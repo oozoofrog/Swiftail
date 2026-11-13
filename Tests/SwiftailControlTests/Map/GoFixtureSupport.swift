@@ -162,6 +162,8 @@ private func projectGoRawJSON(_ value: JSONValue) -> GoFixtureJSON {
     switch value {
     case .null: .null
     case .bool(let v): .bool(v)
+    case .integer(let v): .integer(v)
+    case .unsignedInteger(let v): .integer(v)
     case .number(let v): .number(Decimal(v))
     case .string(let v): .string(v)
     case .array(let v): .array(v.map(projectGoRawJSON))

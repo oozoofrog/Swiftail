@@ -20,9 +20,21 @@ public struct MapSession: Sendable {
         public var pingRequest: PingRequest?
     }
 
+    /// 세션이 쥐는 피어의 최대 수. 목표 규모(피어 10,000명)의 두 배다.
+    static let maximumPeerCount = 20_000
+    /// 세션이 쥐는 사용자 프로필의 최대 수. 피어마다 소유자와 공유자가 있으므로 피어 한도의 두 배다.
+    static let maximumUserProfileCount = 2 * maximumPeerCount
+    /// 이름 붙은 패킷 필터 묶음의 최대 수. Go 제어 서버는 `base`를 포함해 몇 개의 이름만 쓴다.
+    static let maximumPacketFilterNameCount = 256
+    /// 모든 이름 붙은 패킷 필터 묶음의 규칙 수 합의 최대. 노드 하나가 받는 ACL 규칙은 많아야 수천 개다.
+    static let maximumPacketFilterRuleCount = 50_000
+
+    /// 한도를 넘어 끝난 세션의 오류. 있으면 상태를 비운 채 같은 오류를 낸다.
+    private var failure: MapError?
     private var selfNode: Node?
     private var peers: [Int64: Node] = [:]
-    /// 받은 프로필 전부. 지우지 않는다. netmap에는 쓰이는 것만 고른다.
+    /// 받은 프로필 전부. 지우지 않는다(Go `lastUserProfile`도 지우지 않는다. 다시 나타난 피어의 프로필을
+    /// 서버가 다시 보내지 않기 때문이다). 개수 한도를 넘으면 세션을 끝낸다. netmap에는 쓰이는 것만 고른다.
     private var userProfiles: [Int64: UserProfile] = [:]
     private var derpMap: DERPMap?
     private var dnsConfig: DNSConfig?
@@ -37,15 +49,23 @@ public struct MapSession: Sendable {
     public init() {}
 
     /// 응답 하나를 적용한다. 스트림의 첫 일반 응답에 `node`가 없으면 `missingSelfNode`를 던진다.
-    /// 그 뒤로는 이 세션과 스트림을 버려야 한다.
+    /// 피어·사용자 프로필·이름 붙은 패킷 필터(이름 수와 규칙 수)가 한도를 넘으면 상태를 비우고
+    /// `stateTooLarge`를 던지며, 그 뒤의 호출도 같은 오류를 낸다. 어느 오류든 이 세션과 스트림을 버리고
+    /// 새 스트림으로 전체 맵부터 다시 받아야 한다.
     ///
     /// - Parameter now: 이 응답을 받은 시각. "지금 보였다"는 증분의 마지막 온라인 시각이 된다.
     public mutating func apply(_ response: MapResponse, receivedAt now: Date) throws(MapError) -> Update {
+        if let failure { throw failure }
         if let time = response.controlTime {
             controlTime = time
         }
         // KeepAlive에서 유효한 것은 핑과 서버 시각뿐이다(노트 3.5, 4.3의 1).
         guard !response.keepAlive else {
+            return Update(netmap: nil, pingRequest: response.pingRequest)
+        }
+        // 상태 필드가 없는 응답은 netmap을 다시 만들지 않는다. 바뀌는 것은 서버 시각뿐이다.
+        if netmap != nil, !response.carriesState {
+            netmap?.controlTime = controlTime
             return Update(netmap: nil, pingRequest: response.pingRequest)
         }
         let currentSelf: Node
@@ -78,6 +98,15 @@ public struct MapSession: Sendable {
         }
         if let info = response.tkaInfo {
             tkaInfo = info
+        }
+        guard peers.count <= Self.maximumPeerCount,
+              userProfiles.count <= Self.maximumUserProfileCount,
+              namedPacketFilters.count <= Self.maximumPacketFilterNameCount,
+              namedPacketFilters.values.reduce(0, { $0 + $1.count }) <= Self.maximumPacketFilterRuleCount
+        else {
+            self = MapSession()
+            failure = .stateTooLarge
+            throw .stateTooLarge
         }
         // 서버 시각은 응답마다 바뀐다. 그것만 다른 netmap은 변화로 치지 않는다.
         let previous = netmap
@@ -189,6 +218,16 @@ public struct MapSession: Sendable {
             tailnetLockEnabled: tkaInfo.map { !$0.disabled } ?? false,
             controlTime: controlTime
         )
+    }
+}
+
+extension MapResponse {
+    /// 세션 상태를 바꿀 수 있는 필드가 하나라도 있다. 서버 시각·핑·빈 `Peers`·빈 `Domain`만 있는 응답은 false다.
+    /// `MapSession.apply`가 쓰는 필드를 더하면 여기에도 더한다.
+    fileprivate var carriesState: Bool {
+        node != nil || derpMap != nil || !(peers ?? []).isEmpty || peersChanged != nil || peersRemoved != nil
+            || peersChangedPatch != nil || peerSeenChange != nil || onlineChange != nil || dnsConfig != nil
+            || !domain.isEmpty || packetFilter != nil || packetFilters != nil || userProfiles != nil || tkaInfo != nil
     }
 }
 
