@@ -17,13 +17,13 @@ Swiftail 구현에 필요한 수준으로 각 프로토콜을 정리한 문서�
 
 | 노트 | 쓰는 마일스톤 | 작성 | 검증 |
 | --- | --- | --- | --- |
-| [wireguard.md](wireguard.md) | M1 | | |
-| [control-transport.md](control-transport.md) | M2 | | |
-| [control-map.md](control-map.md) | M2 | | |
-| [derp-stun.md](derp-stun.md) | M3 | | |
-| [disco-magicsock.md](disco-magicsock.md) | M4 | | |
-| [netmap-engine.md](netmap-engine.md) | M3·M5 | | |
-| [dns-state-node.md](dns-state-node.md) | M5~M7 | | |
+| [wireguard.md](wireguard.md) | M1 | Claude Opus 5.5 | 미검증 |
+| [control-transport.md](control-transport.md) | M2 | Claude Opus 5.5 | 미검증 |
+| [control-map.md](control-map.md) | M2 | GPT-6.1 Sol | 미검증 |
+| [derp-stun.md](derp-stun.md) | M3 | GPT-6.1 Terra | 미검증 |
+| [disco-magicsock.md](disco-magicsock.md) | M4 | GPT-6.1 Sol | 미검증 |
+| [netmap-engine.md](netmap-engine.md) | M3·M5 | Claude Sonnet 5.5 | 미검증 |
+| [dns-state-node.md](dns-state-node.md) | M5~M7 | Claude Sonnet 5.5 | 미검증 |
 
 ## 노트 형식
 
