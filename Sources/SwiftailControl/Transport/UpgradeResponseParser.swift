@@ -5,7 +5,8 @@
 /// 그래서 머리 뒤에 이미 도착한 바이트를 돌려줘 `ControlHandshake`에 넘기게 한다.
 ///
 /// 클라이언트는 상태와 `Upgrade` 값만 본다(`Connection`은 검사하지 않는다). `Upgrade` 값은 정확히
-/// 같아야 한다. 머리의 줄 끝은 CRLF만 받는다(Go 서버가 그렇게 보낸다).
+/// 같아야 한다. 머리의 줄 끝은 CRLF만 받는다(Go 서버가 그렇게 보낸다). 줄 안에 홀로 있는 CR·LF와
+/// 탭 외의 제어 문자는 거절한다.
 ///
 /// `docs/protocol-notes/control-transport.md` 3.6절, 4.4절 2단계 3~4
 /// (출처: tailscale.com `control/controlhttp/client.go`).
@@ -15,7 +16,8 @@ public struct UpgradeResponseParser: Sendable {
     /// 빈 줄까지 포함한 응답 머리의 한도.
     static let maximumHeadSize = 16 * 1024
 
-    private var buffer: [UInt8] = []
+    /// 아직 빈 줄에 닿지 않은 머리. 끝나거나 실패하면 비운다.
+    private(set) var buffer: [UInt8] = []
     private var isDone = false
 
     public init() {}
@@ -34,6 +36,7 @@ public struct UpgradeResponseParser: Sendable {
         guard let headEnd = Self.endOfHead(in: buffer, from: searchStart, to: searchEnd) else {
             guard buffer.count < Self.maximumHeadSize else {
                 isDone = true
+                buffer = []
                 throw .messageTooLarge
             }
             return nil
@@ -77,7 +80,8 @@ public struct UpgradeResponseParser: Sendable {
     /// `HTTP/1.x SP 3DIGIT [SP reason]`의 상태 코드.
     private static func statusCode(of line: ArraySlice<UInt8>) throws(ControlTransportError) -> Int {
         let parts = line.split(separator: UInt8(ascii: " "), maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count >= 2,
+        guard !line.contains(where: isForbiddenControl),
+              parts.count >= 2,
               parts[0].count == 8,
               parts[0].starts(with: "HTTP/1.".utf8),
               let minor = parts[0].last, isDigit(minor),
@@ -91,11 +95,16 @@ public struct UpgradeResponseParser: Sendable {
         (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
     }
 
+    /// 줄 안에 올 수 없는 바이트: 탭을 뺀 C0 제어 문자와 DEL (RFC 9110 5.5의 field-value, RFC 9112 4의 reason-phrase).
+    fileprivate static func isForbiddenControl(_ byte: UInt8) -> Bool {
+        (byte < 0x20 && byte != 0x09) || byte == 0x7F
+    }
+
     private static let crlf: [UInt8] = [0x0D, 0x0A]
     private static let crlfcrlf: [UInt8] = [0x0D, 0x0A, 0x0D, 0x0A]
 }
 
-/// `name: value` 한 줄. 이름은 HTTP token 문자만, 값은 앞뒤 공백·탭을 걷어 낸다.
+/// `name: value` 한 줄. 이름은 HTTP token 문자만, 값은 제어 문자 없이, 앞뒤 공백·탭을 걷어 낸다.
 private struct HeaderField {
     let name: ArraySlice<UInt8>
     let value: ArraySlice<UInt8>
@@ -106,6 +115,7 @@ private struct HeaderField {
         guard !name.isEmpty, name.allSatisfy(Self.isTokenCharacter) else { throw .malformed }
 
         var value = line[(colon + 1)...]
+        guard !value.contains(where: UpgradeResponseParser.isForbiddenControl) else { throw .malformed }
         while let first = value.first, Self.isWhitespace(first) { value = value.dropFirst() }
         while let last = value.last, Self.isWhitespace(last) { value = value.dropLast() }
         self.value = value

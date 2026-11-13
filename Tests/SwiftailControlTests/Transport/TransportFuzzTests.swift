@@ -20,7 +20,8 @@ struct TransportFuzzTests {
         for _ in 0..<Self.iterations {
             var parser = UpgradeResponseParser()
             for chunk in random.chunks(of: random.input(near: valid)) {
-                guard (try? parser.receive(chunk)) != nil else { break }
+                // 미완성(nil)과 오류에서는 계속 넣고, 머리가 완성되면 끝낸다.
+                guard (try? parser.receive(chunk)) == nil else { break }
             }
         }
     }

@@ -86,6 +86,11 @@ public struct ControlSession: Sendable {
     }
 }
 
+extension ControlSession: CustomReflectable {
+    /// 전송 키를 쥐고 있으므로 `dump`와 `print`에 아무것도 드러내지 않는다.
+    public var customMirror: Mirror { Mirror(self, children: [:]) }
+}
+
 /// 한 방향의 키와 카운터.
 private struct RecordCipher: Sendable {
     let key: SymmetricKey

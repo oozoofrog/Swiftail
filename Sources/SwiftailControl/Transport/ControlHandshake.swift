@@ -13,8 +13,6 @@ import CryptoKit
 /// (출처: tailscale.com `control/controlbase/handshake.go`).
 public struct ControlHandshake: Sendable {
     /// 서버에 보낼 initiation 101바이트.
-    ///
-    /// 서버 정적 키가 저차 점이라 initiation을 만들 수 없으면 비어 있고, 첫 `receive`가 `handshakeFailed`를 던진다.
     public let initiation: [UInt8]
 
     private var state: State
@@ -22,7 +20,6 @@ public struct ControlHandshake: Sendable {
 
     private enum State: Sendable {
         case awaitingResponse(PendingHandshake)
-        case cannotInitiate
         case done
     }
 
@@ -32,8 +29,13 @@ public struct ControlHandshake: Sendable {
     ///   - machineKey: 이 기기의 machine 개인 키.
     ///   - serverKey: `/key`로 받은 서버의 Noise 공개 키(`publicKey`).
     ///   - protocolVersion: capability version. 프롤로그와 initiation 머리에 실린다.
-    public init(machineKey: Curve25519.KeyAgreement.PrivateKey, serverKey: MachinePublicKey, protocolVersion: UInt16 = 148) {
-        self.init(machineKey: machineKey, serverKey: serverKey, protocolVersion: protocolVersion, ephemeral: Curve25519.KeyAgreement.PrivateKey())
+    /// - Throws: 서버 키가 저차 점이라 공유 비밀이 0이면 `handshakeFailed`. 보낼 initiation이 없다.
+    public init(
+        machineKey: Curve25519.KeyAgreement.PrivateKey,
+        serverKey: MachinePublicKey,
+        protocolVersion: UInt16 = 148
+    ) throws(ControlTransportError) {
+        try self.init(machineKey: machineKey, serverKey: serverKey, protocolVersion: protocolVersion, ephemeral: Curve25519.KeyAgreement.PrivateKey())
     }
 
     /// 임시 키를 인자로 받는다. 고정 벡터 시험용이다.
@@ -42,19 +44,15 @@ public struct ControlHandshake: Sendable {
         serverKey: MachinePublicKey,
         protocolVersion: UInt16,
         ephemeral: Curve25519.KeyAgreement.PrivateKey
-    ) {
-        if let (message, pending) = NoiseIK.makeInitiation(
+    ) throws(ControlTransportError) {
+        guard let (message, pending) = NoiseIK.makeInitiation(
             machineKey: machineKey,
             serverKey: serverKey,
             protocolVersion: protocolVersion,
             ephemeral: ephemeral
-        ) {
-            initiation = message.bytes
-            state = .awaitingResponse(pending)
-        } else {
-            initiation = []
-            state = .cannotInitiate
-        }
+        ) else { throw .handshakeFailed }
+        initiation = message.bytes
+        state = .awaitingResponse(pending)
     }
 
     /// 서버가 보낸 바이트를 넣는다. response가 다 오지 않았으면 nil.
@@ -63,15 +61,7 @@ public struct ControlHandshake: Sendable {
     /// - Throws: response가 열리지 않거나 서버가 error 메시지를 보내면 `handshakeFailed`, type·길이가
     ///   틀리면 `malformed`, 세션을 이미 돌려줬거나 실패한 뒤면 `closed`.
     public mutating func receive(_ bytes: [UInt8]) throws(ControlTransportError) -> (session: ControlSession, remainder: [UInt8])? {
-        let pending: PendingHandshake
-        switch state {
-        case .awaitingResponse(let value): pending = value
-        case .cannotInitiate:
-            state = .done
-            throw .handshakeFailed
-        case .done:
-            throw .closed
-        }
+        guard case .awaitingResponse(let pending) = state else { throw .closed }
 
         received += bytes
         do throws(ControlTransportError) {
@@ -87,4 +77,9 @@ public struct ControlHandshake: Sendable {
             throw error
         }
     }
+}
+
+extension ControlHandshake: CustomReflectable {
+    /// 장기 키, 임시 키, chaining key를 쥐고 있으므로 `dump`와 `print`에 아무것도 드러내지 않는다.
+    public var customMirror: Mirror { Mirror(self, children: [:]) }
 }

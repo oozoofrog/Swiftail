@@ -33,8 +33,8 @@ public enum ControlTransportError: Error, Sendable, Equatable {
     case upgradeRejected(status: Int)   // 101이 아님
     case handshakeFailed           // 복호화 실패, 서버의 error 메시지, 0 공유 비밀
     case authenticationFailed      // 전송 단계 레코드의 복호화 실패. 연결을 버려야 한다
-    case messageTooLarge           // 레코드·early payload가 한도를 넘음
-    case closed                    // 실패한 뒤의 호출
+    case messageTooLarge           // 레코드·early payload·업그레이드 응답 머리가 한도를 넘음
+    case closed                    // 실패했거나 이미 끝난(결과를 돌려준) 상태 기계를 다시 부름. 송신 카운터 고갈
 }
 
 /// `POST /ts2021` 업그레이드 요청의 바이트.
@@ -51,7 +51,8 @@ public struct UpgradeResponseParser: Sendable {
 
 /// 제어 Noise(Noise_IK_25519_ChaChaPoly_BLAKE2s)의 초기자.
 public struct ControlHandshake: Sendable {
-    public init(machineKey: Curve25519.KeyAgreement.PrivateKey, serverKey: MachinePublicKey, protocolVersion: UInt16 = 148)
+    /// 서버 키가 저차 점이라 공유 비밀이 0이면 `handshakeFailed`.
+    public init(machineKey: Curve25519.KeyAgreement.PrivateKey, serverKey: MachinePublicKey, protocolVersion: UInt16 = 148) throws(ControlTransportError)
     /// 서버에 보낼 initiation 101바이트.
     public var initiation: [UInt8] { get }
     /// 서버가 보낸 바이트를 넣는다. response가 다 오지 않았으면 nil.
@@ -83,7 +84,9 @@ public struct EarlyPayloadParser: Sendable {
 - 임시 키는 `ControlHandshake.init`에서 시스템 난수로 만든다. 고정 벡터 시험을 위한 internal 생성자(임시 키를 인자로 받는다)를 둔다.
 - 레코드 nonce는 빅엔디언 카운터다(Noise 규격의 리틀엔디언이 아니다). 노트 3.5절.
 - 복호화가 한 번 실패하면 세션은 `closed`가 되고 키를 버린다.
-- 한도: 레코드 4,096바이트, early payload 10MiB, 업그레이드 응답 머리 16KiB.
+- 한도: 레코드 4,096바이트, early payload 10MiB, 업그레이드 응답 머리 16KiB. 한도를 넘거나 실패하면 받아 둔 바이트를 버린다.
+- 업그레이드 응답의 상태 줄과 헤더 값에 홀로 있는 CR·LF, 탭 외의 제어 문자가 있으면 `malformed`.
+- 키를 쥔 공개 타입(`ControlHandshake`, `ControlSession`)은 `CustomReflectable`로 자식을 감춘다. `print`·`dump`에 키 재료가 나오지 않는다.
 
 시험: 노트 7.3절의 고정 벡터(initiation, response, 방향별 키, 카운터 0·1·2의 레코드, 빈 레코드), 조각난 입력(한 바이트씩), 4,077바이트 경계 분할, 변조된 레코드 뒤 `closed`, 서버 error 메시지, 101 뒤 EOF 처리에 필요한 상태, early payload 있음·없음·잘못됨, 업그레이드 응답의 상태·`Upgrade` 값 검증, 임의 입력으로 죽지 않음.
 
@@ -213,17 +216,18 @@ public actor ControlClient {
 
     public init(configuration: Configuration, identityStore: NodeIdentityStore)
 
-    /// 사건의 흐름. 구독자는 하나다.
+    /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
     public nonisolated var events: AsyncStream<Event> { get }
 
     /// 등록하고, 상태를 올리고, 맵 스트림을 유지한다. 끊기면 물러났다가 다시 잇는다.
     /// 호출한 Task가 취소될 때까지 돌아오지 않는다. 다시 시도해도 소용없는 실패는 던진다.
+    /// 클라이언트 하나에 한 번만 부른다. 다시 부르면 `invalidConfiguration`.
     public func run() async throws(ControlError)
 
     /// 상태를 바꾼다. 연결되어 있으면 곧 올리고, 아니면 다음 연결 때 올린다. 마지막 값만 남는다.
     public func setLocalStatus(_ status: LocalStatus)
 
-    /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도).
+    /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도). 연결을 새로 맺으므로 `disconnected`가 먼저 나간다.
     public func startInteractiveLogin()
 }
 ```
@@ -245,6 +249,7 @@ public actor ControlClient {
 5. **물러나기**: `min(n² × 10ms, 30s) × [0.5, 1.5)`. 전체 netmap을 받으면 초기화한다. 429와 `Retry-After`가 붙은 503은 그 시간만큼 기다린다(최대 5분).
 6. **Hostinfo**: 노트 3.3절의 최소 필드. OS 이름과 버전, 호스트 이름, 앱 버전 자리에는 Swiftail임을 드러내는 값을 넣는다(공식 클라이언트로 가장하지 않는다).
 7. **신원 파일**: 디렉터리 안의 파일 하나(JSON, 키는 `privkey:` + 16진). 원자적으로 쓰고 소유자만 읽게(0600) 한다. 키를 로그·오류·description에 넣지 않는다.
+8. **비밀의 출력**: `NodeIdentity`와 `Configuration`은 `CustomStringConvertible`·`CustomReflectable`을 채택해 `print`·`dump`에 개인 키와 인증 키를 드러내지 않는다(공개 키와 "가림" 표시만).
 
 구조: 연결 하나(소켓, `ControlSession`, `HTTP2ClientConnection`, 읽기 루프)를 감싼 internal 타입을 두고, 그 위에 "요청 하나를 보내 응답을 받는다"와 "응답 본문을 흘려 받는다" 두 가지를 얹는다. 등록·맵·상태 올리기는 그 둘로 쓴다. 구조적 동시성을 쓴다(분리된 Task를 흩뿌리지 않는다. 취소는 `run()`을 부른 Task의 취소로 전파된다).
 

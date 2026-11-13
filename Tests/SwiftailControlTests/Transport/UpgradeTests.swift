@@ -87,6 +87,37 @@ struct UpgradeTests {
         #expect(throws: ControlTransportError.malformed) { try parser.receive(Array(head.utf8)) }
     }
 
+    @Test("상태 줄이나 헤더 값에 홀로 있는 CR·LF나 제어 문자가 있으면 malformed", arguments: [
+        "X-Test: x\ny", "X-Test: x\ry", "X-Test: x\0y", "X-Test: x\u{7F}y", "X-Test: \u{1B}",
+    ])
+    func controlCharacterInHeaderValue(_ line: String) throws {
+        var parser = UpgradeResponseParser()
+        let head = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: tailscale-control-protocol\r\n\(line)\r\n\r\n"
+        #expect(throws: ControlTransportError.malformed) { try parser.receive(Array(head.utf8)) }
+
+        var statusParser = UpgradeResponseParser()
+        let statusHead = "HTTP/1.1 101 Switching\u{1}Protocols\r\nUpgrade: tailscale-control-protocol\r\n\r\n"
+        #expect(throws: ControlTransportError.malformed) { try statusParser.receive(Array(statusHead.utf8)) }
+    }
+
+    @Test("헤더 값 안의 탭과 0x80 이상의 바이트는 받는다")
+    func tabAndObsTextInHeaderValue() throws {
+        var parser = UpgradeResponseParser()
+        let head = Array("HTTP/1.1 101 x\r\nUpgrade: tailscale-control-protocol\r\nX-Test: a\tb ".utf8)
+            + [0xC3, 0xA9] + Array("\r\n\r\n".utf8)
+        #expect(try parser.receive(head) == [])
+    }
+
+    @Test("한도를 넘겨 실패하면 받은 바이트를 쥐고 있지 않는다")
+    func oversizedInputIsDropped() throws {
+        var parser = UpgradeResponseParser()
+        #expect(throws: ControlTransportError.messageTooLarge) {
+            try parser.receive([UInt8](repeating: UInt8(ascii: "a"), count: 1_000_000))
+        }
+        #expect(parser.buffer.isEmpty)
+        #expect(throws: ControlTransportError.closed) { try parser.receive([]) }
+    }
+
     @Test("빈 줄 없이 16KiB에 이르면 messageTooLarge")
     func headTooLarge() throws {
         var parser = UpgradeResponseParser()

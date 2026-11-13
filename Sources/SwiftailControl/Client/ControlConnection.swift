@@ -77,7 +77,9 @@ actor ControlConnection {
     ) async throws(ControlError) -> ControlConnection {
         let socket = try await NetworkSocket.connect(host: endpoint.host, port: endpoint.port, usesTLS: endpoint.usesTLS)
         do throws(ControlError) {
-            var handshake = ControlHandshake(machineKey: machineKey, serverKey: serverKey)
+            var handshake = try transport { () throws(ControlTransportError) in
+                try ControlHandshake(machineKey: machineKey, serverKey: serverKey)
+            }
             socket.send(UpgradeRequest.bytes(host: endpoint.hostHeader, initiation: handshake.initiation))
 
             var upgrade = UpgradeResponseParser()

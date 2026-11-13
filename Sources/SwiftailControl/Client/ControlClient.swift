@@ -232,9 +232,19 @@ enum SessionInterruption: Error {
     case rateLimited(Duration)
 }
 
-extension ControlClient.Configuration: CustomStringConvertible {
+extension ControlClient.Configuration: CustomStringConvertible, CustomReflectable {
     /// 인증 키를 가린다. 설정 값을 그대로 로그에 찍어도 비밀이 새지 않게 한다.
     public var description: String {
         "Configuration(serverURL: \(serverURL), hostname: \(hostname), authKey: \(authKey == nil ? "없음" : "<가림>"), ephemeral: \(ephemeral))"
+    }
+
+    /// `dump`는 `description`을 거치지 않으므로 여기서도 인증 키를 가린다.
+    public var customMirror: Mirror {
+        Mirror(self, children: [
+            "serverURL": serverURL,
+            "hostname": hostname,
+            "authKey": authKey == nil ? "없음" : "<가림>",
+            "ephemeral": ephemeral,
+        ])
     }
 }

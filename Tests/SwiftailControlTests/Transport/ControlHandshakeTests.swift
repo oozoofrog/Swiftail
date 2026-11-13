@@ -154,10 +154,9 @@ struct ControlHandshakeTests {
     @Test("서버 정적 키가 저차 점이면 initiation을 만들지 않고 handshakeFailed")
     func lowOrderServerKey() throws {
         let machine = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: V.bytes(V.clientMachinePrivate))
-        var handshake = ControlHandshake(machineKey: machine, serverKey: .zero)
-        #expect(handshake.initiation.isEmpty)
-        #expect(throws: ControlTransportError.handshakeFailed) { try handshake.receive([]) }
-        #expect(throws: ControlTransportError.closed) { try handshake.receive([]) }
+        #expect(throws: ControlTransportError.handshakeFailed) {
+            try ControlHandshake(machineKey: machine, serverKey: .zero)
+        }
     }
 
     @Test("서버 임시 키가 저차 점이면 handshakeFailed")
@@ -171,8 +170,8 @@ struct ControlHandshakeTests {
     func freshEphemeral() throws {
         let machine = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: V.bytes(V.clientMachinePrivate))
         let server = try #require(MachinePublicKey(rawValue: V.bytes(V.serverStaticPublic)))
-        let first = ControlHandshake(machineKey: machine, serverKey: server)
-        let second = ControlHandshake(machineKey: machine, serverKey: server)
+        let first = try ControlHandshake(machineKey: machine, serverKey: server)
+        let second = try ControlHandshake(machineKey: machine, serverKey: server)
         #expect(first.initiation.count == 101)
         #expect(Array(first.initiation[..<5]) == [0x00, 0x94, 0x01, 0x00, 0x60])
         #expect(first.initiation != second.initiation)
