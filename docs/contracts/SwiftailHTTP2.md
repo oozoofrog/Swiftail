@@ -58,6 +58,7 @@ public struct HTTP2ClientConnection: Sendable {
     public mutating func startRequest(_ request: Request, body: [UInt8]?) throws(HTTP2Error) -> HTTP2StreamID
 
     /// 스트림을 버린다(RST_STREAM CANCEL). 이미 끝난 스트림이면 아무 일도 하지 않는다.
+    /// 그 스트림의 사건은 더 나오지 않는다(`streamClosed`도 없다). 부른 쪽이 스스로 정리한다.
     public mutating func cancel(_ stream: HTTP2StreamID)
 
     /// 상대에게서 받은 바이트를 넣는다. 프레임 경계와 무관하게 임의의 조각이어도 된다.

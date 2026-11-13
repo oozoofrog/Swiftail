@@ -21,6 +21,7 @@ extension HTTP2ClientConnection {
     }
 
     /// 스트림을 버린다(RST_STREAM CANCEL). 이미 끝난 스트림이면 아무 일도 하지 않는다.
+    /// 그 스트림의 사건은 더 나오지 않는다(`streamClosed`도 없다). 부른 쪽이 스스로 정리한다.
     public mutating func cancel(_ stream: HTTP2StreamID) {
         guard phase != .failed, streams.removeValue(forKey: stream) != nil else { return }
         outbound += FrameEncoder.rstStream(stream, code: .cancel)
