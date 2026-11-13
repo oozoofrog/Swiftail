@@ -16,8 +16,10 @@ struct MapSessionTests {
         return session
     }
 
+    /// 응답을 적용한 뒤의 netmap. 응답이 아무것도 바꾸지 않았어도(이때 `apply`는 nil을 낸다) 지금 상태를 돌려준다.
     private func apply(_ json: String, to session: inout MapSession) throws -> Netmap {
-        try #require(try session.apply(mapResponse(json), receivedAt: receivedAt).netmap)
+        _ = try session.apply(mapResponse(json), receivedAt: receivedAt)
+        return try #require(session.netmap)
     }
 
     // MARK: 세션의 시작과 KeepAlive
@@ -114,11 +116,25 @@ struct MapSessionTests {
         #expect(try apply(#"{"PeersChanged":[\#(peerJSON(2))]}"#, to: &session).peers.map(\.id) == [2])
     }
 
-    @Test("한 응답 안에서는 Removed 다음에 Changed다")
-    func removedBeforeChanged() throws {
+    @Test("한 응답이 같은 피어를 지우면서 바꾸면: patch로 옮겨지는 변화는 지우기가 이기고, 그 밖의 변화는 되살린다")
+    func removedAndChangedTogether() throws {
+        // Cap은 patch로 표현되는 필드다. Go는 이 변화를 patch로 옮겨 맨 뒤에 적용하는데, 그때 피어는 이미 없다.
         var session = try session(#","Peers":[\#(peerJSON(2))]"#)
-        let netmap = try apply(#"{"PeersRemoved":[2],"PeersChanged":[\#(peerJSON(2, #","Cap":7"#))]}"#, to: &session)
-        #expect(netmap.peers.map(\.cap) == [7])
+        var netmap = try apply(#"{"PeersRemoved":[2],"PeersChanged":[\#(peerJSON(2, #","Cap":7"#))]}"#, to: &session)
+        #expect(netmap.peers.isEmpty)
+
+        // 태그는 patch로 표현되지 않는다. 통째로 바꾸는 변화는 지운 뒤에 적용되어 피어가 남는다.
+        session = try self.session(#","Peers":[\#(peerJSON(2))]"#)
+        netmap = try apply(#"{"PeersRemoved":[2],"PeersChanged":[\#(peerJSON(2, #","Tags":["tag:server"]"#))]}"#, to: &session)
+        #expect(netmap.peers.map(\.tags) == [["tag:server"]])
+    }
+
+    @Test("바뀐 것이 없는 응답은 netmap을 내지 않는다. 서버 시각만 바뀐 것도 변화가 아니다")
+    func unchangedResponsesYieldNothing() throws {
+        var session = try session(#","Peers":[\#(peerJSON(2))]"#)
+        #expect(try session.apply(mapResponse(#"{"PeersChanged":[\#(peerJSON(2))]}"#), receivedAt: receivedAt).netmap == nil)
+        #expect(try session.apply(mapResponse(#"{"ControlTime":"2026-01-02T03:04:05Z"}"#), receivedAt: receivedAt).netmap == nil)
+        #expect(try session.apply(mapResponse(#"{"PeersRemoved":[2]}"#), receivedAt: receivedAt).netmap != nil)
     }
 
     @Test("OnlineChange는 값 그대로, 모르는 ID는 무시")
@@ -327,8 +343,10 @@ struct PacketFilterTests {
         return session
     }
 
+    /// 응답을 적용한 뒤의 netmap. 응답이 아무것도 바꾸지 않았어도(이때 `apply`는 nil을 낸다) 지금 상태를 돌려준다.
     private func apply(_ json: String, to session: inout MapSession) throws -> Netmap {
-        try #require(try session.apply(mapResponse(json), receivedAt: receivedAt).netmap)
+        _ = try session.apply(mapResponse(json), receivedAt: receivedAt)
+        return try #require(session.netmap)
     }
 
     @Test("PacketFilter: null·생략은 그대로, 빈 배열은 base를 비운다(모두 차단)")

@@ -133,7 +133,7 @@ public struct Netmap: Sendable, Equatable {
 /// 맵 스트림 하나의 상태. 응답을 적용해 netmap을 만든다.
 public struct MapSession: Sendable {
     public struct Update: Sendable {
-        /// 이 응답으로 바뀐 뒤의 netmap. KeepAlive처럼 바뀐 것이 없으면 nil.
+        /// 이 응답으로 바뀐 뒤의 netmap. 바뀐 것이 없으면 nil(KeepAlive, 같은 내용의 재전송, 서버 시각만 바뀐 응답).
         public var netmap: Netmap?
         /// 서버가 답을 요구한 핑. 호출하는 쪽이 처리한다.
         public var pingRequest: PingRequest?

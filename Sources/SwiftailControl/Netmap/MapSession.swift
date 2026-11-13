@@ -31,6 +31,8 @@ public struct MapSession: Sendable {
     private var domain = ""
     private var tkaInfo: TKAInfo?
     private var controlTime: Date?
+    /// 지금의 netmap. 응답이 아무것도 바꾸지 않았는지 가리는 데 쓴다.
+    private(set) var netmap: Netmap?
 
     public init() {}
 
@@ -77,7 +79,13 @@ public struct MapSession: Sendable {
         if let info = response.tkaInfo {
             tkaInfo = info
         }
-        return Update(netmap: netmap(selfNode: currentSelf), pingRequest: response.pingRequest)
+        // 서버 시각은 응답마다 바뀐다. 그것만 다른 netmap은 변화로 치지 않는다.
+        let previous = netmap
+        let current = makeNetmap(selfNode: currentSelf)
+        netmap = current
+        let ignoringControlTime = { (map: Netmap?) in var copy = map; copy?.controlTime = nil; return copy }
+        let changed = ignoringControlTime(current) != ignoringControlTime(previous)
+        return Update(netmap: changed ? current : nil, pingRequest: response.pingRequest)
     }
 
     /// 피어 저장소에 증분을 적용한다(노트 4.3의 3~5).
@@ -87,11 +95,20 @@ public struct MapSession: Sendable {
             peers = Dictionary(fullList.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
             return
         }
+        // Go 클라이언트는 PeersChanged의 노드가 기존 노드와 "patch로 표현되는 필드"에서만 다르면 통째로
+        // 바꾸지 않고 그 차이를 patch로 옮겨 맨 뒤에 적용한다(map.go `patchifyPeersChanged`). 결과가
+        // 갈리는 것은 한 응답이 같은 피어를 지우면서 바꾸는 경우 정도지만(지우기가 이긴다) 같은 결과를 낸다.
+        let before = peers
+        var deferred: [(was: Node, new: Node)] = []
         for id in response.peersRemoved ?? [] {
             peers[id] = nil
         }
         for node in response.peersChanged ?? [] {
-            peers[node.id] = node
+            if let was = before[node.id], was.withoutPatchableFields == node.withoutPatchableFields {
+                deferred.append((was, node))
+            } else {
+                peers[node.id] = node
+            }
         }
         for (id, seen) in response.peerSeenChange ?? [:] where peers[id] != nil {
             peers[id]?.lastSeen = seen ? now : nil
@@ -112,6 +129,9 @@ public struct MapSession: Sendable {
             if let keySignature = patch.keySignature { node.keySignature = keySignature }
             if let capMap = patch.capMap { node.capMap = capMap }
             peers[patch.nodeID] = node
+        }
+        for (was, new) in deferred {
+            peers[new.id]?.applyPatchableDifferences(from: was, to: new)
         }
     }
 
@@ -147,7 +167,7 @@ public struct MapSession: Sendable {
     }
 
     /// 지금 상태의 netmap.
-    private func netmap(selfNode: Node) -> Netmap {
+    private func makeNetmap(selfNode: Node) -> Netmap {
         let sortedPeers = peers.values.sorted { $0.id < $1.id }
 
         // 프로필은 self와 피어의 소유자·공유자 것만 고른다(노트 4.3의 7). 0은 사용자가 아니다.
@@ -169,5 +189,39 @@ public struct MapSession: Sendable {
             tailnetLockEnabled: tkaInfo.map { !$0.disabled } ?? false,
             controlTime: controlTime
         )
+    }
+}
+
+extension Node {
+    /// patch(`PeerChange`)로 표현되는 필드를 비운 사본. 두 노드가 이 사본에서 같으면 둘의 차이는 patch로 옮길 수 있다.
+    fileprivate var withoutPatchableFields: Node {
+        var copy = self
+        copy.key = .zero
+        copy.keyExpiry = nil
+        copy.keySignature = []
+        copy.discoKey = .zero
+        copy.endpoints = []
+        copy.homeDERP = 0
+        copy.cap = 0
+        copy.capMap = [:]
+        copy.online = nil
+        copy.lastSeen = nil
+        return copy
+    }
+
+    /// was에서 new로 바뀐 patch 대상 필드만 이 노드에 옮긴다(map.go `peerChangeDiff`).
+    fileprivate mutating func applyPatchableDifferences(from was: Node, to new: Node) {
+        if new.key != was.key { key = new.key }
+        if new.keyExpiry != was.keyExpiry { keyExpiry = new.keyExpiry }
+        if new.keySignature != was.keySignature { keySignature = new.keySignature }
+        if new.discoKey != was.discoKey { discoKey = new.discoKey }
+        if new.endpoints != was.endpoints { endpoints = new.endpoints }
+        // patch에서 0은 "바꾸지 않음"이다. 0으로 되돌리는 변화는 patch로 옮겨지지 않는다.
+        if new.homeDERP != was.homeDERP, new.homeDERP != 0 { homeDERP = new.homeDERP }
+        if new.cap != was.cap, new.cap != 0 { cap = new.cap }
+        if new.capMap != was.capMap { capMap = new.capMap }
+        // 온라인 여부와 마지막 온라인 시각은 양쪽 모두 값이 있을 때만 patch가 된다.
+        if let wasOnline = was.online, let newOnline = new.online, wasOnline != newOnline { online = newOnline }
+        if let wasSeen = was.lastSeen, let newSeen = new.lastSeen, wasSeen != newSeen { lastSeen = newSeen }
     }
 }
