@@ -21,4 +21,8 @@ Swift로 쓴 tailnet 노드 라이브러리. 앱 프로세스와 iOS Network Ext
 swift test
 ```
 
-상호 운용 시험은 Go(1.27 이상)가 필요하다. 방법은 마일스톤 M1부터 `docs/plan.md`에 적는다.
+wireguard-go와의 상호 운용 시험은 Go(1.27 이상)가 필요하고 실제 시간으로 2분 남짓 걸린다. `SWIFTAIL_WGPEER`가 없으면 건너뛴다.
+
+```sh
+SWIFTAIL_WGPEER="$(sh Scripts/build-interop-tools.sh)" swift test --filter SwiftailWireGuardInteropTests
+```

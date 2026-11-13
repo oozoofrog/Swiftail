@@ -59,9 +59,9 @@ public enum WireGuardError: Error, Sendable, Equatable {
     case malformed              // 길이·type·예약 바이트가 규격과 다름
     case unknownPeer            // 등록되지 않은 피어, 또는 모르는 receiver index
     case authenticationFailed   // mac1, AEAD 태그 불일치
-    case replayed               // 핸드셰이크 timestamp·flood 검사 또는 전송 카운터 재사용
+    case replayed               // 핸드셰이크 timestamp·flood 검사, 이미 처리한 response, 전송 카운터 재사용
     case noSession              // 쓸 수 있는 keypair가 없음(만료 포함)
-    case disallowedSource       // 복호화한 IP 패킷의 출발 주소가 피어의 AllowedIPs 밖
+    case disallowedSource       // 복호화한 IP 패킷의 출발 주소가 피어의 AllowedIPs 밖(rejectedIPPacket으로만 나온다)
     case packetTooLarge
 }
 
@@ -72,6 +72,8 @@ public struct WireGuardDevice: Sendable {
         case datagram([UInt8], to: PublicKey)
         /// 복호화와 AllowedIPs 검사를 통과한 IP 패킷.
         case ipPacket([UInt8], from: PublicKey)
+        /// 피어가 보낸 것은 맞지만 올리지 않은 IP 패킷. 이유는 malformed 또는 disallowedSource.
+        case rejectedIPPacket(WireGuardError, from: PublicKey)
     }
 
     /// wallClock은 now 시점의 벽시계 시각이다. 이후의 TAI64N timestamp는
@@ -99,6 +101,14 @@ public struct WireGuardDevice: Sendable {
     public var nextDeadline: ContinuousClock.Instant? { get }
 }
 ```
+
+오류와 상태: `receive`가 오류를 던지면 상태는 그대로다(flood 검사를 위한 initiation 수신 시각 기록만 예외). AEAD와 재전송 검사를 통과한 transport는 안의 IP 패킷이 잘못됐거나 출발 주소가 AllowedIPs 밖이어도 오류가 아니다. 인증된 피어가 보낸 것이므로 next 확정, 대기열 방출, rekey, 타이머 갱신을 정상 수신과 같이 하고(wireguard-go와 같다), 버린 패킷은 `rejectedIPPacket`으로 알린다.
+
+시각: `wallClock`이 1970년 이전이면 1970년으로 본다.
+
+난수: 핸드셰이크 단계는 ephemeral 키와 index를 인자로 받는 순수 함수다. 시스템 난수는 장치 계층(index, ephemeral, 재시도 지터)에서만 뽑는다.
+
+송신 크기: 장치는 MTU를 모른다. 상한은 wireguard-go 기본값(65535 − 40)이고, 실제 크기 제한은 TUN의 MTU가 맡는다.
 
 호출 규칙: `now`는 호출마다 줄어들지 않아야 한다. `send`·`receive`도 내부에서 기한이 지난 타이머를 먼저 처리한다고 가정하지 않는다. 호출하는 쪽은 `nextDeadline`에 맞춰 `advance`를 부른다.
 
