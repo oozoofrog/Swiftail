@@ -13,7 +13,7 @@ Swift로 쓴 tailnet 노드 라이브러리. 앱 프로세스와 iOS Network Ext
 ## 요구 사항
 
 - Swift 6, iOS 18 이상, macOS 15 이상
-- 외부 Swift 패키지 의존성 없음(CryptoKit, Network, Foundation만 사용)
+- 전부 Swift. 외부 패키지와 C 코드 없음(CryptoKit, Network, Foundation만 사용)
 
 ## 시험
 

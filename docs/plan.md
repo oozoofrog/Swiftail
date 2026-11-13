@@ -9,6 +9,7 @@ Go의 tsnet과 Tailscale 엔진 없이, Swift만으로 tailnet 노드가 된다.
 1. iOS Network Extension 패킷 터널 안에서 50MiB 한도 아래로 상주한다.
 2. 앱 프로세스 안에서 권한 없이 tailnet 리스너를 열고 tailnet 주소로 접속한다.
 3. 첫 사용처(RemoteDebug)의 Go 코어가 Tailscale에 기대는 기능을 대체할 수 있다.
+4. 라이브러리 전체를 Swift로 쓰고, 코드가 Swift 개발자에게 길잡이가 된다(5절의 코드 기준).
 
 ## 2. 첫 사용처의 요구 사항
 
@@ -51,17 +52,12 @@ tailnet lock(노드 키 서명 검증)은 1차 범위에서 제외한다. 이 �
 
 ### (a) 사용자 공간 TCP/IP 스택
 
-1차 목표(M0~M5)에는 넣지 않는다. iOS 패킷 터널은 OS의 스택을 쓰므로 필요 없다.
+**Swift로 직접 구현한다**(사용자 결정, 2026-11-14). 라이브러리에 C 코드를 들이지 않는다. lwIP 래핑과 Mac의 Network Extension 사용은 채택하지 않았다.
 
-M6에서 필요해지며, 선택지는 셋이다.
-
-| 선택지 | 장점 | 단점 |
-| --- | --- | --- |
-| lwIP(C, BSD 라이선스)를 선택 타깃으로 감싼다 | 20년 넘게 쓰인 TCP 동작(재전송, 혼잡 제어, 창 관리). 구현·검증 비용이 가장 낮다 | 저장소에 C 코드가 들어온다. 신뢰할 수 없는 입력을 C가 해석한다 |
-| Swift로 최소 TCP를 직접 쓴다 | 전부 Swift, 메모리 안전 | 정확한 TCP는 손실·재정렬 환경에서의 검증이 구현보다 크다. 대용량 IPA 전송이 여기에 걸린다 |
-| Mac도 Network Extension + utun을 쓴다 | 스택이 필요 없다 | Mac에서 공식 Tailscale 앱과 같은 주소 대역·100.100.100.100을 두고 충돌한다. VPN 구성 승인이 필요하다. tsnet을 대체한다는 목표에서 벗어난다 |
-
-권장: **lwIP를 선택 타깃 `SwiftailNetstack`으로 감싼다.** 코어 타깃은 Swift만으로 유지되고, iOS 확장에는 이 타깃이 링크되지 않는다. 검증 여력은 대안이 없는 Tailscale 고유 프로토콜에 쓴다. "저장소 전체가 Swift여야 한다"가 우선이면 두 번째 선택지로 바꾼다. M6 시작 전에 확정하면 된다.
+- 1차 목표(M0~M5)에는 필요 없다. iOS 패킷 터널은 OS의 스택을 쓴다. M6에서 `SwiftailNetstack` 타깃으로 만든다.
+- 범위는 tailnet 안의 TCP 연결에 필요한 만큼으로 잡는다: 수동·능동 연결, MSS, 창 확장, RFC 6298 재전송 타이머, 빠른 재전송과 NewReno, 지연 ACK, 0 창 탐침, FIN·RST. IP 단편화 재조립과 SACK은 측정 뒤에 판단한다.
+- WireGuard와 같은 구조로 쓴다: 소켓도 시계도 갖지 않는 상태 기계 + 가장자리의 입출력. 손실·재정렬·지연을 시험에서 결정적으로 재현할 수 있다.
+- 검증 상대는 둘이다: Go 피어(gVisor netstack)와 macOS 커널 스택.
 
 ### (b) 상호 운용 시험 상대
 
@@ -77,7 +73,7 @@ M6에서 필요해지며, 선택지는 셋이다.
   - HTTP/2: 제어 연결 하나, 스트림 몇 개만 쓰므로 최소 클라이언트를 직접 구현한다. 운영 서버와의 상호 운용에서 문제가 반복되면 swift-nio-http2로 바꾼다.
   - TLS(제어 443, DERP): Network 프레임워크.
   - UDP(WireGuard·disco·STUN): 포트 하나로 여러 상대와 주고받아야 하므로 POSIX 소켓을 쓴다.
-- 시험 도구는 Go를 쓴다(`Tools/`). 라이브러리에는 링크되지 않는다.
+- 시험 도구는 Go를 쓴다(`Tools/`). 상호 운용의 상대가 Go 구현이기 때문이며, 라이브러리에는 링크되지 않는다.
 
 ### (d) 1차 목표
 
@@ -94,8 +90,23 @@ SwiftailCrypto ◄─ SwiftailWireGuard ◄─┐
        ▲◄──────── SwiftailMagicsock ◄─┘
 ```
 
+`SwiftailBase`(IP 주소·접두 같은 공용 값 타입)는 모든 타깃이 쓴다.
+
+### 코드 기준
+
+이 저장소는 프로토콜을 Swift로 어떻게 쓰는지 보여 주는 본보기이기도 하다.
+
+- **상태 기계는 값 타입으로, 입출력은 가장자리에.** 프로토콜 로직은 소켓·시계·난수원을 갖지 않는 `struct`로 쓰고 시각은 인자로 받는다. 소켓과 타이머는 그것을 감싸는 actor가 맡는다. 시험은 시간을 직접 넘겨 결정적으로 돌린다.
+- **타입 있는 오류**(`throws(SomeError)`)로 실패의 종류를 시그니처에 드러낸다.
+- **안전하지 않은 도구는 이유와 함께만.** `Unsafe*` 포인터, `@unchecked Sendable`, `nonisolated(unsafe)`, 강제 언래핑·`try!`는 쓰지 않는다. POSIX 호출처럼 피할 수 없는 곳은 좁게 가두고 이유를 주석으로 남긴다.
+- **신뢰할 수 없는 입력은 경계에서 한 번 해석한다.** 바이트 배열을 그대로 들고 다니지 않고 검증된 타입으로 바꾼다. 어떤 입력으로도 프로세스가 죽지 않는다.
+- **이름은 Swift API Design Guidelines를 따른다.** 프로토콜 용어(initiation, cookie, netmap)는 원문을 쓴다.
+- **문서 주석은 무엇을·왜를 적고 규격의 절을 가리킨다.** 파일 하나는 개념 하나를 다루고 위에서 아래로 읽힌다.
+- 적게 쓴다. 본보기는 분량이 아니라 읽히는 구조에서 나온다.
+
 | 타깃 | 마일스톤 | 책임 | 하지 않는 것 |
 | --- | --- | --- | --- |
+| `SwiftailBase` | M1 | IP 주소·접두, 16진 변환 | |
 | `SwiftailCrypto` | M0 | BLAKE2s, HMAC·HKDF-BLAKE2s, NaCl box·secretbox, XChaCha20-Poly1305, 상수 시간 비교 | X25519, ChaCha20-Poly1305(CryptoKit 사용) |
 | `SwiftailWireGuard` | M1 | Noise IKpsk2 핸드셰이크, cookie, 전송 암복호화, 재전송 방지, 타이머·키 교체, AllowedIPs | 소켓, TUN. 데이터그램 송신과 IP 패킷 전달은 주입받는다 |
 | `SwiftailControl` | M2 | 키 타입과 인코딩, tailcfg 모델, 제어 Noise, 최소 HTTP/2, 등록·맵 클라이언트, netmap과 증분 적용 | 데이터면 설정 |
@@ -103,7 +114,7 @@ SwiftailCrypto ◄─ SwiftailWireGuard ◄─┐
 | `SwiftailMagicsock` | M4 | disco, STUN, 지연 측정과 홈 지역 선택, 엔드포인트 상태 기계, UDP 소켓과 재결속, WireGuard에 대한 송수신 창구 | |
 | `SwiftailEngine` | M3~M5 | netmap → WireGuard 피어·필터·경로·DNS, 패킷 필터, MagicDNS 응답기, 상태 저장, TUN(utun fd, 메모리) | |
 | `Swiftail` | M2~ | 공개 API(`TailnetNode`) | |
-| `SwiftailNetstack` | M6 | TCP 리스너·다이얼 | |
+| `SwiftailNetstack` | M6 | Swift로 쓴 TCP: 리스너·다이얼 | |
 
 ### 노트에서 확인해 설계에 반영한 것
 
@@ -181,7 +192,7 @@ extension TailnetNode {
 | M3 | DERP만으로 통신 | UDP 직접 경로 없이 로컬 DERP 서버만으로 Go tsnet 피어의 UDP 에코와 왕복. TCP SYN에 SYN-ACK가 돌아온다. ACL이 막은 포트의 패킷은 버려진다 |
 | M4 | 직접 연결 | Go 피어와 루프백·LAN에서 직접 경로가 잡힌다(Go 쪽 상태에서 직접 주소 확인). 직접 경로를 막으면 DERP로 내려가고 풀면 다시 올라온다. 마무리: 실제 tailnet에서 NAT 뒤의 기기와 직접 경로 |
 | M5 | iOS 패킷 터널 | MagicDNS는 UDP 질의만 답한다(아래 8절 위험 12). 메모리 TUN으로 RemoteDebug `docs/tunnel.md`의 시험 계약에 대응하는 항목(설정 산출, UDP·TCP·MagicDNS, 다시 시작, 엔진 정지) 통과. 실기기: 시험용 터널 앱으로 Mac의 tailnet HTTPS에 접속, FQDN 해석, Wi-Fi ↔ 셀룰러 전환 뒤 복구, 유휴·전송 중 `phys_footprint` 기록 |
-| M6 | 프로세스 내 리스너 | Go 피어가 Swiftail 리스너에서 100MB를 내려받아 해시가 일치한다(손실·재정렬을 주입한 조건 포함). 반대 방향 다이얼도 같다 |
+| M6 | 프로세스 내 리스너(Swift TCP) | 상태 기계 단위 시험(손실·재정렬·중복·지연 주입)과, Go 피어(gVisor)·macOS 커널 스택을 상대로 한 100MB 양방향 전송의 해시 일치. 손실 1%·5% 조건에서 전송이 멈추지 않고 처리량을 기록한다 |
 | M7 | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
 
 메모리 목표(M5): 유휴 상주 20MiB 이하를 목표로 두고 실기기 측정으로 확정한다. Go 코어의 권장 한도 설정은 28MiB였다.
@@ -196,7 +207,7 @@ extension TailnetNode {
 | 4 | NAT 통과 성공률이 Go보다 낮다 | DERP로 항상 통신은 된다. 포트 매핑·피어 릴레이는 측정 뒤에 판단한다 |
 | 5 | iOS 확장: utun fd를 찾는 방법이 비공식이다. 확장 자신의 소켓이 터널로 되돌아올 수 있다 | RemoteDebug가 실기기에서 확인한 방법을 따른다. 소켓을 물리 인터페이스에 결속한다 |
 | 6 | 직접 구현한 암호의 부채널, 감사 부재 | 상수 시간 구현 규칙, 다른 제공자의 검토, README 고지 |
-| 7 | TCP 스택(4절 a) | M6 전에 확정. 1차 목표에 영향 없음 |
+| 7 | 직접 구현하는 TCP가 손실·재정렬 환경에서 멈추거나 느리다 | 상태 기계를 입출력에서 분리해 결정적 시험으로 덮고, 두 개의 독립 구현(gVisor, macOS 커널)을 상대로 확인한다. 1차 목표에는 영향 없음 |
 | 8 | tailnet lock을 켠 tailnet에서 서명 검증 없이 피어를 받아들이면 그 보호가 사라진다 | M2에서 결정: 지원 전까지는 lock이 켜진 tailnet을 감지해 접속을 거부하는 쪽을 기본으로 검토한다 |
 | 9 | Swift 패킷 경로의 처리량과 패킷당 할당 | M1에서 버퍼 재사용 구조를 정하고 M5에서 실기기 처리량을 잰다 |
 | 10 | 비공식 클라이언트로 Tailscale 운영 서버에 접속하는 것과 이름 사용이 약관·상표에 맞는지 확인하지 못했다 | 공개 배포 전에 사용자가 확인한다. 그 전까지 저장소는 로컬에만 둔다 |
@@ -208,8 +219,7 @@ extension TailnetNode {
 
 | 결정 | 기한 | 권장 |
 | --- | --- | --- |
-| 1차 목표를 M5(iOS 터널)로 둘지 | 지금 | M5 |
-| TCP 스택: lwIP 래핑 / Swift 직접 구현 | M6 전 | lwIP 래핑 |
+| 1차 목표를 M5(iOS 터널)로 둘지 | M5 전 | M5(M0~M4는 어느 쪽이든 같다) |
 | 실제 tailnet을 마무리 관문에 쓸지, 어떤 tailnet·태그로 등록할지 | M2 마무리 전 | 임시 노드 |
 | 실기기 시험용 터널 앱의 서명(팀, Network Extension 권한) | M5 전 | |
 | tailnet lock이 켜진 tailnet의 처리 | M2 | 접속 거부(Go 피어도 서명 없는 노드를 netmap에서 뺀다) |

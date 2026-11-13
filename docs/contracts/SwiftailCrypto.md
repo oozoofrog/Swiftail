@@ -13,7 +13,7 @@ CryptoKit에 없는 암호 기본기를 제공한다. X25519와 ChaCha20-Poly130
 
 ## 공개 API
 
-입력은 `some DataProtocol`, 키·nonce·출력은 `[UInt8]`이다. 길이가 틀린 키·nonce는 `CryptoError.invalidLength`를 던진다. `BLAKE2s.init`만 예외로, 잘못된 길이는 프로그래머 오류이므로 `precondition`으로 막는다.
+입력은 `some DataProtocol`, 키·nonce·출력은 `[UInt8]`이다. 길이가 틀린 키·nonce는 `CryptoError.invalidLength`를 던진다. 던지는 함수는 모두 타입 있는 오류(`throws(CryptoError)`)다. `BLAKE2s.init`만 예외로, 잘못된 길이는 프로그래머 오류이므로 `precondition`으로 막는다.
 
 ```swift
 public enum CryptoError: Error, Sendable, Equatable {
@@ -49,23 +49,23 @@ public enum NaClSecretBox {
     public static let keyByteCount = 32
     public static let nonceByteCount = 24
     public static let overhead = 16
-    public static func seal(_ plaintext: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws -> [UInt8]
-    public static func open(_ box: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws -> [UInt8]
+    public static func seal(_ plaintext: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws(CryptoError) -> [UInt8]
+    public static func open(_ box: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws(CryptoError) -> [UInt8]
 }
 
 /// NaCl crypto_box_curve25519xsalsa20poly1305의 사전 계산(beforenm).
 /// 결과 키로 NaClSecretBox.seal·open을 부르면 crypto_box와 같다.
 public enum NaClBox {
     /// HSalsa20(key: X25519(privateKey, peerPublicKey), input: 0^16). 32바이트.
-    public static func sharedKey(privateKey: [UInt8], peerPublicKey: [UInt8]) throws -> [UInt8]
+    public static func sharedKey(privateKey: [UInt8], peerPublicKey: [UInt8]) throws(CryptoError) -> [UInt8]
 }
 
 /// draft-irtf-cfrg-xchacha-03. 출력 배치는 ciphertext ‖ tag(16).
 public enum XChaCha20Poly1305 {
     public static let keyByteCount = 32
     public static let nonceByteCount = 24
-    public static func seal(_ plaintext: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws -> [UInt8]
-    public static func open(_ sealed: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws -> [UInt8]
+    public static func seal(_ plaintext: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8]
+    public static func open(_ sealed: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8]
 }
 
 /// 길이가 같으면 내용과 무관한 시간에 비교한다. 길이가 다르면 false.

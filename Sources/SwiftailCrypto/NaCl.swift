@@ -8,7 +8,7 @@ public enum NaClSecretBox {
     public static let overhead = 16
 
     /// plaintext를 암호화하고 인증한다. key는 32바이트, nonce는 24바이트여야 하며 아니면 `invalidLength`.
-    public static func seal(_ plaintext: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws -> [UInt8] {
+    public static func seal(_ plaintext: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws(CryptoError) -> [UInt8] {
         guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw CryptoError.invalidLength }
         let message = Array(plaintext)
         // 키스트림의 앞 32바이트는 Poly1305 키, 그 뒤가 암호화 스트림이다.
@@ -21,7 +21,7 @@ public enum NaClSecretBox {
 
     /// box(tag ‖ ciphertext)를 검증하고 복호화한다. 길이가 틀리면 `invalidLength`, 태그가 틀리면 `authenticationFailed`.
     /// 인증에 실패하면 평문을 돌려주지 않는다.
-    public static func open(_ box: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws -> [UInt8] {
+    public static func open(_ box: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws(CryptoError) -> [UInt8] {
         guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw CryptoError.invalidLength }
         let bytes = Array(box)
         guard bytes.count >= overhead else { throw CryptoError.invalidLength }
@@ -41,7 +41,7 @@ public enum NaClSecretBox {
 public enum NaClBox {
     /// HSalsa20(key: X25519(privateKey, peerPublicKey), input: 0^16). 32바이트.
     /// 길이가 32바이트가 아니면 `invalidLength`, X25519 결과가 전부 0이면 `invalidKey`.
-    public static func sharedKey(privateKey: [UInt8], peerPublicKey: [UInt8]) throws -> [UInt8] {
+    public static func sharedKey(privateKey: [UInt8], peerPublicKey: [UInt8]) throws(CryptoError) -> [UInt8] {
         guard privateKey.count == 32, peerPublicKey.count == 32 else { throw CryptoError.invalidLength }
         let secret: [UInt8]
         do {
@@ -62,34 +62,38 @@ public enum XChaCha20Poly1305 {
     public static let nonceByteCount = 24
 
     /// 부분 키 = HChaCha20(key, nonce[0..<16]), ChaCha20-Poly1305 nonce = 0^4 ‖ nonce[16..<24].
-    private static func subkeyAndNonce(key: [UInt8], nonce: [UInt8]) throws -> (SymmetricKey, ChaChaPoly.Nonce) {
-        guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw CryptoError.invalidLength }
+    private static func subkeyAndNonce(key: [UInt8], nonce: [UInt8]) throws(CryptoError) -> (SymmetricKey, ChaChaPoly.Nonce) {
+        guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw .invalidLength }
         let subkey = hchacha20(key: key, input: Array(nonce[0..<16]))
-        let chachaNonce = try ChaChaPoly.Nonce(data: [UInt8](repeating: 0, count: 4) + nonce[16..<24])
+        // 12바이트이므로 실패하지 않지만 CryptoKit의 오류 타입을 밖으로 내보내지 않는다.
+        guard let chachaNonce = try? ChaChaPoly.Nonce(data: [UInt8](repeating: 0, count: 4) + nonce[16..<24]) else {
+            throw .invalidLength
+        }
         return (SymmetricKey(data: subkey), chachaNonce)
     }
 
     /// plaintext를 암호화하고 aad와 함께 인증한다. key는 32바이트, nonce는 24바이트여야 하며 아니면 `invalidLength`.
-    public static func seal(_ plaintext: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws -> [UInt8] {
+    public static func seal(_ plaintext: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8] {
         let (subkey, chachaNonce) = try subkeyAndNonce(key: key, nonce: nonce)
-        let box = try ChaChaPoly.seal(plaintext, using: subkey, nonce: chachaNonce, authenticating: aad)
+        guard let box = try? ChaChaPoly.seal(plaintext, using: subkey, nonce: chachaNonce, authenticating: aad) else {
+            throw .invalidLength
+        }
         return Array(box.ciphertext) + Array(box.tag)
     }
 
     /// sealed(ciphertext ‖ tag)를 검증하고 복호화한다. 길이가 틀리면 `invalidLength`, 태그가 틀리면 `authenticationFailed`.
-    public static func open(_ sealed: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws -> [UInt8] {
+    public static func open(_ sealed: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8] {
         let (subkey, chachaNonce) = try subkeyAndNonce(key: key, nonce: nonce)
         let bytes = Array(sealed)
         guard bytes.count >= 16 else { throw CryptoError.invalidLength }
-        let box = try ChaChaPoly.SealedBox(
+        guard let box = try? ChaChaPoly.SealedBox(
             nonce: chachaNonce,
             ciphertext: bytes[0..<(bytes.count - 16)],
             tag: bytes[(bytes.count - 16)...]
-        )
-        do {
-            return Array(try ChaChaPoly.open(box, using: subkey, authenticating: aad))
-        } catch {
-            throw CryptoError.authenticationFailed
+        ) else { throw .invalidLength }
+        guard let plaintext = try? ChaChaPoly.open(box, using: subkey, authenticating: aad) else {
+            throw .authenticationFailed
         }
+        return Array(plaintext)
     }
 }
