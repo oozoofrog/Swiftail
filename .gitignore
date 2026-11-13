@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+*.xcresult
+
+# 실제 tailnet 시험의 로그·상태. 노드 이름, tailnet 주소, 키가 들어 있을 수 있다.
+interop-evidence/
+*.state
