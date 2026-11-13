@@ -150,23 +150,105 @@ public struct MapSession: Sendable {
 
 시험: 노트 3.1절의 JSON 예와 Go가 만든 자료(`Tests/SwiftailControlTests/Fixtures/`, 다른 단위가 만든다)로 해독·부호화를 확인한다. 증분 적용은 Go의 실제 `mapSession`에 같은 응답 열을 넣어 얻은 결과와 비교한다. `null`·빈 배열·생략의 구분, 마지막 피어 제거, 조각난 프레임, 한도 초과, 첫 응답에 Node 없음.
 
-## 단위 4: ControlClient (단위 1~3이 합쳐진 뒤 계약을 확정한다)
+## 단위 4: ControlClient (`Sources/SwiftailControl/Client/`)
 
-방향만 적는다.
+단위 1~3의 상태 기계를 실제 연결에 잇는 가장자리다. 소켓과 시계는 여기에만 있다.
 
 ```swift
+/// 노드의 신원: 기기를 가리키는 machine 키와 WireGuard에 쓰는 node 키.
+public struct NodeIdentity: Sendable {
+    public var machineKey: Curve25519.KeyAgreement.PrivateKey
+    /// 등록을 마친 node 키. 아직 등록한 적이 없으면 nil.
+    public var nodeKey: Curve25519.KeyAgreement.PrivateKey?
+    public init()                                   // 새 machine 키, node 키 없음
+    public var machinePublicKey: MachinePublicKey { get }
+    public var nodePublicKey: NodePublicKey? { get }
+}
+
+/// 신원을 디렉터리의 파일 하나에 둔다. 다시 시작해도 같은 노드로 뜨게 하는 유일한 상태다.
+public struct NodeIdentityStore: Sendable {
+    public init(directory: URL)
+    public func load() throws(ControlError) -> NodeIdentity?    // 파일이 없으면 nil
+    public func save(_ identity: NodeIdentity) throws(ControlError)
+}
+
+public enum ControlError: Error, Sendable {
+    case invalidConfiguration(String)
+    case storage(String)                    // 신원 파일을 읽거나 쓰지 못함
+    case connection(String)                 // 연결·전송 계층 실패(재시도 대상)
+    case http(status: Int)                  // 200이 아닌 응답(429·503의 대기는 내부에서 처리)
+    case registrationRejected(String)       // RegisterResponse.Error
+    case nodeKeyExpired                     // 새 키로 다시 등록해도 만료
+    case tailnetLockEnabled                 // tailnet lock이 켜진 tailnet. 지원하지 않는다
+}
+
 public actor ControlClient {
-    public init(serverURL: URL, identity: NodeIdentity, hostinfo: Hostinfo)
-    /// 등록한다. 대화형 로그인이 필요하면 URL을 알리고 완료를 기다린다.
-    public func register(authKey: String?) async throws(ControlError) -> RegistrationResult
-    /// 맵 스트림을 열고 netmap이 바뀔 때마다 내놓는다. 끊기면 물러났다가 다시 잇는다.
-    public func netmaps() -> AsyncThrowingStream<Netmap, Error>
-    /// 엔드포인트·disco 키·Hostinfo 변경을 알린다(스트림을 끊지 않는 형태의 요청).
-    public func updateStatus(_ status: NodeStatusUpdate) async throws(ControlError)
+    public struct Configuration: Sendable {
+        public var serverURL: URL             // http:// 또는 https://
+        public var hostname: String
+        public var authKey: String?           // 첫 등록에만 쓴다. 로그에 남기지 않는다
+        public var ephemeral: Bool
+        public init(serverURL: URL, hostname: String, authKey: String? = nil, ephemeral: Bool = false)
+    }
+
+    public enum Event: Sendable {
+        /// 사용자가 이 URL에서 로그인해야 등록이 끝난다.
+        case loginRequired(URL)
+        /// 등록이 끝났다. 신원은 저장되었다.
+        case registered(NodePublicKey)
+        /// netmap이 바뀌었다(맵 스트림의 첫 응답 포함).
+        case netmap(Netmap)
+        /// 맵 스트림이 끊겼다. 물러났다가 다시 잇는다. 그동안 마지막 netmap은 유효하다.
+        case disconnected
+    }
+
+    /// 지금 알려 둘 이 노드의 상태. 맵 스트림과 별개의 요청으로 올라간다.
+    public struct LocalStatus: Sendable, Equatable {
+        public var discoKey: DiscoPublicKey
+        public var endpoints: [IPEndpoint]
+        public var endpointTypes: [EndpointType]
+        public var netInfo: NetInfo?
+        public init(discoKey: DiscoPublicKey = .zero, endpoints: [IPEndpoint] = [], endpointTypes: [EndpointType] = [], netInfo: NetInfo? = nil)
+    }
+
+    public init(configuration: Configuration, identityStore: NodeIdentityStore)
+
+    /// 사건의 흐름. 구독자는 하나다.
+    public nonisolated var events: AsyncStream<Event> { get }
+
+    /// 등록하고, 상태를 올리고, 맵 스트림을 유지한다. 끊기면 물러났다가 다시 잇는다.
+    /// 호출한 Task가 취소될 때까지 돌아오지 않는다. 다시 시도해도 소용없는 실패는 던진다.
+    public func run() async throws(ControlError)
+
+    /// 상태를 바꾼다. 연결되어 있으면 곧 올리고, 아니면 다음 연결 때 올린다. 마지막 값만 남는다.
+    public func setLocalStatus(_ status: LocalStatus)
+
+    /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도).
+    public func startInteractiveLogin()
 }
 ```
 
-신원 저장(machine 키, node 키, 등록 결과)도 이 단위에서 정한다.
+동작(노트 control-map 4.1·4.2·4.4·4.5, control-transport 4장):
+
+1. **연결**: `GET <serverURL>/key?v=148`(URLSession)로 서버 키를 얻는다. `http://`이면 그 포트로 TCP, `https://`이면 443으로 TLS 연결을 열고(Network 프레임워크) 업그레이드 → Noise → early payload → HTTP/2. 연결 하나에 요청을 다중화한다. 끊기면 다음 요청 때 새로 맺는다.
+   - `shortcut:` 80·443 경쟁, ControlDialPlan, 프록시는 없다. 필요해지는 시점: 443이 막힌 망이 보고될 때.
+   - `/key`의 TLS는 검증한다. 업그레이드 연결의 TLS도 검증한다(Go는 Noise가 서버를 인증하므로 검증 실패를 넘기지만, 여기서는 더 엄격하게 둔다).
+2. **등록**: 저장된 node 키가 있으면 그것으로, 없으면 새 후보 키로 `POST /machine/register`.
+   - 인증 키가 `--TL`을 담고 있으면 그 앞부분만 보낸다.
+   - `AuthURL`이 오면 `loginRequired`를 내고 같은 후보 키로 `Followup` 요청(긴 폴링)을 반복한다. 후보 키는 인증이 끝난 뒤에만 확정·저장한다.
+   - `NodeKeyExpired`면 새 키로 한 번 더. `Error`면 `registrationRejected`.
+3. **상태 올리기**: `Stream=false, OmitPeers=true`인 맵 요청으로 Hostinfo·NetInfo·DiscoKey·Endpoints를 올린다. 응답 본문은 끝까지 읽고 버린다. 스트림이 열린 뒤의 변경도 이 형태로만 보낸다(다른 형태는 서버가 기존 스트림을 끊는다).
+4. **맵 스트림**: `Stream=true, KeepAlive=true, Compress=""`. 바이트를 `MapResponseFramer` → `MapSession`에 넣고 netmap이 바뀌면 `netmap` 사건을 낸다. 120초 동안 아무것도 오지 않으면 끊고 다시 잇는다. 다시 이을 때는 새 `MapSession`으로 시작한다.
+   - `TKAInfo`로 tailnet lock이 켜진 것을 알면 `tailnetLockEnabled`로 끝낸다.
+   - self 노드의 키가 만료되면 등록부터 다시 한다.
+   - `PingRequest`(Types가 빈 것)는 그 URL에 HEAD로 답한다. 나머지 종류는 무시한다.
+5. **물러나기**: `min(n² × 10ms, 30s) × [0.5, 1.5)`. 전체 netmap을 받으면 초기화한다. 429와 `Retry-After`가 붙은 503은 그 시간만큼 기다린다(최대 5분).
+6. **Hostinfo**: 노트 3.3절의 최소 필드. OS 이름과 버전, 호스트 이름, 앱 버전 자리에는 Swiftail임을 드러내는 값을 넣는다(공식 클라이언트로 가장하지 않는다).
+7. **신원 파일**: 디렉터리 안의 파일 하나(JSON, 키는 `privkey:` + 16진). 원자적으로 쓰고 소유자만 읽게(0600) 한다. 키를 로그·오류·description에 넣지 않는다.
+
+구조: 연결 하나(소켓, `ControlSession`, `HTTP2ClientConnection`, 읽기 루프)를 감싼 internal 타입을 두고, 그 위에 "요청 하나를 보내 응답을 받는다"와 "응답 본문을 흘려 받는다" 두 가지를 얹는다. 등록·맵·상태 올리기는 그 둘로 쓴다. 구조적 동시성을 쓴다(분리된 Task를 흩뿌리지 않는다. 취소는 `run()`을 부른 Task의 취소로 전파된다).
+
+단위 시험: 신원 저장(왕복, 파일 권한, 손상된 파일), 물러나기 계산, `--TL` 인증 키 자르기, Retry-After 해석, Hostinfo 부호화. 네트워크가 필요한 것은 아래 관문에서 다룬다.
 
 ## M2 관문
 
