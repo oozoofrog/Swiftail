@@ -44,3 +44,74 @@ GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-s
 - `setAuth`는 첫 제어 요청 전에 `requireAuth`와 `authKey`를 설정한다. 키는 testcontrol이 단일 문자열로 비교하며 만료·재사용·태그 정책은 없다. 대화형 인증은 반환받은 로그인 URL을 `authURL`로 넘겨 성공 완료한다. 실패 완료와 기기 승인 조작은 지원하지 않는다. 키를 요구하면 addPeer에도 같은 키를 사용한다. 대화형 인증을 요구하는 동안 addPeer는 완료까지 대기하므로 Swift 노드의 등록 시험에 사용한다.
 
 기본 등록은 자동 승인이다. testcontrol의 기본 맵은 self Node, 전체 Peers, DERPMap, DNSConfig, PacketFilter 등을 포함하며 ControlTime은 고정 시각이다. 시험 로그 업로드는 `logtail.Disable()`과 `TS_NO_LOGS_NO_SUPPORT=true`로 끄고 portmapper도 비활성화한다. testcontrol의 인증 키 비교는 상수 시간이 아닌 upstream 구현이므로 시험용 값만 사용한다.
+
+# h2server
+
+`sh Scripts/build-interop-tools.sh h2server`으로 빌드한다. `127.0.0.1`의 임의 포트에서 TLS·HTTP/1 업그레이드 없는 prior knowledge HTTP/2를 받는다. 준비 출력은 `{"event":"ready","port":12345}` 한 줄이다. `golang.org/x/net/http2` v0.60.0의 `Server.ServeConn`을 기본 설정으로 사용한다. Go 1.27.3에서는 이것이 표준 라이브러리 HTTP/2 서버에 위임된다. `ConfigureServer`는 `http.Server.Shutdown`의 정상 GOAWAY 경로를 연결하기 위해 사용한다(testcontrol의 ServeConn과 같은 프레임 구현).
+
+| 요청 | 응답 |
+| --- | --- |
+| `GET /small` | 200, `ok` |
+| `POST /echo` | 200, 요청 본문 그대로. 최대 8MiB, 초과하면 413 |
+| `GET /bytes?size=N` | 200, N바이트. 0부터 세어 i번째 바이트는 `i % 251`. N은 0…8MiB |
+| `GET /stream?count=N&intervalMs=M` | 200, M밀리초 대기 후 `0\n`, `1\n`, …을 각각 flush. N=0이면 취소될 때까지. N은 0…1,000,000, M은 0…60,000 |
+| `GET /headers?count=N&size=S` | 200, `x-test-0`…`x-test-(N-1)`. 각 값은 j번째 문자가 `a + j % 26`인 S바이트 문자열. N≤1024, S≤64KiB, `N*(S+64)`≤1MiB |
+| `GET /status?code=N` | 최종 상태 N(200…599), 빈 본문 |
+
+음수·누락·범위 밖 숫자는 400, 다른 메서드는 405, 다른 경로는 404다. Date 헤더는 생성하지 않는다. `/stream`은 응답 헤더부터 flush하므로 첫 줄 전에도 다른 요청을 보낼 수 있다. 큰 `/headers`는 CONTINUATION과 허프만 해독을 시험한다. 동적 표를 재사용하는 시험은 같은 연결에서 `/headers?count=4&size=20`을 두 번 호출한다. 큰 헤더 전체는 4096바이트 동적 표에 남을 수 없으므로 그 경우 모든 필드의 재색인을 기대하면 안 된다.
+
+표준 입력은 JSON 줄이다. `{"cmd":"goaway"}`는 리스너를 닫고 정상 Shutdown으로 GOAWAY를 보내 새 스트림을 거절한다. 기존 스트림은 계속된다. `{"cmd":"quit"}` 또는 EOF는 모든 연결을 닫는다. 잘못된 명령은 `{"event":"error","message":"…"}` 한 줄이다. 표준 출력은 JSON 줄만, 로그는 표준 오류다. 기본 서버 설정을 유지하므로 서버 발신 PING을 강제로 발생시키는 명령은 없다.
+
+# HPACK 자료 생성
+
+다음 명령은 저장소 루트에서 실행한다. 외부 네트워크 없이 이미 받은 기준 모듈과 도구 체인을 사용한다.
+
+```sh
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
+(cd Tools/interop && go run ./cmd/h2server -hpack-fixtures ../../Tests/SwiftailHTTP2Tests/Fixtures/hpack.json)
+```
+
+`hpack.json`은 연결 배열이다. 연결의 `name`은 설명, `blocks`는 순서 있는 헤더 블록 배열이다. 블록의 `hex`는 HPACK 바이트의 소문자 16진 문자열, `headers`는 기대 헤더 배열이다. 헤더는 `name`, `value`, `sensitive`를 모두 가진다. 연결마다 새 해독기를 만들고 같은 연결의 블록 사이에는 동적 표를 유지한다. 해독기의 허용 최대 동적 표 크기는 4096이다.
+
+Go `golang.org/x/net/http2/hpack.Encoder`가 허프만과 표현 방식을 선택한다. 2연결·10블록으로 정적 색인, 동적 추가·재색인·축출, 4096→128→0→4096 및 한 블록의 0→512 표 크기 갱신, 빈 값, 4096바이트 값, `Sensitive=true`의 never indexed를 포함한다. 생성된 모든 블록은 Go Decoder로 다시 해독하여 검증한다.
+
+# mapfixtures
+
+맵 응답을 Go의 실제 `mapSession`에 차례로 넣고 정규화한 상태와 요청 JSON을 생성한다. Swift 구현은 읽거나 호출하지 않는다. 빌드는 `sh Scripts/build-interop-tools.sh mapfixtures`, 실행은 `Tools/interop`을 현재 폴더로 한다. 위 환경 변수를 설정한 뒤 저장소 루트에서 실행한다.
+
+```sh
+(cd Tools/interop && go run ./cmd/mapfixtures ../../Tests/SwiftailControlTests/Fixtures)
+```
+
+`tailscale.com` v1.104.6을 `go list -m`으로 찾고 `eyebuild dir interop-tools` 아래에 임시 복사한다. Go는 GOMODCACHE 내부 overlay를 거부하고 embed는 링크 파일을 거부하므로 복사본이 필요하다. 임시 `-modfile`의 로컬 replace로 그 복사본을 지정하고, `-overlay`로 `control/controlclient/swiftail_fixtures.go` 한 파일만 추가한다. 추가 파일은 `newMapSession`과 `HandleNonKeepAliveMapResponse`를 호출하고 `NetmapUpdater.UpdateFullNetmap`에서 실제 netmap을 받는다. delta updater는 구현하지 않아 Go의 전체 netmap 출력 경로를 사용한다. 적용 로직은 다시 구현하지 않는다. `KeepAlive`만 upstream `direct.go`처럼 mapSession 진입 전에 건너뛴다. 모듈 캐시는 수정하지 않으며 임시 복사본·overlay·modfile은 종료 시 지운다.
+
+`PeerSeenChange=true`에 쓰이는 패키지 시계와 세션 시계는 `2026-01-02T03:04:05.123456789Z`로 고정한다. 공개 키는 `SHA-256("swiftail-fixtures/node/<번호>")` 또는 `.../disco/<번호>`를 X25519 private 입력으로 사용해 유도한다. NLKey는 `SHA-256("swiftail-fixtures/lock")`을 Ed25519 시드로 사용한다. 시험용 공개 시드이며 운영 키가 아니다. 현재 시각·난수·실제 tailnet은 자료에 들어가지 않는다.
+
+`map-sessions.json`은 시나리오 배열이다. `name`과 `steps`를 가지며 단계는 설명 `name`, 원문 문자열 `response`, 정규화 객체 또는 null인 `netmap`이다. `response`를 한 번 더 JSON 해독한 값을 Go에 전달한다. 원문을 tailcfg 타입으로 재부호화하지 않아 키 생략·`null`·`[]`·`{}`를 보존한다. 단계의 정규화 상태가 이전 상태와 같으면 `netmap`은 null이다(Go 콜백 발생 여부를 뜻하지 않는다). 각 시나리오는 새 세션으로 시작한다.
+
+정규화한 netmap은 아래 키를 항상 가진다. 객체 키의 순서는 의미가 없다. 64비트 ID는 부동소수점을 거치지 않고 비교한다.
+
+| 키 | 형식 |
+| --- | --- |
+| `SelfNode` | 아래 Node 투영 객체 |
+| `Peers` | ID 숫자 오름차순의 Node 투영 배열. 비면 `[]` |
+| `DERPMap` | null 또는 Go `tailcfg.DERPMap`의 JSON. `Regions`는 10진 ID 문자열→지역 객체, 각 지역의 `Nodes`는 Go 순서다. `omitDefaultRegions`는 소문자로 시작하며 false이면 생략된다. `HomeParams.RegionScore`는 비면 생략된다 |
+| `DNSConfig` | Go `tailcfg.DNSConfig` JSON 객체. 초기 zero 객체도 출력한다. nil DNSConfig 응답은 이전 객체 유지 |
+| `PacketFilter` | 이름 순으로 연결된 적용 후 `tailcfg.FilterRule` 배열. 비면 `[]`. 각 규칙은 Go JSON 그대로 |
+| `UserProfiles` | 현재 self.User·peer.User·peer.Sharer에 필요한 프로필만 있는 10진 UserID 문자열→Go `tailcfg.UserProfile` JSON 객체 |
+| `Domain` | 문자열 |
+| `TKAEnabled` | bool |
+
+Node 투영은 `ID`, `StableID`, `Name`, `Key`, `DiscoKey`, `Addresses`, `AllowedIPs`, `Endpoints`, `HomeDERP`, `Online`, `LastSeen`, `KeyExpiry`, `Expired`, `Cap`, `CapMap`, `User`, `Sharer`, `MachineAuthorized`를 항상 출력한다. ID·User·Sharer·HomeDERP·Cap은 정수, StableID·Name은 문자열, 키는 `nodekey:`/`discokey:`+64자리 hex다. Addresses·AllowedIPs는 CIDR 문자열 배열, Endpoints는 IP:port 문자열 배열이며 이 세 배열의 nil은 `[]`로 정규화한다. Online은 bool 또는 null, LastSeen은 RFC3339Nano 문자열 또는 null, KeyExpiry는 RFC3339Nano 문자열(zero면 `0001-01-01T00:00:00Z`), Expired·MachineAuthorized는 bool이다. 시간은 Go가 보존한 오프셋을 그대로 쓴다. CapMap은 null 또는 capability 문자열→raw JSON 값 배열/null 객체이며 null과 빈 배열을 임의로 합치지 않는다. 그 밖의 Node 필드·계산한 표시 이름·ControlTime은 이 투영에서 제외한다.
+
+`requests.json`은 사례 배열이다. `name`, `type`(`RegisterRequest` 또는 `MapRequest`), `input`(명시적으로 채운 값의 JSON 객체), `json`(Go `encoding/json.Marshal` 원문 문자열)을 가진다. input에 없는 필드는 해당 Go 타입의 zero 값이다. 중첩 객체도 같은 규칙이다. 비교 대상은 json의 공백·키 순서가 아니라 해독한 객체와 필드의 존재 여부다. zero RegisterRequest·MapRequest, 인증 키·Followup·OldNodeKey·Expiry, 스트림·상태 갱신, Hostinfo·NetInfo 사례가 `omitempty`/`omitzero` 차이를 드러낸다.
+
+특히 `peer-full-empty-omitted`에서 Peers의 빈 배열과 생략은 모두 피어를 유지한다(전체 교체 조건은 `len(Peers)>0`). `derp-replacement-and-preservation`에서 Regions 객체는 지역별 patch가 아니라 전체 교체이며 nil 지역은 제거된다. Regions가 null이면 이전 Regions와 omitDefaultRegions를 함께 유지한다. `packet-filters`에서 빈 PacketFilter는 `base`만 비우고 다른 이름은 남긴다. `"*":null`은 같은 응답의 PacketFilter 적용 뒤 모든 이름을 비운다. `profiles-domain-tka`에서 프로필 저장소는 누적되지만 출력 netmap에는 현재 참조하는 사용자만 나타난다. `peer-patches`에서 과거 KeyExpiry만으로 Expired가 true가 되지 않으며, seen·online 변경 뒤 patch가 적용된다.
+
+전체 Go 검증은 다음과 같다. `interop-tools`·`ref-src` 폴더는 유지한다.
+
+```sh
+(cd Tools/interop && go vet ./... && go test -count=1 ./...)
+```

@@ -1,0 +1,154 @@
+[
+  {
+    "name": "인증 키 등록",
+    "type": "RegisterRequest",
+    "input": {
+      "Auth": {
+        "AuthKey": "tskey-auth-fake"
+      },
+      "Hostinfo": {
+        "IPNVersion": "swiftail-test",
+        "BackendLogID": "fake-log-id",
+        "OS": "darwin",
+        "Hostname": "rd-mac-1a2b3c4d",
+        "Userspace": true
+      },
+      "NLKey": "nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35",
+      "NodeKey": "nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d",
+      "Version": 148
+    },
+    "json": "{\"Version\":148,\"NodeKey\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"OldNodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"NLKey\":\"nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35\",\"Auth\":{\"AuthKey\":\"tskey-auth-fake\"},\"Expiry\":\"0001-01-01T00:00:00Z\",\"Followup\":\"\",\"Hostinfo\":{\"IPNVersion\":\"swiftail-test\",\"BackendLogID\":\"fake-log-id\",\"OS\":\"darwin\",\"Hostname\":\"rd-mac-1a2b3c4d\",\"Userspace\":true},\"NodeKeySignature\":null}"
+  },
+  {
+    "name": "Followup 등록",
+    "type": "RegisterRequest",
+    "input": {
+      "Followup": "https://control.tail0001.test/auth/fake",
+      "Hostinfo": {
+        "IPNVersion": "swiftail-test",
+        "BackendLogID": "fake-log-id",
+        "OS": "darwin",
+        "Hostname": "rd-mac-1a2b3c4d",
+        "Userspace": true
+      },
+      "NLKey": "nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35",
+      "NodeKey": "nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d",
+      "Version": 148
+    },
+    "json": "{\"Version\":148,\"NodeKey\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"OldNodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"NLKey\":\"nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35\",\"Expiry\":\"0001-01-01T00:00:00Z\",\"Followup\":\"https://control.tail0001.test/auth/fake\",\"Hostinfo\":{\"IPNVersion\":\"swiftail-test\",\"BackendLogID\":\"fake-log-id\",\"OS\":\"darwin\",\"Hostname\":\"rd-mac-1a2b3c4d\",\"Userspace\":true},\"NodeKeySignature\":null}"
+  },
+  {
+    "name": "키 교체",
+    "type": "RegisterRequest",
+    "input": {
+      "Hostinfo": {
+        "IPNVersion": "swiftail-test",
+        "BackendLogID": "fake-log-id",
+        "OS": "darwin",
+        "Hostname": "rd-mac-1a2b3c4d",
+        "Userspace": true
+      },
+      "NLKey": "nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35",
+      "NodeKey": "nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064",
+      "OldNodeKey": "nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d",
+      "Version": 148
+    },
+    "json": "{\"Version\":148,\"NodeKey\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"OldNodeKey\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"NLKey\":\"nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35\",\"Expiry\":\"0001-01-01T00:00:00Z\",\"Followup\":\"\",\"Hostinfo\":{\"IPNVersion\":\"swiftail-test\",\"BackendLogID\":\"fake-log-id\",\"OS\":\"darwin\",\"Hostname\":\"rd-mac-1a2b3c4d\",\"Userspace\":true},\"NodeKeySignature\":null}"
+  },
+  {
+    "name": "로그아웃",
+    "type": "RegisterRequest",
+    "input": {
+      "Expiry": "1970-01-01T00:02:03Z",
+      "Hostinfo": {
+        "IPNVersion": "swiftail-test",
+        "BackendLogID": "fake-log-id",
+        "OS": "darwin",
+        "Hostname": "rd-mac-1a2b3c4d",
+        "Userspace": true
+      },
+      "NLKey": "nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35",
+      "NodeKey": "nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d",
+      "Version": 148
+    },
+    "json": "{\"Version\":148,\"NodeKey\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"OldNodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"NLKey\":\"nlpub:93db174a0781a56b69c37171dbc23325bc75e758205d9f88bc3f42131767ce35\",\"Expiry\":\"1970-01-01T00:02:03Z\",\"Followup\":\"\",\"Hostinfo\":{\"IPNVersion\":\"swiftail-test\",\"BackendLogID\":\"fake-log-id\",\"OS\":\"darwin\",\"Hostname\":\"rd-mac-1a2b3c4d\",\"Userspace\":true},\"NodeKeySignature\":null}"
+  },
+  {
+    "name": "스트림 맵",
+    "type": "MapRequest",
+    "input": {
+      "DiscoKey": "discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b",
+      "KeepAlive": true,
+      "NodeKey": "nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d",
+      "Stream": true,
+      "Version": 148
+    },
+    "json": "{\"Version\":148,\"KeepAlive\":true,\"NodeKey\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Stream\":true,\"Hostinfo\":null}"
+  },
+  {
+    "name": "상태 갱신",
+    "type": "MapRequest",
+    "input": {
+      "DiscoKey": "discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b",
+      "EndpointTypes": [
+        1,
+        2
+      ],
+      "Endpoints": [
+        "100.64.0.1:41641",
+        "[fd7a:115c:a1e0::1]:41641"
+      ],
+      "Hostinfo": {
+        "IPNVersion": "swiftail-test",
+        "BackendLogID": "fake-log-id",
+        "OS": "darwin",
+        "Hostname": "rd-mac-1a2b3c4d",
+        "Userspace": true
+      },
+      "NodeKey": "nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d",
+      "OmitPeers": true,
+      "Stream": false,
+      "Version": 148
+    },
+    "json": "{\"Version\":148,\"NodeKey\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Hostinfo\":{\"IPNVersion\":\"swiftail-test\",\"BackendLogID\":\"fake-log-id\",\"OS\":\"darwin\",\"Hostname\":\"rd-mac-1a2b3c4d\",\"Userspace\":true},\"Endpoints\":[\"100.64.0.1:41641\",\"[fd7a:115c:a1e0::1]:41641\"],\"EndpointTypes\":[1,2],\"OmitPeers\":true}"
+  },
+  {
+    "name": "zero 등록",
+    "type": "RegisterRequest",
+    "input": {},
+    "json": "{\"Version\":0,\"NodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"OldNodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"NLKey\":\"nlpub:0000000000000000000000000000000000000000000000000000000000000000\",\"Expiry\":\"0001-01-01T00:00:00Z\",\"Followup\":\"\",\"Hostinfo\":null,\"NodeKeySignature\":null}"
+  },
+  {
+    "name": "zero 맵",
+    "type": "MapRequest",
+    "input": {},
+    "json": "{\"Version\":0,\"NodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"DiscoKey\":\"discokey:0000000000000000000000000000000000000000000000000000000000000000\",\"Hostinfo\":null}"
+  },
+  {
+    "name": "최소 Hostinfo",
+    "type": "RegisterRequest",
+    "input": {
+      "Hostinfo": {
+        "Hostname": "rd-mac-1a2b3c4d"
+      }
+    },
+    "json": "{\"Version\":0,\"NodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"OldNodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"NLKey\":\"nlpub:0000000000000000000000000000000000000000000000000000000000000000\",\"Expiry\":\"0001-01-01T00:00:00Z\",\"Followup\":\"\",\"Hostinfo\":{\"Hostname\":\"rd-mac-1a2b3c4d\"},\"NodeKeySignature\":null}"
+  },
+  {
+    "name": "최소 NetInfo",
+    "type": "MapRequest",
+    "input": {
+      "Hostinfo": {
+        "NetInfo": {
+          "DERPLatency": {
+            "1-v4": 0.001
+          },
+          "PreferredDERP": 1,
+          "WorkingIPv6": false,
+          "WorkingUDP": true
+        }
+      }
+    },
+    "json": "{\"Version\":0,\"NodeKey\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000000\",\"DiscoKey\":\"discokey:0000000000000000000000000000000000000000000000000000000000000000\",\"Hostinfo\":{\"NetInfo\":{\"WorkingIPv6\":false,\"WorkingUDP\":true,\"PreferredDERP\":1,\"DERPLatency\":{\"1-v4\":0.001}}}}"
+  }
+]

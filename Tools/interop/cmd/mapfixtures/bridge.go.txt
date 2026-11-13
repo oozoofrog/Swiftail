@@ -1,0 +1,121 @@
+// 호출 대상: tailscale.com v1.104.6 control/controlclient/map.go (BSD-3-Clause).
+// 적용 로직은 복제하지 않고 실제 mapSession의 진입점과 netmap 출력을 사용한다.
+package controlclient
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
+	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
+)
+
+type swiftailFixtureClock struct{ tstime.StdClock }
+
+func (swiftailFixtureClock) Now() time.Time {
+	return time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
+}
+func (c swiftailFixtureClock) Since(t time.Time) time.Duration { return c.Now().Sub(t) }
+
+type swiftailFixtureUpdater struct{ latest *netmap.NetworkMap }
+
+func (u *swiftailFixtureUpdater) UpdateFullNetmap(n *netmap.NetworkMap) { u.latest = n }
+
+func swiftailFixtureNode(v tailcfg.NodeView) any {
+	if !v.Valid() {
+		return nil
+	}
+	n := v.AsStruct()
+	return map[string]any{
+		"ID": n.ID, "StableID": n.StableID, "Name": n.Name, "Key": n.Key, "DiscoKey": n.DiscoKey,
+		"Addresses": swiftailNonNil(n.Addresses), "AllowedIPs": swiftailNonNil(n.AllowedIPs), "Endpoints": swiftailNonNil(n.Endpoints),
+		"HomeDERP": n.HomeDERP, "Online": n.Online, "LastSeen": n.LastSeen, "KeyExpiry": n.KeyExpiry,
+		"Expired": n.Expired, "Cap": n.Cap, "CapMap": n.CapMap, "User": n.User, "Sharer": n.Sharer,
+		"MachineAuthorized": n.MachineAuthorized,
+	}
+}
+func swiftailNonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+func swiftailFixtureNetmap(n *netmap.NetworkMap) ([]byte, error) {
+	peers := make([]any, 0, len(n.Peers))
+	for _, p := range n.Peers {
+		peers = append(peers, swiftailFixtureNode(p))
+	}
+	profiles := make(map[tailcfg.UserID]*tailcfg.UserProfile)
+	for id, p := range n.UserProfiles {
+		profiles[id] = p.AsStruct()
+	}
+	return json.Marshal(map[string]any{
+		"SelfNode": swiftailFixtureNode(n.SelfNode), "Peers": peers, "DERPMap": n.DERPMap,
+		"DNSConfig": n.DNS, "PacketFilter": swiftailNonNil(n.PacketFilterRules.AsSlice()),
+		"UserProfiles": profiles, "Domain": n.Domain, "TKAEnabled": n.TKAEnabled,
+	})
+}
+
+// SwiftailFixtureMaps는 독립 실행하는 자료 생성 프로세스에서만 호출한다.
+func SwiftailFixtureMaps(input []byte) ([]byte, error) {
+	var scenarios []struct {
+		Name  string `json:"name"`
+		Steps []struct {
+			Name     string          `json:"name"`
+			Response string          `json:"response"`
+			Netmap   json.RawMessage `json:"netmap"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(input, &scenarios); err != nil {
+		return nil, err
+	}
+	oldClock := clock
+	clock = swiftailFixtureClock{}
+	defer func() { clock = oldClock }()
+	seed := sha256.Sum256([]byte("swiftail-fixtures/node/1"))
+	var private key.NodePrivate
+	if err := private.UnmarshalText([]byte("privkey:" + hex.EncodeToString(seed[:]))); err != nil {
+		return nil, err
+	}
+	for si := range scenarios {
+		u := new(swiftailFixtureUpdater)
+		ms := newMapSession(private, u, nil)
+		ms.altClock = swiftailFixtureClock{}
+		var previous []byte
+		for i := range scenarios[si].Steps {
+			s := &scenarios[si].Steps[i]
+			var resp tailcfg.MapResponse
+			if err := json.Unmarshal([]byte(s.Response), &resp); err != nil {
+				ms.Close()
+				return nil, fmt.Errorf("%s/%s: %w", scenarios[si].Name, s.Name, err)
+			}
+			// direct.go의 KeepAlive 분기는 mapSession 호출 전에 응답을 건너뛴다.
+			if resp.KeepAlive {
+				continue
+			}
+			if err := ms.HandleNonKeepAliveMapResponse(context.Background(), &resp); err != nil {
+				ms.Close()
+				return nil, err
+			}
+			normalized, err := swiftailFixtureNetmap(u.latest)
+			if err != nil {
+				ms.Close()
+				return nil, err
+			}
+			if !bytes.Equal(previous, normalized) {
+				s.Netmap = append(json.RawMessage(nil), normalized...)
+			}
+			previous = normalized
+		}
+		ms.Close()
+	}
+	output, err := json.MarshalIndent(scenarios, "", "  ")
+	return append(output, '\n'), err
+}
