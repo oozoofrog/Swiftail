@@ -22,7 +22,7 @@ Swiftail 구현에 필요한 수준으로 각 프로토콜을 정리한 문서�
 | [control-map.md](control-map.md) | M2 | GPT-6.1 Sol | Claude Opus 5.5, 2026-11-14, 수정 16건 |
 | [derp-stun.md](derp-stun.md) | M3 | GPT-6.1 Terra | Claude Opus 5.5, 2026-11-14, 수정 13건 + 빠진 절차 보충 |
 | [disco-magicsock.md](disco-magicsock.md) | M4 | GPT-6.1 Sol | 미검증 |
-| [netmap-engine.md](netmap-engine.md) | M3·M5 | Claude Sonnet 5.5 | 미검증 |
+| [netmap-engine.md](netmap-engine.md) | M3·M5 | Claude Sonnet 5.5 | GPT-6.1 Sol, 2026-11-14, 수정 10건 + M3 절차 보충 |
 | [dns-state-node.md](dns-state-node.md) | M5~M7 | Claude Sonnet 5.5 | 미검증 |
 
 ## 노트 형식
