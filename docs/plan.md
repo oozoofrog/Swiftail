@@ -90,7 +90,7 @@ SwiftailCrypto ◄─ SwiftailWireGuard ◄─┐
        ▲◄──────── SwiftailMagicsock ◄─┘
 ```
 
-`SwiftailBase`(IP 주소·접두 같은 공용 값 타입)는 모든 타깃이 쓴다.
+`SwiftailBase`(IP 주소·접두·키 같은 공용 값 타입)는 모든 타깃이 쓴다. `SwiftailIO`(소켓 감싸기 등)는 소켓을 여는 타깃(`SwiftailControl`, `SwiftailDERP`, `Swiftail`)이 쓴다.
 
 ### 코드 기준
 
@@ -106,7 +106,8 @@ SwiftailCrypto ◄─ SwiftailWireGuard ◄─┐
 
 | 타깃 | 마일스톤 | 책임 | 하지 않는 것 |
 | --- | --- | --- | --- |
-| `SwiftailBase` | M1 | IP 주소·접두, 16진 변환 | |
+| `SwiftailBase` | M1 | IP 주소·접두, 16진 변환, 키 타입과 텍스트 형식(M3에 `SwiftailControl`에서 옮김) | |
+| `SwiftailIO` | M3 | 가장자리 입출력의 공용 부품: 소켓 감싸기, 시간 제한, 물러나기, HTTP 응답 머리. 패키지 안에서만 쓴다 | 프로토콜 로직 |
 | `SwiftailCrypto` | M0 | BLAKE2s, HMAC·HKDF-BLAKE2s, NaCl box·secretbox, XChaCha20-Poly1305, 상수 시간 비교 | X25519, ChaCha20-Poly1305(CryptoKit 사용) |
 | `SwiftailWireGuard` | M1 | Noise IKpsk2 핸드셰이크, cookie, 전송 암복호화, 재전송 방지, 타이머·키 교체, AllowedIPs | 소켓, TUN. 데이터그램 송신과 IP 패킷 전달은 주입받는다 |
 | `SwiftailHTTP2` | M2 | 최소 HTTP/2 클라이언트 연결(HPACK 포함). Tailscale을 모른다 | 범용 HTTP 클라이언트 |
