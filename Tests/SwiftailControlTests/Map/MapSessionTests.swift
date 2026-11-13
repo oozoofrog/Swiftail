@@ -58,7 +58,7 @@ struct MapSessionTests {
     func selfNode() throws {
         var session = try session()
         let netmap = try apply(#"{"Node":{"ID":1,"User":100,"Capabilities":["cap/a","cap/b"],"CapMap":{"cap/b":[1]}}}"#, to: &session)
-        #expect(netmap.selfNode.capMap == ["cap/a": [], "cap/b": [.number(1)]])
+        #expect(netmap.selfNode.capMap == ["cap/a": [], "cap/b": [.integer(1)]])
         #expect(netmap.selfNode.machineAuthorized == false)  // 이전 값으로 메우지 않는다
         #expect(netmap.selfNode.addresses.isEmpty)
     }
@@ -127,6 +127,39 @@ struct MapSessionTests {
         session = try self.session(#","Peers":[\#(peerJSON(2))]"#)
         netmap = try apply(#"{"PeersRemoved":[2],"PeersChanged":[\#(peerJSON(2, #","Tags":["tag:server"]"#))]}"#, to: &session)
         #expect(netmap.peers.map(\.tags) == [["tag:server"]])
+    }
+
+    @Test("한 응답의 여러 증분이 같은 피어에 겹치면 Go 순서를 따른다: 지우기, 바꾸기, 본 시각, 온라인, patch, patch로 옮긴 바꾸기")
+    func overlappingDeltas() throws {
+        let seen = "2026-01-01T00:00:00Z"
+        let start = [
+            peerJSON(2, #","Online":false"#), peerJSON(3, #","Online":true"#), peerJSON(4, #","HomeDERP":1,"Online":false"#),
+            peerJSON(5, #","LastSeen":"\#(seen)""#), peerJSON(6),
+        ].joined(separator: ",")
+        var session = try session(#","Peers":[\#(start)]"#)
+        let netmap = try apply(#"""
+            {"PeersRemoved":[6],
+             "PeersChanged":[\#(peerJSON(3, #","Tags":["tag:new"]"#)),\#(peerJSON(4, #","HomeDERP":3,"Online":true"#)),\#(peerJSON(6, #","Tags":["tag:back"]"#))],
+             "PeerSeenChange":{"5":true,"6":false},
+             "OnlineChange":{"2":true,"3":true,"4":false,"6":true},
+             "PeersChangedPatch":[{"NodeID":2,"Online":false},{"NodeID":4,"DERPRegion":5},{"NodeID":5,"LastSeen":"\#(seen)"},{"NodeID":6,"Cap":9}]}
+            """#, to: &session)
+        #expect(netmap.peers.map(\.id) == [2, 3, 4, 5, 6])
+        // 2: OnlineChange 뒤에 patch가 온다.
+        #expect(netmap.peers[0].online == false)
+        // 3: 통째로 바뀐 노드(Online 없음)에 OnlineChange가 얹힌다.
+        #expect(netmap.peers[1].tags == ["tag:new"])
+        #expect(netmap.peers[1].online == true)
+        // 4: patch로 옮겨진 PeersChanged는 명시한 patch와 OnlineChange보다 뒤에 적용된다.
+        #expect(netmap.peers[2].homeDERP == 3)
+        #expect(netmap.peers[2].online == true)
+        // 5: PeerSeenChange 뒤에 patch의 LastSeen이 온다.
+        #expect(netmap.peers[3].lastSeen == GoTime.parse(seen))
+        // 6: 지운 뒤 통째로 다시 들어온 노드에 같은 응답의 본 시각·온라인·patch가 모두 얹힌다.
+        #expect(netmap.peers[4].tags == ["tag:back"])
+        #expect(netmap.peers[4].lastSeen == nil)
+        #expect(netmap.peers[4].online == true)
+        #expect(netmap.peers[4].cap == 9)
     }
 
     @Test("바뀐 것이 없는 응답은 netmap을 내지 않는다. 서버 시각만 바뀐 것도 변화가 아니다")
@@ -308,6 +341,29 @@ struct MapSessionTests {
         #expect(netmap.userProfiles.keys.sorted() == [100, 102, 500])
         #expect(netmap.userProfiles[102]?.displayName == "new")
         #expect(netmap.userProfiles[102]?.loginName == "")
+    }
+
+    @Test("self 노드의 사용자가 바뀌면 netmap의 프로필도 새 사용자 것으로 바뀌고, 옛 프로필은 세션에 남는다")
+    func selfUserChange() throws {
+        func profile(_ id: Int64) -> String { #"{"ID":\#(id),"DisplayName":"U\#(id)"}"# }
+        var session = try session(#","Peers":[\#(peerJSON(2))],"UserProfiles":[\#(profile(100)),\#(profile(102)),\#(profile(200))]"#)
+        #expect(try apply("{}", to: &session).userProfiles.keys.sorted() == [100, 102])
+
+        let movedSelf = #"{"ID":1,"Name":"rd-mac-1a2b3c4d.tail0001.ts.net.","User":200,"Addresses":["100.64.0.1/32"]}"#
+        #expect(try apply(#"{"Node":\#(movedSelf)}"#, to: &session).userProfiles.keys.sorted() == [102, 200])
+
+        // 되돌아가면 서버가 프로필을 다시 보내지 않아도 이전에 받은 것이 쓰인다(Go lastUserProfile과 같다).
+        #expect(try apply(#"{"Node":\#(selfNodeJSON)}"#, to: &session).userProfiles.keys.sorted() == [100, 102])
+    }
+
+    @Test("CapMap 인자가 2^53 근처의 다른 정수로 바뀌어도 변화로 친다")
+    func largeIntegerCapMapChange() throws {
+        var session = try session()
+        let first = #"{"Node":{"ID":1,"User":100,"CapMap":{"cap/x":[9007199254740992]}}}"#
+        let second = #"{"Node":{"ID":1,"User":100,"CapMap":{"cap/x":[9007199254740993]}}}"#
+        #expect(try session.apply(mapResponse(first), receivedAt: receivedAt).netmap != nil)
+        let netmap = try #require(try session.apply(mapResponse(second), receivedAt: receivedAt).netmap)
+        #expect(netmap.selfNode.capMap["cap/x"] == [.integer(9_007_199_254_740_993)])
     }
 
     @Test("TKAInfo: 처음 없으면 꺼짐, 한 번 오면 nil은 그대로, Disabled면 꺼짐")

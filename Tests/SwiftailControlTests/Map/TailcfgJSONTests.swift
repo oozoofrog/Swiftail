@@ -44,11 +44,30 @@ struct TailcfgJSONTests {
         #expect(encoded["NodeKeySignature"] as? String == "AQID")
     }
 
-    @Test("인증 키는 description에 나오지 않는다")
-    func authKeyRedacted() {
-        let auth = RegisterResponseAuth(authKey: "tskey-auth-fake")
-        #expect(!String(describing: auth).contains("tskey"))
-        #expect(!String(reflecting: auth).contains("tskey"))
+    @Test("인증 키는 description·debugDescription·dump 어디에도 나오지 않는다. 품은 요청을 찍어도 같다")
+    func authKeyRedacted() throws {
+        let secret = "tskey-auth-fake0000-SECRET"
+        let auth = RegisterResponseAuth(authKey: secret)
+        let request = RegisterRequest(nodeKey: try #require(NodePublicKey(nodeKey)), auth: auth, hostinfo: nil)
+        let optional: RegisterResponseAuth? = auth
+        func dumped(_ value: some Any) -> String {
+            var text = ""
+            dump(value, to: &text)
+            return text
+        }
+        let outputs = [
+            String(describing: auth), String(reflecting: auth), dumped(auth),
+            String(describing: request), String(reflecting: request), dumped(request),
+            String(describing: optional), String(reflecting: optional), dumped(optional),
+            String(describing: [request]), dumped([request]),
+        ]
+        for output in outputs {
+            #expect(!output.contains("SECRET"), "\(output)")
+            #expect(!output.contains("tskey"), "\(output)")
+        }
+        #expect(dumped(request).contains("authKey: \"<\(secret.count)자>\""))
+        // 부호화에는 원문이 그대로 나가야 한다.
+        #expect(try JSONSerialization.jsonObject(with: JSONEncoder().encode(auth)) as? [String: String] == ["AuthKey": secret])
     }
 
     @Test("스트림 맵 요청")
@@ -126,7 +145,7 @@ struct TailcfgJSONTests {
         #expect(node.allowedIPs == node.addresses)
         #expect(node.key == .zero)
         #expect(node.hostinfo.hostname == "rd-mac-1a2b3c4d")
-        #expect(node.capMap == ["cap/x": [], "cap/y": [.object(["a": .number(1)])]])
+        #expect(node.capMap == ["cap/x": [], "cap/y": [.object(["a": .integer(1)])]])
         #expect(node.capabilities == ["cap/old"])
 
         let peer = try #require(response.peers?.first)
@@ -176,6 +195,19 @@ struct TailcfgJSONTests {
         #expect(throws: DecodingError.self) { try mapResponse(#"{"OnlineChange":{"":true}}"#) }
     }
 
+    @Test("CapMap 인자의 64비트 정수는 그대로 보존하고, 그 밖의 수는 Double이다")
+    func capMapNumbers() throws {
+        let response = try mapResponse(#"""
+            {"Node":{"CapMap":{"cap/n":[9007199254740992,9007199254740993,-9223372036854775808,
+              9223372036854775808,18446744073709551615,18446744073709551616,1.5,-0,1e2]}}}
+            """#)
+        #expect(response.node?.capMap["cap/n"] == [
+            .integer(9_007_199_254_740_992), .integer(9_007_199_254_740_993), .integer(.min),
+            .unsignedInteger(9_223_372_036_854_775_808), .unsignedInteger(.max), .number(18_446_744_073_709_551_616),
+            .number(1.5), .integer(0), .integer(100),
+        ])
+    }
+
     @Test("2^53을 넘는 ID도 정확히 읽는다")
     func largeIDs() throws {
         let response = try mapResponse(#"{"PeersRemoved":[9007199254740993,-9223372036854775808]}"#)
@@ -186,7 +218,7 @@ struct TailcfgJSONTests {
     @Test("CapMap 값의 null과 []는 모두 인자 없음")
     func capMapNull() throws {
         let response = try mapResponse(#"{"PeersChangedPatch":[{"NodeID":1,"CapMap":{"cap/x":null,"cap/y":[],"cap/z":[true,"s",null,[1]]}}]}"#)
-        #expect(response.peersChangedPatch?.first?.capMap == ["cap/x": [], "cap/y": [], "cap/z": [.bool(true), .string("s"), .null, .array([.number(1)])]])
+        #expect(response.peersChangedPatch?.first?.capMap == ["cap/x": [], "cap/y": [], "cap/z": [.bool(true), .string("s"), .null, .array([.integer(1)])]])
     }
 
     @Test("opt.Bool은 true·false·null만 받는다")

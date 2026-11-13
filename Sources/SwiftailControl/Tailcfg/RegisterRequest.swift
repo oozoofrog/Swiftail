@@ -104,7 +104,13 @@ public struct RegisterResponseAuth: Encodable, Sendable {
     }
 }
 
-extension RegisterResponseAuth: CustomStringConvertible {
+extension RegisterResponseAuth: CustomStringConvertible, CustomReflectable {
     /// 인증 키를 가린다. 요청 값을 그대로 로그에 찍어도 비밀이 새지 않게 하기 위해서다.
     public var description: String { "RegisterResponseAuth(authKey: <\(authKey.count)자>)" }
+
+    /// `dump`와 `Mirror`에도 인증 키 대신 길이만 보인다. `description`만으로는 `dump`가 저장 속성을 그대로 내보낸다.
+    /// 이 값을 품은 `RegisterRequest`를 `dump`해도 이 거울을 거친다.
+    public var customMirror: Mirror {
+        Mirror(self, children: ["authKey": "<\(authKey.count)자>"])
+    }
 }
