@@ -85,7 +85,7 @@ tailnet lock(노드 키 서명 검증)은 1차 범위에서 제외한다. 이 �
 
 ```
 SwiftailCrypto ◄─ SwiftailWireGuard ◄─┐
-       ▲◄──────── SwiftailControl  ◄──┤
+       ▲◄──────── SwiftailControl  ◄──┤   (SwiftailControl은 SwiftailHTTP2를 쓴다)
        ▲◄──────── SwiftailDERP     ◄──┼─ SwiftailEngine ◄─ Swiftail ◄─ SwiftailNetstack(선택)
        ▲◄──────── SwiftailMagicsock ◄─┘
 ```
@@ -109,11 +109,12 @@ SwiftailCrypto ◄─ SwiftailWireGuard ◄─┐
 | `SwiftailBase` | M1 | IP 주소·접두, 16진 변환 | |
 | `SwiftailCrypto` | M0 | BLAKE2s, HMAC·HKDF-BLAKE2s, NaCl box·secretbox, XChaCha20-Poly1305, 상수 시간 비교 | X25519, ChaCha20-Poly1305(CryptoKit 사용) |
 | `SwiftailWireGuard` | M1 | Noise IKpsk2 핸드셰이크, cookie, 전송 암복호화, 재전송 방지, 타이머·키 교체, AllowedIPs | 소켓, TUN. 데이터그램 송신과 IP 패킷 전달은 주입받는다 |
-| `SwiftailControl` | M2 | 키 타입과 인코딩, tailcfg 모델, 제어 Noise, 최소 HTTP/2, 등록·맵 클라이언트, netmap과 증분 적용 | 데이터면 설정 |
+| `SwiftailHTTP2` | M2 | 최소 HTTP/2 클라이언트 연결(HPACK 포함). Tailscale을 모른다 | 범용 HTTP 클라이언트 |
+| `SwiftailControl` | M2 | 키 타입과 인코딩, tailcfg 모델, 제어 Noise, 등록·맵 클라이언트, netmap과 증분 적용 | 데이터면 설정 |
 | `SwiftailDERP` | M3 | DERP 프레임, 연결·재연결, 지역별 연결 관리 | 홈 지역 선택 |
 | `SwiftailMagicsock` | M4 | disco, STUN, 지연 측정과 홈 지역 선택, 엔드포인트 상태 기계, UDP 소켓과 재결속, WireGuard에 대한 송수신 창구 | |
 | `SwiftailEngine` | M3~M5 | netmap → WireGuard 피어·필터·경로·DNS, 패킷 필터, MagicDNS 응답기, 상태 저장, TUN(utun fd, 메모리) | |
-| `Swiftail` | M2~ | 공개 API(`TailnetNode`) | |
+| `Swiftail` | M3~ | 공개 API(`TailnetNode`) | |
 | `SwiftailNetstack` | M6 | Swift로 쓴 TCP: 리스너·다이얼 | |
 
 ### 노트에서 확인해 설계에 반영한 것
