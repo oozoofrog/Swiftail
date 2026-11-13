@@ -113,10 +113,8 @@ struct LimitTests {
         }
     }
 
-    @Test("작은 DATA가 낳는 WINDOW_UPDATE가 쌓이는 것도 같은 한도")
-    func windowUpdateFloodLimit() throws {
-        // DATA 한 프레임(END_STREAM 없음)마다 연결·스트림 WINDOW_UPDATE 13바이트씩 26바이트를 낳는다.
-        let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 26
+    @Test("작은 DATA 프레임이 한꺼번에 와도 WINDOW_UPDATE는 연결과 스트림에 하나씩이다")
+    func smallDataFramesShareOneWindowUpdate() throws {
         func connectionWithHead() throws -> HTTP2ClientConnection {
             var connection = try HTTP2ClientConnection.established()
             _ = try connection.startRequest(getRequest, body: nil)
@@ -124,15 +122,24 @@ struct LimitTests {
             _ = connection.takeOutboundBytes()
             return connection
         }
-        let data = dataBytes(stream: 1, [0])
-        var connection = try connectionWithHead()
-        _ = try connection.receive(Array(repeating: data, count: allowed).flatMap { $0 })
-        #expect(try connection.takeOutboundFrames().count == allowed * 2)
+        // 1바이트 DATA 3,000개(30,000바이트)는 유효한 응답이다. 프레임마다 답을 쌓으면 78,000바이트가 되어
+        // 제어 프레임 대기 한도(64KiB)에 걸리고, TCP 조각이 어떻게 나뉘었느냐에 따라 성패가 갈린다.
+        let frames = (0..<3_000).map { _ in dataBytes(stream: 1, [0x61]) }
 
-        var overflowing = try connectionWithHead()
-        #expect(throws: HTTP2Error.connectionFailed(code: 11)) {
-            try overflowing.receive(Array(repeating: data, count: allowed + 1).flatMap { $0 })
-        }
+        var coalesced = try connectionWithHead()
+        let events = try coalesced.receive(frames.flatMap { $0 })
+        #expect(events.count == 3_000)
+        #expect(try coalesced.takeOutboundFrames() == [
+            .windowUpdate(.connection, increment: 3_000), .windowUpdate(HTTP2StreamID(1), increment: 3_000),
+        ])
+        #expect(coalesced.takeOutboundBytes().isEmpty)
+
+        // 꺼내 가지 않고 조각조각 받아도 쌓이는 것은 숫자뿐이다.
+        var fragmented = try connectionWithHead()
+        for frame in frames { _ = try fragmented.receive(frame) }
+        #expect(try fragmented.takeOutboundFrames() == [
+            .windowUpdate(.connection, increment: 3_000), .windowUpdate(HTTP2StreamID(1), increment: 3_000),
+        ])
     }
 
     @Test("닫힌 스트림의 헤더 블록도 해제해 동적 표를 맞춘다")

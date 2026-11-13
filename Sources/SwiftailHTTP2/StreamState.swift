@@ -23,6 +23,8 @@ struct StreamState {
     var declaredBodyLength: Int?
     /// 지금까지 받은 DATA payload의 합(패딩 제외). `declaredBodyLength`와 맞춰 본다(§8.1.1).
     var receivedBodyLength = 0
+    /// 받은 DATA만큼 돌려줄 스트림 창. `takeOutboundBytes()`가 WINDOW_UPDATE 하나로 내보낸다.
+    var pendingWindowCredit = 0
 
     init(sendWindowSize: Int, body: [UInt8]?, isHeadRequest: Bool) {
         sendWindow = FlowControlWindow(sendWindowSize)

@@ -61,6 +61,29 @@ struct MapLimitsTests {
         }
     }
 
+    @Test("UTF-16·UTF-32로 쓴 JSON은 해독 전에 malformed (UTF-8로 훑은 깊이가 해독기와 어긋난다)", arguments: [
+        String.Encoding.utf16LittleEndian, .utf16BigEndian, .utf32LittleEndian, .utf32BigEndian, .utf16, .utf32,
+    ])
+    func rejectsNonUTF8(_ encoding: String.Encoding) throws {
+        // UTF-8로 훑으면 `"\""` 뒤의 `]`들이 문자열 밖으로, 깊은 배열이 문자열 안으로 보인다.
+        // UTF-16으로 해독하면 그 반대여서, 깊이 한도를 넘는 배열이 검사를 지나 해독기에 닿았다.
+        let deep = 500
+        let text = #"{"Node":{"CapMap":{"cap/x":["\""# + String(repeating: "]", count: deep)
+            + #"","# + String(repeating: "[", count: deep) + "0" + String(repeating: "]", count: deep) + "]}}}"
+        let payload = Array(try #require(text.data(using: encoding)))
+        #expect(throws: MapError.malformed) { try MapResponseFramer.checkShape(of: payload[...]) }
+
+        var framer = MapResponseFramer()
+        let header = (0..<4).map { UInt8((payload.count >> ($0 * 8)) & 0xFF) }
+        #expect(throws: MapError.malformed) { try framer.receive(header + payload) }
+    }
+
+    @Test("0 바이트가 든 페이로드는 문자열 안이어도 malformed")
+    func rejectsNULByte() {
+        let payload = Array(#"{"Node":{"Name":"a"#.utf8) + [0] + Array(#"b"}}"#.utf8)
+        #expect(throws: MapError.malformed) { try MapResponseFramer.checkShape(of: payload[...]) }
+    }
+
     @Test("문자열 안의 괄호·쉼표와 이스케이프된 따옴표는 깊이와 값으로 세지 않는다")
     func bracketsInsideStrings() throws {
         let noise = String(repeating: #"[{,\"\\"#, count: 200)

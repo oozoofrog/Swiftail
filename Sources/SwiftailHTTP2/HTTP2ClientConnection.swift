@@ -60,20 +60,25 @@ public struct HTTP2ClientConnection: Sendable {
     /// 헤더 블록(CONTINUATION을 합친 것)의 한도.
     static let maximumHeaderBlockSize = 65_536
 
-    /// 상대가 요구해서 쌓인 제어 프레임(PING·SETTINGS ACK, WINDOW_UPDATE, RST_STREAM)의 대기 바이트 한도.
+    /// 상대가 요구해서 쌓인 제어 프레임(PING·SETTINGS ACK, RST_STREAM)의 대기 바이트 한도.
     ///
     /// 상대는 작은 프레임을 얼마든지 보낼 수 있고(PING 하나는 17바이트이고 17바이트 ACK를 낳는다), 답은
     /// 호출하는 쪽이 `takeOutboundBytes()`로 꺼내 가야 비워진다. 소켓이 막혀 있으면 쌓이기만 하므로 상한을
-    /// 둔다. 한도는 헤더 블록 한도와 같은 64KiB다: 정상 서버가 한 번의 `receive`로 일으키는 답(DATA 프레임
-    /// 하나당 WINDOW_UPDATE 26바이트)보다 훨씬 크고, 쌓이는 메모리는 입력 크기에 비례한 채 작게 묶인다.
-    /// Go의 `x/net/http2` 서버도 대기 제어 프레임을 10,000개로 묶는다. 넘으면 ENHANCE_YOUR_CALM 연결
-    /// 오류로 끝내고(§7), 그 GOAWAY(17바이트)는 한도와 상관없이 뒤에 붙는다.
+    /// 둔다. 한도는 헤더 블록 한도와 같은 64KiB다. Go의 `x/net/http2` 서버도 대기 제어 프레임을 10,000개로
+    /// 묶는다. 넘으면 ENHANCE_YOUR_CALM 연결 오류로 끝내고(§7), 그 GOAWAY(17바이트)는 한도와 상관없이
+    /// 뒤에 붙는다.
+    ///
+    /// WINDOW_UPDATE는 여기에 들지 않는다. 정상 서버도 작은 DATA 프레임을 많이 보낼 수 있으므로, 프레임마다
+    /// 답을 쌓지 않고 돌려줄 창의 양만 적어 둔다(`pendingConnectionWindowCredit`).
     static let maximumPendingControlBytes = 65_536
 
     var phase = Phase.open
     var outbound: [UInt8]
     /// `outbound` 가운데 상대가 요구해서 쌓인 제어 프레임의 바이트. `takeOutboundBytes()`가 비운다.
     var pendingControlBytes = 0
+    /// 받은 DATA만큼 돌려줄 연결 창. `takeOutboundBytes()`가 WINDOW_UPDATE 하나로 내보낸다.
+    /// 스트림 몫은 `StreamState.pendingWindowCredit`에 있다.
+    var pendingConnectionWindowCredit = 0
     var frames = FrameBuffer()
     var decoder = HPACKDecoder()
     var peerSettings = PeerSettings()
@@ -99,11 +104,35 @@ public struct HTTP2ClientConnection: Sendable {
 
     /// 상대에게 보낼 바이트를 꺼낸다. 없으면 빈 배열. `init`, `startRequest`, `cancel`, `receive` 뒤에 부른다.
     public mutating func takeOutboundBytes() -> [UInt8] {
+        if phase != .failed { queueWindowUpdates() }
         defer {
             outbound = []
             pendingControlBytes = 0
         }
         return outbound
+    }
+
+    /// 적어 둔 창을 WINDOW_UPDATE로 바꾼다: 연결 하나, 그리고 스트림마다 하나(식별자 순).
+    private mutating func queueWindowUpdates() {
+        outbound += Self.windowUpdates(.connection, credit: pendingConnectionWindowCredit)
+        pendingConnectionWindowCredit = 0
+        for id in streams.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let credit = streams[id]?.pendingWindowCredit, credit > 0 else { continue }
+            outbound += Self.windowUpdates(id, credit: credit)
+            streams[id]?.pendingWindowCredit = 0
+        }
+    }
+
+    /// 한 프레임의 증가분은 2³¹−1까지다(§6.9). 그보다 크면 나눠 낸다.
+    private static func windowUpdates(_ stream: HTTP2StreamID, credit: Int) -> [UInt8] {
+        var bytes: [UInt8] = []
+        var remaining = credit
+        while remaining > 0 {
+            let increment = min(remaining, FlowControlWindow.maximum)
+            bytes += FrameEncoder.windowUpdate(stream, increment: increment)
+            remaining -= increment
+        }
+        return bytes
     }
 
     /// 상대에게서 받은 바이트를 넣는다. 프레임 경계와 무관하게 임의의 조각이어도 된다.

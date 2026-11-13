@@ -149,7 +149,7 @@ public struct MapSession: Sendable {
 ```
 
 - 증분 적용은 노트 4.3절의 알고리즘과 순서를 따른다: `Peers`(전체 교체), `PeersChanged`, `PeersRemoved`, `PeersChangedPatch`, `PeerSeenChange`, `OnlineChange`, `DERPMap`(부분 유지 규칙), `DNSConfig`, `PacketFilter`·`PacketFilters`(이름 붙은 증분, 빈 배열은 "모두 차단"), `UserProfiles`, `Domain`, `TKAInfo`, `ControlTime`.
-- 한도(프레임): 64MiB(Go의 256MiB보다 낮춘다. 확장의 메모리 한도 때문이다), JSON 중첩 깊이 64, 값(배열 원소 + 객체 멤버) 1,000,000개. 깊이와 값 수는 `JSONDecoder`에 넘기기 전에 바이트를 훑어 센다. 넘으면 `malformed`.
+- 한도(프레임): 64MiB(Go의 256MiB보다 낮춘다. 확장의 메모리 한도 때문이다), JSON 중첩 깊이 64, 값(배열 원소 + 객체 멤버) 1,000,000개. 깊이와 값 수는 `JSONDecoder`에 넘기기 전에 바이트를 훑어 센다. 넘으면 `malformed`. 0 바이트가 든 페이로드도 `malformed`다(UTF-16·UTF-32로 쓴 JSON을 걸러 UTF-8만 해독기에 넘긴다).
 - 한도(세션): 피어 20,000, 사용자 프로필 40,000, 이름 붙은 필터 256개, 필터 규칙 합 50,000. 넘으면 `stateTooLarge`. Go처럼 프로필은 세션 동안 지우지 않는다.
 - 실패한 프레이머와 세션은 받아 둔 바이트·상태를 버리고 같은 오류만 반복한다.
 - 상태 필드가 없는 응답(KeepAlive, 서버 시각·핑만 있는 것)은 netmap을 다시 만들지 않는다.

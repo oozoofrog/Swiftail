@@ -91,6 +91,11 @@ public struct MapResponseFramer: Sendable {
     /// 문법은 검사하지 않는다(해독기가 한다). 문자열 안의 괄호·쉼표는 세지 않으며, 이스케이프된 `\"`는
     /// 문자열을 끝내지 않는다. UTF-8의 여러 바이트 문자는 0x80 이상이라 ASCII 구분자와 섞이지 않는다.
     /// 값의 수는 컨테이너마다 "첫 값 + 쉼표 수"로 센다.
+    ///
+    /// 0 바이트가 있으면 거절한다. `JSONDecoder`는 UTF-16·UTF-32로 쓴 JSON도 받는데, 그 바이트를 UTF-8로
+    /// 훑으면 따옴표와 괄호를 다르게 읽어 이 검사가 해독기와 어긋난다. UTF-16·UTF-32의 JSON은 구분자마다
+    /// 0 바이트를 갖고, UTF-8의 JSON에는 0 바이트가 올 수 없으므로(제어 문자는 이스케이프해야 한다)
+    /// 이것으로 UTF-8만 남는다.
     static func checkShape(of json: ArraySlice<UInt8>) throws(MapError) {
         var depth = 0
         var values = 0
@@ -98,6 +103,7 @@ public struct MapResponseFramer: Sendable {
         var escaped = false
         var awaitingFirstValue = false
         for byte in json {
+            guard byte != 0 else { throw .malformed }
             if inString {
                 if escaped {
                     escaped = false

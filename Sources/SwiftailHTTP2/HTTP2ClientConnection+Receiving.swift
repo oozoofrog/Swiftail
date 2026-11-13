@@ -69,11 +69,11 @@ extension HTTP2ClientConnection {
         _ id: HTTP2StreamID, _ payload: [UInt8], endStream: Bool, flowControlledLength: Int, events: inout [Event]
     ) throws(HTTP2Error) {
         try requireNotIdle(id)
-        // 받은 만큼 곧바로 창을 돌려준다. 연결 창은 스트림이 닫혔어도 이미 줄었으므로 늘 돌려준다.
+        // 받은 만큼 창을 돌려준다. 연결 창은 스트림이 닫혔어도 이미 줄었으므로 늘 돌려준다. 프레임마다
+        // WINDOW_UPDATE를 만들지 않고 돌려줄 양만 적어 두었다가 `takeOutboundBytes()`에서 한 번에 낸다:
+        // 작은 DATA 프레임이 한꺼번에 와도 답이 프레임 수만큼 쌓이지 않는다.
         // shortcut: 받는 쪽 역압은 없다(소비가 느려도 서버를 늦추지 못한다), 큰 응답을 스트리밍으로 소비해야 할 때 올린다.
-        if flowControlledLength > 0 {
-            queueControl(FrameEncoder.windowUpdate(.connection, increment: flowControlledLength))
-        }
+        pendingConnectionWindowCredit += flowControlledLength
         guard let stream = streams[id] else { return }
         switch stream.receiving {
         case .awaitingHead:
@@ -88,9 +88,7 @@ extension HTTP2ClientConnection {
                 return
             }
             streams[id]?.receivedBodyLength = received
-            if flowControlledLength > 0 && !endStream {
-                queueControl(FrameEncoder.windowUpdate(id, increment: flowControlledLength))
-            }
+            if !endStream { streams[id]?.pendingWindowCredit += flowControlledLength }
             if !payload.isEmpty { events.append(.responseData(id, payload)) }
             if endStream { finishResponse(id, events: &events) }
         }

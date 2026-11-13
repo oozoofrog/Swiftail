@@ -78,10 +78,10 @@ public struct HTTP2ClientConnection: Sendable {
 - HEADERS + CONTINUATION, DATA, RST_STREAM, PING(ACK로 답), GOAWAY, WINDOW_UPDATE. PRIORITY는 읽고 버린다. PUSH_PROMISE는 연결 오류다(ENABLE_PUSH=0을 알린다)
 - HPACK 해제: 정적·동적 표, 모든 표현 형식, 표 크기 갱신, 허프만 문자열
 - HPACK 압축: 색인 없는 리터럴만, 허프만 없이(가장 단순하고 규격상 유효하다)
-- 흐름 제어: 보내는 쪽은 연결·스트림 창을 지키고 WINDOW_UPDATE와 SETTINGS_INITIAL_WINDOW_SIZE 변경을 반영한다. 받는 쪽은 받은 DATA만큼 곧바로 창을 돌려준다
+- 흐름 제어: 보내는 쪽은 연결·스트림 창을 지키고 WINDOW_UPDATE와 SETTINGS_INITIAL_WINDOW_SIZE 변경을 반영한다. 받는 쪽은 받은 DATA만큼 창을 돌려준다. WINDOW_UPDATE는 프레임마다 만들지 않고 `takeOutboundBytes()` 때 연결과 스트림에 하나씩 낸다(작은 DATA 프레임이 많아도 답이 쌓이지 않는다)
 - 상대의 MAX_FRAME_SIZE에 맞춘 프레임 분할, MAX_CONCURRENT_STREAMS 준수
 
-한도(신뢰할 수 없는 입력): 받는 프레임 16,384바이트(알린 MAX_FRAME_SIZE), 헤더 블록 합계 64KiB, HPACK 동적 표 4,096바이트, 상대가 요구해서 쌓인 제어 프레임(PING ACK, SETTINGS ACK, WINDOW_UPDATE, RST_STREAM)의 대기 바이트 64KiB(`takeOutboundBytes()`가 비운다). 넘으면 연결 오류다(마지막 것은 ENHANCE_YOUR_CALM이고 GOAWAY가 한도와 상관없이 뒤에 붙는다). 어떤 바이트열로도 프로세스가 죽지 않는다.
+한도(신뢰할 수 없는 입력): 받는 프레임 16,384바이트(알린 MAX_FRAME_SIZE), 헤더 블록 합계 64KiB, HPACK 동적 표 4,096바이트, 상대가 요구해서 쌓인 제어 프레임(PING ACK, SETTINGS ACK, RST_STREAM)의 대기 바이트 64KiB(`takeOutboundBytes()`가 비운다). 넘으면 연결 오류다(마지막 것은 ENHANCE_YOUR_CALM이고 GOAWAY가 한도와 상관없이 뒤에 붙는다). 어떤 바이트열로도 프로세스가 죽지 않는다.
 
 응답 검증(어기면 그 스트림만 RST_STREAM PROTOCOL_ERROR와 `streamClosed`, RFC 9113 §8.1.1·§8.2·§8.3·§8.6): 헤더 이름은 비어 있지 않은 소문자 token(이름 중간의 `:`·공백·대문자 불가), 값에 NUL·CR·LF 불가, 연결 전용 필드(`connection`, `keep-alive`, `proxy-connection`, `transfer-encoding`, `upgrade`, `trailers` 아닌 값의 `te`) 불가. 같은 규칙을 요청 헤더(`invalidRequest`)와 트레일러에도 쓰고, 트레일러에는 의사 헤더도 불가다. `content-length`는 하나뿐인 십진수여야 하고 받은 DATA 합계와 같아야 한다(HEAD 응답, 204, 304는 본문이 없으므로 대조하지 않는다). 101은 임시 응답으로 넘기지 않고 오류다.
 
