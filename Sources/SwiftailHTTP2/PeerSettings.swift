@@ -18,7 +18,8 @@ struct PeerSettings: Equatable {
     // shortcut: 상대의 MAX_HEADER_LIST_SIZE는 지키지 않는다(요청 헤더는 작다), 큰 헤더를 보내게 되면 확인한다.
 
     /// SETTINGS를 반영한다. 값이 규격 범위 밖이면 연결 오류이고, 모르는 식별자는 무시한다.
-    /// 성공하면 INITIAL_WINDOW_SIZE가 바뀐 만큼(열린 스트림의 창에 더할 값)을 돌려준다.
+    /// 성공하면 INITIAL_WINDOW_SIZE가 바뀐 만큼(열린 스트림의 창에 더할 값)을 돌려준다. 한 SETTINGS 프레임의
+    /// 값은 받은 순서대로 창에 적용되어야 중간의 넘침을 놓치지 않으므로(§6.9.2) 연결은 설정 하나씩 부른다.
     mutating func apply(_ settings: [Frame.Setting]) throws(HTTP2Error) -> Int {
         let previousInitialWindowSize = initialWindowSize
         for setting in settings {

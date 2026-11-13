@@ -62,6 +62,79 @@ struct LimitTests {
         }
     }
 
+    // 상대가 요구해서 쌓이는 제어 프레임의 대기 바이트 한도(`maximumPendingControlBytes`). PING ACK는 17바이트다.
+    @Test("PING ACK가 한도 직전까지 쌓이는 것은 허용하고, 한 개 넘으면 ENHANCE_YOUR_CALM")
+    func pingFloodLimit() throws {
+        let ping = frameBytes(6, payload: [1, 2, 3, 4, 5, 6, 7, 8])
+        let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 17
+
+        var connection = try HTTP2ClientConnection.established()
+        _ = try connection.receive(Array(repeating: ping, count: allowed).flatMap { $0 })
+        #expect(try connection.takeOutboundFrames().count == allowed)
+
+        var overflowing = try HTTP2ClientConnection.established()
+        #expect(throws: HTTP2Error.connectionFailed(code: 11)) {
+            try overflowing.receive(Array(repeating: ping, count: allowed + 1).flatMap { $0 })
+        }
+        // 한도를 넘겨 쌓인 답 뒤에 GOAWAY가 붙는다.
+        #expect(try overflowing.takeOutboundFrames().last == .goAway(lastStreamID: .connection, code: 11))
+        #expect(throws: HTTP2Error.connectionClosed) { try overflowing.receive([]) }
+    }
+
+    @Test("대기 바이트는 꺼내 가면 비워지므로 한도를 여러 번 받아도 된다")
+    func pendingBytesResetWhenTaken() throws {
+        let ping = frameBytes(6, payload: [1, 2, 3, 4, 5, 6, 7, 8])
+        let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 17
+        var connection = try HTTP2ClientConnection.established()
+        for _ in 0..<3 {
+            _ = try connection.receive(Array(repeating: ping, count: allowed).flatMap { $0 })
+            _ = connection.takeOutboundBytes()
+        }
+    }
+
+    @Test("꺼내 가지 않고 여러 번 나눠 받아도 합계가 한도를 넘으면 연결 오류")
+    func pendingBytesAccumulateAcrossReceives() throws {
+        let ping = frameBytes(6, payload: [1, 2, 3, 4, 5, 6, 7, 8])
+        let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 17
+        var connection = try HTTP2ClientConnection.established()
+        _ = try connection.receive(Array(repeating: ping, count: allowed).flatMap { $0 })
+        #expect(throws: HTTP2Error.connectionFailed(code: 11)) { try connection.receive(ping) }
+    }
+
+    @Test("SETTINGS ACK가 쌓이는 것도 같은 한도")
+    func settingsFloodLimit() throws {
+        let empty = settingsBytes()
+        let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 9
+        var connection = try HTTP2ClientConnection.established()
+        _ = try connection.receive(Array(repeating: empty, count: allowed).flatMap { $0 })
+        #expect(try connection.takeOutboundFrames().count == allowed)
+        #expect(throws: HTTP2Error.connectionFailed(code: 11)) {
+            try connection.receive(Array(repeating: empty, count: allowed + 1).flatMap { $0 })
+        }
+    }
+
+    @Test("작은 DATA가 낳는 WINDOW_UPDATE가 쌓이는 것도 같은 한도")
+    func windowUpdateFloodLimit() throws {
+        // DATA 한 프레임(END_STREAM 없음)마다 연결·스트림 WINDOW_UPDATE 13바이트씩 26바이트를 낳는다.
+        let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 26
+        func connectionWithHead() throws -> HTTP2ClientConnection {
+            var connection = try HTTP2ClientConnection.established()
+            _ = try connection.startRequest(getRequest, body: nil)
+            _ = try connection.receive(responseHeadBytes(stream: 1))
+            _ = connection.takeOutboundBytes()
+            return connection
+        }
+        let data = dataBytes(stream: 1, [0])
+        var connection = try connectionWithHead()
+        _ = try connection.receive(Array(repeating: data, count: allowed).flatMap { $0 })
+        #expect(try connection.takeOutboundFrames().count == allowed * 2)
+
+        var overflowing = try connectionWithHead()
+        #expect(throws: HTTP2Error.connectionFailed(code: 11)) {
+            try overflowing.receive(Array(repeating: data, count: allowed + 1).flatMap { $0 })
+        }
+    }
+
     @Test("닫힌 스트림의 헤더 블록도 해제해 동적 표를 맞춘다")
     func closedStreamHeadersKeepTableInSync() throws {
         var connection = try HTTP2ClientConnection.established()

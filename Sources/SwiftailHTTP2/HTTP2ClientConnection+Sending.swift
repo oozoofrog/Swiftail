@@ -11,7 +11,8 @@ extension HTTP2ClientConnection {
 
         let id = HTTP2StreamID(nextStreamID)
         nextStreamID += 2
-        streams[id] = StreamState(sendWindowSize: peerSettings.initialWindowSize, body: body)
+        streams[id] = StreamState(
+            sendWindowSize: peerSettings.initialWindowSize, body: body, isHeadRequest: request.method == "HEAD")
         outbound += FrameEncoder.headers(
             id, block: HPACKEncoder.encode(fields), endStream: body == nil,
             maximumPayloadLength: peerSettings.maxFrameSize)
@@ -63,19 +64,13 @@ extension HTTP2ClientConnection.Request {
     /// 의사 헤더를 앞에 두고 일반 헤더를 이어 붙인 헤더 목록. 규격에 어긋나면 `invalidRequest`.
     ///
     /// 보낼 값은 여기서 한 번 확인한다: method·path·authority는 비어 있거나 공백·제어 문자를 가지면
-    /// 안 되고, 헤더 이름은 소문자 표시 가능 문자여야 하며 `:`로 시작하지 않고, 값에는 NUL·CR·LF가
-    /// 없어야 한다(RFC 9113 §8.2.1, §8.3.1).
+    /// 안 된다(RFC 9113 §8.3.1). 일반 헤더는 응답을 받을 때와 같은 `HeaderValidation` 규칙을 따른다
+    /// (소문자 token 이름, NUL·CR·LF 없는 값, 연결 전용 필드 금지. §8.2).
     func headerFields() throws(HTTP2Error) -> [HeaderField] {
         for pseudo in [method, path, authority] {
             guard !pseudo.isEmpty, !pseudo.utf8.contains(where: { $0 <= 0x20 || $0 == 0x7f }) else { throw .invalidRequest }
         }
-        for header in headers {
-            let name = header.name.utf8
-            guard !name.isEmpty, name.first != UInt8(ascii: ":"),
-                  !name.contains(where: { $0 <= 0x20 || $0 >= 0x7f || ($0 >= 0x41 && $0 <= 0x5a) }),
-                  !header.value.utf8.contains(where: { $0 == 0 || $0 == 0x0a || $0 == 0x0d })
-            else { throw .invalidRequest }
-        }
+        guard headers.allSatisfy(HeaderValidation.isValid) else { throw .invalidRequest }
         return [
             HeaderField(":method", method),
             HeaderField(":scheme", "https"),
