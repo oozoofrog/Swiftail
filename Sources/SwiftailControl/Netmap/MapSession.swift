@@ -5,8 +5,8 @@ import Foundation
 /// 스트림의 첫 일반 응답이 전체 상태이고 그 뒤는 증분이다. 상태는 이 스트림에 묶인다. 스트림이 끊기면
 /// 새 `MapSession`으로 전체 맵부터 다시 받는다(세션 재개는 하지 않는다. Go 클라이언트도 그렇다).
 ///
-/// 입출력도 시계도 없는 값이다. 피어가 "지금 보였다"(`PeerSeenChange` true)는 증분의 "지금"은
-/// 서버가 마지막으로 알린 `ControlTime`이다. 아직 받지 못했으면 마지막 온라인 시각을 그대로 둔다.
+/// 입출력도 시계도 없는 값이다. 피어가 "지금 보였다"(`PeerSeenChange` true)는 증분에 필요한 "지금"은
+/// 호출하는 쪽이 응답을 받은 시각으로 넘긴다.
 ///
 /// 적용 순서와 규칙은 Go 클라이언트의 `mapSession`과 같다.
 /// `docs/protocol-notes/control-map.md` 4.3 (출처: tailscale.com `control/controlclient/map.go`
@@ -36,7 +36,9 @@ public struct MapSession: Sendable {
 
     /// 응답 하나를 적용한다. 스트림의 첫 일반 응답에 `node`가 없으면 `missingSelfNode`를 던진다.
     /// 그 뒤로는 이 세션과 스트림을 버려야 한다.
-    public mutating func apply(_ response: MapResponse) throws(MapError) -> Update {
+    ///
+    /// - Parameter now: 이 응답을 받은 시각. "지금 보였다"는 증분의 마지막 온라인 시각이 된다.
+    public mutating func apply(_ response: MapResponse, receivedAt now: Date) throws(MapError) -> Update {
         if let time = response.controlTime {
             controlTime = time
         }
@@ -58,7 +60,7 @@ public struct MapSession: Sendable {
         }
 
         selfNode = currentSelf
-        applyPeerChanges(response)
+        applyPeerChanges(response, receivedAt: now)
         for profile in response.userProfiles ?? [] {
             userProfiles[profile.id] = profile
         }
@@ -79,7 +81,7 @@ public struct MapSession: Sendable {
     }
 
     /// 피어 저장소에 증분을 적용한다(노트 4.3의 3~5).
-    private mutating func applyPeerChanges(_ response: MapResponse) {
+    private mutating func applyPeerChanges(_ response: MapResponse, receivedAt now: Date) {
         // 비어 있지 않은 전체 목록은 저장소를 바꾸고, 이 응답의 다른 피어 증분을 모두 배제한다.
         if let fullList = response.peers, !fullList.isEmpty {
             peers = Dictionary(fullList.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
@@ -92,11 +94,7 @@ public struct MapSession: Sendable {
             peers[node.id] = node
         }
         for (id, seen) in response.peerSeenChange ?? [:] where peers[id] != nil {
-            if !seen {
-                peers[id]?.lastSeen = nil
-            } else if let controlTime {
-                peers[id]?.lastSeen = controlTime
-            }
+            peers[id]?.lastSeen = seen ? now : nil
         }
         for (id, online) in response.onlineChange ?? [:] where peers[id] != nil {
             peers[id]?.online = online

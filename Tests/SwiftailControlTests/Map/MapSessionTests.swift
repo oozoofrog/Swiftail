@@ -12,12 +12,12 @@ struct MapSessionTests {
     /// self 노드가 든 첫 응답(extra는 `,"Peers":[…]`처럼 쉼표로 시작)을 적용한 세션.
     private func session(_ extra: String = "") throws -> MapSession {
         var session = MapSession()
-        _ = try session.apply(mapResponse(#"{"Node":\#(selfNodeJSON)\#(extra)}"#))
+        _ = try session.apply(mapResponse(#"{"Node":\#(selfNodeJSON)\#(extra)}"#), receivedAt: receivedAt)
         return session
     }
 
     private func apply(_ json: String, to session: inout MapSession) throws -> Netmap {
-        try #require(try session.apply(mapResponse(json)).netmap)
+        try #require(try session.apply(mapResponse(json), receivedAt: receivedAt).netmap)
     }
 
     // MARK: 세션의 시작과 KeepAlive
@@ -25,8 +25,8 @@ struct MapSessionTests {
     @Test("첫 일반 응답에 Node가 없으면 missingSelfNode, KeepAlive는 그 전에 와도 된다")
     func missingSelfNode() throws {
         var session = MapSession()
-        #expect(try session.apply(mapResponse(#"{"KeepAlive":true}"#)).netmap == nil)
-        #expect(throws: MapError.missingSelfNode) { try session.apply(mapResponse(#"{"Peers":[\#(peerJSON(2))]}"#)) }
+        #expect(try session.apply(mapResponse(#"{"KeepAlive":true}"#), receivedAt: receivedAt).netmap == nil)
+        #expect(throws: MapError.missingSelfNode) { try session.apply(mapResponse(#"{"Peers":[\#(peerJSON(2))]}"#), receivedAt: receivedAt) }
 
         // 두 번째 응답부터는 Node가 없어도 이전 것을 쓴다.
         var started = try self.session()
@@ -38,7 +38,7 @@ struct MapSessionTests {
     @Test("KeepAlive는 netmap을 내지 않고 핑만 전한다. 다른 필드가 실려도 적용하지 않는다")
     func keepAlive() throws {
         var session = try session(#","Peers":[\#(peerJSON(2))]"#)
-        let update = try session.apply(mapResponse(#"{"KeepAlive":true,"PingRequest":{"URL":"https://control.example/ping/1","Types":""},"PeersRemoved":[2]}"#))
+        let update = try session.apply(mapResponse(#"{"KeepAlive":true,"PingRequest":{"URL":"https://control.example/ping/1","Types":""},"PeersRemoved":[2]}"#), receivedAt: receivedAt)
         #expect(update.netmap == nil)
         #expect(update.pingRequest?.url == "https://control.example/ping/1")
         #expect(try apply("{}", to: &session).peers.map(\.id) == [2])
@@ -47,7 +47,7 @@ struct MapSessionTests {
     @Test("일반 응답의 핑도 전한다")
     func pingOnRegularResponse() throws {
         var session = MapSession()
-        let update = try session.apply(mapResponse(#"{"Node":\#(selfNodeJSON),"PingRequest":{"URL":"https://control.example/ping/2","URLIsNoise":true}}"#))
+        let update = try session.apply(mapResponse(#"{"Node":\#(selfNodeJSON),"PingRequest":{"URL":"https://control.example/ping/2","URLIsNoise":true}}"#), receivedAt: receivedAt)
         #expect(update.netmap != nil)
         #expect(update.pingRequest?.urlIsNoise == true)
     }
@@ -129,18 +129,15 @@ struct MapSessionTests {
         #expect(netmap.peers.map(\.id) == [2, 3])
     }
 
-    @Test("PeerSeenChange: false는 지우기, true는 서버가 마지막으로 알린 시각, 피어는 지우지 않는다")
+    @Test("PeerSeenChange: false는 지우기, true는 응답을 받은 시각, 피어는 지우지 않는다")
     func peerSeenChange() throws {
         let earlier = "2026-01-01T00:00:00Z"
         var session = try session(#","Peers":[\#(peerJSON(2, #","LastSeen":"\#(earlier)""#)),\#(peerJSON(3))]"#)
 
-        // ControlTime을 아직 받지 못했으면 true는 아무것도 바꾸지 않는다.
-        var netmap = try apply(#"{"PeerSeenChange":{"2":false,"3":true,"99":false}}"#, to: &session)
+        // 서버의 ControlTime이 아니라 받은 시각을 쓴다(Go 클라이언트와 같다).
+        let netmap = try apply(#"{"ControlTime":"2026-01-02T03:04:05Z","PeerSeenChange":{"2":false,"3":true,"99":false}}"#, to: &session)
         #expect(netmap.peers.map(\.id) == [2, 3])
-        #expect(netmap.peers.map(\.lastSeen) == [nil, nil])
-
-        netmap = try apply(#"{"ControlTime":"2026-01-02T03:04:05Z","PeerSeenChange":{"3":true}}"#, to: &session)
-        #expect(netmap.peers[1].lastSeen == GoTime.parse("2026-01-02T03:04:05Z"))
+        #expect(netmap.peers.map(\.lastSeen) == [nil, receivedAt])
     }
 
     // MARK: PeersChangedPatch
@@ -309,7 +306,7 @@ struct MapSessionTests {
     @Test("ControlTime: KeepAlive의 것도 기록하고, 0 시각은 무시한다")
     func controlTime() throws {
         var session = try session()
-        _ = try session.apply(mapResponse(#"{"KeepAlive":true,"ControlTime":"2026-01-02T03:04:05Z"}"#))
+        _ = try session.apply(mapResponse(#"{"KeepAlive":true,"ControlTime":"2026-01-02T03:04:05Z"}"#), receivedAt: receivedAt)
         #expect(try apply(#"{"ControlTime":"0001-01-01T00:00:00Z"}"#, to: &session).controlTime == GoTime.parse("2026-01-02T03:04:05Z"))
     }
 }
@@ -326,12 +323,12 @@ struct PacketFilterTests {
 
     private func start(_ fields: String) throws -> MapSession {
         var session = MapSession()
-        _ = try session.apply(mapResponse(#"{"Node":\#(selfNodeJSON)\#(fields)}"#))
+        _ = try session.apply(mapResponse(#"{"Node":\#(selfNodeJSON)\#(fields)}"#), receivedAt: receivedAt)
         return session
     }
 
     private func apply(_ json: String, to session: inout MapSession) throws -> Netmap {
-        try #require(try session.apply(mapResponse(json)).netmap)
+        try #require(try session.apply(mapResponse(json), receivedAt: receivedAt).netmap)
     }
 
     @Test("PacketFilter: null·생략은 그대로, 빈 배열은 base를 비운다(모두 차단)")

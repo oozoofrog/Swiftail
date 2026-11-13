@@ -139,7 +139,8 @@ public struct MapSession: Sendable {
         public var pingRequest: PingRequest?
     }
     public init()
-    public mutating func apply(_ response: MapResponse) throws(MapError) -> Update
+    /// now는 응답을 받은 시각이다("지금 보였다"는 증분의 마지막 온라인 시각이 된다).
+    public mutating func apply(_ response: MapResponse, receivedAt now: Date) throws(MapError) -> Update
 }
 ```
 

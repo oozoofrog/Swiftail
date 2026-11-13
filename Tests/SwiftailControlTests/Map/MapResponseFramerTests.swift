@@ -66,7 +66,7 @@ struct MapResponseFramerTests {
         var session = MapSession()
         let responses = try framer.receive(frame(TailcfgJSONTests.goMarshaledMapResponse))
         let response = try #require(responses.first)
-        let netmap = try #require(try session.apply(response).netmap)
+        let netmap = try #require(try session.apply(response, receivedAt: receivedAt).netmap)
         #expect(netmap.selfNode.capMap.keys.sorted() == ["cap/old", "cap/x", "cap/y"])
         #expect(netmap.peers.map(\.id) == [2])
         #expect(netmap.peers.first?.online == true)
@@ -103,7 +103,7 @@ struct MapResponseFramerTests {
             var session = MapSession()
             do {
                 for response in try framer.receive(frame(payload)) {
-                    _ = try session.apply(response)
+                    _ = try session.apply(response, receivedAt: receivedAt)
                     decoded += 1
                 }
             } catch {

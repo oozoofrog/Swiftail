@@ -57,3 +57,6 @@ struct SeededRandom: RandomNumberGenerator {
         return value ^ (value >> 31)
     }
 }
+
+/// 시험에서 응답을 "받은" 시각.
+let receivedAt = Date(timeIntervalSince1970: 1_800_000_000)
