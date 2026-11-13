@@ -115,3 +115,31 @@ Node 투영은 `ID`, `StableID`, `Name`, `Key`, `DiscoKey`, `Addresses`, `Allowe
 ```sh
 (cd Tools/interop && go vet ./... && go test -count=1 ./...)
 ```
+
+# controlfaults
+
+`ControlClient`의 회귀 시험용 제어 서버다. 빌드는 `sh Scripts/build-interop-tools.sh controlfaults`, 실행은 `controlfaults <모드>`이다. `127.0.0.1`의 임의 포트에서 듣고 표준 출력의 첫 줄에 서버 URL(`http://127.0.0.1:12345`)을 쓴다. 표준 입력이 닫히면(EOF) 끝난다. 로그는 표준 오류로 보내며 요청 본문과 키는 출력하지 않는다. 서버 키는 실행할 때마다 새로 만든다.
+
+`/key`와 `/ts2021`(업그레이드·Noise·HTTP/2)은 `tailscale.com/control/controlhttp/controlhttpserver`와 `golang.org/x/net/http2`로 진짜 제어 서버처럼 처리하고, 그 안의 `/machine/register`·`/machine/map` 응답만 모드에 따라 바꾼다. testcontrol은 쓰지 않는다.
+
+| 모드 | 동작 |
+| --- | --- |
+| `basic` | 등록은 곧바로 `MachineAuthorized`. 상태 갱신(`Stream=false`)은 빈 200. 맵 스트림은 self Node(`ID` 1, 요청의 NodeKey) 하나를 보내고 붙잡는다 |
+| `initialUploadHang` | `basic`과 같되 상태 갱신에 답하지 않는다 |
+| `interactiveRace` | 첫 등록 요청을 `/release`가 올 때까지 붙잡는다. 그 뒤의 등록은 곧바로 승인한다 |
+| `followupReconnect` | Followup이 빈 등록에는 `AuthURL`(`<서버 URL>/login/1`)을 준다. 첫 Followup 요청은 스트림을 끊고(RST_STREAM) 두 번째 Followup부터 승인한다 |
+| `expiryTimer` | 맵 스트림의 self Node `KeyExpiry`를 응답 시각 + 1초로 준다 |
+| `alwaysExpired` | 맵 스트림의 self Node `KeyExpiry`를 응답 시각 − 1시간으로 준다 |
+| `authEcho` | `Auth`가 있는 등록을 `{"Error":"invalid authkey: <받은 AuthKey>"}`로 거절한다 |
+| `manyMaps` | 첫 맵 스트림에 self Node 응답과 `Domain`만 다른 응답 199개(`d1`…`d199`)를 보내고 스트림을 끝낸다. 다음 맵 스트림은 머리만 보내고 붙잡는다 |
+
+평문 HTTP 경로:
+
+- `GET /probe`: 지금까지 센 값. `{"connections":0,"registers":0,"followups":0,"maps":0,"nodeKeys":0}`. `connections`는 `/ts2021` 연결, `maps`는 스트림과 상태 갱신을 합친 `/machine/map` 요청, `nodeKeys`는 등록 요청에 나온 서로 다른 NodeKey의 수다(키 자체는 내놓지 않는다).
+- `GET /release`: `interactiveRace`에서 붙잡은 첫 등록을 놓아 준다. 여러 번 불러도 된다.
+
+Swift 시험은 `SWIFTAIL_CONTROLFAULTS`에 도구 경로를 넣어 돌린다. 값이 없으면 건너뛴다.
+
+```sh
+SWIFTAIL_CONTROLFAULTS="$(sh Scripts/build-interop-tools.sh controlfaults)" eyebuild swift <용도> -- test --filter ControlFaultsTests
+```

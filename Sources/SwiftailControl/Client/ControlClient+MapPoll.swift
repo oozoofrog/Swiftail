@@ -5,10 +5,13 @@ import SwiftailHTTP2
 ///
 /// - 상태 올리기: `Stream=false, OmitPeers=true`. Hostinfo·NetInfo·DiscoKey·Endpoints를 올리고 응답 본문은
 ///   끝까지 읽어 버린다. 스트림이 열린 뒤의 변경도 이 형태로만 보낸다. 다른 형태(`Stream=false,
-///   OmitPeers=false` 등)는 서버가 기존 스트림을 끊는다.
+///   OmitPeers=false` 등)는 서버가 기존 스트림을 끊는다. 응답이 `timeouts.request` 안에 끝나지 않으면 연결 오류다.
 /// - 맵 스트림: `Stream=true, KeepAlive=true, Compress=""`. 본문을 `MapResponseFramer` → `MapSession`에 넣고
 ///   netmap이 바뀌면 사건으로 낸다. 스트림마다 새 `MapSession`으로 시작한다(세션 재개는 하지 않는다).
 /// - 감시: 맵 스트림에서 120초 동안 아무것도 오지 않으면 끊는다. 서버는 1분 안쪽 간격으로 KeepAlive를 보낸다.
+///   마지막 netmap의 self 노드 키 만료 시각에도 깨어나, 새 맵이 오지 않아도 만료를 알아챈다.
+/// - 만료: self 노드의 키가 만료되면 새 키로 다시 등록한다. 그렇게 받은 새 키도 곧바로 만료라면 `nodeKeyExpired`로
+///   끝낸다(다시 시도해도 같은 결과이고, 되풀이하면 서버를 몰아붙인다).
 /// - 핑: `Types`가 빈 `PingRequest`에는 그 URL에 HEAD로 답한다. 다른 종류는 무시한다.
 ///
 /// `docs/protocol-notes/control-map.md` 3.4, 3.5, 4.2, 4.5, 5장, 6.2
@@ -31,12 +34,13 @@ extension ControlClient {
             endpointTypes: status.endpointTypes,
             omitPeers: true
         )
-        var reader = try await connection.responseStream(
-            to: connection.jsonRequest("POST", path: "/machine/map", nodeKey: nodeKey),
-            body: Self.encode(request)
-        )
-        try Self.check(status: reader.status, retryAfter: reader.header("retry-after"))
-        while try await reader.nextChunk() != nil {}
+        let httpRequest = connection.jsonRequest("POST", path: "/machine/map", nodeKey: nodeKey)
+        let body = try Self.encode(request)
+        try await withTimeout(timeouts.request) {
+            var reader = try await connection.responseStream(to: httpRequest, body: body)
+            try Self.check(status: reader.status, retryAfter: reader.header("retry-after"))
+            while try await reader.nextChunk() != nil {}
+        }
         uploadedStatus = status
     }
 
@@ -95,20 +99,55 @@ extension ControlClient {
         if netmap.tailnetLockEnabled {
             throw ControlError.tailnetLockEnabled
         }
-        consecutiveFailures = 0
         eventContinuation.yield(.netmap(netmap))
-        if let expiry = netmap.selfNode.keyExpiry, expiry <= Date() {
-            rotateNodeKey = true
-            needsRegistration = true
-            throw SessionInterruption.nodeKeyExpired
+        if netmap.selfNode.keyExpiry != selfKeyExpiry {
+            selfKeyExpiry = netmap.selfNode.keyExpiry
+            selfKeyExpiryChanged?.yield()
         }
+        if let expiry = selfKeyExpiry, expiry <= Date() {
+            try selfKeyExpired()
+        }
+        // 만료된 self 노드는 성공이 아니다. 물러나기는 쓸 수 있는 netmap에서만 초기화한다.
+        renewedExpiredKey = false
+        consecutiveFailures = 0
+    }
+
+    /// self 노드의 키가 만료되었다. 새 키로 다시 등록하게 하고 연결을 끝낸다. 그렇게 등록한 새 키도 만료라면 끝낸다.
+    private func selfKeyExpired() throws {
+        if renewedExpiredKey { throw ControlError.nodeKeyExpired }
+        renewedExpiredKey = true
+        rotateNodeKey = true
+        needsRegistration = true
+        throw SessionInterruption.nodeKeyExpired
     }
 
     /// 맵 스트림이 120초 동안 조용하면 던진다. 기준 시각은 `receiveMap`이 받을 때마다 옮긴다.
+    /// self 노드의 키 만료 시각이 더 이르면 그때도 깨어나 만료를 처리한다. 만료 시각이 바뀌면(첫 netmap 포함)
+    /// 곧바로 깨어나 깨어날 시각을 다시 계산한다.
     func watchMapActivity() async throws {
         while true {
-            let deadline = lastMapActivity + Self.watchdogTimeout
-            try await Task.sleep(until: deadline, clock: .continuous)
+            var deadline = lastMapActivity + Self.watchdogTimeout
+            if let expiry = selfKeyExpiry {
+                // 감시 주기보다 먼 만료는 다음에 깨어날 때 다시 본다. 먼 날짜를 Duration으로 바꾸지 않는다.
+                let untilExpiry = expiry.timeIntervalSinceNow
+                if untilExpiry < Self.watchdogTimeout / .seconds(1) {
+                    deadline = min(deadline, .now + .seconds(max(untilExpiry, 0)))
+                }
+            }
+            // 바뀜 알림은 잠들 때마다 새 흐름으로 받는다. 경쟁에서 진 쪽을 취소하면 그 흐름은 끝나기 때문이다.
+            let (expiryChanges, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+            selfKeyExpiryChanged = continuation
+            let wake = deadline
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { try? await Task.sleep(until: wake, clock: .continuous) }
+                group.addTask { for await _ in expiryChanges { return } }
+                await group.next()
+                group.cancelAll()
+            }
+            try Task.checkCancellation()
+            if let expiry = selfKeyExpiry, expiry <= Date() {
+                try selfKeyExpired()
+            }
             if lastMapActivity + Self.watchdogTimeout <= .now {
                 throw ControlError.connection("맵 스트림에서 120초 동안 아무것도 오지 않았다")
             }

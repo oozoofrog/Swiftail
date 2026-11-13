@@ -8,7 +8,9 @@ import Synchronization
 /// 지키는 것:
 ///
 /// - continuation은 정확히 한 번 재개한다. 상태 콜백은 여러 번 오므로 `ResumeOnce`로 첫 결과만 넘긴다.
-/// - 기다리던 Task가 취소되면 연결을 닫는다. 그러면 걸려 있던 콜백이 오류로 돌아와 continuation이 풀린다.
+/// - 기다리던 Task가 취소되면 continuation을 곧바로 오류로 풀고 연결을 닫는다. 이미 취소된 Task에서 부르면
+///   취소 처리기가 continuation보다 먼저 돌므로, 그 결과를 `ResumeOnce`에 담아 두었다가 continuation을 다는
+///   즉시 넘긴다(취소된 `NWConnection`의 콜백이 오리라고 기대하지 않는다).
 /// - 보내기는 기다리지 않는다. `NWConnection`이 부른 순서대로 내보내므로 Noise 레코드의 순서(nonce 순서)가
 ///   지켜진다. 보내기 실패는 연결을 실패 상태로 만들고, 그 사실은 다음 `receive()`가 알린다.
 ///
@@ -35,10 +37,11 @@ final class NetworkSocket: Sendable {
         let parameters = NWParameters(tls: usesTLS ? NWProtocolTLS.Options() : nil, tcp: tcp)
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: parameters)
         let socket = NetworkSocket(connection: connection)
+        let once = ResumeOnce<Void>()
         do {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                    let once = ResumeOnce(continuation)
+                    guard once.install(continuation) else { return }
                     connection.stateUpdateHandler = { state in
                         switch state {
                         case .ready:
@@ -56,6 +59,7 @@ final class NetworkSocket: Sendable {
                     connection.start(queue: DispatchQueue(label: "Swiftail.NetworkSocket"))
                 }
             } onCancel: {
+                once.resume(with: .failure(ControlError.connection("연결이 취소되었다")))
                 connection.cancel()
             }
         } catch {
@@ -74,22 +78,25 @@ final class NetworkSocket: Sendable {
     /// 도착한 바이트를 받는다. 상대가 연결을 닫았으면 nil.
     func receive() async throws(ControlError) -> [UInt8]? {
         let connection = connection
+        let once = ResumeOnce<[UInt8]?>()
         do {
             return try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[UInt8]?, any Error>) in
+                    guard once.install(continuation) else { return }
                     connection.receive(minimumIncompleteLength: 1, maximumLength: Self.maximumReadSize) { data, _, isComplete, error in
                         if let data, !data.isEmpty {
-                            continuation.resume(returning: [UInt8](data))
+                            once.resume(with: .success([UInt8](data)))
                         } else if let error {
-                            continuation.resume(throwing: ControlError.connection("읽기 실패: \(error)"))
+                            once.resume(with: .failure(ControlError.connection("읽기 실패: \(error)")))
                         } else if isComplete {
-                            continuation.resume(returning: nil)
+                            once.resume(with: .success(nil))
                         } else {
-                            continuation.resume(returning: [])
+                            once.resume(with: .success([]))
                         }
                     }
                 }
             } onCancel: {
+                once.resume(with: .failure(ControlError.connection("읽기가 취소되었다")))
                 connection.cancel()
             }
         } catch {
@@ -103,15 +110,52 @@ final class NetworkSocket: Sendable {
     }
 }
 
-/// continuation을 한 번만 재개하게 하는 상자. 콜백이 여러 번 와도 첫 결과만 넘긴다.
+/// continuation을 정확히 한 번 재개하게 하는 상자. 콜백이 여러 번 와도 첫 결과만 넘긴다.
+///
+/// 결과가 continuation보다 먼저 올 수 있다(이미 취소된 Task에서는 취소 처리기가 본문보다 먼저 돈다).
+/// 그때는 결과를 쥐고 있다가 `install`에서 넘긴다.
 private final class ResumeOnce<Value: Sendable>: Sendable {
-    private let continuation: Mutex<CheckedContinuation<Value, any Error>?>
+    private enum State {
+        case empty
+        case waiting(CheckedContinuation<Value, any Error>)
+        case early(Result<Value, any Error>)
+        case resumed
+    }
 
-    init(_ continuation: CheckedContinuation<Value, any Error>) {
-        self.continuation = Mutex(continuation)
+    private let state = Mutex(State.empty)
+
+    /// continuation을 단다. 결과가 이미 와서 곧바로 재개했으면 false다. 그때는 콜백을 걸지 않는다.
+    func install(_ continuation: CheckedContinuation<Value, any Error>) -> Bool {
+        let early: Result<Value, any Error>? = state.withLock { state in
+            switch state {
+            case .early(let result):
+                state = .resumed
+                return result
+            case .empty:
+                state = .waiting(continuation)
+                return nil
+            case .waiting, .resumed:
+                return nil
+            }
+        }
+        guard let early else { return true }
+        continuation.resume(with: early)
+        return false
     }
 
     func resume(with result: Result<Value, any Error>) {
-        continuation.withLock { $0.take() }?.resume(with: result)
+        let waiting: CheckedContinuation<Value, any Error>? = state.withLock { state in
+            switch state {
+            case .waiting(let continuation):
+                state = .resumed
+                return continuation
+            case .empty:
+                state = .early(result)
+                return nil
+            case .early, .resumed:
+                return nil
+            }
+        }
+        waiting?.resume(with: result)
     }
 }

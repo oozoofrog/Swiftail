@@ -29,7 +29,9 @@ enum RetryPolicy {
         if let seconds = Int(value) {
             parsed = .seconds(seconds)
         } else if let date = httpDate(value) {
-            parsed = .milliseconds(Int64((date.timeIntervalSince(now) * 1_000).rounded(.down)))
+            // 정수로 바꾸기 전에 범위를 본다. 먼 날짜를 그대로 바꾸면 Int64를 넘어 트랩할 수 있다.
+            let interval = date.timeIntervalSince(now)
+            parsed = interval > 0 && interval <= 3_600 ? .milliseconds(Int64((interval * 1_000).rounded(.down))) : nil
         } else {
             parsed = nil
         }

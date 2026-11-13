@@ -53,4 +53,21 @@ struct RetryPolicyTests {
         #expect(RetryPolicy.retryAfter(header, now: now, jitter: 0) == .seconds(5))
         #expect(RetryPolicy.retryAfter(header, now: now, jitter: 0.5) == .milliseconds(7_500))
     }
+
+    /// 날짜를 밀리초 정수로 바꾸기 전에 범위를 본다. 해석기가 받는 가장 먼 날짜(99999년)와 받지 않는 더 먼 날짜,
+    /// 정수 초의 끝값을 같이 본다.
+    @Test("먼 미래·먼 과거의 날짜와 정수 끝값도 죽지 않고 대체값", arguments: [
+        "Sun, 06 Nov 99999 08:49:37 GMT",
+        "Sun Nov 6 08:49:37 99999",
+        "Sun, 06 Nov 999999 08:49:37 GMT",
+        "Sun, 06 Nov 999999999 08:49:37 GMT",
+        "Sun, 06 Nov 999999999999 08:49:37 GMT",
+        "Sun, 06 Nov 0001 08:49:37 GMT",
+        "Sun Nov 6 08:49:37 999999999",
+        "9223372036854775807",
+        "-9223372036854775808",
+    ])
+    func extremes(header: String) {
+        #expect(RetryPolicy.retryAfter(header, now: now, jitter: 0) == .seconds(5))
+    }
 }
