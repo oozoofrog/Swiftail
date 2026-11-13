@@ -20,7 +20,8 @@ public struct HTTP2StreamID: Hashable, Sendable {
 }
 
 public enum HTTP2Error: Error, Sendable, Equatable {
-    /// 상대가 규격을 어겼거나 상대가 연결 오류를 알렸다. 연결은 끝났다. code는 RFC 9113 §7의 오류 코드.
+    /// 상대가 규격을 어겼다. 연결은 끝났다. code는 RFC 9113 §7의 오류 코드.
+    /// 상대가 보낸 GOAWAY는 오류 코드가 있어도 던지지 않고 `goAway` 사건으로 알린다(같은 호출에서 모은 사건을 잃지 않기 위해서다).
     case connectionFailed(code: UInt32)
     /// 연결이 끝났거나 GOAWAY를 받아 새 요청을 시작할 수 없다.
     case connectionClosed

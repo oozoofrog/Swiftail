@@ -25,6 +25,7 @@ let package = Package(
         .testTarget(name: "SwiftailWireGuardInteropTests", dependencies: ["SwiftailWireGuard", "SwiftailBase"]),
         .target(name: "SwiftailHTTP2"),
         .testTarget(name: "SwiftailHTTP2Tests", dependencies: ["SwiftailHTTP2"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "SwiftailHTTP2InteropTests", dependencies: ["SwiftailHTTP2"]),
         .target(name: "SwiftailControl", dependencies: ["SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2"]),
         .testTarget(
             name: "SwiftailControlTests",
