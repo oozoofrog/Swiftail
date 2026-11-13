@@ -116,8 +116,9 @@ public struct MapResponseFramer: Sendable {
 
 public enum MapError: Error, Sendable, Equatable {
     case frameTooLarge              // 길이 접두가 한도를 넘음
-    case malformed                  // JSON 해독 실패
+    case malformed                  // JSON 해독 실패, 중첩 깊이·값 수 한도 초과
     case missingSelfNode            // 첫 일반 응답에 Node가 없음
+    case stateTooLarge              // 세션이 쥔 상태가 한도를 넘음. 세션을 버리고 새로 시작한다
 }
 
 /// 지금의 tailnet 모습. 맵 응답을 차례로 적용한 결과다.
@@ -148,10 +149,17 @@ public struct MapSession: Sendable {
 ```
 
 - 증분 적용은 노트 4.3절의 알고리즘과 순서를 따른다: `Peers`(전체 교체), `PeersChanged`, `PeersRemoved`, `PeersChangedPatch`, `PeerSeenChange`, `OnlineChange`, `DERPMap`(부분 유지 규칙), `DNSConfig`, `PacketFilter`·`PacketFilters`(이름 붙은 증분, 빈 배열은 "모두 차단"), `UserProfiles`, `Domain`, `TKAInfo`, `ControlTime`.
-- 한도: 프레임 하나 64MiB(Go의 256MiB보다 낮춘다. 확장의 메모리 한도 때문이다).
+- 한도(프레임): 64MiB(Go의 256MiB보다 낮춘다. 확장의 메모리 한도 때문이다), JSON 중첩 깊이 64, 값(배열 원소 + 객체 멤버) 1,000,000개. 깊이와 값 수는 `JSONDecoder`에 넘기기 전에 바이트를 훑어 센다. 넘으면 `malformed`.
+- 한도(세션): 피어 20,000, 사용자 프로필 40,000, 이름 붙은 필터 256개, 필터 규칙 합 50,000. 넘으면 `stateTooLarge`. Go처럼 프로필은 세션 동안 지우지 않는다.
+- 실패한 프레이머와 세션은 받아 둔 바이트·상태를 버리고 같은 오류만 반복한다.
+- 상태 필드가 없는 응답(KeepAlive, 서버 시각·핑만 있는 것)은 netmap을 다시 만들지 않는다.
+- `JSONValue`의 수는 `integer(Int64)` → `unsignedInteger(UInt64)` → `number(Double)` 순으로 해독한다. 64비트 범위를 넘는 정수와 고정밀 소수는 `Double`로 반올림된다.
+- `RegisterResponseAuth`는 `CustomReflectable`로 인증 키를 가린다(`print`·`dump`에 길이만 나온다).
+- `shortcut:` 값 수 한도는 해독을 끝낼 수 있는 크기로 묶을 뿐 확장의 메모리 한도(약 50MB)를 보장하지 않는다(빈 노드로 채운 최악의 프레임은 약 1.3GB, 정상 자료로 채우면 약 110MB. Debug 측정). M5에서 실기기 측정과 함께 `Peers` 원소 수를 해독 중에 제한하는 방식으로 조인다.
+- 알려진 차이(고치지 않는다. 제어 서버는 Noise로 인증된 상대이고 Go 서버는 이런 JSON을 만들지 않는다): 유니코드 정규화로 같은 문자열이 되는 필터 이름은 하나로 합쳐진다(Go는 바이트로 구분). 중복 키는 Go와 다른 쪽이 남을 수 있다. 정수 자리에 `1.0`·`1e0`을 받는다(Go는 거절).
 - zstd는 구현하지 않는다. `Compress`를 비워 비압축을 요청한다. `shortcut:` 운영 서버가 비압축을 받아 주지 않으면 해제기를 추가한다(M2 마무리 관문에서 확인).
 
-시험: 노트 3.1절의 JSON 예와 Go가 만든 자료(`Tests/SwiftailControlTests/Fixtures/`, 다른 단위가 만든다)로 해독·부호화를 확인한다. 증분 적용은 Go의 실제 `mapSession`에 같은 응답 열을 넣어 얻은 결과와 비교한다. `null`·빈 배열·생략의 구분, 마지막 피어 제거, 조각난 프레임, 한도 초과, 첫 응답에 Node 없음.
+시험: 노트 3.1절의 JSON 예와 Go가 만든 자료(`Tests/SwiftailControlTests/Fixtures/`, 다른 단위가 만든다)로 해독·부호화를 확인한다. 증분 적용은 Go의 실제 `mapSession`에 같은 응답 열을 넣어 얻은 결과와 비교한다. `null`·빈 배열·생략의 구분, 마지막 피어 제거, 조각난 프레임, 한도 초과(깊이·값 수·세션 상태의 경계, 보조 스레드의 작은 스택), 첫 응답에 Node 없음, 한 응답 안에서 같은 피어에 겹친 증분, 비밀이 `dump`에 나오지 않음.
 
 ## 단위 4: ControlClient (`Sources/SwiftailControl/Client/`)
 
