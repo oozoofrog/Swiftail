@@ -103,6 +103,29 @@ struct SendFlowControlTests {
         _ = id
     }
 
+    @Test("한 SETTINGS 안에서 열린 스트림 창이 중간에 2^31-1을 넘으면 최종 차이가 0이어도 FLOW_CONTROL_ERROR")
+    func intermediateWindowOverflowInOneSettings() throws {
+        func connectionWithFullStreamWindow() throws -> HTTP2ClientConnection {
+            var connection = try HTTP2ClientConnection.established()
+            _ = try connection.startRequest(getRequest, body: nil)
+            // 스트림 창을 초깃값 65,535에서 2^31-1까지 올린다.
+            _ = try connection.receive(windowUpdateBytes(stream: 1, increment: UInt32(FlowControlWindow.maximum - 65_535)))
+            _ = connection.takeOutboundBytes()
+            return connection
+        }
+        var overflowing = try connectionWithFullStreamWindow()
+        #expect(throws: HTTP2Error.connection(.flowControlError)) {
+            try overflowing.receive(settingsBytes([(4, UInt32(FlowControlWindow.maximum)), (4, 65_535)]))
+        }
+
+        // 같은 값 하나만(차이 0)이면 문제없다. 반대 순서(먼저 줄이고 키우는 것)도 넘치지 않는다.
+        var unchanged = try connectionWithFullStreamWindow()
+        _ = try unchanged.receive(settingsBytes([(4, 65_535)]))
+        var decreasing = try connectionWithFullStreamWindow()
+        _ = try decreasing.receive(settingsBytes([(4, 0), (4, 65_535)]))
+        #expect(try decreasing.takeOutboundFrames() == [.settingsAcknowledgement])
+    }
+
     @Test("연결 창은 스트림들이 나눠 쓴다")
     func connectionWindowShared() throws {
         var connection = try HTTP2ClientConnection.established(serverSettings: [(4, 1_000_000)])

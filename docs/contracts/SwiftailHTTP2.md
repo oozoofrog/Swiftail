@@ -80,7 +80,11 @@ public struct HTTP2ClientConnection: Sendable {
 - 흐름 제어: 보내는 쪽은 연결·스트림 창을 지키고 WINDOW_UPDATE와 SETTINGS_INITIAL_WINDOW_SIZE 변경을 반영한다. 받는 쪽은 받은 DATA만큼 곧바로 창을 돌려준다
 - 상대의 MAX_FRAME_SIZE에 맞춘 프레임 분할, MAX_CONCURRENT_STREAMS 준수
 
-한도(신뢰할 수 없는 입력): 받는 프레임 16,384바이트(알린 MAX_FRAME_SIZE), 헤더 블록 합계 64KiB, HPACK 동적 표 4,096바이트. 넘으면 연결 오류다. 어떤 바이트열로도 프로세스가 죽지 않는다.
+한도(신뢰할 수 없는 입력): 받는 프레임 16,384바이트(알린 MAX_FRAME_SIZE), 헤더 블록 합계 64KiB, HPACK 동적 표 4,096바이트, 상대가 요구해서 쌓인 제어 프레임(PING ACK, SETTINGS ACK, WINDOW_UPDATE, RST_STREAM)의 대기 바이트 64KiB(`takeOutboundBytes()`가 비운다). 넘으면 연결 오류다(마지막 것은 ENHANCE_YOUR_CALM이고 GOAWAY가 한도와 상관없이 뒤에 붙는다). 어떤 바이트열로도 프로세스가 죽지 않는다.
+
+응답 검증(어기면 그 스트림만 RST_STREAM PROTOCOL_ERROR와 `streamClosed`, RFC 9113 §8.1.1·§8.2·§8.3·§8.6): 헤더 이름은 비어 있지 않은 소문자 token(이름 중간의 `:`·공백·대문자 불가), 값에 NUL·CR·LF 불가, 연결 전용 필드(`connection`, `keep-alive`, `proxy-connection`, `transfer-encoding`, `upgrade`, `trailers` 아닌 값의 `te`) 불가. 같은 규칙을 요청 헤더(`invalidRequest`)와 트레일러에도 쓰고, 트레일러에는 의사 헤더도 불가다. `content-length`는 하나뿐인 십진수여야 하고 받은 DATA 합계와 같아야 한다(HEAD 응답, 204, 304는 본문이 없으므로 대조하지 않는다). 101은 임시 응답으로 넘기지 않고 오류다.
+
+SETTINGS_INITIAL_WINDOW_SIZE는 한 프레임 안에서도 받은 순서대로 열린 스트림 창에 적용하고 매번 넘침(2^31-1 초과)을 확인한다. 중간에 넘치면 FLOW_CONTROL_ERROR 연결 오류다.
 
 제외(`shortcut:` 주석으로 남긴다):
 

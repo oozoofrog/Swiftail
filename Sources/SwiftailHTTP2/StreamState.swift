@@ -17,9 +17,16 @@ struct StreamState {
     var sendWindow: FlowControlWindow
     /// 아직 내보내지 못한 요청 본문. `nil`이면 요청 쪽이 끝났다.
     var unsentBody: ArraySlice<UInt8>?
+    /// HEAD 요청이다. 응답의 `content-length`는 본문 길이가 아니다(RFC 9110 §9.3.2).
+    let isHeadRequest: Bool
+    /// 응답이 `content-length`로 알린 본문 길이. 알리지 않았거나 본문이 없는 응답(HEAD, 204, 304)이면 `nil`.
+    var declaredBodyLength: Int?
+    /// 지금까지 받은 DATA payload의 합(패딩 제외). `declaredBodyLength`와 맞춰 본다(§8.1.1).
+    var receivedBodyLength = 0
 
-    init(sendWindowSize: Int, body: [UInt8]?) {
+    init(sendWindowSize: Int, body: [UInt8]?, isHeadRequest: Bool) {
         sendWindow = FlowControlWindow(sendWindowSize)
         unsentBody = body?[...]
+        self.isHeadRequest = isHeadRequest
     }
 }

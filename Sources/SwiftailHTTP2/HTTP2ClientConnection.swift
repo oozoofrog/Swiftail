@@ -60,8 +60,20 @@ public struct HTTP2ClientConnection: Sendable {
     /// 헤더 블록(CONTINUATION을 합친 것)의 한도.
     static let maximumHeaderBlockSize = 65_536
 
+    /// 상대가 요구해서 쌓인 제어 프레임(PING·SETTINGS ACK, WINDOW_UPDATE, RST_STREAM)의 대기 바이트 한도.
+    ///
+    /// 상대는 작은 프레임을 얼마든지 보낼 수 있고(PING 하나는 17바이트이고 17바이트 ACK를 낳는다), 답은
+    /// 호출하는 쪽이 `takeOutboundBytes()`로 꺼내 가야 비워진다. 소켓이 막혀 있으면 쌓이기만 하므로 상한을
+    /// 둔다. 한도는 헤더 블록 한도와 같은 64KiB다: 정상 서버가 한 번의 `receive`로 일으키는 답(DATA 프레임
+    /// 하나당 WINDOW_UPDATE 26바이트)보다 훨씬 크고, 쌓이는 메모리는 입력 크기에 비례한 채 작게 묶인다.
+    /// Go의 `x/net/http2` 서버도 대기 제어 프레임을 10,000개로 묶는다. 넘으면 ENHANCE_YOUR_CALM 연결
+    /// 오류로 끝내고(§7), 그 GOAWAY(17바이트)는 한도와 상관없이 뒤에 붙는다.
+    static let maximumPendingControlBytes = 65_536
+
     var phase = Phase.open
     var outbound: [UInt8]
+    /// `outbound` 가운데 상대가 요구해서 쌓인 제어 프레임의 바이트. `takeOutboundBytes()`가 비운다.
+    var pendingControlBytes = 0
     var frames = FrameBuffer()
     var decoder = HPACKDecoder()
     var peerSettings = PeerSettings()
@@ -87,7 +99,10 @@ public struct HTTP2ClientConnection: Sendable {
 
     /// 상대에게 보낼 바이트를 꺼낸다. 없으면 빈 배열. `init`, `startRequest`, `cancel`, `receive` 뒤에 부른다.
     public mutating func takeOutboundBytes() -> [UInt8] {
-        defer { outbound = [] }
+        defer {
+            outbound = []
+            pendingControlBytes = 0
+        }
         return outbound
     }
 
@@ -100,6 +115,7 @@ public struct HTTP2ClientConnection: Sendable {
             frames.append(bytes)
             while let frame = try frames.nextFrame() {
                 try handle(frame, events: &events)
+                guard pendingControlBytes <= Self.maximumPendingControlBytes else { throw .connection(.enhanceYourCalm) }
             }
             frames.discardConsumedBytes()
         } catch {
