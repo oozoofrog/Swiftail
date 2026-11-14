@@ -8,8 +8,9 @@ Swiftail 구현에 필요한 수준으로 각 프로토콜을 정리한 문서�
 | --- | --- | --- |
 | `tailscale.com` | v1.104.6 (CapabilityVersion 148) | BSD-3-Clause |
 | `github.com/tailscale/wireguard-go` | v0.0.0-20261106233718-9e0ab45c16ca | MIT |
+| `gvisor.dev/gvisor`(`tailscale.com/go.mod`이 고정한 버전) | v0.0.0-20260915211658-a6f909f08a72 | Apache-2.0 |
 
-`Scripts/fetch-reference-sources.sh`가 소스를 내려받고 루트 경로를 출력한다. 노트의 출처는 모듈 루트 기준 상대 경로와 줄 번호로 적는다(예: `tailscale.com/control/controlbase/handshake.go:120`, `wireguard-go/device/noise-protocol.go:60`).
+`Scripts/fetch-reference-sources.sh`가 소스를 내려받고 루트 경로를 출력한다. gVisor는 이 스크립트가 받지 않는다. `sh Scripts/build-interop-tools.sh`로 시험 도구를 빌드하면 같은 모듈 캐시(`gvisor.dev/gvisor@<버전>`)에 들어온다. 노트의 출처는 모듈 루트 기준 상대 경로와 줄 번호로 적는다(예: `tailscale.com/control/controlbase/handshake.go:120`, `wireguard-go/device/noise-protocol.go:60`).
 
 ## 노트 목록과 검증 상태
 
@@ -24,6 +25,7 @@ Swiftail 구현에 필요한 수준으로 각 프로토콜을 정리한 문서�
 | [disco-magicsock.md](disco-magicsock.md) | M4 | GPT-6.1 Sol | Claude Opus 5.5, 2026-11-15, 수정 7건 + M4 절차 보충 |
 | [netmap-engine.md](netmap-engine.md) | M3·M5 | Claude Sonnet 5.5 | GPT-6.1 Sol, 2026-11-14, 수정 10건 + M3 절차 보충 |
 | [dns-state-node.md](dns-state-node.md) | M5~M7 | Claude Sonnet 5.5 | Claude Opus 5.5, 2026-11-15, 수정 16건 + M5 절차 보충 |
+| [tcp-netstack.md](tcp-netstack.md) | M6 | Claude Fable 5.2 | 아직 안 됨 |
 
 ## 노트 형식
 
