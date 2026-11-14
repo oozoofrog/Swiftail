@@ -413,6 +413,21 @@ try await withThrowingDiscardingTaskGroup { group in
 | F12 | Mac 호스트의 tailnet 주소로 ICMP ping을 보내 진단하는 절차가 있는가? | 없다 | N11 |
 | F13 | 리스너가 받아 가지 않은 연결을 32개까지 두는 것(Go는 1초 뒤 닫음)이 지금의 동작에 기대는 곳과 어긋나는가? | 어긋나지 않는다 | 결정 D6 |
 
+## 첫 사용처 검토 결과 (2026-11-15)
+
+RemoteDebug 세션이 F1~F13에 답했다(그쪽 `2814b2c`의 Go 코드에서 확인한 것과 제안). 가정은 모두 맞았고, 계약의 조항은 다음과 같이 굳는다.
+
+1. **TLS와 HTTP(F1)**: HTTP 서버는 첫 사용처가 Swift로 쓴다. 지금 Go 호스트는 `tls.NewListener` + `http.Server.Serve`라서 **HTTP/1.1만** 쓴다. TLS는 **루프백 다리**로 한다: Swiftail 연결을 `127.0.0.1`의 `NWListener`(TLS, ALPN `http/1.1`, 최소 TLS 1.2)로 이어 준다. 첫 사용처에는 tailnet과 무관한 OS TCP 리스너(같은 Wi-Fi 직접 연결)가 이미 있어, HTTP 서버 하나가 두 입구를 같은 방식으로 받게 된다. Swift로 쓴 TLS 서버는 하지 않는다. **M6의 API는 바이트 흐름 그대로다**(N9는 M7에서 닫는다). M7 계약이 정할 것:
+   - 다리를 Swiftail이 선택 제품으로 낼지(역압과 반닫힘을 정확히 잇는 일이다), 첫 사용처가 쓸지. 어느 쪽이든 루프백 연결의 출발 포트 → tailnet `IPEndpoint` 대응을 HTTP 서버가 요청마다 물을 수 있어야 한다(WhoIs).
+   - ts.net 인증서 API의 모양: 인증서 사슬(DER 또는 PEM)과 개인 키(`SecKey`로 만들 수 있는 형식. P-256이면 X9.63 원시 표현), 갱신을 알리는 사건. 첫 사용처가 키체인에 넣어 `SecIdentity`를 만든다.
+2. **범위(F2·F3·F4·F6·F12)**: 리스너는 하나(기본 443), 동시 연결은 기기당 10개 안팎(상한 256이면 충분), 가장 큰 전송은 서버 → 클라이언트 4GiB·반대 방향 4MiB다. 프록시 모드는 Go와 함께 없어진다(호출하는 곳이 없다). 그래서 **iOS 확장에서 `.inProcess`를 쓸 일이 없고**, 동작 M의 상한은 Mac 호스트 기준 그대로다. `connect`는 시험과 진단이 쓴다. ICMP echo에는 답하지 않는다(N11 확정).
+3. **시간 제한과 keep-alive(F5)**: 첫 사용처의 Swift 서버가 머리 10초, 본문 읽기 무응답 30초, 유휴 60초, 쓰기 무진행 60초를 둔다. 그래도 keep-alive는 켠 채로 둔다(N5 그대로. 다른 사용처는 시간 제한이 없을 수 있다). 쓰기 시간 제한은 `write`를 부른 Task의 취소로 건다: 취소된 `write`는 연결을 RST로 끊고 `.cancelled`를 던진다(동작 A4, 공개 API의 `write` 주석 그대로).
+4. **그 밖(F7·F8·F9·F13)**: 원격 주소는 `IPEndpoint`면 충분하다. 듣기 재시도 로직은 없앤다(`listen`은 `run()` 전에도 된다). 노드가 멈출 때 RST 한 번이면 된다(받는 쪽이 Range로 이어받는다). 받아 가지 않은 연결 32개는 어긋나지 않는다.
+5. **속도 기준(F10)**: 기록이 없다. 첫 사용처가 관문 (나)에서 Go 터널 + Go 호스트로 100MB 받는 시간을 재서 준다(Wi-Fi 직접 경로, 가능하면 셀룰러·DERP). 그 값이 N3(SACK)와 관문 기록의 비교 기준이다.
+6. **통합 시험의 발판(F11)**: 가짜 tailnet e2e는 M7에서 다룬다. 그 전에, 계정 없이 프로세스 안에서 Swiftail 노드 둘(하나는 `listen`, 하나는 `connect`)을 `Tools/interop`의 시험 제어 서버에 붙여 돌리는 방법을 `Tools/interop/README.md`에 적는다(M6-9b의 몫으로 더한다). 첫 사용처가 호스트 이식의 통합 시험을 그 위에 올린다.
+7. **큰 전송의 복사 횟수(제안)**: `write(_: [UInt8])`의 복사가 4GiB 전송에서 Mac의 CPU에 주는 영향은 관문 (가)의 100MB 전송에서 잰다. 문제가 보이면 복사를 줄인 쓰기(`Span` 계열이나 `some Collection<UInt8>`)를 더한다. 안전하지 않은 포인터를 공개 API에 내지 않는다(plan 5절 코드 기준). `shortcut:`으로 남긴다.
+8. **커널 스택 관문**: "M5 터널을 켠 iPhone이 Mac의 Swift 리스너에서 큰 파일을 받는" 확인은 첫 사용처 세션이 맡는다. 그 시점에 맞춰 Swift 리스너 위의 최소 HTTPS 서버(파일 하나를 Range로 내보냄)를 그쪽이 만든다.
+
 ## 제외 (`shortcut:` 주석으로 남긴다)
 
 | 제외 | 근거 | 필요해지는 시점 |
@@ -529,7 +544,7 @@ try await withThrowingDiscardingTaskGroup { group in
 | M6-6 | 독립 시험: `LinkSimulator`와 속성 시험(시험 12), 시험 4·5·6·10의 사례. 계약과 TCP 노트만 보고 쓴다 | `Tests/SwiftailNetstackTests/Support/*`, `Tests/SwiftailNetstackTests/Scenarios/*` | M6-4를 쓴 세션과 **다른 세션**. 하네스는 M6-4와 병렬로 쓰고, 시험은 M6-5 뒤에 돌린다 |
 | M6-7 | Go 기준값 도구와 자료, 대조 시험 | `Tools/interop/cmd/tcpfixtures/`, `Tests/SwiftailNetstackTests/Fixtures/tcp-segments.json`, `Tests/SwiftailNetstackTests/Wire/GoSegmentComparisonTests.swift`, `Tools/interop/README.md`의 새 절 | 도구는 **병렬**. 대조 시험은 M6-1 뒤 다른 세션이 |
 | M6-8 | 노드 통합(동작 N·A·K, X10): `TunnelDevice.inProcess`, 스택 잇기와 대기열, 공개 API, 이름 해석, 기다리는 호출, 버려진 핸들, 손실 훅 | `Sources/Swiftail/**`, `Tests/SwiftailTests/Netstack*`(시험 13~16) | M6-5 뒤 |
-| M6-9 | 관문: (9a) `tailnet` 도구의 `peerServe`·`peerDial`·`transfers`·`peerClose`·`addKernelPeer`와 README, (9b) `NetstackTests.swift` | `Tools/interop/cmd/tailnet/*`, `Tools/interop/README.md`의 `tailnet` 절, `Tests/SwiftailInteropTests/NetstackTests.swift` | 9a는 **병렬**(M6-7과 README의 절이 다르다). 9b는 M6-8 뒤 |
+| M6-9 | 관문: (9a) `tailnet` 도구의 `peerServe`·`peerDial`·`transfers`·`peerClose`·`addKernelPeer`와 README, (9b) `NetstackTests.swift`와, 시험 제어 서버에 Swiftail 노드 둘을 붙여 `listen`·`connect`를 돌리는 방법의 문서(첫 사용처 검토 결과 6) | `Tools/interop/cmd/tailnet/*`, `Tools/interop/README.md`의 `tailnet` 절, `Tests/SwiftailInteropTests/NetstackTests.swift` | 9a는 **병렬**(M6-7과 README의 절이 다르다). 9b는 M6-8 뒤 |
 | M6-10 | (조건부) SACK | `Sources/SwiftailNetstack/Recovery/SACK*`와 M6-4의 파일 | 관문 (가) 8의 기록이 N3의 기준 아래일 때만 |
 
 순서: M6-0 → (M6-1, 2, 3, 6의 하네스, 7의 도구, 9a) 병렬 → M6-4 → M6-5 → M6-6의 시험 → M6-8 → M6-9b → 다른 세션의 검토 → 총괄이 관문 (가)를 다시 돌림 → 관문 (나) → (필요하면) M6-10.
