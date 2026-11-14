@@ -197,7 +197,7 @@ public actor ControlClient {
     public struct Configuration: Sendable {
         public var serverURL: URL             // http:// 또는 https://
         public var hostname: String
-        public var authKey: String?           // 첫 등록에만 쓴다. 로그에 남기지 않는다
+        public var authKey: String?           // 등록 요청마다 보낸다(Go와 같다). 로그에 남기지 않는다
         public var ephemeral: Bool
         public init(serverURL: URL, hostname: String, authKey: String? = nil, ephemeral: Bool = false)
     }
@@ -243,16 +243,17 @@ public actor ControlClient {
 
 동작(노트 control-map 4.1·4.2·4.4·4.5, control-transport 4장):
 
-1. **연결**: `GET <serverURL>/key?v=148`(URLSession)로 서버 키를 얻는다. `http://`이면 그 포트로 TCP, `https://`이면 443으로 TLS 연결을 열고(Network 프레임워크) 업그레이드 → Noise → early payload → HTTP/2. 연결 하나에 요청을 다중화한다. 끊기면 다음 요청 때 새로 맺는다.
+1. **연결**(끊긴 뒤의 판정: 연결이 끊겨도 이미 받은 응답으로 낼 결론—등록 거절처럼 다시 시도해도 소용없는 오류—이 연결 오류보다 앞선다. 진행 중이던 요청이 스스로 끝나기를 1초까지 기다린다): `GET <serverURL>/key?v=148`(URLSession)로 서버 키를 얻는다. `http://`이면 그 포트로 TCP, `https://`이면 443으로 TLS 연결을 열고(Network 프레임워크) 업그레이드 → Noise → early payload → HTTP/2. 연결 하나에 요청을 다중화한다. 끊기면 다음 요청 때 새로 맺는다.
    - `shortcut:` 80·443 경쟁, ControlDialPlan, 프록시는 없다. 필요해지는 시점: 443이 막힌 망이 보고될 때.
+   - `shortcut:` 받는 쪽이 기한으로 버린 응답 스트림은 그 스트림에 다음 데이터가 올 때에야 RST_STREAM으로 취소한다. 답하지 않는 요청이 쌓여 서버의 동시 스트림 한도에 닿으면 다음 요청이 연결 오류가 되어 다시 연결한다.
    - `/key`의 TLS는 검증한다. 업그레이드 연결의 TLS도 검증한다(Go는 Noise가 서버를 인증하므로 검증 실패를 넘기지만, 여기서는 더 엄격하게 둔다).
 2. **등록**: 저장된 node 키가 있으면 그것으로, 없으면 새 후보 키로 `POST /machine/register`.
-   - 인증 키가 `--TL`을 담고 있으면 그 앞부분만 보낸다.
+   - 인증 키가 있으면 등록 요청마다 보낸다(처음뿐 아니라 키가 만료되어 새 키를 등록할 때도. 재사용 인증 키면 스스로 다시 인증된다). `--TL`을 담고 있으면 그 앞부분만 보낸다.
    - `AuthURL`이 오면 `loginRequired`를 내고 같은 후보 키로 `Followup` 요청(긴 폴링)을 반복한다. 후보 키는 인증이 끝난 뒤에만 확정·저장한다.
    - `NodeKeyExpired`면 새 키로 한 번 더. `Error`면 `registrationRejected`. 그 메시지에서 인증 키(원문과 `--TL` 앞부분)는 가리고 200자로 자른다.
    - 기한: 등록 요청 120초(Go에는 없는 값이다), Followup 긴 폴링 10분. 넘기면 연결 오류로 보고 물러났다가 다시 잇는다.
    - 확정 전의 후보 키와 Followup URL은 재연결 너머로 유지한다(사용자가 보고 있는 로그인 URL이 그 후보 키에 묶여 있다). 확정·거절·새 로그인 요청 때만 버린다.
-   - 등록이 진행 중일 때 요청한 `startInteractiveLogin()`은 그 등록이 끝난 뒤에도 남아 새 등록을 일으킨다. `shortcut:` Followup 긴 폴링 중의 요청은 그 응답이 오거나 기한이 지날 때 반영된다.
+   - 등록이 진행 중일 때 요청한 `startInteractiveLogin()`은 그 등록이 끝난 뒤에도 남아 새 등록을 일으킨다. 로그인을 기다리는 Followup 긴 폴링은 그 자리에서 그만두고 새 후보 키로 다시 시작해 새 URL을 알린다.
 3. **상태 올리기**: `Stream=false, OmitPeers=true`인 맵 요청으로 Hostinfo·NetInfo·DiscoKey·Endpoints를 올린다. 응답 본문은 끝까지 읽고 버린다. 응답을 120초 안에 다 받지 못하면 연결 오류다(Go의 감시와 같다). 스트림이 열린 뒤의 변경도 이 형태로만 보낸다(다른 형태는 서버가 기존 스트림을 끊는다).
 4. **맵 스트림**: `Stream=true, KeepAlive=true, Compress=""`. 바이트를 `MapResponseFramer` → `MapSession`에 넣고 netmap이 바뀌면 `netmap` 사건을 낸다. 120초 동안 아무것도 오지 않으면 끊고 다시 잇는다. 다시 이을 때는 새 `MapSession`으로 시작한다.
    - `TKAInfo`로 tailnet lock이 켜진 것을 알면 `tailnetLockEnabled`로 끝낸다.

@@ -128,6 +128,8 @@ Node 투영은 `ID`, `StableID`, `Name`, `Key`, `DiscoKey`, `Addresses`, `Allowe
 | `initialUploadHang` | `basic`과 같되 상태 갱신에 답하지 않는다 |
 | `interactiveRace` | 첫 등록 요청을 `/release`가 올 때까지 붙잡는다. 그 뒤의 등록은 곧바로 승인한다 |
 | `followupReconnect` | Followup이 빈 등록에는 `AuthURL`(`<서버 URL>/login/1`)을 준다. 첫 Followup 요청은 스트림을 끊고(RST_STREAM) 두 번째 Followup부터 승인한다 |
+| `followupHold` | Followup이 빈 등록에는 그 요청의 순번이 든 `AuthURL`(`<서버 URL>/login/<순번>`)을 준다. Followup 요청은 `/release`가 올 때까지 붙잡았다가 승인한다 |
+| `sameAuthURL` | `/release` 전까지 모든 등록(Followup 포함)에 같은 `AuthURL`(`<서버 URL>/login/1`)을 곧바로 준다. 그 뒤에는 승인한다 |
 | `expiryTimer` | 맵 스트림의 self Node `KeyExpiry`를 응답 시각 + 1초로 준다 |
 | `alwaysExpired` | 맵 스트림의 self Node `KeyExpiry`를 응답 시각 − 1시간으로 준다 |
 | `authEcho` | `Auth`가 있는 등록을 `{"Error":"invalid authkey: <받은 AuthKey>"}`로 거절한다 |

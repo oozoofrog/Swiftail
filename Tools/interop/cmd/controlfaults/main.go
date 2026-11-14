@@ -27,6 +27,8 @@ var modes = map[string]bool{
 	"initialUploadHang": true, // 상태 갱신(Stream=false)에 답하지 않는다
 	"interactiveRace":   true, // 첫 등록 요청을 /release까지 붙잡는다
 	"followupReconnect": true, // 첫 Followup 요청에서 스트림을 끊고, 두 번째 Followup은 승인한다
+	"followupHold":      true, // Followup 요청을 /release까지 붙잡는다
+	"sameAuthURL":       true, // /release 전까지 모든 등록에 같은 AuthURL을 곧바로 준다
 	"expiryTimer":       true, // self Node의 KeyExpiry를 응답 시각 + 1초로 준다
 	"alwaysExpired":     true, // self Node의 KeyExpiry를 늘 지난 시각으로 준다
 	"authEcho":          true, // 인증 키가 있는 등록을 그 키를 되풀이한 Error로 거절한다
@@ -43,6 +45,7 @@ type server struct {
 	connections int
 	registers   int
 	followups   int
+	withAuth    int
 	maps        int
 	streams     int
 	nodeKeys    map[string]bool
@@ -54,6 +57,7 @@ type probe struct {
 	Connections int `json:"connections"`
 	Registers   int `json:"registers"`
 	Followups   int `json:"followups"`
+	WithAuth    int `json:"withAuth"` // Auth.AuthKey가 실린 등록 요청 수
 	Maps        int `json:"maps"`
 	NodeKeys    int `json:"nodeKeys"` // 등록 요청에 나온 서로 다른 NodeKey 수. 키 자체는 내놓지 않는다
 }
@@ -91,7 +95,7 @@ func (s *server) outer(w http.ResponseWriter, r *http.Request) {
 		s.releaseOnce.Do(func() { close(s.released) })
 	case "/probe":
 		s.mu.Lock()
-		p := probe{s.connections, s.registers, s.followups, s.maps, len(s.nodeKeys)}
+		p := probe{s.connections, s.registers, s.followups, s.withAuth, s.maps, len(s.nodeKeys)}
 		s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(p)
 	case "/ts2021":
@@ -139,6 +143,9 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 		s.followups++
 	}
 	followup := s.followups
+	if request.Auth != nil && request.Auth.AuthKey != "" {
+		s.withAuth++
+	}
 	s.mu.Unlock()
 
 	switch s.mode {
@@ -153,6 +160,23 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 	case "authEcho":
 		if request.Auth != nil {
 			_ = json.NewEncoder(w).Encode(map[string]any{"Error": "invalid authkey: " + request.Auth.AuthKey})
+			return
+		}
+	case "followupHold":
+		if request.Followup == "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"AuthURL": fmt.Sprintf("%s/login/%d", s.base, ordinal)})
+			return
+		}
+		select {
+		case <-s.released:
+		case <-r.Context().Done():
+			return
+		}
+	case "sameAuthURL":
+		select {
+		case <-s.released:
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"AuthURL": s.base + "/login/1"})
 			return
 		}
 	case "followupReconnect":

@@ -51,21 +51,48 @@ actor ControlConnection {
             try await open(endpoint, machineKey: machineKey, serverKey: serverKey)
         }
         defer { connection.close() }
-        return try await withThrowingTaskGroup(of: Result?.self) { group in
+        return try await withThrowingTaskGroup(of: Outcome<Result>.self) { group in
+            defer { group.cancelAll() }
             group.addTask {
-                try await connection.readLoop()
-                return nil
-            }
-            group.addTask { try await body(connection) }
-            // 읽기 루프는 던지는 것으로만 끝나므로 처음 돌아온 값은 body의 것이다.
-            while let result = try await group.next() {
-                if let result {
-                    group.cancelAll()
-                    return result
+                do throws(ControlError) {
+                    try await connection.readLoop()
+                    return .readEnded(.connection("연결이 끝났다"))
+                } catch {
+                    return .readEnded(error)
                 }
             }
-            throw ControlError.connection("연결이 끝났다")
+            group.addTask { .finished(try await body(connection)) }
+
+            // 연결이 끊겨도 곧바로 그 오류를 던지지 않는다. 서버가 응답을 보내자마자 닫으면, `body`가 이미 받은
+            // 응답으로 낼 결론(등록 거절처럼 다시 시도해도 소용없는 오류)을 연결 오류가 앞질러 재시도로 바꾼다.
+            // 끊기면 걸려 있던 응답 스트림이 모두 끝나므로 `body`는 곧 끝난다. 연결과 무관하게 잠든 `body`를
+            // 한없이 기다리지 않게 유예만 둔다.
+            var readFailure: ControlError?
+            while let outcome = try await group.next() {
+                switch outcome {
+                case .finished(let result):
+                    return result
+                case .readEnded(let error):
+                    readFailure = error
+                    group.addTask {
+                        try await Task.sleep(for: bodyGracePeriod, clock: .continuous)
+                        return .graceExpired
+                    }
+                case .graceExpired:
+                    throw readFailure ?? ControlError.connection("연결이 끝났다")
+                }
+            }
+            throw readFailure ?? ControlError.connection("연결이 끝났다")
         }
+    }
+
+    /// 연결이 끊긴 뒤 `body`가 스스로 끝나기를 기다려 주는 시간.
+    private static var bodyGracePeriod: Duration { .seconds(1) }
+
+    private enum Outcome<Result: Sendable>: Sendable {
+        case finished(Result)
+        case readEnded(ControlError)
+        case graceExpired
     }
 
     /// 업그레이드와 Noise 핸드셰이크를 마친 연결을 만든다. HTTP/2 프리페이스는 곧바로 보낸다

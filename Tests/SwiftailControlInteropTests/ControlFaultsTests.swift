@@ -65,6 +65,57 @@ struct ControlFaultsTests {
         }
     }
 
+    @Test("인증 키는 처음뿐 아니라 만료 뒤의 새 등록에도 보낸다 (Go와 같다)")
+    func authKeyOnEveryRegistration() async throws {
+        try await withFaultClient("expiryTimer", authKey: "tskey-auth-EXAMPLE-0000") { server, client, _ in
+            _ = try await client.registered("첫 등록")
+            _ = try await client.registered("만료 뒤 새 등록", timeout: .seconds(10))
+            let probe = try await server.probe()
+            #expect(probe.registers >= 2)
+            #expect(probe.withAuth == probe.registers)
+        }
+    }
+
+    @Test("로그인을 기다리는 긴 폴링 중에 새 로그인을 요청하면 곧바로 새 키와 새 URL로 다시 시작한다")
+    func interactiveLoginDuringFollowup() async throws {
+        try await withFaultClient("followupHold") { server, client, _ in
+            guard case .loginRequired(let firstURL) = try await client.next("첫 로그인 URL") else {
+                throw GateFailure("loginRequired가 아니다")
+            }
+            _ = try await server.wait("붙잡힌 Followup") { $0.followups == 1 }
+            await client.client.startInteractiveLogin()
+            // 기본 Followup 기한은 10분이다. 그만두지 않으면 아래가 시간 안에 오지 않는다.
+            guard case .loginRequired(let secondURL) = try await client.next("새 로그인 URL") else {
+                throw GateFailure("새 loginRequired가 아니다")
+            }
+            #expect(firstURL != secondURL)
+            let probe = try await server.wait("새 후보 키의 Followup") { $0.followups == 2 }
+            #expect(probe.nodeKeys == 2, "새 로그인은 새 후보 키로 시작한다")
+        }
+    }
+
+    @Test("같은 AuthURL로 물러나는 동안 요청한 새 로그인은 이전 후보 키를 되살리지 않는다")
+    func interactiveLoginDuringRepeatedURLBackoff() async throws {
+        try await withFaultClient("sameAuthURL") { server, client, _ in
+            // 같은 URL이 되풀이될수록 물러나는 시간이 길어진다. 일곱 번째 뒤에는 거의 늘 잠들어 있다.
+            _ = try await server.wait("같은 URL의 되풀이", timeout: .seconds(20)) { $0.registers >= 7 }
+            #expect(try await server.probe().nodeKeys == 1)
+            await client.client.startInteractiveLogin()
+            _ = try await server.wait("새 후보 키의 등록", timeout: .seconds(20)) { $0.nodeKeys == 2 }
+            try await server.release()
+            var loginURLs = 0
+            registration: while true {
+                switch try await client.next("풀린 뒤의 등록", timeout: .seconds(20)) {
+                case .loginRequired: loginURLs += 1
+                case .registered: break registration
+                case .netmap, .disconnected: continue
+                }
+            }
+            #expect(loginURLs == 2, "처음의 URL과 새 로그인의 URL, 두 번 알린다")
+            #expect(try await server.probe().nodeKeys == 2, "확정된 것은 새 후보 키다")
+        }
+    }
+
     @Test("새 키로 다시 등록해도 만료면 nodeKeyExpired로 끝난다")
     func alwaysExpired() async throws {
         try await withFaultClient("alwaysExpired") { server, client, _ in
@@ -123,6 +174,7 @@ struct FaultServer: Sendable {
         var connections: Int
         var registers: Int
         var followups: Int
+        var withAuth: Int
         var maps: Int
         var nodeKeys: Int
     }

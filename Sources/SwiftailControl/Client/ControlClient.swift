@@ -118,6 +118,8 @@ public actor ControlClient {
     /// `startInteractiveLogin()`을 부른 횟수. 등록은 시작할 때의 값과 끝날 때의 값이 같을 때만 그 요청을 채운 것으로 본다.
     var loginRequests = 0
     var pendingRegistration: PendingRegistration?
+    /// 로그인을 기다리는 Followup 긴 폴링이 걸려 있을 때, 새 로그인 요청으로 그것을 그만두게 하는 통로.
+    var followupInterrupt: AsyncStream<Void>.Continuation?
     /// 만료로 새 키를 등록했고, 아직 만료되지 않은 self 노드를 받지 못했다. 이때 또 만료면 끝낸다.
     var renewedExpiredKey = false
     /// 지금 연결에서 받은 마지막 netmap의 self 노드 키 만료 시각. 감시가 이 시각에 깨어난다.
@@ -167,6 +169,7 @@ public actor ControlClient {
         needsRegistration = true
         loginRequests += 1
         pendingRegistration = nil
+        followupInterrupt?.yield()
         signals?.yield(.loginRequested)
     }
 
