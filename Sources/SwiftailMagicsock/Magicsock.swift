@@ -16,7 +16,8 @@ import SwiftailCrypto
 /// 진입점이 돌려준 출력을 목록의 순서대로 처리한다.
 ///
 /// 파일: 여기는 상태·출력·조회, `+Peers`는 피어 표와 disco 키, `+Receiving`은 받은 것의 분류와 disco 받기,
-/// `+Sending`은 WireGuard 송신과 disco 보내기·CallMeMaybe, `+Timers`는 기한과 STUN 회차다.
+/// `+Sending`은 WireGuard 송신과 disco 보내기·CallMeMaybe, `+Timers`는 기한과 STUN 회차, `+Rebind`는 망이 바뀐 뒤의
+/// 재결속과 STUN 다시 하기다.
 /// `docs/contracts/SwiftailMagicsock.md` "공개 API"·동작 A~I, `docs/protocol-notes/disco-magicsock.md` 4절.
 public struct Magicsock: Sendable {
     /// 상태 기계가 내놓는 일.
