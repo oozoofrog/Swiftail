@@ -340,6 +340,7 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
 | `events` | 64개 | 그대로(피어가 64개를 넘고 앱의 소비가 느리면 한꺼번에 나온 경로 사건이 상태 사건을 밀어낼 수 있다. M4 검토 B의 추정이고 재현하지 않았다. 앱은 지금 상태를 `status`로도 읽을 수 있다) | 오래된 것부터 버림 |
 | `networkSettings` | 없음 | 1개(동작 E 3) | 새 것이 대신 |
 
+- 쓰기 기한은 메모리를 쌓지 않는다. `DERPClient`는 쓰기마다 기한 Task·타이머를 만들지 않고, 연결 하나에 하나뿐인 감시가 진행 중인 쓰기의 시작 시각으로 5초 기한을 지킨다(SwiftailDERP 계약 `DERPClient` 동작 3). 쓰기마다 `withTimeout`을 걸던 때는 취소된 `Task.sleep`의 Task와 타이머가 기한까지 남아 쓰기 속도에 비례해 쌓였다(DERP 전용 경로 100MiB 양방향, 릴리스: phys_footprint 표본 최고 83MB → 15MB). `withTimeout`도 이제 취소되면 타이머를 그 자리에서 거두지만, 부를 때마다 Task를 만들므로 패킷마다 부르는 경로에는 쓰지 않는다.
 - 바이트 한도 1MiB는 이 계약의 제안값이다. 근거는 "최악 16MiB가 한도 50MiB의 3분의 1이라 버퍼 셋이면 넘친다"는 계산뿐이다. 실기기 처리량 측정에서 버림이 보이면 조정한다.
 - 기존 `shortcut:` 가운데 M5에서 **조이는 것**: 맵 프레임 한도(SwiftailControl 계약 단위 3. 값 수로 묶던 것을 프레임 크기로 먼저 묶는다).
 - 기존 `shortcut:` 가운데 M5에서 **측정 뒤 판단하는 것**(계약은 바꾸지 않고 관문 (나)의 기록으로 결정): 피어 선등록(엔진 계약 M3 동작 3, 엔진 노트 6.3), 홈이 아닌 DERP 연결 정리(엔진 계약 M4 N3), WireGuard 패킷마다의 할당(`Sources/SwiftailWireGuard/Transport.swift`, `WireGuardDevice.swift`의 `shortcut:`), HTTP/2 받는 쪽 역압(SwiftailHTTP2 계약. 프레임 한도가 쌓이는 양을 묶는다).
