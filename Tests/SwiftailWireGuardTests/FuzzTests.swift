@@ -69,7 +69,12 @@ struct FuzzTests {
         let deadline = pair.bob.nextDeadline
         let keypairs = pair.keypairs(of: .bob)?.localIndices
         for input in inputs {
-            #expect(throws: WireGuardError.self) { try pair.bob.receive(input, at: t0) }
+            // mac1이 맞는 핸드셰이크 메시지가 한 시각에 문턱(1초 안에 128개)을 넘으면 그 뒤로는 부하 상태라 오류 대신
+            // cookie reply로 답한다. 그 밖의 입력은 모두 거절된다.
+            do {
+                let outputs = try pair.bob.receive(input, at: t0)
+                #expect(outputs.count == 1 && outputs.allSatisfy { if case .cookieReply = $0 { true } else { false } })
+            } catch {}
         }
         #expect(pair.bob.nextDeadline == deadline)
         #expect(pair.keypairs(of: .bob)?.localIndices == keypairs)

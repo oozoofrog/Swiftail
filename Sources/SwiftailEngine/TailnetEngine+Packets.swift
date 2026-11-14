@@ -4,8 +4,8 @@ import SwiftailWireGuard
 /// 패킷의 송수신: 위에서 내려온 IP 패킷을 피어에게, 받은 WireGuard 데이터그램을 필터를 거쳐 위로.
 ///
 /// 받는 쪽의 층 순서는 Go와 같다. WireGuard의 인증·재전송 방지 → 그 인증된 피어의 AllowedIPs로 출발지 검사 →
-/// TSMP 소비 → 수신 필터. 데이터그램이 어느 주소나 DERP 보낸 쪽에서 왔는지는 보지 않는다. 보낸 피어는 WireGuard
-/// 세션이 정한다.
+/// TSMP 소비 → 수신 필터. 보낸 피어는 WireGuard 세션이 정하고, 데이터그램의 출처(주소나 DERP 보낸 쪽)는 피어를
+/// 정하는 데 쓰지 않는다. 출처는 WireGuard의 부하 방어(cookie, 출처별 속도 제한)에만 넘긴다.
 ///
 /// `docs/protocol-notes/netmap-engine.md` 4.2·4.6·6.1, `docs/contracts/SwiftailEngine.md` 동작 4·5와 M-E1·M-E2,
 /// `docs/contracts/SwiftailTunnel.md` 동작 L.
@@ -42,10 +42,10 @@ extension TailnetEngine {
     /// `Magicsock`이 WireGuard로 분류한 데이터그램 하나를 처리한다(`.wireGuard` 출력).
     ///
     /// disco·STUN은 여기에 오지 않는다. 보낸 피어는 WireGuard 세션이 인증하고, 출발 주소는 그 피어의 AllowedIPs가
-    /// 검사한다.
-    public mutating func receive(_ datagram: [UInt8], at now: ContinuousClock.Instant) -> [Output] {
+    /// 검사한다. `source`는 WireGuard가 부하 상태일 때만 쓴다. 그때 나오는 `.cookieReply`는 `source`로 되돌린다.
+    public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) -> [Output] {
         do {
-            return route(try device.receive(datagram, at: now))
+            return route(try device.receive(datagram, from: source, at: now))
         } catch {
             return [.dropped(.wireGuard(error))]
         }
@@ -62,6 +62,8 @@ extension TailnetEngine {
                 return deliverInbound(bytes)
             case let .rejectedIPPacket(error, from: _):
                 return .dropped(.wireGuard(error))
+            case let .cookieReply(bytes):
+                return .cookieReply(bytes)
             }
         }
     }

@@ -198,8 +198,11 @@ struct MagicsockRulesTests {
         var random = PathTestRandom(state: 7)
         let initiation: [UInt8] = [1, 0, 0, 0] + [UInt8](repeating: 0, count: 144)
         for datagram in [testDatagram(1), [], initiation] {
-            #expect(sock.receiveUDP(datagram, from: b.address, at: sockT0, using: &random) == [.wireGuard(datagram)])
+            #expect(sock.receiveUDP(datagram, from: b.address, at: sockT0, using: &random) == [.wireGuard(datagram, from: .udp(b.address))])
         }
+        // 피어의 후보가 아닌 주소에서 온 것도 그 주소를 출처로 싣는다(WireGuard가 cookie reply를 그리로 되돌린다).
+        let stranger = IPEndpoint(address: b.address.address, port: b.address.port &+ 1)
+        #expect(sock.receiveUDP(initiation, from: stranger, at: sockT0, using: &random) == [.wireGuard(initiation, from: .udp(stranger))])
     }
 
     @Test("IPv6이나 포트 0인 출처는 받지 않는다", arguments: ["[2001:db8::1]:41641", "192.0.2.2:0"])
@@ -281,7 +284,7 @@ struct MagicsockRulesTests {
         }
         #expect(candidates(sock, b) == before)
         for passed in [header(0x7A11) + testDatagram(2), header(0x6558) + testDatagram(3)] {
-            #expect(sock.receiveUDP(passed, from: b.address, at: sockT0, using: &random) == [.wireGuard(passed)])
+            #expect(sock.receiveUDP(passed, from: b.address, at: sockT0, using: &random) == [.wireGuard(passed, from: .udp(b.address))])
         }
     }
 
@@ -400,11 +403,11 @@ struct MagicsockRulesTests {
         #expect(outputs.count == 3)
     }
 
-    @Test("DERP로 온 WireGuard 데이터그램은 아는 피어의 것만 올린다")
+    @Test("DERP로 온 WireGuard 데이터그램은 아는 피어의 것만 보낸 쪽과 지역을 실어 올린다")
     func derpWireGuard() {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
-        #expect(sock.receiveDERP(testDatagram(1), from: b.nodeKey, region: 1, at: sockT0, using: &random) == [.wireGuard(testDatagram(1))])
+        #expect(sock.receiveDERP(testDatagram(1), from: b.nodeKey, region: 1, at: sockT0, using: &random) == [.wireGuard(testDatagram(1), from: .derp(b.nodeKey, region: 1))])
         #expect(sock.receiveDERP(testDatagram(2), from: c.nodeKey, region: 1, at: sockT0, using: &random) == [.dropped(.unknownDERPSender)])
     }
 

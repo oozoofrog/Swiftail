@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import SwiftailBase
-import SwiftailWireGuard
+@testable import SwiftailWireGuard
 
 /// 실제 시각과 UDP 입출력만 맡는다. WireGuard 상태와 훅은 이 actor에서 직렬 처리한다.
 actor UDPDriver {
@@ -27,6 +27,12 @@ actor UDPDriver {
     private var inboundDrops = 0
     private var outboundRule = OutboundRule.pass
     private var stopped = false
+
+    /// Go 피어의 루프백 출처 `127.0.0.1:remotePort`. 출처 포트는 늘 remotePort임을 받을 때 확인한다.
+    private var source: WireGuardDevice.Source {
+        let port = remotePort ?? 0
+        return WireGuardDevice.Source(address: [127, 0, 0, 1, UInt8(port & 0xFF), UInt8(port >> 8)], host: [127, 0, 0, 1])
+    }
 
     init(privateKey: Curve25519.KeyAgreement.PrivateKey, peer: PublicKey) throws {
         socket = try LoopbackSocket()
@@ -60,7 +66,7 @@ actor UDPDriver {
                 let drop = inboundDrops > 0
                 history.append(Datagram(bytes: datagram.bytes, time: .now, incoming: true, dropped: drop))
                 if drop { inboundDrops -= 1; continue }
-                do { try deliver(device.receive(datagram.bytes, at: .now)) }
+                do { try deliver(device.receive(datagram.bytes, from: source, at: .now)) }
                 catch let error as WireGuardError { errors.append(error) }
             }
             if let deadline = device.nextDeadline, deadline <= .now {
@@ -81,6 +87,11 @@ actor UDPDriver {
                 packets.append(bytes)
             case let .rejectedIPPacket(reason, from: _):
                 throw InteropFailure("Go가 보낸 IP 패킷을 거절함: \(reason)")
+            case let .cookieReply(bytes):
+                // 받은 데이터그램의 출처(Go 피어의 루프백 포트)로 되돌린다.
+                guard let remotePort else { throw InteropFailure("UDP 목적지 없음") }
+                history.append(Datagram(bytes: bytes, time: .now, incoming: false, dropped: false))
+                try socket.send(bytes, to: remotePort)
             case let .datagram(bytes, to: destination):
                 guard destination == peer, let remotePort else { throw InteropFailure("UDP 목적지 없음") }
                 let rule = bytes.first == 4 && bytes.count > 32 ? outboundRule : .pass
@@ -107,13 +118,15 @@ actor UDPDriver {
     }
 
     func dropIncoming(_ count: Int) { inboundDrops = count }
+    /// 시험 동안 부하 상태로 둔다(실제로 문턱을 넘기는 대신 판정 결과를 정한다).
+    func holdUnderLoad() { device.handshakeLoad.underLoadUntil = .now + .seconds(600) }
     func interceptNextTransport(_ rule: OutboundRule) { outboundRule = rule }
     func datagrams() -> [Datagram] { history }
     func receivedErrors() -> [WireGuardError] { errors }
 
     /// 캡처한 Go 데이터그램을 네트워크 수신 경로와 같은 공개 API에 다시 넣는다.
     func reinject(_ datagram: [UInt8]) throws {
-        try deliver(device.receive(datagram, at: .now))
+        try deliver(device.receive(datagram, from: source, at: .now))
     }
 
     /// 캡처한 Swift 데이터그램을 그대로 다시 보내거나 시험에서 바꾼 바이트를 보낸다.

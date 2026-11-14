@@ -88,6 +88,13 @@ public struct Magicsock: Sendable {
         public init(id: Int64, stunServers: [IPEndpoint], score: Double = 0)
     }
 
+    /// 받은 것이 온 길. disco의 경로 규칙과, WireGuard 데이터그램에 답할 곳을 정한다.
+    public enum Source: Sendable, Hashable {
+        case udp(IPEndpoint)
+        /// 보낸 쪽 node 키와 받은 지역.
+        case derp(NodePublicKey, region: Int64)
+    }
+
     /// 제어 서버에 올릴 자기 엔드포인트 하나.
     public struct Endpoint: Sendable, Equatable {
         public enum Source: Sendable, Equatable {
@@ -105,8 +112,9 @@ public struct Magicsock: Sendable {
         case udp([UInt8], to: IPEndpoint)
         /// DERP 지역 `region`의 연결로 피어에게 보낸다. 그 지역에 연결이 없으면 노드가 연다.
         case derp([UInt8], to: NodePublicKey, region: Int64)
-        /// WireGuard 장치(엔진의 `receive`)에 넣을 데이터그램.
-        case wireGuard([UInt8])
+        /// WireGuard 장치(엔진의 `receive`)에 넣을 데이터그램과 그것이 온 길. 장치가 이 데이터그램에 답하는 cookie
+        /// reply는 피어 경로 선택 없이 이 길로 되돌린다(엔진 계약 "cookie reply", 2026-11-15).
+        case wireGuard([UInt8], from: Source)
         /// 제어 서버에 올릴 자기 엔드포인트가 바뀌었다(순서가 의미 있다. 노트 4.9 1).
         case endpointsChanged([Endpoint])
         /// 홈 DERP 지역이 바뀌었다. `NetInfo.preferredDERP`로 올리고 그 지역에 연결한다.
@@ -345,7 +353,7 @@ package enum LocalInterfaceAddresses {
 
 1. **UDP 분류 순서**(노트 4.1): 출처가 IPv6이거나 포트가 0이면 `unsupportedSource`. → STUN(`looksLikeSTUN`)이면 E2의 회차 표와 맞춘다. → Go가 Geneve로 보는 것(노트 4.1 2: 머리 조건이 맞고 protocol이 `0x7A12`, 또는 `0x7A11`이고 8바이트 뒤가 disco)이면 `unsupportedDisco`. `0x7A11`인데 뒤가 disco가 아니거나 다른 protocol이면 Go처럼 다음 단계로 내려간다. → disco(`isDisco`, 38바이트 기준)면 C. → 나머지는 `.wireGuard`.
 2. **DERP 분류**(노트 4.3): disco(38바이트 기준)면 C(출처는 "DERP 지역 `region`, 보낸 쪽 `peer`"). 아니면 `peer`가 `setPeers`로 받은 피어일 때만 `.wireGuard`, 아니면 `unknownDERPSender`. 받은 모든 패킷은 `Netcheck.noteDERPActivity(region:)`에 알린다.
-3. `.wireGuard`는 내용을 보지 않는다. 피어를 정하는 일은 WireGuard 장치가 receiver index로 한다(노트 4.1 "출발 주소와 피어의 연결"). 주소→피어 표를 두지 않는다.
+3. `.wireGuard`는 내용을 보지 않는다. 피어를 정하는 일은 WireGuard 장치가 receiver index로 한다(노트 4.1 "출발 주소와 피어의 연결"). 주소→피어 표를 두지 않는다. 온 길(`.udp(출처)`, `.derp(보낸 쪽, region:)`)은 함께 싣는다. 피어를 정하는 데는 쓰지 않고, 노드가 WireGuard의 부하 방어(cookie, 출처별 속도 제한)에 넘기고 cookie reply를 그 길로 되돌리는 데 쓴다(2026-11-15). disco가 온 길을 나타내던 내부 타입을 이 공개 타입으로 바꿨다.
 
 ### B. disco 키와 공유 키
 

@@ -285,7 +285,7 @@ struct TestNetwork {
                 if let target = nodes.firstIndex(where: { $0.identity.nodeKey == key }) {
                     inFlight.append((now + derpLatency, target, .derp(bytes, from: nodes[node].identity.nodeKey, region: region)))
                 }
-            case .wireGuard(let bytes):
+            case .wireGuard(let bytes, _):
                 received.append((now, node, bytes))
                 if nodes[node].echo, let other = nodes.indices.first(where: { $0 != node }) {
                     send(bytes, from: node, to: other)

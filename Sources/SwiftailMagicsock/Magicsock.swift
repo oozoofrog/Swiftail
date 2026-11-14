@@ -26,8 +26,9 @@ public struct Magicsock: Sendable {
         case udp([UInt8], to: IPEndpoint)
         /// DERP 지역 `region`의 연결로 피어에게 보낸다. 그 지역에 연결이 없으면 노드가 연다.
         case derp([UInt8], to: NodePublicKey, region: Int64)
-        /// WireGuard 장치(엔진의 `receive`)에 넣을 데이터그램.
-        case wireGuard([UInt8])
+        /// WireGuard 장치(엔진의 `receive`)에 넣을 데이터그램과 그것이 온 길. 장치가 이 데이터그램에 답하는 cookie
+        /// reply는 피어 경로 선택 없이 이 길로 되돌린다.
+        case wireGuard([UInt8], from: Source)
         /// 제어 서버에 올릴 자기 엔드포인트가 바뀌었다(순서가 의미 있다. 노트 4.9 1).
         case endpointsChanged([Endpoint])
         /// 홈 DERP 지역이 바뀌었다. `NetInfo.preferredDERP`로 올리고 그 지역에 연결한다.

@@ -63,6 +63,10 @@ struct Pair {
                 #expect(destination == key(sender.other))
                 let replies = try self[sender.other].receive(bytes, at: now)
                 queue += replies.map { (from: sender.other, output: $0) }
+            case let .cookieReply(bytes):
+                // 받은 데이터그램의 출처, 곧 방금 보낸 상대에게 되돌아간다.
+                let replies = try self[sender.other].receive(bytes, at: now)
+                queue += replies.map { (from: sender.other, output: $0) }
             case let .ipPacket(bytes, from: source):
                 #expect(source == key(sender.other))
                 delivered[sender, default: []].append(bytes)
@@ -84,6 +88,18 @@ struct Pair {
     /// 이 장치가 피어에게 쓰는 keypair.
     func keypairs(of side: Side) -> Keypairs? {
         self[side].peers[key(side.other)]?.keypairs
+    }
+}
+
+extension WireGuardDevice.Source {
+    /// 출처가 상관없는 시험이 쓰는 UDP 출처 `192.0.2.1:41553`.
+    static let test = Self(address: [192, 0, 2, 1, 0x51, 0xA2], host: [192, 0, 2, 1])
+}
+
+extension WireGuardDevice {
+    /// 출처가 상관없는 시험용: 늘 `Source.test`에서 받은 것으로 넘긴다.
+    mutating func receive(_ datagram: [UInt8], at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
+        try receive(datagram, from: .test, at: now)
     }
 }
 

@@ -19,8 +19,10 @@ enum Constants {
     static let rejectAfterTime: Duration = .seconds(180)
     /// 데이터를 받고 이 시간 동안 보낼 것이 없으면 keepalive를 보낸다.
     static let keepaliveTimeout: Duration = .seconds(10)
-    /// 받은 cookie를 mac2에 쓰는 기간.
+    /// 받은 cookie를 mac2에 쓰는 기간. 받는 쪽이 cookie를 만드는 비밀도 이 주기로 바꾼다.
     static let cookieRefreshTime: Duration = .seconds(120)
+    /// 부하를 감지한 뒤 부하 상태로 머무는 시간(`UnderLoadAfterTime`).
+    static let underLoadAfterTime: Duration = .seconds(1)
     /// 한 피어의 initiation을 이보다 짧은 간격으로 다시 소비하지 않는다(flood 방지).
     static let handshakeInitiationRate: Duration = .milliseconds(20)
     /// 전송 평문을 이 배수로 패딩한다.

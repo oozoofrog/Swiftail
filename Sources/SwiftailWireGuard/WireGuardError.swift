@@ -1,7 +1,7 @@
 /// `WireGuardDevice`가 데이터그램·IP 패킷을 거절한 이유.
 ///
 /// wireguard-go는 이런 입력을 조용히 버린다. 여기서는 호출하는 쪽이 지표나 로그를 남길 수 있게
-/// 이유를 돌려준다. 어느 경우든 상대에게 보낼 것은 없다.
+/// 이유를 돌려준다. 어느 경우든 상대에게 보낼 것은 없다(부하 상태의 cookie reply는 오류가 아니라 출력이다).
 ///
 /// `send`·`receive`가 던지거나, 인증된 transport 안의 IP 패킷을 버릴 때
 /// `WireGuardDevice.Output.rejectedIPPacket`에 실린다.
@@ -20,4 +20,6 @@ public enum WireGuardError: Error, Sendable, Equatable {
     case disallowedSource
     /// 보낼 IP 패킷이 한 transport 메시지에 담을 수 있는 크기를 넘는다.
     case packetTooLarge
+    /// 부하 상태에서 mac2까지 맞았지만 그 출처 호스트의 처리 몫(초당 20개, 버스트 5)을 넘었다.
+    case rateLimited
 }
