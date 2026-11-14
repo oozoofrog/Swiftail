@@ -242,6 +242,115 @@ struct DatagramSocketTests {
         #expect(numbers.last == total - 1)
         #expect(try #require(numbers.first) >= total - 256)
     }
+
+    @Test("읽지 않고 1MiB를 넘게 쌓이면 가장 새 것들만 남고 바이트 합이 한도 이하다")
+    func slowConsumerKeepsNewestWithinByteLimit() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        // 8,000바이트 × 400개 = 3.2MB. 개수 한도(256)만으로는 2MB를 쥐므로 바이트 한도(1MiB)가 먼저 작용한다.
+        let size = 8000
+        let total = 400
+        for number in 0..<total {
+            var payload = [UInt8](repeating: 0xab, count: size)
+            payload[0] = UInt8(number >> 8)
+            payload[1] = UInt8(number & 0xff)
+            while true {
+                do {
+                    try sender.send(payload, to: Self.destination(receiver))
+                    break
+                } catch SocketError.sendFailed("EAGAIN"), SocketError.sendFailed("ENOBUFS") {
+                    try await Task.sleep(for: .milliseconds(1))
+                }
+            }
+        }
+        // 마지막 데이터그램이 흐름에 들어갈 때까지 기다린 뒤에야 소비를 시작한다.
+        try await Task.sleep(for: .milliseconds(500))
+
+        var numbers: [Int] = []
+        var byteTotal = 0
+        while let datagram = await Self.next(from: receiver, within: .seconds(1)) {
+            byteTotal += datagram.bytes.count
+            numbers.append(Int(datagram.bytes[0]) << 8 | Int(datagram.bytes[1]))
+        }
+        #expect(byteTotal <= 1 << 20)
+        // 한도 근처까지는 남긴다(하나가 들어갈 자리만큼 모자랄 수 있고, 커널이 일부를 버렸을 수도 있다).
+        #expect(byteTotal > (1 << 20) / 2)
+        #expect(numbers == numbers.sorted())
+        #expect(numbers.last == total - 1)
+        #expect(try #require(numbers.first) > total - 256)
+    }
+
+    // MARK: 인터페이스 묶기
+
+    @Test("루프백 인터페이스에 묶은 소켓 둘이 루프백에서 주고받는다")
+    func boundToLoopbackInterfaceExchangesDatagrams() async throws {
+        let index = if_nametoindex("lo0")
+        try #require(index != 0)
+        let receiver = try DatagramSocket(interfaceIndex: index)
+        let sender = try DatagramSocket(interfaceIndex: index)
+        try sender.send([1, 2, 3], to: Self.destination(receiver))
+        let received = try #require(await Self.next(from: receiver))
+        #expect(received.bytes == [1, 2, 3])
+        #expect(received.source == IPEndpoint(address: Self.loopback, port: sender.localPort))
+    }
+
+    @Test("묶지 않은 소켓과도 루프백 인터페이스에 묶은 소켓이 주고받는다")
+    func boundSocketExchangesWithUnboundSocket() async throws {
+        let index = if_nametoindex("lo0")
+        try #require(index != 0)
+        let bound = try DatagramSocket(interfaceIndex: index)
+        let plain = try DatagramSocket()
+        try plain.send([7], to: Self.destination(bound))
+        #expect(try #require(await Self.next(from: bound)).bytes == [7])
+        try bound.send([8], to: Self.destination(plain))
+        #expect(try #require(await Self.next(from: plain)).bytes == [8])
+    }
+
+    @Test("없는 인터페이스 index는 bindFailed로 던지고 포트를 쥐지 않는다")
+    func unknownInterfaceIndexFails() async throws {
+        // 큰 index는 어떤 기기에도 없다. 던진 뒤 소켓이 남지 않아야 하므로 같은 포트를 다시 묶을 수 있어야 한다.
+        let holder = try DatagramSocket()
+        let port = holder.localPort
+        holder.close()
+        var failure: SocketError?
+        do {
+            _ = try DatagramSocket(port: port, interfaceIndex: 0x7fff_fff0)
+        } catch {
+            failure = error
+        }
+        guard case .bindFailed? = failure else {
+            Issue.record("bindFailed가 아니다: \(String(describing: failure))")
+            return
+        }
+        var rebound: DatagramSocket?
+        for _ in 0..<100 where rebound == nil {
+            rebound = try? DatagramSocket(port: port)
+            if rebound == nil { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        #expect(rebound != nil)
+    }
+
+    /// 노드 통합이 기대는 관찰: 물리 인터페이스에 묶은 소켓도 루프백 목적지와 주고받는다(`IP_BOUND_IF`가 막지 않는다).
+    /// 그래도 계약은 루프백 목적지의 소켓은 묶지 않는다고 정한다(Go `isLocalhost`와 같은 규칙).
+    @Test("en0에 묶은 소켓도 루프백 목적지로 보내고 루프백에서 온 것을 받는다", .enabled(if: if_nametoindex("en0") != 0))
+    func physicalInterfaceBoundSocketExchangesOnLoopback() async throws {
+        let bound = try DatagramSocket(interfaceIndex: if_nametoindex("en0"))
+        let plain = try DatagramSocket()
+        try bound.send([1], to: Self.destination(plain))
+        #expect(try #require(await Self.next(from: plain)).bytes == [1])
+        try plain.send([2], to: Self.destination(bound))
+        #expect(try #require(await Self.next(from: bound)).bytes == [2])
+    }
+
+    @Test("lo0에 묶은 소켓이 비루프백 목적지로 보내면 sendFailed(ENETUNREACH)다")
+    func loopbackBoundSocketCannotReachNonLoopback() throws {
+        let socket = try DatagramSocket(interfaceIndex: if_nametoindex("lo0"))
+        // 192.0.2.1은 문서용(TEST-NET-1) 주소다. 어디로도 가지 않는다.
+        let destination = IPEndpoint(address: try #require(IPAddress("192.0.2.1")), port: 9)
+        #expect(throws: SocketError.sendFailed("ENETUNREACH")) {
+            try socket.send([1], to: destination)
+        }
+    }
 }
 
 /// 보내기 버퍼를 키운 시험용 UDP 송신자. `DatagramSocket`은 보내기 버퍼를 건드리지 않으므로 기본 한도(9216바이트)를 넘는
