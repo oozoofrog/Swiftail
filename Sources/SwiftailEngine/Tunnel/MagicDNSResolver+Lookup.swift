@@ -46,7 +46,7 @@ extension MagicDNSResolver {
 
     /// 주소의 이름(PTR 대상). 서비스 IP, 호스트 표, 노드의 자기 주소(한 주소짜리 접두) 순으로 찾는다.
     func name(for address: IPAddress) -> DNSMessage.Name? {
-        if address == Self.serviceIPv4 || address == Self.serviceIPv6 {
+        if ServiceIP.contains(address) {
             return Self.symbolicName
         }
         if let host = hosts.first(where: { $0.addresses.contains(address) }) {

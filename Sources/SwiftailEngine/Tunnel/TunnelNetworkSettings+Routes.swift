@@ -69,7 +69,7 @@ extension TunnelNetworkSettings {
     /// 서비스 IP 경로: 자기 주소에 IPv4가 있으면 `100.100.100.100/32`, IPv6가 있으면 `fd7a:115c:a1e0::53/128`.
     private static func serviceRoutes(hasIPv4: Bool, hasIPv6: Bool) -> [IPPrefix] {
         // 리터럴이라 해석에 실패하지 않는다. 시험이 내용을 확인한다.
-        [("100.100.100.100/32", hasIPv4), ("fd7a:115c:a1e0::53/128", hasIPv6)]
+        [("\(ServiceIP.ipv4Text)/32", hasIPv4), ("\(ServiceIP.ipv6Text)/128", hasIPv6)]
             .compactMap { text, wanted in wanted ? IPPrefix(text) : nil }
     }
 

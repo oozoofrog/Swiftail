@@ -95,9 +95,6 @@ extension MagicDNSResolver {
 
     /// `magicdns.localhost-tailscale-daemon.`: 서비스 IP의 역방향 이름이고, 이 이름의 A·AAAA는 서비스 IP다(Go `dnsSymbolicFQDN`).
     static let symbolicName = DNSMessage.Name("magicdns.localhost-tailscale-daemon.")
-    /// 서비스 IP. 노트 5장(Go `tsaddr.TailscaleServiceIP`·`TailscaleServiceIPv6`).
-    static let serviceIPv4 = IPAddress(bytes: [100, 100, 100, 100])
-    static let serviceIPv6 = IPAddress("fd7a:115c:a1e0::53")
 
     /// PTR 밖의 질의(노트 4.2.2 3, Go `resolveLocal`). nil이면 로컬 답이 없다.
     ///
@@ -109,8 +106,8 @@ extension MagicDNSResolver {
             return LocalOutcome(code: .nameError, negativeZone: zone(containing: name))
         }
         if name == Self.symbolicName {
-            if type == .a, let address = Self.serviceIPv4 { return LocalOutcome(code: .noError, answer: .address(address)) }
-            if type == .aaaa, let address = Self.serviceIPv6 { return LocalOutcome(code: .noError, answer: .address(address)) }
+            if type == .a, let address = ServiceIP.ipv4 { return LocalOutcome(code: .noError, answer: .address(address)) }
+            if type == .aaaa, let address = ServiceIP.ipv6 { return LocalOutcome(code: .noError, answer: .address(address)) }
         }
         guard let addresses = addresses(for: name) else {
             guard let zone = zone(containing: name) else { return nil }

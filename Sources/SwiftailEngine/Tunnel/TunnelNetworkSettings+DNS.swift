@@ -27,7 +27,7 @@ extension TunnelNetworkSettings {
     /// (Go도 `OnlyIPv6`를 속성보다 앞세운다).
     static func dnsServers(hasIPv4: Bool, hasIPv6: Bool, ipv4Only: Bool) -> [IPAddress] {
         let wantsIPv6 = hasIPv6 && !(ipv4Only && hasIPv4)
-        return [("100.100.100.100", hasIPv4), ("fd7a:115c:a1e0::53", wantsIPv6)]
+        return [(ServiceIP.ipv4Text, hasIPv4), (ServiceIP.ipv6Text, wantsIPv6)]
             .compactMap { text, wanted in wanted ? IPAddress(text) : nil }
     }
 
@@ -88,7 +88,7 @@ extension TunnelNetworkSettings {
 
     /// 노드의 키가 만료됐다: 만료 표지가 있거나 키 만료 시각이 지났다(같은 시각 포함. `EnginePeer`와 같은 규칙).
     // shortcut: 로컬 시계로 판단한다. Go는 ControlTime과 1분 넘게 어긋난 시계를 보정한다.
-    private static func isExpired(_ node: Node, at now: Date) -> Bool {
+    static func isExpired(_ node: Node, at now: Date) -> Bool {
         node.expired || (node.keyExpiry.map { $0 <= now } ?? false)
     }
 

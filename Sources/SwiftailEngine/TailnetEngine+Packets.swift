@@ -7,19 +7,26 @@ import SwiftailWireGuard
 /// TSMP 소비 → 수신 필터. 데이터그램이 어느 주소나 DERP 보낸 쪽에서 왔는지는 보지 않는다. 보낸 피어는 WireGuard
 /// 세션이 정한다.
 ///
-/// `docs/protocol-notes/netmap-engine.md` 4.2·4.6·6.1, `docs/contracts/SwiftailEngine.md` 동작 4·5와 M-E1·M-E2.
+/// `docs/protocol-notes/netmap-engine.md` 4.2·4.6·6.1, `docs/contracts/SwiftailEngine.md` 동작 4·5와 M-E1·M-E2,
+/// `docs/contracts/SwiftailTunnel.md` 동작 L.
 extension TailnetEngine {
 
     /// 위에서 내려온 IP 패킷 하나를 보낸다.
     ///
-    /// 목적지가 어느 피어의 한 주소짜리 `addresses`인지로 피어를 고른다. 나가는 패킷에는 ACL을 적용하지 않고
-    /// (Go와 같다) UDP 응답을 받으려고 흐름만 기록한다.
+    /// 서비스 IP로 가는 패킷과 자기 주소로 가는 패킷, 장치에서 온 TSMP는 WireGuard로 보내지 않고 엔진이 처리한다
+    /// (`TailnetEngine+LocalDelivery.swift`). 나머지는 목적지가 어느 피어의 한 주소짜리 `addresses`인지로 피어를
+    /// 고른다. 나가는 패킷에는 ACL을 적용하지 않고(Go와 같다) UDP 응답을 받으려고 흐름만 기록한다.
+    ///
+    /// 로컬 응답은 `.ipPacket`으로 나온다. 장치로 되써야 할 패킷이다.
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output] {
         let packet: IPPacket
         do {
             packet = try IPPacket(parsing: ipPacket)
         } catch {
             return [.dropped(Drop(error))]
+        }
+        if let local = deliverLocally(packet, at: now) {
+            return [local]
         }
         guard let key = peerByAddress[packet.destination], peers[key] != nil else {
             return [.dropped(.noPeerForDestination)]
