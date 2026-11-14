@@ -19,6 +19,8 @@ import Synchronization
 ///   보내기 실패는 연결을 실패 상태로 만들고, 그 사실은 다음 `receive()`가 알린다.
 /// - 버린 소켓은 연결을 닫는다(`deinit`). 시간 초과와 연결 완료가 겹쳐 결과를 받을 쪽이 없어진 소켓도 상대에게
 ///   남지 않는다.
+/// - 인터페이스를 지정하면 그 인터페이스로만 나간다(`connect(host:port:tls:interface:)`). 패킷 터널 안에서 제어·DERP
+///   연결이 터널 자신으로 되돌아가지 않게 하는 길이다.
 ///
 /// 바이트의 경계는 뜻이 없다. TCP 조각을 그대로 돌려주고 레코드·프레임은 위 계층이 모은다.
 package final class NetworkSocket: Sendable {
@@ -35,7 +37,13 @@ package final class NetworkSocket: Sendable {
     }
 
     /// 연결이 준비될 때까지 기다린다.
-    package static func connect(host: String, port: UInt16, tls: TLS) async throws(SocketError) -> NetworkSocket {
+    ///
+    /// - Parameter interface: 지정하면 이 연결은 그 인터페이스로만 나간다(`NWParameters.requiredInterface`). 그
+    ///   인터페이스로 목적지에 닿을 수 없으면 다른 길로 돌지 않고 연결에 실패한다. nil이면 시스템이 고른다.
+    ///   목적지가 루프백이면 그 인터페이스로 닿을 수 없으므로 부르는 쪽이 `bindableInterface(_:forHost:)`로 거른다.
+    package static func connect(
+        host: String, port: UInt16, tls: TLS, interface: NWInterface? = nil
+    ) async throws(SocketError) -> NetworkSocket {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw .connectFailed("포트가 잘못되었다")
         }
@@ -44,6 +52,7 @@ package final class NetworkSocket: Sendable {
         tcp.connectionTimeout = 10
         // ALPN은 비워 둔다. HTTP/2로 협상되면 HTTP/1.1 업그레이드를 할 수 없다(노트 control-transport 4.4).
         let parameters = NWParameters(tls: tls.options, tcp: tcp)
+        parameters.requiredInterface = interface
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: parameters)
         let socket = NetworkSocket(connection: connection)
         let once = ResumeOnce<Void>()

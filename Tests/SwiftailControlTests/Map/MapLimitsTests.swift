@@ -150,6 +150,27 @@ struct MapLimitsTests {
         }
     }
 
+    // MARK: 프레임 크기
+
+    /// 고치기 전의 한도는 64MiB라 8MiB + 1바이트의 프레임도 받았다.
+    @Test("프레임은 정확히 8MiB까지 해독하고 8MiB + 1바이트는 페이로드를 기다리지 않고 frameTooLarge")
+    func frameSizeBoundary() throws {
+        let limit = 8 << 20
+        #expect(MapResponseFramer.maximumFrameSize == limit)
+        // 공백으로 채운 8MiB 페이로드. 해독하는 값은 하나다.
+        let json = #"{"Domain":"x"}"#
+        var payload = Array(json.utf8)
+        payload += [UInt8](repeating: UInt8(ascii: " "), count: limit - payload.count)
+        var atLimit = MapResponseFramer()
+        #expect(try atLimit.receive(frame(payload)).map(\.domain) == ["x"])
+
+        // 한도를 넘는 길이는 페이로드가 오기 전에, 머리 4바이트만 보고 거절한다.
+        var over = MapResponseFramer()
+        let header = (0..<4).map { UInt8(truncatingIfNeeded: (limit + 1) >> (8 * $0)) }
+        #expect(throws: MapError.frameTooLarge) { try over.receive(header) }
+        #expect((Mirror(reflecting: over).descendant("buffer") as? [UInt8])?.isEmpty == true)
+    }
+
     // MARK: 실패한 프레이머
 
     @Test("길이를 거절하면 모은 바이트를 버리고 같은 오류만 기억한다")

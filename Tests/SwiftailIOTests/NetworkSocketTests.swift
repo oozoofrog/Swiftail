@@ -97,6 +97,49 @@ struct NetworkSocketTests {
         #expect(outcome == "닫힘")
     }
 
+    // MARK: 인터페이스 묶기
+
+    @Test("루프백 인터페이스로 묶어도 루프백 서버에 붙는다")
+    func connectBoundToLoopbackInterface() async throws {
+        let listener = try LoopbackListener()
+        defer { listener.close() }
+        let loopback = try #require(await currentInterfaces(of: .loopback).first, "루프백 인터페이스가 없다")
+        let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: try await listener.port(), tls: .none, interface: loopback)
+        defer { socket.close() }
+        _ = try await listener.firstConnection()
+    }
+
+    /// 묶은 인터페이스가 실제로 쓰인다는 증거다. 묶이지 않았다면 루프백 서버에 붙었을 것이다.
+    @Test("맞지 않는 인터페이스로 묶으면 루프백 서버에 붙지 못한다")
+    func connectBoundToWrongInterfaceFails() async throws {
+        let listener = try LoopbackListener()
+        defer { listener.close() }
+        let other = try #require(await currentInterfaces(of: nil).first { $0.type != .loopback }, "루프백이 아닌 인터페이스가 없다")
+        let port = try await listener.port()
+        let outcome = try await finishes(within: .seconds(10)) {
+            do {
+                let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: port, tls: .none, interface: other)
+                socket.close()
+                return "연결됨"
+            } catch {
+                return "실패"
+            }
+        }
+        #expect(outcome == "실패")
+    }
+
+    @Test("루프백 목적지는 묶을 인터페이스를 거르고, 그 밖의 목적지는 그대로 둔다")
+    func bindableInterfaceSkipsLoopbackDestinations() async throws {
+        let interface = try #require(await currentInterfaces(of: .loopback).first, "루프백 인터페이스가 없다")
+        for host in ["127.0.0.1", "127.1.2.3", "::1", "localhost", "LOCALHOST", "localhost6", "ip6-loopback", "ip6-localhost"] {
+            #expect(NetworkSocket.bindableInterface(interface, forHost: host) == nil, "\(host)")
+        }
+        for host in ["192.0.2.1", "128.0.0.1", "126.255.255.255", "127.0.0", "127.0.0.1.5", "2001:db8::1", "controlplane.example.test", ""] {
+            #expect(NetworkSocket.bindableInterface(interface, forHost: host) == interface, "\(host)")
+        }
+        #expect(NetworkSocket.bindableInterface(nil, forHost: "192.0.2.1") == nil)
+    }
+
     /// 상대가 닫을 때까지 읽는다. 닫혔거나 실패했으면 true, 바이트가 오면 false.
     private static func waitUntilClosed(_ connection: NWConnection) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -105,6 +148,16 @@ struct NetworkSocketTests {
             }
         }
     }
+}
+
+/// 지금 경로의 인터페이스. `type`이 nil이면 기본 경로의 것이고, 아니면 그 종류의 것이다.
+private func currentInterfaces(of type: NWInterface.InterfaceType?) async -> [NWInterface] {
+    let monitor = type.map { NWPathMonitor(requiredInterfaceType: $0) } ?? NWPathMonitor()
+    defer { monitor.cancel() }
+    for await path in monitor {
+        return path.availableInterfaces
+    }
+    return []
 }
 
 /// `operation`이 `duration` 안에 끝나는지 본다. 끝나지 않으면 시험 실패로 던진다.

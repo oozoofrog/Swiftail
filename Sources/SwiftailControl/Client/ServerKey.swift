@@ -8,6 +8,11 @@ import SwiftailBase
 /// 옛 서버이므로 실패한다. 본문은 64KiB까지만 읽는다. testcontrol은 이 요청에서 Noise 키 쌍을 만들므로
 /// `/ts2021`보다 먼저 불러야 한다.
 ///
+/// `shortcut:` 이 요청은 `NWInterface`로 묶지 않는다. URLSession에는 요청을 인터페이스에 묶는 길이 없다. 패킷 터널
+/// 확장에서 제어 서버 주소는 터널의 경로(자기 tailnet 주소와 서비스 IP뿐)에 들지 않으므로 시스템의 기본 경로, 곧 물리
+/// 인터페이스로 나간다고 본다. 서버 키는 연결이 실패한 뒤에만 다시 받으므로 요청도 드물다. 실기기에서 이 요청이 터널로
+/// 들어가는 것이 보이면 `NetworkSocket` 위의 HTTP/1.1(`Transfer-Encoding: chunked` 해독 포함)로 바꾼다.
+///
 /// `docs/protocol-notes/control-transport.md` 3.8, 4.1.
 enum ServerKey {
     static let maximumBodySize = 64 << 10
