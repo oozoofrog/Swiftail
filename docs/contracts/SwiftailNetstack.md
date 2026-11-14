@@ -232,6 +232,19 @@ tsnet과의 대응:
 8. **keep-alive**: ESTABLISHED·CLOSE-WAIT·FIN-WAIT-2에서 받은 것도 보낼 것도 없이 2시간이 지나면 `<SEQ=SND.NXT-1><CTL=ACK>`(데이터 없음)를 75초마다 보낸다. 9번 보내도록 아무것도 받지 못하면 `.closed(.timedOut)`. 무엇이든 받으면 다시 2시간을 잰다. 값은 gVisor 기본값이다(TCP 노트 5절). 끄는 길은 없다(총괄 확인 필요 N5).
 9. 받은 keep-alive 탐침(`SEG.SEQ = RCV.NXT-1`, 길이 0 또는 1)에는 시퀀스 검사의 "받지 않는 세그먼트에 ACK" 규칙으로 답하게 된다. 따로 처리하지 않는다.
 
+구현에서 정해진 것(M6-4, 2026-11-15. `Sources/SwiftailNetstack/Connection/`):
+
+- **생성**: `TCPConnection.connect(from:to:initialSequenceNumber:at:)`와, 스택이 ACK·RST 없는 SYN을 넘기는 `accept(_:initialSequenceNumber:at:) throws(AcceptError)`다. 상대 MSS가 64보다 작으면 그 SYN에 답할 RST를 오류에 담아 던진다. SYN·SYN-ACK에 실린 데이터와 FIN은 받지 않는다(상대가 다시 보낸다).
+- **`receive`는 순수 ACK를 내지 않는다.** 곧바로 보낼 ACK(어긋난 데이터, 빈 곳을 메운 데이터, FIN, 창 밖 세그먼트, challenge ACK, 창 갱신)도 "지금"이 기한인 타이머로 둔다. 스택과 노드는 패킷 묶음을 넣은 뒤 **같은 시각으로 `advance(to:)`를 불러** ACK를 받는다(동작 F5·N4의 묶음 ACK). 응용 호출(`write`·`read`·`close` 등)은 끝에서 바로 낸다.
+- **닫힌 까닭**은 `finished`·`reset`·`refused`·`timedOut`·`aborted`다. `finished`만 받는 버퍼를 남긴다. `close(at:)`가 선언에 더해졌다. `peerRemoved`는 연결이 아니라 스택이 낸다(아무것도 보내지 않고 연결을 버린다).
+- **타이머**는 일곱 개(TIME-WAIT, FIN-WAIT-2 linger, 재전송, 0 창 탐침, SWS override, keep-alive, ACK)이고 `nextDeadline`은 그중 가장 이른 것이다. 끝난 연결은 nil이다. 같은 시각이면 데이터를 내는 타이머가 ACK보다 먼저다.
+- **go-back-N**은 SND.NXT를 되돌리지 않고 "다음에 보낼 번호"를 따로 둔다(gVisor와 같다). ACK의 범위 검사는 지금까지 보낸 가장 높은 번호가 기준이다.
+- **0 창 탐침**은 `<SEQ=SND.UNA−1>`에 0 한 바이트를 실은 ACK다(gVisor의 형식. RFC 9293 3.8.6.1의 "새 데이터 한 바이트"와 다르다. 탐침이 재전송 횟수에 섞이지 않는다). 창이 0일 때 RCV.NXT에서 시작하는 데이터 세그먼트는 데이터만 버리고 ACK·RST를 처리한 뒤 곧바로 ACK한다(RFC 9293 3.10.7.4).
+- SYN-RECEIVED의 틀린 ACK는 RFC 5961 5.2의 범위 검사보다 먼저 보고 늘 RST로 답한다(T4, Linux·gVisor와 같다). challenge ACK의 속도 제한(5초에 10개)은 동작 X2·X3의 ACK에도 함께 쓴다.
+- TIME-WAIT의 FIN 예외는 번호가 RCV.NXT−1인 FIN에만 적용한다(이미 소비한 FIN의 재전송. gVisor와 같다). `abort`는 CLOSING·LAST-ACK·TIME-WAIT에서 RST를 보내지 않는다(RFC 9293 3.10.5). SYN-SENT의 `close`는 아무것도 보내지 않고 `aborted`로 끝난다.
+- 지연 ACK의 2×MSS는 이 쪽이 광고한 MSS가 기준이다. SYN을 다시 보내지 않았으면 핸드셰이크 왕복이 RTT의 첫 표본이다. PSH는 버퍼의 마지막 바이트를 싣는 세그먼트에 켠다.
+- `shortcut:` 빈 곳 너머에 온 FIN의 위치를 기억하지 않는다. 빈 곳이 메워진 뒤 상대가 FIN을 다시 보내야 끝난다.
+
 ### R. 재전송과 혼잡 제어
 
 1. **RTO**(TCP 노트 4.5): 처음 1초. 측정이 생기면 RFC 6298 2.2·2.3의 식. 하한 200ms, 상한 120초(gVisor와 같다. RFC 6298 2.4의 1초 하한은 SHOULD다. 총괄 확인 필요 N4). G는 0으로 본다(시계가 나노초 단위다).
