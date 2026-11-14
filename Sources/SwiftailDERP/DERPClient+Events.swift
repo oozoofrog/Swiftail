@@ -6,6 +6,8 @@ extension DERPClient {
     /// 소비가 느릴 때 버리는 것은 종류에 따라 다르다.
     ///
     /// - `packet`·`peerGone`: 가장 새 것 `eventBufferLimit`개까지만 쥐고 오래된 것부터 버린다. 패킷은 데이터그램이다.
+    ///   패킷 본문의 바이트 합도 `eventBufferByteLimit`까지만 쥐고, 넘치면 오래된 패킷부터 버린다(`peerGone`은 바이트가
+    ///   없으므로 바이트 한도 때문에는 버리지 않는다).
     /// - `connected`·`disconnected`: 버리지 않는다. 다만 읽지 않은 연결 상태 사건은 가장 새 것 하나만 남긴다. 지난
     ///   상태는 이미 뜻이 없고, 이렇게 해야 소비가 멈춘 채 재연결이 되풀이되어도 큐가 자라지 않는다.
     ///
@@ -14,9 +16,16 @@ extension DERPClient {
     final class EventQueue: Sendable {
         private struct State {
             var events: [Event] = []
+            /// `events`에 든 패킷 본문의 바이트 합.
+            var packetBytes = 0
             /// 사건을 기다리는 소비자.
             var waiter: CheckedContinuation<Event?, Never>?
             var isFinished = false
+
+            /// `index`의 사건을 버린다.
+            mutating func drop(at index: Int) {
+                packetBytes -= events.remove(at: index).packetSize
+            }
         }
 
         private let state = Mutex(State())
@@ -29,11 +38,19 @@ extension DERPClient {
                 if let waiter = state.waiter.take() { return waiter }
                 if event.isLinkState {
                     state.events.removeAll(where: \.isLinkState)
-                } else if state.events.count(where: { !$0.isLinkState }) >= DERPClient.eventBufferLimit,
-                          let oldest = state.events.firstIndex(where: { !$0.isLinkState }) {
-                    state.events.remove(at: oldest)
+                } else {
+                    if state.events.count(where: { !$0.isLinkState }) >= DERPClient.eventBufferLimit,
+                       let oldest = state.events.firstIndex(where: { !$0.isLinkState }) {
+                        state.drop(at: oldest)
+                    }
+                    // 새 패킷이 들어갈 자리가 날 때까지 오래된 패킷부터 버린다. 패킷 하나는 한도보다 작으므로 끝난다.
+                    while state.packetBytes + event.packetSize > DERPClient.eventBufferByteLimit,
+                          let oldest = state.events.firstIndex(where: { $0.packetSize > 0 }) {
+                        state.drop(at: oldest)
+                    }
                 }
                 state.events.append(event)
+                state.packetBytes += event.packetSize
                 return nil
             }
             waiter?.resume(returning: event)
@@ -53,7 +70,11 @@ extension DERPClient {
             await withTaskCancellationHandler {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Event?, Never>) in
                     let ready: Event?? = state.withLock { state in
-                        if !state.events.isEmpty { return .some(state.events.removeFirst()) }
+                        if !state.events.isEmpty {
+                            let event = state.events.removeFirst()
+                            state.packetBytes -= event.packetSize
+                            return .some(event)
+                        }
                         // 이미 취소되었으면 취소 처리기가 먼저 돌았으므로 기다리지 않는다. 두 번째 구독자도 기다리게 하지 않는다.
                         if state.isFinished || Task.isCancelled || state.waiter != nil { return .some(nil) }
                         state.waiter = continuation
@@ -69,6 +90,11 @@ extension DERPClient {
 }
 
 extension DERPClient.Event {
+    /// 패킷 본문의 바이트 수. 패킷이 아니면 0.
+    fileprivate var packetSize: Int {
+        if case .packet(let bytes, from: _) = self { bytes.count } else { 0 }
+    }
+
     /// 연결 상태 사건이다(`connected`·`disconnected`).
     fileprivate var isLinkState: Bool {
         switch self {

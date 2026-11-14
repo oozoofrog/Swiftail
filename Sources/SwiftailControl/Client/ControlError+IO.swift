@@ -1,3 +1,4 @@
+import Network
 import SwiftailIO
 
 // `SwiftailIO`의 오류를 제어 클라이언트의 오류로 옮긴다. 소켓과 타임아웃의 실패는 모두 물러났다가 다시 시도할
@@ -15,10 +16,14 @@ extension ControlError {
 
 extension NetworkSocket {
     /// 제어 서버에 연결한다. TLS면 시스템 인증서 검증으로 `host`를 확인한다.
-    static func connect(to endpoint: ControlEndpoint) async throws(ControlError) -> NetworkSocket {
+    /// `interface`가 있으면 그 인터페이스로만 나간다. 서버가 루프백이면 묶지 않는다.
+    static func connect(to endpoint: ControlEndpoint, interface: NWInterface?) async throws(ControlError) -> NetworkSocket {
         let tls: TLS = endpoint.usesTLS ? .system(serverName: endpoint.host) : .none
         do {
-            return try await connect(host: endpoint.host, port: endpoint.port, tls: tls)
+            return try await connect(
+                host: endpoint.host, port: endpoint.port, tls: tls,
+                interface: bindableInterface(interface, forHost: endpoint.host)
+            )
         } catch {
             throw ControlError(error)
         }

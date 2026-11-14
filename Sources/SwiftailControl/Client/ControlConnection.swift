@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Network
 import SwiftailBase
 import SwiftailHTTP2
 import SwiftailIO
@@ -42,15 +43,17 @@ actor ControlConnection {
     }
 
     /// 연결을 맺고 `body`를 부른다. `body`가 돌아오거나 던지면, 또는 연결이 끊기면 연결을 닫는다.
+    /// `interface`가 있으면 연결은 그 인터페이스로만 나간다.
     /// 연결이 끊기면 걸려 있던 응답 스트림은 모두 `ControlError.connection`으로 끝난다.
     static func withConnection<Result: Sendable>(
         to endpoint: ControlEndpoint,
+        interface: NWInterface? = nil,
         machineKey: Curve25519.KeyAgreement.PrivateKey,
         serverKey: MachinePublicKey,
         _ body: @escaping @Sendable (ControlConnection) async throws -> Result
     ) async throws -> Result {
         let connection = try await withControlTimeout(handshakeTimeout) {
-            try await open(endpoint, machineKey: machineKey, serverKey: serverKey)
+            try await open(endpoint, interface: interface, machineKey: machineKey, serverKey: serverKey)
         }
         defer { connection.close() }
         return try await withThrowingTaskGroup(of: Outcome<Result>.self) { group in
@@ -101,10 +104,11 @@ actor ControlConnection {
     /// (early payload를 기다리지 않는다. Go도 그렇다).
     private static func open(
         _ endpoint: ControlEndpoint,
+        interface: NWInterface?,
         machineKey: Curve25519.KeyAgreement.PrivateKey,
         serverKey: MachinePublicKey
     ) async throws(ControlError) -> ControlConnection {
-        let socket = try await NetworkSocket.connect(to: endpoint)
+        let socket = try await NetworkSocket.connect(to: endpoint, interface: interface)
         do throws(ControlError) {
             var handshake = try transport { () throws(ControlTransportError) in
                 try ControlHandshake(machineKey: machineKey, serverKey: serverKey)

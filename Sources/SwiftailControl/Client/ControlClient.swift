@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Network
 import SwiftailBase
 import SwiftailIO
 
@@ -140,6 +141,15 @@ public actor ControlClient {
     var lastTKAInfo: TKAInfo?
     /// 지금 연결의 신호 통로. 연결이 없으면 nil.
     var signals: AsyncStream<SessionSignal>.Continuation?
+    /// 연결을 묶을 인터페이스. nil이면 묶지 않는다. `run()`이 연결을 시작할 때 읽는다.
+    private var networkInterface: NWInterface?
+    /// `setNetworkInterface`를 부른 횟수. 연결 시도는 시작할 때의 값과 달라지면 그 시도를 버린다. 신호가 시도 사이에
+    /// 들어와도 잃지 않게 하는 기준이다(`loginRequests`와 같은 방식).
+    private var interfaceGeneration = 0
+    /// 지금 기다리는 쪽의 깨움 통로. 기다리는 곳이 없으면 nil.
+    private var interfaceChange: AsyncStream<Void>.Continuation?
+    /// 지금 쥔 제어 서버의 Noise 공개 키. 연결이 실패하면 지우고 다음에 다시 받는다.
+    private var serverKey: MachinePublicKey?
     private var hasRun = false
 
     public init(configuration: Configuration, identityStore: NodeIdentityStore) {
@@ -177,6 +187,29 @@ public actor ControlClient {
         signals?.yield(.loginRequested)
     }
 
+    /// 연결을 묶을 인터페이스를 바꾸고, 지금 연결을 끊고 새 인터페이스로 곧바로 다시 잇는다.
+    ///
+    /// 물러나지 않는다. 연결 중이든, 이어진 채 맵 스트림을 받는 중이든, 실패해서 물러나는 중이든 지금 하던 것을
+    /// 버리고 곧바로 새 연결을 시작한다. 등록 상태와 마지막 netmap은 그대로다(맵 스트림은 새 연결에서 전체 맵부터
+    /// 다시 받는다). 끊긴 연결은 `disconnected`로 알린다.
+    ///
+    /// **같은 인터페이스를 다시 알려도 다시 잇는다.** 같은 Wi-Fi에서 주소만 바뀐 경우(다른 AP, DHCP 갱신) 옛 연결은
+    /// 이미 죽어 있다. 다시 이을지의 판정(인터페이스나 로컬 주소가 바뀌었는가, `docs/contracts/SwiftailTunnel.md`
+    /// 동작 N 2)은 부르는 쪽의 몫이고, 여기서는 부른 만큼 다시 잇는다. 여러 번 연달아 불러도 시도 하나를 새로 시작할
+    /// 뿐이고 가장 나중 값을 쓴다.
+    ///
+    /// `shortcut:` 망이 내려간 것(만족된 경로 없음)은 알리지 않는다. 그동안 연결은 `run()`의 재시도·물러남으로 버틴다.
+    /// 필요해지는 시점: 실기기에서 망이 없는 동안의 재시도가 배터리·메모리에 문제일 때
+    /// (`docs/contracts/SwiftailTunnel.md` 동작 N 5).
+    ///
+    /// `run()`을 시작하기 전이나 끝난 뒤에 부르면 값만 기억한다. `nil`이면 묶지 않는다. 서버가 루프백이면 어느
+    /// 인터페이스든 묶지 않는다(`NetworkSocket.bindableInterface`).
+    public func setNetworkInterface(_ interface: NWInterface?) {
+        networkInterface = interface
+        interfaceGeneration += 1
+        interfaceChange?.yield()
+    }
+
     /// 등록하고, 상태를 올리고, 맵 스트림을 유지한다. 끊기면 물러났다가 다시 잇는다.
     /// 호출한 Task가 취소될 때까지 돌아오지 않는다. 다시 시도해도 소용없는 실패는 던진다.
     /// 클라이언트 하나에 한 번만 부른다. 실행 중이든 끝난 뒤든 다시 부르면 `invalidConfiguration`이다.
@@ -196,21 +229,23 @@ public actor ControlClient {
         }
         needsRegistration = true
 
-        var serverKey: MachinePublicKey?
         while !Task.isCancelled {
+            // 인터페이스와 그 세대는 시도를 시작하는 순간 함께 읽는다(둘 사이에 멈추는 곳이 없다).
+            let (interface, generation) = (networkInterface, interfaceGeneration)
             let delay: Duration
             do {
-                let key: MachinePublicKey
-                if let serverKey { key = serverKey } else { key = try await ServerKey.fetch(for: endpoint) }
-                serverKey = key
-                try await ControlConnection.withConnection(to: endpoint, machineKey: identity.machineKey, serverKey: key) {
-                    try await self.serve($0)
+                try await untilInterfaceChanges(since: generation) {
+                    try await self.connectAndServe(to: endpoint, interface: interface)
                 }
                 delay = .zero
             } catch {
                 if Task.isCancelled { return }
                 switch error {
                 case SessionInterruption.loginRequested:
+                    delay = .zero
+                case SessionInterruption.interfaceChanged:
+                    // 옛 망에서 쌓인 실패로 새 망의 첫 시도를 늦추지 않는다.
+                    consecutiveFailures = 0
                     delay = .zero
                 case SessionInterruption.rateLimited(let wait):
                     delay = wait
@@ -228,10 +263,51 @@ public actor ControlClient {
                 eventContinuation.yield(.disconnected)
             }
             do {
-                try await Task.sleep(for: delay, clock: .continuous)
+                // 물러나는 동안에도 인터페이스가 바뀌면 기다리지 않고 곧바로 다시 잇는다.
+                try await untilInterfaceChanges(since: generation) {
+                    try await Task.sleep(for: delay, clock: .continuous)
+                }
+            } catch SessionInterruption.interfaceChanged {
+                consecutiveFailures = 0
             } catch {
                 return
             }
+        }
+    }
+
+    /// 서버 키를 받고(아직 없으면) 연결을 맺어 `serve`를 돌린다. 던지는 것으로만 끝난다.
+    private func connectAndServe(to endpoint: ControlEndpoint, interface: NWInterface?) async throws {
+        let key: MachinePublicKey
+        if let serverKey { key = serverKey } else { key = try await ServerKey.fetch(for: endpoint) }
+        serverKey = key
+        try await ControlConnection.withConnection(to: endpoint, interface: interface, machineKey: identity.machineKey, serverKey: key) {
+            try await self.serve($0)
+        }
+    }
+
+    /// `operation`을 돌리다가 `generation` 뒤에 인터페이스가 바뀌면 취소하고 `SessionInterruption.interfaceChanged`를
+    /// 던진다. `operation`이 먼저 끝나면 그 결과(또는 오류)를 낸다.
+    ///
+    /// 깨움 통로는 기다릴 때마다 새로 만든다. 경쟁에서 진 쪽을 취소하면 그 흐름은 끝나기 때문이다. 이미 바뀌어 있었으면
+    /// (`generation`이 낡았으면) 통로가 곧바로 깨어난다. 그래서 시도 사이에 들어온 변경도 잃지 않는다.
+    private func untilInterfaceChanges<Result: Sendable>(
+        since generation: Int, _ operation: @escaping @Sendable () async throws -> Result
+    ) async throws -> Result {
+        let (changes, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        if interfaceGeneration != generation { continuation.yield() }
+        interfaceChange = continuation
+        defer { interfaceChange = nil }
+        return try await withThrowingTaskGroup(of: Result?.self) { group in
+            defer { group.cancelAll() }
+            group.addTask { try await operation() }
+            group.addTask {
+                for await _ in changes { return nil }
+                return nil
+            }
+            guard let first = try await group.next(), let result = first else {
+                throw SessionInterruption.interfaceChanged
+            }
+            return result
         }
     }
 
@@ -284,6 +360,8 @@ enum SessionInterruption: Error {
     case nodeKeyExpired
     /// 서버가 기다리라고 했다(429, `Retry-After`가 붙은 503).
     case rateLimited(Duration)
+    /// `setNetworkInterface`가 불렸다. 물러나지 않고 곧바로 새 인터페이스로 다시 잇는다.
+    case interfaceChanged
 }
 
 extension ControlClient.PendingRegistration: CustomReflectable {

@@ -1,4 +1,5 @@
 import CryptoKit
+import Network
 import SwiftailBase
 import SwiftailIO
 
@@ -19,9 +20,10 @@ extension DERPClient {
     /// shortcut: IPv4·IPv6 동시 시도는 없다. `address`가 있으면 그 주소 하나만, 없으면 `NWConnection`이 `hostName`을
     /// 해석해 고른다.
     static func open(
-        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool, plaintextForTests: Bool
+        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool, plaintextForTests: Bool,
+        interface: NWInterface?
     ) async throws -> OpenedConnection {
-        let (socket, server) = try await connect(to: servers, plaintextForTests: plaintextForTests)
+        let (socket, server) = try await connect(to: servers, plaintextForTests: plaintextForTests, interface: interface)
         do {
             var connection = try DERPConnection(
                 privateKey: privateKey, host: hostHeader(for: server), isPreferred: isPreferred, clientInfoNonce: randomNonce()
@@ -41,18 +43,22 @@ extension DERPClient {
 
     /// 서버 목록에서 처음 닿는 곳에 TLS 소켓을 연다. `plaintextForTests`면 TLS 없이 연다(시험의 가짜 서버용).
     ///
-    /// 마지막 서버는 어느 쪽 실패든 이번 시도의 실패이므로 곧바로 TLS를 맺는다.
+    /// 마지막 서버는 어느 쪽 실패든 이번 시도의 실패이므로 곧바로 TLS를 맺는다. `interface`가 있으면 두 연결 모두 그
+    /// 인터페이스로만 나간다(서버가 루프백이면 묶지 않는다).
     // shortcut: `NetworkSocket.connect`는 TCP와 TLS를 한 번에 맺으므로, TCP 실패와 TLS 실패를 가르려고 마지막이 아닌
     // 서버는 평문 TCP로 먼저 닿는지만 보고(맺자마자 닫는다) TLS로 다시 맺는다. 서버마다 TCP 연결이 하나 더 생긴다.
     // TCP 연결을 맺은 뒤 그 위에 TLS를 얹는 길이 `SwiftailIO`에 생기면 한 번만 맺는다.
-    private static func connect(to servers: [DERPServer], plaintextForTests: Bool) async throws -> (NetworkSocket, DERPServer) {
+    private static func connect(
+        to servers: [DERPServer], plaintextForTests: Bool, interface: NWInterface?
+    ) async throws -> (NetworkSocket, DERPServer) {
         for (index, server) in servers.enumerated() {
             try Task.checkCancellation()
             let host = server.address?.description ?? server.hostName
+            let interface = NetworkSocket.bindableInterface(interface, forHost: host)
             if index < servers.count - 1 {
                 do {
                     let probe = try await withTimeout(tcpTimeout) {
-                        try await NetworkSocket.connect(host: host, port: server.port, tls: .none)
+                        try await NetworkSocket.connect(host: host, port: server.port, tls: .none, interface: interface)
                     }
                     probe.close()
                 } catch {
@@ -60,7 +66,7 @@ extension DERPClient {
                 }
             }
             let security = plaintextForTests ? NetworkSocket.TLS.none : tls(for: server)
-            return (try await NetworkSocket.connect(host: host, port: server.port, tls: security), server)
+            return (try await NetworkSocket.connect(host: host, port: server.port, tls: security, interface: interface), server)
         }
         throw Disconnection.noServers
     }

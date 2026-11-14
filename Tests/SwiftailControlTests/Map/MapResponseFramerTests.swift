@@ -39,10 +39,10 @@ struct MapResponseFramerTests {
         #expect(try framer.receive([]).isEmpty)
     }
 
-    @Test("길이 접두가 64MiB를 넘으면 페이로드를 기다리지 않고 실패한다")
+    @Test("길이 접두가 8MiB를 넘으면 페이로드를 기다리지 않고 실패한다")
     func frameTooLarge() throws {
         let limit = MapResponseFramer.maximumFrameSize
-        #expect(limit == 64 << 20)
+        #expect(limit == 8 << 20)
         var framer = MapResponseFramer()
         #expect(throws: MapError.frameTooLarge) { try framer.receive(frame(first) + Self.header(limit + 1)) }
         // 오류 뒤에도 같은 오류다.

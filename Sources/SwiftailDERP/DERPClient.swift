@@ -1,4 +1,5 @@
 import CryptoKit
+import Network
 import SwiftailBase
 import SwiftailIO
 
@@ -17,8 +18,15 @@ import SwiftailIO
 /// for await event in client.events { … }
 /// ```
 ///
+/// 인터페이스: `interface`를 주면 연결은 그 인터페이스로만 나간다(패킷 터널 안에서 DERP 연결이 터널로 되돌아가지
+/// 않게 한다). 인터페이스가 바뀌면 이 클라이언트를 닫고 새 인터페이스로 새로 만든다. 연결 하나를 닫지 않은 채 다른
+/// 인터페이스로 옮기는 길은 없다(`docs/contracts/SwiftailTunnel.md` 동작 N 3.2).
+/// `shortcut:` 망이 내려간 것(만족된 경로 없음)은 알리지 않는다. 연결은 이 클라이언트의 재시도·물러남으로 버틴다.
+/// 필요해지는 시점: 실기기에서 망이 없는 동안의 재시도가 배터리·메모리에 문제일 때(같은 문서 동작 N 5).
+///
 /// 메모리 상한(iOS 네트워크 확장은 약 50MB다):
 ///
+/// - 읽지 않은 받은 사건은 개수(`eventBufferLimit`)와 패킷 바이트 합(`eventBufferByteLimit`) 둘 다로 묶는다.
 /// - `send`는 기다리지 않고 패킷을 큐에 넣는다. 큐는 연결 상태와 무관하게 `queuedPacketLimit`개까지만 쥐고, 넘치면
 ///   가장 오래된 것을 버린다.
 /// - 쓰기 루프가 큐의 패킷과 상태 기계가 낸 답(Pong)을 한 덩어리씩 `NetworkSocket.write`로 쓰고, 소켓이 받아 갈
@@ -41,6 +49,14 @@ public actor DERPClient {
 
     /// 읽지 않은 `packet`·`peerGone` 사건 수의 한도. 넘으면 오래된 것부터 버린다.
     static let eventBufferLimit = 256
+    /// 읽지 않은 `packet` 사건의 바이트 합(패킷 본문)의 한도(1MiB). 넘으면 오래된 패킷부터 버린다.
+    ///
+    /// 개수 한도만으로는 패킷당 최대 65,536바이트 × 256개 = 최악 16MiB를 쥔다. iOS 패킷 터널 확장의 한도(약 50MiB)의
+    /// 3분의 1이라 받는 쪽 버퍼가 셋이면 넘친다. 1MiB는 그 최악의 16분의 1이다. 근거는 이 계산뿐인 제안값이다
+    /// (`docs/contracts/SwiftailTunnel.md` 동작 M). 실기기 처리량 측정에서 버림이 보이면 조정한다. 패킷은 데이터그램이라
+    /// 버려도 되고(WireGuard 위 TCP가 재전송한다), 가장 큰 패킷 하나(65,536바이트)는 한도 안이므로 어떤 패킷도 혼자서
+    /// 한도를 넘지 않는다.
+    static let eventBufferByteLimit = 1 << 20
     /// 아직 소켓에 쓰지 않은 패킷 수의 한도. 연결 상태와 무관하다. 넘으면 가장 오래된 것을 버린다.
     ///
     /// Go `wgengine/magicsock/derp.go`의 `derpWriteQueueDepth = 32`(지역 연결 하나의 쓰기 큐)와 같고, 넘칠 때 오래된
@@ -67,6 +83,8 @@ public actor DERPClient {
     private let writeTimeout: Duration
     /// 시험에서 TLS 없이 루프백의 가짜 서버에 붙을 때만 true다.
     private let plaintextForTests: Bool
+    /// 연결을 묶을 인터페이스. nil이면 묶지 않는다.
+    private let interface: NWInterface?
     private let eventStream: AsyncStream<Event>
     private let eventQueue = EventQueue()
 
@@ -82,17 +100,25 @@ public actor DERPClient {
     /// 연속 실패 수. 프레임을 받은 연결이 끊기면 1로 돌아간다.
     private var consecutiveFailures = 0
 
-    /// - Parameter servers: 한 지역의 서버들. 앞에서부터 차례로 시도한다.
-    public init(servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool) {
-        self.init(servers: servers, privateKey: privateKey, isPreferred: isPreferred, writeTimeout: Self.writeTimeout, plaintextForTests: false)
+    /// - Parameters:
+    ///   - servers: 한 지역의 서버들. 앞에서부터 차례로 시도한다.
+    ///   - interface: 연결이 나갈 인터페이스. nil이면 시스템이 고른다. 서버가 루프백이면 묶지 않는다.
+    public init(
+        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool, interface: NWInterface? = nil
+    ) {
+        self.init(
+            servers: servers, privateKey: privateKey, isPreferred: isPreferred, interface: interface,
+            writeTimeout: Self.writeTimeout, plaintextForTests: false
+        )
     }
 
     /// 시험이 짧은 쓰기 기한과 평문 연결을 넣을 때 쓴다.
     init(
-        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool,
+        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool, interface: NWInterface? = nil,
         writeTimeout: Duration, plaintextForTests: Bool
     ) {
         self.servers = servers
+        self.interface = interface
         self.privateKey = privateKey
         self.isPreferred = isPreferred
         self.writeTimeout = writeTimeout
@@ -103,8 +129,8 @@ public actor DERPClient {
 
     /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
     ///
-    /// 소비가 느리면 `packet`·`peerGone`은 가장 새 것 256개까지만 쥐고 오래된 것부터 버린다. 패킷은 데이터그램이므로
-    /// 버려도 된다. `connected`·`disconnected`는 버리지 않고, 읽지 않은 것 가운데 가장 새 것 하나만 남긴다
+    /// 소비가 느리면 `packet`·`peerGone`은 가장 새 것 256개까지만, 패킷 바이트 합은 1MiB까지만 쥐고 오래된 것부터
+    /// 버린다. 패킷은 데이터그램이므로 버려도 된다. `connected`·`disconnected`는 버리지 않고, 읽지 않은 것 가운데 가장 새 것 하나만 남긴다
     /// (`EventQueue`).
     public nonisolated var events: AsyncStream<Event> { eventStream }
 
@@ -145,9 +171,13 @@ public actor DERPClient {
     private func serveOneConnection() async -> Bool {
         let opened: OpenedConnection
         do {
-            let (servers, privateKey, isPreferred, plaintextForTests) = (servers, privateKey, isPreferred, plaintextForTests)
+            let (servers, privateKey, isPreferred, plaintextForTests, interface) =
+                (servers, privateKey, isPreferred, plaintextForTests, interface)
             opened = try await withTimeout(Self.readyTimeout) {
-                try await Self.open(servers: servers, privateKey: privateKey, isPreferred: isPreferred, plaintextForTests: plaintextForTests)
+                try await Self.open(
+                    servers: servers, privateKey: privateKey, isPreferred: isPreferred, plaintextForTests: plaintextForTests,
+                    interface: interface
+                )
             }
         } catch {
             return false
