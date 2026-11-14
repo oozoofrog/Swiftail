@@ -1,6 +1,7 @@
 // 경로 선택, 신뢰 기간, 타이머 값은 Go 구현을 따라 옮겼다.
 // 출처: tailscale.com v1.104.6 `wgengine/magicsock/endpoint.go` (`addrForSendLocked`, `send`,
-// `noteTxActivityExtTriggerLocked`, `updateFromNode`, `changedActiveDiscoLocked`, `populatePeerStatus`),
+// `noteTxActivityExtTriggerLocked`, `updateFromNode`, `changedActiveDiscoLocked`, `populatePeerStatus`,
+// `noteConnectivityChange`, `clearBestAddrLocked`, `endpointState.clear`),
 // `wgengine/magicsock/magicsock.go` (상수).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
@@ -100,6 +101,28 @@ struct PeerPathState: Sendable {
         sentPings = [:]
         for index in candidates.indices {
             candidates[index].lastPingSent = nil
+        }
+    }
+
+    /// UDP 소켓이 새로 묶여 옛 경로를 믿을 수 없다(노트 4.11 2, Go `noteConnectivityChange`).
+    ///
+    /// 지우는 것: `bestAddr`와 신뢰, 후보마다의 Ping 기록(마지막 Ping 시각과 받은 Ping의 TxID), 기다리던 Ping.
+    /// 남기는 것: 후보와 그 출처(netmap, 받은 Ping, CallMeMaybe), 마지막 송신 시각, heartbeat(Go는 `lastSendExt`·
+    /// `lastFullPing`을 건드리지 않는다. 그것은 disco 키가 바뀔 때의 `resetForNewDiscoKey`다). 그러므로 다음
+    /// 송신은 신뢰가 없어 DERP로도 보내고, 모든 후보에 Ping하며 CallMeMaybe를 낸다.
+    ///
+    /// Go는 기다리던 Ping(`sentPing`)을 지우지 않는다. 여기서는 지운다: 옛 소켓에서 보낸 Ping의 Pong이 뒤늦게 와도
+    /// 새 소켓의 경로 증거가 아니기 때문이다.
+    ///
+    /// shortcut: Go는 `endpointState.clear`로 CallMeMaybe 시각도 지워 그 후보가 다음 netmap 갱신에서 지워질 수 있게
+    /// 한다. 여기서는 CallMeMaybe 후보를 다음 CallMeMaybe가 빼 줄 때까지 둔다(출처 표시가 하나다). 필요해지는 시점:
+    /// 재결속 뒤 옛 망의 CallMeMaybe 후보에 Ping이 낭비되는 것이 관문에서 보일 때.
+    mutating func noteConnectivityChange() {
+        clearBestAddr()
+        sentPings = [:]
+        for index in candidates.indices {
+            candidates[index].lastPingSent = nil
+            candidates[index].lastPingReceivedTxID = nil
         }
     }
 

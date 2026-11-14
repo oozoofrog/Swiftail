@@ -52,9 +52,10 @@ struct Netcheck: Sendable {
 
     // MARK: 입력
 
-    let localPort: UInt16
-    let localAddresses: [IPAddress]
-    let loopbackAddresses: [IPAddress]
+    /// 소켓이 묶인 포트와 인터페이스 주소. 엔드포인트 목록의 입력이고 `rebind`만 바꾼다.
+    private(set) var localPort: UInt16
+    private(set) var localAddresses: [IPAddress]
+    private(set) var loopbackAddresses: [IPAddress]
 
     // MARK: 상태
 
@@ -126,6 +127,25 @@ struct Netcheck: Sendable {
         guard round == nil, !regions.isEmpty else { return [] }
         isActive = true
         return startRound(at: now, using: &generator)
+    }
+
+    /// 소켓이 새로 묶였다(노트 4.11 2). 엔드포인트의 입력을 바꾸고, 진행 중인 회차를 버리고 새 회차를 곧바로 시작한다.
+    ///
+    /// 진행 중이던 회차는 옛 소켓에서 보낸 것이라 그 응답은 이제 어떤 요청과도 맞지 않는다(`unexpectedSTUN`). 지역이
+    /// 없으면 회차를 시작하지 않고, 지역이 올 때 `setRegions`가 새 입력으로 회차를 시작한다.
+    mutating func rebind(
+        localPort: UInt16,
+        localAddresses: [IPAddress],
+        loopbackAddresses: [IPAddress],
+        at now: ContinuousClock.Instant,
+        using generator: inout some RandomNumberGenerator
+    ) -> [Action] {
+        self.localPort = localPort
+        self.localAddresses = localAddresses
+        self.loopbackAddresses = loopbackAddresses
+        round = nil
+        periodicAt = nil
+        return reSTUN(at: now, using: &generator)
     }
 
     /// DERP 지역에서 패킷을 받았다. 옛 홈이 아직 닿는지 판단하는 데 쓴다(DERP 노트 4.10 5). 후보가 아닌 지역은 무시한다.
