@@ -58,8 +58,6 @@ actor GoTailnet {
     private var nextID = 0
     private var started = false
     private var stopped = false
-    private var lastCommand = "없음"
-    private var tracingCommands = false
 
     init(temporaryDirectory: URL) {
         var environment = ProcessInfo.processInfo.environment
@@ -148,23 +146,13 @@ actor GoTailnet {
         var value = value
         nextID += 1
         value.id = nextID
-        lastCommand = value.cmd
-        if tracingCommands || value.cmd == "addPeer" { checkpoint("\(value.cmd) 쓰기 직전") }
         try write(value)
-        if tracingCommands { checkpoint("\(value.cmd) 쓰기 반환") }
-        let result = try await event(kind, id: value.id)
-        if tracingCommands || value.cmd == "addPeer" { checkpoint("\(value.cmd) 응답 수신") }
-        return result
+        return try await event(kind, id: value.id)
     }
 
-    /// SIGPIPE가 관찰된 새 Go 피어 단계에서는 모든 명령의 경계를 기록한다.
-    func traceCommands() { tracingCommands = true }
-
-    /// 신호로 시험이 끝나도 마지막 단계·명령·도구 생존 여부를 표준 출력에 남긴다.
+    /// 관문의 단계 경계를 표준 출력에 남긴다. 시험이 도중에 끝나도 어느 단계였는지 로그에 남는다.
     func checkpoint(_ stage: String) {
-        let noSignal = fcntl(input.fileHandleForWriting.fileDescriptor, F_GETNOSIGPIPE)
-        let line = "[관문 \(Date().ISO8601Format())] \(stage), 마지막 명령 \(lastCommand), tailnet 실행 중 \(process.isRunning), 입력 NOSIGPIPE \(noSignal)\n"
-        try? FileHandle.standardOutput.write(contentsOf: Data(line.utf8))
+        try? FileHandle.standardOutput.write(contentsOf: Data("[관문 \(Date().ISO8601Format())] \(stage)\n".utf8))
     }
 
     private func write(_ command: Command) throws {

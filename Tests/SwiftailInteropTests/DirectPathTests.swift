@@ -8,7 +8,7 @@ import Testing
     "SWIFTAIL_TAILNET가 없어 M4 관문 시험을 건너뜁니다"), .serialized, .timeLimit(.minutes(6)))
 struct DirectPathTests {
     @Test("항목 1~4·8: 엔드포인트, Swift 선행, 양쪽 차단과 복귀, TSMP 소비")
-    func 경로전환() async throws {
+    func pathSwitching() async throws {
         try await withGate(direct: false) { gate in
             let context = try await DirectContext.load(gate)
             note("항목 1: STUN 엔드포인트·Go selfAddrs", since: gate.runningAt)
@@ -70,7 +70,7 @@ struct DirectPathTests {
     }
 
     @Test("항목 6~8: 유휴·재개, 130초 직접 경로 유지·에코 무손실, TSMP 소비")
-    func 유휴와장기유지() async throws {
+    func idleAndLongHold() async throws {
         try await withGate(direct: false) { gate in
             let context = try await DirectContext.load(gate)
             try await observe(gate) { observations in
@@ -123,9 +123,8 @@ struct DirectPathTests {
         }
     }
     @Test("항목 5: running 뒤 더한 Go 피어가 먼저 보내 직접 경로를 만든다")
-    func Go선행() async throws {
+    func goPeerInitiates() async throws {
         try await withGate(direct: false) { gate in
-            await gate.tool.traceCommands()
             let original = try await DirectContext.load(gate)
             await gate.tool.checkpoint("항목 5: running 뒤 새 Go 피어 추가 직전")
             let event = try await gate.tool.command(.init(cmd: "addPeer", name: "go-peer-b"), expecting: "peer")

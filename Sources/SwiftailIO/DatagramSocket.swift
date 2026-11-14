@@ -20,6 +20,7 @@ import Synchronization
 ///   `close()` 뒤의 `send`는 상태가 비어 있어 기술자를 건드리지 않는다(다른 곳이 재사용한 번호를 닫거나 쓰는 일이 없다).
 /// - **인터페이스에 묶을 수 있다.** `interfaceIndex`를 주면 `IP_BOUND_IF`로 그 인터페이스로 나간다(터널 안에서
 ///   소켓이 터널로 되돌아가지 않게 한다. 계약 동작 N 4). 이 타입은 인터페이스를 index로만 안다.
+/// - **신호로 죽지 않는다.** 소켓에 `SO_NOSIGPIPE`를 건다. Darwin은 UDP 송신에도 `EPIPE`와 SIGPIPE를 낼 수 있다.
 /// - **구조적 동시성을 깨지 않는다.** 읽기는 Task가 아니라 디스패치 원천이 맡고, 흐름을 기다리는 Task가 취소되면 `for await`가
 ///   끝난다. 소켓을 버리면(`deinit`) 닫히고 흐름도 끝난다. 읽기 처리기는 `self`를 붙잡지 않아 소켓이 버려질 수 있다.
 ///
@@ -127,6 +128,13 @@ package final class DatagramSocket: Sendable {
     ) -> (port: UInt16?, error: String) {
         let flags = fcntl(descriptor, F_GETFL)
         guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+            return (nil, errnoName(errno))
+        }
+        // Darwin에서는 UDP `sendto`도 `EPIPE`로 실패할 수 있고(M4 관문에서 LAN 주소로 보낼 때 관찰. Go도 UDP 송신의
+        // `EPIPE`를 다룬다, `net/neterror/neterror_unix.go`), 그때 커널은 SIGPIPE를 보낸다. 신호의 기본 동작은 프로세스
+        // 종료이므로 꺼 둔다. 그러면 그 송신은 `sendFailed("EPIPE")`로 돌아온다.
+        var noSignal: Int32 = 1
+        guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
             return (nil, errnoName(errno))
         }
         if var interfaceIndex {
