@@ -4,6 +4,7 @@ import SwiftailEngine
 import SwiftailMagicsock
 
 /// 데이터면의 흐름: 엔진과 `Magicsock`의 출력을 서로에게 넘기고 입출력으로 내보낸다. 타이머도 여기 있다.
+/// `.inProcess` 장치의 TCP 스택과의 주고받기는 `TailnetNode+Netstack.swift`에 있다.
 ///
 /// ```
 /// 장치 ─► engine.send ─┬ .datagram(to: 피어) ─► magicsock.send ─┬ .udp ─► 소켓
@@ -33,7 +34,7 @@ extension TailnetNode {
                 process(magicsock?.send(bytes, to: peer, at: now) ?? [], at: now)
             case let .ipPacket(bytes):
                 // 엔진은 로컬 응답, 자기 주소로 되돌린 패킷, 피어가 보낸 패킷을 모두 "장치로 쓸 것"으로 낸다.
-                deliverToDevice(bytes)
+                deliverToDevice(bytes, at: now)
             case let .cookieReply(bytes):
                 // 피어를 아직 모르므로 경로 선택(`magicsock.send`)을 거치지 않고 받은 길로 보낸다.
                 if let source {
@@ -92,12 +93,12 @@ extension TailnetNode {
 
     // MARK: 타이머
 
-    /// 엔진과 `Magicsock`의 다음 기한 가운데 이른 것.
+    /// 엔진·`Magicsock`·스택의 다음 기한 가운데 이른 것(netstack 계약 동작 N6).
     private var nextDeadline: ContinuousClock.Instant? {
-        [engine?.nextDeadline, magicsock?.nextDeadline].compactMap { $0 }.min()
+        [engine?.nextDeadline, magicsock?.nextDeadline, netstack?.stack.nextDeadline].compactMap { $0 }.min()
     }
 
-    /// 다음 기한에 깨어나 엔진과 `Magicsock`의 `advance`를 부른다. 기한이 앞당겨지면 다시 계산한다. 취소될 때까지 돈다.
+    /// 다음 기한에 깨어나 엔진·`Magicsock`·스택의 `advance`를 부른다. 기한이 앞당겨지면 다시 계산한다. 취소될 때까지 돈다.
     ///
     /// 바뀜 신호를 받을 흐름을 매번 새로 만들어 통로를 actor에 건다(경쟁에서 진 쪽을 취소하면 그 흐름이 끝나기 때문이다).
     /// 통로를 거는 일과 기한을 읽는 일 사이에 `await`가 없으므로 그 사이의 바뀜을 놓치지 않는다.
@@ -121,6 +122,7 @@ extension TailnetNode {
             let now = ContinuousClock.now
             process(engine?.advance(to: now) ?? [], at: now)
             process(magicsock?.advance(to: now) ?? [], at: now)
+            process(netstack?.stack.advance(to: now) ?? [], at: now)
         }
         timerChanged = nil
     }
