@@ -27,6 +27,38 @@ struct StackRemovalTests {
         expectStackInvariants(pair.client)
     }
 
+    /// 고치기 전에는 응용이 `close`로 놓은 닫는 중인 연결을 끊을 호출이 없어, 노드가 멈출 때 RST 없이 버려졌다.
+    @Test("모두 끊기: 응용이 쥔 것, close로 놓았지만 닫는 중인 것, 대기열의 것에 RST를 하나씩 내고 사건 없이 비운다")
+    func abortAllResetsEveryConnection() throws {
+        var pair = StackPair()
+        let listener = try pair.server.listen(on: 443)
+        let held = try pair.open(listener: listener)
+        let closing = try pair.open(listener: listener)
+        // 서버가 받아 가지 않은 연결 하나(대기열에 남는다).
+        let queued = try pair.client.connect(to: Self.server, at: pair.now)
+        pair.collect(queued.outputs, from: .client)
+        try pair.deliver()
+        // 클라이언트가 close한 연결: FIN이 나갔지만 상대에 닿기 전이라 아직 닫는 중이다.
+        let closeOutputs = pair.client.close(closing.client, at: pair.now)
+        #expect(closeOutputs.segments.contains { $0.flags.contains(.fin) })
+
+        let clientOutputs = pair.client.abortAll()
+        #expect(clientOutputs.events.isEmpty)
+        #expect(clientOutputs.segments.count == 3)
+        #expect(clientOutputs.segments.allSatisfy { $0.flags.contains(.rst) })
+        #expect(pair.client.connections.isEmpty)
+        expectStackInvariants(pair.client)
+
+        let serverOutputs = pair.server.abortAll()
+        #expect(serverOutputs.events.isEmpty)
+        #expect(serverOutputs.segments.count == 3)
+        #expect(serverOutputs.segments.allSatisfy { $0.flags.contains(.rst) })
+        #expect(pair.server.connections.isEmpty)
+        #expect(pair.server.listeners[listener]?.queue.isEmpty == true)
+        expectStackInvariants(pair.server)
+        _ = held
+    }
+
     @Test("상대 주소의 연결을 끝낸다: 응용이 쥔 것은 알리고, 대기열·맺는 중인 것은 알리지 않고 지운다")
     func remoteAddressRemoved() throws {
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: .now)

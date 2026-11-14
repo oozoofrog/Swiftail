@@ -50,9 +50,6 @@ extension TailnetNode {
     /// 리스너를 모두 닫고(받아 가지 않은 연결은 RST), 응용이 쥔 연결마다 RST를 한 번 낸다. 소켓과 엔진이 아직 있을 때 불러야
     /// 직접 경로로 나간다(DERP 통로에 있던 것은 사라질 수 있다). 기다리던 호출을 모두 깨운다: 깨어난 호출은 스택이 없는 것을
     /// 보고 `notRunning`을 던지고, 리스너의 흐름은 끝난다. 그 뒤에 버려진 핸들은 무시한다.
-    // shortcut: 응용이 `close`로 놓았고 아직 FIN을 주고받는 중인 연결은 RST 없이 버린다. 스택에 그것을 끊는 호출이 없다
-    // (`TCPStack.abort`는 응용이 쥔 연결에만 듣는다). 상대는 재전송 한도로 거둔다. 필요해지는 시점: 노드를 자주 다시
-    // 켜는 사용처에서 상대의 반쯤 닫힌 연결이 문제가 될 때(스택에 "모두 끊기"를 더한다).
     func stopNetstack() {
         let now = ContinuousClock.now
         for token in listenerRecords.keys.sorted() {
@@ -62,6 +59,9 @@ extension TailnetNode {
             for id in ids {
                 process(netstack?.stack.abort(id, at: now) ?? [], at: now)
             }
+            // 응용이 `close`로 놓았지만 아직 닫는 중인 연결, 맺는 중인 연결도 RST로 끊는다. 상대가 재전송 한도까지 기다리지
+            // 않게 한다.
+            process(netstack?.stack.abortAll() ?? [], at: now)
             netstack?.connections.values.forEach { $0.finishWaiters() }
             netstack = nil
         }

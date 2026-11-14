@@ -163,6 +163,23 @@ extension TCPStack {
         return outputs
     }
 
+    /// 남은 연결을 모두 끊고 버린다. 노드가 멈출 때 부른다(계약 동작 N8).
+    ///
+    /// 응용이 쥔 것뿐 아니라 맺는 중인 것, 대기열에 있는 것, 응용이 `close`로 놓았지만 아직 FIN을 주고받는 것까지 RST를 한 번씩
+    /// 낸다(`TCPConnection.abort`가 RST를 내지 않는 상태는 그대로 버린다). 사건은 내지 않는다. 리스너와 TIME-WAIT 기록은
+    /// 건드리지 않는다.
+    package mutating func abortAll() -> [Output] {
+        var outputs: [Output] = []
+        for id in connections.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            let connectionOutputs = modifyConnection(id) { $0.abort() } ?? []
+            for case .segment(let segment) in connectionOutputs {
+                append(segment, to: &outputs)
+            }
+            removeConnection(id)
+        }
+        return outputs
+    }
+
     /// 응용이 쥐었고 TCP가 아직 도는 연결.
     private func isLive(_ id: ConnectionID) -> Bool {
         guard let entry = connections[id] else { return false }
