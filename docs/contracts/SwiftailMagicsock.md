@@ -172,6 +172,12 @@ public struct Magicsock: Sendable {
 
     /// 피어의 지금 경로. 데이터면에 없는 피어면 nil.
     public func path(to peer: NodePublicKey, at now: ContinuousClock.Instant) -> PeerPath?
+
+    /// (M5) UDP 소켓이 새로 묶였다. 모든 피어의 직접 경로를 버리고 STUN 회차를 곧바로 시작한다.
+    /// 규칙은 `SwiftailTunnel` 계약 동작 N 3.3.
+    public mutating func rebind(localPort: UInt16, localAddresses: [IPAddress], loopbackAddresses: [IPAddress], at now: ContinuousClock.Instant) -> [Output]
+    /// (M5) 소켓은 그대로이고 링크만 바뀌었다. STUN 회차만 다시 시작한다(Go `ReSTUN`).
+    public mutating func restartSTUN(at now: ContinuousClock.Instant) -> [Output]
 }
 ```
 

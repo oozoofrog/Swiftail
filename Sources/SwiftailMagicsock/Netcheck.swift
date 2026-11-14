@@ -133,6 +133,10 @@ struct Netcheck: Sendable {
     ///
     /// 진행 중이던 회차는 옛 소켓에서 보낸 것이라 그 응답은 이제 어떤 요청과도 맞지 않는다(`unexpectedSTUN`). 지역이
     /// 없으면 회차를 시작하지 않고, 지역이 올 때 `setRegions`가 새 입력으로 회차를 시작한다.
+    ///
+    /// 엔드포인트를 정한 시각도 지운다. 지금 목록은 옛 소켓의 것이라, 새 회차가 끝나기 전의 CallMeMaybe는 미뤄졌다가
+    /// 새 엔드포인트로 나간다(동작 F2). Go는 이 시각을 남겨 재결속 직후의 CallMeMaybe가 옛 엔드포인트를 담는다
+    /// (`magicsock.go`의 `enqueueCallMeMaybe`). 망이 바뀐 뒤의 옛 주소는 피어에게 쓸모가 없어 따르지 않는다.
     mutating func rebind(
         localPort: UInt16,
         localAddresses: [IPAddress],
@@ -145,6 +149,7 @@ struct Netcheck: Sendable {
         self.loopbackAddresses = loopbackAddresses
         round = nil
         periodicAt = nil
+        endpointsRefreshedAt = nil
         return reSTUN(at: now, using: &generator)
     }
 

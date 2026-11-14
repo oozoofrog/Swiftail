@@ -78,14 +78,22 @@ struct MagicsockRebindTests {
             == [.pathChanged(scene.b.nodeKey, .relayed(derpRegion: 1))])
         #expect(scene.sock.path(to: scene.b.nodeKey, at: at) == .relayed(derpRegion: 1))
         // 같은 상태에서 다시 부르면 바뀐 것이 없으므로 경로 사건이 없다.
-        #expect(scene.rebind(at: at + .milliseconds(1)).allSatisfy { if case .pathChanged = $0 { false } else { true } })
+        let again = scene.rebind(at: at + .milliseconds(1))
+        #expect(again.allSatisfy { if case .pathChanged = $0 { false } else { true } })
 
-        // 다음 송신은 전체 Ping과 CallMeMaybe를 내고 DERP로도 보낸다(신뢰가 없으므로. Go와 같다).
+        // 다음 송신은 전체 Ping을 내고 DERP로도 보낸다(신뢰가 없으므로. Go와 같다).
         let send = scene.sock.send(testDatagram(2), to: scene.b.nodeKey, at: sockTime(1100), using: &scene.random)
         #expect(send.contains(.derp(testDatagram(2), to: scene.b.nodeKey, region: 1)))
         #expect(!send.contains(.udp(testDatagram(2), to: scene.b.address)))
         let id = try scene.pingID(in: send)
-        #expect(try scene.callMeMaybe(in: send) != nil)
+        // CallMeMaybe는 옛 소켓의 엔드포인트를 담지 않도록 새 회차가 끝날 때까지 미뤄진다(Go와 다르다).
+        #expect(try scene.callMeMaybe(in: send) == nil)
+        let request = try #require(again.compactMap(\.stunRequest).first)
+        let fresh = try #require(IPEndpoint("203.0.113.9:62000"))
+        let roundEnd = scene.sock.receiveUDP(
+            TestSTUN.response(to: request, mapped: fresh), from: scene.server, at: sockTime(1102), using: &scene.random
+        )
+        #expect(try scene.callMeMaybe(in: roundEnd)?.first == fresh)
 
         let pong = try scene.b.seal(.pong(id, source: scene.a.address), to: scene.a.discoPublicKey)
         let recovered = scene.sock.receiveUDP(pong, from: scene.b.address, at: sockTime(1105), using: &scene.random)
