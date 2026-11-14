@@ -285,6 +285,17 @@ tsnet과의 대응:
 9. **주소 바뀜**: 노드가 netmap을 적용할 때마다 자기 주소 목록을 넘긴다. 자기 주소가 아니게 된 주소를 쓰는 연결은 `.closed(.peerRemoved)`로 끝난다(아무것도 보내지 않는다).
 10. **출력의 순서**: `receive`·`advance`·응용 호출의 출력 목록은 낸 순서대로 처리해야 한다. 한 연결의 세그먼트는 시퀀스 순서로 나온다.
 
+구현에서 정해진 것(M6-5, 2026-11-15. `Sources/SwiftailNetstack/Stack/`):
+
+- **ID**: `TCPStack.ConnectionID`·`ListenerID`는 스택 안에서 다시 쓰지 않는 `UInt64`다. 옛 ID로 부른 호출은 새 연결에 닿지 않고, 응용이 쥐지 않은 ID(없는 것, `close`·`abort`로 놓은 것, 대기열에 있는 것)는 아무 일도 하지 않는다.
+- **선언**: `init(isnSecret:now:)`, 입력 `receive(_:at:)`·`advance(to:)`·`setLocalAddresses(_:)`·`removeConnections(toRemoteAddress:)`, 응용 호출 `listen(on:) throws(ListenError)`·`stopListening(_:)`·`accept(from:)`·`connect(to:at:) throws(ConnectError)`와 ID로 부르는 `write`·`read`·`finishWriting`·`close`·`abort`, 읽는 값 `connection(_:)`(복사본)·`nextDeadline`·`localAddresses`. 출력은 `.ipPacket`·`.event`·`.dropped`이고 사건은 `.established(id)`·`.acceptable(listener)`·`.readable(id)`·`.writable(id)`·`.endOfStream(id)`·`.closed(id, 까닭)`이다. 까닭에 `peerRemoved`가 더해진다.
+- **사건은 응용이 쥔 연결에만 나온다.** 맺는 중이거나 대기열에 있거나 `close`한 뒤의 연결은 알리지 않는다. 대기열에 있는 동안 받은 데이터와 FIN은 `accept` 뒤에 `connection(_:)`으로 본다. `.closed(.finished)`는 TIME-WAIT에 들 때 알리고, 남은 데이터는 응용이 `close`할 때까지 읽힌다.
+- **노드가 부르는 순서**: 스택을 만들고 `setLocalAddresses` → 패킷 묶음을 하나씩 `receive`에 넣은 뒤 같은 시각으로 `advance(to:)`(미뤄 둔 ACK가 나온다) → `nextDeadline`에 타이머를 맞춘다 → 출력은 낸 순서대로 처리한다. netmap을 적용할 때마다 `setLocalAddresses`를 다시 부르고, 주인이 바뀌거나 없어진 상대 주소마다 `removeConnections(toRemoteAddress:)`를 부른다(동작 X10에서 스택이 맡는 부분).
+- **한도**: accept 대기열 32개에는 맺는 중인 연결도 센다(대기열이 32개를 넘지 않게). 연결 256개에는 맺는 중·대기열·응용이 쥔 것·놓았지만 닫는 중인 것이 모두 든다. 넘친 것은 `.dropped(.limitReached(종류))`로 알린다. TIME-WAIT 기록이 1,024개면 그 뒤 TIME-WAIT에 든 연결은 기록으로 옮기지 않고 연결인 채로 마친다.
+- **TIME-WAIT 기록**: RST는 무시한다(RFC 9293 3.10.7.4는 CLOSED로 가라고 하지만 기한 전에 버리지 않기로 한 S6과 gVisor를 따른다). SYN과 데이터에는 ACK로 답하고 같은 4-튜플의 새 연결을 다시 열지 않는다. FIN의 재전송에는 ACK하고 기한을 다시 잰다. 데이터 없는 ACK에는 답하지 않는다. 주소가 바뀌어도 기록은 기한까지 둔다.
+- 나가는 포트는 차례로 고른다(RFC 6056의 무작위 고르기가 아니다. 상대는 인증된 tailnet 피어다). 포트 0은 노드가 거른다. `stopListening`은 맺는 중인 연결을 아무것도 보내지 않고 버린다.
+- 비용(연결 256개·기록 1,024개, 디버그 빌드): `receive` 하나 약 7µs, `nextDeadline` 약 5µs, 기한 없는 `advance` 약 27µs. `shortcut:` 기한은 힙 없이 훑는다.
+
 ### X. 신뢰할 수 없는 입력
 
 tailnet 피어는 WireGuard로 인증되고 출발 주소는 그 피어의 AllowedIPs로 검사된다(엔진 계약 M3 동작 2·5, M-E2). 그래서 어떤 피어도 **다른 피어의 연결**에 세그먼트를 끼워 넣지 못한다. 남는 위협은 피어 자신이 보내는 틀린 세그먼트와 자원 고갈이다. 수신 필터는 TCP에서 SYN만 규칙에 견주므로(`PacketFilter`), **SYN이 아닌 세그먼트는 ACL이 막은 피어의 것도 스택까지 온다.**
