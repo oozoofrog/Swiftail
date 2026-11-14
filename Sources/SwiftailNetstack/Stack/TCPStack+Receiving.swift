@@ -45,7 +45,7 @@ extension TCPStack {
     /// 리스너에 온 세그먼트. 차례로: RST는 무시, ACK가 있으면 `<SEQ=SEG.ACK><CTL=RST>`, SYN이면 상한을 본 뒤 연결을 만든다,
     /// 그 밖은 버린다. SYN의 보안·구획 검사(같은 절 셋째)는 쓰지 않는다.
     ///
-    /// 상한(계약 동작 S4~S6, X7)에 닿은 SYN은 응답 없이 버린다. 상대는 SYN을 다시 보낸다.
+    /// 상한(계약 동작 S4~S6, X7, 상대 주소 하나의 연결 64개)에 닿은 SYN은 응답 없이 버린다. 상대는 SYN을 다시 보낸다.
     private mutating func receiveInListen(
         _ segment: TCPSegment, listener listenerID: ListenerID, at now: ContinuousClock.Instant,
         into outputs: inout [Output]
@@ -66,6 +66,8 @@ extension TCPStack {
         let exceeded: Limit? =
             if connections.count >= Self.maximumConnections {
                 .connections
+            } else if isConnectionLimitReached(for: remoteAddress) {
+                .connectionsPerAddress
             } else if timeWaitRecords.count >= Self.maximumTimeWaitRecords {
                 .timeWaitRecords
             } else if halfOpenCount >= Self.maximumHalfOpenConnections {
@@ -95,9 +97,7 @@ extension TCPStack {
             return
         }
 
-        let id = makeConnectionID()
-        connections[id] = ConnectionEntry(connection: opened.connection, role: .halfOpen(listenerID))
-        connectionsByTuple[FourTuple(local: segment.destination, remote: segment.source)] = id
+        let id = insertConnection(ConnectionEntry(connection: opened.connection, role: .halfOpen(listenerID)))
         halfOpenCount += 1
         halfOpenCountByAddress[remoteAddress, default: 0] += 1
         listeners[listenerID]?.halfOpenCount += 1

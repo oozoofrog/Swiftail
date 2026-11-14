@@ -26,6 +26,7 @@ package struct RTOEstimator: Sendable, Equatable {
 
     private var synTimerHasExpired = false
 
+    /// 측정 전의 추정기. RTO는 `initialTimeout`(1초)이다.
     package init() {}
 
     /// 재전송되지 않은 세그먼트의 왕복 시간 `sample`로 SRTT·RTTVAR·RTO를 고친다(RFC 6298 2.2·2.3).

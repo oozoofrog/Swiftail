@@ -82,10 +82,10 @@ extension TailnetNode {
     /// 걸지 않는다(tsnet과 다르다). 자기 주소로 건 연결은 자기 리스너에 닿는다.
     ///
     /// - Throws: 장치가 `.inProcess`가 아니거나 포트가 0이거나 호스트가 비면 `invalidConfiguration`, 상태가 `.running`이
-    ///   아니면 `notRunning`(맺는 사이 `run()`이 끝나도), 이름·주소를 찾지 못하면 `unknownHost`, 연결이 256개면
-    ///   `limitReached`, 상대가 거절하면 `refused`, 247초 안에 답이 없으면 `timedOut`, 그 사이 주소의 주인이 바뀌면
-    ///   `peerRemoved`, 맺어진 직후 이 호출이 돌아오기 전에 상대의 RST가 오면 `reset`, 호출한 Task가 취소되면
-    ///   `cancelled`(시도를 버린다).
+    ///   아니면 `notRunning`(맺는 사이 `run()`이 끝나도), 이름·주소를 찾지 못하면 `unknownHost`, 연결이 256개이거나 그
+    ///   주소의 연결이 64개면 `limitReached`, 상대가 거절하면 `refused`, 247초 안에 답이 없으면 `timedOut`, 그 사이
+    ///   주소의 주인이 바뀌면 `peerRemoved`, 맺어진 직후 이 호출이 돌아오기 전에 상대의 RST가 오면 `reset`, 호출한 Task가
+    ///   취소되면 `cancelled`(시도를 버린다).
     public func connect(to host: String, port: UInt16) async throws(ConnectionError) -> TailnetConnection {
         try checkInProcessDevice(port: port)
         guard !host.isEmpty else { throw .invalidConfiguration("호스트가 비었다") }

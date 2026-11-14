@@ -7,6 +7,7 @@ package struct SequenceNumber: Sendable, Hashable {
     /// 세그먼트 머리에 실리는 값.
     package var rawValue: UInt32
 
+    /// 세그먼트 머리의 32비트 값 그대로인 번호.
     package init(_ rawValue: UInt32) {
         self.rawValue = rawValue
     }

@@ -3,7 +3,8 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 상한: 리스너 16, 맺는 중 64·주소당 16, accept 대기열 32, 연결 256, TIME-WAIT 기록 1,024.
+/// 상한: 리스너 16, 맺는 중 64·주소당 16, accept 대기열 32, 연결 256, TIME-WAIT 기록 1,024(주소별 연결·기록 64개는
+/// `StackPeerShareTests`).
 /// 넘친 SYN은 응답 없이 버리고 `limitReached`로 알린다. 자리가 나면 다시 받는다.
 /// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S3~S6, X7, M과 시험 11.
 @Suite("스택: 상한")
@@ -137,12 +138,18 @@ struct StackLimitTests {
     func connections() throws {
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: .now)
         _ = try stack.listen(on: 9_000)
-        let remote = IPEndpoint(address: WireHosts.v4b, port: 443)
-        var ids: [TCPStack.ConnectionID] = []
-        for _ in 0..<256 {
-            ids.append(try stack.connect(to: remote, at: .now).connection)
+        // 상대 주소 하나에는 64개까지라 네 주소로 나눈다(M6 검토 A).
+        let remotes = [WireHosts.v4b, StackHosts.peer(1), StackHosts.peer(2), StackHosts.peer(3)].map {
+            IPEndpoint(address: $0, port: 443)
         }
-        #expect(throws: TCPStack.ConnectError.limitReached) { try stack.connect(to: remote, at: .now) }
+        let remote = remotes[0]
+        var ids: [TCPStack.ConnectionID] = []
+        for index in 0..<256 {
+            ids.append(try stack.connect(to: remotes[index % 4], at: .now).connection)
+        }
+        #expect(throws: TCPStack.ConnectError.limitReached) {
+            try stack.connect(to: IPEndpoint(address: StackHosts.peer(4), port: 443), at: .now)
+        }
         let syn = peerSegment(
             from: IPEndpoint(address: WireHosts.v4b, port: 5_000), to: IPEndpoint(address: WireHosts.v4a, port: 9_000),
             flags: [.syn])
@@ -156,50 +163,45 @@ struct StackLimitTests {
 
     @Test("TIME-WAIT 기록은 1,024개까지이고 기한 전에 버리지 않는다. 차 있는 동안 connect·SYN을 받지 않는다")
     func timeWaitRecords() throws {
-        var pair = StackPair()
-        let start = pair.now
-        let listener = try pair.server.listen(on: 443)
-        let clientListener = try pair.client.listen(on: 9_000)
-        _ = clientListener
-        let kept = try pair.open(listener: listener)
-        for _ in 0..<1_024 {
-            try pair.closeFromClient(try pair.open(listener: listener))
+        let start = ContinuousClock.now
+        var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: start)
+        let listener = try stack.listen(on: 443)
+        let kept = try stack.acceptHandmade(
+            from: IPEndpoint(address: StackHosts.peer(100), port: 1_000), to: Self.server, listener: listener, at: start)
+        // 상대 주소 하나에는 기록 64개까지라 열여섯 주소로 채운다(M6 검토 A).
+        for index in 0..<1_024 {
+            let peer = IPEndpoint(address: StackHosts.peer(UInt8(1 + index / 64)), port: UInt16(2_000 + index % 64))
+            let id = try stack.acceptHandmade(from: peer, to: Self.server, listener: listener, at: start)
+            try stack.closeIntoTimeWait(id, at: start)
         }
-        #expect(pair.client.timeWaitRecords.count == 1_024)
-        #expect(pair.client.connections.count == 1)
-        #expect(pair.server.connections.count == 1)
+        #expect(stack.timeWaitRecords.count == 1_024)
+        #expect(stack.connections.count == 1)
 
         #expect(throws: TCPStack.ConnectError.limitReached) {
-            try pair.client.connect(to: IPEndpoint(address: WireHosts.v4b, port: 443), at: pair.now)
+            try stack.connect(to: IPEndpoint(address: StackHosts.peer(101), port: 443), at: start)
         }
-        let syn = peerSegment(
-            from: IPEndpoint(address: WireHosts.v4b, port: 5_000), to: IPEndpoint(address: WireHosts.v4a, port: 9_000),
-            flags: [.syn])
-        #expect(pair.client.receive(syn.packet, at: pair.now) == [.dropped(.limitReached(.timeWaitRecords))])
+        let syn = peerSegment(from: IPEndpoint(address: StackHosts.peer(102), port: 5_000), to: Self.server, flags: [.syn])
+        #expect(stack.receive(syn.packet, at: start) == [.dropped(.limitReached(.timeWaitRecords))])
 
         // 기록이 찬 뒤 TIME-WAIT에 든 연결은 기록이 되지 않고 연결로 남아 TIME-WAIT를 마친다.
-        try pair.closeFromClient(kept)
-        #expect(pair.client.timeWaitRecords.count == 1_024)
-        #expect(pair.client.connections.count == 1)
-        #expect(pair.client.connections.values.first?.connection.state == .timeWait)
-        expectStackInvariants(pair.client)
+        try stack.closeIntoTimeWait(kept, at: start)
+        #expect(stack.timeWaitRecords.count == 1_024)
+        #expect(stack.connections.count == 1)
+        #expect(stack.connections.values.first?.connection.state == .timeWait)
+        expectStackInvariants(stack)
 
         // 그 기록의 4-튜플로 온 FIN 재전송에는 ACK한다.
-        let (tuple, record) = try #require(pair.client.timeWaitRecords.first)
-        let finAgain = peerSegment(
-            from: tuple.remote, to: tuple.local, sequence: record.receiveNext.advanced(by: .max).rawValue,
-            acknowledgment: record.sendNext, flags: [.fin, .ack])
-        let reply = pair.client.receive(finAgain.packet, at: pair.now).segments
+        let (tuple, record) = try #require(stack.timeWaitRecords.first)
+        let reply = stack.retransmitFin(to: tuple, at: start)
         #expect(reply.map(\.flags) == [[.ack]])
         #expect(reply.first?.acknowledgmentNumber == record.receiveNext)
 
-        try pair.run(until: start + .seconds(59))
-        #expect(pair.client.timeWaitRecords.count == 1_024)
-        try pair.run(until: start + .seconds(61))
-        #expect(pair.client.timeWaitRecords.isEmpty)
-        #expect(pair.client.connections.isEmpty)
-        _ = try pair.client.connect(to: IPEndpoint(address: WireHosts.v4b, port: 443), at: pair.now)
-        expectStackInvariants(pair.client)
-        expectStackInvariants(pair.server)
+        _ = advance(&stack, to: start + .seconds(59))
+        #expect(stack.timeWaitRecords.count == 1_024)
+        _ = advance(&stack, to: start + .seconds(61))
+        #expect(stack.timeWaitRecords.isEmpty)
+        #expect(stack.connections.isEmpty)
+        _ = try stack.connect(to: IPEndpoint(address: StackHosts.peer(101), port: 443), at: start + .seconds(61))
+        expectStackInvariants(stack)
     }
 }

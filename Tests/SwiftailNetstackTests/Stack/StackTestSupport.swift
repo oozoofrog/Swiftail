@@ -203,6 +203,46 @@ struct StackPair {
     }
 }
 
+extension TCPStack {
+    /// 손으로 만든 상대 `peer`(ISN 1,000, 창 65,535)가 `local`의 리스너와 연결을 맺고, 응용이 대기열에서 꺼낸다.
+    mutating func acceptHandmade(
+        from peer: IPEndpoint, to local: IPEndpoint, listener: ListenerID, at now: ContinuousClock.Instant
+    ) throws -> ConnectionID {
+        let syn = peerSegment(from: peer, to: local, sequence: 1_000, flags: [.syn])
+        guard let synAck = receive(syn.packet, at: now).segments.first, synAck.flags == [.syn, .ack] else {
+            throw HarnessError(description: "SYN-ACK가 없다")
+        }
+        let ack = peerSegment(
+            from: peer, to: local, sequence: 1_001, acknowledgment: synAck.sequenceNumber.advanced(by: 1), flags: [.ack])
+        _ = receive(ack.packet, at: now)
+        guard let id = accept(from: listener) else { throw HarnessError(description: "대기열이 비었다") }
+        return id
+    }
+
+    /// 응용이 먼저 `close`하고 상대가 이 쪽 FIN을 확인하며 FIN을 보낸다. 같은 시각의 `advance`로 ACK가 나가면 연결은
+    /// TIME-WAIT 기록이 된다(기록이 차 있지 않으면). 그 4-튜플을 돌려준다.
+    @discardableResult
+    mutating func closeIntoTimeWait(_ id: ConnectionID, at now: ContinuousClock.Instant) throws -> FourTuple {
+        guard let connection = connection(id) else { throw HarnessError(description: "연결이 없다") }
+        _ = close(id, at: now)
+        let fin = peerSegment(
+            from: connection.remoteEndpoint, to: connection.localEndpoint, sequence: connection.receiveNext.rawValue,
+            acknowledgment: connection.sendNext.advanced(by: 1), flags: [.fin, .ack])
+        _ = receive(fin.packet, at: now)
+        _ = advance(to: now)
+        return FourTuple(local: connection.localEndpoint, remote: connection.remoteEndpoint)
+    }
+
+    /// TIME-WAIT 기록 `tuple`에 상대 FIN의 재전송을 보낸다. 기록이 없으면 아무것도 보내지 않는다. 답을 돌려준다.
+    mutating func retransmitFin(to tuple: FourTuple, at now: ContinuousClock.Instant) -> [TCPSegment] {
+        guard let record = timeWaitRecords[tuple] else { return [] }
+        let fin = peerSegment(
+            from: tuple.remote, to: tuple.local, sequence: record.receiveNext.advanced(by: .max).rawValue,
+            acknowledgment: record.sendNext, flags: [.fin, .ack])
+        return receive(fin.packet, at: now).segments
+    }
+}
+
 /// 스택의 표가 서로 맞고 상한 안인지 본다(계약 동작 M).
 func expectStackInvariants(_ stack: TCPStack, sourceLocation: SourceLocation = #_sourceLocation) {
     #expect(stack.connections.count <= TCPStack.maximumConnections, sourceLocation: sourceLocation)
@@ -233,6 +273,24 @@ func expectStackInvariants(_ stack: TCPStack, sourceLocation: SourceLocation = #
             #expect(stack.connections[queued]?.role == .queued(id), sourceLocation: sourceLocation)
         }
     }
+    var connectionsByAddress: [IPAddress: Int] = [:]
+    for entry in stack.connections.values {
+        connectionsByAddress[entry.connection.remoteEndpoint.address, default: 0] += 1
+    }
+    #expect(stack.connectionCountByAddress == connectionsByAddress, sourceLocation: sourceLocation)
+    #expect(
+        connectionsByAddress.values.allSatisfy { $0 <= TCPStack.maximumConnectionsPerAddress },
+        sourceLocation: sourceLocation)
+    var recordsByAddress: [IPAddress: Set<FourTuple>] = [:]
+    for tuple in stack.timeWaitRecords.keys {
+        recordsByAddress[tuple.remote.address, default: []].insert(tuple)
+    }
+    #expect(stack.timeWaitTuplesByAddress.mapValues { Set($0) } == recordsByAddress, sourceLocation: sourceLocation)
+    #expect(
+        stack.timeWaitTuplesByAddress.values.allSatisfy {
+            $0.count == Set($0).count && $0.count <= TCPStack.maximumTimeWaitRecordsPerAddress
+        }, sourceLocation: sourceLocation)
+    #expect(stack.timeWaitRecords.values.allSatisfy { $0.deadline <= $0.lifetimeEnd }, sourceLocation: sourceLocation)
     #expect(stack.earliestTimeWaitDeadline == stack.timeWaitRecords.values.map(\.deadline).min(), sourceLocation: sourceLocation)
     for (tuple, id) in stack.connectionsByTuple {
         #expect(stack.connections[id]?.tuple == tuple, sourceLocation: sourceLocation)

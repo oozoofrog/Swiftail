@@ -58,22 +58,23 @@ extension TCPStack {
     ///
     /// 출발 주소는 목적지와 같은 계열의 첫 자기 주소이고, 포트는 49152…65535에서 차례로 고르되 연결이나 TIME-WAIT 기록이 쓰는
     /// 4-튜플은 건너뛴다(계약 동작 S8).
+    ///
+    /// 연결이 256개이거나, 그 상대 주소의 연결이 64개이거나, TIME-WAIT 기록이 1,024개면 `limitReached`다(계약 동작 S6과 그 아래).
     package mutating func connect(
         to remote: IPEndpoint, at now: ContinuousClock.Instant
     ) throws(ConnectError) -> (connection: ConnectionID, outputs: [Output]) {
         guard let localAddress = localAddresses.first(where: { $0.isIPv4 == remote.address.isIPv4 }) else {
             throw .noLocalAddress
         }
-        guard connections.count < Self.maximumConnections, timeWaitRecords.count < Self.maximumTimeWaitRecords,
+        guard connections.count < Self.maximumConnections, !isConnectionLimitReached(for: remote.address),
+            timeWaitRecords.count < Self.maximumTimeWaitRecords,
             let local = freeLocalEndpoint(address: localAddress, remote: remote)
         else { throw .limitReached }
 
         let initialSequenceNumber = initialSequenceNumbers.initialSequenceNumber(local: local, remote: remote, at: now)
         let opened = TCPConnection.connect(
             from: local, to: remote, initialSequenceNumber: initialSequenceNumber, at: now)
-        let id = makeConnectionID()
-        connections[id] = ConnectionEntry(connection: opened.connection, role: .application)
-        connectionsByTuple[FourTuple(local: local, remote: remote)] = id
+        let id = insertConnection(ConnectionEntry(connection: opened.connection, role: .application))
         var outputs: [Output] = []
         process(opened.outputs, of: id, at: now, into: &outputs)
         return (id, outputs)

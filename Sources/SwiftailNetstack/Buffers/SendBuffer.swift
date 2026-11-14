@@ -25,6 +25,7 @@ package struct SendBuffer: Sendable {
         startSequence = firstSequence
     }
 
+    /// 저장소의 용량(바이트). 쥐는 바이트는 이것을 넘지 않는다.
     package var capacity: Int { ring.capacity }
 
     /// 더 받아들일 수 있는 바이트 수.

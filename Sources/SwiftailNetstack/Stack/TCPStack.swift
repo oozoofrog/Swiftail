@@ -21,11 +21,13 @@ import SwiftailBase
 package struct TCPStack: Sendable {
     /// 연결 하나의 이름. 스택 안에서 다시 쓰지 않는다.
     package struct ConnectionID: Hashable, Sendable {
+        /// 스택이 차례로 매기는 번호. 리스너 ID와 같은 번호 줄을 쓴다. 차례(결정적인 출력 순서)를 정하는 데 쓴다.
         package let rawValue: UInt64
     }
 
     /// 리스너 하나의 이름. 스택 안에서 다시 쓰지 않는다(같은 포트를 다시 열어도 새 이름이다).
     package struct ListenerID: Hashable, Sendable {
+        /// 스택이 차례로 매기는 번호. 연결 ID와 같은 번호 줄을 쓴다.
         package let rawValue: UInt64
     }
 
@@ -103,9 +105,11 @@ package struct TCPStack: Sendable {
         case halfOpenConnectionsPerAddress
         /// 리스너 하나의 accept 대기열 32개(맺는 중인 것을 함께 센다).
         case acceptQueue
-        /// 연결 256개.
+        /// 연결 256개(스택 전체).
         case connections
-        /// TIME-WAIT 기록 1,024개.
+        /// 연결 64개(상대 주소 하나). 한 피어가 256개를 채워 다른 피어를 막지 못하게 한다(M6 검토 A).
+        case connectionsPerAddress
+        /// TIME-WAIT 기록 1,024개(스택 전체).
         case timeWaitRecords
     }
 
@@ -121,7 +125,8 @@ package struct TCPStack: Sendable {
     package enum ConnectError: Error, Sendable, Equatable {
         /// 목적지와 같은 계열의 자기 주소가 없다(계약 동작 S8. 노드는 `unknownHost`로 알린다).
         case noLocalAddress
-        /// 연결이 256개이거나 TIME-WAIT 기록이 1,024개이거나, 그 목적지로 쓸 나가는 포트가 없다.
+        /// 연결이 256개이거나, 그 상대 주소의 연결이 64개이거나, TIME-WAIT 기록이 1,024개이거나, 그 목적지로 쓸 나가는
+        /// 포트가 없다.
         case limitReached
     }
 
@@ -132,7 +137,9 @@ package struct TCPStack: Sendable {
     static let maximumHalfOpenConnectionsPerAddress = 16
     static let maximumAcceptQueueLength = 32
     static let maximumConnections = 256
+    static let maximumConnectionsPerAddress = 64
     static let maximumTimeWaitRecords = 1_024
+    static let maximumTimeWaitRecordsPerAddress = 64
     /// 나가는 연결의 포트(계약 동작 S8).
     static let ephemeralPorts: ClosedRange<UInt16> = 49_152...65_535
 
@@ -141,13 +148,20 @@ package struct TCPStack: Sendable {
     /// 자기 tailnet 주소. 이 주소로 온 패킷만 받고, 나가는 연결의 출발 주소를 여기서 고른다.
     package internal(set) var localAddresses: [IPAddress] = []
     /// 모든 연결. 맺는 중·대기열·응용이 쥔 것·응용이 놓았지만 아직 닫는 중인 것·남은 데이터만 있는 것. 256개까지다.
+    /// `insertConnection(_:)`과 `removeConnection(_:)`으로만 넣고 뺀다(상대 주소별 수가 어긋나지 않게). 항목의 값은 제자리에서
+    /// 고친다.
     var connections: [ConnectionID: ConnectionEntry] = [:]
+    /// 상대 주소별 연결 수(`connections`의 항목 수). 주소 하나에 64개까지다.
+    private(set) var connectionCountByAddress: [IPAddress: Int] = [:]
     /// 4-튜플 → 연결. TCP가 끝난(TIME-WAIT 기록으로 옮겼거나 닫힌) 연결은 여기서 빠진다.
     var connectionsByTuple: [FourTuple: ConnectionID] = [:]
     /// 연결마다의 `nextDeadline`. 연결을 움직일 때마다 고친다(기한 찾기가 연결의 타이머를 다시 훑지 않게).
     var connectionDeadlines: [ConnectionID: ContinuousClock.Instant] = [:]
-    /// TIME-WAIT 기록. 1,024개까지이고 기한 전에 버리지 않는다(계약 동작 S6). 아래 "TIME-WAIT 기록"의 함수로만 고친다.
+    /// TIME-WAIT 기록. 1,024개까지이고 기한 전에 버리지 않는다(계약 동작 S6). 다만 상대 주소 하나의 기록이 64개를 넘으면
+    /// 그 주소의 가장 오래된 기록을 지운다(M6 검토 A). 아래 "TIME-WAIT 기록"의 함수로만 고친다.
     private(set) var timeWaitRecords: [FourTuple: TimeWaitRecord] = [:]
+    /// 상대 주소별 TIME-WAIT 기록의 4-튜플. 만든 순서이고 `timeWaitRecords`와 같은 기록을 가리킨다.
+    private(set) var timeWaitTuplesByAddress: [IPAddress: [FourTuple]] = [:]
     /// TIME-WAIT 기록 가운데 가장 이른 기한. 기한이 된 것이 없는 `advance`가 기록을 훑지 않게 한다.
     private(set) var earliestTimeWaitDeadline: ContinuousClock.Instant?
     var listeners: [ListenerID: Listener] = [:]
@@ -214,12 +228,65 @@ package struct TCPStack: Sendable {
     }
 }
 
+// MARK: - 연결 표
+
+extension TCPStack {
+    /// 새 연결을 표에 넣고 ID를 준다. 상대 주소별 연결 수는 여기서만 늘린다(줄이는 곳은 `removeConnection(_:)`).
+    mutating func insertConnection(_ entry: ConnectionEntry) -> ConnectionID {
+        let id = makeConnectionID()
+        connections[id] = entry
+        connectionsByTuple[entry.tuple] = id
+        connectionCountByAddress[entry.connection.remoteEndpoint.address, default: 0] += 1
+        return id
+    }
+
+    /// 연결을 표에서 지운다. 아무것도 보내지 않는다. 맺는 중인 수와 대기열, 상대 주소별 연결 수를 함께 고친다.
+    mutating func removeConnection(_ id: ConnectionID) {
+        guard let entry = connections.removeValue(forKey: id) else { return }
+        connectionDeadlines[id] = nil
+        let tuple = entry.tuple
+        if connectionsByTuple[tuple] == id {
+            connectionsByTuple[tuple] = nil
+        }
+        let address = entry.connection.remoteEndpoint.address
+        let remaining = connectionCountByAddress[address, default: 1] - 1
+        connectionCountByAddress[address] = remaining > 0 ? remaining : nil
+        switch entry.role {
+        case .halfOpen(let listenerID):
+            leaveHalfOpen(address, listener: listenerID)
+        case .queued(let listenerID):
+            listeners[listenerID]?.queue.removeAll { $0 == id }
+        case .application, .released:
+            break
+        }
+    }
+
+    /// 상대 주소 `address`의 연결이 64개다. 새 SYN과 `connect`를 받지 않는다.
+    func isConnectionLimitReached(for address: IPAddress) -> Bool {
+        connectionCountByAddress[address, default: 0] >= Self.maximumConnectionsPerAddress
+    }
+}
+
 // MARK: - TIME-WAIT 기록
 
 extension TCPStack {
-    /// 기록을 더한다. 4-튜플의 연결은 이미 표에서 빠졌어야 한다.
+    /// 기록을 더한다. 4-튜플의 연결은 이미 표에서 빠졌어야 하고, 그 4-튜플의 기록은 없어야 한다.
+    ///
+    /// 상대 주소의 기록이 이미 64개면 그 주소의 가장 오래된 기록을 먼저 지운다. 기한 전에 버리지 않는다는 동작 S6의 예외이고,
+    /// 영향은 그 피어 자신의 옛 연결에만 간다(그 4-튜플의 늦은 세그먼트에는 RST로 답하게 된다). 한 피어가 기록 1,024개를 채워
+    /// 다른 피어의 SYN과 `connect`를 막지 못하게 한다(M6 검토 A).
     mutating func addTimeWaitRecord(_ record: TimeWaitRecord, for tuple: FourTuple) {
+        let address = tuple.remote.address
+        if let sameAddress = timeWaitTuplesByAddress[address],
+            sameAddress.count >= Self.maximumTimeWaitRecordsPerAddress
+        {
+            let evicted = forgetTimeWaitRecord(sameAddress[0])
+            if evicted?.deadline == earliestTimeWaitDeadline {
+                earliestTimeWaitDeadline = timeWaitRecords.values.lazy.map(\.deadline).min()
+            }
+        }
         timeWaitRecords[tuple] = record
+        timeWaitTuplesByAddress[address, default: []].append(tuple)
         earliestTimeWaitDeadline = min(earliestTimeWaitDeadline ?? record.deadline, record.deadline)
     }
 
@@ -245,9 +312,21 @@ extension TCPStack {
             expired.append(tuple)
         }
         for tuple in expired {
-            timeWaitRecords[tuple] = nil
+            forgetTimeWaitRecord(tuple)
         }
         earliestTimeWaitDeadline = timeWaitRecords.values.lazy.map(\.deadline).min()
+    }
+
+    /// 기록 하나를 표와 주소별 목록에서 뺀다. 가장 이른 기한은 부른 쪽이 다시 찾는다.
+    @discardableResult
+    private mutating func forgetTimeWaitRecord(_ tuple: FourTuple) -> TimeWaitRecord? {
+        guard let record = timeWaitRecords.removeValue(forKey: tuple) else { return nil }
+        let address = tuple.remote.address
+        timeWaitTuplesByAddress[address]?.removeAll { $0 == tuple }
+        if timeWaitTuplesByAddress[address]?.isEmpty == true {
+            timeWaitTuplesByAddress[address] = nil
+        }
+        return record
     }
 }
 
