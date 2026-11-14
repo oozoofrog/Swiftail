@@ -188,7 +188,8 @@ public enum ControlError: Error, Sendable {
     case storage(String)                    // 신원 파일을 읽거나 쓰지 못함
     case connection(String)                 // 연결·전송 계층 실패(재시도 대상)
     case http(status: Int)                  // 200이 아닌 응답(429·503의 대기는 내부에서 처리)
-    case registrationRejected(String)       // RegisterResponse.Error
+    case authKeyRejected(String)            // 인증 키를 실은 등록의 RegisterResponse.Error
+    case registrationRejected(String)       // 인증 키 없는 등록의 RegisterResponse.Error
     case nodeKeyExpired                     // 새 키로 다시 등록해도 만료
     case tailnetLockEnabled                 // tailnet lock이 켜진 tailnet. 지원하지 않는다
 }
@@ -197,7 +198,7 @@ public actor ControlClient {
     public struct Configuration: Sendable {
         public var serverURL: URL             // http:// 또는 https://
         public var hostname: String
-        public var authKey: String?           // 등록 요청마다 보낸다(Go와 같다). 로그에 남기지 않는다
+        public var authKey: String?           // 새 node 키를 등록할 때 보낸다. 로그에 남기지 않는다
         public var ephemeral: Bool
         public init(serverURL: URL, hostname: String, authKey: String? = nil, ephemeral: Bool = false)
     }
@@ -248,9 +249,9 @@ public actor ControlClient {
    - `shortcut:` 받는 쪽이 기한으로 버린 응답 스트림은 그 스트림에 다음 데이터가 올 때에야 RST_STREAM으로 취소한다. 답하지 않는 요청이 쌓여 서버의 동시 스트림 한도에 닿으면 다음 요청이 연결 오류가 되어 다시 연결한다.
    - `/key`의 TLS는 검증한다. 업그레이드 연결의 TLS도 검증한다(Go는 Noise가 서버를 인증하므로 검증 실패를 넘기지만, 여기서는 더 엄격하게 둔다).
 2. **등록**: 저장된 node 키가 있으면 그것으로, 없으면 새 후보 키로 `POST /machine/register`.
-   - 인증 키가 있으면 등록 요청마다 보낸다(처음뿐 아니라 키가 만료되어 새 키를 등록할 때도. 재사용 인증 키면 스스로 다시 인증된다). `--TL`을 담고 있으면 그 앞부분만 보낸다.
+   - 인증 키는 새 node 키를 등록할 때 보낸다: 처음 등록할 때와, 키가 만료되거나 로그인을 새로 해서 키를 바꿀 때다(재사용 인증 키면 스스로 다시 인증된다). 이미 등록된 저장 키로 다시 붙을 때(재시작)는 보내지 않는다(일회용 키는 이미 쓰였다. Go tsnet도 로그인이 필요한 상태에서만 인증 키를 넘긴다). `--TL`을 담고 있으면 그 앞부분만 보낸다.
    - `AuthURL`이 오면 `loginRequired`를 내고 같은 후보 키로 `Followup` 요청(긴 폴링)을 반복한다. 후보 키는 인증이 끝난 뒤에만 확정·저장한다.
-   - `NodeKeyExpired`면 새 키로 한 번 더. `Error`면 `registrationRejected`. 그 메시지에서 인증 키(원문과 `--TL` 앞부분)는 가리고 200자로 자른다.
+   - `NodeKeyExpired`면 새 키로 한 번 더. `Error`면 인증 키를 실은 요청이었는지에 따라 `authKeyRejected` 또는 `registrationRejected`(앱이 사용자에게 다르게 안내한다. 서버 메시지는 진단용이다). 그 메시지에서 인증 키(원문과 `--TL` 앞부분)는 가리고 200자로 자른다.
    - 기한: 등록 요청 120초(Go에는 없는 값이다), Followup 긴 폴링 10분. 넘기면 연결 오류로 보고 물러났다가 다시 잇는다.
    - 확정 전의 후보 키와 Followup URL은 재연결 너머로 유지한다(사용자가 보고 있는 로그인 URL이 그 후보 키에 묶여 있다). 확정·거절·새 로그인 요청 때만 버린다.
    - 등록이 진행 중일 때 요청한 `startInteractiveLogin()`은 그 등록이 끝난 뒤에도 남아 새 등록을 일으킨다. 로그인을 기다리는 Followup 긴 폴링은 그 자리에서 그만두고 새 후보 키로 다시 시작해 새 URL을 알린다.

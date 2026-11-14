@@ -66,7 +66,7 @@ struct ControlFaultsTests {
         }
     }
 
-    @Test("인증 키는 처음뿐 아니라 만료 뒤의 새 등록에도 보낸다 (Go와 같다)")
+    @Test("인증 키는 새 node 키를 등록할 때마다 보낸다: 처음과 만료 뒤의 새 등록")
     func authKeyOnEveryRegistration() async throws {
         try await withFaultClient("expiryTimer", authKey: "tskey-auth-EXAMPLE-0000") { server, client, _ in
             _ = try await client.registered("첫 등록")
@@ -74,6 +74,36 @@ struct ControlFaultsTests {
             let probe = try await server.probe()
             #expect(probe.registers >= 2)
             #expect(probe.withAuth == probe.registers)
+        }
+    }
+
+    @Test("이미 등록된 키로 다시 붙을 때(재시작)는 인증 키를 보내지 않는다")
+    func authKeyNotResentForStoredKey() async throws {
+        try await withFaultServer("basic") { server, directory in
+            let authKey = "tskey-auth-EXAMPLE-0000"
+            let first = FaultClient(server: server, directory: directory, authKey: authKey, timeouts: .init(), observes: true)
+            let firstKey: NodePublicKey
+            do {
+                firstKey = try await first.registered("첫 등록")
+                await first.stop()
+            } catch {
+                await first.stop()
+                throw error
+            }
+            // 일회용 인증 키는 첫 등록에서 쓰였다. 같은 신원으로 다시 뜰 때 또 보내면 운영 서버가 거절할 수 있다.
+            let second = FaultClient(server: server, directory: directory, authKey: authKey, timeouts: .init(), observes: true)
+            do {
+                let secondKey = try await second.registered("재시작 뒤 등록")
+                #expect(secondKey == firstKey)
+                let probe = try await server.probe()
+                #expect(probe.registers == 2)
+                #expect(probe.withAuth == 1, "저장된 키의 등록에는 인증 키가 없어야 한다")
+                #expect(probe.nodeKeys == 1)
+                await second.stop()
+            } catch {
+                await second.stop()
+                throw error
+            }
         }
     }
 
@@ -152,8 +182,8 @@ struct ControlFaultsTests {
         let controlValue = "tskey-auth-" + UUID().uuidString
         try await withFaultClient("authEcho", authKey: controlValue + "--TLsynthetic-material") { _, client, _ in
             let error = try await client.result(timeout: .seconds(10))
-            guard case .registrationRejected(let message)? = error else {
-                Issue.record("registrationRejected가 아니다")
+            guard case .authKeyRejected(let message)? = error else {
+                Issue.record("authKeyRejected가 아니다")
                 return
             }
             #expect(message.hasPrefix("invalid authkey: "))

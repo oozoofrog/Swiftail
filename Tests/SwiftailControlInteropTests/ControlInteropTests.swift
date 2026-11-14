@@ -43,10 +43,10 @@ struct SwiftailControlInteropTests {
                 authKey: "tskey-auth-" + UUID().uuidString), expecting: "auth")
             try await withClient(ready: ready, directory: directory,
                 authKey: "tskey-auth-" + UUID().uuidString) { client in
-                switch try await client.next("틀린 인증 키의 registrationRejected") {
-                case .failed(.registrationRejected(let message)):
+                switch try await client.next("틀린 인증 키의 authKeyRejected") {
+                case .failed(.authKeyRejected(let message)):
                     #expect(message == "invalid authkey")
-                default: throw GateFailure("틀린 인증 키: registrationRejected 대신 다른 사건")
+                default: throw GateFailure("틀린 인증 키: authKeyRejected 대신 다른 사건")
                 }
                 let stored = try #require(try NodeIdentityStore(directory: directory).load())
                 #expect(stored.nodePublicKey == nil, "거절한 후보 node 키를 저장하면 안 된다")

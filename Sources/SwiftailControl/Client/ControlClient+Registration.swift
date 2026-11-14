@@ -6,8 +6,10 @@ import SwiftailIO
 /// 등록: `POST /machine/register`로 node 키를 제어 서버에 올린다.
 ///
 /// 1. 저장된 node 키가 있으면 그것으로, 없거나 바꿔야 하면(대화형 로그인, 만료) 새 후보 키로 요청한다.
-///    키를 바꿀 때는 이전 키를 `OldNodeKey`에 넣는다. 인증 키가 있으면 등록 요청마다 `--TL` 앞부분만 보낸다
-///    (Go와 같다. 키가 만료되어 새 키를 등록할 때도 재사용 인증 키로 스스로 인증된다).
+///    키를 바꿀 때는 이전 키를 `OldNodeKey`에 넣는다. 인증 키는 새 node 키를 등록할 때만 `--TL` 앞부분을 보낸다:
+///    처음 등록할 때와, 키가 만료되거나 로그인을 새로 해서 키를 바꿀 때다(재사용 인증 키면 스스로 다시 인증된다).
+///    이미 등록된 저장 키로 다시 붙을 때(재시작)는 보내지 않는다. 일회용 키는 이미 쓰였고, Go tsnet도 로그인이
+///    필요한 상태에서만 인증 키를 넘긴다.
 /// 2. 응답은 `Error` → `NodeKeySignature` → `NodeKeyExpired` → `AuthURL` 순으로 본다.
 /// 3. `AuthURL`이 오면 `loginRequired`를 내고, 같은 후보 키로 `Followup` 요청(긴 폴링)을 되풀이한다.
 ///    후보 키는 인증이 끝난 뒤에만 확정하고 저장한다. 그 전에 연결이 끊기면 다시 이은 뒤 같은 후보 키와 Followup
@@ -42,7 +44,9 @@ extension ControlClient {
             let request = RegisterRequest(
                 nodeKey: publicKey,
                 oldNodeKey: attempt.oldNodeKey,
-                auth: configuration.authKey.map { RegisterResponseAuth(authKey: AuthKey.controlValue(of: $0)) },
+                auth: publicKey == identity.nodePublicKey
+                    ? nil
+                    : configuration.authKey.map { RegisterResponseAuth(authKey: AuthKey.controlValue(of: $0)) },
                 followup: attempt.followup,
                 hostinfo: hostinfo,
                 ephemeral: configuration.ephemeral
@@ -65,7 +69,9 @@ extension ControlClient {
             }
 
             if !decoded.error.isEmpty {
-                throw ControlError.registrationRejected(Self.rejectionMessage(decoded.error, authKey: configuration.authKey))
+                let message = Self.rejectionMessage(decoded.error, authKey: configuration.authKey)
+                // 앱이 사용자에게 다르게 안내해야 하는 두 경우를 가른다: 실어 보낸 인증 키가 거절된 것과 그 밖의 거절.
+                throw request.auth == nil ? ControlError.registrationRejected(message) : ControlError.authKeyRejected(message)
             }
             if !decoded.nodeKeySignature.isEmpty {
                 // 서버가 새 키에 tailnet lock 서명을 다시 해 달라고 한다. lock은 지원하지 않는다.

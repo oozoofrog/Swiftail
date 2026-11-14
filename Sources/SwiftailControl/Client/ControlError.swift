@@ -13,7 +13,11 @@ public enum ControlError: Error, Sendable {
     case connection(String)
     /// 200이 아닌 응답. 429와 `Retry-After`가 붙은 503의 대기는 안에서 처리한다.
     case http(status: Int)
-    /// 서버가 등록을 거절했다(`RegisterResponse.Error`).
+    /// 인증 키를 실은 등록을 서버가 거절했다(`RegisterResponse.Error`). 키가 잘못됐거나 만료됐거나 이미 쓰였다.
+    /// 서버는 그 가운데 무엇인지를 종류로 주지 않는다. 연관 값은 진단용 서버 메시지다(사용자 문구로 쓰지 않는다).
+    case authKeyRejected(String)
+    /// 인증 키 없는 등록을 서버가 거절했다(`RegisterResponse.Error`). 관리자 정책 등이다.
+    /// 연관 값은 진단용 서버 메시지다.
     case registrationRejected(String)
     /// 새 node 키로 다시 등록해도 만료라고 한다.
     case nodeKeyExpired
@@ -26,7 +30,7 @@ extension ControlError {
     var isRetryable: Bool {
         switch self {
         case .connection, .http: true
-        case .invalidConfiguration, .storage, .registrationRejected, .nodeKeyExpired, .tailnetLockEnabled: false
+        case .invalidConfiguration, .storage, .authKeyRejected, .registrationRejected, .nodeKeyExpired, .tailnetLockEnabled: false
         }
     }
 }
