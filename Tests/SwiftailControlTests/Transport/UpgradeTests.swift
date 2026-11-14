@@ -114,7 +114,7 @@ struct UpgradeTests {
         #expect(throws: ControlTransportError.messageTooLarge) {
             try parser.receive([UInt8](repeating: UInt8(ascii: "a"), count: 1_000_000))
         }
-        #expect(parser.buffer.isEmpty)
+        #expect(parser.head.buffer.isEmpty)
         #expect(throws: ControlTransportError.closed) { try parser.receive([]) }
     }
 

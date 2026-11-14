@@ -1,4 +1,4 @@
-import SwiftailBase
+import CryptoKit
 
 /// Tailscale이 텍스트로 주고받는 공개 키: 접두사 + 32바이트의 16진수.
 ///
@@ -28,6 +28,15 @@ public struct PrefixedKey<Kind: KeyKind>: Hashable, Sendable {
 
     private init(repeating byte: UInt8) {
         rawValue = [UInt8](repeating: byte, count: Self.byteCount)
+    }
+
+    /// CryptoKit 공개 키를 접두사 붙은 키로 바꾼다.
+    public init(_ key: Curve25519.KeyAgreement.PublicKey) {
+        // Curve25519 공개 키의 원시 표현은 늘 32바이트다. 실패하면 CryptoKit의 계약이 깨진 것이다.
+        guard let value = Self(rawValue: key.rawRepresentation) else {
+            preconditionFailure("Curve25519 공개 키는 32바이트다")
+        }
+        self = value
     }
 }
 

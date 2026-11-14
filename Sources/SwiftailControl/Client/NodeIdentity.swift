@@ -1,4 +1,5 @@
 import CryptoKit
+import SwiftailBase
 
 /// 노드의 신원: 기기를 가리키는 machine 키와 WireGuard에 쓰는 node 키.
 ///
@@ -37,16 +38,5 @@ extension NodeIdentity: CustomStringConvertible, CustomReflectable {
 
     public var customMirror: Mirror {
         Mirror(self, children: ["machinePublicKey": machinePublicKey, "nodePublicKey": nodePublicKey as Any])
-    }
-}
-
-extension PrefixedKey {
-    /// CryptoKit 공개 키를 접두사 붙은 키로 바꾼다.
-    init(_ key: Curve25519.KeyAgreement.PublicKey) {
-        // Curve25519 공개 키의 원시 표현은 늘 32바이트다. 실패하면 CryptoKit의 계약이 깨진 것이다.
-        guard let value = Self(rawValue: key.rawRepresentation) else {
-            preconditionFailure("Curve25519 공개 키는 32바이트다")
-        }
-        self = value
     }
 }

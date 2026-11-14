@@ -1,4 +1,5 @@
 import Foundation
+import SwiftailBase
 
 /// Noise 평문 스트림 맨 앞에 올 수 있는 서버의 선행 메시지(early payload)를 걸러 낸다.
 ///

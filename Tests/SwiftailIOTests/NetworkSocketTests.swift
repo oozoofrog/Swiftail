@@ -3,7 +3,7 @@ import Network
 import Synchronization
 import Testing
 
-@testable import SwiftailControl
+@testable import SwiftailIO
 
 @Suite("소켓의 취소")
 struct NetworkSocketTests {
@@ -14,7 +14,7 @@ struct NetworkSocketTests {
             let outcome = try await finishes(within: .seconds(2), inCancelledTask: true) {
                 do {
                     // 아무도 듣지 않는 포트. 취소가 없어도 거부로 끝나야 하는 연결이다.
-                    let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: 1, usesTLS: false)
+                    let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: 1, tls: .none)
                     socket.close()
                     return "연결됨"
                 } catch {
@@ -30,7 +30,7 @@ struct NetworkSocketTests {
     func receiveInCancelledTask() async throws {
         let listener = try LoopbackListener()
         defer { listener.close() }
-        let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: try await listener.port(), usesTLS: false)
+        let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: try await listener.port(), tls: .none)
         defer { socket.close() }
         let outcome = try await finishes(within: .seconds(3), inCancelledTask: true) {
             do {
@@ -46,7 +46,7 @@ struct NetworkSocketTests {
     func receiveAfterClose() async throws {
         let listener = try LoopbackListener()
         defer { listener.close() }
-        let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: try await listener.port(), usesTLS: false)
+        let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: try await listener.port(), tls: .none)
         socket.close()
         let outcome = try await finishes(within: .seconds(3)) {
             do {

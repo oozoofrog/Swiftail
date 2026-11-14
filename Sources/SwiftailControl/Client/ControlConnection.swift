@@ -1,6 +1,8 @@
 import CryptoKit
 import Foundation
+import SwiftailBase
 import SwiftailHTTP2
+import SwiftailIO
 
 /// 제어 서버와의 연결 하나: 소켓 위에 HTTP/1.1 업그레이드 → Noise → (early payload) → HTTP/2.
 ///
@@ -47,7 +49,7 @@ actor ControlConnection {
         serverKey: MachinePublicKey,
         _ body: @escaping @Sendable (ControlConnection) async throws -> Result
     ) async throws -> Result {
-        let connection = try await withTimeout(handshakeTimeout) {
+        let connection = try await withControlTimeout(handshakeTimeout) {
             try await open(endpoint, machineKey: machineKey, serverKey: serverKey)
         }
         defer { connection.close() }
@@ -102,7 +104,7 @@ actor ControlConnection {
         machineKey: Curve25519.KeyAgreement.PrivateKey,
         serverKey: MachinePublicKey
     ) async throws(ControlError) -> ControlConnection {
-        let socket = try await NetworkSocket.connect(host: endpoint.host, port: endpoint.port, usesTLS: endpoint.usesTLS)
+        let socket = try await NetworkSocket.connect(to: endpoint)
         do throws(ControlError) {
             var handshake = try transport { () throws(ControlTransportError) in
                 try ControlHandshake(machineKey: machineKey, serverKey: serverKey)
@@ -112,7 +114,7 @@ actor ControlConnection {
             var upgrade = UpgradeResponseParser()
             var afterHead: [UInt8]?
             while afterHead == nil {
-                guard let bytes = try await socket.receive() else {
+                guard let bytes = try await socket.receiveBytes() else {
                     throw .connection("업그레이드 응답 전에 서버가 연결을 닫았다")
                 }
                 afterHead = try transport { () throws(ControlTransportError) in try upgrade.receive(bytes) }
@@ -126,7 +128,7 @@ actor ControlConnection {
                     return connection
                 }
                 // 서버는 핸드셰이크가 실패하면 error 메시지 없이 연결을 닫는다(노트 4.4의 3.6).
-                guard let next = try await socket.receive() else {
+                guard let next = try await socket.receiveBytes() else {
                     throw .connection("Noise 핸드셰이크 중에 서버가 연결을 닫았다")
                 }
                 pending = next
@@ -171,7 +173,7 @@ actor ControlConnection {
     private func readLoop() async throws(ControlError) {
         do throws(ControlError) {
             while true {
-                guard let bytes = try await socket.receive() else {
+                guard let bytes = try await socket.receiveBytes() else {
                     throw .connection("서버가 연결을 닫았다")
                 }
                 try process(sealed: bytes)

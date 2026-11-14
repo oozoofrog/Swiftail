@@ -1,9 +1,8 @@
 import Foundation
 
-/// 실패 뒤 다시 시도하기까지 기다릴 시간. 시계도 난수도 갖지 않는 순수 계산이다.
+/// 제어 서버가 정한 재시도 대기. 시계도 난수도 갖지 않는 순수 계산이다.
 ///
-/// - 일반 물러나기: 연속 실패 n번째에 `min(n² × 10ms, 30s) × [0.5, 1.5)`. 2ⁿ보다 완만하게 늘고,
-///   곱하는 난수가 여러 노드가 한꺼번에 다시 붙는 것을 흩는다. 전체 netmap을 받으면 n을 0으로 되돌린다.
+/// - 일반 물러나기: `Backoff.delay`를 30초 상한으로 쓴다. 전체 netmap을 받으면 연속 실패 수를 0으로 되돌린다.
 /// - 429와 `Retry-After`가 붙은 503: 서버가 정한 시간만큼 기다린다. 값이 없거나 0 이하·1시간 초과·해석 불가면
 ///   `5s + [0, 5s)`를 쓰고, 어느 쪽이든 5분을 넘기지 않는다.
 ///
@@ -13,13 +12,6 @@ import Foundation
 enum RetryPolicy {
     static let maximumBackoff = Duration.seconds(30)
     static let maximumRetryAfter = Duration.seconds(5 * 60)
-
-    /// 연속 실패 `failures`번째 뒤의 대기. `jitter`는 [0, 1)의 난수다.
-    static func backoff(failures: Int, jitter: Double) -> Duration {
-        let n = min(max(failures, 0), 1_000)
-        let base = min(Duration.milliseconds(n * n * 10), maximumBackoff)
-        return base * (0.5 + jitter)
-    }
 
     /// `Retry-After` 헤더 값(정수 초 또는 HTTP-date)에 따른 대기. `jitter`는 [0, 1)의 난수다.
     static func retryAfter(_ header: String?, now: Date, jitter: Double) -> Duration {

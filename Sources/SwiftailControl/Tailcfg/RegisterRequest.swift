@@ -1,4 +1,5 @@
 import Foundation
+import SwiftailBase
 
 /// `POST /machine/register`의 본문. Go `tailcfg.RegisterRequest`.
 ///

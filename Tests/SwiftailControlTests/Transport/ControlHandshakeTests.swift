@@ -2,6 +2,7 @@
 // 101 뒤 EOF 처리에 필요한 상태.
 
 import CryptoKit
+import SwiftailBase
 import Testing
 
 @testable import SwiftailControl
