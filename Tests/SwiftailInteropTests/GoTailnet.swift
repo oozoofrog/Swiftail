@@ -3,6 +3,19 @@ import Foundation
 
 /// tailnet JSON 줄 규약의 필요한 필드만 해석한다(Tools/interop/README.md).
 actor GoTailnet {
+    struct Transfer: Decodable, Sendable {
+        let transferID: Int
+        let name: String
+        let remote: String
+        let sent: UInt64
+        let sentSHA256: String
+        let received: UInt64
+        let receivedSHA256: String
+        let elapsedMs: Int64
+        let error: String
+        let state: String
+    }
+
     struct Event: Decodable, Sendable {
         struct Node: Decodable, Sendable {
             let nodeKey: String
@@ -33,6 +46,8 @@ actor GoTailnet {
         let controlConnections: Int?
         let derpConnections: Int?
         let stunRequests: Int?
+        let transferID: Int?
+        let transfers: [Transfer]?
     }
 
     struct Command: Encodable, Sendable {
@@ -48,6 +63,9 @@ actor GoTailnet {
         var enabled: Bool? = nil
         var requireAuth: Bool? = nil
         var authURL: URL? = nil
+        var send: UInt64? = nil
+        var seed: UInt64? = nil
+        var timeoutSec: Int? = nil
     }
 
     private let process = Process()
@@ -65,6 +83,7 @@ actor GoTailnet {
     private var nextID = 0
     private var started = false
     private var stopped = false
+    private var commandTail: Task<Void, Never>?
 
     init(temporaryDirectory: URL) {
         var environment = ProcessInfo.processInfo.environment
@@ -150,6 +169,17 @@ actor GoTailnet {
     }
 
     func command(_ value: Command, expecting kind: String) async throws -> Event {
+        let previous = commandTail
+        let operation = Task {
+            await previous?.value
+            return try await performCommand(value, expecting: kind)
+        }
+        commandTail = Task { _ = await operation.result }
+        return try await operation.value
+    }
+
+    /// actor 재진입 중에도 명령 하나의 응답을 끝까지 받은 뒤 다음 명령을 보낸다.
+    private func performCommand(_ value: Command, expecting kind: String) async throws -> Event {
         var value = value
         nextID += 1
         value.id = nextID

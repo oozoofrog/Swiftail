@@ -65,6 +65,72 @@ GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-s
 
 기본 등록은 자동 승인이다. testcontrol의 기본 맵은 self Node, 전체 Peers, DERPMap, DNSConfig, PacketFilter 등을 포함하며 ControlTime은 고정 시각이다. 시험 로그 업로드는 `logtail.Disable()`과 `TS_NO_LOGS_NO_SUPPORT=true`로 끄고 portmapper도 비활성화한다. testcontrol의 인증 키 비교는 상수 시간이 아닌 upstream 구현이므로 시험용 값만 사용한다.
 
+## Swiftail 노드 둘을 시험 제어 서버에 붙여 `listen`·`connect` 돌리기
+
+계정·인증 키 없이 로컬 `testcontrol`·DERP·STUN에 Swift 노드 둘을 등록할 수 있다. 저장소 루트에서 `sh Scripts/build-interop-tools.sh tailnet`이 출력한 실행 파일을 터미널에서 실행한다. 첫 JSON 줄 `ready`의 `controlURL`을 아래 함수에 넘긴다. 도구는 표준 입력 EOF에서 끝나므로 이 터미널을 열어 둔다. `addPeer`는 필요 없다. 시험이 끝나면 `{"id":1,"cmd":"quit"}`을 입력한다.
+
+통합 시험 타깃은 `Swiftail`과 `SwiftailBase`에 의존한다. 아래 코드는 두 노드의 상태 디렉터리를 따로 만들며, `.running`과 상대의 netmap 반영을 기다린다. `listen`은 `run()` 전에 열어도 되지만 `connect`는 `.running` 뒤에 부른다. `run()`은 시험이 끝날 때 취소하고 반드시 회수한다. `controlURL`은 실행 때 받은 값이고, `root`는 시험이 만든 빈 임시 디렉터리다.
+
+```swift
+import Foundation
+import Swiftail
+import SwiftailBase
+
+func exchangeWithTwoNodes(controlURL: URL, root: URL) async throws {
+    let server = try TailnetNode(configuration: .init(
+        stateDirectory: root.appending(path: "server"),
+        hostname: "rd-mac-1a2b3c4d", controlURL: controlURL), device: .inProcess)
+    let client = try TailnetNode(configuration: .init(
+        stateDirectory: root.appending(path: "client"),
+        hostname: "rd-mac-5e6f7a8b", controlURL: controlURL), device: .inProcess)
+    let listener = try await server.listen(port: 9_200)
+    let serverRun = Task { try await server.run() }
+    let clientRun = Task { try await client.run() }
+    do {
+        let deadline = ContinuousClock.now + .seconds(25)
+        while true {
+            let serverStatus = await server.status
+            let clientStatus = await client.status
+            if serverStatus.state == .running, clientStatus.state == .running,
+               serverStatus.peerCount >= 1, clientStatus.peerCount >= 1 { break }
+            guard ContinuousClock.now < deadline else { throw CancellationError() }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let status = await server.status
+        guard let address = status.addresses.first(where: { $0.isIPv4 }) else {
+            throw ConnectionError.unknownHost
+        }
+        let connection = try await client.connect(to: address.description, port: listener.port)
+        var iterator = listener.makeAsyncIterator()
+        guard let accepted = await iterator.next() else { throw ConnectionError.closed }
+        try await connection.write([1, 2, 3])
+        try await connection.finishWriting()
+        var request: [UInt8] = []
+        while let bytes = try await accepted.read() { request += bytes }
+        guard request == [1, 2, 3] else { throw ConnectionError.reset }
+        try await accepted.write([4, 5])
+        try await accepted.finishWriting()
+        var response: [UInt8] = []
+        while let bytes = try await connection.read() { response += bytes }
+        guard response == [4, 5] else { throw ConnectionError.reset }
+        await connection.close()
+        await accepted.close()
+        await listener.close()
+        serverRun.cancel()
+        clientRun.cancel()
+        _ = await (serverRun.result, clientRun.result)
+    } catch {
+        await listener.close()
+        serverRun.cancel()
+        clientRun.cancel()
+        _ = await (serverRun.result, clientRun.result)
+        throw error
+    }
+}
+```
+
+실제 시험은 이 함수 전체를 취소 가능한 기한(예: 60초) 안에서 실행하고, 끝나면 `root`를 지운다. 공개 API에는 deadline 인자가 없으므로 시간 제한을 건 Task가 취소되어야 한다. 큰 본문은 이 작은 예제처럼 모으지 말고 청크별로 소비한다. `NetstackTests.twoSwiftNodes`가 같은 등록·반닫힘·요청/응답 흐름을 실제 서버에서 검증한다. 다른 프로젝트는 `root`와 `controlURL`만 주입하고 위의 바이트 교환 자리에 자체 프로토콜 시험을 올리면 된다.
+
 ## M6 TCP 전송 명령
 
 모든 명령은 기존 JSON 줄 규약대로 `id`를 받고 같은 `id`로 곧바로 답한다. `peerDial`의 연결·전송과 `peerServe`의 accept·전송은 뒤에서 돌며 표준 출력에 비동기 사건을 쓰지 않는다. 진행은 `transfers`로 조회한다. 피어는 먼저 `addPeer`로 만든다.
