@@ -330,6 +330,12 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
 2. `NodeError.tunnelDeviceClosed`·`udpUnavailable`의 메시지는 errno 이름만 담는다. `invalidConfiguration`의 메시지에 경로·기술자 번호 밖의 값을 넣지 않는다.
 3. DNS 질의 내용(이름)을 기록하지 않는다. 이 계약은 로그 API를 만들지 않는다(첫 사용처 확인 필요 F6).
 
+### 응답기 구현에서 정해진 것 (M5-1, 2026-11-15)
+
+- 진입점: `MagicDNSResolver(netmap: Netmap?, localZones: [String])`와 `response(to:at:) -> [UInt8]`(internal). 늘 응답 바이트를 낸다(무응답인 경우가 없다). 12바이트보다 짧은 질의에도 Go처럼 ID 0의 FORMERR로 답한다.
+- netmap이 없거나 자기 키가 만료되어 `netmap`이 nil이어도 서비스 IP의 PTR 같은 고정 이름에는 답한다(Go와 같다). 그 밖의 이름은 SERVFAIL.
+- **Go와 일부러 다르게 한 것**: Go는 머리가 짧거나 응답 비트가 켜진 질의에 답할 때, 다시 쓰는 파서에 남아 있던 **앞 질의의 질문**을 응답에 싣는다(다른 앱의 질의 이름이 새어 나갈 수 있다. Go 출력에서 확인). Swiftail은 질문 없이 답한다. `ExtraRecords`의 이름과 MagicDNS 접미사는 소문자로 맞춰 비교한다(Go는 대소문자 그대로 쓴다).
+
 ## 결정 (DNS 노트 6.4)
 
 | # | 결정 | 정한 것 | 근거 |
