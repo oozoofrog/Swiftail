@@ -268,18 +268,19 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 10: 257번째 연결은 대기하고 자리가 나면 맺어진다")
+    @Test("항목 10: 한 피어의 65번째 연결은 대기하고 자리가 나면 맺어진다")
     func connectionLimit() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
-            // 준비 전송의 TIME-WAIT가 256개 한도를 차지하지 않도록 새 노드에서 바로 채운다.
+            // 상대 주소 하나의 연결은 64개까지다(계약 동작 S "검토에서 고친 것"). 전체 256개 상한은 피어가 넷 넘게 있어야
+            // 닿으므로 단위 시험(`StackLimitTests`)이 본다. 준비 전송의 TIME-WAIT가 끼지 않도록 새 노드에서 바로 채운다.
             let listener = try await gate.node.listen(port: 9_101)
             var connections: [TailnetConnection] = []
-            for _ in 0..<256 {
+            for _ in 0..<64 {
                 _ = try await netstackDial(gate, port: listener.port, count: 0)
                 connections.append(try await netstackAccept(listener))
             }
             let id = try await netstackDial(gate, port: listener.port, count: 0)
-            try await assertDialWaits(gate, id: id, stage: "257번째 연결")
+            try await assertDialWaits(gate, id: id, stage: "65번째 연결")
             await connections.removeFirst().abort()
             let next = try await netstackAccept(listener)
             try await netstackWait("연결 자리 반환 뒤 연결") {
