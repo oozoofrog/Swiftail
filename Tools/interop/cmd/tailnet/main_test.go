@@ -301,3 +301,56 @@ func TestPeerSendRejectsInvalidInput(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectCapturedPacket(t *testing.T) {
+	ipv4 := make([]byte, 28)
+	ipv4[0], ipv4[9] = 0x45, 17
+	copy(ipv4[16:20], []byte{100, 100, 100, 100})
+	ipv4[20], ipv4[21] = 0xa8, 0x02
+	ipv6 := make([]byte, 48)
+	ipv6[0], ipv6[6] = 0x60, 17
+	copy(ipv6[24:40], netip.MustParseAddr("fd7a:115c:a1e0::53").AsSlice())
+	ipv6[40], ipv6[41] = 0xa8, 0x02
+	for _, ip := range [][]byte{ipv4, ipv6} {
+		service, port, err := inspectCapturedPacket(append([]byte{1, 0, 0, 0}, ip...))
+		if err != nil || !service || port != 43010 {
+			t.Fatal("서비스 패킷·UDP 포트 해석 실패")
+		}
+	}
+	normal := append([]byte(nil), ipv4...)
+	copy(normal[16:20], []byte{100, 64, 0, 2})
+	service, port, err := inspectCapturedPacket(append([]byte{1, 0, 0, 0}, normal...))
+	if err != nil || service || port != 43010 {
+		t.Fatal("일반 UDP 양성 대조 실패")
+	}
+	for _, data := range [][]byte{nil, {1, 0, 0}, {1, 0, 16, 0}, {1, 0, 1, 0}, {1, 0, 0, 0, 0x45}} {
+		if _, _, err := inspectCapturedPacket(data); err == nil {
+			t.Fatal("짧거나 잘못된 경계 허용")
+		}
+	}
+}
+
+func TestMagicDNSAndNetworkCounters(t *testing.T) {
+	n, err := newNetwork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.close()
+	enabled := true
+	result, err := n.execute(command{Cmd: "setMagicDNS", Enabled: &enabled})
+	if err != nil || result["enabled"] != true || n.control.DNSConfig == nil || !n.control.DNSConfig.Proxied {
+		t.Fatal("MagicDNS 설정 실패")
+	}
+	if _, err := n.execute(command{Cmd: "setMagicDNS"}); err == nil {
+		t.Fatal("bool 누락 허용")
+	}
+	n.started = true
+	enabled = false
+	if _, err := n.execute(command{Cmd: "setMagicDNS", Enabled: &enabled}); err == nil || !n.control.DNSConfig.Proxied {
+		t.Fatal("등록 뒤 DNS 변경 허용")
+	}
+	result, err = n.execute(command{Cmd: "networkStatus"})
+	if err != nil || result["controlConnections"] != 0 || result["derpConnections"] != 0 || result["stunRequests"] != 0 {
+		t.Fatal("초기 연결 카운터 오류")
+	}
+}

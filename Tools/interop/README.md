@@ -426,3 +426,11 @@ eyebuild rm m5-fixtures
 ```
 
 실기기 OS 적용, 실제 Go 피어에 대한 이름 질의, Swift 대조 시험은 이 도구의 검증 범위가 아니다. 노드 색인 규칙은 고정 표이므로 별도 단위 시험과 M5 관문 (가)에서 검증한다.
+
+M5 메모리 관문의 관측 명령:
+
+- `startCapture`(`name`): 해당 Go 피어의 공개 `StreamDebugCapture`를 시작하고 pcap 머리를 읽은 뒤 `captureStarted`로 답한다. 피어당 한 번만 시작하며 피어 제거·도구 종료 때 닫는다.
+- `captureStatus`(`name`, `port` 1…65535): `FromPeer` 패킷 중 목적지가 두 서비스 IP인 수(`servicePackets`)와 UDP 출발 포트가 `port`인 수(`observedPackets`)를 반환한다. 원문·주소는 보관하거나 출력하지 않는다. 일반 UDP 에코의 관측을 양성 대조로 삼고, 후속 에코가 관측될 때까지 기다려 읽기 경계를 확인한다. 관측 흐름 종료·잘못된 경계는 오류다.
+- `networkStatus`: `controlConnections`(`/ts2021` 요청 수), `derpConnections`(`/derp` 요청 수), `stunRequests`(유효 STUN Binding 요청 수)를 반환한다. 인터페이스 재결속·같은 인터페이스 재평가를 주소 없이 관측하기 위한 프로세스 전체 누적 수다.
+
+- `setMagicDNS`(`enabled` bool): 첫 제어 요청 전에 `DNSConfig.Proxied`를 설정하고 `magicDNS`로 답한다. `MagicDNSDomain`은 이름 접미사만 정하므로 DNS 관문은 이 명령으로 MagicDNS를 켠 뒤 피어·Swift 노드를 등록한다. 누락된 bool·등록 뒤 변경은 거절한다.

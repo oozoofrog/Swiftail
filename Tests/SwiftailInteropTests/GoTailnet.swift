@@ -28,6 +28,11 @@ actor GoTailnet {
         let fqdn: String?
         let selfAddrs: [String]?
         let enabled: Bool?
+        let servicePackets: Int?
+        let observedPackets: Int?
+        let controlConnections: Int?
+        let derpConnections: Int?
+        let stunRequests: Int?
     }
 
     struct Command: Encodable, Sendable {
@@ -41,6 +46,8 @@ actor GoTailnet {
         var proto: String? = nil
         var payload: String? = nil
         var enabled: Bool? = nil
+        var requireAuth: Bool? = nil
+        var authURL: URL? = nil
     }
 
     private let process = Process()
