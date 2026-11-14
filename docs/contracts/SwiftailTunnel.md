@@ -179,6 +179,20 @@ public struct TunnelNetworkSettings: Sendable, Equatable {
 `docs/plan.md` 6절 초안과 다른 점(이유):
 
 - `start()`/`stop()` 대신 `run()` + Task 취소(M3 그대로). 정지는 `runTask.cancel()` 뒤 `await runTask.value`다.
+  - `Task { }` 안의 `do`-`catch`는 오류 타입을 `any Error`로 추론한다. `NodeError`의 종류로 갈라 보려면 `do throws(NodeError)`로 적는다(첫 사용처가 빌드 변형을 만들며 확인, 2026-11-15):
+
+    ```swift
+    let runTask = Task {
+        do throws(NodeError) {
+            try await node.run()        // 취소로 돌아오면 정상 종료다
+        } catch {
+            switch error {              // error: NodeError
+            case .control(let failure): …
+            case .tunnelDeviceClosed, .stateDirectoryInUse, .udpUnavailable, .invalidConfiguration: …
+            }
+        }
+    }
+    ```
 - `NodeState`에 `stopped`·`failed`가 없다. 정지는 `run()`이 돌아온 것이고, 실패는 `run()`이 던진 `NodeError`다. 둘 다 사건이 아니라 `run()`의 결과로 알린다.
 - `NodeEvent.networkSettings` 대신 별도 흐름 `networkSettings`(총괄 확인 필요 T2).
 - `TunnelNetworkSettings`의 값은 문자열이 아니라 `IPPrefix`·`IPAddress`다(검증된 값을 넘긴다). 앱은 `description`으로 CIDR 문자열을 얻는다.

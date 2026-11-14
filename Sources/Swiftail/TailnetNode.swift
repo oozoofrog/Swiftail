@@ -203,6 +203,9 @@ public actor TailnetNode {
     /// 끊긴 연결은 안에서 물러났다가 다시 잇는다. 다시 켜도 소용없는 실패만 던진다: 제어의 끝난 실패(`control`), 장치 닫힘
     /// (`tunnelDeviceClosed`), 같은 프로세스의 다른 노드가 상태 디렉터리를 쓰는 중(`stateDirectoryInUse`, 파일·소켓을 열기
     /// 전), UDP 소켓을 열지 못함(`udpUnavailable`). 실행 중이든 끝난 뒤든 다시 부르면 `invalidConfiguration`이다.
+    ///
+    /// `Task { }` 안에서 부를 때는 `do throws(NodeError) { try await node.run() } catch { … }`로 적어야 `catch`의
+    /// `error`가 `NodeError`다. `throws(NodeError)`를 빼면 `any Error`로 추론된다.
     public func run() async throws(NodeError) {
         guard !hasRun else { throw .invalidConfiguration("run()은 노드 하나에 한 번만 부른다") }
         hasRun = true
