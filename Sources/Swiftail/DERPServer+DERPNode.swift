@@ -2,43 +2,9 @@ import SwiftailBase
 import SwiftailControl
 import SwiftailDERP
 
-/// 홈 DERP 지역과 그 지역에 닿는 서버들. 이 노드는 홈 지역의 DERP 서버 하나에 붙어 패킷을 받는다.
+/// tailcfg의 DERP 노드를 `DERPClient`가 연결할 서버로 바꾼다. 노드가 지역 연결을 열 때 쓴다.
 ///
-/// 고르는 일은 입출력 없는 순수 함수다. `TailnetNode`가 netmap을 받을 때마다 부르고, 결과가 바뀌면 DERP 클라이언트를
-/// 다시 띄운다.
-///
-/// `docs/contracts/SwiftailEngine.md` 노드 API 동작 3, `docs/protocol-notes/derp-stun.md` 4.1·4.8.
-// shortcut: 지역별 지연을 재지 않고 ID가 가장 작은 지역을 고정으로 고른다. 지역도 하나만 쓴다. netcheck와 다중 지역은
-// M4(`SwiftailMagicsock`)다. Go도 측정 결과가 없으면 측정 없이 지역 하나를 고른다(노트 4.8 1).
-struct DERPHome: Sendable, Equatable {
-    var regionID: Int64
-    /// 앞에서부터 시도할 서버들. 비어 있지 않다.
-    var servers: [DERPServer]
-
-    /// DERPMap에서 홈 지역을 고른다.
-    ///
-    /// 지금 홈(`current`)을 계속 쓸 수 있으면 그대로 두고 서버 목록만 새로 읽는다. 아니면(처음이거나 그 지역이 사라졌거나
-    /// 쓸 수 없게 되었으면) 쓸 수 있는 지역 가운데 ID가 가장 작은 것을 고른다. 쓸 수 있는 지역은
-    /// `noMeasureNoHome`이 아니고 쓸 수 있는 서버가 하나 이상인 지역이다. 그런 지역이 없으면 nil.
-    ///
-    /// - Parameter current: 지금 홈 지역 ID. 0이면 아직 없다.
-    static func choose(from derpMap: DERPMap?, keeping current: Int64) -> DERPHome? {
-        let regions = derpMap?.regions ?? [:]
-        if let region = regions[current], let home = DERPHome(regionID: current, region: region) {
-            return home
-        }
-        return regions.keys.sorted().lazy.compactMap { id in regions[id].flatMap { DERPHome(regionID: id, region: $0) } }.first
-    }
-
-    /// 지역을 홈으로 쓸 수 있으면 만든다.
-    private init?(regionID: Int64, region: DERPRegion) {
-        let servers = region.nodes.compactMap(DERPServer.init)
-        guard !region.noMeasureNoHome, !servers.isEmpty else { return nil }
-        self.regionID = regionID
-        self.servers = servers
-    }
-}
-
+/// 계약 `docs/contracts/SwiftailEngine.md` 노드 API 동작 3, `docs/protocol-notes/derp-stun.md` 4.1.
 extension DERPServer {
     /// tailcfg의 DERP 노드 하나를 연결할 서버로 바꾼다. 이 노드로 연결할 수 없으면 nil.
     ///

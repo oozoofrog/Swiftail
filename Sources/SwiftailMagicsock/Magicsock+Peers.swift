@@ -8,12 +8,12 @@ import SwiftailBase
 /// - **공유 키 캐시**: 주인이 된 disco 키마다 X25519를 한 번 하고, 빠진 키는 버린다. 받은 패킷이 계산을 일으키지
 ///   못하므로 모르는 키를 내세운 쓰레기로 CPU를 쓰게 할 수 없다. 계산이 실패한 저차수 키의 피어는 DERP만 쓴다.
 /// - **피어별 경로 상태**: 새 피어는 만들고, 남은 피어는 netmap 값을 넣고, disco 키가 바뀐 피어는 신뢰와 진행 중인
-///   Ping을 버린다(노트 4.4 3). 빠진 피어는 지우고 `.pathChanged(key, nil)`을 낸다.
+///   Ping을 버린다(노트 4.4 3). 빠진 피어는 지우고, 경로를 알린 적이 있으면 `.pathChanged(key, nil)`을 낸다.
 extension Magicsock {
     /// netmap의 피어를 맞춘다. 순서가 주인을 정한다(같은 disco 키는 앞의 피어만 갖는다). 노드는 node ID 순으로 넘긴다.
     ///
     /// 같은 node 키가 두 번 오면 앞의 것만 쓴다. 출력은 빠진 피어의 `.pathChanged(_, nil)`, 그다음 목록 순서대로
-    /// 경로가 바뀐(새 피어 포함) 피어의 `.pathChanged`다.
+    /// 경로가 바뀐 피어의 `.pathChanged`다. 새 피어는 아직 보낸 것이 없어 유휴(nil)이므로 사건이 없다(동작 G3).
     public mutating func setPeers(_ newPeers: [Peer], at now: ContinuousClock.Instant) -> [Output] {
         var owners: [DiscoPublicKey: DiscoPeer] = [:]
         var entries: [NodePublicKey: PeerEntry] = [:]
@@ -25,7 +25,8 @@ extension Magicsock {
         }
 
         var outputs: [Output] = []
-        for key in peerOrder where entries[key] == nil {
+        // 이미 nil(유휴)을 알린 피어는 빠져도 다시 알리지 않는다(동작 G2).
+        for key in peerOrder where entries[key] == nil && peers[key]?.reportedPath != nil {
             outputs.append(.pathChanged(key, nil))
         }
         peers = entries

@@ -318,10 +318,11 @@ struct TestNetwork {
         discoLog.append(DiscoRecord(time: now, from: from, to: node, viaDERP: viaDERP, message: message))
     }
 
-    /// `nextDeadline`이 부품들의 기한 가운데 가장 이른 것인지 본다.
+    /// `nextDeadline`이 부품들의 기한(유휴 기한 포함) 가운데 가장 이른 것인지 본다.
     private mutating func checkDeadlines() {
         for node in nodes {
-            let parts = node.sock.peers.values.map(\.path.nextDeadline) + [node.sock.netcheck.nextDeadline]
+            let parts = node.sock.peers.values.flatMap { [$0.path.nextDeadline, Magicsock.idleDeadline(of: $0)] }
+                + [node.sock.netcheck.nextDeadline]
             if node.sock.nextDeadline != parts.compactMap({ $0 }).min() { deadlineViolations += 1 }
         }
     }

@@ -62,7 +62,8 @@ public struct Magicsock: Sendable {
         /// 이 피어와 disco를 하면 그 disco 키(동작 B1의 주인이고 공유 키가 있다). nil이면 DERP만 쓴다.
         var discoKey: DiscoPublicKey?
         var path: PeerPathState
-        /// 마지막으로 `.pathChanged`로 알린 경로. 같은 값은 다시 알리지 않는다(동작 G2).
+        /// 마지막으로 `.pathChanged`로 알린 경로. nil은 아직 알리지 않았거나 유휴를 알렸다는 뜻이다.
+        /// 같은 값은 다시 알리지 않는다(동작 G2).
         var reportedPath: PeerPath?
     }
 
@@ -111,16 +112,33 @@ public struct Magicsock: Sendable {
         netcheck = Netcheck(localPort: localPort, localAddresses: localAddresses, loopbackAddresses: loopbackAddresses)
     }
 
-    /// 피어의 지금 경로. 데이터면에 없는 피어면 nil.
+    /// 피어의 지금 경로. 데이터면에 없거나 유휴인 피어면 nil(동작 G3).
     public func path(to peer: NodePublicKey, at now: ContinuousClock.Instant) -> PeerPath? {
-        peers[peer]?.path.path(at: now)
+        peers[peer].flatMap { Self.path(of: $0, at: now) }
     }
 
     // MARK: 경로 사건 (동작 G)
 
+    /// 피어 하나의 지금 경로. 마지막 WireGuard 송신 뒤 45초가 넘었거나 아직 보낸 적이 없으면 유휴라서 nil이다(동작 G3).
+    ///
+    /// 유휴 피어를 `.relayed`로 보이면, 트래픽이 생기면 직접으로 붙을 연결이 "중계"로 표시된다. 그래서 경로는 실제로
+    /// 주고받는 동안만 알린다. 유휴 판단은 heartbeat·주기 STUN을 멈추는 것과 같은 기준(`sessionActiveTimeout`)이다.
+    static func path(of entry: PeerEntry, at now: ContinuousClock.Instant) -> PeerPath? {
+        guard let lastSend = entry.path.lastSend, now - lastSend <= PeerPathState.sessionActiveTimeout else { return nil }
+        return entry.path.path(at: now)
+    }
+
+    /// 알린 경로가 유휴로 nil이 되는 시각. 이미 nil을 알렸으면 기한이 없다(지난 시각을 계속 내지 않는다).
+    static func idleDeadline(of entry: PeerEntry) -> ContinuousClock.Instant? {
+        guard entry.reportedPath != nil, let lastSend = entry.path.lastSend else { return nil }
+        return lastSend + PeerPathState.sessionActiveTimeout + .nanoseconds(1)
+    }
+
     /// 피어의 지금 경로가 마지막으로 알린 것과 다르면 `.pathChanged`를 더하고 기억한다.
     mutating func reportPathChange(of key: NodePublicKey, at now: ContinuousClock.Instant, into outputs: inout [Output]) {
-        guard let current = peers[key]?.path.path(at: now), peers[key]?.reportedPath != current else { return }
+        guard let entry = peers[key] else { return }
+        let current = Self.path(of: entry, at: now)
+        guard entry.reportedPath != current else { return }
         peers[key]?.reportedPath = current
         outputs.append(.pathChanged(key, current))
     }

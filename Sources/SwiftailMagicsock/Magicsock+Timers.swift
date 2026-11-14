@@ -4,11 +4,12 @@
 
 import SwiftailBase
 
-/// 기한과 STUN 회차(계약 동작 D7·E·G1, 노트 4.6 3·4.8 3·4.9 5).
+/// 기한과 STUN 회차(계약 동작 D7·E·G1·G3, 노트 4.6 3·4.8 3·4.9 5).
 ///
 /// `Magicsock`의 기한은 부품들의 기한을 합친 것이다: 피어마다 Ping 기한·heartbeat·신뢰 만료(`PeerPathState`), 그리고
-/// STUN 회차의 다음 요청·마감·주기(`Netcheck`). 노드는 `nextDeadline`에 `advance(to:)`를 부르고, `advance`는 기한이 된
-/// 부품만 돌린다. 신뢰가 만료된 피어는 그 기한의 `advance`에서 `.pathChanged(.relayed)`가 나온다.
+/// STUN 회차의 다음 요청·마감·주기(`Netcheck`), 그리고 피어가 유휴가 되는 시각(동작 G3). 노드는 `nextDeadline`에
+/// `advance(to:)`를 부르고, `advance`는 기한이 된 부품만 돌린다. 신뢰가 만료된 피어는 그 기한의 `advance`에서
+/// `.pathChanged(.relayed)`가, 유휴가 된 피어는 `.pathChanged(nil)`이 나온다.
 ///
 /// STUN 회차의 결과(`Netcheck.Action`)도 여기서 출력으로 바꾼다. 회차가 끝나 엔드포인트를 다시 정하면 미뤄 둔
 /// CallMeMaybe를 보낸다.
@@ -26,8 +27,11 @@ extension Magicsock {
     }
 
     /// 다음에 `advance`를 불러야 하는 시각. 걸린 타이머가 없으면 nil.
+    ///
+    /// 피어마다 경로 상태 기계의 기한과, 알린 경로가 유휴로 nil이 되는 시각(동작 G3)을 넣는다.
     public var nextDeadline: ContinuousClock.Instant? {
-        (peers.values.map(\.path.nextDeadline) + [netcheck.nextDeadline]).compactMap { $0 }.min()
+        let peerDeadlines = peers.values.flatMap { [$0.path.nextDeadline, Self.idleDeadline(of: $0)] }
+        return (peerDeadlines + [netcheck.nextDeadline]).compactMap { $0 }.min()
     }
 
     /// `setRegions(_:at:)`과 같다. 난수를 `generator`에서 뽑는다.
@@ -45,10 +49,13 @@ extension Magicsock {
     mutating func advance(to now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Output] {
         var outputs: [Output] = []
         for key in peerOrder {
-            guard let deadline = peers[key]?.path.nextDeadline, deadline <= now,
-                  let actions = peers[key]?.path.advance(to: now, using: &generator)
-            else { continue }
-            outputs += handle(actions, for: key, at: now, using: &generator)
+            guard let entry = peers[key] else { continue }
+            let pathDue = entry.path.nextDeadline.map { $0 <= now } ?? false
+            let idleDue = Self.idleDeadline(of: entry).map { $0 <= now } ?? false
+            guard pathDue || idleDue else { continue }
+            if pathDue, let actions = peers[key]?.path.advance(to: now, using: &generator) {
+                outputs += handle(actions, for: key, at: now, using: &generator)
+            }
             reportPathChange(of: key, at: now, into: &outputs)
         }
         if let deadline = netcheck.nextDeadline, deadline <= now {

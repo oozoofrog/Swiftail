@@ -6,19 +6,20 @@ import SwiftailWireGuard
 
 /// 한 노드의 데이터면: netmap, WireGuard, 패킷 필터를 묶은 상태 기계.
 ///
-/// 입출력이 없다. 소켓·시계·actor를 갖지 않고, 시각을 인자로 받아 "DERP로 보낼 데이터그램"과
+/// 입출력이 없다. 소켓·시계·actor를 갖지 않고, 시각을 인자로 받아 "피어에게 보낼 WireGuard 데이터그램"과
 /// "위로 올릴 IP 패킷"을 돌려준다. 모든 진입점은 던지지 않는다. 버린 것은 `.dropped`로 알린다.
 ///
-/// M3은 DERP 중계만 쓴다. 피어에게 보내는 메시지는 그 피어의 홈 DERP 지역으로 나가고, 그 지역이 우리 홈
-/// 지역이 아니면 보낼 길이 없다. 지원하지 않는 패킷과 피어는 닫힌 쪽으로 처리한다.
+/// 엔진은 경로를 모른다. 데이터그램을 UDP로 보낼지 어느 DERP 지역으로 보낼지는 부르는 쪽(`Magicsock`)이 고르고,
+/// 받는 데이터그램도 `Magicsock`이 WireGuard로 분류한 것만 온다(WireGuard 장치가 주소를 모르는 것과 같은 원칙이다).
+/// 지원하지 않는 패킷과 피어는 닫힌 쪽으로 처리한다.
 ///
 /// 이 파일은 상태와 netmap 적용, 타이머를 담는다. 패킷의 송수신은 `TailnetEngine+Packets.swift`에 있다.
-/// `docs/protocol-notes/netmap-engine.md` 4.2·6.1, `docs/contracts/SwiftailEngine.md` 동작 3·7.
+/// `docs/protocol-notes/netmap-engine.md` 4.2·6.1, `docs/contracts/SwiftailEngine.md` 동작 3·7과 "M4에서 바뀌는 것".
 public struct TailnetEngine: Sendable {
     /// 상태 기계가 내놓는 일.
     public enum Output: Sendable, Equatable {
-        /// DERP로 보낼 WireGuard 메시지.
-        case datagram([UInt8], to: NodePublicKey, derpRegion: Int64)
+        /// 피어에게 보낼 WireGuard 메시지. 경로는 부르는 쪽(`Magicsock`)이 고른다.
+        case datagram([UInt8], to: NodePublicKey)
         /// 필터를 통과해 위로 올릴 IP 패킷.
         case ipPacket([UInt8])
         /// 버린 패킷. 진단과 시험용이다.
@@ -37,10 +38,6 @@ public struct TailnetEngine: Sendable {
         case consumedControlPacket
         /// 목적지 주소를 가진 피어가 없다.
         case noPeerForDestination
-        /// 피어의 홈 DERP를 모르거나 우리 홈 지역이 아니다.
-        case noRouteToPeer
-        /// M3은 disco를 처리하지 않는다.
-        case discoMessage
         /// WireGuard가 받거나 보내지 못했다.
         case wireGuard(WireGuardError)
     }
@@ -55,8 +52,6 @@ public struct TailnetEngine: Sendable {
     var peers: [NodePublicKey: EnginePeer] = [:]
     /// 피어의 한 주소짜리 `addresses` → 그 피어. 보낼 피어를 고른다.
     var peerByAddress: [IPAddress: NodePublicKey] = [:]
-    /// 우리 홈 DERP 지역. 0이면 아직 모른다.
-    var homeDERP: Int64 = 0
     /// 마지막으로 적용한 netmap. 키 만료 시각에 피어를 다시 계산할 때 쓴다.
     private var netmap: Netmap?
     /// 다음으로 키가 만료되는 피어가 생기는 시각.
@@ -81,14 +76,11 @@ public struct TailnetEngine: Sendable {
     /// 없게 된 키는 내린다. 같은 키의 AllowedIPs가 바뀌어도 세션은 이어진다. 필터는 규칙만 바꾸고 UDP 흐름
     /// 기록은 잇는다. 피어를 더하고 빼는 일은 메시지를 만들지 않으므로 지금은 늘 빈 목록이다.
     ///
-    /// - Parameters:
-    ///   - homeDERP: 우리 홈 DERP 지역. 이 지역에 있는 피어에게만 보낸다.
-    ///   - wallClock: `now` 시점의 벽시계 시각. 피어 키 만료를 이것으로 판단한다.
-    public mutating func apply(_ netmap: Netmap, homeDERP: Int64, at now: ContinuousClock.Instant, wallClock: Date) -> [Output] {
+    /// - Parameter wallClock: `now` 시점의 벽시계 시각. 피어 키 만료를 이것으로 판단한다.
+    public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output] {
         clockAnchor = now
         wallClockAnchor = wallClock
         self.netmap = netmap
-        self.homeDERP = homeDERP
         let localAddresses = netmap.selfNode.addresses.filter(EnginePeer.isSingleAddress).map(\.address)
         filter.replaceRules(netmap.packetFilter, localAddresses: localAddresses)
         configurePeers(at: now)
@@ -154,7 +146,7 @@ extension TailnetEngine: CustomReflectable {
     public var customMirror: Mirror {
         Mirror(
             self,
-            children: ["publicKey": NodePublicKey(device.publicKey), "homeDERP": homeDERP, "peerCount": peers.count],
+            children: ["publicKey": NodePublicKey(device.publicKey), "peerCount": peers.count],
             displayStyle: .struct
         )
     }

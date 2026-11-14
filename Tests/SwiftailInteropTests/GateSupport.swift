@@ -191,7 +191,7 @@ func running(_ node: TailnetNode, containing marker: IPAddress? = nil) async thr
         switch event {
         case .running(let addresses):
             if marker == nil || addresses.contains(where: { $0 == marker }) { return addresses }
-        case .reconnecting: continue
+        case .reconnecting, .peerPathChanged: continue
         case .loginRequired: throw GateFailure("자동 승인 서버에서 loginRequired 수신")
         }
     }

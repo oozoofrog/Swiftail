@@ -5,8 +5,11 @@ import Testing
 @Suite("M3 공개 TailnetNode Go 상호 운용", .enabled(if: tailnetBinary != nil,
     "SWIFTAIL_TAILNET가 없어 M3 관문 시험을 건너뜁니다"), .timeLimit(.minutes(4)))
 struct SwiftailInteropTests {
-    @Test("관문 1: 등록·running 뒤 Go가 보는 경로는 DERP다")
-    func 등록과DERP경로() async throws {
+    // M4: Swift 노드가 UDP 소켓을 열고 엔드포인트를 올리므로 Go가 보는 경로는 이제 직접 경로다(magicsock 계약
+    // "M4 관문" 2(가)). M3의 "curAddr가 비어 있다"는 더는 참이 아니다. Go는 Swift가 올린 엔드포인트(루프백, LAN) 가운데
+    // 지연이 나은 것을 고르므로 어느 주소인지는 여기서 보지 않는다.
+    @Test("관문 1: 등록·running 뒤 Go가 보는 경로는 직접 UDP다(M4)")
+    func 등록과직접경로() async throws {
         try await withGate { gate in
             // 실제 트래픽 뒤의 경로를 확인한다. 단순한 피어 목록 등재만으로 통과시키지 않는다.
             try await gate.echo(payload: [0x01, 0x02, 0x03])
@@ -14,13 +17,12 @@ struct SwiftailInteropTests {
             while true {
                 let status = try await gate.tool.command(.init(cmd: "peerStatus", name: "go-peer-a"), expecting: "peerStatus")
                 if let peer = status.peers?.first(where: { $0.nodeKey == gate.local.key }),
-                   peer.relay?.isEmpty == false {
-                    #expect(peer.curAddr == "", "직접 UDP 주소가 없어야 한다")
+                   peer.relay?.isEmpty == false, peer.curAddr?.isEmpty == false {
                     #expect(Set(peer.addresses) == Set(gate.local.addresses.map(\.description)))
                     return
                 }
                 guard ContinuousClock.now < deadline else {
-                    throw GateFailure("peerStatus: 20초 안에 Swift 피어의 비어 있지 않은 relay를 보지 못함")
+                    throw GateFailure("peerStatus: 20초 안에 Swift 피어의 직접 경로(curAddr)를 보지 못함")
                 }
                 await Task.yield()
             }

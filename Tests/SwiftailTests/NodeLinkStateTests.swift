@@ -28,15 +28,9 @@ struct NodeLinkStateTests {
             hostname: "rd-mac-1a2b3c4d",
             controlURL: try #require(URL(string: "http://127.0.0.1:9"))
         ))
-        // 돌리지 않는 제어 클라이언트. `apply`가 홈 지역을 올리는 곳으로만 쓴다.
-        let control = ControlClient(
-            configuration: .init(serverURL: try #require(URL(string: "http://127.0.0.1:9")), hostname: "rd-mac-1a2b3c4d"),
-            identityStore: NodeIdentityStore(directory: try #require(URL(string: "file:///var/empty/swiftail-test/")))
-        )
-
-        await node.apply(try Self.netmap(regions: #""1":{"RegionID":1,"Nodes":[\#(Self.derpNode)]}"#), reportingTo: control)
+        await node.apply(try Self.netmap(regions: #""1":{"RegionID":1,"Nodes":[\#(Self.derpNode)]}"#))
         await node.linkBroke(.derp)
-        await node.apply(try Self.netmap(regions: ""), reportingTo: control)
+        await node.apply(try Self.netmap(regions: ""))
 
         #expect(await node.brokenLinks.isEmpty)
         await node.eventContinuation.finish()
@@ -46,6 +40,7 @@ struct NodeLinkStateTests {
             case let .running(addresses): seen.append("running \(addresses.map(\.description))")
             case .reconnecting: seen.append("reconnecting")
             case .loginRequired: seen.append("loginRequired")
+            case .peerPathChanged: seen.append("peerPathChanged")
             }
         }
         #expect(seen == ["running [\"100.64.0.1\"]", "reconnecting", "running [\"100.64.0.1\"]"])

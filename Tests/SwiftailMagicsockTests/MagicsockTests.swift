@@ -437,7 +437,8 @@ struct MagicsockRulesTests {
         #expect(outputs.contains(.dropped(.noRouteToPeer)))
         #expect(!outputs.contains(.udp(testDatagram(1), to: b.address)))
         #expect(try pingDestinations(outputs, openedBy: b) == [b.address])
-        #expect(sock.send(testDatagram(2), to: c.nodeKey, at: sockT0, using: &random) == [.dropped(.noRouteToPeer)])
+        #expect(sock.send(testDatagram(2), to: c.nodeKey, at: sockT0, using: &random)
+            == [.dropped(.noRouteToPeer), .pathChanged(c.nodeKey, .relayed(derpRegion: 0))])
         #expect(sock.send(testDatagram(3), to: d.nodeKey, at: sockT0, using: &random) == [.dropped(.noRouteToPeer)])
     }
 
@@ -477,15 +478,46 @@ struct MagicsockRulesTests {
 
     // MARK: 피어 표 (동작 B·G)
 
-    @Test("피어를 더하면 .relayed(홈 DERP), 홈이 바뀌면 새 지역, 빼면 nil 경로 사건이 나오고 같은 값은 다시 내지 않는다")
+    @Test("새 피어는 보내기 전까지 경로가 없고, 보내면 .relayed(홈 DERP), 홈이 바뀌면 새 지역, 빼면 nil이 나오며 같은 값은 다시 내지 않는다")
     func peerEvents() {
         var sock = a.magicsock()
-        #expect(sock.setPeers([b.peer(homeDERP: 3, endpoints: [])], at: sockT0) == [.pathChanged(b.nodeKey, .relayed(derpRegion: 3))])
-        #expect(sock.setPeers([b.peer(homeDERP: 3, endpoints: [])], at: sockTime(1)) == [])
-        #expect(sock.setPeers([b.peer(homeDERP: 4, endpoints: [])], at: sockTime(2)) == [.pathChanged(b.nodeKey, .relayed(derpRegion: 4))])
-        #expect(sock.setPeers([], at: sockTime(3)) == [.pathChanged(b.nodeKey, nil)])
-        #expect(sock.path(to: b.nodeKey, at: sockTime(3)) == nil)
+        var random = PathTestRandom(state: 7)
+        #expect(sock.setPeers([b.peer(homeDERP: 3, endpoints: [])], at: sockT0) == [])
+        #expect(sock.path(to: b.nodeKey, at: sockT0) == nil)
+        #expect(sock.send(testDatagram(1), to: b.nodeKey, at: sockTime(1), using: &random)
+            == [.derp(testDatagram(1), to: b.nodeKey, region: 3), .pathChanged(b.nodeKey, .relayed(derpRegion: 3))])
+        #expect(sock.setPeers([b.peer(homeDERP: 3, endpoints: [])], at: sockTime(2)) == [])
+        #expect(sock.setPeers([b.peer(homeDERP: 4, endpoints: [])], at: sockTime(3)) == [.pathChanged(b.nodeKey, .relayed(derpRegion: 4))])
+        #expect(sock.setPeers([], at: sockTime(4)) == [.pathChanged(b.nodeKey, nil)])
+        #expect(sock.path(to: b.nodeKey, at: sockTime(4)) == nil)
         #expect(sock.discoPeers.isEmpty)
+        // 알린 적 없는(유휴) 피어는 빠져도 nil을 다시 내지 않는다.
+        _ = sock.setPeers([c.peer(endpoints: [])], at: sockTime(5))
+        #expect(sock.setPeers([], at: sockTime(6)) == [])
+    }
+
+    @Test("마지막 송신 뒤 45초가 넘으면 그 시각의 advance가 경로 nil을 내고, 다시 보내면 그때의 경로가 나온다(동작 G3)")
+    func idlePeerHasNoPath() throws {
+        var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
+        var random = PathTestRandom(state: 7)
+        try establishDirect(&sock, with: b, at: sockT0, random: &random)
+        let idleAt = sockT0 + PeerPathState.sessionActiveTimeout + .nanoseconds(1)
+
+        var events: [(ContinuousClock.Instant, PeerPath?)] = []
+        while let deadline = sock.nextDeadline, deadline <= idleAt + .seconds(60) {
+            for case .pathChanged(b.nodeKey, let path) in sock.advance(to: deadline, using: &random) {
+                events.append((deadline, path))
+            }
+        }
+        // 신뢰가 끝나 .relayed가 되고(Pong이 더 오지 않는다), 45초 경계에서 nil이 된다. 그 뒤로는 걸린 기한이 없다.
+        #expect(events.map(\.1) == [.relayed(derpRegion: 1), nil])
+        #expect(events.last?.0 == idleAt)
+        #expect(sock.path(to: b.nodeKey, at: idleAt - .nanoseconds(1)) == .relayed(derpRegion: 1))
+        #expect(sock.path(to: b.nodeKey, at: idleAt) == nil)
+        #expect(sock.nextDeadline == nil)
+
+        let resumed = sock.send(testDatagram(2), to: b.nodeKey, at: idleAt + .seconds(60), using: &random)
+        #expect(resumed.last == .pathChanged(b.nodeKey, .relayed(derpRegion: 1)))
     }
 
     @Test("netmap 엔드포인트가 바뀌면 새 주소에 Ping하고 빠진 주소에는 하지 않는다")
@@ -520,7 +552,8 @@ struct MagicsockRulesTests {
         let rotated = try TestIdentity(9, address: "192.0.2.9:41641")
         var changed = b.peer(endpoints: [b.address])
         changed.discoKey = rotated.discoPublicKey
-        #expect(sock.setPeers([changed], at: sockTime(10)) == [.pathChanged(b.nodeKey, .relayed(derpRegion: 1))])
+        // Go처럼 송신 기록도 지우므로(`invalidateDiscoPathLocked`의 `lastSendExt = 0`) 다음 송신까지 유휴다.
+        #expect(sock.setPeers([changed], at: sockTime(10)) == [.pathChanged(b.nodeKey, nil)])
         #expect(Array(sock.discoPeers.keys) == [rotated.discoPublicKey])
         let oldPing = try b.seal(.ping(try txID(3), nodeKey: b.nodeKey), to: a.discoPublicKey)
         #expect(sock.receiveUDP(oldPing, from: b.address, at: sockTime(11), using: &random) == [.dropped(.unknownDiscoKey)])
@@ -534,7 +567,8 @@ struct MagicsockRulesTests {
         var random = PathTestRandom(state: 7)
         #expect(sock.discoPeers.count == 1)
         #expect(sock.discoPeers[b.discoPublicKey]?.node == b.nodeKey)
-        #expect(sock.send(testDatagram(1), to: c.nodeKey, at: sockT0, using: &random) == [.derp(testDatagram(1), to: c.nodeKey, region: 1)])
+        #expect(sock.send(testDatagram(1), to: c.nodeKey, at: sockT0, using: &random)
+            == [.derp(testDatagram(1), to: c.nodeKey, region: 1), .pathChanged(c.nodeKey, .relayed(derpRegion: 1))])
 
         let callMeMaybe = try b.seal(.callMeMaybe([try endpoint("203.0.113.10:41641")]), to: a.discoPublicKey)
         #expect(sock.receiveDERP(callMeMaybe, from: c.nodeKey, region: 1, at: sockTime(1), using: &random) == [.dropped(.misroutedDisco)])
@@ -543,7 +577,8 @@ struct MagicsockRulesTests {
         // 순서가 주인을 정한다.
         _ = sock.setPeers([cWithBKey, b.peer(endpoints: [b.address])], at: sockTime(2))
         #expect(sock.discoPeers[b.discoPublicKey]?.node == c.nodeKey)
-        #expect(sock.send(testDatagram(2), to: b.nodeKey, at: sockTime(3), using: &random) == [.derp(testDatagram(2), to: b.nodeKey, region: 1)])
+        #expect(sock.send(testDatagram(2), to: b.nodeKey, at: sockTime(3), using: &random)
+            == [.derp(testDatagram(2), to: b.nodeKey, region: 1), .pathChanged(b.nodeKey, .relayed(derpRegion: 1))])
     }
 
     @Test("disco 키가 0인 피어는 DERP만 쓴다")
@@ -553,7 +588,8 @@ struct MagicsockRulesTests {
         var sock = makeSock(peers: [peer])
         var random = PathTestRandom(state: 7)
         #expect(sock.discoPeers.isEmpty)
-        #expect(sock.send(testDatagram(1), to: b.nodeKey, at: sockT0, using: &random) == [.derp(testDatagram(1), to: b.nodeKey, region: 1)])
+        #expect(sock.send(testDatagram(1), to: b.nodeKey, at: sockT0, using: &random)
+            == [.derp(testDatagram(1), to: b.nodeKey, region: 1), .pathChanged(b.nodeKey, .relayed(derpRegion: 1))])
     }
 
     @Test("빠진 피어는 미뤄 둔 CallMeMaybe 목록에서도 빠진다")
