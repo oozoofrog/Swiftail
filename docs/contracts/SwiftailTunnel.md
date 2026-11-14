@@ -49,7 +49,7 @@ public struct NodeConfiguration: Sendable {
     public var stateDirectory: URL
     public var hostname: String
     public var controlURL: URL
-    /// 첫 등록에만 쓴다. 저장하지 않는다.
+    /// 첫 등록과 node 키를 새로 등록할 때 쓴다(저장된 키로 다시 붙을 때는 보내지 않는다). 저장하지 않는다.
     public var authKey: String?
     public var ephemeral: Bool
     public init(stateDirectory: URL, hostname: String, controlURL: URL = Self.defaultControlURL,
@@ -277,19 +277,20 @@ DNS 노트 4.5의 대응표를 Swiftail의 입력으로 옮긴다. 입력: 제�
 - 첫 사용처의 "URL도 인증 키도 없는 `NeedsLogin`에서 30초마다 로그인 재요청"(DNS 노트 4.5 끝)은 필요 없다. Swiftail의 `ControlClient`는 등록을 시작하면 서버가 준 `AuthURL`로 늘 `loginRequired`를 낸다(`Sources/SwiftailControl/Client/ControlClient+Registration.swift` 문서 주석 3). URL 없는 `needsLogin`이 없으므로 `NodeState.needsLogin`의 URL은 옵셔널이 아니다.
 - Go의 `Stopped`·`NoState`·`InUseOtherUser`는 없다. 정지는 `run()`의 끝이다.
 - `.running` 뒤 제어·DERP 연결이 끊겨도 `.running`이다(Go 표 9와 같다). M3·M4의 `reconnecting`은 없앤다(총괄 확인 필요 T1).
+- 구현에서 정해진 것(M5-8b, 2026-11-15): 처음 상태 `.starting`은 사건으로 내지 않는다(`status`로 읽는다). 표 5의 "핸드셰이크를 마친 피어가 있음"은 엔진이 복호화된 전송 패킷의 출력을 처음 낸 때로 잰다(`shortcut:` Go의 `LastHandshake`보다 한 패킷 늦을 수 있다. 필요해지는 시점: DERP 없이 직접 경로만 쓰는 tailnet에서 `.running`이 늦을 때).
 
 ### N. 네트워크 전환 (`setDefaultInterface`)
 
 DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없으므로 앱이 부르는 `setDefaultInterface`가 유일한 통지원이다(결정 D6).
 
-1. **무시하는 것**: 인터페이스 이름이 이 노드의 utun 이름(동작 U1에서 읽은 것)과 같으면 무시한다(Go `net/netns/netns_darwin.go:57-145`가 Tailscale utun을 무효로 보는 것과 같다). `run()` 전이나 끝난 뒤의 호출은 마지막 값만 기억한다.
+1. **무시하는 것**: 인터페이스 이름이 이 노드의 utun 이름(동작 U1에서 읽은 것)과 같으면 무시한다(Go `net/netns/netns_darwin.go:57-145`가 Tailscale utun을 무효로 보는 것과 같다. `run()` 전의 호출도 기억하지 않고 무시한다). `run()` 전이나 끝난 뒤의 호출은 마지막 값만 기억한다.
 2. **판정**: 노드는 마지막 인터페이스(이름과 `index`)와 마지막으로 읽은 로컬 IPv4 주소(`LocalInterfaceAddresses.current()`)를 쥔다. 호출마다 주소를 다시 읽는다.
    - 처음 받은 인터페이스, 또는 인터페이스나 로컬 주소가 바뀜 → 3의 **재결속**. Go `RebindLikelyRequired`(DNS 노트 4.6.2)의 Swiftail판이다(가용 프로토콜·비용·PAC 변화는 보지 않는다).
    - 같음 → `Magicsock.restartSTUN(at:)`으로 STUN 회차만 다시 시작한다(Go: 링크 변경마다 `ReSTUN`, DNS 노트 4.6.3 1). 회차가 진행 중이거나 지역이 없으면 아무 일도 없다(`shortcut:` Go는 진행 중인 회차 뒤에 한 번 더 돌도록 예약한다).
 3. **재결속**(Go 엔진의 순서, DNS 노트 4.6.3 1):
    1. 새 인터페이스를 노드의 "지금 인터페이스"로 둔다. 이후 여는 모든 소켓이 이 인터페이스에 묶인다.
    2. DERP: 열린 모든 지역 연결을 닫고 홈 지역부터 다시 연다(`DERPClient`를 새 인터페이스로 새로 만든다). `shortcut:` Go는 로컬 주소가 기본 인터페이스 주소인 연결은 남기고 3초 Ping으로 확인한다(DNS 노트 4.6.3 2). 모두 다시 여는 것이 단순하고, 비용은 홈이 아닌 연결의 재연결뿐이다. 필요해지는 시점: 실기기 전환에서 재연결 지연이 문제일 때.
-   3. UDP: 소켓을 닫고 같은 포트로 다시 묶는다. 실패하면 포트 0으로 묶는다. 그것도 실패하면 `run()`이 `udpUnavailable`을 던진다. 이어서 `Magicsock.rebind(localPort:localAddresses:loopbackAddresses:at:)`: 모든 피어의 `bestAddr`·신뢰·Ping 기록을 지우고(magicsock 노트 4.11 2) STUN 회차를 곧바로 시작한다. 엔드포인트가 바뀌면 M4 N4대로 제어 서버에 올린다. 노드의 순서는 새 소켓 열기 → `rebind` → 출력을 순서대로 처리 → `nextDeadline`에 맞춘 `advance`다.
+   3. UDP: 소켓을 닫고 같은 포트로 다시 묶는다. 실패하면 포트 0으로 묶는다. 그것도 실패하면 `run()`이 `udpUnavailable`을 던진다. 이어서 `Magicsock.rebind(localPort:localAddresses:loopbackAddresses:at:)`: 모든 피어의 `bestAddr`·신뢰·Ping 기록을 지우고(magicsock 노트 4.11 2) STUN 회차를 곧바로 시작한다. 엔드포인트가 바뀌면 M4 N4대로 제어 서버에 올린다. 노드의 순서는 새 소켓 열기 → `rebind` → 출력을 순서대로 처리 → `nextDeadline`에 맞춘 `advance`다. `DatagramSocket.close()`의 `close(2)`는 디스패치 큐에서 늦게 일어나므로, 같은 포트로 다시 묶기는 `run()`의 자식 하나가 20ms 간격으로 25번까지 시도한 뒤 포트 0으로 넘어간다. 그동안 UDP 송신은 버린다. 제어 연결 다시 잇기(3.4)는 새 소켓을 연 뒤에 한다.
       - 지우는 것(Go `noteConnectivityChange`, `endpoint.go:1876`과 같다): `bestAddr`, 신뢰, 후보별 마지막 Ping 시각, 받은 Ping의 TxID, Pong 기록. 남기는 것: 후보와 그 출처, 송신 기록, heartbeat.
       - Go와 다른 곳: ① 보낸 Ping 표도 지운다(옛 소켓에서 보낸 Ping의 Pong은 새 소켓의 증거가 아니다). ② 진행 중인 STUN 회차를 버리고 새로 시작한다(Go는 그대로 두고 `ReSTUN`을 예약한다). 옛 회차의 응답은 `.dropped(.unexpectedSTUN)`이다. ③ 엔드포인트를 정한 시각을 지워, 새 회차가 끝나기 전의 CallMeMaybe는 미뤘다가 새 엔드포인트로 보낸다(Go는 옛 엔드포인트를 담아 곧바로 보낸다). ④ `shortcut:` CallMeMaybe로 배운 후보는 다음 CallMeMaybe가 빼 줄 때까지 둔다(Go는 다음 netmap 갱신 때 지울 수 있게 표시한다).
    4. 제어: `ControlClient.setNetworkInterface(_:)`가 지금 연결을 닫고 물러남 없이 새 인터페이스로 다시 잇는다(Go `tsdial`이 기본 인터페이스가 바뀐 시스템 연결을 닫는 것, DNS 노트 4.6.3 4). 등록 상태와 마지막 netmap은 유지된다.
@@ -593,7 +594,7 @@ M3 `filterfixtures`·M2 `mapfixtures`와 같은 방식이다. 자료는 `Tools/i
 | M5-5 | Go 기준값 도구와 자료 | `Tools/interop/cmd/{dnsfixtures,tunnelfixtures}/`, `Tests/SwiftailEngineTests/Fixtures/{magicdns-fixtures,tunnel-settings-fixtures}.json`, `Tools/interop/README.md`의 새 절 | **M4와 병렬**. 대조 시험은 M5-1·2 뒤 다른 세션이 |
 | M5-6 | 묶기와 메모리 한도의 가장자리: `NetworkSocket` `requiredInterface`, `ControlClient.setNetworkInterface`, 맵 프레임 8MiB, `DERPClient` 인터페이스 인자·사건 바이트 한도 | `Sources/SwiftailIO/NetworkSocket*.swift`, `Sources/SwiftailControl/Client/ControlClient*.swift`, `Sources/SwiftailControl/Netmap/MapResponseFramer.swift`, `Sources/SwiftailDERP/DERPClient*.swift`와 각 시험 | **M4와 병렬**(M4가 고치지 않는 파일). `DERPClient`의 생성자 변경은 M4 단위 4의 호출 지점과 맞물리므로 기본값 있는 인자로 더한다 |
 | M5-7 | UDP 묶기와 재결속: `DatagramSocket`의 `IP_BOUND_IF`·바이트 한도, `Magicsock.rebind` | `Sources/SwiftailIO/DatagramSocket.swift`, `Sources/SwiftailMagicsock/Magicsock*.swift`와 시험 | **M4 단위 3·4 병합 뒤**. 7a(`DatagramSocket`)는 M4 단위 4와 파일이 겹치지 않아 먼저, 7b(`Magicsock.rebind`)는 단위 4 병합 뒤 |
-| M5-8 | 엔진·노드 통합(8a 엔진은 끝남: b503d5f): `TailnetEngine.send`의 로컬 처리(동작 L), 응답기 설치, 상태 기계(동작 B), 설정 내기(동작 E), `TunnelDevice`·utun 읽기 루프, `setDefaultInterface`(동작 N), 상태 디렉터리 표·파일 보호(동작 P), 공개 API 모양(T1~T4), 기존 관문 시험의 사건 기다림 고치기 | `Sources/SwiftailEngine/TailnetEngine*.swift`, `Sources/Swiftail/*`, `Tests/SwiftailEngineTests/TailnetEngineTests.swift`, `Tests/SwiftailTests/*`, `Tests/SwiftailInteropTests/*`(사건 기다림만), `Sources/SwiftailControl/Client/NodeIdentityStore.swift`(보호 등급) | **M4 단위 4 병합 뒤**, M5-1~4·6·7 뒤. 가장 크다. 나눈다면 8a(엔진: 동작 L과 응답기 설치)와 8b(노드)로 나누고 8b는 8a 병합 뒤 빌드한다 |
+| M5-8 | 엔진·노드 통합(8a 엔진 b503d5f, 8b 노드 9f1ec00으로 끝남): `TailnetEngine.send`의 로컬 처리(동작 L), 응답기 설치, 상태 기계(동작 B), 설정 내기(동작 E), `TunnelDevice`·utun 읽기 루프, `setDefaultInterface`(동작 N), 상태 디렉터리 표·파일 보호(동작 P), 공개 API 모양(T1~T4), 기존 관문 시험의 사건 기다림 고치기 | `Sources/SwiftailEngine/TailnetEngine*.swift`, `Sources/Swiftail/*`, `Tests/SwiftailEngineTests/TailnetEngineTests.swift`, `Tests/SwiftailTests/*`, `Tests/SwiftailInteropTests/*`(사건 기다림만), `Sources/SwiftailControl/Client/NodeIdentityStore.swift`(보호 등급) | **M4 단위 4 병합 뒤**, M5-1~4·6·7 뒤. 가장 크다. 나눈다면 8a(엔진: 동작 L과 응답기 설치)와 8b(노드)로 나누고 8b는 8a 병합 뒤 빌드한다 |
 | M5-9 | 관문 (가): `tailnet` 도구 명령 보강(필요하면), `TunnelTests.swift` | `Tools/interop/cmd/tailnet/*`, `Tests/SwiftailInteropTests/TunnelTests.swift` | 도구는 M4 단위 5 병합 뒤 언제든. Swift 시험은 M5-8 뒤 |
 | M5-10 | 관문 (나): 시험용 터널 앱(T7) | `Tools/TunnelHarness/`(라이브러리 타깃 밖) | M5-8 뒤. 서명 결정(plan 9절) 뒤 |
 
