@@ -12,7 +12,7 @@ netmap을 데이터면으로 바꾸는 층이다. M3의 목표는 **직접 UDP �
 | 타깃 | 의존 | 내용 |
 | --- | --- | --- |
 | `SwiftailEngine` | `SwiftailBase`, `SwiftailWireGuard`, `SwiftailControl`, CryptoKit | 아래 "엔진" API. 소켓·시계 없음 |
-| `Swiftail` | `SwiftailEngine`, `SwiftailControl`, `SwiftailDERP`, `SwiftailIO` | `TailnetNode` |
+| `Swiftail` | `SwiftailBase`, `SwiftailEngine`, `SwiftailControl`, `SwiftailDERP`, `SwiftailIO` | `TailnetNode` |
 
 ## M3에서 지원하는 범위
 
@@ -162,6 +162,7 @@ public enum NodeEvent: Sendable {
     /// 사용자가 이 URL에서 로그인해야 한다.
     case loginRequired(URL)
     /// 등록되고 netmap을 받았다. 자기 tailnet 주소다. 주소가 바뀌면 다시 나온다.
+    /// `reconnecting` 뒤 끊겼던 연결이 모두 돌아와도 다시 나온다.
     case running(addresses: [IPAddress])
     /// 제어 서버나 DERP와의 연결이 끊겼다. 다시 잇는 중이다.
     case reconnecting
@@ -200,7 +201,7 @@ public actor TailnetNode {
 1. **시작**: `NodeIdentityStore`와 `ControlClient`를 만든다. disco 키를 새로 만들고(저장하지 않는다) 공개 키를 `LocalStatus.discoKey`로 올린다. **0이 아닌 DiscoKey가 없으면 Go 피어는 이 노드를 피어로 만들지 않는다**(노트 derp-stun 6절 7). M3은 disco 메시지에 답하지 않는다.
 2. **등록 뒤**: `registered` 사건을 받으면 신원 파일에서 node 개인 키를 읽어 `TailnetEngine`을 만든다(키가 바뀌면 새로 만든다).
 3. **홈 DERP**(노트 derp-stun 4.8): 첫 netmap의 DERPMap에서 `noMeasureNoHome`이 아니고 쓸 수 있는 서버(`stunOnly`가 아니고, `certName`이 비었거나 `hostName`과 같은 것)가 있는 지역 가운데 ID가 가장 작은 것을 고른다. `LocalStatus.netInfo.preferredDERP`로 올린다(**올리지 않으면 Go 피어가 보낼 곳을 모른다**). 그 지역에 `DERPClient`를 `isPreferred: true`로 띄운다. DERPMap에서 그 지역이 바뀌면 클라이언트를 다시 띄운다. `shortcut:` 지연 측정 없음, 지역 하나만(M4).
-   - `DERPServer` 변환: `hostName` 그대로, `ipv4`가 IPv4 주소면 그 주소·비었으면 DNS·그 밖이면(`"none"`) `ipv6`를 같은 규칙으로, 둘 다 못 쓰면 그 서버를 건너뛴다. `derpPort`가 0이면 443. `insecureForTests`면 `.noneForTests`.
+   - `DERPServer` 변환: `hostName` 그대로, `ipv4`가 IPv4 주소면 그 주소·비었으면 DNS·그 밖이면(`"none"`) `ipv6`를 같은 규칙으로, 둘 다 못 쓰면 그 서버를 건너뛴다. `derpPort`가 0이면 443. `insecureForTests`면 `.noneForTests`. `hostName`이 빈 서버는 건너뛴다.
 4. **netmap**: 받을 때마다 `engine.apply`. 자기 주소가 정해지면 `running`.
 5. **패킷**: `send` → `engine.send`. DERP `packet` 사건 → `engine.receive`. 엔진의 `.datagram` → `DERPClient.send`, `.ipPacket` → `inboundPackets`. `nextDeadline`에 맞춰 `engine.advance`.
 6. **구조적 동시성**: `run()` 안의 TaskGroup 하나에 제어, DERP, 타이머가 자식으로 돈다. `run()`을 부른 Task가 취소되면 모두 멈춘다. 엔진 호출은 actor가 직렬화한다.
