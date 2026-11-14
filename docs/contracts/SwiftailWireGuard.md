@@ -102,7 +102,7 @@ public struct WireGuardDevice: Sendable {
     public mutating func send(_ ipPacket: [UInt8], to peer: PublicKey, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output]
 
     /// 네트워크에서 받은 데이터그램 하나를 처리한다.
-    /// 오류를 던진 경우 상태는 바뀌지 않는다(규격이 요구하는 flood 시각 기록 등은 예외이며 주석으로 밝힌다).
+    /// 오류를 던진 경우 상태는 바뀌지 않는다(부하 판정을 위한 기록은 예외이며 주석으로 밝힌다).
     public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output]
 
     /// now까지 기한이 지난 타이머를 모두 처리한다.
@@ -113,7 +113,7 @@ public struct WireGuardDevice: Sendable {
 }
 ```
 
-오류와 상태: `send`·`receive`가 오류를 던지면 피어 상태는 그대로다. 피어를 표 안에서 제자리로 고치므로(`edit`) 이 성질은 구조가 아니라 순서로 지킨다: 오류를 던지는 검사(mac, AEAD, timestamp·재전송 창, 만료, 크기)는 모두 피어를 고치기 전에 끝내고, 재전송 창은 인증된 counter를 받아들일 때만 바뀐다. `Tests/SwiftailWireGuardTests/FailureAtomicityTests.swift`가 거절한 입력마다 세션·카운터·재전송 창·타이머·index 표 전체가 그대로인지 비교한다. 예외는 공격을 세는 기록이다: flood 검사를 위한 initiation 수신 시각, 부하 판정을 위한 mac1 통과 수, 속도 제한 표. AEAD와 재전송 검사를 통과한 transport는 안의 IP 패킷이 잘못됐거나 출발 주소가 AllowedIPs 밖이어도 오류가 아니다. 인증된 피어가 보낸 것이므로 next 확정, 대기열 방출, rekey, 타이머 갱신을 정상 수신과 같이 하고(wireguard-go와 같다), 버린 패킷은 `rejectedIPPacket`으로 알린다.
+오류와 상태: `send`·`receive`가 오류를 던지면 피어 상태는 그대로다. 피어를 표 안에서 제자리로 고치므로(`edit`) 이 성질은 구조가 아니라 순서로 지킨다: 오류를 던지는 검사(mac, AEAD, timestamp·재전송 창, 만료, 크기)는 모두 피어를 고치기 전에 끝내고, 재전송 창은 인증된 counter를 받아들일 때만 바뀐다. `Tests/SwiftailWireGuardTests/FailureAtomicityTests.swift`가 거절한 입력마다 세션·카운터·재전송 창·타이머·index 표 전체가 그대로인지 비교한다. 예외는 공격을 세는 기록이다: 부하 판정을 위한 mac1 통과 수와 속도 제한 표(flood 검사의 기준 시각은 initiation을 받아들였을 때만 바뀐다). AEAD와 재전송 검사를 통과한 transport는 안의 IP 패킷이 잘못됐거나 출발 주소가 AllowedIPs 밖이어도 오류가 아니다. 인증된 피어가 보낸 것이므로 next 확정, 대기열 방출, rekey, 타이머 갱신을 정상 수신과 같이 하고(wireguard-go와 같다), 버린 패킷은 `rejectedIPPacket`으로 알린다.
 
 시각: `wallClock`이 1970년 이전이면 1970년으로 본다.
 

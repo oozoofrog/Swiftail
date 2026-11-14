@@ -58,6 +58,42 @@ struct DERPClientTests {
         #expect(server.acceptedCount >= 2)
     }
 
+    /// 고치기 전에는 쓰기 감시가 연결을 끊을 때 쓰기 루프가 큐를 끝까지 꺼내 닫힌 소켓에 넘겨, 큐가 통째로 사라졌다.
+    @Test("쓰기가 막혀 끊겨도 큐에 남은 패킷은 다음 연결로 순서대로 나간다")
+    func queueSurvivesStalledWrite() async throws {
+        let server = try FakeDERPServer(.silentThenReading)
+        defer { server.close() }
+        let client = try Self.client(port: try await server.port(), writeTimeout: .seconds(1))
+        let log = EventLog()
+        let peer = try DERPFixtures.nodeKey(7)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            defer { group.cancelAll() }
+            group.addTask { await client.run() }
+            group.addTask { await log.record(client.events) }
+            try await log.wait(for: ["connected"], within: .seconds(10))
+
+            // 큐가 가득 찬 채 줄지 않으면 쓰기가 막힌 것이다. 그때 큐에 든 패킷의 번호를 적어 둔다.
+            var held: [Int] = []
+            for index in 0..<10_000 where held.isEmpty {
+                await client.send(Self.indexed(index, size: DERPConnection.maximumPacketSize), to: peer)
+                guard await client.queuedPackets.count == DERPClient.queuedPacketLimit else { continue }
+                try await Task.sleep(for: .milliseconds(50))
+                let queued = await client.queuedPackets
+                if queued.count == DERPClient.queuedPacketLimit {
+                    held = queued.map { $0.packet.prefix(4).reduce(0) { $0 << 8 | Int($1) } }
+                }
+            }
+            try #require(held.count == DERPClient.queuedPacketLimit)
+
+            try await log.wait(for: ["connected", "disconnected", "connected"], within: .seconds(20))
+            let deadline = ContinuousClock.now + .seconds(10)
+            while server.sentPacketIndices().count < held.count, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(server.sentPacketIndices() == held)
+        }
+    }
+
     // MARK: 쓰기 묶기와 쓰기 감시
 
     @Test("한 덩어리에는 첫 패킷을 늘 넣고, 패킷 프레임의 합이 64KiB를 넘기 전까지 더 넣는다")
@@ -394,6 +430,8 @@ private final class FakeDERPServer: Sendable {
         case packets(Int)
         /// 핸드셰이크 뒤 클라이언트가 보낸 바이트를 끝까지 읽는다. `keep`이면 `received`에 모은다.
         case reading(keep: Bool)
+        /// 첫 연결은 `silent`, 그다음 연결부터는 `reading(keep: true)`처럼 한다.
+        case silentThenReading
         /// 핸드셰이크 뒤 1초를 기다렸다가 Ping을 끝없이 보낸다. 100개(1,300바이트)씩 5ms 간격으로 보내, 한 번 읽은 조각에서
         /// 나오는 Pong은 한도(64KiB)에 한참 못 미친다. 한도를 넘는다면 쓰지 못한 Pong이 쌓였기 때문이다.
         case pingFlood
@@ -419,7 +457,10 @@ private final class FakeDERPServer: Sendable {
         listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [accepted] connection in
             connection.start(queue: .global())
-            accepted.connections.withLock { $0.append(connection) }
+            let isFirst = accepted.connections.withLock { connections in
+                connections.append(connection)
+                return connections.count == 1
+            }
             switch behavior {
             case .silent:
                 connection.send(content: Data(handshake), completion: .contentProcessed { _ in })
@@ -431,6 +472,9 @@ private final class FakeDERPServer: Sendable {
             case .reading(let keep):
                 connection.send(content: Data(handshake), completion: .contentProcessed { _ in })
                 Self.read(from: connection, keep: keep, into: accepted)
+            case .silentThenReading:
+                connection.send(content: Data(handshake), completion: .contentProcessed { _ in })
+                if !isFirst { Self.read(from: connection, keep: true, into: accepted) }
             case .pingFlood:
                 connection.send(content: Data(handshake), completion: .contentProcessed { _ in })
                 let flood = Task {

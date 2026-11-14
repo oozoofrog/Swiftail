@@ -239,10 +239,11 @@ public actor DERPClient {
     }
 
     /// 큐의 패킷과 상태 기계가 낸 답을 한 덩어리씩 쓴다. 쓰는 동안 시작 시각을 `writeStartedAt`에 남긴다.
-    /// 취소되면 돌아온다(소켓은 쓰던 중이면 닫힌다).
+    /// 취소되면 돌아온다(소켓은 쓰던 중이면 닫힌다). 취소된 뒤에는 큐에서 더 꺼내지 않는다. 취소된 Task의 `write`는
+    /// 곧바로 돌아오므로, 꺼내면 큐 전체가 닫힌 소켓으로 버려진다. 남은 패킷은 다음 연결이 보낸다.
     private func writeLoop(to socket: NetworkSocket, signals: AsyncStream<Void>) async {
         for await _ in signals {
-            while let bytes = nextWrite() {
+            while !Task.isCancelled, let bytes = nextWrite() {
                 writeStartedAt = .now
                 await socket.write(bytes)
                 writeStartedAt = nil
