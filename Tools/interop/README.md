@@ -299,3 +299,130 @@ export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
 - `disco.parse`: 경계 평문(0·1바이트, Ping 11·12·13·43·44·45바이트와 0 NodeKey, Pong 29·30·31바이트, CallMeMaybe 17·18·19·35·36바이트와 version 1, 종류 0x00·0x04–0x09·0x0a·0xff)을 `disco.Parse`에 넣은 결과. 해석되면 `result`, 아니면 Go의 오류 문장이 `error`다. `kind: "relay"`는 Go가 해석하지만 Swiftail은 해석하지 않는 종류(0x04–0x09)다.
 - `stun.requests`: `stun.Request(txID)`의 바이트.
 - `stun.parse`: `stun.Response`로 만든 IPv4·IPv6 응답과 손으로 바꾼 응답(0x8020, MAPPED-ADDRESS만, 속성 앞 SOFTWARE, 선언 길이 뒤의 바이트, 거절 사례)을 `stun.ParseResponse`에 넣은 결과와, 같은 패킷이 `looksLikeSTUN`(`stun.Is`와 바이트 1이 `0x01`)인지.
+
+# MagicDNS 기준 자료 생성 (`dnsfixtures`)
+
+`tailscale.com v1.104.6`의 실제 UDP 응답 바이트를 `Tests/SwiftailEngineTests/Fixtures/magicdns-fixtures.json`에 쓴다. Swift 파일은 바꾸지 않는다. 아래 환경은 두 도구와 전체 Go 검증에 공통이다. 기준 모듈은 `Scripts/fetch-reference-sources.sh`로 미리 받아 두어야 한다.
+
+```sh
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw
+export GOPROXY=off
+export GOSUMDB=off
+(cd Tools/interop && go run ./cmd/dnsfixtures ../../Tests/SwiftailEngineTests/Fixtures)
+```
+
+`sh Scripts/build-interop-tools.sh dnsfixtures`로 빌드한 실행 파일도 같은 환경에서 `dnsfixtures <Engine Fixtures 폴더>`로 실행한다. 인자는 필수이며 파일 이름은 고정이다.
+
+호출 경로는 `resolver.New` → `SetConfig(Hosts, LocalDomains)` → `SetMagicDNSHosts` → 단계별 `Query(context, query, "udp", 100.64.0.1:42001)`다(`net/dns/resolver/tsdns.go`). 응답 생성·타입 선택·RCODE·SOA·EDNS·TC 로직은 복제하지 않는다. 내보내지 않은 `ipnlocal`의 노드 색인은 계약대로 고정 표로 대신한다. `nodes[].addresses`는 PTR용 원래 주소, `answerAddresses`는 D7에 맞춰 미리 정한 정방향 주소, `aliases`는 인식할 FQDN·짧은 이름이다. 주소 없는 노드는 별칭을 넣지 않는다. `subdomain`도 명시적 시험 표다. 이 자료로 색인 구현 자체의 정확성을 입증할 수는 없다.
+
+SOA의 현재 시각을 자료에 넣지 않기 위해 `mapfixtures`와 같이 모듈의 임시 복사본에 `-overlay`로 작은 bridge를 넣고, upstream의 시험용 `timeNow` hook만 `1767323045`(고정 Unix 초)로 설정한다. 응답 바이트는 그 뒤 `Query`가 돌려준 그대로다. 모듈 캐시는 읽기만 하고 임시 모듈 복사본·bridge·worker·overlay·modfile·sum은 성공·실패 뒤 모두 지운다. 임시 파일은 `interop-tools` 아래에만 둔다.
+
+자료 머리는 `reference`, `scenarioCount: 8`, `stepCount: 85`, `soaSerial: 1767323045`, `scenarios`다. 각 시나리오는 `name`, `magicDNSSuffix`(끝 점 포함), `proxied`, `capabilities`, `nodes`, `localDomains`, `hosts`, `steps`를 가진다. `hosts`는 Go `Config.Hosts`로 줄 ExtraRecords 표다.
+
+단계의 키:
+
+| 키 | 뜻 |
+| --- | --- |
+| `name` | 질의의 목적 |
+| `query`, `response` | UDP DNS 메시지 전체의 소문자 hex. IP·UDP 머리는 없음 |
+| `decoded.id`, `rcode`, `flags` | 응답 ID, 숫자 RCODE, 16비트 머리 플래그 |
+| `decoded.qr/aa/tc/rd/ra` | 자주 비교하는 머리 비트. Opcode·AD·CD 등은 `flags`로 비교 |
+| `decoded.questions` | `name`·숫자 `type`·`class`의 배열. 응답의 첫 질문 또는 빈 배열 |
+| `decoded.answers/authorities/additionals` | `type`·`name`·`class`·`ttl`·`value`의 배열. 이름은 끝 점 포함 |
+| 레코드의 `value` | A·AAAA는 주소 문자열, PTR은 FQDN, SOA는 `ns/mbox/serial/refresh/retry/expire/minimum` 객체 |
+| `swiftailDiffers` | 계약에 근거한 의도적 차이의 이유. 없으면 Go 결과를 그대로 비교 |
+
+Swift 대조 시험은 고정 시각을 넘겨 전체 hex를 비교하거나, 계약대로 SOA SERIAL 필드만 비교에서 빼면 된다. 질의 이름의 끝 점 유무는 wire에서 구별할 수 없다. 끝 점 없이 만든 입력도 같은 절대 DNS 이름으로 인코딩한다. `decoded`의 질문·레코드 이름은 Go가 만든 응답의 실제 대소문자를 보존한다. 빈 목록은 `[]`다.
+
+시나리오 목록:
+
+1. 기본 노드·질의 형식(61단계): self·피어·IPv4 전용·IPv6 전용의 A/AAAA/ANY, IPv4·IPv6·4to6·서비스 PTR, 표기 차이, 모르는 이름·PTR, 주소 없는 노드, 영역 밖, onion·Bonjour, TXT/MX/NS/SOA/AXFR/HINFO/미지 타입, 서비스 이름, 머리 비트, 질문 0·2개, 정상 압축·고리·11회 초과 포인터, 잘림·잘못된 레이블·FQDN, EDNS.
+2. `magicdns-aaaa` 능력 있음(3단계).
+3. 자기가 IPv6 전용(4단계).
+4. MagicDNS 끔(3단계).
+5. ExtraRecords 우선과 역방향(3단계).
+6. 자기 키 만료 또는 netmap 없음(4단계): 빈 표·빈 영역과 서비스 이름/PTR 예외.
+7. 긴 로컬 영역의 큰 SOA 응답(4단계): 512 초과, EDNS 1232·512, 옵션 있는 OPT. 512바이트 초과와 TC 결과를 자체 검사한다.
+8. M5 제외 4via6와 서브도메인(3단계).
+
+`swiftailDiffers`는 마지막 시나리오의 **3단계**다: 4via6 이름 생략 2개, `dns-subdomain-resolve` 생략 1개(동작 D8·제외). 상위 전달은 설정하지 않아 영역 밖 질의는 Go의 “라우트 없음” SERVFAIL이며, Swiftail과 차이가 없으므로 표시하지 않는다.
+
+관찰된 계약의 빈틈: 동작 D7은 자기 키 만료·netmap 없음에서 “모든 이름이 SERVFAIL”이라고 하지만, Go는 빈 색인·빈 `LocalDomains`에서도 `magicdns.localhost-tailscale-daemon.`의 A와 서비스 IPv4 PTR에 정상 응답한다. 두 단계에는 의도적 차이 표시를 달지 않았다. 서비스 응답은 색인보다 먼저 처리된다(`resolveLocal`, `resolveLocalReverse`). 노트의 서비스 특수 처리 규칙과는 맞는다.
+
+# 터널 설정 기준 자료 생성 (`tunnelfixtures`)
+
+같은 환경에서 실행한다.
+
+```sh
+(cd Tools/interop && go run ./cmd/tunnelfixtures ../../Tests/SwiftailEngineTests/Fixtures)
+# 또는 sh Scripts/build-interop-tools.sh tunnelfixtures 로 빌드한 뒤:
+# tunnelfixtures <Engine Fixtures 폴더>
+```
+
+출력은 `tunnel-settings-fixtures.json`이다. Go의 원본 결과와 계약 S의 형태로 좁힌 결과를 함께 보존한다.
+
+- 경로: 공개 `routemanager.New` → `Begin` → `SetPrefs(RouteAll:false, exit node 없음)` → `SetTailnetConfig` → `UpsertPeer` → `Commit` → `OSRoutes().All()`을 정렬한다. `controlknobs.UpdateFromNodeAttributes`로 `one-cgnat?v=true/false`를 해석한다. 모르는 제어 지시를 직접 해석하지 않는다.
+- DNS·로컬 주소·서비스 경로: upstream LocalBackend 시험의 방식대로 메모리 store·fake TUN 엔진을 가진 Go 노드 하나를 만든다. 임시 복사본의 `ipn/ipnlocal`에 overlay bridge를 더해, 고정 netmap과 prefs를 넣고 실제 `LocalBackend.authReconfigLocked`를 실행한다. `Engine`을 포함한 캡처 타입이 `Reconfig`만 가로채 `dns.Config`와 `router.Config`를 받는다. 내보내지 않은 `dnsConfigForNetmap`·`routerConfigLocked`의 산출 로직을 옮겨 적지 않는다. 제어 서버 연결과 실제 OS 설정 적용은 하지 않는다.
+- 캡처한 `dns.Config`는 공개 `dns.NewManager(..., goos:"ios")` → `Set`으로 컴파일한다. `OSConfigurator`는 `SupportsSplitDNS=true`, `GetBaseConfig`는 고정 가짜 기본 리졸버 `192.0.2.54`를 반환하고 `SetDNS`는 값을 받기만 한다. `Resolver.TestOnlySetHook`으로 실제 `LocalDomains`를 받는다. 기본 리졸버가 필요한 1차 모드에서도 호스트 OS의 DNS를 읽지 않는다.
+- `router.Config.LocalAddrs`·서비스 경로는 Go가 만든 그대로 받는다. 공개 RouteManager의 피어 경로에 자기 주소 계열별 서비스 경로를 붙인 결과가 캡처한 전체 Go 경로와 같은지 자체 검사한다.
+- `settings`에는 S1·S4·S5와 D1~D3의 정책만 적용한다: 자기 주소가 없으면 `null`, 자기 주소가 없는 계열의 경로·DNS 서버 제외, Go에서 받은 `LocalDomains`만 DNS match로 사용, 검색 도메인·전역 리졸버·리졸버 있는 Routes를 설정에 넣지 않음. DNS 로컬 영역을 도구가 다시 산출하지 않는다. 의도적 차이 표시가 없는 만료 경계도 Go 값을 그대로 남긴다.
+
+두 번째 도구도 임시 복사·overlay·modfile을 종료 시 지우며, 기준 모듈의 버전·replace 유무를 검사한다. `TS_DEBUG_MAGIC_DNS_DUAL_STACK=false`를 프로세스 시작 때 고정해 외부 환경이 IPv4-only 지시를 덮지 않게 한다. 시험 노드의 로그 업로드·portmapper도 끈다. 현재 시각이나 생성한 신원·소켓 주소는 자료에 싣지 않는다.
+
+자료 머리는 `reference`, `scenarioCount: 27`, `stepCount: 32`, `now: "2026-01-02T03:04:05Z"`, `baseResolvers`, `scenarios`다. 시나리오마다 `name`, `steps`가 있다. 각 단계는 독립된 전체 netmap 입력이다. 이전 단계에 대한 delta가 아니다.
+
+| 키 | 뜻 |
+| --- | --- |
+| `input.self`, `input.peers` | `id/name/addresses/allowedIPs/expired/keyExpiry/homeDERP`. 주소는 CIDR 문자열. disco 키는 없고, `homeDERP`가 데이터면 후보 여부를 결정한다. 시험 공개 키는 ID에서 고정 생성하며 출력하지 않음 |
+| `input.dnsConfig` | 제어의 `tailcfg.DNSConfig` JSON. Go의 원래 대문자 키(`Proxied`, `Routes`, `Resolvers`, `Domains`, `ExtraRecords` 등)를 보존 |
+| `input.capMap` | 자기 노드의 제어 capability map |
+| `input.routeAll`, `exitNode` | 각각 고정 `false`, 빈 문자열 |
+| `input.selfExpired` | LocalBackend에 주는 키 만료 스냅샷. 도구는 실행 시각으로 만료를 다시 판단하지 않음 |
+| `input.mtu` | 계약 설정으로 옮길 MTU(1280) |
+| `go.addresses` | Go `router.Config.LocalAddrs` |
+| `go.peerRoutes`, `go.routes` | 공개 RouteManager의 정렬된 피어 경로, LocalBackend가 서비스 경로까지 붙인 원본 경로 |
+| `go.dns` | iOS OSConfig의 `servers/matchDomains/searchDomains`와 실제 리졸버의 `localDomains`. 도메인은 끝 점을 뗀 문자열 |
+| `go.dnsConfig` | 엔진이 받은 원본 `dns.Config`. Go 구조체 키와 끝 점 포함 FQDN을 보존. 선택 필드의 `null`도 원본 그대로 |
+| `settings` | 계약 형태의 `addresses/routes/dnsServers/dnsMatchDomains/mtu`, 또는 자기 주소가 없으면 `null` |
+| `swiftailDiffers` | 원본 Go 설정을 그대로 비교하면 안 되는 계약상의 의도적 차이 |
+
+Swift 대조 시험은 `input`으로 netmap을 만들고 `settings`를 비교한다. 다만 아래의 **표시 없는 관찰 차이**는 계약 보완 여부를 먼저 확인해야 한다. Go 원본을 조사할 때는 `go`를 본다. Go `dnsConfig`의 `null`과 달리 정규화한 출력 목록은 항상 `[]`이며, IPv4 경로가 IPv6보다 먼저다. Go의 서비스 경로는 정렬된 피어 경로 뒤에 IPv4·IPv6 순서로 온다. `settings`에서 빠진 검색 도메인은 `go.dns.searchDomains`에 보존된다.
+
+시나리오 목록(OneCGNAT만 6단계, 나머지는 각 1단계):
+
+- IPv4만·IPv6만·둘 다 × 피어 0·1·3(9개): 자기 주소, 피어별 경로, 계열 필터, 서비스 경로, MagicDNS와 검색 도메인.
+- 검색 도메인 없는 IPv4 피어, ULA 한 피어의 /48 집계(2개).
+- OneCGNAT 문턱과 제어 지시(1개, 6단계): 지시 없음·true·false × CGNAT 피어 1·2. true일 때 1개는 /32, 2개는 /10. 기본 10,000 경계 대신 계약이 허용한 문턱 1로 경계만 확인한다.
+- 만료 피어, 지난 KeyExpiry와 Expired false, disco·DERP 없는 피어, 서브넷·exit 광고 거절(4개).
+- MagicDNS 끔, 접미사 없음, 빈 Routes, 사용자 지정 분할 DNS, 전역 리졸버, 전역 리졸버만 있음(6개).
+- 덮이지 않은 ExtraRecords, 사용자 라우트가 ExtraRecords를 덮음, IPv4 DNS만 등록 지시, 자기 키 만료, 자기 주소 없음(5개).
+
+`swiftailDiffers`는 **16단계**다. 중복을 포함한 근거별 수는 검색 도메인 생략(D3) 10개, 자기 주소 계열 필터(S4·S5) 5개, 1차 DNS·전역 리졸버·사용자 분할 DNS를 로컬 match로 좁히기(D1·D2) 5개, 자기 주소 없음에서 설정 생략(S1) 1개다. 한 단계에 여러 근거가 있을 수 있다.
+
+관찰된 차이·주의점:
+
+- `Expired=false`이고 `KeyExpiry`가 고정 `now`보다 과거인 피어도 Go RouteManager와 LocalBackend 경로에 남는다. RouteManager는 `Expired`만 검사한다(`peerViewOf`). 계약 S2가 참조하는 `EnginePeer.peers(in:at:)`의 시간 검사와 다르며, 이를 의도적 차이로 정한 계약은 없어 **표시하지 않았다**. 이 단계의 `settings`에도 Go 경로를 보존했다.
+- 자기 `Name`이 비면 Go `magicDNSRootDomains`는 역방향 영역까지 전부 생략한다. 계약 S5 요약을 읽을 때 `Proxied`만으로 역방향 65개를 항상 더한다고 해석하지 않아야 한다. DNS 노트의 출처 함수가 가진 접미사 검사다.
+- MagicDNS 끔·Routes 없음·전역 리졸버 없음은 `MagicDNSHostsUnrouted=true`여도 `needsOSResolver`의 이른 반환으로 네임서버가 없다. 빈 Routes 하나가 있으면 같은 flag 때문에 Go가 1차 모드를 고른다. flag의 설명만 보고 항상 1차 모드라고 추론하면 안 된다.
+
+# 두 자료의 재현·회귀 검증
+
+저장소 루트에서 위 공통 환경 변수를 설정한 뒤 실행한다. `go test`는 두 새 도구의 embedded worker·bridge도 실제로 컴파일·실행해 저장 자료와 바이트 단위로 비교한다. `dnsfixtures`는 각 질의의 RCODE와 큰 응답의 길이·TC도 검사한다.
+
+```sh
+(cd Tools/interop && go vet ./... && go test -count=1 ./...)
+check_dir=$(mktemp -d "$(eyebuild dir interop-tools)/m5-fixture-check.XXXXXX")
+(cd Tools/interop && go run ./cmd/dnsfixtures "$check_dir/first")
+(cd Tools/interop && go run ./cmd/dnsfixtures "$check_dir/second")
+(cd Tools/interop && go run ./cmd/tunnelfixtures "$check_dir/first")
+(cd Tools/interop && go run ./cmd/tunnelfixtures "$check_dir/second")
+cmp "$check_dir/first/magicdns-fixtures.json" "$check_dir/second/magicdns-fixtures.json"
+cmp "$check_dir/first/tunnel-settings-fixtures.json" "$check_dir/second/tunnel-settings-fixtures.json"
+rm -r "$check_dir"
+eyebuild swift m5-fixtures -- build --build-tests 2>&1 | grep -E "warning|error"; echo build-done
+eyebuild rm m5-fixtures
+```
+
+실기기 OS 적용, 실제 Go 피어에 대한 이름 질의, Swift 대조 시험은 이 도구의 검증 범위가 아니다. 노드 색인 규칙은 고정 표이므로 별도 단위 시험과 M5 관문 (가)에서 검증한다.

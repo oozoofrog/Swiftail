@@ -1,0 +1,402 @@
+// 기준값: tailscale.com v1.104.6 routemanager·ipnlocal·dns.Manager (BSD-3-Clause).
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/netip"
+	"os"
+	"slices"
+	"strings"
+	"time"
+
+	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
+	"tailscale.com/health"
+	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/routemanager"
+	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tsdial"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/types/dnstype"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
+	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
+	"tailscale.com/util/set"
+)
+
+const suffix = "tail0001.ts.net"
+const fixedNow = "2026-01-02T03:04:05Z"
+
+type node struct {
+	ID         int            `json:"id"`
+	Name       string         `json:"name"`
+	Addresses  []netip.Prefix `json:"addresses"`
+	AllowedIPs []netip.Prefix `json:"allowedIPs"`
+	Expired    bool           `json:"expired"`
+	KeyExpiry  string         `json:"keyExpiry,omitempty"`
+	HomeDERP   int            `json:"homeDERP"`
+}
+type input struct {
+	Self        node               `json:"self"`
+	Peers       []node             `json:"peers"`
+	DNS         tailcfg.DNSConfig  `json:"dnsConfig"`
+	CapMap      tailcfg.NodeCapMap `json:"capMap"`
+	RouteAll    bool               `json:"routeAll"`
+	ExitNode    string             `json:"exitNode"`
+	SelfExpired bool               `json:"selfExpired"`
+	MTU         int                `json:"mtu"`
+}
+type dnsOutput struct {
+	Servers       []netip.Addr `json:"servers"`
+	MatchDomains  []string     `json:"matchDomains"`
+	SearchDomains []string     `json:"searchDomains"`
+	LocalDomains  []string     `json:"localDomains"`
+	Error         string       `json:"error,omitempty"`
+}
+type output struct {
+	Addresses  []netip.Prefix `json:"addresses"`
+	PeerRoutes []netip.Prefix `json:"peerRoutes"`
+	Routes     []netip.Prefix `json:"routes"`
+	DNS        dnsOutput      `json:"dns"`
+	DNSConfig  *dns.Config    `json:"dnsConfig"`
+}
+type settings struct {
+	Addresses       []netip.Prefix `json:"addresses"`
+	Routes          []netip.Prefix `json:"routes"`
+	DNSServers      []netip.Addr   `json:"dnsServers"`
+	DNSMatchDomains []string       `json:"dnsMatchDomains"`
+	MTU             int            `json:"mtu"`
+}
+type step struct {
+	Name            string    `json:"name"`
+	Input           input     `json:"input"`
+	Go              output    `json:"go"`
+	Settings        *settings `json:"settings"`
+	SwiftailDiffers string    `json:"swiftailDiffers,omitempty"`
+}
+type scenario struct {
+	Name  string `json:"name"`
+	Steps []step `json:"steps"`
+}
+
+func prefixes(ss ...string) []netip.Prefix {
+	out := []netip.Prefix{}
+	for _, s := range ss {
+		out = append(out, netip.MustParsePrefix(s))
+	}
+	return out
+}
+func base() input {
+	return input{Self: node{ID: 1, Name: "rd-mac-1a2b3c4d." + suffix + ".", Addresses: prefixes("100.64.0.1/32", "fd7a:115c:a1e0::1/128"), AllowedIPs: prefixes("100.64.0.1/32", "fd7a:115c:a1e0::1/128"), HomeDERP: 1}, Peers: []node{}, DNS: tailcfg.DNSConfig{Proxied: true, Domains: []string{suffix}}, CapMap: tailcfg.NodeCapMap{}, MTU: 1280}
+}
+func peer(id int, addresses ...string) node {
+	p := prefixes(addresses...)
+	return node{ID: id, Name: fmt.Sprintf("rd-peer-%08x.%s.", id, suffix), Addresses: p, AllowedIPs: slices.Clone(p), HomeDERP: 1}
+}
+func one(name string, in input, reason string) scenario {
+	return scenario{Name: name, Steps: []step{{Name: "설정", Input: in, SwiftailDiffers: reason}}}
+}
+func scenarios() []scenario {
+	out := []scenario{}
+	for _, family := range []string{"IPv4", "IPv6", "둘 다"} {
+		in := base()
+		if family == "IPv4" {
+			in.Self.Addresses = prefixes("100.64.0.1/32")
+		}
+		if family == "IPv6" {
+			in.Self.Addresses = prefixes("fd7a:115c:a1e0::1/128")
+		}
+		in.Self.AllowedIPs = slices.Clone(in.Self.Addresses)
+		for _, n := range []int{0, 1, 3} {
+			in.Peers = []node{}
+			for i := 0; i < n; i++ {
+				in.Peers = append(in.Peers, peer(i+2, fmt.Sprintf("100.64.0.%d/32", i+2), fmt.Sprintf("fd7a:115c:a1e0::%x/128", i+2)))
+			}
+			reason := "결정 D3: 검색 도메인을 내지 않음"
+			if family == "IPv4" {
+				reason += "; 동작 S4·S5: 자기 주소에 없는 IPv6 경로·DNS 서버를 제외"
+			}
+			if family == "IPv6" && n > 0 {
+				reason += "; 동작 S4: 자기 주소에 없는 IPv4 경로를 제외"
+			}
+			out = append(out, one(family+fmt.Sprintf(" 피어 %d", n), in, reason))
+		}
+	}
+	in := base()
+	in.DNS.Domains = nil
+	in.Peers = []node{peer(2, "100.64.0.2/32")}
+	out = append(out, one("검색 도메인 없는 IPv4 피어", in, ""))
+	in = base()
+	in.DNS.Domains = nil
+	in.Peers = []node{peer(2, "fd7a:115c:a1e0::2/128")}
+	out = append(out, one("ULA 한 피어의 /48 집계", in, ""))
+	s := scenario{Name: "OneCGNAT 문턱과 제어 지시", Steps: []step{}}
+	for _, mode := range []string{"없음", "true", "false"} {
+		for _, n := range []int{1, 2} {
+			in = base()
+			in.DNS.Domains = nil
+			if mode != "없음" {
+				in.CapMap["one-cgnat?v="+nodecap.Cap(mode)] = nil
+			}
+			for i := 0; i < n; i++ {
+				in.Peers = append(in.Peers, peer(i+2, fmt.Sprintf("100.64.0.%d/32", i+2)))
+			}
+			s.Steps = append(s.Steps, step{Name: fmt.Sprintf("지시 %s 피어 %d", mode, n), Input: in})
+		}
+	}
+	out = append(out, s)
+	in = base()
+	in.DNS.Domains = nil
+	p := peer(2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
+	p.Expired = true
+	p.KeyExpiry = "2026-01-01T00:00:00Z"
+	in.Peers = []node{p}
+	out = append(out, one("만료 피어는 경로에 없음", in, ""))
+	in = base()
+	in.DNS.Domains = nil
+	p = peer(2, "100.64.0.2/32")
+	p.KeyExpiry = "2026-01-01T00:00:00Z"
+	in.Peers = []node{p}
+	out = append(out, one("지난 KeyExpiry와 Expired false", in, ""))
+	in = base()
+	in.DNS.Domains = nil
+	p = peer(2, "100.64.0.2/32")
+	p.HomeDERP = 0
+	in.Peers = []node{p}
+	out = append(out, one("disco와 DERP 없는 피어", in, ""))
+	in = base()
+	in.DNS.Domains = nil
+	p = peer(2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
+	p.AllowedIPs = append(p.AllowedIPs, prefixes("192.0.2.0/24", "0.0.0.0/0", "::/0")...)
+	in.Peers = []node{p}
+	out = append(out, one("서브넷·exit 광고는 받지 않음", in, ""))
+	in = base()
+	in.DNS.Proxied = false
+	out = append(out, one("MagicDNS 끔", in, "결정 D3: 검색 도메인을 내지 않음"))
+	in = base()
+	in.Self.Name = ""
+	in.DNS.Domains = nil
+	out = append(out, one("MagicDNS 접미사 없음", in, ""))
+	in = base()
+	in.DNS.Proxied = false
+	in.DNS.Domains = nil
+	in.DNS.Routes = map[string][]*dnstype.Resolver{"local.tail0001.ts.net": {}}
+	out = append(out, one("빈 Routes는 로컬 영역", in, "결정 D1: 노드 색인이 영역 밖에 있어도 1차 리졸버로 설정하지 않음"))
+	in = base()
+	in.DNS.Domains = nil
+	in.DNS.Routes = map[string][]*dnstype.Resolver{"split.example.com": {{Addr: "192.0.2.53"}}}
+	out = append(out, one("사용자 지정 분할 DNS", in, "결정 D2: 리졸버가 있는 Routes·상위 전달을 무시하고 로컬 영역만 match"))
+	in = base()
+	in.DNS.Domains = nil
+	in.DNS.Resolvers = []*dnstype.Resolver{{Addr: "192.0.2.53"}}
+	out = append(out, one("전역 리졸버", in, "결정 D1·D2: 전역 리졸버를 무시하고 로컬 영역만 match"))
+	in = base()
+	in.DNS.Domains = nil
+	in.DNS.Proxied = false
+	in.DNS.Resolvers = []*dnstype.Resolver{{Addr: "192.0.2.53"}}
+	out = append(out, one("전역 리졸버만 있음", in, "결정 D1·D2: 로컬 영역이 없으면 DNS 없음"))
+	in = base()
+	in.DNS.Domains = nil
+	in.DNS.ExtraRecords = []tailcfg.DNSRecord{{Name: "rd-extra.example.com", Type: "A", Value: "100.64.0.9"}}
+	out = append(out, one("덮이지 않은 ExtraRecords", in, ""))
+	in = base()
+	in.DNS.Domains = nil
+	in.DNS.ExtraRecords = []tailcfg.DNSRecord{{Name: "rd-extra.example.com", Value: "100.64.0.9"}}
+	in.DNS.Routes = map[string][]*dnstype.Resolver{"example.com": {{Addr: "192.0.2.53"}}}
+	out = append(out, one("사용자 라우트가 ExtraRecords를 덮음", in, "결정 D2: 사용자 지정 분할 DNS·상위 전달을 무시"))
+	in = base()
+	in.DNS.Domains = nil
+	in.CapMap[nodecap.ForceRegisterMagicDNSIPv4Only] = nil
+	out = append(out, one("IPv4 DNS만 등록 지시", in, ""))
+	in = base()
+	in.SelfExpired = true
+	in.Self.Expired = true
+	in.Self.KeyExpiry = "2026-01-01T00:00:00Z"
+	out = append(out, one("자기 키 만료면 DNS 없음", in, ""))
+	in = base()
+	in.Self.Addresses = []netip.Prefix{}
+	in.Self.AllowedIPs = []netip.Prefix{}
+	out = append(out, one("자기 주소 없음", in, "동작 S1: 자기 주소가 없으면 설정을 내지 않음"))
+	return out
+}
+func convert(n node) *tailcfg.Node {
+	p := &tailcfg.Node{ID: tailcfg.NodeID(n.ID), StableID: tailcfg.StableNodeID(fmt.Sprintf("fixture-%d", n.ID)), Name: n.Name, Addresses: n.Addresses, AllowedIPs: n.AllowedIPs, Expired: n.Expired, HomeDERP: tailcfg.DERPRegionID(n.HomeDERP), MachineAuthorized: true}
+	// 시험 공개 식별자만 쓴다. 개인 키를 만들거나 자료에 싣지 않는다.
+	if err := p.Key.UnmarshalText([]byte(fmt.Sprintf("nodekey:%064x", n.ID))); err != nil {
+		panic(err)
+	}
+	if n.KeyExpiry != "" {
+		var err error
+		p.KeyExpiry, err = time.Parse(time.RFC3339, n.KeyExpiry)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return p
+}
+
+type osCapture struct{ cfg dns.OSConfig }
+
+func (o *osCapture) SetDNS(c dns.OSConfig) error { o.cfg = c; return nil }
+func (*osCapture) SupportsSplitDNS() bool        { return true }
+
+// 실제 OS DNS를 읽지 않는다. 1차 모드도 결정적으로 컴파일되게 가짜 기본값을 준다.
+func (*osCapture) GetBaseConfig() (dns.OSConfig, error) {
+	return dns.OSConfig{Nameservers: []netip.Addr{netip.MustParseAddr("192.0.2.54")}}, nil
+}
+func (*osCapture) Close() error { return nil }
+func domains(v []dnsname.FQDN) []string {
+	out := []string{}
+	for _, s := range v {
+		out = append(out, strings.TrimSuffix(string(s), "."))
+	}
+	return out
+}
+func compile(cfg dns.Config, caps tailcfg.NodeCapMap) (dnsOutput, error) {
+	bus := eventbus.New()
+	defer bus.Close()
+	tracker := health.NewTracker(bus)
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
+	defer dialer.Close()
+	knobs := new(controlknobs.Knobs)
+	knobs.UpdateFromNodeAttributes(caps)
+	oscfg := new(osCapture)
+	m := dns.NewManager(logger.Discard, oscfg, tracker, dialer, nil, knobs, "ios", bus)
+	defer m.Down()
+	local := []string{}
+	m.Resolver().TestOnlySetHook(func(c resolver.Config) { local = domains(c.LocalDomains) })
+	err := m.Set(cfg)
+	out := dnsOutput{Servers: append([]netip.Addr{}, oscfg.cfg.Nameservers...), MatchDomains: domains(oscfg.cfg.MatchDomains), SearchDomains: domains(oscfg.cfg.SearchDomains), LocalDomains: local}
+	if err != nil {
+		out.Error = err.Error()
+	}
+	return out, err
+}
+func family(p netip.Prefix, v4, v6 bool) bool { return p.Addr().Is4() && v4 || p.Addr().Is6() && v6 }
+func evaluate(in input, backend *ipnlocal.SwiftailFixtureBackend) (output, *settings, error) {
+	self := convert(in.Self)
+	self.CapMap = in.CapMap
+	nm := &netmap.NetworkMap{SelfNode: self.View(), DNS: in.DNS, AllCaps: set.Set[nodecap.Cap]{}}
+	for c := range in.CapMap {
+		nm.AllCaps.Add(c)
+	}
+	rm := routemanager.New(logger.Discard)
+	mutation := rm.Begin()
+	knobs := new(controlknobs.Knobs)
+	knobs.UpdateFromNodeAttributes(in.CapMap)
+	one, _ := knobs.OneCGNAT.Load().Get()
+	mutation.SetTailnetConfig(routemanager.TailnetConfig{OneCGNAT: one})
+	mutation.SetPrefs(routemanager.Prefs{RouteAll: false})
+	for _, n := range in.Peers {
+		p := convert(n)
+		nm.Peers = append(nm.Peers, p.View())
+		mutation.UpsertPeer(p.View())
+	}
+	mutation.Commit()
+	peerRoutes := []netip.Prefix{}
+	for p := range rm.OSRoutes().All() {
+		peerRoutes = append(peerRoutes, p)
+	}
+	slices.SortFunc(peerRoutes, func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return a.Bits() - b.Bits()
+	})
+	dcfg, rcfg, err := backend.Capture(nm, in.SelfExpired)
+	if err != nil {
+		return output{}, nil, err
+	}
+	dnsOut, err := compile(*dcfg, in.CapMap)
+	if err != nil {
+		return output{}, nil, err
+	}
+	out := output{Addresses: append([]netip.Prefix{}, rcfg.LocalAddrs...), PeerRoutes: peerRoutes, Routes: append([]netip.Prefix{}, rcfg.Routes...), DNS: dnsOut, DNSConfig: dcfg}
+	// 공개 API 경로와 LocalBackend가 쓴 RouteManager의 결과를 서로 검증한다.
+	rawRoutes := slices.Clone(peerRoutes)
+	v4, v6 := false, false
+	for _, p := range in.Self.Addresses {
+		v4 = v4 || p.Addr().Is4()
+		v6 = v6 || p.Addr().Is6()
+	}
+	if v4 {
+		rawRoutes = append(rawRoutes, netip.PrefixFrom(tsaddr.TailscaleServiceIP(), 32))
+	}
+	if v6 {
+		rawRoutes = append(rawRoutes, netip.PrefixFrom(tsaddr.TailscaleServiceIPv6(), 128))
+	}
+	if !slices.Equal(rawRoutes, out.Routes) {
+		return output{}, nil, fmt.Errorf("공개 RouteManager와 LocalBackend 라우터 경로가 다릅니다")
+	}
+	result := &settings{Addresses: []netip.Prefix{}, Routes: []netip.Prefix{}, DNSServers: []netip.Addr{}, DNSMatchDomains: []string{}, MTU: in.MTU}
+	for _, p := range out.Addresses {
+		if p.IsSingleIP() {
+			result.Addresses = append(result.Addresses, p)
+		}
+	}
+	if len(result.Addresses) == 0 {
+		return out, nil, nil
+	}
+	for _, p := range out.Routes {
+		if family(p, v4, v6) {
+			result.Routes = append(result.Routes, p)
+		}
+	}
+	// 동작 S5의 좁히기만 수행한다. 로컬 영역은 Go Manager의 실제 resolver.Config에서 가져온다.
+	if len(dnsOut.LocalDomains) > 0 {
+		if v4 {
+			result.DNSServers = append(result.DNSServers, tsaddr.TailscaleServiceIP())
+		}
+		if v6 && !knobs.ShouldForceRegisterMagicDNSIPv4Only() {
+			result.DNSServers = append(result.DNSServers, tsaddr.TailscaleServiceIPv6())
+		}
+		result.DNSMatchDomains = slices.Clone(dnsOut.LocalDomains)
+	}
+	return out, result, nil
+}
+func run() error {
+	envknob.Setenv("TS_DEBUG_MAGIC_DNS_DUAL_STACK", "false")
+	envknob.Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
+	envknob.Setenv("TS_DISABLE_PORTMAPPER", "true")
+	backend, err := ipnlocal.NewSwiftailFixtureBackend()
+	if err != nil {
+		return err
+	}
+	defer backend.Close()
+	ss := scenarios()
+	steps := 0
+	for i := range ss {
+		for j := range ss[i].Steps {
+			st := &ss[i].Steps[j]
+			steps++
+			st.Go, st.Settings, err = evaluate(st.Input, backend)
+			if err != nil {
+				return fmt.Errorf("%s/%s: %w", ss[i].Name, st.Name, err)
+			}
+		}
+	}
+	result := struct {
+		Reference     string     `json:"reference"`
+		ScenarioCount int        `json:"scenarioCount"`
+		StepCount     int        `json:"stepCount"`
+		Now           string     `json:"now"`
+		BaseResolvers []string   `json:"baseResolvers"`
+		Scenarios     []scenario `json:"scenarios"`
+	}{"tailscale.com v1.104.6", len(ss), steps, fixedNow, []string{"192.0.2.54"}, ss}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
+}
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}

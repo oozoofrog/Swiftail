@@ -1,0 +1,425 @@
+// 응답 생성: tailscale.com v1.104.6 net/dns/resolver (BSD-3-Clause).
+// 노드 색인만 고정 표로 대신하고 DNS 응답은 Query의 원본 바이트를 보존한다.
+package main
+
+import (
+	"context"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/netip"
+	"os"
+	"strings"
+
+	dns "golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/control/controlknobs"
+	"tailscale.com/health"
+	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsdial"
+	"tailscale.com/types/logger"
+	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
+)
+
+const suffix = "tail0001.ts.net."
+const selfName = "rd-mac-1a2b3c4d." + suffix
+const peerName = "rd-phone-2b3c4d5e." + suffix
+const emptyName = "rd-empty-3c4d5e6f." + suffix
+const ipv4Name = "rd-ipv4-4d5e6f70." + suffix
+const ipv6Name = "rd-ipv6-5e6f7081." + suffix
+
+// AnswerAddresses·Aliases는 ipnlocal 색인 대신 넣는 명시적 시험 표다.
+type node struct {
+	Name            string   `json:"name"`
+	Self            bool     `json:"self,omitempty"`
+	Addresses       []string `json:"addresses"`
+	AnswerAddresses []string `json:"answerAddresses"`
+	Aliases         []string `json:"aliases"`
+	Subdomain       bool     `json:"subdomain,omitempty"`
+}
+type record struct {
+	Type  uint16 `json:"type"`
+	Name  string `json:"name"`
+	Class uint16 `json:"class"`
+	TTL   uint32 `json:"ttl"`
+	Value any    `json:"value"`
+}
+type question struct {
+	Name  string `json:"name"`
+	Type  uint16 `json:"type"`
+	Class uint16 `json:"class"`
+}
+type decoded struct {
+	ID          uint16     `json:"id"`
+	RCode       int        `json:"rcode"`
+	Flags       uint16     `json:"flags"`
+	QR          bool       `json:"qr"`
+	AA          bool       `json:"aa"`
+	TC          bool       `json:"tc"`
+	RD          bool       `json:"rd"`
+	RA          bool       `json:"ra"`
+	Questions   []question `json:"questions"`
+	Answers     []record   `json:"answers"`
+	Authorities []record   `json:"authorities"`
+	Additionals []record   `json:"additionals"`
+}
+type step struct {
+	Name            string   `json:"name"`
+	Query           string   `json:"query"`
+	Response        string   `json:"response"`
+	Decoded         *decoded `json:"decoded"`
+	SwiftailDiffers string   `json:"swiftailDiffers,omitempty"`
+	wantCode        int
+}
+type scenario struct {
+	Name           string                  `json:"name"`
+	MagicDNSSuffix string                  `json:"magicDNSSuffix"`
+	Proxied        bool                    `json:"proxied"`
+	Capabilities   []string                `json:"capabilities"`
+	Nodes          []node                  `json:"nodes"`
+	LocalDomains   []string                `json:"localDomains"`
+	Hosts          map[string][]netip.Addr `json:"hosts"`
+	Steps          []step                  `json:"steps"`
+}
+type table []node
+
+func (t table) LookupHost(name dnsname.FQDN) ([]netip.Addr, bool) {
+	for _, n := range t {
+		for _, alias := range n.Aliases {
+			if strings.EqualFold(alias, string(name)) {
+				ips := []netip.Addr{}
+				for _, a := range n.AnswerAddresses {
+					ips = append(ips, netip.MustParseAddr(a))
+				}
+				return ips, true
+			}
+		}
+	}
+	return nil, false
+}
+func (t table) LookupPTR(ip netip.Addr) (dnsname.FQDN, bool) {
+	for _, n := range t {
+		for _, a := range n.Addresses {
+			if a == ip.String() {
+				return dnsname.FQDN(n.Name), true
+			}
+		}
+	}
+	return "", false
+}
+func (t table) SubdomainHost(name dnsname.FQDN) bool {
+	for _, n := range t {
+		if strings.EqualFold(n.Name, string(name)) {
+			return n.Subdomain
+		}
+	}
+	return false
+}
+func base(name string) scenario {
+	n := func(name string, self bool, addresses, answers []string) node {
+		return node{name, self, addresses, answers, []string{name, strings.TrimSuffix(name, suffix)}, false}
+	}
+	zones := []string{suffix, "0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."}
+	for i := 64; i <= 127; i++ {
+		zones = append(zones, fmt.Sprintf("%d.100.in-addr.arpa.", i))
+	}
+	return scenario{Name: name, MagicDNSSuffix: suffix, Proxied: true, Capabilities: []string{}, Nodes: []node{
+		n(selfName, true, []string{"100.64.0.1", "fd7a:115c:a1e0::1"}, []string{"100.64.0.1"}),
+		n(peerName, false, []string{"100.64.0.2", "fd7a:115c:a1e0::2"}, []string{"100.64.0.2"}),
+		{Name: emptyName, Addresses: []string{}, AnswerAddresses: []string{}, Aliases: []string{}},
+		n(ipv4Name, false, []string{"100.64.0.3"}, []string{"100.64.0.3"}),
+		n(ipv6Name, false, []string{"fd7a:115c:a1e0::4"}, []string{"fd7a:115c:a1e0::4"}),
+	}, LocalDomains: zones, Hosts: map[string][]netip.Addr{}, Steps: []step{}}
+}
+func query(name string, typ dns.Type, flags uint16) []byte {
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	b, err := (&dns.Message{Header: dns.Header{ID: 0x1234}, Questions: []dns.Question{{Name: dns.MustNewName(name), Type: typ, Class: dns.ClassINET}}}).Pack()
+	if err != nil {
+		panic(err)
+	}
+	binary.BigEndian.PutUint16(b[2:4], flags)
+	return b
+}
+func add(s *scenario, name string, b []byte, code int) {
+	s.Steps = append(s.Steps, step{Name: name, Query: hex.EncodeToString(b), wantCode: code})
+}
+func ask(s *scenario, name, host string, typ dns.Type, code int) {
+	add(s, name, query(host, typ, 0x0100), code)
+}
+func reverse(ip string) string {
+	a := netip.MustParseAddr(ip)
+	if a.Is4() {
+		b := a.As4()
+		return fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa.", b[3], b[2], b[1], b[0])
+	}
+	b := a.As16()
+	h := hex.EncodeToString(b[:])
+	var out strings.Builder
+	for i := len(h) - 1; i >= 0; i-- {
+		out.WriteByte(h[i])
+		out.WriteByte('.')
+	}
+	return out.String() + "ip6.arpa."
+}
+func scenarios() []scenario {
+	s := base("기본 노드·질의 형식")
+	for _, host := range []string{selfName, peerName, ipv4Name, ipv6Name} {
+		for _, typ := range []dns.Type{dns.TypeA, dns.TypeAAAA, dns.TypeALL} {
+			ask(&s, host+" "+typ.String(), host, typ, 0)
+		}
+	}
+	for _, ip := range []string{"100.64.0.1", "fd7a:115c:a1e0::1", "100.64.0.2", "fd7a:115c:a1e0::2", "100.100.100.100", "fd7a:115c:a1e0::53", "fd7a:115c:a1e0:ab12:4843:cd96:6240:2"} {
+		ask(&s, "PTR "+ip, reverse(ip), dns.TypePTR, 0)
+	}
+	for _, host := range []string{"RD-PHONE-2B3C4D5E.TAIL0001.TS.NET.", "rd-phone-2b3c4d5e", "rd-phone-2b3c4d5e.", "rd-phone-2b3c4d5e.tail0001.ts.net"} {
+		ask(&s, "표기 "+host, host, dns.TypeA, 0)
+	}
+	ask(&s, "모르는 로컬 이름", "rd-unknown.tail0001.ts.net.", dns.TypeA, 3)
+	ask(&s, "주소 없는 노드", emptyName, dns.TypeA, 3)
+	ask(&s, "영역 밖 라우트 없음", "example.com.", dns.TypeA, 2)
+	ask(&s, "모르는 로컬 PTR", reverse("100.64.0.99"), dns.TypePTR, 3)
+	ask(&s, "모르는 외부 PTR", reverse("192.0.2.1"), dns.TypePTR, 2)
+	ask(&s, "잘못된 IPv6 PTR", "0.ip6.arpa.", dns.TypePTR, 2)
+	ask(&s, "onion", "rd-test.onion.", dns.TypeA, 3)
+	ask(&s, "Bonjour", "b._dns-sd._udp.64.100.in-addr.arpa.", dns.TypePTR, 3)
+	for _, typ := range []dns.Type{dns.TypeTXT, dns.TypeMX, dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO, dns.Type(65000)} {
+		code := 0
+		if typ == dns.TypeNS || typ == dns.TypeSOA || typ == dns.TypeAXFR || typ == dns.TypeHINFO {
+			code = 4
+		}
+		ask(&s, typ.String(), peerName, typ, code)
+	}
+	ask(&s, "서비스 이름 A", "magicdns.localhost-tailscale-daemon.", dns.TypeA, 0)
+	ask(&s, "서비스 이름 AAAA", "magicdns.localhost-tailscale-daemon.", dns.TypeAAAA, 0)
+	for _, flags := range []uint16{0, 0x0080, 0x7bb0, 0x8100} {
+		code := 0
+		if flags&0x8000 != 0 {
+			code = 1
+		}
+		add(&s, fmt.Sprintf("머리 비트 %04x", flags), query(peerName, dns.TypeA, flags), code)
+	}
+	q := query(peerName, dns.TypeA, 0x0100)
+	zero := append([]byte(nil), q[:12]...)
+	binary.BigEndian.PutUint16(zero[4:6], 0)
+	add(&s, "질문 0개", zero, 1)
+	two := append([]byte(nil), q...)
+	binary.BigEndian.PutUint16(two[4:6], 2)
+	two = append(two, 0xc0, 0x0c, 0, 28, 0, 1)
+	add(&s, "질문 2개 둘째는 압축", two, 0)
+	forward := append([]byte(nil), q[:12]...)
+	forward = append(forward, 0xc0, 0x12, 0, 1, 0, 1)
+	forward = append(forward, q[12:len(q)-4]...)
+	add(&s, "첫 이름 앞으로 압축 포인터", forward, 0)
+	cycle := append([]byte(nil), q[:12]...)
+	cycle = append(cycle, 0xc0, 0x0c, 0, 1, 0, 1)
+	add(&s, "포인터 고리", cycle, 1)
+	chain := append([]byte(nil), q[:12]...)
+	chain = append(chain, 0xc0, 0x12, 0, 1, 0, 1)
+	for i := 0; i < 11; i++ {
+		chain = append(chain, 0xc0, byte(20+i*2))
+	}
+	chain = append(chain, 0)
+	add(&s, "포인터 11회 초과", chain, 1)
+	for _, length := range []int{0, 1, 11, 12, 13, len(q) - 1} {
+		add(&s, fmt.Sprintf("잘린 질의 %d", length), q[:length], 1)
+	}
+	for _, label := range []byte{0x40, 0x80} {
+		b := append([]byte(nil), q...)
+		b[12] = label
+		add(&s, fmt.Sprintf("잘못된 레이블 %02x", label), b, 1)
+	}
+	b := append([]byte(nil), q...)
+	b[14] = '.'
+	add(&s, "레이블 내부 점", b, 1)
+	b = append([]byte(nil), q...)
+	b[14] = ' '
+	add(&s, "유효하지 않은 FQDN", b, 1)
+	for _, size := range []uint16{512, 1232} {
+		b := opt(q, size, false)
+		add(&s, fmt.Sprintf("EDNS %d", size), b, 0)
+	}
+	out := []scenario{s}
+	s = base("magicdns-aaaa 능력 있음")
+	s.Capabilities = []string{"magicdns-aaaa"}
+	for i := range s.Nodes {
+		if len(s.Nodes[i].Addresses) > 0 {
+			s.Nodes[i].AnswerAddresses = append([]string{}, s.Nodes[i].Addresses...)
+		}
+	}
+	ask(&s, "피어 AAAA", peerName, dns.TypeAAAA, 0)
+	ask(&s, "자기 AAAA", selfName, dns.TypeAAAA, 0)
+	ask(&s, "IPv4 전용 피어 AAAA", ipv4Name, dns.TypeAAAA, 0)
+	out = append(out, s)
+	s = base("자기가 IPv6 전용")
+	s.Nodes[0].Addresses = []string{"fd7a:115c:a1e0::1"}
+	s.Nodes[0].AnswerAddresses = []string{"fd7a:115c:a1e0::1"}
+	s.Nodes[1].AnswerAddresses = []string{"fd7a:115c:a1e0::2"}
+	s.Nodes[3].AnswerAddresses = []string{}
+	ask(&s, "피어 A", peerName, dns.TypeA, 0)
+	ask(&s, "피어 AAAA", peerName, dns.TypeAAAA, 0)
+	ask(&s, "IPv4 전용 피어 AAAA", ipv4Name, dns.TypeAAAA, 0)
+	ask(&s, "자기 AAAA", selfName, dns.TypeAAAA, 0)
+	out = append(out, s)
+	s = base("MagicDNS 끔")
+	s.Proxied = false
+	s.LocalDomains = []string{}
+	for i := range s.Nodes {
+		if len(s.Nodes[i].Aliases) > 0 {
+			s.Nodes[i].Aliases = s.Nodes[i].Aliases[:1]
+		}
+	}
+	ask(&s, "FQDN은 색인에서 답함", peerName, dns.TypeA, 0)
+	ask(&s, "짧은 이름 모름", "rd-phone-2b3c4d5e.", dns.TypeA, 2)
+	ask(&s, "모르는 이름", "rd-unknown.tail0001.ts.net.", dns.TypeA, 2)
+	out = append(out, s)
+	s = base("ExtraRecords 우선과 역방향")
+	s.Hosts[peerName] = []netip.Addr{netip.MustParseAddr("100.64.0.9"), netip.MustParseAddr("fd7a:115c:a1e0::9")}
+	ask(&s, "노드보다 우선 A", peerName, dns.TypeA, 0)
+	ask(&s, "노드보다 우선 AAAA", peerName, dns.TypeAAAA, 0)
+	ask(&s, "ExtraRecords PTR", reverse("100.64.0.9"), dns.TypePTR, 0)
+	out = append(out, s)
+	s = base("자기 키 만료 또는 netmap 없음")
+	s.Nodes = []node{}
+	s.LocalDomains = []string{}
+	ask(&s, "이전 피어 이름", peerName, dns.TypeA, 2)
+	ask(&s, "이전 피어 PTR", reverse("100.64.0.2"), dns.TypePTR, 2)
+	ask(&s, "색인 없이 서비스 이름", "magicdns.localhost-tailscale-daemon.", dns.TypeA, 0)
+	ask(&s, "색인 없이 서비스 PTR", reverse("100.100.100.100"), dns.TypePTR, 0)
+	out = append(out, s)
+	s = base("긴 로컬 영역의 큰 SOA 응답")
+	zone := strings.Repeat("a", 60) + "." + strings.Repeat("b", 60) + "." + strings.Repeat("c", 60) + ".tail0001.ts.net."
+	s.LocalDomains = []string{zone}
+	q = query("rd-unknown."+zone, dns.TypeA, 0x0100)
+	add(&s, "512 초과 TC", q, 3)
+	add(&s, "EDNS 1232 TC 없음", opt(q, 1232, false), 3)
+	add(&s, "EDNS 512 TC", opt(q, 512, false), 3)
+	add(&s, "OPT 옵션 있음 인식 안 함", opt(q, 1232, true), 3)
+	out = append(out, s)
+	s = base("M5 제외 4via6와 서브도메인")
+	ask(&s, "4via6 A", "192-0-2-1-via-1.", dns.TypeA, 0)
+	s.Steps[len(s.Steps)-1].SwiftailDiffers = "동작 D8·제외: M5는 4via6 이름을 생략하여 SERVFAIL"
+	ask(&s, "4via6 AAAA", "192-0-2-1-via-1.", dns.TypeAAAA, 0)
+	s.Steps[len(s.Steps)-1].SwiftailDiffers = "동작 D8·제외: M5는 4via6 이름을 생략하여 SERVFAIL"
+	s.Nodes[1].Subdomain = true
+	ask(&s, "노드 서브도메인", "child."+peerName, dns.TypeA, 0)
+	s.Steps[len(s.Steps)-1].SwiftailDiffers = "동작 D8·제외: M5는 dns-subdomain-resolve를 생략하여 NXDOMAIN"
+	out = append(out, s)
+	return out
+}
+func opt(q []byte, size uint16, options bool) []byte {
+	b := append([]byte(nil), q...)
+	binary.BigEndian.PutUint16(b[10:12], 1)
+	b = append(b, 0, 0, 41, byte(size>>8), byte(size), 0, 0, 0, 0, 0, 0)
+	if options {
+		b[len(b)-1] = 4
+		b = append(b, 0, 12, 0, 0)
+	}
+	return b
+}
+func questions(qs []dns.Question) []question {
+	out := []question{}
+	for _, q := range qs {
+		out = append(out, question{q.Name.String(), uint16(q.Type), uint16(q.Class)})
+	}
+	return out
+}
+func records(resources []dns.Resource) []record {
+	out := []record{}
+	for _, r := range resources {
+		var v any
+		switch b := r.Body.(type) {
+		case *dns.AResource:
+			v = netip.AddrFrom4(b.A).String()
+		case *dns.AAAAResource:
+			v = netip.AddrFrom16(b.AAAA).String()
+		case *dns.PTRResource:
+			v = b.PTR.String()
+		case *dns.SOAResource:
+			v = map[string]any{"ns": b.NS.String(), "mbox": b.MBox.String(), "serial": b.Serial, "refresh": b.Refresh, "retry": b.Retry, "expire": b.Expire, "minimum": b.MinTTL}
+		default:
+			panic(fmt.Sprintf("예상하지 않은 응답 타입 %T", b))
+		}
+		out = append(out, record{uint16(r.Header.Type), r.Header.Name.String(), uint16(r.Header.Class), r.Header.TTL, v})
+	}
+	return out
+}
+func run() error {
+	resolver.SwiftailFixtureClock()
+	bus := eventbus.New()
+	defer bus.Close()
+	health := health.NewTracker(bus)
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	defer dialer.Close()
+	dialer.SetBus(bus)
+	ss := scenarios()
+	steps := 0
+	for i := range ss {
+		s := &ss[i]
+		r := resolver.New(logger.Discard, nil, dialer, health, new(controlknobs.Knobs))
+		cfg := resolver.Config{Hosts: map[dnsname.FQDN][]netip.Addr{}}
+		for k, v := range s.Hosts {
+			cfg.Hosts[dnsname.FQDN(k)] = v
+		}
+		for _, z := range s.LocalDomains {
+			cfg.LocalDomains = append(cfg.LocalDomains, dnsname.FQDN(z))
+		}
+		if err := r.SetConfig(cfg); err != nil {
+			r.Close()
+			return err
+		}
+		r.SetMagicDNSHosts(table(s.Nodes))
+		for j := range s.Steps {
+			st := &s.Steps[j]
+			steps++
+			q, err := hex.DecodeString(st.Query)
+			if err != nil {
+				r.Close()
+				return err
+			}
+			b, err := r.Query(context.Background(), q, "udp", netip.MustParseAddrPort("100.64.0.1:42001"))
+			if err != nil {
+				r.Close()
+				return fmt.Errorf("%s/%s: %w", s.Name, st.Name, err)
+			}
+			var m dns.Message
+			if err := m.Unpack(b); err != nil {
+				r.Close()
+				return err
+			}
+			if int(m.Header.RCode) != st.wantCode {
+				r.Close()
+				return fmt.Errorf("%s/%s: RCODE=%d 기대=%d", s.Name, st.Name, m.Header.RCode, st.wantCode)
+			}
+			st.Response = hex.EncodeToString(b)
+			st.Decoded = &decoded{m.Header.ID, int(m.Header.RCode), binary.BigEndian.Uint16(b[2:4]), m.Header.Response, m.Header.Authoritative, m.Header.Truncated, m.Header.RecursionDesired, m.Header.RecursionAvailable, questions(m.Questions), records(m.Answers), records(m.Authorities), records(m.Additionals)}
+			if strings.Contains(s.Name, "큰 SOA") {
+				wantTC := st.Name != "EDNS 1232 TC 없음"
+				if len(b) <= 512 || m.Header.Truncated != wantTC {
+					r.Close()
+					return fmt.Errorf("큰 응답 TC·길이 자체 검사 실패: %s", st.Name)
+				}
+			}
+		}
+		r.Close()
+	}
+	result := struct {
+		Reference     string     `json:"reference"`
+		ScenarioCount int        `json:"scenarioCount"`
+		StepCount     int        `json:"stepCount"`
+		SOASerial     uint32     `json:"soaSerial"`
+		Scenarios     []scenario `json:"scenarios"`
+	}{"tailscale.com v1.104.6", len(ss), steps, 1767323045, ss}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
+}
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}

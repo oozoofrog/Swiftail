@@ -1,0 +1,8 @@
+// 호출 대상: tailscale.com v1.104.6 net/dns/resolver/tsdns.go (BSD-3-Clause).
+// 응답 코드를 바꾸지 않고 Go 시험용 clock hook만 고정한다.
+package resolver
+
+import "time"
+
+// SwiftailFixtureClock은 단일 자료 생성 프로세스에서만 호출한다.
+func SwiftailFixtureClock() { timeNow = func() time.Time { return time.Unix(1767323045, 0).UTC() } }
