@@ -506,6 +506,8 @@ package enum LocalInterfaceAddresses {
 
 ### 확인 항목
 
+기준 관찰(2026-11-14, Go 피어 둘 사이, 도구의 `setNeverDirectUDP`): 켠 뒤 양쪽 `curAddr`가 6.45초·6.60초에 비었고(신뢰 기간 6.5초와 맞다), 끈 뒤 UDP를 보내자 약 0.04초에 직접 경로로 돌아왔다. 이 노브가 켜져 있어도 UDP 데이터는 계속 흐른다(탐색 Ping만 막는다). 노브를 켠 직후의 `peerPing`(disco)은 30초 뒤 시간 초과로 실패한다. 아래 시각 기대값은 이 관찰과 노트의 계산에 여유를 더한 것이다.
+
 Go 피어 하나(`addPeer`)와 Swift 노드 하나로 시작한다. 시각 기대값은 노트 7.2 3의 계산이다. 시험은 기대 시각 + 여유(아래 괄호)까지 조건을 기다린다.
 
 1. **엔드포인트**: Swift 노드가 `running` 뒤 10초 안에 `nodes`의 Swift 항목 `endpoints`에 `127.0.0.1:<Swift 포트>`가 있다(STUN 결과). Go `peerStatus`의 `selfAddrs`에서 Go 포트를 얻는다.
