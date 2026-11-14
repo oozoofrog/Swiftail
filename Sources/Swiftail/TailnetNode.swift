@@ -208,8 +208,7 @@ public actor TailnetNode {
 
     /// 메모리 장치일 때 장치로 쓸 IP 패킷: 피어가 보냈고 필터를 통과한 것, 노드가 로컬에서 만든 응답(MagicDNS 등), 자기
     /// 주소로 보내 되돌아온 것. utun·`.inProcess` 장치일 때는 아무것도 내지 않는다(패킷은 utun이나 스택으로 간다).
-    /// 구독자는 하나다. `run()`이
-    /// 끝나면 흐름도 끝난다.
+    /// 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
     ///
     /// 소비가 느리면 가장 새 것 256개까지만 쥐고 오래된 것부터 버린다.
     public nonisolated var inboundPackets: AsyncStream<[UInt8]> { inboundStream }

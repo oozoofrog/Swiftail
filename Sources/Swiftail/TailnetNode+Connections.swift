@@ -19,13 +19,15 @@ extension TailnetNode {
     /// 이 노드의 tailnet 주소(IPv4·IPv6)에서 TCP 포트 하나를 듣는다. tsnet `Listen("tcp", ":<port>")`.
     ///
     /// `run()` 전에 불러도 된다(`run()`이 시작할 때 스택에 올린다). netmap 전이어도 된다. 리스너는 리스너를 닫거나,
-    /// 버리거나, `run()`이 끝날 때까지 듣는다.
+    /// 버리거나, `run()`이 끝날 때까지 듣는다. 버려진 리스너는 이 호출이 먼저 닫으므로 포트와 상한(16)을 쥐지 않는다.
     ///
-    /// - Throws: 장치가 `.inProcess`가 아니거나 포트가 0이면 `invalidConfiguration`, 그 포트에 이미 리스너가 있으면
-    ///   `addressInUse`, 리스너가 16개면 `limitReached`, `run()`이 끝났으면 `notRunning`.
+    /// - Throws: 장치가 `.inProcess`가 아니거나 포트가 0이면 `invalidConfiguration`, 그 포트에 아직 쓰는 리스너가 있으면
+    ///   `addressInUse`, 쓰는 리스너가 16개면 `limitReached`, `run()`이 끝났거나 시작 검사(`stateDirectoryInUse` 등)에서
+    ///   끝났으면 `notRunning`.
     public func listen(port: UInt16) throws(ConnectionError) -> TailnetListener {
         try checkInProcessDevice(port: port)
         if hasRun, !isRunning { throw .notRunning }
+        closeDroppedListeners()
         guard !listenerRecords.values.contains(where: { $0.port == port }) else { throw .addressInUse }
         guard listenerRecords.count < Self.listenerLimit else { throw .limitReached }
         var stackID: TCPStack.ListenerID?
@@ -36,9 +38,10 @@ extension TailnetNode {
         }
         let token = nextListenerToken
         nextListenerToken += 1
-        listenerRecords[token] = ListenerRecord(port: port, stackID: stackID)
+        let listener = TailnetListener(node: self, token: token, port: port)
+        listenerRecords[token] = ListenerRecord(port: port, handle: listener, stackID: stackID)
         Self.log.info("듣기 시작: 포트 \(port, privacy: .public)")
-        return TailnetListener(node: self, token: token, port: port)
+        return listener
     }
 
     /// 리스너의 다음 연결. 대기열에 있으면 곧바로, 없으면 들어올 때까지 기다린다.
@@ -79,9 +82,10 @@ extension TailnetNode {
     /// 걸지 않는다(tsnet과 다르다). 자기 주소로 건 연결은 자기 리스너에 닿는다.
     ///
     /// - Throws: 장치가 `.inProcess`가 아니거나 포트가 0이거나 호스트가 비면 `invalidConfiguration`, 상태가 `.running`이
-    ///   아니면 `notRunning`, 이름·주소를 찾지 못하면 `unknownHost`, 연결이 256개면 `limitReached`, 상대가 거절하면
-    ///   `refused`, 247초 안에 답이 없으면 `timedOut`, 그 사이 주소의 주인이 바뀌면 `peerRemoved`, 호출한 Task가
-    ///   취소되면 `cancelled`(시도를 버린다).
+    ///   아니면 `notRunning`(맺는 사이 `run()`이 끝나도), 이름·주소를 찾지 못하면 `unknownHost`, 연결이 256개면
+    ///   `limitReached`, 상대가 거절하면 `refused`, 247초 안에 답이 없으면 `timedOut`, 그 사이 주소의 주인이 바뀌면
+    ///   `peerRemoved`, 맺어진 직후 이 호출이 돌아오기 전에 상대의 RST가 오면 `reset`, 호출한 Task가 취소되면
+    ///   `cancelled`(시도를 버린다).
     public func connect(to host: String, port: UInt16) async throws(ConnectionError) -> TailnetConnection {
         try checkInProcessDevice(port: port)
         guard !host.isEmpty else { throw .invalidConfiguration("호스트가 비었다") }

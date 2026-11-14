@@ -30,7 +30,7 @@ public enum TunnelDevice: Sendable {
         }
     }
 
-    /// 장치를 검사한다. utun이면 그 인터페이스 이름(`utun3` 등)을 돌려준다. 메모리 장치는 nil.
+    /// 장치를 검사한다. utun이면 그 인터페이스 이름(`utun3` 등)을 돌려준다. 메모리 장치와 `.inProcess`는 nil.
     ///
     /// 파일·소켓을 만들지 않는다. utun 검사는 `getpeername`·`getsockopt`뿐이다(동작 U1).
     func validate() throws(NodeError) -> String? {
