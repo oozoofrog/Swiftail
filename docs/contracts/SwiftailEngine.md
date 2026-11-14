@@ -30,7 +30,7 @@ netmap을 데이터면으로 바꾸는 층이다. M3의 목표는 **직접 UDP �
 ```swift
 /// 검증을 마친 IP 패킷 하나의 머리. 필터와 경로 선택이 읽는 필드만 담는다.
 public struct IPPacket: Sendable, Equatable {
-    public enum TransportProtocol: Sendable, Equatable { case tcp, udp, icmpv4, icmpv6, tsmp, other(UInt8) }
+    public enum TransportProtocol: Sendable, Equatable { case tcp, udp, sctp, icmpv4, icmpv6, tsmp, other(UInt8) }
     public enum ParseError: Error, Sendable, Equatable {
         case malformed      // 길이·버전·머리 길이가 맞지 않음
         case fragment       // 조각(첫 조각 포함)
@@ -42,7 +42,7 @@ public struct IPPacket: Sendable, Equatable {
     public let source: IPAddress
     public let destination: IPAddress
     public let transportProtocol: TransportProtocol
-    /// TCP·UDP의 포트. 그 밖에는 0.
+    /// TCP·UDP·SCTP의 포트. 그 밖에는 0.
     public let sourcePort: UInt16
     public let destinationPort: UInt16
     /// TCP에서 SYN이 켜지고 ACK가 꺼진 패킷(새 연결의 시작).
@@ -125,7 +125,7 @@ public struct TailnetEngine: Sendable {
 
 ### 동작
 
-1. **IP 패킷 해석**(노트 3.1·3.2): 경계에서 한 번 검증한다. IPv4는 20바이트 이상·IHL 5 이상·선언 길이가 버퍼 이하, IPv6는 40바이트 이상·선언 길이가 버퍼 이하, TCP·UDP·ICMP는 전송 머리의 최소 길이. 선언 길이 뒤의 바이트는 잘라 낸다. IPv4의 MF가 켜졌거나 오프셋이 0이 아니면, IPv6의 next-header가 44면 `fragment`. IPv6 next-header가 0·43·50·51·60·135·139·140이면 `extensionHeader`. Go의 약한 검사(IHL 최솟값 없음, 재사용 필드)는 옮기지 않는다.
+1. **IP 패킷 해석**(노트 3.1·3.2): 경계에서 한 번 검증한다. IPv4는 20바이트 이상·IHL 5 이상·선언 길이가 버퍼 이하, IPv6는 40바이트 이상·선언 길이가 버퍼 이하, TCP(20)·UDP(8)·SCTP(12)·ICMP는 전송 머리의 최소 길이. 선언 길이 뒤의 바이트는 잘라 낸다. IP 프로토콜 번호 0과 255는 `malformed`다(Go는 둘을 Unknown으로 버린다). IPv4의 MF가 켜졌거나 오프셋이 0이 아니면, IPv6의 next-header가 44면 `fragment`. IPv6 next-header가 0·43·50·51·60·135·139·140이면 `extensionHeader`. Go의 약한 검사(IHL 최솟값 없음, 재사용 필드)는 옮기지 않는다.
 2. **피어 계산**(노트 4.1, `RouteAll=false`·exit node 없음):
    - 올리지 않는 피어: `id`가 0, `key`가 0, 만료(`expired`이거나 0이 아닌 `keyExpiry <= now`), `discoKey`가 0이고 `homeDERP`가 0, 위 "지원하지 않는 것"의 피어.
    - AllowedIPs: 피어의 `allowedIPs` 가운데 (한 주소짜리이고 Tailscale 주소 범위) 또는 (피어의 `addresses`에 있는 것)만 남긴다. Tailscale 주소 범위는 `100.64.0.0/10`(단 `100.115.92.0/23` 제외)과 `fd7a:115c:a1e0::/48`. 남는 것이 없으면 올리지 않는다.
@@ -137,7 +137,7 @@ public struct TailnetEngine: Sendable {
    - 규칙 변환: `SrcBits`가 있거나 `DstPorts[].Bits`가 있으면 필터 전체가 `allowNone`이 된다(Go와 같다. 넓은 옛 규칙을 남기지 않는다). `IPProto`가 비면 TCP·UDP·ICMPv4·ICMPv6, 있으면 0…255만. 주소 문자열은 `*`, CIDR(호스트 비트가 남으면 그 항목을 버린다), `a-b` 범위, 단일 주소. `cap:`으로 시작하는 출발지와 해석할 수 없는 항목은 그 항목만 버린다. `CapGrant`만 있는 규칙은 패킷을 열지 않는다.
    - 판정 순서: 목적지가 multicast·link-local이면 버린다 → 목적지가 자기 주소가 아니면 `notForUs` → 프로토콜별 판정.
    - TCP: SYN이 켜지고 ACK가 꺼진 패킷만 규칙(프로토콜·출발 주소·목적 주소·목적 포트)을 본다. 나머지 TCP는 받는다(연결 추적이 아니다. Go와 같다).
-   - UDP: 흐름 기록에 있으면 받고, 아니면 규칙을 본다. 기록은 내보낸 UDP의 역방향 튜플(프로토콜, 주소·포트 쌍)이고 512개 LRU, 시간 제한은 없다. 받은 패킷은 기록을 만들지 않는다.
+   - UDP·SCTP: 흐름 기록에 있으면 받고, 아니면 규칙을 본다. 기록은 내보낸 UDP·SCTP의 역방향 튜플(프로토콜, 주소·포트 쌍)이고 512개 LRU, 시간 제한은 없다. 받은 패킷은 기록을 만들지 않는다.
    - ICMP: echo reply와 오류(v4 type 3·11·12, v6 type 1·2·3·4)는 받는다. 그 밖에는 포트를 보지 않고 출발·목적 주소만 맞는 규칙이 있으면 받는다. Go의 v4 오류 집합은 3·11·`0x12`(18)인데, 규격의 Parameter Problem은 12이므로 12를 쓴다(알려진 차이. Go 대조 자료에 표시한다).
    - 그 밖의 프로토콜: 그 번호를 명시하고 포트 범위가 0…65535인 규칙이 있을 때만 받는다.
    - 허용 규칙의 합이다. 거부 규칙과 우선순위는 없다.
