@@ -35,14 +35,14 @@ struct NodeConfigurationTests {
     @Test("노드의 dump에 설정의 비밀이 나오지 않는다")
     func nodeDump() throws {
         var text = ""
-        dump(TailnetNode(configuration: try Self.configuration()), to: &text)
+        dump(try TailnetNode(configuration: try Self.configuration()), to: &text)
         #expect(!text.contains(Self.authKey))
     }
 
     @Test("run()을 두 번 부르면 invalidConfiguration")
     func runTwice() async throws {
-        let node = TailnetNode(configuration: try Self.configuration(stateDirectory: "https://example.com/state"))
-        // 첫 호출은 파일 URL이 아닌 상태 디렉터리로 곧바로 끝난다. 그래도 한 번 부른 것이다.
+        let node = try TailnetNode(configuration: try Self.configuration())
+        // 첫 호출은 만들 수 없는 상태 디렉터리라 신원 파일을 쓰지 못해 곧바로 끝난다. 그래도 한 번 부른 것이다.
         await #expect(throws: NodeError.self) { try await node.run() }
         do {
             try await node.run()

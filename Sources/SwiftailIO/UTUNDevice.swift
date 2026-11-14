@@ -94,7 +94,7 @@ package final class UTUNDevice: Sendable {
     /// - Throws: `SocketError.invalidDevice`(utun이 아니거나 닫힌·음수 기술자, MTU가 범위 밖) 또는 복제하지 못했을 때
     ///   `SocketError.readFailed`(errno 이름).
     package convenience init(duplicating descriptor: Int32, mtu: Int) throws(SocketError) {
-        try self.init(duplicating: descriptor, mtu: mtu, verifying: Self.requireUTUN)
+        try self.init(duplicating: descriptor, mtu: mtu) { (copy) throws(SocketError) in try Self.requireUTUN(copy) }
     }
 
     /// 복제본을 `verify`로 확인한 뒤 읽기를 시작한다. 시험이 utun 대신 `socketpair`를 붙이려고 확인을 바꿔 끼운다.
@@ -214,9 +214,21 @@ package final class UTUNDevice: Sendable {
         }
     }
 
-    /// utun 제어 소켓인지 읽기 호출만으로 확인한다(계약 U1): 상대 주소의 계열이 `AF_SYSTEM`이고 인터페이스 이름이 `utun`으로 시작한다.
-    /// 소켓이 아니거나(파이프) 다른 계열이면 어느 호출이든 실패하거나 계열이 다르다.
-    private static func requireUTUN(_ descriptor: Int32) throws(SocketError) {
+    /// `descriptor`가 utun 제어 소켓이면 그 인터페이스 이름(`utun3` 등)을 돌려준다. 복제하지 않고 읽기 호출만 한다.
+    ///
+    /// 노드가 `init`에서 장치를 검사하고(파일·소켓을 만들지 않는다), 기본 인터페이스 통지에서 자기 utun을 걸러 내는 데 쓴다
+    /// (계약 U1, N1).
+    ///
+    /// - Throws: `SocketError.invalidDevice`(음수·닫힌 기술자, utun이 아님).
+    package static func interfaceName(ofUTUN descriptor: Int32) throws(SocketError) -> String {
+        guard descriptor >= 0 else { throw .invalidDevice("fileDescriptor") }
+        return try requireUTUN(descriptor)
+    }
+
+    /// utun 제어 소켓인지 읽기 호출만으로 확인하고 인터페이스 이름을 돌려준다(계약 U1): 상대 주소의 계열이 `AF_SYSTEM`이고
+    /// 인터페이스 이름이 `utun`으로 시작한다. 소켓이 아니거나(파이프) 다른 계열이면 어느 호출이든 실패하거나 계열이 다르다.
+    @discardableResult
+    private static func requireUTUN(_ descriptor: Int32) throws(SocketError) -> String {
         var address = sockaddr_storage()
         var addressLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
         // `getpeername`이 주소 종류에 맞는 구조체를 `sockaddr *`로만 받아서, 가장 큰 `sockaddr_storage`를 `sockaddr`로 다시 본다.
@@ -233,6 +245,7 @@ package final class UTUNDevice: Sendable {
         }
         let text = name.prefix(Int(nameLength)).prefix { $0 != 0 }
         guard queried == 0, text.starts(with: "utun".utf8) else { throw .invalidDevice("notUTUN") }
+        return String(decoding: text, as: UTF8.self)
     }
 
     /// 읽을 것이 없을 때까지 읽어 흐름에 넣는다. 읽기 원천의 처리기 안에서만 부른다.

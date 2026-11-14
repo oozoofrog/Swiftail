@@ -5,7 +5,7 @@ import SwiftailControl
 import Testing
 @testable import Swiftail
 
-/// 끊긴 연결과 `running`·`reconnecting`. 계약 노드 API 동작 3·4.
+/// DERP 지역 연결의 수명과 상태. 계약 노드 API 동작 3·4, `docs/contracts/SwiftailTunnel.md` 동작 B.
 @Suite("노드의 연결 상태")
 struct NodeLinkStateTests {
     private static let derpNode =
@@ -13,48 +13,28 @@ struct NodeLinkStateTests {
 
     /// 자기 주소가 `100.64.0.1`인 netmap. `regions`는 DERPMap의 `Regions` 안쪽 JSON이다.
     private static func netmap(regions: String) throws -> Netmap {
-        let key = "nodekey:" + String(repeating: "11", count: 32)
-        let json = #"{"Node":{"ID":1,"Name":"rd-mac-1a2b3c4d.tail0001.ts.net.","User":101,"Key":"\#(key)","Addresses":["100.64.0.1/32"]},"#
-            + #""Peers":[],"DERPMap":{"Regions":{\#(regions)}}}"#
-        let response = try JSONDecoder().decode(MapResponse.self, from: Data(json.utf8))
-        var session = MapSession()
-        return try #require(try session.apply(response, receivedAt: Date()).netmap)
+        try NodeTestSupport.netmap(regions: regions)
     }
 
-    /// 고치기 전에는 DERP가 끊긴 채로 홈 지역이 없어지면 끊긴 연결 목록에서 DERP가 빠지지 않아 `running`이 다시 나오지 않았다.
-    @Test("DERP가 끊긴 뒤 홈 지역이 없어지면 DERP를 끊긴 것으로 세지 않고 running을 다시 알린다")
-    func homeLossClearsBrokenDERP() async throws {
-        let node = TailnetNode(configuration: NodeConfiguration(
-            stateDirectory: try #require(URL(string: "file:///var/empty/swiftail-test/")),
-            hostname: "rd-mac-1a2b3c4d",
-            controlURL: try #require(URL(string: "http://127.0.0.1:9"))
-        ))
+    /// M4에서는 DERP가 끊긴 채로 홈 지역이 없어지면 끊긴 연결 목록에서 DERP가 빠지지 않아 `running`이 다시 나오지 않았다.
+    /// M5에서는 끊김이 상태를 바꾸지 않으므로(동작 B), 같은 상황에서 `running`이 한 번만 나오고 그대로 남는지 본다.
+    @Test("running 뒤 홈 지역이 없어지는 netmap이 와도 running이 유지되고 다시 나오지 않는다")
+    func homeLossKeepsRunning() async throws {
+        let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try Self.netmap(regions: #""1":{"RegionID":1,"Nodes":[\#(Self.derpNode)]}"#))
-        await node.linkBroke(.derp)
+        await node.markHomeDERPConnectedForTesting()
         await node.apply(try Self.netmap(regions: ""))
 
-        #expect(await node.brokenLinks.isEmpty)
+        #expect(await node.status.state == .running)
         await node.eventContinuation.finish()
-        var seen: [String] = []
-        for await event in node.events {
-            switch event {
-            case let .running(addresses): seen.append("running \(addresses.map(\.description))")
-            case .reconnecting: seen.append("reconnecting")
-            case .loginRequired: seen.append("loginRequired")
-            case .peerPathChanged: seen.append("peerPathChanged")
-            }
-        }
-        #expect(seen == ["running [\"100.64.0.1\"]", "reconnecting", "running [\"100.64.0.1\"]"])
+        let seen = await NodeTestSupport.drain(node.events)
+        #expect(seen == [.stateChanged(.running)])
     }
 
     /// 고치기 전에는 DERPMap에서 사라진 지역만 닫아, 서버가 바뀐 지역의 연결이 옛 서버로만 다시 붙으려 했다.
     @Test("서버 정의가 바뀐 지역의 연결은 닫고, 홈이면 새 서버로 다시 연다. 정의가 같으면 그대로 둔다")
     func redefinedRegionIsReopened() async throws {
-        let node = TailnetNode(configuration: NodeConfiguration(
-            stateDirectory: try #require(URL(string: "file:///var/empty/swiftail-test/")),
-            hostname: "rd-mac-1a2b3c4d",
-            controlURL: try #require(URL(string: "http://127.0.0.1:9"))
-        ))
+        let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         func region(_ id: Int, host: String) -> String {
             #""\#(id)":{"RegionID":\#(id),"Nodes":[{"Name":"\#(id)a","RegionID":\#(id),"HostName":"\#(host)","IPv4":"127.0.0.1","IPv6":"none","DERPPort":8443}]}"#
         }
@@ -83,5 +63,10 @@ private extension TailnetNode {
     /// 등록을 거치지 않고 node 키만 넣는다. DERP 연결은 node 키가 있어야 열린다.
     func setNodeKeyForTesting(_ key: Curve25519.KeyAgreement.PrivateKey) {
         nodeKey = key
+    }
+
+    /// 홈 DERP 연결이 선 것처럼 상태 기계에 넣는다.
+    func markHomeDERPConnectedForTesting() {
+        announce(stateMachine.connected())
     }
 }

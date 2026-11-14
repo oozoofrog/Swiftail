@@ -13,6 +13,11 @@ import SwiftailBase
 /// 개인 키를 담으므로 소유자만 읽게(0600) 만들고, 같은 디렉터리의 임시 파일에 다 쓴 뒤 이름을 바꿔 원자적으로
 /// 바꾼다. 쓰다가 멈춰도 이전 신원이 남는다. 오류 메시지에는 경로와 키를 넣지 않는다.
 /// `docs/contracts/SwiftailControl.md` 단위 4 동작 7.
+///
+/// iOS에서는 쓰기 전에 임시 파일에 데이터 보호 등급 `completeUntilFirstUserAuthentication`과 백업 제외를 건다. 패킷 터널
+/// 확장은 잠긴 화면에서도 뜨므로(`complete`면 시작이 실패한다) 첫 잠금 해제 뒤에 읽을 수 있어야 하고, 개인 키가 다른 기기로
+/// 복원되면 같은 머신 키를 가진 기기가 둘이 된다. 두 성질은 파일에 붙어 이름을 바꿔도 따라간다고 보았다(실기기 관문에서
+/// 확인한다). `docs/contracts/SwiftailTunnel.md` 동작 P 2.
 public struct NodeIdentityStore: Sendable {
     static let fileName = "identity.json"
     private static let keyPrefix = "privkey:"
@@ -69,6 +74,7 @@ public struct NodeIdentityStore: Sendable {
         guard descriptor >= 0 else { throw .storage("임시 신원 파일을 만들지 못했다(errno \(errno))") }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
+            try Self.protect(temporary)
             try handle.write(contentsOf: data)
             try handle.synchronize()
             try handle.close()
@@ -82,6 +88,19 @@ public struct NodeIdentityStore: Sendable {
             try? FileManager.default.removeItem(at: temporary)
             throw .storage("신원 파일을 바꾸지 못했다(errno \(code))")
         }
+    }
+
+    /// 신원 파일의 보호 등급과 백업 제외. iOS에서만 뜻이 있다(macOS의 데이터 보호는 다른 체계이고 백업 제외도 앱 몫이다).
+    private static func protect(_ file: URL) throws {
+        #if os(iOS)
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: file.path
+        )
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var file = file
+        try file.setResourceValues(values)
+        #endif
     }
 
     private static func text(_ key: Curve25519.KeyAgreement.PrivateKey) -> String {
