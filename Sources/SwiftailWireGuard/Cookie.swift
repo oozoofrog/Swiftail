@@ -6,8 +6,8 @@ import SwiftailCrypto
 /// 걸러 낸다. 부하 상태의 받는 쪽은 mac2도 요구한다. mac2의 키는 받는 쪽이 cookie reply로 준
 /// cookie이며, 보낸 쪽이 그 출발 주소에서 실제로 응답을 받을 수 있음을 증명한다.
 ///
-/// 이 모듈은 cookie를 **받아서 쓰는** 쪽만 구현한다.
-/// shortcut: cookie reply를 보내는 쪽(부하 판정, mac2 검사, rate limiter)은 없다. 신뢰할 수 없는 네트워크에 UDP 포트를 여는 M4에서 올린다.
+/// 보내는 쪽은 `CookieGenerator`, 받는 쪽은 `CookieChecker`다. 받는 쪽이 언제 mac2를 요구하는지(부하 판정)와
+/// 출처별 속도 제한은 `HandshakeLoad`·`RateLimiter`가 맡는다.
 ///
 /// 백서 §5.4.4·§5.4.7, `docs/protocol-notes/wireguard.md` "mac1·mac2와 cookie"
 /// (출처: wireguard-go `device/cookie.go`).
@@ -74,5 +74,75 @@ struct CookieGenerator {
         else { return false }
         cookie = Cookie(value: value, received: now)
         return true
+    }
+}
+
+/// 부하 상태의 받는 쪽: mac2를 검사하고, 맞지 않으면 보낸 쪽에 cookie reply를 만든다
+/// (wireguard-go의 `CookieChecker`의 mac2 부분).
+///
+/// cookie = MAC(비밀, 출처)다. 비밀은 받는 쪽만 알고 `cookieRefreshTime`(120초)마다 바뀌므로, cookie는 그 출처에서
+/// 실제로 답장을 받을 수 있는 쪽만 얻고 오래 쓰지 못한다. 비밀과 cookie는 `dump`·디버거에 나오지 않는다.
+struct CookieChecker {
+    private struct Secret {
+        let value: [UInt8]
+        let created: ContinuousClock.Instant
+    }
+
+    /// cookie를 봉하는 키 = HASH("cookie--" ‖ 자기 공개 키).
+    private let cookieKey: [UInt8]
+    /// 아직 reply를 만든 적이 없으면 nil이다. 그동안 mac2는 늘 틀리다(Go의 0 시각 `secretSet`과 같다).
+    private var secret: Secret?
+
+    init(publicKey: PublicKey) {
+        cookieKey = MAC.cookieKey(for: publicKey)
+    }
+
+    /// 받은 메시지의 mac2가 이 출처에 준 cookie로 만든 것인지 상수 시간으로 확인한다.
+    /// 비밀이 없거나 120초를 넘었으면 거짓이다(그 비밀로 준 cookie는 보낸 쪽도 이미 쓰지 않는다).
+    func isValidMAC2(
+        _ macs: MessageMACs,
+        over bytesBeforeMACs: [UInt8],
+        from source: WireGuardDevice.Source,
+        at now: ContinuousClock.Instant
+    ) -> Bool {
+        guard let secret, now - secret.created <= Constants.cookieRefreshTime else { return false }
+        let cookie = MAC.authenticate(source.address, key: secret.value)
+        return constantTimeEqual(macs.mac2, MAC.authenticate(bytesBeforeMACs + macs.mac1, key: cookie))
+    }
+
+    /// 거절한 핸드셰이크 메시지(보낸 쪽 index `sender`, mac1 `mac1`)에 답할 cookie reply를 만든다.
+    ///
+    /// 비밀이 없거나 120초를 넘었으면 먼저 `generator`로 새로 뽑는다. cookie는 거절한 메시지의 mac1을 AAD로 봉한다.
+    /// 그 mac1을 보낸 쪽만 열 수 있으므로 reply를 엿보거나 꾸며도 다른 메시지에 쓸 수 없다.
+    /// 봉하기는 키·nonce 길이가 고정이라 실패하지 않지만, 실패하면 nil이다.
+    mutating func makeReply(
+        to sender: UInt32,
+        mac1: [UInt8],
+        from source: WireGuardDevice.Source,
+        at now: ContinuousClock.Instant,
+        using generator: inout some RandomNumberGenerator
+    ) -> CookieReply? {
+        let secret: Secret
+        if let current = self.secret, now - current.created <= Constants.cookieRefreshTime {
+            secret = current
+        } else {
+            secret = Secret(value: Self.randomBytes(32, using: &generator), created: now)
+            self.secret = secret
+        }
+        let cookie = MAC.authenticate(source.address, key: secret.value)
+        let nonce = Self.randomBytes(XChaCha20Poly1305.nonceByteCount, using: &generator)
+        guard let sealed = try? XChaCha20Poly1305.seal(cookie, key: cookieKey, nonce: nonce, authenticating: mac1) else { return nil }
+        return CookieReply(receiver: sender, nonce: nonce, encryptedCookie: sealed)
+    }
+
+    private static func randomBytes(_ count: Int, using generator: inout some RandomNumberGenerator) -> [UInt8] {
+        (0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
+    }
+}
+
+extension CookieChecker: CustomReflectable {
+    /// 비밀이 `print`·`dump`에 펼쳐지지 않게 아무것도 보이지 않는다.
+    var customMirror: Mirror {
+        Mirror(self, children: [:], displayStyle: .struct)
     }
 }

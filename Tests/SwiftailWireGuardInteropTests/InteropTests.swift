@@ -53,6 +53,29 @@ struct WireGuardInteropTests {
         }
     }
 
+    @Test("부하 상태의 Swift 응답자: cookie reply를 받은 Go가 mac2를 붙여 다시 보내고 핸드셰이크를 마친다")
+    func cookieReplyUnderLoad() async throws {
+        try await withInteropPair { pair in
+            await pair.swift.holdUnderLoad()
+            try await pair.goToSwift(marker: 51)
+            try await pair.swiftToGo(marker: 52)
+
+            let history = await pair.swift.datagrams()
+            let initiations = history.filter { $0.incoming && $0.bytes.first == 1 }
+            let replies = history.filter { !$0.incoming && $0.bytes.first == 3 }
+            let responses = history.filter { !$0.incoming && $0.bytes.first == 2 }
+            guard let first = initiations.first, let reply = replies.first, let accepted = initiations.last,
+                  initiations.count == 2, replies.count == 1, responses.count == 1 else {
+                throw InteropFailure("initiation·cookie reply·response 수 불일치")
+            }
+            guard first.bytes[132..<148].allSatisfy({ $0 == 0 }), !accepted.bytes[132..<148].allSatisfy({ $0 == 0 }),
+                  reply.bytes.count == 64, reply.bytes[4..<8] == first.bytes[4..<8],
+                  reply.time < accepted.time, accepted.time < responses[0].time else {
+                throw InteropFailure("cookie reply 형식·순서 불일치")
+            }
+        }
+    }
+
     @Test("변조 거부·중복 전달 방지 뒤 세션 유지")
     func tamperAndReplay() async throws {
         try await withInteropPair { pair in

@@ -103,6 +103,10 @@ struct CookieReply: Equatable {
     var nonce: [UInt8]
     /// cookie 16 + 태그 16.
     var encryptedCookie: [UInt8]
+
+    var bytes: [UInt8] {
+        Self.type.littleEndianBytes + receiver.littleEndianBytes + nonce + encryptedCookie
+    }
 }
 
 /// Transport data(type 4). 머리 16바이트 뒤에 패딩한 IP 패킷의 암호문과 태그가 온다.

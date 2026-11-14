@@ -63,6 +63,7 @@ public enum WireGuardError: Error, Sendable, Equatable {
     case noSession              // 쓸 수 있는 keypair가 없음(만료 포함)
     case disallowedSource       // 복호화한 IP 패킷의 출발 주소가 피어의 AllowedIPs 밖(rejectedIPPacket으로만 나온다)
     case packetTooLarge
+    case rateLimited            // 부하 상태에서 mac2까지 맞았지만 출처 호스트의 몫(초당 20개, 버스트 5)을 넘음
 }
 
 /// 한 노드의 WireGuard 상태 전체(자기 정적 키와 피어들).
@@ -74,6 +75,16 @@ public struct WireGuardDevice: Sendable {
         case ipPacket([UInt8], from: PublicKey)
         /// 피어가 보낸 것은 맞지만 올리지 않은 IP 패킷. 이유는 malformed 또는 disallowedSource.
         case rejectedIPPacket(WireGuardError, from: PublicKey)
+        /// 부하 상태에서 mac2가 맞지 않는 핸드셰이크 메시지에 답하는 cookie reply(64바이트).
+        /// 방금 받은 데이터그램의 출처로 그 길 그대로 보낸다(피어 경로 선택을 거치지 않는다).
+        case cookieReply([UInt8])
+    }
+
+    /// 받은 데이터그램이 온 곳. 장치는 내용을 해석하지 않는다.
+    public struct Source: Hashable, Sendable {
+        public var address: [UInt8]   // cookie가 묶이는 값(UDP면 주소 ‖ 포트)
+        public var host: [UInt8]      // 속도 제한 단위(UDP면 주소)
+        public init(address: [UInt8], host: [UInt8])
     }
 
     /// wallClock은 now 시점의 벽시계 시각이다. 이후의 TAI64N timestamp는
@@ -92,7 +103,7 @@ public struct WireGuardDevice: Sendable {
 
     /// 네트워크에서 받은 데이터그램 하나를 처리한다.
     /// 오류를 던진 경우 상태는 바뀌지 않는다(규격이 요구하는 flood 시각 기록 등은 예외이며 주석으로 밝힌다).
-    public mutating func receive(_ datagram: [UInt8], at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output]
+    public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output]
 
     /// now까지 기한이 지난 타이머를 모두 처리한다.
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output]
@@ -102,7 +113,7 @@ public struct WireGuardDevice: Sendable {
 }
 ```
 
-오류와 상태: `receive`가 오류를 던지면 상태는 그대로다(flood 검사를 위한 initiation 수신 시각 기록만 예외). AEAD와 재전송 검사를 통과한 transport는 안의 IP 패킷이 잘못됐거나 출발 주소가 AllowedIPs 밖이어도 오류가 아니다. 인증된 피어가 보낸 것이므로 next 확정, 대기열 방출, rekey, 타이머 갱신을 정상 수신과 같이 하고(wireguard-go와 같다), 버린 패킷은 `rejectedIPPacket`으로 알린다.
+오류와 상태: `receive`가 오류를 던지면 상태는 그대로다. 예외는 공격을 세는 기록이다: flood 검사를 위한 initiation 수신 시각, 부하 판정을 위한 mac1 통과 수, 속도 제한 표. AEAD와 재전송 검사를 통과한 transport는 안의 IP 패킷이 잘못됐거나 출발 주소가 AllowedIPs 밖이어도 오류가 아니다. 인증된 피어가 보낸 것이므로 next 확정, 대기열 방출, rekey, 타이머 갱신을 정상 수신과 같이 하고(wireguard-go와 같다), 버린 패킷은 `rejectedIPPacket`으로 알린다.
 
 시각: `wallClock`이 1970년 이전이면 1970년으로 본다.
 
@@ -124,12 +135,27 @@ public struct WireGuardDevice: Sendable {
 - 타이머와 키 교체: 노트 "상수와 타이머" 표의 값 그대로. 재시도마다 initiation을 새로 만든다
 - 세션이 서기 전의 송신 대기열: 피어당 최대 64개, 넘치면 가장 오래된 것을 버린다
 - cookie reply의 수신 처리와 그 뒤 initiation의 mac2(상대가 부하 상태일 때 회복하는 데 필요하다)
+- cookie reply 보내기(부하 판정, mac2 검사, 출처별 속도 제한). 2026-11-15에 더했다. 아래 "cookie reply 보내기"
 
 제외(코드에 `shortcut:` 주석으로 한계를 남긴다):
 
-- cookie reply를 **보내는** 쪽(부하 판정, rate limiter). 필요해지는 시점: 신뢰할 수 없는 네트워크에 UDP 포트를 여는 M4
 - PSK 설정, persistent keepalive
 - 버퍼 재사용. 지금은 패킷마다 배열을 만든다. 필요해지는 시점: M5의 실기기 처리량·메모리 측정에서 병목으로 확인될 때
+
+## cookie reply 보내기 (2026-11-15)
+
+node 공개 키는 비밀이 아니므로 mac1이 맞는 initiation은 누구나 만들 수 있고, 받는 쪽은 그때마다 X25519를 계산한다. 그래서 받는 쪽은 부하 상태에서 mac2를 요구하고 cookie reply로 답하며, 출처 호스트별로 속도를 제한한다(백서 §5.3, 노트 "mac1·mac2와 cookie"). 이 장치는 iOS 확장 안에서도 돈다.
+
+1. **순서**(wireguard-go `device/receive.go`): initiation·response는 mac1을 검사하고(틀리면 `authenticationFailed`, 부하 수에 세지 않는다) → 부하 판정에 센다 → 부하이면 mac2를 검사해 틀리면 `.cookieReply`를 내고 메시지를 처리하지 않는다(X25519 전) → mac2가 맞으면 출처 `host`의 속도 제한을 넘을 때 `rateLimited` → 나머지는 부하가 아닐 때와 같다. 부하가 아닐 때는 mac2를 보지 않는다.
+2. **부하 판정**(`HandshakeLoad`): Go는 핸드셰이크 큐 길이가 문턱(기본 1024/8 = 128, Tailscale iOS는 큐 64라서 8)에 이르렀는지로 본다(`device/device.go` `IsUnderLoad`, `wgengine/wgcfg/mem_ios.go`). 이 장치에는 큐가 없고 받은 자리에서 처리하므로, **mac1을 통과한 핸드셰이크 메시지가 1초보다 짧은 간격 안에 128개**에 이르면 부하로 본다. 감지한 뒤 Go와 같이 1초(`UnderLoadAfterTime`) 동안 부하로 머물고 그 시각 정각에 끝난다. 바꿀 수 있는 옵션이 아니다.
+   - 근거: 응답자가 initiation 하나를 처리하는 시간은 이 개발 기기(Apple M4 Pro, release)에서 약 211µs, cookie reply 하나는 약 20µs다(400개 평균). 문턱 128/초는 X25519 경로에 한 코어의 약 2.7%(iPhone이 1.5배 느리다고 보아도 약 4%)까지만 쓰게 하는 값이다. Go의 큐 문턱은 "처리가 밀렸다"는 뜻이라 초당 비율로 바로 옮길 수 없다. 큐가 128개 밀리려면 처리 속도(이 기기에서 초당 약 4,700개)를 넘는 입력이 와야 하므로 Go 데스크톱보다는 이르게, Go iOS(8개 밀림, 약 2ms 분량)보다는 늦게 걸린다.
+   - 정상적인 tailnet: 한 피어는 핸드셰이크 메시지를 `RekeyTimeout`(5초)에 한 번보다 자주 보내지 않는다. 망이 바뀌거나 잠에서 깨어 모든 활성 피어가 한꺼번에 다시 핸드셰이크해도 1초에 피어당 많아야 2개(상대의 initiation과 우리 initiation의 response)이므로, 활성 피어 64개(한쪽만 시작하면 128개)까지는 걸리지 않는다. 잘못 걸려도 그 피어는 cookie를 받아 5초 뒤 재시도에서 mac2로 통과한다(끊기지 않고 늦어질 뿐이다).
+3. **cookie와 비밀**(`CookieChecker`, wireguard-go `device/cookie.go`): cookie = MAC(비밀 32바이트, `source.address`), mac2 = MAC(cookie, mac2 앞까지). 비밀은 처음 reply를 만들 때 시스템 난수로 뽑고, 만든 지 120초(`CookieRefreshTime`)가 지난 뒤 reply를 만들 때 바꾼다. 비밀이 없거나 120초를 넘었으면 mac2는 늘 틀리다. reply = type 3 ‖ receiver(거절한 메시지의 sender) ‖ nonce 24(시스템 난수) ‖ XChaCha20-Poly1305(키 HASH("cookie--" ‖ 자기 공개 키), 평문 cookie, AAD 거절한 메시지의 mac1), 64바이트. 비밀·cookie·출처는 `description`·`dump`·오류에 나오지 않는다(`WireGuardDevice`의 `customMirror`는 공개 키와 피어만 보인다).
+4. **출처별 속도 제한**(`RateLimiter`, wireguard-go `ratelimiter/ratelimiter.go`): `source.host`마다 초당 20개, 버스트 5(`packetCost` 50ms, `maxTokens` 250ms). 새 호스트는 첫 메시지를 받고 토큰 `maxTokens − packetCost`로 시작하고, 아는 호스트는 지난 시간만큼 채우되 상한을 넘지 않으며 토큰이 `packetCost`보다 클 때만 받는다.
+   - **표 상한 4096개**. Go는 상한 없이 1초마다 1초 넘게 쉰 항목을 지운다. 여기서는 표가 찼을 때만 1초 넘게 쉰 항목을 지우고, 그래도 차 있으면 새 호스트를 받지 않는다(닫힌 쪽). 늦게 지워도 결과는 같다(1초 넘게 쉰 항목의 토큰은 상한까지 차 있어 새 항목과 똑같이 동작한다). 항목에는 그 출처에서 cookie를 받아 mac2를 맞춘 호스트만 들어가므로 주소를 꾸며 표를 채울 수 없고, 4096개(항목당 약 100바이트로 어림하면 약 400KB, 재지 않았다)는 큰 tailnet의 동시 재핸드셰이크보다 넉넉하다. 닫힌 쪽을 고른 까닭: 열린 쪽(오래된 항목을 밀어내기)은 실제 주소를 많이 가진 공격자가 이미 표에 있는 호스트의 몫을 지워 버릴 수 있고, 표를 키우면 메모리가 입력만큼 자란다. 상한에 닿은 동안 새 호스트는 1초 안에 쉬는 항목이 생길 때까지 핸드셰이크하지 못한다.
+5. **출처**: 노드가 받은 길에서 만든다(엔진 계약 N5 "cookie reply"). 장치는 `address`와 `host`를 해석하지 않는다.
+
+시험(`Tests/SwiftailWireGuardTests/CookieReplyTests.swift`, `RateLimiterTests.swift`, 상호 운용 `cookieReplyUnderLoad`): 문턱과 창의 경계, 1초 유지, mac1이 틀린 것은 세지 않음, 실제 입력으로 문턱을 넘김, reply 형식과 Swift 소비 코드와의 왕복, 열리지 않는 본문·모르는 피어에도 X25519 전에 reply, 다른 출처의 mac2와 낡은 비밀의 cookie 거절, 비밀 교체 주기, response에도 mac2 요구, 장치에서의 속도 제한 경계, Go `TestRatelimiter`의 일정, 표 상한과 정리, 부하 상태의 임의 입력, `dump`. 상호 운용: wireguard-go가 초기자이고 Swift가 부하 상태일 때 Go가 cookie reply를 받아 mac2를 붙인 재시도로 핸드셰이크를 마친다(부하 상태는 시험 전용으로 `underLoadUntil`을 정해 만든다).
 
 ## 시험
 
@@ -139,7 +165,7 @@ public struct WireGuardDevice: Sendable {
 2. 시간 주입: 120초 뒤 초기자의 rekey, 응답자 쪽 rekey, 180초 넘은 키의 거부, 핸드셰이크 재시도(5초 + 지터)와 포기, 540초 뒤 키 재료 삭제.
 3. 재전송 방지 창: wireguard-go `replay/replay_test.go`의 사례를 옮긴다(파일 머리에 출처와 MIT 라이선스).
 4. 유실·변조: response 유실 뒤 복구, 옛 response가 새 핸드셰이크를 덮지 않음, 변조된 메시지가 상태를 바꾸지 않음, AllowedIPs 밖 출발 주소 거부.
-5. cookie: reply 소비 뒤 mac2가 붙는다. cookie는 120초 뒤 쓰지 않는다.
+5. cookie: reply 소비 뒤 mac2가 붙는다. cookie는 120초 뒤 쓰지 않는다. 보내는 쪽은 위 "cookie reply 보내기"의 시험.
 6. 어떤 바이트열을 `receive`에 넣어도 죽지 않는다(길이 0~200의 무작위·경계 입력).
 
 상호 운용 관문(`Tests/SwiftailWireGuardInteropTests`, `Tools/interop`의 wireguard-go 피어 상대, UDP 루프백):

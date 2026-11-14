@@ -26,6 +26,25 @@ public struct WireGuardDevice: Sendable {
         /// 피어가 보낸 것은 맞지만 올리지 않은 IP 패킷. 이유는 `malformed` 또는 `disallowedSource`다.
         /// 보낼 것도 올릴 것도 없으며, 호출하는 쪽이 지표나 로그를 남기는 데 쓴다.
         case rejectedIPPacket(WireGuardError, from: PublicKey)
+        /// 부하 상태에서 mac2가 맞지 않는 핸드셰이크 메시지에 답하는 cookie reply(64바이트). 방금 받은 데이터그램의
+        /// 출처로 그 길 그대로 보낸다. 핸드셰이크를 열기 전이라 보낸 피어를 모르므로 피어 경로 선택을 거치지 않는다.
+        case cookieReply([UInt8])
+    }
+
+    /// 받은 데이터그램이 온 곳. 장치는 내용을 해석하지 않고 cookie를 묶고 속도 제한을 세는 데만 쓴다.
+    ///
+    /// 다른 출처끼리는 `address`가 달라야 하고, 같은 호스트에서 온 것은 `host`가 같아야 한다. 출처의 종류(UDP,
+    /// DERP)가 다르면 두 값의 길이도 다르게 만들어 서로 겹치지 않게 한다.
+    public struct Source: Hashable, Sendable {
+        /// cookie가 묶이는 값. 이 값으로 답장이 실제로 닿는 단위다(UDP면 주소와 포트).
+        public var address: [UInt8]
+        /// 속도 제한을 함께 받는 단위(UDP면 IP 주소).
+        public var host: [UInt8]
+
+        public init(address: [UInt8], host: [UInt8]) {
+            self.address = address
+            self.host = host
+        }
     }
 
     /// 이 장치의 정적 공개 키.
@@ -33,6 +52,10 @@ public struct WireGuardDevice: Sendable {
     let staticKey: Curve25519.KeyAgreement.PrivateKey
     /// 받은 핸드셰이크 메시지의 mac1을 검사하는 키. 자기 공개 키에서 나온다.
     let mac1Key: [UInt8]
+    /// 부하 상태에서 mac2를 검사하고 cookie reply를 만든다. 비밀을 쥔다.
+    var cookieChecker: CookieChecker
+    var handshakeLoad = HandshakeLoad()
+    var rateLimiter = RateLimiter()
     /// TAI64N 계산용: `monotonicOrigin` 시점의 Unix 기원부터의 경과 시간.
     private let monotonicOrigin: ContinuousClock.Instant
     private let wallClockOrigin: Duration
@@ -50,6 +73,7 @@ public struct WireGuardDevice: Sendable {
         staticKey = privateKey
         publicKey = PublicKey(privateKey.publicKey)
         mac1Key = MAC.mac1Key(for: publicKey)
+        cookieChecker = CookieChecker(publicKey: publicKey)
         monotonicOrigin = now
         wallClockOrigin = .seconds(wallClock.timeIntervalSince1970)
     }
@@ -115,5 +139,13 @@ public struct WireGuardDevice: Sendable {
     /// now 시점의 TAI64N.
     func timestamp(at now: ContinuousClock.Instant) -> TAI64N {
         TAI64N(sinceUnixEpoch: wallClockOrigin + (now - monotonicOrigin))
+    }
+}
+
+extension WireGuardDevice: CustomReflectable {
+    /// 정적 비밀 키, cookie 비밀, 속도 제한 표의 출처 주소가 `print`·`dump`·디버거에 나오지 않도록 공개 키와 피어만
+    /// 보인다(피어도 공개 정보만 보인다).
+    public var customMirror: Mirror {
+        Mirror(self, children: ["publicKey": publicKey, "peers": Array(peers.values)], displayStyle: .struct)
     }
 }

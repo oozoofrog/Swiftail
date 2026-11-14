@@ -12,10 +12,11 @@ import SwiftailBase
 /// 거르는 순서는 싼 것부터다: 출처 → 모양 → 길이 → 보낸 쪽 disco 키(표에서 찾기만 한다) → 복호화 → 경로 규칙.
 /// 모르는 키의 disco는 암호 연산 없이 버려지고, 열리지 않은 패킷은 WireGuard로 넘어가지 않는다(노트 3.2 6).
 ///
-/// WireGuard 데이터그램은 내용을 보지 않는다. 피어는 WireGuard 장치가 receiver index로 정한다(동작 A3).
+/// WireGuard 데이터그램은 내용을 보지 않는다. 피어는 WireGuard 장치가 receiver index로 정한다(동작 A3). 온 길은
+/// 함께 싣는다. WireGuard가 부하 상태일 때 cookie를 그 길에 묶고 cookie reply를 그 길로 되돌린다.
 extension Magicsock {
-    /// disco가 온 길.
-    enum DiscoPath: Equatable {
+    /// 받은 것이 온 길. disco의 경로 규칙과, WireGuard 데이터그램에 답할 곳(cookie reply)을 정한다.
+    public enum Source: Sendable, Hashable {
         /// UDP. 출처 주소.
         case udp(IPEndpoint)
         /// DERP. 보낸 쪽 node 키와 받은 지역.
@@ -74,7 +75,7 @@ extension Magicsock {
         if DiscoPacket.isDisco(datagram) {
             return receiveDisco(datagram, via: .udp(source), at: now, using: &generator)
         }
-        return [.wireGuard(datagram)]
+        return [.wireGuard(datagram, from: .udp(source))]
     }
 
     /// `receiveDERP(_:from:region:at:)`과 같다. 난수를 `generator`에서 뽑는다.
@@ -93,7 +94,7 @@ extension Magicsock {
             return receiveDisco(packet, via: .derp(peer, region: region), at: now, using: &generator)
         }
         guard peers[peer] != nil else { return [.dropped(.unknownDERPSender)] }
-        return [.wireGuard(packet)]
+        return [.wireGuard(packet, from: .derp(peer, region: region))]
     }
 
     // MARK: 분류
@@ -135,7 +136,7 @@ extension Magicsock {
     /// disco 패킷 하나를 열어 종류별로 처리한다. 처리한 피어의 경로가 바뀌었으면 `.pathChanged`도 낸다.
     private mutating func receiveDisco(
         _ packet: [UInt8],
-        via path: DiscoPath,
+        via path: Source,
         at now: ContinuousClock.Instant,
         using generator: inout some RandomNumberGenerator
     ) -> [Output] {
@@ -175,7 +176,7 @@ extension Magicsock {
         _ txID: TransactionID,
         from sender: DiscoPublicKey,
         owner: NodePublicKey,
-        via path: DiscoPath,
+        via path: Source,
         at now: ContinuousClock.Instant,
         using generator: inout some RandomNumberGenerator
     ) -> [Output] {
@@ -200,7 +201,7 @@ extension Magicsock {
     private mutating func receiveCallMeMaybe(
         _ endpoints: [IPEndpoint],
         from sender: DiscoPublicKey,
-        via path: DiscoPath,
+        via path: Source,
         at now: ContinuousClock.Instant,
         using generator: inout some RandomNumberGenerator
     ) -> [Output] {
@@ -211,7 +212,7 @@ extension Magicsock {
     }
 }
 
-extension Magicsock.DiscoPath {
+extension Magicsock.Source {
     /// UDP로 왔으면 출처 주소, DERP로 왔으면 nil.
     var udpSource: IPEndpoint? {
         if case .udp(let source) = self { source } else { nil }

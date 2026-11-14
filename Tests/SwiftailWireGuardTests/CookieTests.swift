@@ -1,7 +1,7 @@
 // 계약 시험 5: cookie reply를 받으면 이후 핸드셰이크 메시지에 mac2가 붙고, 120초가 지나면 쓰지 않는다.
 //
-// 이 모듈은 cookie reply를 보내지 않으므로, 부하 상태의 응답자가 보낼 reply는 시험이 직접 만든다
-// (wireguard-go `device/cookie.go`의 `CreateReply`와 같은 식).
+// 받는 쪽의 형식을 따로 고정하려고, 부하 상태의 응답자가 보낼 reply를 시험이 규격대로 직접 만든다
+// (wireguard-go `device/cookie.go`의 `CreateReply`와 같은 식). 장치가 보내는 쪽은 `CookieReplyTests.swift`.
 
 import Testing
 

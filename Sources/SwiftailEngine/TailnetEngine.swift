@@ -26,7 +26,14 @@ public struct TailnetEngine: Sendable {
         case ipPacket([UInt8])
         /// 버린 패킷. 진단과 시험용이다.
         case dropped(Drop)
+        /// 방금 `receive`한 데이터그램의 출처로 그 길 그대로 되돌릴 WireGuard cookie reply. 보낸 피어를 아직 모르므로
+        /// 피어 경로 선택을 거치지 않는다. `receive`의 출력에만 나온다.
+        case cookieReply([UInt8])
     }
+
+    /// 받은 데이터그램이 온 곳. 부르는 쪽이 경로(UDP 주소, DERP 보낸 쪽)에서 만든 불투명한 값이다. 엔진은 WireGuard
+    /// 장치에 넘기기만 한다(부하 상태의 cookie와 출처별 속도 제한).
+    public typealias Source = WireGuardDevice.Source
 
     /// 버린 까닭.
     public enum Drop: Sendable, Equatable {

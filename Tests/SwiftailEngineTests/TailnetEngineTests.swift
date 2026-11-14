@@ -9,7 +9,7 @@ import Testing
 import SwiftailBase
 import SwiftailControl
 @testable import SwiftailEngine
-import SwiftailWireGuard
+@testable import SwiftailWireGuard
 
 /// 메모리에서 이어진 엔진 둘.
 private struct EnginePair {
@@ -20,6 +20,11 @@ private struct EnginePair {
         var address4: String { self == .alice ? "100.64.0.1" : "100.64.0.2" }
         var address6: String { self == .alice ? "fd7a:115c:a1e0::1" : "fd7a:115c:a1e0::2" }
         var id: Int64 { self == .alice ? 1 : 2 }
+        /// 이 쪽이 보낸 데이터그램이 상대에게 도착할 때의 출처(UDP `192.0.2.x:41641`).
+        var source: TailnetEngine.Source {
+            let host: [UInt8] = [192, 0, 2, self == .alice ? 1 : 2]
+            return TailnetEngine.Source(address: host + [0x29, 0xA2], host: host)
+        }
     }
 
     /// 한 번 오간 결과: 각 쪽이 위로 올린 패킷과 버린 것.
@@ -82,7 +87,11 @@ private struct EnginePair {
             switch output {
             case let .datagram(bytes, to: destination):
                 #expect(destination == publicKey(sender.other))
-                let replies = self[sender.other].receive(bytes, at: now)
+                let replies = self[sender.other].receive(bytes, from: sender.source, at: now)
+                queue += replies.map { (from: sender.other, output: $0) }
+            case let .cookieReply(bytes):
+                // 받은 데이터그램의 출처, 곧 방금 보낸 상대에게 되돌아간다.
+                let replies = self[sender.other].receive(bytes, from: sender.source, at: now)
                 queue += replies.map { (from: sender.other, output: $0) }
             case let .ipPacket(bytes):
                 delivery.packets[sender, default: []].append(bytes)
@@ -212,7 +221,7 @@ struct TailnetEngineTests {
         var old = oldBob
         let stale = old.send(toAlice, at: clockStart + .seconds(1))
         let datagram = try #require(stale.compactMap { if case let .datagram(bytes, _) = $0 { bytes } else { nil } }.first)
-        #expect(pair.alice.receive(datagram, at: clockStart + .seconds(1)) == [.dropped(.wireGuard(.unknownPeer))])
+        #expect(pair.alice.receive(datagram, from: EnginePair.Side.bob.source, at: clockStart + .seconds(1)) == [.dropped(.wireGuard(.unknownPeer))])
     }
 
     @Test("AllowedIPs 밖의 출발지는 필터보다 먼저 WireGuard가 버린다")
@@ -324,6 +333,42 @@ struct TailnetEngineTests {
         #expect(!retry.isEmpty)
     }
 
+    @Test("부하 상태의 WireGuard가 낸 cookie reply를 출처로 되돌릴 것으로 내고, 같은 출처에서 mac2를 붙인 재시도로 세션이 선다")
+    func cookieReplyUnderLoad() throws {
+        var pair = try EnginePair()
+        pair.bob.device.handshakeLoad.underLoadUntil = clockStart + .seconds(60)
+        let request = TestPacket.udp(from: "100.64.0.1", 40000, to: "100.64.0.2", 7)
+        let initiation = pair.alice.send(request, at: clockStart)
+        guard case let .datagram(bytes, _)? = initiation.first else {
+            Issue.record("initiation이 없다: \(initiation)")
+            return
+        }
+        let answered = pair.bob.receive(bytes, from: EnginePair.Side.alice.source, at: clockStart)
+        guard case let .cookieReply(reply)? = answered.first, answered.count == 1 else {
+            Issue.record("cookie reply가 아니다: \(answered)")
+            return
+        }
+        #expect(reply.count == 64 && reply[0] == 3)
+        #expect(pair.alice.receive(reply, from: EnginePair.Side.bob.source, at: clockStart).isEmpty)
+
+        // 재시도 initiation은 mac2를 붙인다. 다른 출처에서 오면 cookie가 맞지 않아 다시 cookie reply다.
+        let retryAt = try #require(pair.alice.nextDeadline)
+        let retry = pair.alice.advance(to: retryAt)
+        guard case let .datagram(retried, _)? = retry.first else {
+            Issue.record("재시도가 없다: \(retry)")
+            return
+        }
+        let elsewhere = TailnetEngine.Source(address: [198, 51, 100, 9, 0x29, 0xA2], host: [198, 51, 100, 9])
+        guard case .cookieReply? = pair.bob.receive(retried, from: elsewhere, at: retryAt).first else {
+            Issue.record("다른 출처의 mac2를 받아들였다")
+            return
+        }
+        let delivery = pair.deliver(pair.bob.receive(retried, from: EnginePair.Side.alice.source, at: retryAt), from: .bob, at: retryAt)
+        #expect(delivery.drops[.alice] == nil)
+        // 세션이 섰다. 대기열의 요청이 bob에 닿는다(bob은 규칙이 없어 필터가 버린다).
+        #expect(delivery.drops[.bob] == [.inbound(.noRuleMatched)])
+    }
+
     @Test("dump에 node 개인 키가 나오지 않는다")
     func dumpHidesSecrets() throws {
         var pair = try EnginePair()
@@ -344,7 +389,7 @@ struct TailnetEngineTests {
         for step in 0..<5_000 {
             let bytes = random.bytes(Int.random(in: 0...200, using: &random))
             let now = clockStart + .milliseconds(step)
-            _ = pair.alice.receive(bytes, at: now)
+            _ = pair.alice.receive(bytes, from: EnginePair.Side.bob.source, at: now)
             _ = pair.alice.send(bytes, at: now)
         }
     }

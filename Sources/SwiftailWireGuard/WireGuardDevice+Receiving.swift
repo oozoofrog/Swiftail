@@ -5,23 +5,38 @@
 /// - cookie reply: 다음 핸드셰이크 메시지의 mac2에 쓸 cookie를 보관한다.
 /// - transport: 복호화, 재전송 검사, next 확인, IP 패킷 검사와 AllowedIPs 검사.
 ///
+/// initiation과 response는 먼저 mac1을 보고, 부하 상태이면 mac2와 출처별 속도 제한을 본다(`admitHandshake`).
+/// mac2가 틀리면 X25519를 하기 전에 cookie reply로 답하고 메시지는 처리하지 않는다.
+///
 /// 어느 경로든 실패하면 오류를 던지고 상태를 바꾸지 않는다. 인증된 transport 안의 IP 패킷이 잘못된
 /// 경우는 데이터그램의 실패가 아니므로 오류가 아니라 `rejectedIPPacket` 출력으로 알린다.
 ///
 /// 백서 §5.4, §6, `docs/protocol-notes/wireguard.md` "응답자: initiation 소비", "초기자: response 소비",
-/// "cookie reply 소비", "전송 데이터: 받기" (출처: wireguard-go `device/receive.go`, `device/noise-protocol.go`).
+/// "mac1·mac2와 cookie", "전송 데이터: 받기" (출처: wireguard-go `device/receive.go`, `device/noise-protocol.go`).
 extension WireGuardDevice {
     /// 네트워크에서 받은 데이터그램 하나를 처리한다.
     ///
-    /// 오류를 던진 경우 상태는 바뀌지 않는다(initiation flood 검사를 위한 수신 시각 기록은 예외).
+    /// 오류를 던진 경우 상태는 바뀌지 않는다. 예외는 공격을 세는 기록이다: initiation flood 검사를 위한 수신 시각,
+    /// 부하 판정을 위한 mac1 통과 수, 속도 제한 표.
     /// 인증된 transport의 평문이 올바른 IP 패킷이 아니거나 출발 주소가 AllowedIPs 밖이면 오류를 던지지
     /// 않고 `rejectedIPPacket`을 낸다. 그 패킷도 인증된 수신이므로 세션 상태는 정상 수신과 같이 갱신한다.
-    public mutating func receive(_ datagram: [UInt8], at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
+    ///
+    /// - Parameter source: 데이터그램이 온 곳. 부하 상태에서 cookie를 묶고 속도 제한을 센다. `.cookieReply` 출력은
+    ///   이곳으로 되돌려 보낸다.
+    public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         switch try Message(parsing: datagram) {
         case let .initiation(message, macs):
-            return try receiveInitiation(message, macs: macs, at: now)
+            guard MAC.isValidMAC1(macs, over: message.bytesBeforeMACs, key: mac1Key) else { throw .authenticationFailed }
+            if let reply = try admitHandshake(from: message.sender, over: message.bytesBeforeMACs, macs: macs, source: source, at: now) {
+                return [.cookieReply(reply)]
+            }
+            return try receiveInitiation(message, at: now)
         case let .response(message, macs):
-            return try receiveResponse(message, macs: macs, at: now)
+            guard MAC.isValidMAC1(macs, over: message.bytesBeforeMACs, key: mac1Key) else { throw .authenticationFailed }
+            if let reply = try admitHandshake(from: message.sender, over: message.bytesBeforeMACs, macs: macs, source: source, at: now) {
+                return [.cookieReply(reply)]
+            }
+            return try receiveResponse(message, at: now)
         case let .cookieReply(reply):
             try receiveCookieReply(reply, at: now)
             return []
@@ -32,10 +47,35 @@ extension WireGuardDevice {
 
     // MARK: - 핸드셰이크
 
-    private mutating func receiveInitiation(_ message: Initiation, macs: MessageMACs, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
-        // mac1은 우리 공개 키를 아는 사람만 만든다. 비싼 DH 전에 거른다.
-        // shortcut: 부하 상태의 mac2 검사와 cookie reply 송신은 없다(Cookie.swift 참조).
-        guard MAC.isValidMAC1(macs, over: message.bytesBeforeMACs, key: mac1Key) else { throw .authenticationFailed }
+    /// mac1을 통과한 핸드셰이크 메시지의 문지기(wireguard-go `device/receive.go`의 `IsUnderLoad` 분기).
+    ///
+    /// mac1은 우리 공개 키를 아는 사람이면 누구나 만들 수 있다. 그래서 이 메시지를 부하 판정에 세고, 부하 상태이면
+    /// 비싼 X25519 전에 두 가지를 더 본다.
+    /// 1. mac2가 이 출처에 준 cookie로 만든 것이 아니면 cookie reply를 돌려준다. 메시지는 처리하지 않는다.
+    /// 2. mac2가 맞아도 출처 호스트의 몫을 넘으면 `rateLimited`.
+    /// 부하 상태가 아니면 mac2는 보지 않는다.
+    ///
+    /// - Returns: 보낼 cookie reply. nil이면 메시지를 처리해도 된다.
+    private mutating func admitHandshake(
+        from sender: UInt32,
+        over bytesBeforeMACs: [UInt8],
+        macs: MessageMACs,
+        source: Source,
+        at now: ContinuousClock.Instant
+    ) throws(WireGuardError) -> [UInt8]? {
+        guard handshakeLoad.record(at: now) else { return nil }
+        guard cookieChecker.isValidMAC2(macs, over: bytesBeforeMACs, from: source, at: now) else {
+            var random = SystemRandomNumberGenerator()
+            guard let reply = cookieChecker.makeReply(to: sender, mac1: macs.mac1, from: source, at: now, using: &random) else {
+                throw .authenticationFailed
+            }
+            return reply.bytes
+        }
+        guard rateLimiter.allow(source.host, at: now) else { throw .rateLimited }
+        return nil
+    }
+
+    private mutating func receiveInitiation(_ message: Initiation, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         guard let opened = Handshake.openInitiation(message, localStatic: staticKey) else { throw .authenticationFailed }
         guard var peer = peers[opened.initiator] else { throw .unknownPeer }
         guard let staticStaticSecret = peer.staticStaticSecret,
@@ -65,8 +105,7 @@ extension WireGuardDevice {
         return [.datagram(response.bytesBeforeMACs + macs.bytes, to: peer.publicKey)]
     }
 
-    private mutating func receiveResponse(_ message: Response, macs: MessageMACs, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
-        guard MAC.isValidMAC1(macs, over: message.bytesBeforeMACs, key: mac1Key) else { throw .authenticationFailed }
+    private mutating func receiveResponse(_ message: Response, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         guard let owner = indexTable[message.receiver], var peer = peers[owner] else { throw .unknownPeer }
         // index가 이미 keypair로 바뀌었다면 이 response는 처리한 적이 있다.
         guard let pending = peer.pendingHandshake, pending.localIndex == message.receiver else { throw .replayed }

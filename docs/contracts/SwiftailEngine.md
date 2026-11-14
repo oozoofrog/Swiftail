@@ -258,6 +258,9 @@ public struct TailnetEngine: Sendable {
         case datagram([UInt8], to: NodePublicKey)
         case ipPacket([UInt8])
         case dropped(Drop)
+        /// 새로 더함(2026-11-15). 방금 `receive`한 데이터그램의 출처로 그 길 그대로 되돌릴 WireGuard cookie reply.
+        /// 보낸 피어를 모르므로 피어 경로 선택을 거치지 않는다. `receive`의 출력에만 나온다.
+        case cookieReply([UInt8])
     }
     public enum Drop: Sendable, Equatable {
         case inbound(PacketFilter.DropReason)
@@ -268,13 +271,16 @@ public struct TailnetEngine: Sendable {
         case wireGuard(WireGuardError)
         // 지움: noRouteToPeer(→ Magicsock.Drop.noRouteToPeer), discoMessage(엔진에 disco가 오지 않는다)
     }
+    /// 새로 더함(2026-11-15). 받은 데이터그램이 온 곳. 노드가 경로에서 만든 불투명한 값이고 엔진은 장치에 넘기기만 한다.
+    public typealias Source = WireGuardDevice.Source
 
     public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, now: ContinuousClock.Instant, wallClock: Date)   // 그대로
     /// `homeDERP` 인자를 지운다. 엔진은 지역을 모른다.
     public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]   // 그대로
     /// `Magicsock`이 `.wireGuard`로 낸 데이터그램 하나. 보낸 쪽 키 인자를 지운다(UDP에는 없다. 피어는 WireGuard가 정한다).
-    public mutating func receive(_ datagram: [UInt8], at now: ContinuousClock.Instant) -> [Output]
+    /// `source`는 2026-11-15에 더했다. WireGuard가 부하 상태일 때 cookie를 묶고 출처별 속도 제한을 세는 데만 쓴다.
+    public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) -> [Output]
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output]   // 그대로
     public var nextDeadline: ContinuousClock.Instant? { get }                 // 그대로
 }
@@ -336,7 +342,8 @@ extension TailnetNode {
 - **N5 (패킷 흐름)**:
   - 보내기: `send(ipPacket)` → `engine.send` → `.datagram(b, to: k)` → `magicsock.send(b, to: k)`.
   - UDP 받기: 소켓 흐름의 `(bytes, source)` → `magicsock.receiveUDP`.
-  - `Magicsock` 출력: `.udp` → `socket.send`(실패는 버린다. `shortcut:` 송신 오류에 따른 재결속은 M5, magicsock 계약 제외 표), `.derp` → 그 지역 연결(N3), `.wireGuard` → `engine.receive` → 엔진 출력은 다시 이 흐름으로, `.endpointsChanged`·`.homeRegionChanged` → N4, `.pathChanged` → N6, `.dropped` → 버린다.
+  - `Magicsock` 출력: `.udp` → `socket.send`(실패는 버린다. `shortcut:` 송신 오류에 따른 재결속은 M5, magicsock 계약 제외 표), `.derp` → 그 지역 연결(N3), `.wireGuard(b, from: 길)` → `engine.receive(b, from: 길의 출처)` → 엔진 출력은 다시 이 흐름으로, `.endpointsChanged`·`.homeRegionChanged` → N4, `.pathChanged` → N6, `.dropped` → 버린다.
+  - cookie reply(2026-11-15): `engine.receive`가 낸 `.cookieReply(b)`는 `magicsock.send`를 거치지 않고 받은 길로 보낸다. UDP로 왔으면 `.udp(b, to: 출처)`, DERP로 왔으면 `.derp(b, to: 보낸 쪽, region: 받은 지역)`을 위 흐름에 넣는다(N8의 거르개도 그대로 적용된다). 엔진에 넘기는 출처는 `address`(cookie가 묶이는 값)와 `host`(속도 제한 단위)다. UDP는 Go 표준 bind와 같이 `address` = 주소 ‖ 포트(LE), `host` = 주소. DERP는 Tailscale magicsock과 같은 뜻으로 피어마다 하나이고 지역은 넣지 않는다: 둘 다 node 공개 키 32바이트(Go는 피어별 가짜 주소 `fakeWGAddr`에 묶고 피어의 tailnet 주소 `nodeAddr`로 제한한다, `wgengine/magicsock/endpoint.go` `DstToBytes`·`DstIP`). 길이가 달라 UDP 값과 겹치지 않는다.
   - netmap: `engine.apply` 뒤 `magicsock.setPeers(EnginePeer.peers(in: netmap, at: Date()).map { Magicsock.Peer(key: $0.key, discoKey: $0.discoKey, homeDERP: $0.homeDERP, endpoints: $0.endpoints) })`. 순서는 node ID 오름차순이다(disco 키의 주인, magicsock 계약 B1). `shortcut:` 키 만료로 엔진이 `advance`에서 내린 피어는 다음 netmap까지 `Magicsock`에 남는다. 엔진이 그 피어에게 데이터그램을 내지 않으므로 heartbeat는 45초 뒤 멈추고, 받은 WireGuard는 장치가 버린다.
   - 타이머: `min(engine.nextDeadline, magicsock.nextDeadline)`에 깨어나 둘 다 `advance`.
 - **N6 (경로 사건과 조회)**: 노드는 netmap마다 데이터면 피어의 키 → 이름 표를 만든다(이름은 `Node.name`에서 끝의 점 하나를 뗀 것). `.pathChanged(k, p)`는 그 표의 이름으로 `peerPathChanged`를 낸다. 피어가 빠지는 경우의 이름은 표를 바꾸기 전의 것을 쓴다. 이름이 빈 피어는 사건을 내지 않는다. `path(toPeerNamed:)`는 이름 → 키(N6의 비교 규칙) → `magicsock.path(to:at: .now)`. 이름은 엔진이 데이터면에 올린 바로 그 노드의 것이다(`EnginePeer.name`. 같은 키를 여러 노드가 내세울 때 netmap에서 키로 다시 찾으면 다른 노드의 이름이 붙는다).
