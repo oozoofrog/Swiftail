@@ -63,6 +63,7 @@ extension TCPStack {
     ///   지운다. 응용이 쥔 연결에 읽지 않은 데이터가 남았으면 응용이 놓을 때까지 그것만 둔다.
     /// - TIME-WAIT에 들었으면 응용에 `.closed(.finished)`를 알리고, 상대 FIN에 대한 ACK가 나간 뒤 기록으로 옮긴다(계약 동작
     ///   S6). 기록이 1,024개면 옮기지 않고 연결 그대로 두어 TIME-WAIT를 마치게 한다(기록도 연결도 상한을 넘지 않는다).
+    ///   기록의 수명은 연결이 TIME-WAIT에 든 때부터 240초까지다(`TimeWaitRecord.lifetimeEnd`).
     /// - 그 밖에는 연결의 기한을 다시 적는다.
     private mutating func settle(_ id: ConnectionID, at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         guard let index = connections.index(forKey: id), !connections.values[index].isDetached else { return }
@@ -89,7 +90,8 @@ extension TCPStack {
                 addTimeWaitRecord(
                     TimeWaitRecord(
                         sendNext: connection.sendNext, receiveNext: connection.receiveNext,
-                        deadline: connection.timers[.timeWait] ?? now + TCPConnection.timeWaitDuration),
+                        deadline: connection.timers[.timeWait] ?? now + TCPConnection.timeWaitDuration,
+                        lifetimeEnd: (connection.timeWaitEnteredAt ?? now) + TCPConnection.maximumTimeWaitLifetime),
                     for: connections.values[index].tuple)
                 finish(id)
             } else {
@@ -112,24 +114,6 @@ extension TCPStack {
         }
     }
 
-    /// 연결을 표에서 지운다. 아무것도 보내지 않는다. 맺는 중인 수와 대기열을 함께 고친다.
-    mutating func removeConnection(_ id: ConnectionID) {
-        guard let entry = connections.removeValue(forKey: id) else { return }
-        connectionDeadlines[id] = nil
-        let tuple = entry.tuple
-        if connectionsByTuple[tuple] == id {
-            connectionsByTuple[tuple] = nil
-        }
-        switch entry.role {
-        case .halfOpen(let listenerID):
-            leaveHalfOpen(entry.connection.remoteEndpoint.address, listener: listenerID)
-        case .queued(let listenerID):
-            listeners[listenerID]?.queue.removeAll { $0 == id }
-        case .application, .released:
-            break
-        }
-    }
-
     /// 아무것도 보내지 않고 연결을 끝낸다. 응용이 쥔 연결이면 `.closed(reason)`을 알린다(계약 동작 S9, X10).
     mutating func discard(_ id: ConnectionID, reason: CloseReason, into outputs: inout [Output]) {
         guard let entry = connections[id] else { return }
@@ -140,14 +124,14 @@ extension TCPStack {
     }
 
     /// 맺는 중인 연결 하나가 빠진다(맺어졌거나 지워졌다).
-    private mutating func leaveHalfOpen(_ remoteAddress: IPAddress, listener listenerID: ListenerID) {
+    mutating func leaveHalfOpen(_ remoteAddress: IPAddress, listener listenerID: ListenerID) {
         halfOpenCount -= 1
         let remaining = halfOpenCountByAddress[remoteAddress, default: 1] - 1
         halfOpenCountByAddress[remoteAddress] = remaining > 0 ? remaining : nil
         listeners[listenerID]?.halfOpenCount -= 1
     }
 
-    /// 새 연결 ID. 스택 안에서 다시 쓰지 않는다(2⁶⁴개를 다 쓸 일은 없다).
+    /// 새 연결 ID. 스택 안에서 다시 쓰지 않는다(2⁶⁴개를 다 쓸 일은 없다). 표에 넣는 일은 `insertConnection(_:)`이 한다.
     mutating func makeConnectionID() -> ConnectionID {
         defer { nextIdentifier &+= 1 }
         return ConnectionID(rawValue: nextIdentifier)

@@ -37,12 +37,14 @@ extension TCPConnection {
         let flags = segment.flags
 
         // TIME-WAIT에서 상대 FIN의 재전송(이미 소비한 FIN)은 시퀀스 검사로는 받지 않는 세그먼트다. 먼저 보아 ACK로 답하고
-        // 60초를 다시 잰다(RFC 9293 3.10.7.4 다섯째·여덟째의 TIME-WAIT, 계약 동작 T6).
+        // 60초를 다시 잰다(RFC 9293 3.10.7.4 다섯째·여덟째의 TIME-WAIT, 계약 동작 T6). 든 때부터 240초는 넘기지 않는다
+        // (RFC 9293 3.6.1의 2MSL. 피어가 59초마다 FIN을 다시 보내 연결을 쥐지 못하게 한다. M6 검토 A).
         if state == .timeWait, flags.contains(.fin), !flags.contains(.rst), !flags.contains(.syn),
             segment.sequenceNumber.advanced(by: UInt32(clamping: segment.payload.count))
                 == receiveNext.advanced(by: .max)  // RCV.NXT − 1
         {
-            timers[.timeWait] = now + Self.timeWaitDuration
+            let lifetimeEnd = (timeWaitEnteredAt ?? now) + Self.maximumTimeWaitLifetime
+            timers[.timeWait] = min(now + Self.timeWaitDuration, lifetimeEnd)
             scheduleAcknowledgment(immediately: true, at: now)
             return
         }
@@ -99,6 +101,11 @@ extension TCPConnection {
     /// RCV.WND는 광고한 가장 먼 오른쪽 끝까지다(계약 동작 F1, RFC 7323 2.4). 창이 0이면 데이터 있는 세그먼트는
     /// 받지 않는 것이 원칙이지만, RCV.NXT에서 시작하는 것은 데이터를 버리고 ACK·RST만 본다
     /// (같은 절의 "창 0의 특별 허용". 그렇지 않으면 창을 닫은 쪽이 상대의 ACK를 놓친다).
+    ///
+    /// 창이 0이어도 RCV.NXT에 온 **데이터 없는 FIN**은 받는다(계약 동작 T6). 표 6으로는 길이 1이라 받지 않는 세그먼트지만
+    /// FIN은 버퍼를 쓰지 않는다. gVisor는 길이를 데이터로만 재어 이 FIN을 받고(`rcv.go:460`, `header/tcp.go:682-685`) 자기도
+    /// 창과 상관없이 보낸다. 받지 않으면 그 재전송이 RTO로 물러나 EOF가 최대 120초 늦고 상대의 재전송 한도에 닿을 수 있다
+    /// (M6 검토 A). 데이터가 든 FIN은 위 원칙대로 데이터와 함께 버린다.
     func acceptedText(of segment: TCPSegment) -> InboundText? {
         let receiveNext = self.receiveNext
         let window = max(0, Int(advertisedWindowEnd.distance(from: receiveNext)))
@@ -108,7 +115,8 @@ extension TCPConnection {
             guard window == 0 ? start == 0 : (0 <= start && start < window) else { return nil }
         } else if window == 0 {
             guard start == 0 else { return nil }
-            return InboundText(sequence: receiveNext, payload: [], fin: false, droppedForZeroWindow: true)
+            let isBareFin = segment.payload.isEmpty && segment.flags.contains(.fin) && !segment.flags.contains(.syn)
+            return InboundText(sequence: receiveNext, payload: [], fin: isBareFin, droppedForZeroWindow: !isBareFin)
         } else {
             let last = start + length - 1
             guard (0 <= start && start < window) || (0 <= last && last < window) else { return nil }
@@ -172,8 +180,12 @@ extension TCPConnection {
             }
             return false
         }
-        zeroWindowProbeCount = 0
+        acknowledgedSinceRetransmissionTimeout = true
         let peerWindow = scaledWindow(of: segment)
+        // 탐침에 답했으니 다시 센다(MUST-37). 응용이 놓은 연결은 진전이 있을 때만이다(계약 동작 F8).
+        if !readClosed || sendUnacknowledged.precedes(ack) || peerWindow > 0 {
+            zeroWindowProbeCount = 0
+        }
 
         if sendUnacknowledged.precedes(ack) {
             acknowledge(upTo: ack, at: now, into: &outputs)
@@ -327,6 +339,7 @@ extension TCPConnection {
         timers.removeAll()
         timers[.acknowledgment] = acknowledgment
         timers[.timeWait] = now + Self.timeWaitDuration
+        timeWaitEnteredAt = now
         roundTripSample = nil
     }
 

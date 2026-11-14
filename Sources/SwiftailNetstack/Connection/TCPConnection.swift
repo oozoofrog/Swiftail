@@ -21,15 +21,25 @@ import SwiftailBase
 package struct TCPConnection: Sendable {
     /// 연결의 상태(RFC 9293 3.3.2). LISTEN은 스택이 맡는다.
     package enum State: Sendable, Equatable {
+        /// SYN-SENT: SYN을 보내고 SYN-ACK를 기다린다.
         case synSent
+        /// SYN-RECEIVED: SYN에 SYN-ACK로 답하고 ACK를 기다린다.
         case synReceived
+        /// ESTABLISHED: 양쪽이 데이터를 주고받는다.
         case established
+        /// FIN-WAIT-1: 이 쪽 FIN을 보냈고 확인을 기다린다.
         case finWait1
+        /// FIN-WAIT-2: 이 쪽 FIN이 확인됐고 상대 FIN을 기다린다.
         case finWait2
+        /// CLOSE-WAIT: 상대 FIN을 받았고 응용이 닫기를 기다린다.
         case closeWait
+        /// CLOSING: 양쪽 FIN이 엇갈려 이 쪽 FIN의 확인을 기다린다.
         case closing
+        /// LAST-ACK: 상대 FIN 뒤에 보낸 이 쪽 FIN의 확인을 기다린다.
         case lastAck
+        /// TIME-WAIT: 먼저 닫은 쪽이 상대 FIN의 재전송에 답하며 머문다(계약 동작 T6).
         case timeWait
+        /// CLOSED: 끝났다. 더 내는 것이 없다.
         case closed
     }
 
@@ -65,7 +75,8 @@ package struct TCPConnection: Sendable {
         /// 능동 열기가 거절됐다(SYN에 RST), 또는 상대가 광고한 MSS가 64보다 작다(계약 동작 T3, X9).
         case refused
         /// 상대가 답하지 않는다: 재전송 한도(SYN·SYN-ACK 7번, 데이터 15번), 0 창 탐침 15번, keep-alive 9번,
-        /// `close` 뒤 FIN-WAIT-2의 60초(계약 동작 R4, F8, T8, T6). 버퍼는 비운다.
+        /// `close` 뒤 FIN-WAIT-2의 60초(계약 동작 R4, F8, T8, T6). 응용이 `close`로 놓은 연결이 창 0에서 진전 없이 한도에
+        /// 닿은 것도 여기다(상대가 답했으면 RST를 보낸다. 계약 동작 F8). 버퍼는 비운다.
         case timedOut
         /// 이 쪽이 끊었다: `abort`, 읽지 않은 데이터가 있을 때의 `close`, `close` 뒤에 온 데이터(SHLD-3). 버퍼는 비운다.
         case aborted
@@ -95,7 +106,7 @@ package struct TCPConnection: Sendable {
     static let synchronizeRetransmissionLimit = 7
     /// 데이터·FIN의 재전송 한도(계약 동작 R4).
     static let dataRetransmissionLimit = 15
-    /// 아무 ACK도 받지 못한 0 창 탐침의 한도(계약 동작 F8).
+    /// 아무 ACK도 받지 못한 0 창 탐침의 한도. 응용이 놓은 연결은 진전 없는 탐침의 한도다(계약 동작 F8).
     static let zeroWindowProbeLimit = 15
     /// 0 창 탐침 간격의 상한(계약 동작 F8).
     static let maximumZeroWindowProbeInterval = Duration.seconds(60)
@@ -110,6 +121,9 @@ package struct TCPConnection: Sendable {
     static let keepaliveProbeLimit = 9
     /// TIME-WAIT(계약 동작 T6, gVisor의 값. RFC 9293의 2MSL은 4분이다).
     static let timeWaitDuration = Duration.seconds(60)
+    /// FIN 재전송이 TIME-WAIT를 다시 재어도 넘지 않는 끝: 든 때부터 2MSL = 4분(RFC 9293 3.6.1 MUST-13. MSL은 같은 RFC의
+    /// 용어 정의에서 2분). 스택의 TIME-WAIT 기록도 이 끝을 이어받는다.
+    static let maximumTimeWaitLifetime = Duration.seconds(240)
     /// `close` 뒤 FIN-WAIT-2에 머무는 한도(계약 동작 T6, gVisor linger 기본값).
     static let finWait2Linger = Duration.seconds(60)
 
@@ -170,7 +184,8 @@ package struct TCPConnection: Sendable {
     var finReceived = false
     /// 빈 곳 너머에 먼저 도착한 상대 FIN의 번호. 그 앞의 데이터가 다 도착하면 소비한다(RFC 9293 3.10.7.4 SHLD-31).
     var pendingFinSequence: SequenceNumber?
-    /// 응용이 `close`로 읽기를 끝냈다. 그 뒤에 온 데이터에는 RST로 답한다(SHLD-3).
+    /// 응용이 `close`로 읽기를 끝냈다. 그 뒤에 온 데이터에는 RST로 답한다(SHLD-3). 0 창 탐침과 줄어든 창의 재전송은 상대가
+    /// 답해도 한도에서 끝난다(계약 동작 F8).
     var readClosed = false
     /// 마지막 ACK 뒤에 순서대로 받은 바이트 수. 2×RMSS가 되면 곧바로 ACK한다(SHLD-19).
     var unacknowledgedByteCount = 0
@@ -181,6 +196,9 @@ package struct TCPConnection: Sendable {
     var congestionControl: NewRenoCongestionControl
     /// 같은 세그먼트(또는 SYN)를 다시 보낸 횟수. `SND.UNA`가 나아가면 0이 된다.
     var retransmissionCount = 0
+    /// 마지막 재전송 타이머 만료 뒤에 받아들일 수 있는 ACK를 받았다. 창이 0으로 줄었을 때 그 만료를 한도에 셀지 정한다
+    /// (계약 동작 F8 아래).
+    var acknowledgedSinceRetransmissionTimeout = false
     /// 왕복 시간을 재는 세그먼트(한 번에 하나, 계약 동작 R2). 재전송되면 버린다(Karn, RFC 6298 3).
     var roundTripSample: RoundTripSample?
     /// SYN·SYN-ACK를 처음 보낸 시각. 다시 보내지 않았으면 맺어질 때 왕복 시간의 첫 표본이 된다.
@@ -191,7 +209,10 @@ package struct TCPConnection: Sendable {
     // MARK: 타이머
 
     var timers = ConnectionTimers()
-    /// 아무 ACK도 받지 못한 채 보낸 0 창 탐침의 수.
+    /// TIME-WAIT에 든 시각. FIN 재전송이 기한을 늘리는 끝(`maximumTimeWaitLifetime`)을 이것에서 잰다.
+    var timeWaitEnteredAt: ContinuousClock.Instant?
+    /// 아무 ACK도 받지 못한 채 보낸 0 창 탐침의 수. 응용이 놓은 연결(`readClosed`)은 상대가 답해도 진전(새 데이터의 확인,
+    /// 열린 창)이 없으면 줄이지 않는다(계약 동작 F8).
     var zeroWindowProbeCount = 0
     /// 다음 0 창 탐침까지의 간격. 탐침마다 두 배, 상한 60초.
     var zeroWindowProbeInterval = Duration.zero

@@ -16,8 +16,9 @@ extension TCPSegment {
     ///
     /// 옵션은 EOL에서 멈추고 NOP는 건너뛴다. MSS(kind 2, 길이 4)와 Window Scale(kind 3, 길이 3)만 읽고 SYN이 켜진
     /// 세그먼트에서만 담는다. 모르는 옵션과, 길이가 다른 MSS·Window Scale은 길이로 건너뛴다. 길이가 2보다 작거나 머리
-    /// 밖으로 나가는 옵션은 `malformed`다(RFC 9293 3.2 MUST-7의 대비로, 연결을 끊지 않는다). MSS 0은 IPv4 536·IPv6 1220으로,
-    /// shift 14 초과는 14로 읽는다(RFC 9293 3.7.1, RFC 7323 2.3). 같은 옵션이 여럿이면 뒤의 것이 남는다.
+    /// 밖으로 나가는 옵션은 `malformed`다(RFC 9293 3.2 MUST-7의 대비로, 연결을 끊지 않는다). MSS 0은 IPv4 536·IPv6 1220으로
+    /// 읽는다: RFC에 정해진 값이 없어(RFC 9293 3.7.1의 536·1220은 옵션이 **없을** 때의 값이다) 계약 동작 W2가 그 값을 쓰기로
+    /// 정했다. shift 14 초과는 14로 읽는다(RFC 7323 2.3). 같은 옵션이 여럿이면 뒤의 것이 남는다.
     ///
     /// 받을 때 urgent pointer와 CWR·ECE·URG는 무시한다.
     package init(parsingIPPacket bytes: [UInt8]) throws(ParseError) {

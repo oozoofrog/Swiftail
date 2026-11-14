@@ -2,7 +2,7 @@
 ///
 /// 먼저 닫은 쪽은 TIME-WAIT에 머물며 상대의 FIN 재전송에 ACK하고, 앞 연결의 늦은 세그먼트가 같은 4-튜플의 새 연결에
 /// 섞이지 않게 한다(RFC 9293 3.6.1, MUST-13). 버퍼를 쥔 연결을 60초씩 두지 않으려고 4-튜플(표의 열쇠)과 시퀀스 번호 둘,
-/// 기한만 남긴다. 기록은 기한 전에 버리지 않는다.
+/// 기한만 남긴다. 기록은 기한 전에 버리지 않는다(상대 주소별 상한을 넘을 때의 예외는 `TCPStack.addTimeWaitRecord`).
 struct TimeWaitRecord: Sendable, Equatable {
     /// SND.NXT: 이 쪽 FIN의 다음 번호.
     var sendNext: SequenceNumber
@@ -10,8 +10,13 @@ struct TimeWaitRecord: Sendable, Equatable {
     var receiveNext: SequenceNumber
     /// 기록이 사라지는 시각.
     var deadline: ContinuousClock.Instant
+    /// `deadline`이 넘지 않는 끝: 연결이 TIME-WAIT에 든 시각 + 2MSL(`TCPConnection.maximumTimeWaitLifetime`, 240초.
+    /// RFC 9293 3.6.1 MUST-13). FIN 재전송이 기한을 다시 재기만 하면 피어가 59초마다 FIN을 다시 보내 기록을 영영 쥘 수 있다
+    /// (M6 검토 A).
+    let lifetimeEnd: ContinuousClock.Instant
 
-    /// 이 4-튜플로 온 세그먼트에 답할 세그먼트. 답하지 않으면 `nil`. FIN 재전송이면 기한을 60초 뒤로 다시 잰다.
+    /// 이 4-튜플로 온 세그먼트에 답할 세그먼트. 답하지 않으면 `nil`. FIN 재전송이면 기한을 60초 뒤로 다시 재되
+    /// `lifetimeEnd`를 넘기지 않는다.
     ///
     /// - RST는 무시한다. RFC 9293 3.10.7.4 둘째는 TIME-WAIT의 RST에 CLOSED로 가라고 하지만, 계약 동작 S6이 기록을 기한 전에
     ///   버리지 않기로 했다(gVisor도 TIME-WAIT의 RST를 무시한다, TCP 노트 4.2. RFC 1337의 TIME-WAIT 암살을 막는다).
@@ -31,7 +36,7 @@ struct TimeWaitRecord: Sendable, Equatable {
             && segment.sequenceNumber.advanced(by: UInt32(clamping: segment.payload.count))
                 == receiveNext.advanced(by: .max)  // RCV.NXT − 1
         if isFinRetransmission {
-            deadline = now + TCPConnection.timeWaitDuration
+            deadline = min(now + TCPConnection.timeWaitDuration, lifetimeEnd)
         } else if segment.sequenceLength == 0 {
             return nil
         }

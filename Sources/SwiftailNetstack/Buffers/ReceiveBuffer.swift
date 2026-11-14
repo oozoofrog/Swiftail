@@ -24,7 +24,8 @@ package struct ReceiveBuffer: Sendable {
         var end: Int
     }
 
-    /// 한 번의 `insert`가 한 일. 연결이 ACK를 언제 낼지 정하는 데 쓴다(계약 동작 F5).
+    /// 한 번의 `insert`가 한 일. 연결은 `advancedCount`·`filledGap`으로 ACK를 언제 낼지 정한다(계약 동작 F5).
+    /// `storedCount`·`rejectedForRangeLimit`은 연결이 쓰지 않고 시험이 버퍼의 동작을 확인하는 데 쓴다.
     package struct Insertion: Sendable, Equatable {
         /// `RCV.NXT`가 나아간 양. 순서대로 온 데이터이거나 빈 곳을 메운 데이터면 0보다 크다.
         package var advancedCount = 0
@@ -35,6 +36,7 @@ package struct ReceiveBuffer: Sendable {
         /// 새 구간을 만들어야 하는데 이미 32개라서 세그먼트 전체를 받지 않았다. 상대가 다시 보낸다.
         package var rejectedForRangeLimit = false
 
+        /// 필드로 만든다. 시험이 기대값을 적는 데 쓴다.
         package init(
             advancedCount: Int = 0, storedCount: Int = 0, filledGap: Bool = false, rejectedForRangeLimit: Bool = false
         ) {
@@ -62,6 +64,7 @@ package struct ReceiveBuffer: Sendable {
         extents.reserveCapacity(Self.maximumOutOfOrderRanges)
     }
 
+    /// 저장소의 용량(바이트). 받는 창은 이것을 넘지 않는다.
     package var capacity: Int { ring.capacity }
 
     /// 광고할 수 있는 창의 최대치: `RCV.NXT`에서 버퍼의 남은 자리까지. 연결은 여기서 SWS 회피와 창 확장의 내림을 적용해 광고한다.

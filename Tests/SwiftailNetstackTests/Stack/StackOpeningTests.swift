@@ -94,7 +94,9 @@ struct StackOpeningTests {
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: .now)
         _ = try stack.connect(to: Self.remote, at: .now)  // 49152
         stack.addTimeWaitRecord(
-            TimeWaitRecord(sendNext: SequenceNumber(1), receiveNext: SequenceNumber(2), deadline: .now + .seconds(60)),
+            TimeWaitRecord(
+                sendNext: SequenceNumber(1), receiveNext: SequenceNumber(2), deadline: .now + .seconds(60),
+                lifetimeEnd: .now + .seconds(240)),
             for: FourTuple(local: IPEndpoint(address: WireHosts.v4a, port: 49_153), remote: Self.remote))
         stack.nextEphemeralPort = 49_152
         let third = try stack.connect(to: Self.remote, at: .now).connection

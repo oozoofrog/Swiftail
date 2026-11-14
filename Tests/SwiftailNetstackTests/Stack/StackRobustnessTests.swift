@@ -102,7 +102,8 @@ struct StackRobustnessTests {
         // 상한이 실제로 걸렸는지(홍수가 상한까지 닿았는지)도 본다.
         let limits: [TCPStack.Limit] = drops.compactMap { if case .limitReached(let limit) = $0 { limit } else { nil } }
         print("임의 입력(씨앗 \(seed)): 상한에 닿아 버린 SYN \(limits.count)개, 종류 \(Set(limits.map { "\($0)" }).sorted())")
-        #expect(limits.contains(.halfOpenConnectionsPerAddress))
+        // 상대 주소가 셋뿐이라 주소별 상한(맺는 중 16, 연결 64. 연결 64를 먼저 본다)에 닿는다.
+        #expect(limits.contains(.halfOpenConnectionsPerAddress) || limits.contains(.connectionsPerAddress))
         #expect(drops.contains(.malformed) || drops.contains(.badChecksum))
     }
 
@@ -110,19 +111,22 @@ struct StackRobustnessTests {
     func costAtLimits() throws {
         let start = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: start)
+        // 상대 주소 하나에 연결 64개·기록 64개까지라 주소를 나눈다(M6 검토 A).
         for index in 0..<256 {
-            _ = try stack.connect(to: IPEndpoint(address: WireHosts.v4b, port: UInt16(1_000 + index)), at: start)
+            let remote = IPEndpoint(address: StackHosts.peer(UInt8(1 + index / 64)), port: UInt16(1_000 + index))
+            _ = try stack.connect(to: remote, at: start)
         }
         for index in 0..<1_024 {
             let tuple = FourTuple(
                 local: IPEndpoint(address: WireHosts.v4a, port: UInt16(20_000 + index)),
-                remote: IPEndpoint(address: WireHosts.v4b, port: 443))
+                remote: IPEndpoint(address: StackHosts.peer(UInt8(10 + index / 64)), port: 443))
             stack.addTimeWaitRecord(
                 TimeWaitRecord(
                     sendNext: SequenceNumber(1), receiveNext: SequenceNumber(2),
-                    deadline: start + .seconds(60) + .milliseconds(index)),
+                    deadline: start + .seconds(60) + .milliseconds(index), lifetimeEnd: start + .seconds(240)),
                 for: tuple)
         }
+        #expect(stack.timeWaitRecords.count == 1_024)
         #expect(stack.connections.count == 256)
 
         let iterations = 2_000

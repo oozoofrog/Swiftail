@@ -369,6 +369,7 @@ extension TCPStack.Limit {
         case .halfOpenConnectionsPerAddress: "halfOpenConnectionsPerAddress"
         case .acceptQueue: "acceptQueue"
         case .connections: "connections"
+        case .connectionsPerAddress: "connectionsPerAddress"
         case .timeWaitRecords: "timeWaitRecords"
         }
     }

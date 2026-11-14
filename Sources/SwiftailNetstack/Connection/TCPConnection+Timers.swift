@@ -41,6 +41,12 @@ extension TCPConnection {
     ///
     /// SYN·SYN-ACK는 7번까지 다시 보내고, 그 뒤의 만료(247초)에 끝낸다. 데이터·FIN은 15번까지다. RTO를 두 배로 하고
     /// 혼잡 제어에 알린 뒤(cwnd 1 세그먼트), `SND.UNA`부터 slow start가 허락하는 대로 다시 보낸다(go-back-N).
+    ///
+    /// 데이터가 날아가는 중에 상대가 창을 0으로 줄였고 마지막 만료 뒤에도 ACK했으면, 그 만료는 15번에 세지 않는다. 살아 있는
+    /// 상대가 창 밖의 데이터를 받지 않을 뿐이다(RFC 9293 3.8.6: 창 밖 데이터가 확인되지 않는다고 끊지 않는다 SHLD-17, 창이 0이면
+    /// 탐침한다 MUST-35. gVisor는 이때 0 창 탐침으로 바꾸고 재전송 수를 보지 않는다, `snd.go:556`). 다시 보내는 세그먼트가
+    /// 탐침을 겸한다. 다만 응용이 `close`로 놓은 연결은 이 예외 없이 세고, 한도에서 RST를 보내 상대가 쥔 상태도 놓게 한다
+    /// (0 창 탐침의 한도와 같은 까닭이다. `sendZeroWindowProbe`).
     private mutating func retransmissionTimerExpired(at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         switch state {
         case .synSent, .synReceived:
@@ -54,11 +60,18 @@ extension TCPConnection {
             outputs.append(.segment(synchronizeSegment()))
         default:
             guard hasOutstandingData else { return }
-            guard retransmissionCount < Self.dataRetransmissionLimit else {
-                terminate(.timedOut, into: &outputs)
-                return
+            let peerIsAnswering = sendWindow == 0 && acknowledgedSinceRetransmissionTimeout
+            acknowledgedSinceRetransmissionTimeout = false
+            if !peerIsAnswering || readClosed {
+                guard retransmissionCount < Self.dataRetransmissionLimit else {
+                    if peerIsAnswering {
+                        outputs.append(.segment(resetSegment(sequence: sendNext)))
+                    }
+                    terminate(.timedOut, into: &outputs)
+                    return
+                }
+                retransmissionCount += 1
             }
-            retransmissionCount += 1
             retransmissionEstimator.retransmissionTimerExpired()
             congestionControl.retransmissionTimerExpired(sendUnacknowledged: sendUnacknowledged, sendNext: sendNext)
             roundTripSample = nil
@@ -71,8 +84,15 @@ extension TCPConnection {
     /// 0 창 탐침(RFC 9293 3.8.6.1, 계약 동작 F8). `<SEQ=SND.UNA−1><ACK=RCV.NXT><CTL=ACK>`에 0 한 바이트를 싣는다
     /// (gVisor `snd.go:1009-1034`와 같은 형식). 이미 확인된 번호라 상대는 데이터로 받지 않고 지금의 창을 담은 ACK로 답한다.
     /// 상대가 ACK하는 동안은 끝내지 않고(MUST-37), 아무 ACK 없이 15번이면 끝낸다. 간격은 RTO에서 두 배씩, 60초까지(SHLD-30).
+    ///
+    /// 응용이 `close`로 놓은 연결은 상대가 답해도 진전 없이 15번이면 RST를 보내고 끝낸다(계약 동작 F8). 상대가 창 0을 둔 채
+    /// 탐침에 ACK만 하면 주인 없는 연결이 칸 하나와 보내는 버퍼를 무기한 쥐기 때문이다. MUST-37의 이 예외는 RFC 9293 3.8.6.1이
+    /// 가리키는 자원 관리다(RFC 6429 3·4: 주인 없는 연결을 운영체제가 끊을 수 있다).
     private mutating func sendZeroWindowProbe(at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         guard zeroWindowProbeCount < Self.zeroWindowProbeLimit else {
+            if readClosed {
+                outputs.append(.segment(resetSegment(sequence: sendNext)))
+            }
             terminate(.timedOut, into: &outputs)
             return
         }

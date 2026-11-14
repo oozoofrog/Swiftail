@@ -14,8 +14,10 @@ import SwiftailBase
 package struct TCPSegment: Sendable, Equatable {
     /// 제어 비트. 상태 기계가 쓰는 다섯 개만 둔다.
     package struct Flags: OptionSet, Sendable {
+        /// TCP 머리의 플래그 바이트(오프셋 13)에서 쓰는 비트. 그 밖의 비트(URG, ECE, CWR)는 해석할 때 버린다.
         package let rawValue: UInt8
 
+        /// 비트 값으로 만든다. 위의 다섯 비트만 뜻이 있다.
         package init(rawValue: UInt8) {
             self.rawValue = rawValue
         }
@@ -61,6 +63,8 @@ package struct TCPSegment: Sendable, Equatable {
     /// 데이터.
     package var payload: [UInt8]
 
+    /// 필드로 세그먼트를 만든다. 값을 검사하지 않는다(상태 기계와 시험이 만드는 값이다. 받은 바이트는 `init(parsingIPPacket:)`
+    /// 으로만 들인다). `maximumSegmentSize`·`windowScale`은 SYN이 켜진 세그먼트에서만 `ipPacket(hopLimit:)`이 싣는다.
     package init(
         source: IPEndpoint,
         destination: IPEndpoint,

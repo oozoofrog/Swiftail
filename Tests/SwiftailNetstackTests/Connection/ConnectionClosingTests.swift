@@ -162,6 +162,28 @@ struct ConnectionClosingTests {
         #expect(pair.client.state == .closed)
     }
 
+    @Test("TIME-WAIT는 FIN 재전송이 다시 재어도 든 때부터 240초를 넘지 않는다(2MSL)")
+    func timeWaitLifetimeCap() throws {
+        var pair = try ConnectionPair.established()
+        pair.finishWriting(.client)
+        try pair.deliver()
+        pair.finishWriting(.server)
+        let serverFIN = try #require(pair.toClient.last)
+        try pair.deliver()
+        let entered = pair.now
+        #expect(pair.client.state == .timeWait)
+        for second in [59, 118, 177, 236] {
+            pair.now = entered + .seconds(second)
+            let outputs = pair.client.receive(serverFIN, at: pair.now) + pair.client.advance(to: pair.now)
+            #expect(outputs.segments.map(\.flags) == [[.ack]])
+        }
+        #expect(pair.client.nextDeadline == entered + .seconds(240))
+        _ = pair.client.advance(to: entered + .seconds(240) - .milliseconds(1))
+        #expect(pair.client.state == .timeWait)
+        _ = pair.client.advance(to: entered + .seconds(240))
+        #expect(pair.client.state == .closed)
+    }
+
     @Test("TIME-WAIT의 RST가 RCV.NXT면 끝난다, 창 밖 데이터에는 ACK")
     func timeWaitOtherSegments() throws {
         var pair = try ConnectionPair.established()
