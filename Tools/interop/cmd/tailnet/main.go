@@ -46,19 +46,23 @@ type command struct {
 	Enabled     *bool           `json:"enabled"`
 }
 type peer struct {
-	server *tsnet.Server
-	dir    string
+	server  *tsnet.Server
+	dir     string
+	capture *peerCapture
 }
 type network struct {
-	control  *testcontrol.Server
-	http     *httptest.Server
-	derpHTTP *httptest.Server
-	derp     *derpserver.Server
-	stun     *net.UDPConn
-	peers    map[string]*peer
-	mu       sync.Mutex
-	started  bool
-	authKey  string
+	control            *testcontrol.Server
+	http               *httptest.Server
+	derpHTTP           *httptest.Server
+	derp               *derpserver.Server
+	stun               *net.UDPConn
+	peers              map[string]*peer
+	mu                 sync.Mutex
+	started            bool
+	authKey            string
+	controlConnections int
+	derpConnections    int
+	stunRequests       int
 }
 
 func newNetwork() (*network, error) {
@@ -83,13 +87,21 @@ func newNetwork() (*network, error) {
 			}
 			id, e := stun.ParseBindingRequest(b[:count])
 			if e == nil {
+				n.mu.Lock()
+				n.stunRequests++
+				n.mu.Unlock()
 				_, _ = n.stun.WriteToUDPAddrPort(stun.Response(id, addr), addr)
 			}
 		}
 	}()
 	n.derp = derpserver.New(key.NewNode(), log.Printf)
 	mux := http.NewServeMux()
-	mux.Handle("/derp", derpserver.Handler(n.derp))
+	mux.Handle("/derp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.mu.Lock()
+		n.derpConnections++
+		n.mu.Unlock()
+		derpserver.Handler(n.derp).ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("/derp/probe", derpserver.ProbeHandler)
 	n.derpHTTP = httptest.NewUnstartedServer(mux)
 	n.derpHTTP.StartTLS()
@@ -98,6 +110,9 @@ func newNetwork() (*network, error) {
 	n.http = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.started = true
+		if r.URL.Path == "/ts2021" {
+			n.controlConnections++
+		}
 		n.mu.Unlock()
 		n.control.ServeHTTP(w, r)
 	}))
@@ -107,6 +122,9 @@ func newNetwork() (*network, error) {
 }
 func (n *network) close() {
 	for _, p := range n.peers {
+		if p.capture != nil {
+			p.capture.close()
+		}
 		p.server.Close()
 		os.RemoveAll(p.dir)
 	}
@@ -185,7 +203,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 				}
 			}()
 		}
-		n.peers[c.Name] = &peer{s, dir}
+		n.peers[c.Name] = &peer{server: s, dir: dir}
 		ok = true
 		result = map[string]any{"event": "peer", "name": c.Name, "nodeKey": st.Self.PublicKey.String(), "addresses": st.TailscaleIPs, "fqdn": st.Self.DNSName}
 	case "removePeer":
@@ -194,6 +212,9 @@ func (n *network) execute(c command) (map[string]any, error) {
 			return nil, errors.New("피어가 없습니다")
 		}
 		delete(n.peers, c.Name)
+		if p.capture != nil {
+			p.capture.close()
+		}
 		e := p.server.Close()
 		os.RemoveAll(p.dir)
 		if e != nil {
@@ -210,6 +231,50 @@ func (n *network) execute(c command) (map[string]any, error) {
 			nodes = append(nodes, map[string]any{"nodeKey": v.Key.String(), "name": v.Name, "addresses": addresses(v), "online": online, "endpoints": append([]netip.AddrPort{}, v.Endpoints...)})
 		}
 		result = map[string]any{"event": "nodes", "nodes": nodes}
+	case "networkStatus":
+		n.mu.Lock()
+		result = map[string]any{"event": "networkStatus", "controlConnections": n.controlConnections, "derpConnections": n.derpConnections, "stunRequests": n.stunRequests}
+		n.mu.Unlock()
+	case "setMagicDNS":
+		if c.Enabled == nil {
+			return nil, errors.New("enabled에 bool이 필요합니다")
+		}
+		n.mu.Lock()
+		if n.started {
+			n.mu.Unlock()
+			return nil, errors.New("DNS 설정은 첫 제어 요청 전에만 바꿀 수 있습니다")
+		}
+		n.control.DNSConfig = &tailcfg.DNSConfig{Proxied: *c.Enabled}
+		n.mu.Unlock()
+		result = map[string]any{"event": "magicDNS", "enabled": *c.Enabled}
+	case "startCapture", "captureStatus":
+		p := n.peers[c.Name]
+		if p == nil {
+			return nil, errors.New("피어가 없습니다")
+		}
+		if c.Cmd == "startCapture" {
+			if p.capture != nil {
+				return nil, errors.New("이미 관측 중입니다")
+			}
+			var err error
+			p.capture, err = startPeerCapture(p.server)
+			if err != nil {
+				return nil, err
+			}
+			result = map[string]any{"event": "captureStarted"}
+		} else {
+			if p.capture == nil {
+				return nil, errors.New("관측을 시작하지 않았습니다")
+			}
+			if c.Port < 1 || c.Port > 65535 {
+				return nil, errors.New("port는 1…65535여야 합니다")
+			}
+			var err error
+			result, err = p.capture.status(uint16(c.Port))
+			if err != nil {
+				return nil, err
+			}
+		}
 	case "peerStatus", "peerPing":
 		p := n.peers[c.Name]
 		if p == nil {
