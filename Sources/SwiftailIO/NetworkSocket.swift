@@ -2,7 +2,10 @@ import Foundation
 import Network
 import Synchronization
 
-/// TCP(또는 TLS) 연결 하나를 async 함수로 감싼다.
+/// TCP(또는 TLS) 연결 하나를 async 바이트 스트림으로 감싼다.
+///
+/// 제어 서버(`SwiftailControl`)와 DERP 서버(`SwiftailDERP`)가 함께 쓴다. 실패는 `SocketError`로 내고,
+/// 부르는 쪽이 자기 오류 타입으로 옮긴다.
 ///
 /// Network 프레임워크의 `NWConnection`은 콜백으로 결과를 알린다. 콜백을 continuation으로 바꾸는 곳은 이 파일뿐이다.
 /// 지키는 것:
@@ -15,8 +18,7 @@ import Synchronization
 ///   지켜진다. 보내기 실패는 연결을 실패 상태로 만들고, 그 사실은 다음 `receive()`가 알린다.
 ///
 /// 바이트의 경계는 뜻이 없다. TCP 조각을 그대로 돌려주고 레코드·프레임은 위 계층이 모은다.
-/// 계약 단위 4 동작 1, 구조.
-final class NetworkSocket: Sendable {
+package final class NetworkSocket: Sendable {
     private static let maximumReadSize = 64 << 10
 
     private let connection: NWConnection
@@ -25,16 +27,16 @@ final class NetworkSocket: Sendable {
         self.connection = connection
     }
 
-    /// 연결이 준비될 때까지 기다린다. TLS면 시스템 기본 인증서 검증을 거친다.
-    static func connect(host: String, port: UInt16, usesTLS: Bool) async throws(ControlError) -> NetworkSocket {
+    /// 연결이 준비될 때까지 기다린다.
+    package static func connect(host: String, port: UInt16, tls: TLS) async throws(SocketError) -> NetworkSocket {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            throw .invalidConfiguration("포트가 잘못되었다")
+            throw .connectFailed("포트가 잘못되었다")
         }
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.connectionTimeout = 10
         // ALPN은 비워 둔다. HTTP/2로 협상되면 HTTP/1.1 업그레이드를 할 수 없다(노트 control-transport 4.4).
-        let parameters = NWParameters(tls: usesTLS ? NWProtocolTLS.Options() : nil, tcp: tcp)
+        let parameters = NWParameters(tls: tls.options, tcp: tcp)
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: parameters)
         let socket = NetworkSocket(connection: connection)
         let once = ResumeOnce<Void>()
@@ -49,9 +51,9 @@ final class NetworkSocket: Sendable {
                         case .waiting(let error), .failed(let error):
                             // 연결 거부 같은 실패에서 NWConnection은 waiting으로 머물며 다시 시도한다.
                             // 다시 시도는 위 계층의 물러나기가 맡으므로 여기서 실패로 끝낸다.
-                            once.resume(with: .failure(ControlError.connection("연결하지 못했다: \(error)")))
+                            once.resume(with: .failure(SocketError.connectFailed("연결하지 못했다: \(error)")))
                         case .cancelled:
-                            once.resume(with: .failure(ControlError.connection("연결이 취소되었다")))
+                            once.resume(with: .failure(SocketError.connectFailed("연결이 취소되었다")))
                         default:
                             break
                         }
@@ -59,24 +61,24 @@ final class NetworkSocket: Sendable {
                     connection.start(queue: DispatchQueue(label: "Swiftail.NetworkSocket"))
                 }
             } onCancel: {
-                once.resume(with: .failure(ControlError.connection("연결이 취소되었다")))
+                once.resume(with: .failure(SocketError.connectFailed("연결이 취소되었다")))
                 connection.cancel()
             }
         } catch {
             connection.cancel()
-            throw error as? ControlError ?? .connection("연결하지 못했다")
+            throw error as? SocketError ?? .connectFailed("연결하지 못했다")
         }
         return socket
     }
 
     /// 바이트를 보낸다. 기다리지 않는다(형식 설명 참고).
-    func send(_ bytes: [UInt8]) {
+    package func send(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         connection.send(content: Data(bytes), completion: .contentProcessed { _ in })
     }
 
     /// 도착한 바이트를 받는다. 상대가 연결을 닫았으면 nil.
-    func receive() async throws(ControlError) -> [UInt8]? {
+    package func receive() async throws(SocketError) -> [UInt8]? {
         let connection = connection
         let once = ResumeOnce<[UInt8]?>()
         do {
@@ -87,7 +89,7 @@ final class NetworkSocket: Sendable {
                         if let data, !data.isEmpty {
                             once.resume(with: .success([UInt8](data)))
                         } else if let error {
-                            once.resume(with: .failure(ControlError.connection("읽기 실패: \(error)")))
+                            once.resume(with: .failure(SocketError.readFailed("읽기 실패: \(error)")))
                         } else if isComplete {
                             once.resume(with: .success(nil))
                         } else {
@@ -96,16 +98,16 @@ final class NetworkSocket: Sendable {
                     }
                 }
             } onCancel: {
-                once.resume(with: .failure(ControlError.connection("읽기가 취소되었다")))
+                once.resume(with: .failure(SocketError.readFailed("읽기가 취소되었다")))
                 connection.cancel()
             }
         } catch {
-            throw error as? ControlError ?? .connection("읽기 실패")
+            throw error as? SocketError ?? .readFailed("읽기 실패")
         }
     }
 
     /// 연결을 닫는다. 걸려 있던 `receive()`는 오류로 끝난다. 여러 번 불러도 된다.
-    func close() {
+    package func close() {
         connection.cancel()
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftailBase
 
 /// 제어 서버의 Noise 공개 키를 `GET <serverURL>/key?v=148`로 얻는다.
 ///

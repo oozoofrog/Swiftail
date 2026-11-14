@@ -1,5 +1,6 @@
 import Foundation
 import SwiftailHTTP2
+import SwiftailIO
 
 /// 등록 뒤의 `POST /machine/map` 두 가지와 맵 스트림 곁의 일.
 ///
@@ -36,7 +37,7 @@ extension ControlClient {
         )
         let httpRequest = connection.jsonRequest("POST", path: "/machine/map", nodeKey: nodeKey)
         let body = try Self.encode(request)
-        try await withTimeout(timeouts.request) {
+        try await withControlTimeout(timeouts.request) {
             var reader = try await connection.responseStream(to: httpRequest, body: body)
             try Self.check(status: reader.status, retryAfter: reader.header("retry-after"))
             while try await reader.nextChunk() != nil {}
@@ -184,7 +185,7 @@ extension ControlClient {
                 try await Task.sleep(for: wait, clock: .continuous)
             } catch ControlError.http {
                 failures += 1
-                try await Task.sleep(for: RetryPolicy.backoff(failures: failures, jitter: .random(in: 0..<1)), clock: .continuous)
+                try await Task.sleep(for: Backoff.delay(failures: failures, maximum: RetryPolicy.maximumBackoff, jitter: .random(in: 0..<1)), clock: .continuous)
             }
         }
     }
@@ -198,7 +199,7 @@ extension ControlClient {
             if path.isEmpty { path = "/" }
             if let query = url.query(percentEncoded: true) { path += "?" + query }
             let request = HTTP2ClientConnection.Request(method: "HEAD", path: path, authority: connection.authority)
-            _ = try? await withTimeout(Self.pingTimeout) {
+            _ = try? await withControlTimeout(Self.pingTimeout) {
                 try await connection.responseStream(to: request, body: nil).status
             }
         } else {

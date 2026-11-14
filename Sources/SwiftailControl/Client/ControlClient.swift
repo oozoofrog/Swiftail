@@ -1,5 +1,7 @@
 import CryptoKit
 import Foundation
+import SwiftailBase
+import SwiftailIO
 
 /// 제어 서버 클라이언트. 등록하고, 이 노드의 상태를 올리고, 맵 스트림으로 netmap을 받아 유지한다.
 ///
@@ -216,7 +218,7 @@ public actor ControlClient {
                     // 연결·HTTP 실패, 만료로 인한 재등록. 서버 키도 다시 받는다(서버가 키를 바꿨을 수 있다).
                     serverKey = nil
                     consecutiveFailures += 1
-                    delay = RetryPolicy.backoff(failures: consecutiveFailures, jitter: .random(in: 0..<1))
+                    delay = Backoff.delay(failures: consecutiveFailures, maximum: RetryPolicy.maximumBackoff, jitter: .random(in: 0..<1))
                 }
             }
             if mapStreamOpen {

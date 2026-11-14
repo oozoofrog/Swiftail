@@ -10,6 +10,9 @@ let package = Package(
         .library(name: "SwiftailWireGuard", targets: ["SwiftailWireGuard"]),
         .library(name: "SwiftailHTTP2", targets: ["SwiftailHTTP2"]),
         .library(name: "SwiftailControl", targets: ["SwiftailControl"]),
+        .library(name: "SwiftailDERP", targets: ["SwiftailDERP"]),
+        .library(name: "SwiftailEngine", targets: ["SwiftailEngine"]),
+        .library(name: "Swiftail", targets: ["Swiftail"]),
     ],
     targets: [
         .target(name: "SwiftailCrypto"),
@@ -26,13 +29,27 @@ let package = Package(
         .target(name: "SwiftailHTTP2"),
         .testTarget(name: "SwiftailHTTP2Tests", dependencies: ["SwiftailHTTP2"], resources: [.copy("Fixtures")]),
         .testTarget(name: "SwiftailHTTP2InteropTests", dependencies: ["SwiftailHTTP2"]),
-        .target(name: "SwiftailControl", dependencies: ["SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2"]),
+        .target(name: "SwiftailControl", dependencies: ["SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2", "SwiftailIO"]),
         .testTarget(name: "SwiftailControlInteropTests", dependencies: ["SwiftailControl", "SwiftailBase"]),
         .testTarget(
             name: "SwiftailControlTests",
             dependencies: ["SwiftailControl", "SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2"],
             resources: [.copy("Fixtures")]
         ),
+        // 제품으로 내보내지 않는다. 소켓을 여는 타깃(Control, DERP, Swiftail)이 쓰는 가장자리 입출력 부품이다.
+        .target(name: "SwiftailIO"),
+        .testTarget(name: "SwiftailIOTests", dependencies: ["SwiftailIO"]),
+        .target(name: "SwiftailDERP", dependencies: ["SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
+        .testTarget(name: "SwiftailDERPTests", dependencies: ["SwiftailDERP", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
+        .testTarget(name: "SwiftailDERPInteropTests", dependencies: ["SwiftailDERP", "SwiftailBase", "SwiftailIO"]),
+        .target(name: "SwiftailEngine", dependencies: ["SwiftailBase", "SwiftailWireGuard", "SwiftailControl"]),
+        .testTarget(
+            name: "SwiftailEngineTests",
+            dependencies: ["SwiftailEngine", "SwiftailBase", "SwiftailWireGuard", "SwiftailControl"],
+            resources: [.copy("Fixtures")]
+        ),
+        .target(name: "Swiftail", dependencies: ["SwiftailEngine", "SwiftailControl", "SwiftailDERP", "SwiftailIO"]),
+        .testTarget(name: "SwiftailInteropTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl"]),
     ],
     swiftLanguageModes: [.v6]
 )

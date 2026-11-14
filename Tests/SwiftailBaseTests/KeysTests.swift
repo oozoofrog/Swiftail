@@ -1,7 +1,8 @@
+import CryptoKit
 import Foundation
 import Testing
 
-import SwiftailControl
+import SwiftailBase
 
 @Suite("키 텍스트 형식")
 struct KeysTests {
@@ -28,5 +29,11 @@ struct KeysTests {
         #expect(try JSONDecoder().decode([MachinePublicKey].self, from: encoded) == [.zero])
         #expect(MachinePublicKey.zero.isZero)
         #expect(throws: DecodingError.self) { try JSONDecoder().decode([DiscoPublicKey].self, from: encoded) }
+    }
+
+    @Test("CryptoKit 공개 키에서 만들면 원시 바이트가 같다")
+    func fromCryptoKit() {
+        let publicKey = Curve25519.KeyAgreement.PrivateKey().publicKey
+        #expect(NodePublicKey(publicKey).rawValue == [UInt8](publicKey.rawRepresentation))
     }
 }

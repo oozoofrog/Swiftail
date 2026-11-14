@@ -1,4 +1,5 @@
 import Foundation
+import SwiftailBase
 
 /// 이미 아는 피어의 일부 필드만 바꾸는 증분. Go `tailcfg.PeerChange`. 맵 응답의 `PeersChangedPatch`로 온다.
 ///

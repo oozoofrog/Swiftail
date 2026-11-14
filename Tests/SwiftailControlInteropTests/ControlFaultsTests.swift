@@ -1,4 +1,5 @@
 import Foundation
+import SwiftailBase
 import Testing
 
 @testable import SwiftailControl

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftailBase
 import SwiftailHTTP2
 
 /// 연결 위의 두 가지 주고받기: "요청 하나를 보내 응답 전체를 받는다"와 "응답 본문을 흘려 받는다".

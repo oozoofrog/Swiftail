@@ -1,5 +1,6 @@
 // 계약 단위 2 시험: early payload 있음·없음·잘못됨.
 
+import SwiftailBase
 import Testing
 
 @testable import SwiftailControl

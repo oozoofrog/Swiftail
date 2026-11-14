@@ -1,3 +1,5 @@
+import SwiftailBase
+
 /// `POST /machine/map`의 본문. Go `tailcfg.MapRequest`.
 ///
 /// 두 가지로 쓴다(노트 4.2).

@@ -1,5 +1,7 @@
 import CryptoKit
 import Foundation
+import SwiftailBase
+import SwiftailIO
 
 /// 등록: `POST /machine/register`로 node 키를 제어 서버에 올린다.
 ///
@@ -49,7 +51,7 @@ extension ControlClient {
             let body = try Self.encode(request)
             let response: ControlConnection.Response
             if attempt.followup.isEmpty {
-                response = try await withTimeout(timeouts.request) {
+                response = try await withControlTimeout(timeouts.request) {
                     try await connection.response(to: httpRequest, body: body, limit: Self.maximumRegisterResponseSize)
                 }
             } else {
@@ -85,7 +87,7 @@ extension ControlClient {
                 if decoded.authURL == attempt.followup {
                     // 같은 URL이 곧바로 되돌아오면 서버를 몰아붙이지 않게 물러난다.
                     repeatedURLs += 1
-                    try await Task.sleep(for: RetryPolicy.backoff(failures: repeatedURLs, jitter: .random(in: 0..<1)), clock: .continuous)
+                    try await Task.sleep(for: Backoff.delay(failures: repeatedURLs, maximum: RetryPolicy.maximumBackoff, jitter: .random(in: 0..<1)), clock: .continuous)
                     // 잠든 사이에 새 로그인을 요청받았으면 지워진 이전 등록을 되살리지 않는다.
                     guard loginRequests == loginRequest else { throw SessionInterruption.loginRequested }
                 } else {
@@ -124,7 +126,7 @@ extension ControlClient {
         }
         return try await withThrowingTaskGroup(of: ControlConnection.Response?.self) { group in
             defer { group.cancelAll() }
-            group.addTask { try await withTimeout(timeout, operation) }
+            group.addTask { try await withControlTimeout(timeout, operation) }
             group.addTask {
                 for await _ in requests { break }
                 return nil
