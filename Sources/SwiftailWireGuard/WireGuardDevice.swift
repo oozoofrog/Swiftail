@@ -80,9 +80,8 @@ public struct WireGuardDevice: Sendable {
 
     /// 피어를 등록한다. 이미 있으면 AllowedIPs만 바꾸고 세션은 유지한다.
     public mutating func addPeer(_ peer: PublicKey, allowedIPs: [IPPrefix]) {
-        if var existing = peers[peer] {
-            existing.allowedIPs = allowedIPs
-            peers[peer] = existing
+        if peers[peer] != nil {
+            peers[peer]?.allowedIPs = allowedIPs
             return
         }
         peers[peer] = Peer(
@@ -103,29 +102,62 @@ public struct WireGuardDevice: Sendable {
 
     /// 다음에 `advance(to:)`를 불러야 하는 시각. 걸린 타이머가 없으면 `nil`.
     public var nextDeadline: ContinuousClock.Instant? {
-        peers.values.compactMap { $0.timers.earliest?.deadline }.min()
+        earliestTimer()?.deadline
+    }
+
+    /// 모든 피어의 타이머 가운데 가장 이른 것. 배열을 만들지 않고 한 번 훑는다.
+    // shortcut: 피어 수만큼 훑는다(64명에 약 1.4µs). 피어가 수백이 되어 병목으로 확인되면 가장 이른 기한을 캐시한다.
+    func earliestTimer() -> (owner: PublicKey, kind: PeerTimers.Kind, deadline: ContinuousClock.Instant)? {
+        var result: (owner: PublicKey, kind: PeerTimers.Kind, deadline: ContinuousClock.Instant)?
+        // 피어 전체를 꺼내 복사하지 않도록 위치로 타이머 필드만 읽는다.
+        for position in peers.indices {
+            guard let timer = peers.values[position].timers.earliest else { continue }
+            if let best = result, best.deadline <= timer.deadline { continue }
+            result = (peers.keys[position], timer.kind, timer.deadline)
+        }
+        return result
     }
 
     // MARK: - 피어 갱신
 
-    /// 바꾼 피어를 저장하고 index 표를 맞춘다.
+    /// 피어 하나를 표 안에서 그 자리에서 고친다.
     ///
-    /// 처리는 늘 피어의 사본을 바꾼 뒤 성공했을 때만 이 함수로 저장한다. 그래서 오류를 던진 경로는
-    /// 상태를 바꾸지 않는다.
-    // shortcut: 사본을 바꾸므로 피어의 배열(재전송 창 1KB 등)이 패킷마다 복사된다. M5 실기기 측정에서 병목으로 확인되면 제자리 갱신으로 바꾼다.
-    mutating func store(_ peer: Peer) {
-        let previous = peers[peer.publicKey]?.localIndices ?? []
-        let current = peer.localIndices
-        for index in previous.subtracting(current) {
-            indexTable[index] = nil
+    /// 표(`peers`)를 장치에서 잠시 떼어 지역 변수로 들고, 그 안의 피어를 `inout`으로 `body`에 넘긴다. 표에서 꺼내
+    /// 다시 넣는 해시 연산이 없고 피어를 복사하지도 않는다. 떼어 둔 동안 장치의 `peers`는 비어 있으므로 `body`는
+    /// 다른 피어를 찾아서는 안 된다(index 표와 자기 키는 그대로 읽을 수 있다).
+    ///
+    /// **실패하면 상태를 바꾸지 않는다**: 오류를 던지는 검사는 모두 피어를 고치기 전에 한다. `body`가 던지면 피어는
+    /// 그대로 표에 남는다.
+    ///
+    /// 끝나면 피어가 가진 keypair·핸드셰이크 index가 바뀌었는지 보고 index 표를 맞춘다.
+    ///
+    /// - Returns: `body`의 결과. 그 피어가 없으면 `nil`.
+    mutating func edit<Result, Failure: Error>(
+        _ key: PublicKey,
+        _ body: (inout WireGuardDevice, inout Peer) throws(Failure) -> Result
+    ) throws(Failure) -> Result? {
+        var table: [PublicKey: Peer] = [:]
+        swap(&table, &peers)
+        guard let position = table.index(forKey: key) else {
+            swap(&table, &peers)
+            return nil
         }
-        for index in current {
-            indexTable[index] = peer.publicKey
+        defer {
+            let (before, after) = table.values[position].syncTabledIndexSlots()
+            if before != after {
+                for index in before.all where !after.all.contains(index) {
+                    indexTable[index] = nil
+                }
+                for index in after.all {
+                    indexTable[index] = key
+                }
+            }
+            swap(&table, &peers)
         }
-        peers[peer.publicKey] = peer
+        return try body(&self, &table.values[position])
     }
 
-    /// 표에 없고 이 피어의 사본에도 없는 새 index를 뽑는다. 0도 정상 값이다.
+    /// 표에 없고 이 피어에도 없는 새 index를 뽑는다. 0도 정상 값이다.
     func freshIndex(avoiding peer: Peer) -> UInt32 {
         let taken = peer.localIndices
         while true {

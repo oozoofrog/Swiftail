@@ -77,7 +77,13 @@ extension WireGuardDevice {
 
     private mutating func receiveInitiation(_ message: Initiation, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         guard let opened = Handshake.openInitiation(message, localStatic: staticKey) else { throw .authenticationFailed }
-        guard var peer = peers[opened.initiator] else { throw .unknownPeer }
+        guard let outputs = try edit(opened.initiator, { device, peer throws(WireGuardError) in
+            try device.acceptInitiation(opened, for: &peer, at: now)
+        }) else { throw .unknownPeer }
+        return outputs
+    }
+
+    private func acceptInitiation(_ opened: OpenedInitiation, for peer: inout Peer, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         guard let staticStaticSecret = peer.staticStaticSecret,
               let initiation = Handshake.authenticate(opened, staticStaticSecret: staticStaticSecret)
         else { throw .authenticationFailed }
@@ -101,12 +107,17 @@ extension WireGuardDevice {
         peer.keypairs.install(Keypair(keys: keys, localIndex: localIndex, remoteIndex: initiation.sender, isInitiator: false, created: now))
         peer.timers.sessionDerived(at: now)
         peer.timers.anyAuthenticatedPacketSent()
-        store(peer)
         return [.datagram(response.bytesBeforeMACs + macs.bytes, to: peer.publicKey)]
     }
 
     private mutating func receiveResponse(_ message: Response, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
-        guard let owner = indexTable[message.receiver], var peer = peers[owner] else { throw .unknownPeer }
+        guard let owner = indexTable[message.receiver],
+              let outputs = try edit(owner, { device, peer throws(WireGuardError) in try device.acceptResponse(message, for: &peer, at: now) })
+        else { throw .unknownPeer }
+        return outputs
+    }
+
+    private func acceptResponse(_ message: Response, for peer: inout Peer, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         // index가 이미 keypair로 바뀌었다면 이 response는 처리한 적이 있다.
         guard let pending = peer.pendingHandshake, pending.localIndex == message.receiver else { throw .replayed }
         guard let keys = Handshake.consumeResponse(message, pending: pending, localStatic: staticKey) else {
@@ -119,31 +130,34 @@ extension WireGuardDevice {
         peer.timers.sessionDerived(at: now)
         peer.timers.handshakeComplete()
         // 응답자는 이 키로 온 첫 패킷을 받아야 next를 확정한다. 대기열이 비어 있으면 keepalive라도 보낸다.
-        let outputs = sendKeepalive(&peer, at: now)
-        store(peer)
-        return outputs
+        return sendKeepalive(&peer, at: now)
     }
 
     private mutating func receiveCookieReply(_ reply: CookieReply, at now: ContinuousClock.Instant) throws(WireGuardError) {
         // 핸드셰이크 index든 keypair index든 그 피어의 것이면 받는다.
-        guard let owner = indexTable[reply.receiver], var peer = peers[owner] else { throw .unknownPeer }
-        guard peer.cookieGenerator.consume(reply, at: now) else { throw .authenticationFailed }
-        store(peer)
+        guard let owner = indexTable[reply.receiver],
+              let consumed = try edit(owner, { _, peer throws(WireGuardError) in
+                  guard peer.cookieGenerator.consume(reply, at: now) else { throw .authenticationFailed }
+                  return true
+              })
+        else { throw .unknownPeer }
+        _ = consumed
     }
 
     // MARK: - 전송 데이터
 
     private mutating func receiveTransportData(_ message: TransportData, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         guard let owner = indexTable[message.receiver],
-              var peer = peers[owner],
-              let slot = peer.keypairs.slot(forLocalIndex: message.receiver),
-              var keypair = peer.keypairs[slot]
+              let outputs = try edit(owner, { device, peer throws(WireGuardError) in try device.receiveTransportData(message, for: &peer, at: now) })
         else { throw .unknownPeer }
-        guard keypair.canReceive(at: now) else { throw .noSession }
-        guard let plaintext = keypair.open(message) else { throw .authenticationFailed }
-        // 재전송 창은 인증된 counter로만 움직인다.
-        guard keypair.replayFilter.accept(message.counter) else { throw .replayed }
-        peer.keypairs[slot] = keypair
+        return outputs
+    }
+
+    private func receiveTransportData(_ message: TransportData, for peer: inout Peer, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
+        guard let slot = peer.keypairs.slot(forLocalIndex: message.receiver) else { throw .unknownPeer }
+        // 오류를 던지는 검사(만료, 복호화, 재전송 창)는 피어를 고치기 전에 끝낸다. 재전송 창은 인증된 counter를
+        // 받아들일 때만 바뀌고, 거절할 때는 바뀌지 않는다.
+        let plaintext = try peer.keypairs.open(message, in: slot, at: now)
 
         // 여기부터 패킷은 인증되었다. 안에 든 IP 패킷이 잘못됐더라도 인증된 수신으로 다룬다:
         // next 확정, 대기열 방출, rekey, 타이머 갱신은 IP 검사와 무관하다(wireguard-go와 같다).
@@ -159,7 +173,6 @@ extension WireGuardDevice {
             peer.timers.dataReceived(at: now)
             outputs.append(delivery(of: plaintext, from: peer))
         }
-        store(peer)
         return outputs
     }
 

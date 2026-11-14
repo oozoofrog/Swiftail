@@ -34,7 +34,11 @@ struct PeerTimers {
         case retransmitHandshake, sendKeepalive, newHandshake, zeroKeyMaterial
     }
 
-    private var deadlines: [Kind: ContinuousClock.Instant] = [:]
+    // 타이머가 넷뿐이라 사전 대신 필드로 둔다. 패킷마다 값을 바꾸므로 할당이 없어야 한다.
+    private var retransmitHandshake: ContinuousClock.Instant?
+    private var sendKeepalive: ContinuousClock.Instant?
+    private var newHandshake: ContinuousClock.Instant?
+    private var zeroKeyMaterial: ContinuousClock.Instant?
     /// 이번 핸드셰이크의 재시도 횟수.
     var handshakeAttempts = 0
     /// sendKeepalive가 걸려 있는 동안 데이터를 또 받았다. 만료 뒤 한 번 더 건다.
@@ -43,13 +47,37 @@ struct PeerTimers {
     var sentLastMinuteHandshake = false
 
     subscript(kind: Kind) -> ContinuousClock.Instant? {
-        get { deadlines[kind] }
-        set { deadlines[kind] = newValue }
+        get {
+            switch kind {
+            case .retransmitHandshake: retransmitHandshake
+            case .sendKeepalive: sendKeepalive
+            case .newHandshake: newHandshake
+            case .zeroKeyMaterial: zeroKeyMaterial
+            }
+        }
+        set {
+            switch kind {
+            case .retransmitHandshake: retransmitHandshake = newValue
+            case .sendKeepalive: sendKeepalive = newValue
+            case .newHandshake: newHandshake = newValue
+            case .zeroKeyMaterial: zeroKeyMaterial = newValue
+            }
+        }
     }
 
-    /// 가장 이른 만료 시각과 그 타이머.
+    /// 가장 이른 만료 시각과 그 타이머. 같은 시각이면 `Kind`의 선언 순서가 앞선 것.
     var earliest: (kind: Kind, deadline: ContinuousClock.Instant)? {
-        deadlines.min { $0.value < $1.value }.map { ($0.key, $0.value) }
+        var result: (kind: Kind, deadline: ContinuousClock.Instant)?
+        func consider(_ kind: Kind, _ deadline: ContinuousClock.Instant?) {
+            guard let deadline else { return }
+            if let best = result, best.deadline <= deadline { return }
+            result = (kind, deadline)
+        }
+        consider(.retransmitHandshake, retransmitHandshake)
+        consider(.sendKeepalive, sendKeepalive)
+        consider(.newHandshake, newHandshake)
+        consider(.zeroKeyMaterial, zeroKeyMaterial)
+        return result
     }
 
     /// 인증된 데이터 패킷(keepalive 아님)을 보낸 뒤.

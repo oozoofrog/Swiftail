@@ -120,10 +120,18 @@ struct TransportData: Equatable {
     var receiver: UInt32
     /// 패킷 번호. AEAD nonce이자 재전송 방지 창의 입력이다.
     var counter: UInt64
-    var encryptedPacket: [UInt8]
+    /// 암호문 ‖ 태그. 받은 데이터그램의 저장소를 그대로 가리키며 복사하지 않는다.
+    var encryptedPacket: ArraySlice<UInt8>
 
-    var bytes: [UInt8] {
-        Self.type.littleEndianBytes + receiver.littleEndianBytes + counter.littleEndianBytes + encryptedPacket
+    /// 머리 16바이트(type, receiver, counter)를 쓴 배열. 뒤에 암호문과 태그를 붙여 메시지를 완성한다.
+    /// - Parameter capacity: 완성한 메시지의 크기. 한 번만 할당하도록 미리 잡아 둔다.
+    static func header(receiver: UInt32, counter: UInt64, capacity: Int) -> [UInt8] {
+        var header: [UInt8] = []
+        header.reserveCapacity(capacity)
+        header.appendLittleEndian(type)
+        header.appendLittleEndian(receiver)
+        header.appendLittleEndian(counter)
+        return header
     }
 }
 
@@ -141,16 +149,32 @@ private struct ByteReader {
         return Array(bytes[offset..<offset + count])
     }
 
-    mutating func rest() -> [UInt8] {
-        take(bytes.count - offset)
+    /// 남은 바이트 전부. 복사하지 않고 같은 저장소를 가리킨다.
+    mutating func rest() -> ArraySlice<UInt8> {
+        defer { offset = bytes.count }
+        return bytes[offset...]
     }
 
     mutating func uint32() -> UInt32 {
-        take(4).reversed().reduce(0) { $0 << 8 | UInt32($1) }
+        UInt32(truncatingIfNeeded: littleEndian(count: 4))
     }
 
     mutating func uint64() -> UInt64 {
-        take(8).reversed().reduce(0) { $0 << 8 | UInt64($1) }
+        littleEndian(count: 8)
+    }
+
+    private mutating func littleEndian(count: Int) -> UInt64 {
+        defer { offset += count }
+        return bytes[offset..<offset + count].reversed().reduce(0) { $0 << 8 | UInt64($1) }
+    }
+}
+
+extension [UInt8] {
+    /// little-endian으로 덧붙인다.
+    mutating func appendLittleEndian<Integer: FixedWidthInteger>(_ value: Integer) {
+        for offset in 0..<(Integer.bitWidth / 8) {
+            append(UInt8(truncatingIfNeeded: value >> (offset * 8)))
+        }
     }
 }
 

@@ -79,9 +79,36 @@ struct Keypairs {
         return true
     }
 
+    /// 칸의 keypair로 transport 하나를 연다: 만료 확인 → 복호화 → 재전송 창 기록. 성공했을 때만 창이 바뀐다.
+    ///
+    /// keypair를 꺼내 복사하지 않고 칸 안에서 바로 처리한다. 복사해 두면 재전송 창(1KB)을 기록할 때 창 전체가 복사된다.
+    ///
+    /// - Throws: 칸이 비었으면 `unknownPeer`, `rejectAfterTime`을 넘었으면 `noSession`, 인증에 실패하면
+    ///   `authenticationFailed`, 이미 받았거나 창 밖이면 `replayed`.
+    mutating func open(_ message: TransportData, in slot: Slot, at now: ContinuousClock.Instant) throws(WireGuardError) -> [UInt8] {
+        switch slot {
+        case .previous: try Self.open(message, in: &previous, at: now)
+        case .current: try Self.open(message, in: &current, at: now)
+        case .next: try Self.open(message, in: &next, at: now)
+        }
+    }
+
+    private static func open(_ message: TransportData, in keypair: inout Keypair?, at now: ContinuousClock.Instant) throws(WireGuardError) -> [UInt8] {
+        guard let canReceive = keypair?.canReceive(at: now) else { throw .unknownPeer }
+        guard canReceive else { throw .noSession }
+        guard let plaintext = keypair?.open(message) else { throw .authenticationFailed }
+        // 재전송 창은 인증된 counter로만 움직인다.
+        guard keypair?.replayFilter.accept(message.counter) == true else { throw .replayed }
+        return plaintext
+    }
+
     /// localIndex로 keypair가 있는 칸을 찾는다.
     func slot(forLocalIndex index: UInt32) -> Slot? {
-        Slot.allCases.first { self[$0]?.localIndex == index }
+        // 칸 셋을 집합 없이 차례로 본다. 패킷마다 부른다.
+        if previous?.localIndex == index { return .previous }
+        if current?.localIndex == index { return .current }
+        if next?.localIndex == index { return .next }
+        return nil
     }
 
     subscript(slot: Slot) -> Keypair? {

@@ -9,12 +9,12 @@ extension WireGuardDevice {
     /// 대기열은 피어당 64개이며 넘치면 가장 오래된 것을 버린다.
     /// - Throws: 등록되지 않은 피어면 `unknownPeer`, 빈 패킷이면 `malformed`, 너무 크면 `packetTooLarge`.
     public mutating func send(_ ipPacket: [UInt8], to peer: PublicKey, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
-        guard var state = peers[peer] else { throw .unknownPeer }
-        guard !ipPacket.isEmpty else { throw .malformed }
-        guard ipPacket.count <= Constants.maxContentSize else { throw .packetTooLarge }
-        state.stage(ipPacket)
-        let outputs = sendStagedPackets(&state, at: now)
-        store(state)
+        guard let outputs = try edit(peer, { device, state throws(WireGuardError) in
+            guard !ipPacket.isEmpty else { throw .malformed }
+            guard ipPacket.count <= Constants.maxContentSize else { throw .packetTooLarge }
+            state.stage(ipPacket)
+            return device.sendStagedPackets(&state, at: now)
+        }) else { throw .unknownPeer }
         return outputs
     }
 
@@ -30,7 +30,7 @@ extension WireGuardDevice {
         var sentData = false
         while !peer.staged.isEmpty, keypair.sendNonce < Constants.rejectAfterMessages {
             let packet = peer.staged.removeFirst()
-            outputs.append(.datagram(keypair.seal(packet).bytes, to: peer.publicKey))
+            outputs.append(.datagram(keypair.seal(packet), to: peer.publicKey))
             sentData = sentData || !packet.isEmpty
         }
         peer.keypairs.current = keypair
