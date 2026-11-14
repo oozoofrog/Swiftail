@@ -130,4 +130,56 @@ struct NetstackListenerTests {
             }
         }
     }
+
+    @Test("run() 전에 버린 리스너는 포트를 놓는다. 같은 포트를 다시 열고, 그것이 run() 뒤에 연결을 받는다")
+    func droppedListenerBeforeRunReleasesPort() async throws {
+        try await NodeTestSupport.withTemporaryDirectory { directory in
+            let node = try TailnetNode(
+                configuration: try NodeTestSupport.configuration(stateDirectory: directory), device: .inProcess)
+            var dropped: TailnetListener? = try await node.listen(port: 9_000)
+            #expect(dropped?.port == 9_000)
+            dropped = nil
+            let listener = try await node.listen(port: 9_000)
+
+            let run = Task { try await node.run() }
+            try await Support.waitUntil("run()이 시작됨") { await node.isRunning }
+            await node.prepareForTesting(try Support.netmap())
+            let client = try await node.connect(to: "100.64.0.1", port: 9_000)
+            var connections = listener.makeAsyncIterator()
+            let server = try #require(await connections.next())
+            await client.close()
+            await server.close()
+            run.cancel()
+            _ = await run.result
+        }
+    }
+
+    @Test("run() 전에 버린 리스너는 상한에도 세지 않는다")
+    func droppedListenersBeforeRunDoNotCount() async throws {
+        try await NodeTestSupport.withTemporaryDirectory { directory in
+            let node = try TailnetNode(
+                configuration: try NodeTestSupport.configuration(stateDirectory: directory), device: .inProcess)
+            var dropped: [TailnetListener]? = []
+            for port in UInt16(9_000)..<9_016 {
+                dropped?.append(try await node.listen(port: port))
+            }
+            #expect(await Support.error { try await node.listen(port: 9_016) } == .limitReached)
+            dropped = nil
+            let listener = try await node.listen(port: 9_016)
+            #expect(listener.port == 9_016)
+        }
+    }
+
+    @Test("run() 중에도 버린 직후 같은 포트의 listen은 addressInUse가 아니다")
+    func droppedListenerReleasesPortImmediately() async throws {
+        try await Support.withRunningNode(try Support.netmap()) { node in
+            for _ in 0..<20 {
+                var listener: TailnetListener? = try await node.listen(port: 9_000)
+                #expect(listener?.port == 9_000)
+                listener = nil
+                listener = try await node.listen(port: 9_000)
+                #expect(listener?.port == 9_000)
+            }
+        }
+    }
 }

@@ -31,6 +31,7 @@ extension TailnetNode {
     /// ISN의 비밀 32바이트는 `run()`마다 시스템 난수로 뽑는다(계약 동작 S7). `run()` 전에 연 리스너를 스택에 올린다(동작 A1).
     func startNetstack() {
         guard case .inProcess = device else { return }
+        closeDroppedListeners()
         var generator = SystemRandomNumberGenerator()
         let isnSecret = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         netstack = Netstack(stack: TCPStack(isnSecret: isnSecret, now: .now))
@@ -66,6 +67,14 @@ extension TailnetNode {
             netstack = nil
         }
         handleReleases.finish()
+    }
+
+    /// 핸들이 버려진 리스너를 닫는다(`listen(port:)`과 `run()`의 시작이 먼저 부른다). 버려진 핸들의 닫기 요청은 `run()`의 자식만
+    /// 받으므로, `run()` 전에 버렸거나 그 자식이 아직 받지 못한 리스너가 포트와 상한을 쥐고 있지 않게 한다.
+    func closeDroppedListeners() {
+        for token in listenerRecords.keys.sorted() where listenerRecords[token]?.handle == nil {
+            closeListener(token)
+        }
     }
 
     /// 버려진 핸들을 처리한다. 취소될 때까지 돈다(동작 N9).
@@ -279,6 +288,9 @@ struct ConnectionRecord: Sendable {
 /// 열린 리스너 하나.
 struct ListenerRecord: Sendable {
     let port: UInt16
+    /// 앱이 쥔 핸들. 약한 참조다: 핸들이 버려졌으면 nil이고, 노드가 `deinit`의 닫기 요청(`HandleRelease`)을 처리하기 전이라도
+    /// 그 리스너는 이미 닫힌 것으로 본다(`TailnetNode.closeDroppedListeners()`).
+    weak var handle: TailnetListener?
     /// 스택의 리스너. `run()` 전에 열었으면 `run()`이 시작할 때까지 nil이다.
     var stackID: TCPStack.ListenerID?
     /// 다음 연결을 기다리는 흐름.
