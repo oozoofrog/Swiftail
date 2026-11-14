@@ -13,4 +13,7 @@ package enum SocketError: Error, Sendable, Equatable {
     /// 데이터그램을 보내지 못했다(`DatagramSocket.send`). 메시지는 errno 이름이다. 닫힌 소켓은 `EBADF`, IPv6 목적지는
     /// `EAFNOSUPPORT`다. 부르는 쪽이 그 데이터그램을 버린다.
     case sendFailed(String)
+    /// 받은 파일 기술자를 utun으로 쓸 수 없다(`UTUNDevice.init`). 메시지는 이유를 가리키는 짧은 이름이고(`fileDescriptor`:
+    /// 음수이거나 닫힌 번호, `notUTUN`: utun 제어 소켓이 아님, `mtu`: 허용 범위 밖) 번호나 경로는 담지 않는다.
+    case invalidDevice(String)
 }
