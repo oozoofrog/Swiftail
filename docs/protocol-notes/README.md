@@ -25,7 +25,7 @@ Swiftail 구현에 필요한 수준으로 각 프로토콜을 정리한 문서�
 | [disco-magicsock.md](disco-magicsock.md) | M4 | GPT-6.1 Sol | Claude Opus 5.5, 2026-11-15, 수정 7건 + M4 절차 보충 |
 | [netmap-engine.md](netmap-engine.md) | M3·M5 | Claude Sonnet 5.5 | GPT-6.1 Sol, 2026-11-14, 수정 10건 + M3 절차 보충 |
 | [dns-state-node.md](dns-state-node.md) | M5~M7 | Claude Sonnet 5.5 | Claude Opus 5.5, 2026-11-15, 수정 16건 + M5 절차 보충 |
-| [tcp-netstack.md](tcp-netstack.md) | M6 | Claude Fable 5.2 | 아직 안 됨 |
+| [tcp-netstack.md](tcp-netstack.md) | M6 | Claude Fable 5.2 | GPT-6.1 Sol, 2026-11-15, RFC 12개·Tailscale v1.104.6·gVisor a6f909f08a72 대조, 사실 정정·미확인 경로 보충 |
 
 ## 노트 형식
 
