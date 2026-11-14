@@ -231,3 +231,132 @@ public actor TailnetNode {
 7. 2분 넘게 유지한 뒤에도 에코가 된다(WireGuard rekey와 DERP KeepAlive를 넘긴다).
 
 마무리 관문(실제 tailnet)은 M4 끝에 한다.
+
+## M4에서 바뀌는 것
+
+이 절은 위의 M3 내용을 고치지 않고 M4의 변경을 덧붙인다. 위 내용과 어긋나면 이 절이 앞선다. 경로 찾기 자체는 [SwiftailMagicsock.md](SwiftailMagicsock.md)(아래에서 "magicsock 계약")에 있다.
+
+원칙: 엔진은 지금처럼 "이 피어에게 보낼 WireGuard 데이터그램"만 내고, UDP와 DERP 가운데 어디로 보낼지는 `Magicsock`이 고른다. 노드가 두 값 타입을 저장 프로퍼티로 쥐고 출력을 서로에게 넘긴다(magicsock 계약 Q1). WireGuard 장치가 주소를 모르는 것과 같은 원칙이다(`docs/contracts/SwiftailWireGuard.md` "왜 이 구조인가").
+
+### 엔진 (`SwiftailEngine`)
+
+```swift
+public struct EnginePeer: Sendable, Equatable {
+    public var key: NodePublicKey
+    public var allowedIPs: [IPPrefix]
+    public var homeDERP: Int64
+    /// 새로 더함. netmap의 `DiscoKey`. 0이면 disco를 하지 않는다.
+    public var discoKey: DiscoPublicKey
+    /// 새로 더함. netmap의 `Endpoints` 그대로(거르기는 `Magicsock`이 한다).
+    public var endpoints: [IPEndpoint]
+    public static func peers(in netmap: Netmap, at now: Date) -> [EnginePeer]   // 그대로
+}
+
+public struct TailnetEngine: Sendable {
+    public enum Output: Sendable, Equatable {
+        /// 피어에게 보낼 WireGuard 메시지. 경로는 부르는 쪽(`Magicsock`)이 고른다.
+        case datagram([UInt8], to: NodePublicKey)
+        case ipPacket([UInt8])
+        case dropped(Drop)
+    }
+    public enum Drop: Sendable, Equatable {
+        case inbound(PacketFilter.DropReason)
+        case malformedPacket
+        case unsupportedPacket
+        case consumedControlPacket
+        case noPeerForDestination
+        case wireGuard(WireGuardError)
+        // 지움: noRouteToPeer(→ Magicsock.Drop.noRouteToPeer), discoMessage(엔진에 disco가 오지 않는다)
+    }
+
+    public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, now: ContinuousClock.Instant, wallClock: Date)   // 그대로
+    /// `homeDERP` 인자를 지운다. 엔진은 지역을 모른다.
+    public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
+    public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]   // 그대로
+    /// `Magicsock`이 `.wireGuard`로 낸 데이터그램 하나. 보낸 쪽 키 인자를 지운다(UDP에는 없다. 피어는 WireGuard가 정한다).
+    public mutating func receive(_ datagram: [UInt8], at now: ContinuousClock.Instant) -> [Output]
+    public mutating func advance(to now: ContinuousClock.Instant) -> [Output]   // 그대로
+    public var nextDeadline: ContinuousClock.Instant? { get }                 // 그대로
+}
+```
+
+동작 변경(번호는 위 "동작"의 번호를 가리킨다):
+
+- **M-E1 (동작 4 보내기)**: "피어의 `homeDERP`가 우리 홈 지역이 아니면 `noRouteToPeer`"를 지운다. 데이터면에 올린 모든 피어에게 `.datagram(_, to:)`를 낸다. 보낼 곳이 없는 피어는 `Magicsock`이 `noRouteToPeer`로 버린다. 핸드셰이크 응답·재시도·keepalive도 같다(`route`에서 지역을 붙이지 않는다).
+- **M-E2 (동작 5 받기)**: disco 판정을 지운다. 엔진에 들어오는 것은 `Magicsock`이 WireGuard로 분류한 것뿐이다(magicsock 계약 동작 A). DERP 프레임의 보낸 쪽 키는 M3에서도 쓰지 않았으므로 인자를 지운다. 나머지(WireGuard → AllowedIPs 출발지 검사 → TSMP 소비 → 필터)는 그대로다.
+- **M-E3 (동작 2 피어 계산)**: `EnginePeer`에 `discoKey`와 `endpoints`를 그대로 옮겨 담는다. 올리는 조건은 그대로다(disco 키가 0이어도 홈 DERP가 있으면 올린다. 그 피어는 DERP만 쓴다).
+- **M-E4 (TSMP)**: 그대로 소비만 한다. Go 피어의 disco 키 광고(`disco-magicsock.md` 3.8)도 여기서 소비된다. 보내지 않는다(magicsock 계약 결정 표).
+- 시험: 엔진 둘을 맞물리는 시험은 출력 모양만 바뀐다. "홈 지역이 다른 피어" 시험은 이제 데이터그램이 나오는지 본다. disco 메시지 시험은 엔진에서 지우고 `MagicsockTests`로 간다.
+
+### 노드 (`Swiftail`)
+
+```swift
+public enum NodeEvent: Sendable {
+    case loginRequired(URL)
+    case running(addresses: [IPAddress])
+    case reconnecting
+    /// 새로 더함. 피어의 경로가 바뀌었다. nil은 그 피어가 데이터면에서 빠졌다는 뜻이다.
+    /// - Parameter fqdn: netmap의 노드 이름에서 끝의 점을 뗀 것(`rd-mac-1a2b3c4d.tail0001.ts.net`).
+    case peerPathChanged(fqdn: String, path: PeerPath?)
+}
+
+public enum NodeError: Error, Sendable {
+    case control(ControlError)
+    case invalidConfiguration(String)
+    /// 새로 더함. UDP 소켓을 열거나 묶지 못했다. 메시지에는 errno 이름만 담는다.
+    case udpUnavailable(String)
+}
+
+extension TailnetNode {
+    /// 새로 더함. 이름이 `fqdn`인 피어의 지금 경로. 그런 피어가 데이터면에 없으면 nil.
+    ///
+    /// 이름은 끝의 점 하나를 떼고 ASCII 대소문자를 무시해 비교한다. 같은 이름이 둘이면 node ID가 작은 쪽이다.
+    /// 경로의 뜻은 Go `tailscale status`의 직접 주소(`CurAddr`)와 같다(`PeerPath`).
+    public func path(toPeerNamed fqdn: String) -> PeerPath?
+
+    /// 시험 전용(공개 API 아님). 이 원격 UDP 포트로 보낼 것과 이 포트에서 온 것을 소켓 경계에서 버린다.
+    package func setBlockedUDPPorts(_ ports: Set<UInt16>)
+}
+```
+
+`PeerPath`는 `SwiftailMagicsock`의 공개 타입이다(`IPAddress`가 `SwiftailBase`의 것인 것과 같다).
+
+동작 변경:
+
+- **N1 (시작)**: `run()`이 시작할 때 `DatagramSocket(port: 0)`을 열고(실패하면 `udpUnavailable`을 던진다), `LocalInterfaceAddresses.current()`를 한 번 읽는다(실패하면 빈 목록으로 계속한다. STUN 엔드포인트만 올라간다). disco 개인 키를 만들어 **노드가 쥔다**(M3은 공개 키만 남겼다). `LocalStatus.discoKey`는 그 공개 키다. 소켓은 `run()`이 끝날 때 닫는다.
+- **N2 (등록 뒤)**: node 키를 얻으면 엔진과 함께 `Magicsock(discoKey:nodeKey:localPort:localAddresses:loopbackAddresses:now:)`을 만든다. node 키가 바뀌면 둘 다 새로 만든다(disco 키와 소켓은 그대로). 새로 만든 뒤 마지막 netmap의 피어와 지역을 다시 넣는다.
+- **N3 (DERP 지역)**: M3 동작 3의 "홈 DERP 고정 선택, 클라이언트 하나"를 바꾼다.
+  - 홈 후보 `Magicsock.Region`: DERPMap의 지역 가운데 M3의 홈 조건(`noMeasureNoHome`이 아니고 `DERPServer`로 바꿀 수 있는 노드가 있음)을 만족하는 것. `stunServers`는 그 지역 노드를 순서대로 보며 magicsock 계약 E3의 규칙(`stunTestIP` → IPv4 리터럴, `stunPort` 0은 3478, 음수는 건너뜀)으로 만든다(`stunOnly` 노드 포함). `score`는 `homeParams.regionScore[id]`(없으면 0). DERPMap이 바뀔 때마다 `setRegions`. 이 변환은 입출력 없는 함수로 두고 `SwiftailTests`에서 시험한다.
+  - 연결: 지역 ID → `DERPClient` 표. 홈 지역(`.homeRegionChanged`로 받은 것)은 `isPreferred: true`로 연다. `Magicsock`이 `.derp(_, to:, region:)`로 처음 가리킨 지역은 그때 `isPreferred: false`로 연다(DERPMap의 어느 지역이든, `noMeasureNoHome` 포함. 서버로 바꿀 수 없으면 그 데이터그램을 버린다). 홈이 바뀌어도 옛 홈 연결은 닫지 않는다(magicsock 계약 E6). DERPMap에서 사라진 지역의 연결은 닫는다. node 키가 바뀌면 모두 다시 연다.
+  - `shortcut:` 홈이 아닌 연결의 60초 미사용 정리(DERP 노트 4.9 5)는 하지 않는다. 열린 연결 수는 DERPMap 지역 수로 묶인다. 필요해지는 시점: M5 메모리 측정. 홈이 바뀌어도 이미 열린 연결의 NotePreferred는 다시 보내지 않는다(서버 통계용, DERP 노트 4.8 3).
+  - `reconnecting`은 홈 지역 연결의 끊김만 알린다. `peerGone`은 계속 무시한다(역방향 경로를 쓰지 않는다).
+  - 각 연결의 `.packet`은 `magicsock.receiveDERP(_, from:, region: 그 연결의 지역)`으로 넣는다.
+  - `DERPHome.choose`는 쓰지 않는다(홈 선택은 `Magicsock`). `DERPServer.init(_: DERPNode)`는 그대로 쓴다.
+- **N4 (제어 서버에 올리기)**: `.endpointsChanged(eps)` → `localStatus.endpoints = eps.map(\.address)`, `endpointTypes`는 같은 순서로 `.local`→`EndpointType.local`, `.stun`→`EndpointType.stun`. `.homeRegionChanged(id)` → `localStatus.netInfo = NetInfo(preferredDERP: id)`. 어느 쪽이든 바뀌면 `control.setLocalStatus(localStatus)`. `ControlClient`는 상태 올리기마다 `DiscoKey`와 엔드포인트 전체를 함께 보내므로 testcontrol이 노드 값을 통째로 덮는 동작(`disco-magicsock.md` 4.9 4)과 맞는다. M3의 "netmap마다 홈 지역을 올리기"는 이 흐름으로 바뀐다.
+- **N5 (패킷 흐름)**:
+  - 보내기: `send(ipPacket)` → `engine.send` → `.datagram(b, to: k)` → `magicsock.send(b, to: k)`.
+  - UDP 받기: 소켓 흐름의 `(bytes, source)` → `magicsock.receiveUDP`.
+  - `Magicsock` 출력: `.udp` → `socket.send`(실패는 버린다. `shortcut:` 송신 오류에 따른 재결속은 M5, magicsock 계약 제외 표), `.derp` → 그 지역 연결(N3), `.wireGuard` → `engine.receive` → 엔진 출력은 다시 이 흐름으로, `.endpointsChanged`·`.homeRegionChanged` → N4, `.pathChanged` → N6, `.dropped` → 버린다.
+  - netmap: `engine.apply` 뒤 `magicsock.setPeers(EnginePeer.peers(in: netmap, at: Date()).map { Magicsock.Peer(key: $0.key, discoKey: $0.discoKey, homeDERP: $0.homeDERP, endpoints: $0.endpoints) })`. 순서는 node ID 오름차순이다(disco 키의 주인, magicsock 계약 B1). `shortcut:` 키 만료로 엔진이 `advance`에서 내린 피어는 다음 netmap까지 `Magicsock`에 남는다. 엔진이 그 피어에게 데이터그램을 내지 않으므로 heartbeat는 45초 뒤 멈추고, 받은 WireGuard는 장치가 버린다.
+  - 타이머: `min(engine.nextDeadline, magicsock.nextDeadline)`에 깨어나 둘 다 `advance`.
+- **N6 (경로 사건과 조회)**: 노드는 netmap마다 데이터면 피어의 키 → 이름 표를 만든다(이름은 `Node.name`에서 끝의 점 하나를 뗀 것). `.pathChanged(k, p)`는 그 표의 이름으로 `peerPathChanged`를 낸다. 피어가 빠지는 경우의 이름은 표를 바꾸기 전의 것을 쓴다. 이름이 빈 피어는 사건을 내지 않는다. `path(toPeerNamed:)`는 이름 → 키(N6의 비교 규칙) → `magicsock.path(to:at: .now)`.
+- **N7 (구조적 동시성)**: `run()`의 TaskGroup 자식이 바뀐다.
+
+  ```
+  run()
+   └ TaskGroup
+      ├ control.run()
+      ├ follow(control)
+      ├ forwardLoginRequests
+      ├ receiveUDP()     소켓의 데이터그램 → magicsock.receiveUDP. 소켓이 닫히면 끝난다
+      ├ maintainDERP()   지역별 DERPClient 묶음(홈 + Magicsock이 가리킨 지역). 지역마다 M3의 serve와 같은 모양
+      └ runTimer()       엔진과 Magicsock의 이른 기한
+  ```
+
+  엔진과 `Magicsock`은 actor의 저장 프로퍼티로 두고 제자리에서만 바꾼다. 한쪽 출력을 다른 쪽에 넘기는 일은 `await` 없이 한 번의 actor 실행 안에서 끝낸다(재진입으로 두 상태가 어긋나지 않게 한다).
+- **N8 (시험용 UDP 거르개)**: `setBlockedUDPPorts`의 집합을 `receiveUDP()`(받은 직후)와 `.udp` 출력(보내기 직전)에서만 본다. `Magicsock`과 엔진은 이 집합을 모른다. 기본은 빈 집합이다.
+- **N9 (비밀)**: disco 개인 키를 사건·오류·`description`·`dump`에 넣지 않는다. `customMirror`는 그대로(호스트 이름만).
+
+시험(`Tests/SwiftailTests`, 소켓 없음): N3의 지역 변환(`noMeasureNoHome`, 쓸 수 없는 서버만 있는 지역, `stunTestIP`, `stunPort` 0·음수, `stunOnly`, `regionScore`), N6의 이름 비교(끝의 점, 대소문자, 같은 이름 둘). 노드 전체 흐름은 magicsock 계약의 "M4 관문"이 덮는다.
+
+공개 API에 더하는 것은 `NodeEvent.peerPathChanged`, `NodeError.udpUnavailable`, `TailnetNode.path(toPeerNamed:)`, `PeerPath`(`SwiftailMagicsock`)뿐이다. `docs/plan.md` 6절의 `setDefaultInterface`는 M5에서 정한다.
