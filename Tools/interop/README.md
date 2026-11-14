@@ -40,6 +40,7 @@ GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-s
 - `nodes`는 testcontrol의 등록 목록이다. `online`은 testcontrol에 개별 연결 추적이 없으므로 실제 접속 상태로 해석하면 안 된다.
 - `peerStatus`는 `name` 노드가 보는 `peers`의 nodeKey, addresses, online, curAddr, relay를 돌려준다.
 - `peerPing`은 `name`, 대상 IP `to`, `type` (`disco`, `TSMP`, `ICMP`)을 받는다. `result`는 LocalClient PingResult이며 `Err`가 비어 있어야 성공이다.
+- `peerSend`는 `{"id":1,"cmd":"peerSend","name":"go-peer-a","to":"100.64.0.2","port":42001,"proto":"udp","payload":"010203"}`처럼 보낸다. `proto`는 `udp` 또는 `tcp`, `port`는 1…65535, `payload`는 65507바이트 이하의 hex다(빈 값 허용). 지정 피어의 tsnet으로 UDP 데이터그램 하나를 쓰거나, 2초 제한으로 TCP 연결을 시도한 뒤 연결되면 payload를 쓴다. 결과는 `{"id":1,"event":"peerSend","name":"go-peer-a","attempted":true,"sent":true,"error":""}`다. 전송 실패도 `peerSend` 사건으로 `sent:false`와 오류 문자열을 돌려주고, 잘못된 명령 입력은 기존 `error` 사건이다. `sent`는 payload 쓰기 완료를 뜻하며 상대의 수신을 보장하지 않는다. TCP 스택이 없는 Swift 대상은 보통 제한 시간으로 `sent:false`가 된다. SYN 송신 여부는 수신 패킷으로 확인해야 한다. TCP·UDP 소켓은 명령이 끝날 때 닫는다.
 - `injectMapResponse`는 대상 `nodeKey`와 `response` 객체를 받는다. 스트림이 연결된 경우에만 큐에 넣으며 실제 전송은 스트림 처리 시점이다. 첫 주입부터 해당 노드에 대한 자동 맵이 계속 억제된다. `MapResponse` 타입으로 다시 JSON 인코딩하므로 빈 배열 등의 원래 JSON 표현은 보존되지 않는다.
 - `setAuth`는 첫 제어 요청 전에 `requireAuth`와 `authKey`를 설정한다. 키는 testcontrol이 단일 문자열로 비교하며 만료·재사용·태그 정책은 없다. 대화형 인증은 반환받은 로그인 URL을 `authURL`로 넘겨 성공 완료한다. 실패 완료와 기기 승인 조작은 지원하지 않는다. 키를 요구하면 addPeer에도 같은 키를 사용한다. 대화형 인증을 요구하는 동안 addPeer는 완료까지 대기하므로 Swift 노드의 등록 시험에 사용한다.
 
