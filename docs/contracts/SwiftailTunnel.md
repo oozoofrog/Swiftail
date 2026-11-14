@@ -287,6 +287,8 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
    4. 제어: `ControlClient.setNetworkInterface(_:)`가 지금 연결을 닫고 물러남 없이 새 인터페이스로 다시 잇는다(Go `tsdial`이 기본 인터페이스가 바뀐 시스템 연결을 닫는 것, DNS 노트 4.6.3 4). 등록 상태와 마지막 netmap은 유지된다.
    5. 설정: 다시 산출하지 않는다. netmap이 바뀌지 않았으므로 동작 E 2에 따라 나갈 것이 없다.
 4. **소켓 묶기**(DNS 노트 4.6.4): UDP 소켓은 `setsockopt(IPPROTO_IP, IP_BOUND_IF, index)`. 제어·DERP의 `NWConnection`은 `NWParameters.requiredInterface = interface`. 목적지가 루프백 주소면 묶지 않는다(Go `netns_darwin.go:38-55`. macOS 관문의 루프백 testcontrol·DERP가 이 규칙으로 돈다). 인터페이스를 아직 모르면 묶지 않고 연다.
+   - `DatagramSocket(port:interfaceIndex:)`는 `bind` 전에 `IP_BOUND_IF`를 건다. 실패(없는 index 등)는 `bindFailed(errno 이름)`이다. 묶음은 열 때 한 번만 걸리므로 인터페이스가 바뀌면 새 소켓을 연다(동작 N 3.3).
+   - macOS에서 관찰한 것(M5-7a, 기기 한 대): 물리 인터페이스에 묶은 UDP 소켓도 루프백과 주고받는다(그래서 UDP 소켓에는 루프백 예외를 두지 않는다. 목적지가 여럿인 소켓이다). lo0에 묶은 소켓이 비루프백 목적지로 보내면 `ENETUNREACH`이고, 자기 기기의 비루프백 주소로 보내면 오류 없이 도착하지 않는다.
 5. `shortcut:` 망이 내려감(만족된 경로 없음)의 처리(Go: DERP 닫기, 제어 일시 정지, DNS 노트 4.6.3 1·3)는 없다. 앱은 만족된 경로만 알린다. 끊긴 동안 연결은 각자의 재시도·물러남으로 버틴다. 필요해지는 시점: 실기기에서 망이 없는 동안의 재시도가 배터리·메모리에 문제일 때.
 6. `shortcut:` UDP 송신 오류(`EPERM`·broken pipe)에 따른 자동 재결속(magicsock 노트 4.11 3)은 없다. 필요해지는 시점: 실기기 전환 시험에서 `setDefaultInterface` 없이 소켓이 죽는 경우.
 
@@ -305,9 +307,9 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
 | --- | --- | --- | --- |
 | utun 읽기 | 없음 | 재사용 버퍼 하나 4 + 65,535바이트(동작 U4) | 해당 없음 |
 | utun 쓰기 | 없음 | 큐 없음(동작 U5) | 그 패킷을 버림 |
-| 맵 응답 프레임(`MapResponseFramer`) | 64MiB | **8MiB**(총괄 확인 필요 T5) | `malformed`. 64MiB 프레임의 해독 최고치는 약 110MB로 측정됐다(SwiftailControl 계약 단위 3 `shortcut:`). 8MiB면 같은 비율로 약 14MB |
-| `DERPClient` 받은 사건 | 256개(패킷당 최대 65,536바이트, 최악 16MiB) | 256개 **그리고 1MiB** | 오래된 것부터 버림 |
-| `DatagramSocket` 받은 데이터그램 | 256개(최대 65,535바이트, 최악 16MiB) | 256개 **그리고 1MiB** | 오래된 것부터 버림 |
+| 맵 응답 프레임(`MapResponseFramer`) | 64MiB | **8MiB**(구현됨, M5-6) | `malformed`. 64MiB 프레임의 해독 최고치는 약 110MB로 측정됐다(SwiftailControl 계약 단위 3 `shortcut:`). 8MiB면 같은 비율로 약 14MB |
+| `DERPClient` 받은 사건 | 256개(Go 서버의 패킷 한도 65,536바이트로 최악 16MiB. 프레임 한도 1MiB를 채워 보내는 서버면 256MiB) | 256개 **그리고 1MiB**(구현됨, M5-6) | 오래된 것부터 버림 |
+| `DatagramSocket` 받은 데이터그램 | 256개(최대 65,535바이트, 최악 16MiB) | 256개 **그리고 1MiB**(구현됨, M5-7a) | 오래된 것부터 버림 |
 | 노드 → DERP 송신 큐 | 256개 | 256개 그리고 1MiB | 오래된 것부터 버림 |
 | `inboundPackets`(메모리 장치) | 256개 | 그대로 | 오래된 것부터 버림 |
 | `events` | 64개 | 그대로 | 오래된 것부터 버림 |

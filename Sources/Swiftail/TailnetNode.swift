@@ -260,7 +260,8 @@ private extension SocketError {
     /// errno 이름 등 사람이 읽을 메시지. 경로나 키를 담지 않는다.
     var message: String {
         switch self {
-        case let .connectFailed(message), let .readFailed(message), let .bindFailed(message), let .sendFailed(message):
+        case let .connectFailed(message), let .readFailed(message), let .bindFailed(message), let .sendFailed(message),
+            let .invalidDevice(message):
             message
         }
     }

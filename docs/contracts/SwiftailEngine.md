@@ -349,6 +349,7 @@ extension TailnetNode {
       ├ control.run()
       ├ follow(control)
       ├ forwardLoginRequests
+      ├ uploadLocalStatus()  엔드포인트·홈 지역을 제어 서버에 올린다. 출력 처리에는 await가 없어 통로로 넘겨받는다
       ├ receiveUDP()     소켓의 데이터그램 → magicsock.receiveUDP. 소켓이 닫히면 끝난다
       ├ maintainDERP()   지역별 DERPClient 묶음(홈 + Magicsock이 가리킨 지역). 지역마다 M3의 serve와 같은 모양
       └ runTimer()       엔진과 Magicsock의 이른 기한

@@ -346,7 +346,7 @@ package enum LocalInterfaceAddresses {
 1. **disco 키의 주인**: `setPeers`의 순서대로 disco 키 하나에 피어 하나만 둔다. 0인 disco 키의 피어는 disco를 하지 않는다(DERP만). 같은 disco 키를 내세운 뒤의 피어도 disco 없이 DERP만 쓴다. (Go는 같은 disco 키의 모든 피어에 Ping을 나눈다(노트 4.2 3·4). 키와 접두의 주인을 하나로 정한 엔진 규칙과 맞추고, 같은 disco 키가 둘인 정상적인 경우가 없어서다.)
 2. **공유 키 캐시**(노트 3.2 5): `setPeers`에서 새 disco 키마다 한 번 계산하고, 빠진 키는 지운다. **받은 패킷마다 X25519를 하지 않는다**(모르는 키로 CPU를 쓰게 하지 못한다). 계산이 `invalidKey`면 그 피어는 disco 없이 DERP만 쓴다.
 3. **피어의 disco 키가 바뀌면** `PeerPathState.resetForNewDiscoKey()`(노트 4.4 3).
-4. `setPeers`에서 빠진 피어는 상태를 지우고 `.pathChanged(key, nil)`을 낸다. 새 피어는 `.pathChanged(key, .relayed(homeDERP))`를 낸다.
+4. `setPeers`에서 빠진 피어는 상태를 지우고 `.pathChanged(key, nil)`을 낸다(이미 nil을 알린 피어면 다시 내지 않는다). 새 피어는 아직 보낸 것이 없어 유휴이므로(G3) 사건을 내지 않는다. disco 키가 바뀐 피어의 경로는 nil이 된다(Go `invalidateDiscoPathLocked`가 마지막 송신 시각을 지우는 것과 같다). `.pathChanged`의 nil은 "빠졌거나 유휴"다.
 
 ### C. disco 받기 (노트 4.2)
 
@@ -378,7 +378,7 @@ package enum LocalInterfaceAddresses {
 3. **STUN 주소**(Go `netcheck.go:1665-1700`): 노드가 DERPMap에서 뽑는다. `stunTestIP`가 있으면 그 주소, 아니면 `ipv4`가 IPv4 리터럴일 때 그 주소. `stunPort` 0은 3478, 음수는 그 노드를 쓰지 않는다. `shortcut:` `ipv4`가 빈 노드의 DNS 조회는 하지 않는다(값 타입은 DNS를 할 수 없다. 운영 DERPMap은 IPv4 리터럴을 준다. 필요해지는 시점: 리터럴 없는 DERPMap을 만날 때 노드가 조회해 넘긴다).
 4. **엔드포인트 목록**(노트 4.9 1의 2·7): 회차가 끝나면 `[STUN 전역 주소들(.stun)] + [localAddresses의 각 주소:localPort(.local)]`, 둘 다 비었으면 loopback 주소들:localPort(.local). 중복은 처음 것만. STUN 전역 주소는 회차의 첫 응답 주소와, 두 번 이상 관측된 주소다(노트 4.9 1.2). 회차가 끝날 때마다 `endpointsRefreshedAt`을 갱신하고 `.endpointsRefreshed`를 낸다. 목록이 **집합으로** 바뀌었을 때만 `.endpointsChanged`(Go `magicsock.go:1448-1473`은 순서가 달라도 같은 집합이면 같다고 본다). 지역이 하나도 없고 STUN 결과도 없는 목록은 내지 않는다(노트 4.9 5).
 5. **주기**(노트 4.9 5, Go `magicsock.go:887-923`, `:3683-3712`): 회차가 끝나면 `isActive`일 때 20–26초 무작위 뒤에 다음 회차를 건다. `isActive`는 "피어가 하나 이상 있고, 어느 피어든 마지막 송신(`lastSend`) 뒤 45초가 지나지 않음"이다. 아니면 주기를 멈추고, 다음 `send`가 다시 건다. `setRegions`의 변경과 CallMeMaybe를 보내려는데 엔드포인트가 낡은 경우(F2)는 곧바로 회차를 시작한다.
-   - Go의 유휴 판단은 TUN 송수신 시각이다(`net/tstun/wrap.go:842-853`, `wgengine/userspace.go:435`). 이 계약은 WireGuard 송신 시각으로 대신한다. 차이는 트래픽이 멈춘 뒤 WireGuard keepalive 하나(10초)만큼 STUN이 더 도는 것이다.
+   - Go의 유휴 판단은 TUN 송수신 시각이다(`net/tstun/wrap.go:842-853`, `wgengine/userspace.go:435`). 이 계약은 WireGuard 송신 시각으로 대신한다. 차이는 트래픽이 멈춘 뒤 WireGuard keepalive만큼(최대 둘, 약 20초. wireguard-go의 `needAnotherKeepalive`를 옮긴 동작이다) STUN이 더 돌고 유휴 판정(G3의 nil)이 늦는 것이다. Go 피어와 맞춰 본 값(2026-11-15): 마지막 트래픽 뒤 약 55~64초에 nil.
 6. **홈 지역 선택**(DERP 노트 4.10 5, Go `netcheck.go:1426-1531`): 회차가 끝날 때 최근 5분 5초의 회차 기록에서 지역별 최소 지연에 `score`(양수일 때)를 곱해 가장 작은 지역을 고르고, 기존 홈이 아직 닿으면(이번 회차에 지연이 있거나 회차 시작 뒤 또는 8초 안에 그 지역에서 DERP 패킷을 받음) 차이가 10 ms 미만이거나 새 후보가 기존의 2/3보다 크면 유지한다. 측정이 하나도 없으면 120초 안에 DERP 패킷을 받은 기존 홈을 유지하고, 그래도 0이면 기존 홈을 유지한다(DERP 노트 4.8 1).
    - **대체 홈**: 홈이 0인 채로 `setRegions`가 오면 곧바로 지역 ID가 가장 작은 것을 홈으로 낸다(M3 규칙). 첫 회차(3초)를 기다리지 않고 DERP에 붙기 위해서다. 회차가 끝나면 6의 규칙으로 다시 고른다.
    - 홈이 바뀌면 `.homeRegionChanged`. `shortcut:` Go는 제어 서버와 맵 스트림이 끊긴 동안 홈을 바꾸지 않는다(DERP 노트 4.8 2). 이 계약은 바꾸되, 노드가 옛 홈 연결을 닫지 않으므로(엔진 계약 M4 동작 N3) 아직 옛 홈으로 보내는 피어의 패킷도 받는다. 바뀐 홈은 제어가 다시 이어진 뒤 올라간다.
@@ -507,19 +507,21 @@ package enum LocalInterfaceAddresses {
 
 ### 확인 항목
 
+Go 피어와 Swift 노드 사이의 관찰(2026-11-15, 단위 4b, 5번 실행): 엔드포인트는 `running` 뒤 0.1초 안에 올라갔고, 첫 에코 뒤 약 0.9~1.0초에 양쪽 직접, Swift 쪽 차단 뒤 6.38~6.51초에 `.relayed`(한 번은 3.44초. 차단이 heartbeat Pong 직전에 걸리면 신뢰가 마지막 Pong부터 세어져 이르다), 풀면 0.11~0.20초(한 번 2.0초)에 직접, Go 노브를 켜면 5.0~6.2초에 중계, 끄면 0.07~0.9초에 직접, 130초 유지에서 에코 유실 0. 관문의 "6.5초(+3초) 안에"는 상한이지 하한이 아니다.
+
 기준 관찰(2026-11-14, Go 피어 둘 사이, 도구의 `setNeverDirectUDP`): 켠 뒤 양쪽 `curAddr`가 6.45초·6.60초에 비었고(신뢰 기간 6.5초와 맞다), 끈 뒤 UDP를 보내자 약 0.04초에 직접 경로로 돌아왔다. 이 노브가 켜져 있어도 UDP 데이터는 계속 흐른다(탐색 Ping만 막는다). 노브를 켠 직후의 `peerPing`(disco)은 30초 뒤 시간 초과로 실패한다. 아래 시각 기대값은 이 관찰과 노트의 계산에 여유를 더한 것이다.
 
 Go 피어 하나(`addPeer`)와 Swift 노드 하나로 시작한다. 시각 기대값은 노트 7.2 3의 계산이다. 시험은 기대 시각 + 여유(아래 괄호)까지 조건을 기다린다.
 
 1. **엔드포인트**: Swift 노드가 `running` 뒤 10초 안에 `nodes`의 Swift 항목 `endpoints`에 `127.0.0.1:<Swift 포트>`가 있다(STUN 결과). Go `peerStatus`의 `selfAddrs`에서 Go 포트를 얻는다.
-2. **직접 경로 성립(Swift가 먼저)**: Swift가 Go 피어의 IPv4 주소 포트 7로 UDP 에코를 1초 간격으로 보낸다. 15초 안에 (가) Go `peerStatus`의 Swift 항목 `curAddr`가 Swift가 올린 엔드포인트 가운데 하나(기대: `127.0.0.1:<Swift 포트>`, 노트 4.7 계산)이고, (나) Swift `path(toPeerNamed:)`가 `.direct(127.0.0.1:<Go 포트>)`이며, (다) `peerPathChanged` 사건이 `.direct`로 나왔다. 에코는 계속 돌아온다.
+2. **직접 경로 성립(Swift가 먼저)**: Swift가 Go 피어의 IPv4 주소 포트 7로 UDP 에코를 1초 간격으로 보낸다. 15초 안에 (가) Go `peerStatus`의 Swift 항목 `curAddr`가 Swift가 올린 엔드포인트 가운데 하나이고(계산은 `127.0.0.1:<Swift 포트>`지만 Go가 LAN 주소를 고르는 것이 약 10번의 전환 가운데 2번 관찰됐다. 어느 것이든 받는다), (나) Swift `path(toPeerNamed:)`가 `.direct(127.0.0.1:<Go 포트>)`이며, (다) `peerPathChanged` 사건이 `.direct`로 나왔다. 에코는 계속 돌아온다.
 3. **Swift 쪽 차단과 복귀**: `setBlockedUDPPorts([Go 포트])`. 에코를 계속 보내며
    - 6.5초(+3초) 안에 Swift 경로가 `.relayed(derpRegion: 1)`이고 Go `curAddr`가 빈 문자열이다.
    - 차단 직후 신뢰 기간에는 양쪽이 UDP로만 보내므로 에코가 빠진다. 신뢰가 지난 뒤(차단 + 9.5초)부터는 에코가 하나도 빠지지 않는다(UDP와 DERP로 함께, 이어서 DERP로만 나간다).
    - 차단을 푼다. 10초 안에 둘 다 직접 경로로 돌아오고 에코가 이어진다.
 4. **Go 쪽 노브**: `setNeverDirectUDP true`. 6.5초(+3초) 안에 Swift 경로 `.relayed`, Go `curAddr` 빈 문자열. 에코는 계속된다. `false`로 되돌리면 10초 안에 둘 다 직접. (Go는 기한 처리할 Ping이 없어 UDP도 함께 보낸다. 노트 7.2 3.)
-5. **Go가 먼저**: Swift 노드가 `running`이 된 뒤 새 Go 피어를 더하고, Swift가 그 피어에게 아무것도 보내지 않은 상태에서 Go 피어가 `peerPing type=ICMP`로 Swift 주소를 1초 간격으로 부른다. 15초 안에 2의 (가)·(나)가 성립한다(Go가 netmap의 Swift 엔드포인트로 Ping하고, Swift가 Pong하며 Go의 출처를 후보로 배운다). Swift가 엔드포인트를 올리기 전에 Go가 먼저 보내는 경우(노트 4.8 계산)는 단위 시험 6이 덮는다.
-6. **유휴와 재개**: 에코를 멈추고 50초 기다린다. Go `peerStatus`의 Swift 항목 `active`가 거짓이다(Go도 45초 유휴). 다시 보내면 15초 안에 직접 경로.
+5. **Go가 먼저**: Swift 노드가 `running`이 된 뒤 새 Go 피어를 더하고, Swift가 그 피어에게 아무것도 보내지 않은 상태에서 Go 피어가 `peerPing`(disco)이나 `peerSend`로 Swift 주소를 1초 간격으로 부른다(ICMP `peerPing`은 쓰지 않는다. 메모리 장치의 Swift 노드에는 ICMP 응답기가 없어 늘 시간 초과다). 15초 안에 2의 (가)·(나)가 성립한다(Go가 netmap의 Swift 엔드포인트로 Ping하고, Swift가 Pong하며 Go의 출처를 후보로 배운다). Swift가 엔드포인트를 올리기 전에 Go가 먼저 보내는 경우(노트 4.8 계산)는 단위 시험 6이 덮는다.
+6. **유휴와 재개**: 에코를 멈추고 50초 기다린다. Go `peerStatus`의 Swift 항목 `active`가 거짓이다(Go도 45초 유휴). 멈춘 뒤 75초 안에 Swift `path(toPeerNamed:)`가 nil이고 `peerPathChanged`가 nil로 나왔다(45초 + keepalive 최대 둘). 다시 보내면 15초 안에 직접 경로.
 7. **2분 넘는 유지**: 직접 경로에서 에코를 1초 간격으로 130초 보낸다. 10초마다 본 Swift 경로와 Go `curAddr`가 모두 직접이고, 에코가 모두 돌아온다(WireGuard rekey 120초, heartbeat, 주기 STUN을 넘긴다).
 8. **TSMP 광고**: 세션이 선 뒤 Go가 보낸 TSMP disco 광고가 `inboundPackets`에 나오지 않는다(M3과 같다).
 9. **M3 관문 회귀**: M3 관문 2~7(UDP·TCP 에코, ACL, 피어 제거)을 직접 경로가 선 상태에서 다시 통과한다.

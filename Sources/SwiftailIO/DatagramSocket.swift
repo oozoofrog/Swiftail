@@ -18,7 +18,7 @@ import Synchronization
 /// - **파일 기술자는 한 번만 닫는다.** `close()`는 기술자를 상태에서 떼어 낸 뒤 읽기 원천을 취소하고, 실제 `close(2)`는
 ///   원천의 취소 처리기가 한다. 취소 처리기는 돌고 있던 읽기 처리기가 끝난 뒤에 돌므로 읽는 중에 기술자가 닫히지 않고,
 ///   `close()` 뒤의 `send`는 상태가 비어 있어 기술자를 건드리지 않는다(다른 곳이 재사용한 번호를 닫거나 쓰는 일이 없다).
-/// - **인터페이스에 묶을 수 있다.** `interfaceIndex`를 주면 `IP_BOUND_IF`로 그 인터페이스로만 나가고 들어온다(터널 안에서
+/// - **인터페이스에 묶을 수 있다.** `interfaceIndex`를 주면 `IP_BOUND_IF`로 그 인터페이스로 나간다(터널 안에서
 ///   소켓이 터널로 되돌아가지 않게 한다. 계약 동작 N 4). 이 타입은 인터페이스를 index로만 안다.
 /// - **구조적 동시성을 깨지 않는다.** 읽기는 Task가 아니라 디스패치 원천이 맡고, 흐름을 기다리는 Task가 취소되면 `for await`가
 ///   끝난다. 소켓을 버리면(`deinit`) 닫히고 흐름도 끝난다. 읽기 처리기는 `self`를 붙잡지 않아 소켓이 버려질 수 있다.
@@ -62,8 +62,8 @@ package final class DatagramSocket: Sendable {
     /// IPv4 와일드카드에 묶는다. `port`가 0이면 OS가 고른다. 읽기는 곧바로 시작한다.
     ///
     /// `interfaceIndex`를 주면 묶기 전에 `IP_BOUND_IF`로 그 인터페이스(`if_nametoindex`나 `NWInterface.index`가 주는 번호)에
-    /// 소켓을 묶는다. 그러면 소켓은 그 인터페이스로만 보내고 그 인터페이스에서 온 것만 받는다. 루프백 목적지로 보내려는
-    /// 소켓은 부르는 쪽이 묶지 않는다(Go `netns_darwin.go`의 `isLocalhost`와 같은 규칙).
+    /// 소켓을 묶는다. 그러면 소켓이 보내는 것은 그 인터페이스로 나간다. macOS에서 보면 물리 인터페이스에 묶은 소켓도
+    /// 루프백과는 주고받으므로(`DatagramSocketTests`), 목적지가 여럿인 이 소켓에는 루프백 예외를 두지 않는다.
     ///
     /// - Throws: 소켓을 만들거나 묶지 못하면, 또는 인터페이스에 묶지 못하면(없는 index 등) `SocketError.bindFailed`(errno 이름).
     package init(port: UInt16 = 0, interfaceIndex: UInt32? = nil) throws(SocketError) {
