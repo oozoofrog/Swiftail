@@ -356,6 +356,26 @@ tailnet 피어는 WireGuard로 인증되고 출발 주소는 그 피어의 Allow
 | N10 | 체크섬을 `SwiftailBase`로 옮기기 | (가) 옮긴다(엔진 파일 하나의 호출이 바뀐다) / (나) netstack에 한 벌 더 둔다 | (가)(결정 D10). 엔진의 기존 시험이 그대로 지킨다 |
 | N11 | `.inProcess`에서 ICMP echo에 답하기 | (가) 답하지 않는다 / (나) 답한다(tsnet은 답한다) | (가)로 시작한다. disco ping은 스택 없이 된다. 첫 사용처의 답(F12)에 따라 (나) |
 
+### 총괄 확정 (2026-11-15, 초안 단계)
+
+첫 사용처의 검토(아래 F1~F13) 전의 결정이다. 답에 따라 바뀔 수 있는 것은 그렇게 적는다.
+
+| # | 결정 | 덧붙임 |
+| --- | --- | --- |
+| N1 | (가) `Swiftail`이 `SwiftailNetstack`에 의존한다 | iOS 터널 확장의 바이너리 크기 증가를 구현 뒤에 재어 기록한다. plan 5절 그림과 모듈 표는 검토가 끝난 뒤 함께 고친다 |
+| N2 | (가) 핸들과 `listen(port:)`·`connect(to:port:)` | plan 6절 초안의 `dial`은 쓰지 않는다 |
+| N3 | (가) SACK 없이 시작하고 관문 기록으로 정한다 | 기준: 손실 1%의 처리량이 손실 0%의 1/10 아래면 M6-10을 연다 |
+| N4 | (가) RTO 하한 200ms | — |
+| N5 | (가) keep-alive를 늘 켠다 | RFC의 "기본 꺼짐"과 다르다는 것을 문서 주석에 적는다. F5의 답에 따라 다시 본다 |
+| N6 | 표의 값(연결 256개, 버퍼 256KiB씩)으로 시작 | Mac 호스트 기준이다. iOS 확장에서 `.inProcess`를 쓰게 되면(F6) 낮춘 값을 따로 정한다 |
+| N7 | (나) 실기기를 기본 마무리로 두고, (가) `addKernelPeer`는 **사용자가 sudo를 허락할 때만** 쓴다 | 관리자 권한은 사용자만 줄 수 있다. 허락 전에는 Go 피어(gVisor) 관문 (가)와 실기기로 간다 |
+| N8 | (가) 주소의 주인이 바뀐 연결은 끊는다 | — |
+| N9 | 정하지 않는다. M6의 API는 바이트 흐름만 낸다 | **M7의 가장 큰 위험이다**: 사용자 바이트 흐름 위에 TLS를 올릴 공개 API가 Apple 플랫폼에 마땅치 않다. M7 계약 전에 따로 조사하고, F1의 답을 먼저 받는다 |
+| N10 | (가) 체크섬을 `SwiftailBase`로 옮긴다 | — |
+| N11 | (가) `.inProcess`는 ICMP echo에 답하지 않는 것으로 시작 | F12의 답에 따라 다시 본다 |
+
+TCP 노트(`docs/protocol-notes/tcp-netstack.md`)는 작성한 세션과 다른 세션의 대조를 거친 뒤에 구현의 근거로 쓴다.
+
 ## 첫 사용처 확인 필요
 
 이 절은 첫 사용처의 커밋된 코드(`core/internal/node/node.go`·`tls.go`, `core/internal/proxy/proxy.go`, `core/internal/host/`, `docs/protocol.md`, `docs/protocol-addenda.md`, `docs/tunnel.md`)를 읽고 세운 가정과 질문이다. 답에 따라 바뀌는 조항을 함께 적는다.
