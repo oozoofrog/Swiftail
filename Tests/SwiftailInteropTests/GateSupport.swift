@@ -107,6 +107,25 @@ struct Gate: Sendable {
     let local: GatePeer
     let peer: GatePeer
     let witness: GatePeer?
+    let runningAt: ContinuousClock.Instant
+
+    /// 기존 M3 시험도 직접 경로가 선 뒤 본문을 시작해 M4 회귀 관문으로 쓴다.
+    func prepareDirectPath() async throws {
+        let nodes = try #require(await tool.command(.init(cmd: "nodes"), expecting: "nodes").nodes)
+        let fqdn = try #require(nodes.first { $0.nodeKey == peer.key }?.name)
+        let deadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < deadline {
+            try await echo(payload: [0x4d, 0x33])
+            let status = try await tool.command(.init(cmd: "peerStatus", name: "go-peer-a"), expecting: "peerStatus")
+            if case .direct = await node.path(toPeerNamed: fqdn),
+               status.peers?.first(where: { $0.nodeKey == local.key })?.curAddr?.isEmpty == false {
+                await tool.checkpoint("항목 9: M3 본문 시작 전 양쪽 직접 경로 확인")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw GateFailure("항목 9: M3 본문 시작 전 직접 경로 15초 제한 초과")
+    }
 
     /// 자기 주소 표식을 같은 응답에 넣어 ACL·피어 증분 적용 이후임을 확인한다.
     /// 원래 시험 주소는 유지하며, 데이터 패킷은 표식 주소를 사용하지 않는다.
@@ -198,7 +217,7 @@ func running(_ node: TailnetNode, containing marker: IPAddress? = nil) async thr
 }
 
 /// 매 시험의 도구·노드·상태를 격리하고 성공·실패·취소에서 모두 회수한다.
-func withGate(witness: Bool = false, _ body: (Gate) async throws -> Void) async throws {
+func withGate(witness: Bool = false, direct: Bool = true, _ body: (Gate) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-m3-\(UUID().uuidString)")
     let tool = GoTailnet(temporaryDirectory: directory)
     defer {
@@ -219,11 +238,14 @@ func withGate(witness: Bool = false, _ body: (Gate) async throws -> Void) async 
                                                   controlURL: try #require(ready.controlURL)))
         run = Task { try await node.run() }
         let addresses = try await running(node)
+        let runningAt = ContinuousClock.now
         let nodes = try #require(await tool.command(.init(cmd: "nodes"), expecting: "nodes").nodes)
         let local = try #require(nodes.first { Set($0.addresses) == Set(addresses.map(\.description)) })
         // 공개 목록에서 공개 키만 읽는다. 신원 파일·개인 키에는 접근하지 않는다.
         let localPeer = GatePeer(key: local.nodeKey, addresses: addresses)
-        try await body(Gate(tool: tool, node: node, local: localPeer, peer: peer, witness: other))
+        let gate = Gate(tool: tool, node: node, local: localPeer, peer: peer, witness: other, runningAt: runningAt)
+        if direct { try await gate.prepareDirectPath() }
+        try await body(gate)
         run?.cancel()
         await tool.stop()
         _ = await run?.result
