@@ -3,25 +3,53 @@ import Foundation
 /// `TailnetNode` 하나를 띄우는 데 필요한 설정.
 ///
 /// 인증 키를 담으므로 `description`과 `dump`에서 가린다. 설정 값을 그대로 로그에 찍어도 비밀이 새지 않는다.
-/// `docs/contracts/SwiftailEngine.md` "노드 API".
+/// `docs/contracts/SwiftailEngine.md` "노드 API", `docs/contracts/SwiftailTunnel.md` "공개 API".
 public struct NodeConfiguration: Sendable {
-    /// 신원 파일을 둘 디렉터리. 파일 URL이어야 한다.
+    /// Tailscale 제어 서버(Go `ipn.DefaultControlURL`, `ipn/prefs.go`).
+    public static let defaultControlURL: URL = {
+        guard let url = URL(string: "https://controlplane.tailscale.com") else {
+            preconditionFailure("고정된 제어 서버 URL은 올바른 URL이다")
+        }
+        return url
+    }()
+
+    /// 신원 파일(`identity.json`)을 둘 디렉터리. 파일 URL이어야 한다. 같은 프로세스의 노드 둘이 같은 디렉터리로 동시에
+    /// 돌지 못한다(`NodeError.stateDirectoryInUse`).
     public var stateDirectory: URL
-    /// 노드의 호스트 이름. 제어 서버가 노드 이름을 지을 때 쓴다.
+    /// 노드의 호스트 이름. 제어 서버가 노드 이름을 지을 때 쓴다. 비어 있으면 안 된다.
     public var hostname: String
     /// 제어 서버 URL. `http://` 또는 `https://`.
     public var controlURL: URL
-    /// 인증 키. 첫 등록에만 쓴다.
+    /// 인증 키. 첫 등록과 node 키를 새로 등록할 때만 쓴다. 저장하지 않는다.
     public var authKey: String?
     /// 오래 비활성이면 제어 서버가 지우는 노드로 등록한다.
     public var ephemeral: Bool
 
-    public init(stateDirectory: URL, hostname: String, controlURL: URL, authKey: String? = nil, ephemeral: Bool = false) {
+    public init(
+        stateDirectory: URL,
+        hostname: String,
+        controlURL: URL = Self.defaultControlURL,
+        authKey: String? = nil,
+        ephemeral: Bool = false
+    ) {
         self.stateDirectory = stateDirectory
         self.hostname = hostname
         self.controlURL = controlURL
         self.authKey = authKey
         self.ephemeral = ephemeral
+    }
+
+    /// 파일·소켓을 만들지 않고 볼 수 있는 것만 검사한다. URL의 세부(포트 범위, 사용자 정보 등)는 제어 클라이언트가
+    /// `run()`에서 한 번 더 검사하고 그 실패도 `invalidConfiguration`이다. 메시지에 경로·키를 넣지 않는다.
+    func validate() throws(NodeError) {
+        guard stateDirectory.isFileURL else { throw .invalidConfiguration("상태 디렉터리는 파일 URL이어야 한다") }
+        guard let scheme = controlURL.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            throw .invalidConfiguration("제어 서버 URL은 http:// 또는 https://여야 한다")
+        }
+        guard controlURL.host(percentEncoded: false)?.isEmpty == false else {
+            throw .invalidConfiguration("제어 서버 URL에 호스트가 없다")
+        }
+        guard !hostname.isEmpty else { throw .invalidConfiguration("호스트 이름이 비었다") }
     }
 }
 

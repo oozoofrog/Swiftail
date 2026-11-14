@@ -41,7 +41,7 @@ func redacted(_ text: String) -> String {
     return result
 }
 
-/// Node는 주입 적용을 공개 running 사건으로 확인할 때 필요한 필드만 갖는다.
+/// Node는 주입 적용을 공개 상태(`status.addresses`)로 확인할 때 필요한 필드만 갖는다.
 struct MapInjection: Encodable, Sendable {
     struct Node: Encodable, Sendable {
         let ID: Int64
@@ -183,16 +183,27 @@ struct Gate: Sendable {
     }
 }
 
+/// 첫 running을 기다려 자기 주소를 돌려준다. `marker`를 주면 그 주소가 자기 주소에 들어올 때까지 기다린다.
+///
+/// M5부터 주소는 사건에 실리지 않고(`NodeEvent.stateChanged`) `status`로 읽는다. 이미 running인 노드에 맵을 주입하면
+/// 상태가 바뀌지 않으므로 표식은 `status.addresses`를 짧은 간격으로 확인한다.
 func running(_ node: TailnetNode, containing marker: IPAddress? = nil) async throws -> [IPAddress] {
     let deadline = ContinuousClock.now + .seconds(25)
+    if let marker {
+        while true {
+            let addresses = await node.status.addresses
+            if addresses.contains(marker) { return addresses }
+            guard ContinuousClock.now < deadline else { throw GateFailure("주입 맵의 주소 표식 제한 시간 초과 (25초)") }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
     while true {
-        let event = try await nextEvent(node.events, waitingFor: marker == nil ? "첫 running·자기 주소" : "주입 맵의 주소 표식 running",
+        let event = try await nextEvent(node.events, waitingFor: "첫 running·자기 주소",
                                         timeout: ContinuousClock.now.duration(to: deadline))
         switch event {
-        case .running(let addresses):
-            if marker == nil || addresses.contains(where: { $0 == marker }) { return addresses }
-        case .reconnecting, .peerPathChanged: continue
-        case .loginRequired: throw GateFailure("자동 승인 서버에서 loginRequired 수신")
+        case .stateChanged(.running): return await node.status.addresses
+        case .stateChanged(.needsLogin): throw GateFailure("자동 승인 서버에서 needsLogin 수신")
+        case .stateChanged, .peerPathChanged: continue
         }
     }
 }
@@ -215,8 +226,8 @@ func withGate(witness: Bool = false, _ body: (Gate) async throws -> Void) async 
         let other: GatePeer?
         if witness { other = try GatePeer(await tool.command(.init(cmd: "addPeer", name: "go-peer-b"), expecting: "peer")) }
         else { other = nil }
-        let node = TailnetNode(configuration: .init(stateDirectory: directory, hostname: "rd-mac-1a2b3c4d",
-                                                  controlURL: try #require(ready.controlURL)))
+        let node = try TailnetNode(configuration: .init(stateDirectory: directory, hostname: "rd-mac-1a2b3c4d",
+                                                      controlURL: try #require(ready.controlURL)))
         run = Task { try await node.run() }
         let addresses = try await running(node)
         let nodes = try #require(await tool.command(.init(cmd: "nodes"), expecting: "nodes").nodes)

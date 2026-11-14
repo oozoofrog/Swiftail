@@ -5,15 +5,17 @@ import SwiftailDERP
 import SwiftailEngine
 import SwiftailMagicsock
 
-/// 제어 사건을 데이터면과 노드 사건으로 옮긴다.
+/// 제어 사건을 데이터면, 상태 기계, 터널 설정으로 옮긴다.
 ///
+/// - `loginRequired`: 상태 기계에 넣는다(`.needsLogin(url)`).
 /// - `registered`: 신원 파일에서 node 개인 키를 읽어 엔진과 `Magicsock`을 만든다. 키가 바뀌면 둘 다 새로 만들고 DERP 지역
-///   연결을 모두 다시 연다(disco 키와 소켓은 그대로).
+///   연결을 모두 다시 연다(disco 키와 소켓은 그대로). 상태 기계의 로그인 URL을 지운다.
 /// - `netmap`: 엔진에 적용하고, 피어와 홈 후보 지역을 `Magicsock`에 넣고, DERPMap에서 사라진 지역의 연결을 닫고,
-///   자기 주소를 `running`으로 알린다.
-/// - `disconnected`: `reconnecting`을 알린다.
+///   터널 설정을 산출해 바뀌었으면 내고(동작 E), 상태 기계에 넣는다.
+/// - `disconnected`: 로그만 남긴다. `.running` 뒤 끊겨도 상태는 그대로다(동작 B).
 ///
-/// 계약 `docs/contracts/SwiftailEngine.md` 노드 API 동작 1~4와 "M4에서 바뀌는 것" N2·N3·N5·N6.
+/// 계약 `docs/contracts/SwiftailEngine.md` 노드 API 동작 1~4와 "M4에서 바뀌는 것" N2·N3·N5·N6,
+/// `docs/contracts/SwiftailTunnel.md` 동작 B·E.
 extension TailnetNode {
     /// 제어 사건을 끝까지 따라간다. 계속할 수 없는 실패면 그것을 돌려준다.
     func follow(_ control: ControlClient) async -> NodeError? {
@@ -30,13 +32,15 @@ extension TailnetNode {
     private func handle(_ event: ControlClient.Event) throws(ControlError) {
         switch event {
         case let .loginRequired(url):
-            eventContinuation.yield(.loginRequired(url))
+            announce(stateMachine.loginRequired(url))
         case let .registered(key):
             try adoptNodeKey(key)
+            Self.log.info("제어: 등록됨")
+            announce(stateMachine.registered())
         case let .netmap(netmap):
             apply(netmap)
         case .disconnected:
-            linkBroke(.control)
+            Self.log.info("제어: 연결 끊김, 다시 잇는 중")
         }
     }
 
@@ -46,8 +50,8 @@ extension TailnetNode {
         guard let privateKey = try identityStore.load()?.nodeKey, NodePublicKey(privateKey.publicKey) == key else {
             throw .storage("등록한 node 키가 신원 파일에 없다")
         }
-        // 제어 사건은 `run()` 안에서만 오므로 소켓은 열려 있다.
-        guard let socket else { return }
+        // 제어 사건은 `run()` 안에서만 온다.
+        guard isRunning else { return }
         nodeKey = privateKey
         // 새 키는 새 WireGuard 신원이다. 이전 세션과 경로 상태, 옛 키로 연 DERP 연결은 쓸 수 없으므로 모두 새로 만든다.
         let now = ContinuousClock.now
@@ -59,7 +63,8 @@ extension TailnetNode {
         magicsock = Magicsock(
             discoKey: discoKey,
             nodeKey: key,
-            localPort: socket.localPort,
+            // 재결속 중이라 소켓이 없으면 0이다. 새 소켓을 열면 `rebind`가 포트를 알린다.
+            localPort: socket?.localPort ?? 0,
             localAddresses: interfaceAddresses.regular,
             loopbackAddresses: interfaceAddresses.loopback,
             now: now
@@ -75,19 +80,19 @@ extension TailnetNode {
     func apply(_ netmap: Netmap) {
         lastNetmap = netmap
         configureDataPlane(netmap)
+        publishSettings(for: netmap)
+        announce(stateMachine.receivedNetmap(machineAuthorized: netmap.selfNode.machineAuthorized))
+    }
 
-        let addresses = netmap.selfNode.addresses
-            .filter { $0.length == $0.address.bytes.count * 8 }
-            .map(\.address)
-        // 홈 지역의 연결이 없으면(쓸 수 있는 지역이 없어졌다) DERP를 끊긴 연결로 세지 않는다. 세면 `running`이 다시
-        // 나오지 않는다.
-        let derpDropped = derpLinks[homeRegion] == nil && brokenLinks.remove(.derp) != nil
-        let controlRestored = brokenLinks.remove(.control) != nil
-        let recovered = (derpDropped || controlRestored) && brokenLinks.isEmpty
-        if !addresses.isEmpty, addresses != announcedAddresses || recovered {
-            announcedAddresses = addresses
-            eventContinuation.yield(.running(addresses: addresses))
-        }
+    /// 터널 설정을 산출해 마지막으로 낸 것과 다르면 낸다(동작 E). 자기 주소가 없으면 내지 않는다.
+    private func publishSettings(for netmap: Netmap) {
+        let settings = TunnelNetworkSettings(netmap: netmap, mtu: device.mtu, at: Date())
+        guard let settings = settingsPublisher.publish(settings) else { return }
+        Self.log.info("""
+            터널 설정 산출: 주소 \(settings.addresses.count, privacy: .public)개, 경로 \(settings.routes.count, privacy: .public)개, \
+            DNS 서버 \(settings.dnsServers.count, privacy: .public)개, match 도메인 \(settings.dnsMatchDomains.count, privacy: .public)개
+            """)
+        settingsContinuation.yield(settings)
     }
 
     /// netmap을 엔진과 `Magicsock`에 넣는다. DERPMap에서 사라졌거나 서버 정의가 바뀐 지역의 연결을 닫는다.
@@ -135,26 +140,10 @@ extension TailnetNode {
         homeRegion = region
         localStatus.netInfo = NetInfo(preferredDERP: region)
         statusUploadContinuation.yield(localStatus)
+        Self.log.info("홈 DERP 지역: \(region, privacy: .public)")
         openDERPLink(to: region)
         if connectedDERPRegions.contains(region) {
-            linkRestored(.derp)
+            announce(stateMachine.connected())
         }
-    }
-
-    // MARK: 연결 상태
-
-    /// 연결 하나가 끊겼다. 다른 연결이 이미 끊겨 있지 않았다면 `reconnecting`을 알린다. `running` 전에는 알리지 않는다.
-    func linkBroke(_ link: Link) {
-        guard announcedAddresses != nil else { return }
-        if brokenLinks.isEmpty {
-            eventContinuation.yield(.reconnecting)
-        }
-        brokenLinks.insert(link)
-    }
-
-    /// 끊겼던 연결이 돌아왔다. 모두 돌아왔으면 `running`을 다시 알린다.
-    func linkRestored(_ link: Link) {
-        guard brokenLinks.remove(link) != nil, brokenLinks.isEmpty, let addresses = announcedAddresses else { return }
-        eventContinuation.yield(.running(addresses: addresses))
     }
 }
