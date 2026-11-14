@@ -1,4 +1,5 @@
-// 계약 동작 3~5·7: 엔진 둘을 메모리에서 맞물려(한쪽의 `.datagram`을 다른 쪽 `receive`에) 시험한다.
+// 계약 동작 3~5·7과 M-E1·M-E2: 엔진 둘을 메모리에서 맞물려(한쪽의 `.datagram`을 다른 쪽 `receive`에) 시험한다.
+// 엔진은 경로를 모르므로 망은 데이터그램을 받는 쪽 엔진에 그대로 넘긴다(노드에서는 `Magicsock`이 그 자리에 있다).
 // alice는 100.64.0.1·fd7a:115c:a1e0::1, bob은 100.64.0.2·fd7a:115c:a1e0::2이고 둘 다 홈 DERP 지역 1에 있다.
 
 import CryptoKit
@@ -40,8 +41,8 @@ private struct EnginePair {
     init() throws {
         alice = TailnetEngine(nodeKey: aliceKey, now: clockStart, wallClock: wallClockStart)
         bob = TailnetEngine(nodeKey: bobKey, now: clockStart, wallClock: wallClockStart)
-        _ = alice.apply(try netmap(for: .alice), homeDERP: Self.homeDERP, at: clockStart, wallClock: wallClockStart)
-        _ = bob.apply(try netmap(for: .bob), homeDERP: Self.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = alice.apply(try netmap(for: .alice), at: clockStart, wallClock: wallClockStart)
+        _ = bob.apply(try netmap(for: .bob), at: clockStart, wallClock: wallClockStart)
     }
 
     subscript(side: Side) -> TailnetEngine {
@@ -79,10 +80,9 @@ private struct EnginePair {
         while !queue.isEmpty {
             let (sender, output) = queue.removeFirst()
             switch output {
-            case let .datagram(bytes, to: destination, derpRegion: region):
+            case let .datagram(bytes, to: destination):
                 #expect(destination == publicKey(sender.other))
-                #expect(region == Self.homeDERP)
-                let replies = self[sender.other].receive(bytes, from: publicKey(sender), at: now)
+                let replies = self[sender.other].receive(bytes, at: now)
                 queue += replies.map { (from: sender.other, output: $0) }
             case let .ipPacket(bytes):
                 delivery.packets[sender, default: []].append(bytes)
@@ -153,13 +153,13 @@ struct TailnetEngineTests {
         // bob에게는 규칙이 없다. 아래에서 bob이 먼저 보낸 UDP(1 → 7)의 응답이 되는 패킷이다.
         let packet = TestPacket.udp(from: "100.64.0.1", 7, to: "100.64.0.2", 1)
 
-        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: []), homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: []), at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.send(packet, at: clockStart) == [.dropped(.noPeerForDestination)])
         // alice에서 지워진 bob이 보낸 initiation은 모르는 피어다.
         let rejected = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
         #expect(rejected.drops[.alice] == [.wireGuard(.unknownPeer)])
 
-        _ = pair.alice.apply(try pair.netmap(for: .alice), homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = pair.alice.apply(try pair.netmap(for: .alice), at: clockStart, wallClock: wallClockStart)
         let delivered = pair.send(packet, from: .alice, at: clockStart + .seconds(6))
         #expect(delivered.packets[.bob] == [packet])
     }
@@ -170,7 +170,7 @@ struct TailnetEngineTests {
         let toAlice = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
         #expect(pair.send(toAlice, from: .bob).packets[.alice] == [toAlice])
 
-        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: []), homeDERP: EnginePair.homeDERP, at: clockStart + .seconds(1), wallClock: wallClockStart + 1)
+        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: []), at: clockStart + .seconds(1), wallClock: wallClockStart + 1)
         let after = pair.send(toAlice, from: .bob, at: clockStart + .seconds(1))
         #expect(after.packets[.alice] == nil)
         #expect(after.drops[.alice] == [.wireGuard(.unknownPeer)])
@@ -183,7 +183,7 @@ struct TailnetEngineTests {
         #expect(pair.send(toAlice, from: .bob).packets[.alice] == [toAlice])
 
         // IPv6 주소를 AllowedIPs에서 뺀다. 같은 키이므로 핸드셰이크 없이 transport 하나로 닿는다.
-        _ = pair.alice.apply(try pair.netmap(for: .alice, peerExtra: #","AllowedIPs":["100.64.0.2/32"]"#), homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = pair.alice.apply(try pair.netmap(for: .alice, peerExtra: #","AllowedIPs":["100.64.0.2/32"]"#), at: clockStart, wallClock: wallClockStart)
         let outputs = pair.bob.send(toAlice, at: clockStart + .milliseconds(1))
         #expect(outputs.count == 1)
         #expect(pair.deliver(outputs, from: .bob, at: clockStart + .milliseconds(1)).packets[.alice] == [toAlice])
@@ -202,8 +202,8 @@ struct TailnetEngineTests {
         // bob이 새 node 키로 다시 시작한다.
         pair.bobKey = Curve25519.KeyAgreement.PrivateKey()
         pair.bob = TailnetEngine(nodeKey: pair.bobKey, now: clockStart, wallClock: wallClockStart)
-        _ = pair.bob.apply(try pair.netmap(for: .bob), homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
-        _ = pair.alice.apply(try pair.netmap(for: .alice), homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = pair.bob.apply(try pair.netmap(for: .bob), at: clockStart, wallClock: wallClockStart)
+        _ = pair.alice.apply(try pair.netmap(for: .alice), at: clockStart, wallClock: wallClockStart)
 
         let rotated = pair.send(toAlice, from: .bob, at: clockStart + .seconds(1))
         #expect(rotated.packets[.alice] == [toAlice])
@@ -211,8 +211,8 @@ struct TailnetEngineTests {
         // 옛 키의 세션으로 온 데이터는 모르는 피어다.
         var old = oldBob
         let stale = old.send(toAlice, at: clockStart + .seconds(1))
-        let datagram = try #require(stale.compactMap { if case let .datagram(bytes, _, _) = $0 { bytes } else { nil } }.first)
-        #expect(pair.alice.receive(datagram, from: pair.publicKey(.bob), at: clockStart + .seconds(1)) == [.dropped(.wireGuard(.unknownPeer))])
+        let datagram = try #require(stale.compactMap { if case let .datagram(bytes, _) = $0 { bytes } else { nil } }.first)
+        #expect(pair.alice.receive(datagram, at: clockStart + .seconds(1)) == [.dropped(.wireGuard(.unknownPeer))])
     }
 
     @Test("AllowedIPs 밖의 출발지는 필터보다 먼저 WireGuard가 버린다")
@@ -234,25 +234,33 @@ struct TailnetEngineTests {
         #expect(delivery.drops[.alice] == [.consumedControlPacket])
     }
 
-    @Test("disco 메시지는 WireGuard에 넣지 않고 버린다")
-    func discoMessage() throws {
-        var pair = try EnginePair()
-        let magic: [UInt8] = [0x54, 0x53, 0xF0, 0x9F, 0x92, 0xAC]
-        let disco = magic + [UInt8](repeating: 7, count: 56)
-        #expect(pair.alice.receive(disco, from: pair.publicKey(.bob), at: clockStart) == [.dropped(.discoMessage)])
-        // 62바이트보다 짧으면 disco가 아니다. WireGuard가 해석하지 못한다.
-        #expect(pair.alice.receive(Array(disco.prefix(61)), from: pair.publicKey(.bob), at: clockStart) == [.dropped(.wireGuard(.malformed))])
-    }
-
-    @Test("피어의 홈 DERP가 우리 홈 지역이 아니거나 모르면 보내지 않는다")
-    func noRouteToPeer() throws {
+    @Test("홈 DERP가 우리와 다르거나 없는 피어에게도 데이터그램을 낸다. 경로는 Magicsock이 고른다(M-E1)")
+    func peersOutsideHomeRegion() throws {
         var pair = try EnginePair()
         let packet = TestPacket.udp(from: "100.64.0.1", 5000, to: "100.64.0.2", 7)
-        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: [makeNodeJSON(id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32"], extra: #","HomeDERP":2"#)]), homeDERP: 1, at: clockStart, wallClock: wallClockStart)
-        #expect(pair.alice.send(packet, at: clockStart) == [.dropped(.noRouteToPeer)])
+        let otherRegion = makeNodeJSON(id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32"], extra: #","HomeDERP":2"#)
+        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: [otherRegion]), at: clockStart, wallClock: wallClockStart)
+        let toRegion2 = pair.alice.send(packet, at: clockStart)
+        #expect(toRegion2.count == 1)
+        #expect(toRegion2.allSatisfy { if case .datagram(_, to: pair.publicKey(.bob)) = $0 { true } else { false } })
 
-        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: [makeNodeJSON(id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32"], extra: #","DiscoKey":"\#(discoKeyText)""#)]), homeDERP: 0, at: clockStart, wallClock: wallClockStart)
-        #expect(pair.alice.send(packet, at: clockStart) == [.dropped(.noRouteToPeer)])
+        // 홈 DERP가 0이어도 disco 키가 있으면 올린다(M-E3). 직접 경로로 닿을 수 있다.
+        let noHome = makeNodeJSON(id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32"], extra: #","DiscoKey":"\#(discoKeyText)""#)
+        var fresh = TailnetEngine(nodeKey: pair.aliceKey, now: clockStart, wallClock: wallClockStart)
+        _ = fresh.apply(try pair.netmap(for: .alice, peers: [noHome]), at: clockStart, wallClock: wallClockStart)
+        #expect(fresh.send(packet, at: clockStart).allSatisfy { if case .datagram = $0 { true } else { false } })
+    }
+
+    @Test("netmap의 disco 키와 엔드포인트를 EnginePeer에 그대로 옮긴다(M-E3)")
+    func peerCarriesDiscoAndEndpoints() throws {
+        let pair = try EnginePair()
+        let bob = makeNodeJSON(
+            id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32"],
+            extra: #","DiscoKey":"\#(discoKeyText)","HomeDERP":1,"Endpoints":["127.0.0.1:41641","[2001:db8::1]:41641"]"#
+        )
+        let peer = try #require(EnginePeer.peers(in: try pair.netmap(for: .alice, peers: [bob]), at: wallClockStart).first)
+        #expect(peer.discoKey.description == discoKeyText)
+        #expect(peer.endpoints == [try #require(IPEndpoint("127.0.0.1:41641")), try #require(IPEndpoint("[2001:db8::1]:41641"))])
     }
 
     @Test("키 만료 시각에 피어가 내려간다")
@@ -260,7 +268,7 @@ struct TailnetEngineTests {
         var pair = try EnginePair()
         // bob의 키는 wallClockStart + 60초에 만료된다.
         let netmap = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"2027-01-15T08:01:00Z""#)
-        _ = pair.alice.apply(netmap, homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = pair.alice.apply(netmap, at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.nextDeadline == clockStart + .seconds(60))
 
         let toAlice = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
@@ -279,14 +287,14 @@ struct TailnetEngineTests {
         let day = Duration.seconds(24 * 60 * 60)
         // 9999년의 만료: 단조 시각으로 바꿀 때 넘치지 않게 하루 뒤에 다시 본다.
         let distant = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"9999-12-31T00:00:00Z""#)
-        _ = pair.alice.apply(distant, homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = pair.alice.apply(distant, at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.nextDeadline == clockStart + day)
         _ = pair.alice.advance(to: clockStart + day)
         #expect(pair.alice.nextDeadline == clockStart + day + day)
 
         // 하루하고 1초 뒤의 만료(wallClockStart는 2027-01-15T08:00:00Z): 하루 뒤에 한 번 보고, 1초 뒤에 내린다.
         let soon = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"2027-01-16T08:00:01Z""#)
-        _ = pair.alice.apply(soon, homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        _ = pair.alice.apply(soon, at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.nextDeadline == clockStart + day)
         _ = pair.alice.advance(to: clockStart + day)
         #expect(pair.alice.nextDeadline == clockStart + day + .seconds(1))
@@ -305,7 +313,7 @@ struct TailnetEngineTests {
         let deadline = try #require(pair.alice.nextDeadline)
         #expect(deadline > clockStart)
         let retry = pair.alice.advance(to: deadline)
-        #expect(retry.allSatisfy { if case .datagram(_, to: pair.publicKey(.bob), derpRegion: 1) = $0 { true } else { false } })
+        #expect(retry.allSatisfy { if case .datagram(_, to: pair.publicKey(.bob)) = $0 { true } else { false } })
         #expect(!retry.isEmpty)
     }
 
@@ -315,7 +323,7 @@ struct TailnetEngineTests {
         _ = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
         var text = ""
         dump(pair.alice, to: &text)
-        #expect(Mirror(reflecting: pair.alice).children.map(\.label) == ["publicKey", "homeDERP", "peerCount"])
+        #expect(Mirror(reflecting: pair.alice).children.map(\.label) == ["publicKey", "peerCount"])
         #expect(text.contains(pair.publicKey(.alice).description))
         #expect(!text.contains(Array(pair.aliceKey.rawRepresentation).hex))
         #expect(!text.contains("device") && !text.contains("staticKey"))
@@ -329,7 +337,7 @@ struct TailnetEngineTests {
         for step in 0..<5_000 {
             let bytes = random.bytes(Int.random(in: 0...200, using: &random))
             let now = clockStart + .milliseconds(step)
-            _ = pair.alice.receive(bytes, from: pair.publicKey(.bob), at: now)
+            _ = pair.alice.receive(bytes, at: now)
             _ = pair.alice.send(bytes, at: now)
         }
     }

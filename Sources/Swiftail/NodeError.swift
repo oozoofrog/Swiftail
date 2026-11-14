@@ -8,6 +8,8 @@ public enum NodeError: Error, Sendable {
     case control(ControlError)
     /// 설정이 잘못되었다(상태 디렉터리, 제어 서버 URL, 호스트 이름). `run()`을 두 번 부른 것도 여기다.
     case invalidConfiguration(String)
+    /// UDP 소켓을 열거나 묶지 못했다. 메시지에는 errno 이름만 담는다(예: `EADDRINUSE`).
+    case udpUnavailable(String)
 }
 
 extension NodeError {

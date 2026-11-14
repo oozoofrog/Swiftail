@@ -20,6 +20,10 @@ public struct EnginePeer: Sendable, Equatable {
     public var allowedIPs: [IPPrefix]
     /// 이 피어에게 보낼 때 쓸 DERP 지역. 0이면 모른다.
     public var homeDERP: Int64
+    /// netmap의 `DiscoKey`. 0이면 이 피어와 disco를 하지 않는다(DERP만).
+    public var discoKey: DiscoPublicKey
+    /// netmap의 `Endpoints` 그대로. 후보로 쓸 주소를 거르는 일은 `Magicsock`이 한다.
+    public var endpoints: [IPEndpoint]
 
     /// netmap에서 데이터면에 올릴 피어들을 고른다. 순서는 node ID 오름차순이다.
     ///
@@ -71,6 +75,8 @@ public struct EnginePeer: Sendable, Equatable {
         key = node.key
         self.allowedIPs = allowedIPs
         homeDERP = node.homeDERP
+        discoKey = node.discoKey
+        endpoints = node.endpoints
     }
 
     /// 만료 표지가 있거나 키 만료 시각이 지났다(같은 시각 포함).
