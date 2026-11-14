@@ -66,8 +66,8 @@ struct ConnectionClosingTests {
         #expect(pair.serverEvents == [.established, .readable, .endOfStream])
     }
 
-    @Test("앞에 빈 곳이 있는 FIN은 소비하지 않고 곧바로 ACK한다. 빈 곳이 메워진 뒤 다시 온 FIN을 소비한다")
-    func finAfterGapIsNotConsumed() throws {
+    @Test("앞에 빈 곳이 있는 FIN은 곧바로 ACK하되 소비하지 않고, 빈 곳이 메워지면 재전송 없이 소비한다")
+    func finAfterGapIsConsumedWhenGapFills() throws {
         var peer = try ManualPeer.established()
         let base = peer.peerNext
         let finAhead = peer.segment(
@@ -76,13 +76,14 @@ struct ConnectionClosingTests {
         #expect(outputs.events.isEmpty)
         #expect(outputs.segments.first?.acknowledgmentNumber == base)
         #expect(peer.connection.state == .established)
-        _ = peer.receive(peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 100)))
-        #expect(peer.connection.receiveNext == base.advanced(by: 150))
         #expect(!peer.connection.hasReceivedEndOfStream)
-        let retransmittedFIN = peer.segment(sequence: base.advanced(by: 150), flags: [.ack, .fin])
-        #expect(peer.receive(retransmittedFIN).events == [.endOfStream])
+        // 빈 곳을 메우면 적어 둔 FIN까지 이어진다(RFC 9293 3.10.7.4 SHLD-31). FIN의 번호는 base + 150이다.
+        let filled = peer.receive(peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 100)))
+        #expect(filled.events.contains(.endOfStream))
+        #expect(peer.connection.hasReceivedEndOfStream)
         #expect(peer.connection.state == .closeWait)
         #expect(peer.connection.receiveNext == base.advanced(by: 151))
+        #expect(filled.segments.last?.acknowledgmentNumber == base.advanced(by: 151))
     }
 
     @Test("close에 읽지 않은 데이터가 있으면 곧바로 RST, 상대는 .reset")

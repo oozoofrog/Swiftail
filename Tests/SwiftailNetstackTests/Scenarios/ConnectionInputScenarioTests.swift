@@ -223,14 +223,8 @@ struct ConnectionInputScenarioTests {
         let consumedFinish = peer.connection.hasReceivedEndOfStream
         let reportedFinish = output.contains(.event(.endOfStream))
         let enteredCloseWait = peer.connection.state == .closeWait
-        withKnownIssue("계약 T2·TCP 노트 4.2·RFC 9293 3.10.7.4 SHLD-31: 빈 곳 뒤 FIN을 보관하지 않아 재전송 전에는 EOF가 없다. M6-4의 명시된 shortcut. 재현: ISS=90000, FIN SEQ=90004, 이어 SEQ=90001의 3바이트; 난수 없음.") {
-            #expect(consumedFinish && reportedFinish && enteredCloseWait)
-        }
-        if !consumedFinish {
-            let retry = peer.receive(peer.segment(sequence: peer.peerStart.advanced(by: 3), flags: [.ack, .fin]))
-            #expect(retry.contains(.event(.endOfStream)))
-            #expect(peer.connection.state == .closeWait)
-        }
+        // 계약 T2·RFC 9293 3.10.7.4 SHLD-31: 빈 곳을 메우면 FIN의 재전송 없이 EOF가 난다.
+        #expect(consumedFinish && reportedFinish && enteredCloseWait)
     }
 
     @Test("1바이트 구간 1만 개에서도 읽는 바이트는 원본의 앞부분")

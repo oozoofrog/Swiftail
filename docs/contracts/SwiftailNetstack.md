@@ -243,7 +243,8 @@ tsnet과의 대응:
 - SYN-RECEIVED의 틀린 ACK는 RFC 5961 5.2의 범위 검사보다 먼저 보고 늘 RST로 답한다(T4, Linux·gVisor와 같다). challenge ACK의 속도 제한(5초에 10개)은 동작 X2·X3의 ACK에도 함께 쓴다.
 - TIME-WAIT의 FIN 예외는 번호가 RCV.NXT−1인 FIN에만 적용한다(이미 소비한 FIN의 재전송. gVisor와 같다). `abort`는 CLOSING·LAST-ACK·TIME-WAIT에서 RST를 보내지 않는다(RFC 9293 3.10.5). SYN-SENT의 `close`는 아무것도 보내지 않고 `aborted`로 끝난다.
 - 지연 ACK의 2×MSS는 이 쪽이 광고한 MSS가 기준이다. SYN을 다시 보내지 않았으면 핸드셰이크 왕복이 RTT의 첫 표본이다. PSH는 버퍼의 마지막 바이트를 싣는 세그먼트에 켠다.
-- `shortcut:` 빈 곳 너머에 온 FIN의 위치를 기억하지 않는다. 빈 곳이 메워진 뒤 상대가 FIN을 다시 보내야 끝난다.
+- 빈 곳 너머에 먼저 온 FIN은 번호를 적어 두었다가 그 앞의 데이터가 다 도착하면 소비한다(RFC 9293 3.10.7.4 SHLD-31. 처음에는 `shortcut:`이었으나 독립 시험 M6-6이 짚어 넣었다).
+- 손실이 심한 경로에서는 닫기가 `finished`가 아니라 `timedOut`으로 끝날 수 있다: TIME-WAIT 60초가 지난 뒤에야 상대의 FIN 재전송(RTO가 120초까지 자란다)이 닿으면 그 연결은 이미 없다. 데이터는 그 전에 모두 전달된 뒤다(M6-6의 손실 20% 조합에서 관찰).
 
 ### R. 재전송과 혼잡 제어
 

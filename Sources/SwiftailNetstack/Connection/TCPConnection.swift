@@ -168,6 +168,8 @@ package struct TCPConnection: Sendable {
     var advertisedWindowEnd: SequenceNumber
     /// 상대의 FIN을 소비했다.
     var finReceived = false
+    /// 빈 곳 너머에 먼저 도착한 상대 FIN의 번호. 그 앞의 데이터가 다 도착하면 소비한다(RFC 9293 3.10.7.4 SHLD-31).
+    var pendingFinSequence: SequenceNumber?
     /// 응용이 `close`로 읽기를 끝냈다. 그 뒤에 온 데이터에는 RST로 답한다(SHLD-3).
     var readClosed = false
     /// 마지막 ACK 뒤에 순서대로 받은 바이트 수. 2×RMSS가 되면 곧바로 ACK한다(SHLD-19).

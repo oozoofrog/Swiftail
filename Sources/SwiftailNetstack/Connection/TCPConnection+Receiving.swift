@@ -285,11 +285,16 @@ extension TCPConnection {
                 outputs.append(.event(.readable))
             }
         }
-        guard text.fin else { return }
-        // FIN에는 곧바로 ACK한다. 앞에 빈 곳이 있으면 소비하지 않는다(상대가 다시 보낸다).
+        if text.fin {
+            // FIN에는 곧바로 ACK한다. 앞에 빈 곳이 있으면 자리만 적어 두고, 빈 곳이 메워질 때 소비한다(SHLD-31. 상대가
+            // FIN을 다시 보내기를 기다리면 닫기가 RTO만큼 늦는다).
+            scheduleAcknowledgment(immediately: true, at: now)
+            pendingFinSequence = text.sequence.advanced(by: UInt32(text.payload.count))
+        }
+        // 적어 둔 FIN 앞의 데이터가 빈 곳 없이 다 왔는가. 이 세그먼트가 빈 곳을 메웠을 수도 있다.
+        guard let finSequence = pendingFinSequence, finSequence.precedesOrEquals(receiveBuffer.nextSequence) else { return }
+        pendingFinSequence = nil
         scheduleAcknowledgment(immediately: true, at: now)
-        // shortcut: 빈 곳 너머에 온 FIN의 자리를 기억하지 않는다. 빈 곳이 메워진 뒤 상대가 FIN을 다시 보내야 끝난다.
-        guard text.sequence.advanced(by: UInt32(text.payload.count)) == receiveBuffer.nextSequence else { return }
         finReceived = true
         outputs.append(.event(.endOfStream))
         switch state {
