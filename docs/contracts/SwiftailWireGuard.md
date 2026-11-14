@@ -113,7 +113,7 @@ public struct WireGuardDevice: Sendable {
 }
 ```
 
-오류와 상태: `receive`가 오류를 던지면 상태는 그대로다. 예외는 공격을 세는 기록이다: flood 검사를 위한 initiation 수신 시각, 부하 판정을 위한 mac1 통과 수, 속도 제한 표. AEAD와 재전송 검사를 통과한 transport는 안의 IP 패킷이 잘못됐거나 출발 주소가 AllowedIPs 밖이어도 오류가 아니다. 인증된 피어가 보낸 것이므로 next 확정, 대기열 방출, rekey, 타이머 갱신을 정상 수신과 같이 하고(wireguard-go와 같다), 버린 패킷은 `rejectedIPPacket`으로 알린다.
+오류와 상태: `send`·`receive`가 오류를 던지면 피어 상태는 그대로다. 피어를 표 안에서 제자리로 고치므로(`edit`) 이 성질은 구조가 아니라 순서로 지킨다: 오류를 던지는 검사(mac, AEAD, timestamp·재전송 창, 만료, 크기)는 모두 피어를 고치기 전에 끝내고, 재전송 창은 인증된 counter를 받아들일 때만 바뀐다. `Tests/SwiftailWireGuardTests/FailureAtomicityTests.swift`가 거절한 입력마다 세션·카운터·재전송 창·타이머·index 표 전체가 그대로인지 비교한다. 예외는 공격을 세는 기록이다: flood 검사를 위한 initiation 수신 시각, 부하 판정을 위한 mac1 통과 수, 속도 제한 표. AEAD와 재전송 검사를 통과한 transport는 안의 IP 패킷이 잘못됐거나 출발 주소가 AllowedIPs 밖이어도 오류가 아니다. 인증된 피어가 보낸 것이므로 next 확정, 대기열 방출, rekey, 타이머 갱신을 정상 수신과 같이 하고(wireguard-go와 같다), 버린 패킷은 `rejectedIPPacket`으로 알린다.
 
 시각: `wallClock`이 1970년 이전이면 1970년으로 본다.
 
@@ -140,7 +140,7 @@ public struct WireGuardDevice: Sendable {
 제외(코드에 `shortcut:` 주석으로 한계를 남긴다):
 
 - PSK 설정, persistent keepalive
-- 버퍼 재사용. 지금은 패킷마다 배열을 만든다. 필요해지는 시점: M5의 실기기 처리량·메모리 측정에서 병목으로 확인될 때
+- 송수신 버퍼의 완전한 재사용. 패킷마다 결과 배열(송신은 머리·암호문·태그를 담은 배열 하나, 수신은 평문 배열)을 새로 만들고, CryptoKit이 돌려주는 `SealedBox`·`Data`에서 한 번씩 복사한다(CryptoKit에는 호출하는 쪽 버퍼에 직접 쓰는 API가 없다). `nextDeadline`·`advance`는 피어 수만큼 훑는다(피어 64명에 약 1.4µs). 필요해지는 시점: M5의 실기기 처리량·메모리 측정에서 이 복사나 피어 수가 병목으로 확인될 때. 불필요한 복사는 없앴다(2026-11-15): 패킷마다 피어 전체를 복사하던 `store`를 표 안 제자리 고치기로 바꿨고, 메시지·타이머·nonce의 중간 배열을 줄였다(1,280바이트 패킷, 릴리스 빌드, 메모리 안 장치 둘: seal 5.1→3.0µs, open 5.5→3.5µs)
 
 ## cookie reply 보내기 (2026-11-15)
 

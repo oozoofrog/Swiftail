@@ -7,16 +7,22 @@
 /// (출처: wireguard-go `device/send.go`, `device/receive.go`).
 extension Keypair {
     /// 다음 counter로 패킷을 암호화한다. 호출하는 쪽은 먼저 `canSend(at:)`을 확인한다.
-    // shortcut: 패킷마다 패딩·암호문·메시지 배열을 새로 만든다(버퍼 재사용 없음). M5 실기기 처리량·메모리 측정에서 병목으로 확인되면 올린다.
-    mutating func seal(_ packet: [UInt8]) -> TransportData {
+    ///
+    /// - Returns: 보낼 데이터그램 전체(머리 16 + 암호문 + 태그). 배열 하나를 한 번만 할당해 채운다.
+    ///   패딩이 필요 없으면(16의 배수) 패킷을 복사하지 않고 그대로 암호화한다.
+    // shortcut: CryptoKit이 돌려주는 `SealedBox`에서 데이터그램으로 한 번 복사한다. 호출하는 쪽 버퍼에 직접 암호화하는 API가 없다. 실기기 측정에서 병목이면 올린다.
+    mutating func seal(_ packet: [UInt8]) -> [UInt8] {
         let counter = sendNonce
         sendNonce += 1
-        let padded = packet + [UInt8](repeating: 0, count: Self.paddingSize(for: packet.count, mtu: Constants.defaultMTU))
-        return TransportData(
+        let padding = Self.paddingSize(for: packet.count, mtu: Constants.defaultMTU)
+        let plaintext = padding == 0 ? packet : packet + [UInt8](repeating: 0, count: padding)
+        var datagram = TransportData.header(
             receiver: remoteIndex,
             counter: counter,
-            encryptedPacket: AEAD.seal(padded, key: sendKey, counter: counter)
+            capacity: TransportData.headerSize + plaintext.count + AEAD.tagSize
         )
+        AEAD.seal(plaintext, key: sendKey, counter: counter, appendingTo: &datagram)
+        return datagram
     }
 
     /// 복호화만 한다. 재전송 검사는 인증된 뒤 `replayFilter`로 따로 한다.

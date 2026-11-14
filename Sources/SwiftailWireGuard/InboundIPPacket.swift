@@ -35,7 +35,8 @@ struct InboundIPPacket {
             return nil
         }
         guard let source = IPAddress(bytes: plaintext[sourceRange]) else { return nil }
-        self.bytes = Array(plaintext[..<length])
+        // 패딩이 없으면 평문이 곧 패킷이므로 복사하지 않는다.
+        self.bytes = length == plaintext.count ? plaintext : Array(plaintext[..<length])
         self.source = source
     }
 

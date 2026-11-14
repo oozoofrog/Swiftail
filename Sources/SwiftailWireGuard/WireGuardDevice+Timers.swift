@@ -9,21 +9,15 @@ extension WireGuardDevice {
     /// now까지 기한이 지난 타이머를 모두 처리한다.
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
         var outputs: [Output] = []
-        while case let (owner, kind)? = expiredTimer(at: now), var peer = peers[owner] {
-            peer.timers[kind] = nil
-            outputs += fire(kind, for: &peer, at: now)
-            store(peer)
+        while let timer = earliestTimer(), timer.deadline <= now {
+            let fired = edit(timer.owner) { device, peer in
+                peer.timers[timer.kind] = nil
+                return device.fire(timer.kind, for: &peer, at: now)
+            }
+            guard let fired else { break }
+            outputs += fired
         }
         return outputs
-    }
-
-    /// 기한이 지난 타이머 가운데 가장 이른 것.
-    private func expiredTimer(at now: ContinuousClock.Instant) -> (PublicKey, PeerTimers.Kind)? {
-        let earliest = peers.compactMap { key, peer in
-            peer.timers.earliest.map { (key: key, kind: $0.kind, deadline: $0.deadline) }
-        }.min { $0.deadline < $1.deadline }
-        guard let earliest, earliest.deadline <= now else { return nil }
-        return (earliest.key, earliest.kind)
     }
 
     private func fire(_ kind: PeerTimers.Kind, for peer: inout Peer, at now: ContinuousClock.Instant) -> [Output] {

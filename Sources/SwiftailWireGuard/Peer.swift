@@ -33,6 +33,37 @@ struct Peer {
         return indices
     }
 
+    /// `localIndices`를 집합 없이 칸별로 쥔 값. 패킷마다 "index가 바뀌었는가"만 비교하는 데 쓴다.
+    struct IndexSlots: Equatable {
+        var previous: UInt32?
+        var current: UInt32?
+        var next: UInt32?
+        var pending: UInt32?
+
+        /// 값이 있는 칸의 index.
+        var all: [UInt32] { [previous, current, next, pending].compactMap { $0 } }
+    }
+
+    /// 장치의 index 표에 올려 둔 칸. 장치가 피어를 고치고 나면(`edit`) `indexSlots`와 맞춘다.
+    var tabledIndexSlots = IndexSlots()
+
+    /// `tabledIndexSlots`를 지금의 `indexSlots`로 맞추고 (이전, 지금)을 돌려준다.
+    mutating func syncTabledIndexSlots() -> (before: IndexSlots, after: IndexSlots) {
+        let before = tabledIndexSlots
+        let after = indexSlots
+        tabledIndexSlots = after
+        return (before, after)
+    }
+
+    var indexSlots: IndexSlots {
+        IndexSlots(
+            previous: keypairs.previous?.localIndex,
+            current: keypairs.current?.localIndex,
+            next: keypairs.next?.localIndex,
+            pending: pendingHandshake?.localIndex
+        )
+    }
+
     /// 출발 주소가 이 피어의 AllowedIPs 안인지.
     func allows(source: IPAddress) -> Bool {
         allowedIPs.contains { $0.contains(source) }
