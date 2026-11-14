@@ -491,13 +491,13 @@ fixture_tool="$(sh Scripts/build-interop-tools.sh tcpfixtures)"
 | `checksumValid` | TCP 체크섬. data offset 등 구조를 읽을 수 없으면 null |
 | `decoded` | TCP 구조를 읽었으면 해석 객체. 체크섬 오류에서도 진단용으로 남기며 `error`가 있으면 수용할 패킷이 아님. 머리를 읽을 수 없으면 null |
 
-`decoded`에는 `ipVersion`, `source`, `destination`, `ipHeaderLength`, `sourcePort`, `destinationPort`, `sequenceNumber`, `ackNumber`, `flags`(8비트 원값), `window`(와이어의 16비트 원값), `tcpHeaderLength`, `optionsHex`, `mss`, `windowScale`, `dataLength`가 있다. `mss`는 SYN의 **유효 MSS**로 옵션 생략 시 기본값도 포함한다. `windowScale`은 SYN에서 옵션 없으면 -1이며, SYN이 아니면 MSS·WS 모두 null이다. data offset 길이는 바이트 단위다. `swiftail.error`가 `malformed`인 사례의 `decoded`는 Go가 읽은 진단 값이며 성공한 Swift 해석을 뜻하지 않는다.
+`decoded`에는 `ipVersion`, `source`, `destination`, `ipHeaderLength`, `sourcePort`, `destinationPort`, `sequenceNumber`, `ackNumber`, `flags`(8비트 원값), `window`(와이어의 16비트 원값), `tcpHeaderLength`, `optionsHex`, `mss`, `windowScale`, `dataLength`가 있다. `mss`는 SYN의 **유효 MSS**로 옵션 생략 시 기본값도 포함한다(Swift 코덱의 `maximumSegmentSize`는 옵션이 없으면 nil이고, 기본값은 연결 상태 기계가 계약 T5로 채운다. 대조 시험은 nil을 기본값으로 읽어 견준다). `windowScale`은 SYN에서 옵션 없으면 -1이며, SYN이 아니면 MSS·WS 모두 null이다. data offset 길이는 바이트 단위다. `swiftail.error`가 `malformed`인 사례의 `decoded`는 Go가 읽은 진단 값이며 성공한 Swift 해석을 뜻하지 않는다.
 
 49개 사례:
 
 - 각 IPv4·IPv6에 SYN(MSS·WS), SYN-ACK, 홀수 길이 데이터, 반복 올림 체크섬, FIN-ACK, RST, SYN 아닌 MSS·WS, 옵션 생략, MSS 0, shift 15, 틀린 체크섬(22개).
 - IPv4 옵션, NOP로 어긋난 정렬, EOL 뒤 잘못된 바이트 무시, 모르는 옵션, SACK·timestamp와 MSS·WS 조합, shift 14, 최대 60바이트 TCP 머리, 작은 MSS 1(8개).
-- 옵션 길이 0·1·머리 밖, 마지막 옵션 길이 필드 누락, MSS 길이 3·WS 길이 2, MSS 본문 잘림(7개).
+- 옵션 길이 0·1·머리 밖, 마지막 옵션 길이 필드 누락, MSS 본문 잘림(5개. 계약은 `malformed`), MSS 길이 3·WS 길이 2(2개. 계약도 gVisor처럼 값을 읽지 않고 건너뛴다).
 - TCP 0·1·19바이트, IP 0·1·19·39바이트 잘림(7개).
 - data offset 4·6·15(세그먼트 밖), 16을 넣으면 4비트가 0으로 순환하는 사례(4개). 와이어에는 16을 담을 수 없다.
 - 프로토콜이 TCP가 아닌 IPv4(1개).

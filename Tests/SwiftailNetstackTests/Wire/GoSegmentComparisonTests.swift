@@ -10,8 +10,8 @@
 //   데이터 길이를 견준다. `flags`는 Go의 8비트 원값이고 코덱은 상태 기계가 쓰는 하위 5비트만 담으므로 `& 0x1F`로 견준다.
 // - `mss`는 SYN의 **유효 MSS**(옵션이 없으면 기본값 포함)이고 `windowScale`은 옵션이 없으면 -1이다. SYN이 아니면 둘 다 null.
 //   코덱은 광고하지 않은 값을 `nil`로 둔다(`TCPSegment.maximumSegmentSize` 문서). 그래서 MSS 옵션이 없는 SYN은 자료의
-//   기본값과 `nil`이 어긋난다. 이것은 표시 없는 차이로 따로 분리하고(`unmarkedDifferences`), 계약 T5의 읽는 규칙(옵션이
-//   없으면 IPv4 536·IPv6 1220으로 본다)을 적용한 값은 자료와 같은지 따로 확인한다.
+//   기본값과 `nil`이 어긋난다. 그런 사례(`withoutMSSOption`)는 코덱이 `nil`을 내는지 보고, 계약 T5의 읽는 규칙(옵션이
+//   없으면 IPv4 536·IPv6 1220으로 본다)을 적용한 값이 자료와 같은지 확인한다.
 // - 표시된 차이(`swiftailDiffers`)는 `go`와 `swiftail`이 다른 필드를 계산해, 표에 적은 필드와 같은지 보고, 코덱의 결과가
 //   그 필드에서 `swiftail`과 같고 `go`와는 다름을 확인한다.
 
@@ -182,7 +182,7 @@ private func differingFields(_ go: FixtureResult, _ swiftail: FixtureResult) -> 
 
 @Suite("Go(gVisor) 기준 자료와 TCP 세그먼트 코덱의 대조")
 struct GoSegmentComparisonTests {
-    /// `swiftailDiffers`가 있는 11개와 차이가 나는 필드. 자료 도구(`tcpfixtures`)가 적은 이유와 README의 설명에서 옮겼다.
+    /// `swiftailDiffers`가 있는 9개와 차이가 나는 필드. 자료 도구(`tcpfixtures`)가 적은 이유와 README의 설명에서 옮겼다.
     private static let markedDifferences: [String: Set<String>] = [
         "ipv4-mss-zero": ["windowScale"],  // Go는 MSS 0에서 옵션 해석을 멈춰 뒤의 WS를 읽지 않는다
         "ipv6-mss-zero": ["mss", "windowScale"],  // 위와 같고, 기본 MSS도 536과 1220으로 다르다
@@ -192,20 +192,12 @@ struct GoSegmentComparisonTests {
         "unknown-length-one": ["error"],
         "unknown-length-outside": ["error"],
         "missing-option-length": ["error"],
-        "mss-length-three": ["error"],
-        "ws-length-two": ["error"],
         "mss-outside": ["error"],
     ]
 
-    /// 표시 없는 차이: MSS 옵션이 없는 SYN에서 자료는 유효 MSS(기본값)를 적었고 코덱은 `nil`을 낸다.
-    /// 계약 T5가 기본값으로 읽는 것은 상태 기계이고, 코덱의 필드는 "광고하지 않으면 nil"이다.
-    private static let unmarkedDifferences: Set<String> = ["ipv4-no-options", "ipv6-no-options"]
-
-    /// 자료의 기대값(`malformed`)이 계약과 어긋나 보이는 사례. 계약 "구현에서 정해진 것"(M6-1)은 길이가 규격과 다른 MSS·Window Scale을
-    /// 값을 읽지 않고 길이로 건너뛴다고 정했고, 동작 W2가 `malformed`로 버리는 것은 길이가 2보다 작거나 머리 밖으로 나가는
-    /// 옵션뿐이다. 이 두 사례의 옵션(`02 03 01 01`, `03 02 01 01`)은 둘 다 길이 2 이상이고 머리 안이다. 코덱은 건너뛰어 성공으로 읽고,
-    /// 그 결과는 Go의 해석(MSS 기본값, Window Scale 없음)과 같다.
-    private static let skippedByLengthButExpectedMalformed: Set<String> = ["mss-length-three", "ws-length-two"]
+    /// MSS 옵션이 없는 SYN. 자료의 `mss`는 유효 MSS(기본값 포함)이고 코덱의 필드는 "광고하지 않으면 nil"이다.
+    /// 기본값으로 읽는 것은 상태 기계다(계약 T5). 이 사례들은 코덱이 nil을 내는지와, 기본값으로 읽으면 자료와 같은지를 본다.
+    private static let withoutMSSOption: Set<String> = ["ipv4-no-options", "ipv6-no-options", "mss-length-three", "ws-length-two"]
 
     /// 원본이 Swiftail이 만드는 모양(`ipPacket()`)과 같은 사례. 만든 바이트가 원본과 같아야 한다.
     /// IPv4는 IHL 5·DF·식별자 0·TTL 64, 옵션은 MSS + NOP + Window Scale 순서이고 SYN에만 있다.
@@ -216,14 +208,14 @@ struct GoSegmentComparisonTests {
     ]
 
     @Test("자료의 머리와 사례 수, 표시 수가 README와 같다")
-    func 자료범위를확인한다() throws {
+    func fixtureCoverage() throws {
         let fixture = try loadTCPSegmentFixture()
         #expect(fixture.reference.hasPrefix("gvisor.dev/gvisor "), "기대=gVisor 기준 실제=\(fixture.reference)")
         #expect(fixture.caseCount == 49, "기대=caseCount 49 실제=\(fixture.caseCount)")
         #expect(fixture.cases.count == 49, "기대=사례 49개 실제=\(fixture.cases.count)")
         #expect(Set(fixture.cases.map(\.name)).count == fixture.cases.count, "기대=사례 이름이 서로 다름 실제=중복 있음")
         let marked = fixture.cases.filter { $0.swiftailDiffers != nil }
-        #expect(marked.count == 11, "기대=표시된 차이 11개 실제=\(marked.count)")
+        #expect(marked.count == 9, "기대=표시된 차이 9개 실제=\(marked.count)")
         #expect(Set(marked.map(\.name)) == Set(Self.markedDifferences.keys),
                 "기대=표시된 사례 \(Self.markedDifferences.keys.sorted()) 실제=\(marked.map(\.name))")
         for item in fixture.cases {
@@ -233,7 +225,7 @@ struct GoSegmentComparisonTests {
     }
 
     @Test("표시 없는 사례는 go와 swiftail이 같고, 표시된 사례는 표에 적힌 필드만 다르다(자료의 일관성)", arguments: try loadTCPSegmentFixture().cases)
-    fileprivate func 자료가일관된다(_ item: FixtureCase) throws {
+    fileprivate func fixtureIsConsistent(_ item: FixtureCase) throws {
         if item.swiftailDiffers == nil {
             #expect(item.go == item.swiftail, "\(item.name): 기대=표시 없으면 go와 swiftail이 같음 실제=\(differingFields(item.go, item.swiftail).sorted())")
         } else {
@@ -247,42 +239,26 @@ struct GoSegmentComparisonTests {
     }
 
     @Test("코덱의 해석이 swiftail 기대값과 같고, 표시된 차이는 그 기대값 쪽에 선다", arguments: try loadTCPSegmentFixture().cases)
-    fileprivate func 코덱을대조한다(_ item: FixtureCase) throws {
+    fileprivate func codecMatchesFixture(_ item: FixtureCase) throws {
         let packet = try #require(bytes(fromHex: item.packet), "\(item.name): 기대=hex 실제=\(item.packet.prefix(40))")
         let outcome = ParseOutcome(packet: packet)
         let expected = item.swiftail
 
-        if Self.skippedByLengthButExpectedMalformed.contains(item.name) {
-            withKnownIssue("자료는 malformed를 기대하나 계약(M6-1)은 길이로 건너뛰어 성공으로 읽는다") {
-                #expect(outcome.errorName == expected.error, "\(item.name): 기대=오류 '\(expected.error)' 실제='\(outcome.errorName)'")
-            }
-            // 계약대로라면 Go와 같은 성공이다: 오류 없이 읽고, 값은 Go의 해석과 같다(T5 규칙을 적용한 MSS).
-            guard case .segment(let segment) = outcome, let goDecoded = item.go.decoded else {
-                Issue.record("\(item.name): 기대=계약대로 성공(Go와 같음) 실제=\(outcome.errorName)")
-                return
-            }
-            let againstGo = differences(of: segment, from: goDecoded, mss: .effective)
-            #expect(againstGo.isEmpty, "\(item.name): 계약대로 읽은 값이 Go와 다름: \(againstGo.joined(separator: "; "))")
-            return
-        }
         #expect(outcome.errorName == expected.error, "\(item.name): 기대=오류 '\(expected.error)' 실제='\(outcome.errorName)'")
         guard case .segment(let segment) = outcome, let decoded = expected.decoded, expected.error.isEmpty else { return }
 
-        // 표시 없는 차이는 코덱이 낸 값 그대로 견주는 쪽만 알려진 문제로 둔다. 계약 T5의 읽는 규칙을 적용한 값은 같아야 한다.
-        let literal = differences(of: segment, from: decoded, mss: .literal)
-        if Self.unmarkedDifferences.contains(item.name) {
-            withKnownIssue("MSS 옵션이 없는 SYN: 자료는 유효 MSS(기본값), 코덱은 nil") {
-                #expect(literal.isEmpty, "\(item.name): \(literal.joined(separator: "; "))")
-            }
+        if Self.withoutMSSOption.contains(item.name) {
+            #expect(segment.maximumSegmentSize == nil, "\(item.name): 기대=MSS 옵션이 없으면 nil 실제=\(String(describing: segment.maximumSegmentSize))")
             let effective = differences(of: segment, from: decoded, mss: .effective)
             #expect(effective.isEmpty, "\(item.name): T5 규칙을 적용해도 다름: \(effective.joined(separator: "; "))")
         } else {
+            let literal = differences(of: segment, from: decoded, mss: .literal)
             #expect(literal.isEmpty, "\(item.name): \(literal.joined(separator: "; "))")
         }
 
         // 표시된 차이: 다른 필드에서 코덱은 go가 아니라 swiftail 쪽이다.
         if item.swiftailDiffers != nil, let goDecoded = item.go.decoded {
-            if goDecoded.mss != decoded.mss, !Self.unmarkedDifferences.contains(item.name) {
+            if goDecoded.mss != decoded.mss, !Self.withoutMSSOption.contains(item.name) {
                 #expect(segment.maximumSegmentSize == decoded.mss && segment.maximumSegmentSize != goDecoded.mss,
                         "\(item.name): MSS 기대=\(String(describing: decoded.mss))(Go \(String(describing: goDecoded.mss))와 다름) 실제=\(String(describing: segment.maximumSegmentSize))")
             }
@@ -294,8 +270,8 @@ struct GoSegmentComparisonTests {
         }
     }
 
-    @Test("표시된 차이는 11개이고, 코덱이 go와 다른 사례는 그중 계약과 자료가 어긋나는 2개를 뺀 9개다")
-    func 표시된차이의수를센다() throws {
+    @Test("표시된 차이는 9개이고, 코덱이 go와 다른 사례는 바로 그 9개다")
+    func markedDifferenceCount() throws {
         let fixture = try loadTCPSegmentFixture()
         var marked = 0
         var codecDiffersFromGo: [String] = []
@@ -310,14 +286,13 @@ struct GoSegmentComparisonTests {
             }
             if differs { codecDiffersFromGo.append(item.name) }
         }
-        #expect(marked == 11, "기대=표시된 차이 11개 실제=\(marked)")
-        // 표시 없이 go와 다른 사례는 없고, 표시된 사례 중 코덱이 go와 같아 보이는 것은 자료와 계약이 어긋나는 두 개뿐이다.
-        let expected = Set(Self.markedDifferences.keys).subtracting(Self.skippedByLengthButExpectedMalformed)
+        #expect(marked == 9, "기대=표시된 차이 9개 실제=\(marked)")
+        let expected = Set(Self.markedDifferences.keys)
         #expect(Set(codecDiffersFromGo) == expected, "기대=코덱이 go와 다른 사례 \(expected.sorted()) 실제=\(codecDiffersFromGo.sorted())")
     }
 
     @Test("해석한 세그먼트를 ipPacket()으로 다시 만들어 해석하면 같은 세그먼트다", arguments: try loadTCPSegmentFixture().cases)
-    fileprivate func 만들어서다시해석한다(_ item: FixtureCase) throws {
+    fileprivate func serializedSegmentParsesBack(_ item: FixtureCase) throws {
         guard item.swiftail.error.isEmpty else { return }
         let packet = try #require(bytes(fromHex: item.packet), "\(item.name): 기대=hex")
         guard case .segment(let segment) = ParseOutcome(packet: packet) else {

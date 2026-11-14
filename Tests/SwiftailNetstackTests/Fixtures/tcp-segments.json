@@ -1643,104 +1643,6 @@
       "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
     },
     {
-      "name": "mss-length-three",
-      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcc68000002030101",
-      "go": {
-        "error": "",
-        "ipChecksumValid": true,
-        "checksumValid": true,
-        "decoded": {
-          "ipVersion": 4,
-          "source": "100.64.0.1",
-          "destination": "100.64.0.2",
-          "ipHeaderLength": 20,
-          "sourcePort": 42001,
-          "destinationPort": 9100,
-          "sequenceNumber": 4294967280,
-          "ackNumber": 270544960,
-          "flags": 2,
-          "window": 65535,
-          "tcpHeaderLength": 24,
-          "optionsHex": "02030101",
-          "mss": 536,
-          "windowScale": -1,
-          "dataLength": 0
-        }
-      },
-      "swiftail": {
-        "error": "malformed",
-        "ipChecksumValid": true,
-        "checksumValid": true,
-        "decoded": {
-          "ipVersion": 4,
-          "source": "100.64.0.1",
-          "destination": "100.64.0.2",
-          "ipHeaderLength": 20,
-          "sourcePort": 42001,
-          "destinationPort": 9100,
-          "sequenceNumber": 4294967280,
-          "ackNumber": 270544960,
-          "flags": 2,
-          "window": 65535,
-          "tcpHeaderLength": 24,
-          "optionsHex": "02030101",
-          "mss": 536,
-          "windowScale": -1,
-          "dataLength": 0
-        }
-      },
-      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
-    },
-    {
-      "name": "ws-length-two",
-      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcb69000003020101",
-      "go": {
-        "error": "",
-        "ipChecksumValid": true,
-        "checksumValid": true,
-        "decoded": {
-          "ipVersion": 4,
-          "source": "100.64.0.1",
-          "destination": "100.64.0.2",
-          "ipHeaderLength": 20,
-          "sourcePort": 42001,
-          "destinationPort": 9100,
-          "sequenceNumber": 4294967280,
-          "ackNumber": 270544960,
-          "flags": 2,
-          "window": 65535,
-          "tcpHeaderLength": 24,
-          "optionsHex": "03020101",
-          "mss": 536,
-          "windowScale": -1,
-          "dataLength": 0
-        }
-      },
-      "swiftail": {
-        "error": "malformed",
-        "ipChecksumValid": true,
-        "checksumValid": true,
-        "decoded": {
-          "ipVersion": 4,
-          "source": "100.64.0.1",
-          "destination": "100.64.0.2",
-          "ipHeaderLength": 20,
-          "sourcePort": 42001,
-          "destinationPort": 9100,
-          "sequenceNumber": 4294967280,
-          "ackNumber": 270544960,
-          "flags": 2,
-          "window": 65535,
-          "tcpHeaderLength": 24,
-          "optionsHex": "03020101",
-          "mss": 536,
-          "windowScale": -1,
-          "dataLength": 0
-        }
-      },
-      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
-    },
-    {
       "name": "mss-outside",
       "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcc67000001010204",
       "go": {
@@ -1788,6 +1690,102 @@
         }
       },
       "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "mss-length-three",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcc68000002030101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "02030101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "02030101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ws-length-two",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcb69000003020101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "03020101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "03020101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      }
     },
     {
       "name": "tcp-truncated-0",

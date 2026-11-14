@@ -229,12 +229,14 @@ func evaluate() ([]byte, error) {
 		{"unknown-length-one", []byte{254, 1, 1, 1}},
 		{"unknown-length-outside", []byte{254, 5, 1, 1}},
 		{"missing-option-length", []byte{1, 1, 1, 254}},
-		{"mss-length-three", []byte{2, 3, 1, 1}},
-		{"ws-length-two", []byte{3, 2, 1, 1}},
 		{"mss-outside", []byte{1, 1, 2, 4}},
 	} {
 		add(opts.name, packet(false, false, syn, opts.bytes, nil), "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다.", "malformed", -1, -1)
 	}
+	// 길이가 규격과 다르지만 2 이상이고 머리 안인 MSS·Window Scale은 계약도 값을 읽지 않고 길이로 건너뛴다(W의 "구현에서
+	// 정해진 것"). 결과가 gVisor와 같으므로 차이로 표시하지 않는다.
+	plain("mss-length-three", packet(false, false, syn, []byte{2, 3, 1, 1}, nil))
+	plain("ws-length-two", packet(false, false, syn, []byte{3, 2, 1, 1}, nil))
 	// 절단 뒤 IP 길이만 다시 맞춰 TCP 머리 길이 검사까지 도달시킨다.
 	for _, size := range []int{0, 1, 19} {
 		b := packet(false, false, syn, nil, nil)[:20+size]

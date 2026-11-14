@@ -75,7 +75,7 @@ func TestFixturesMatchGo(t *testing.T) {
 			}
 		}
 	}
-	if len(doc.Cases) != 49 || doc.CaseCount != 49 || differences != 11 {
+	if len(doc.Cases) != 49 || doc.CaseCount != 49 || differences != 9 {
 		t.Fatalf("사례/차이 수: %d/%d", len(doc.Cases), differences)
 	}
 }
