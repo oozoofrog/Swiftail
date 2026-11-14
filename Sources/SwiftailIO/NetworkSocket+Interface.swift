@@ -6,7 +6,11 @@ extension NetworkSocket {
     /// 루프백 주소는 어떤 물리 인터페이스로도 닿지 않아, 묶으면 연결이 실패한다. Go도 같은 규칙이다
     /// (`net/netns/netns_darwin.go`의 `controlLogf`가 `isLocalhost(address)`이면 묶지 않는다. `net/netns/netns.go`
     /// `isLocalhost`: `localhost`·`localhost6`·`ip6-loopback`·`ip6-localhost`와 루프백 IP). 시험의 로컬 서버가
-    /// 이 규칙으로 돈다. 호스트 이름이 가리키는 주소는 풀어 보지 않는다(Go도 그렇다).
+    /// 이 규칙으로 돈다.
+    ///
+    /// shortcut: 호스트 이름이 가리키는 주소는 풀어 보지 않고 이름과 IP 리터럴만 본다. Go는 이름을 푼 뒤의 실제 주소로
+    /// 판정하므로(`net.Dialer.Control`), 루프백으로 풀리는 다른 이름이나 `::1`의 다른 표기는 여기서만 묶인다. 운영
+    /// 서버에는 영향이 없다. 필요해지는 시점: 그런 이름의 로컬 서버로 시험할 때.
     ///
     /// - Parameters:
     ///   - interface: 묶고 싶은 인터페이스. nil이면 묶지 않는다.

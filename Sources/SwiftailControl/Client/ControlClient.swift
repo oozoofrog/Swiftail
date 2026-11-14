@@ -141,6 +141,11 @@ public actor ControlClient {
     var lastTKAInfo: TKAInfo?
     /// 지금 연결의 신호 통로. 연결이 없으면 nil.
     var signals: AsyncStream<SessionSignal>.Continuation?
+    /// 통로에 든 채 아직 처리하지 않은 신호. 처리(상태 올리기의 물러나기, 핑 답)가 막힌 동안 통로가 끝없이 자라지
+    /// 않게 한다: 상태 바뀜은 하나면 충분하고(올릴 때 마지막 값을 읽는다), 핑은 `queuedPingLimit`개까지만 넣는다.
+    var isStatusChangeQueued = false
+    var queuedPings = 0
+    static let queuedPingLimit = 8
     /// 연결을 묶을 인터페이스. nil이면 묶지 않는다. `run()`이 연결을 시작할 때 읽는다.
     private var networkInterface: NWInterface?
     /// `setNetworkInterface`를 부른 횟수. 연결 시도는 시작할 때의 값과 달라지면 그 시도를 버린다. 신호가 시도 사이에
@@ -173,7 +178,9 @@ public actor ControlClient {
     /// 상태를 바꾼다. 연결되어 있으면 곧 올리고, 아니면 다음 연결 때 올린다. 마지막 값만 남는다.
     public func setLocalStatus(_ status: LocalStatus) {
         localStatus = status
-        signals?.yield(.statusChanged)
+        guard !isStatusChangeQueued, let signals else { return }
+        isStatusChangeQueued = true
+        signals.yield(.statusChanged)
     }
 
     /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도). 새 node 키로 다시 등록하고,
@@ -316,6 +323,8 @@ public actor ControlClient {
     private func serve(_ connection: ControlConnection) async throws {
         let (signalStream, continuation) = AsyncStream.makeStream(of: SessionSignal.self)
         signals = continuation
+        isStatusChangeQueued = false
+        queuedPings = 0
         uploadedStatus = nil
         selfKeyExpiry = nil
         selfKeyExpiryChanged = nil

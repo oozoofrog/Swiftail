@@ -57,7 +57,8 @@ package final class DatagramSocket: Sendable {
     /// 묶인 포트. 0을 요청했으면 OS가 고른 값이다.
     package let localPort: UInt16
 
-    /// 받은 데이터그램의 흐름. 구독자는 하나다. 소비가 느리면 오래된 것부터 버린다(256개). 소켓을 닫거나 버리면 끝난다.
+    /// 받은 데이터그램의 흐름. 구독자는 하나다. 소비가 느리면 오래된 것부터 버린다(256개, 그리고 바이트 합 1MiB). 소켓을
+    /// 닫거나 버리면 끝난다. 닫지 않았는데 끝났다면 읽기가 오류로 멈춘 것이니 `close()`하고 새로 연다.
     package let datagrams: AsyncStream<Datagram>
 
     /// IPv4 와일드카드에 묶는다. `port`가 0이면 OS가 고른다. 읽기는 곧바로 시작한다.
@@ -164,8 +165,9 @@ package final class DatagramSocket: Sendable {
 
     /// 읽을 것이 없을 때까지 읽어 흐름에 넣는다. 읽기 원천의 처리기 안에서만 부른다.
     ///
-    /// 예기치 않은 오류(`EAGAIN`·`EINTR` 밖)가 나면 흐름을 끝낸다. 커널이 계속 읽을 수 있다고 알리는 소켓에서 같은 오류가
-    /// 되풀이되면 처리기가 헛돌기 때문이다.
+    /// 예기치 않은 오류(`EAGAIN`·`EINTR` 밖)가 나면 흐름을 끝낸다. 읽기 원천은 여기서 멈추지 못하므로(멈추려면 기술자를
+    /// 닫아야 하고, 그것은 `close()`가 상태와 함께 한다) 흐름이 끝난 것을 본 쪽이 `close()`를 불러야 한다. 노드는 그때
+    /// 소켓을 새로 연다.
     private static func drain(_ descriptor: Int32, into output: ReceiveQueue) {
         var buffer = [UInt8](repeating: 0, count: maximumDatagramSize)
         while true {

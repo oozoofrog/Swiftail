@@ -86,8 +86,9 @@ extension ControlClient {
                 } catch {
                     throw ControlError.connection("맵 응답 적용 오류: \(error)")
                 }
-                if let ping = update.pingRequest {
-                    signals?.yield(.ping(ping))
+                if let ping = update.pingRequest, queuedPings < Self.queuedPingLimit, let signals {
+                    queuedPings += 1
+                    signals.yield(.ping(ping))
                 }
                 if let netmap = update.netmap {
                     try accept(netmap)
@@ -163,10 +164,13 @@ extension ControlClient {
         for await signal in signals {
             switch signal {
             case .statusChanged:
+                // 올리는 동안 또 바뀌면 신호가 다시 들어오게 먼저 푼다.
+                isStatusChangeQueued = false
                 try await uploadStatusRetrying(over: connection)
             case .loginRequested:
                 throw SessionInterruption.loginRequested
             case .ping(let ping):
+                queuedPings -= 1
                 guard ping.types.isEmpty, !ping.url.isEmpty, ping.url != lastPingURL else { continue }
                 lastPingURL = ping.url
                 await answer(ping, over: connection)
@@ -193,6 +197,9 @@ extension ControlClient {
 
     /// 핑 URL에 HEAD를 보낸다. `URLIsNoise`면 Noise 연결 위로, 아니면 평범한 HTTP(S)로. 실패는 무시한다
     /// (Go도 기록만 한다).
+    ///
+    /// shortcut: Noise가 아닌 핑의 HEAD는 URLSession이라 `setNetworkInterface`의 인터페이스에 묶이지 않는다(`ServerKey`의
+    /// `/key`와 같은 사정이다). 필요해지는 시점: 실기기에서 이 요청이 터널로 들어가는 것이 보일 때.
     private func answer(_ ping: PingRequest, over connection: ControlConnection) async {
         guard let url = URL(string: ping.url), ["http", "https"].contains(url.scheme?.lowercased()) else { return }
         if ping.urlIsNoise {

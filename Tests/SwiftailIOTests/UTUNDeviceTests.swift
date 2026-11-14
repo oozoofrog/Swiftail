@@ -192,7 +192,7 @@ struct UTUNDeviceTests {
         let device = try Self.device(on: pair.caller)
         let copy = try #require(device.duplicateDescriptor)
         device.close()
-        try await Self.waitUntilClosed(copy)
+        try await Self.waitUntilClosed(copy, duplicateOf: pair.caller)
         #expect(fcntl(pair.caller, F_GETFD) >= 0)
         // 호출자의 기술자는 여전히 읽고 쓸 수 있다.
         try pair.send([1, 2, 3])
@@ -210,7 +210,7 @@ struct UTUNDeviceTests {
             copy = device.duplicateDescriptor
             stream = device.packets
         }
-        try await Self.waitUntilClosed(try #require(copy))
+        try await Self.waitUntilClosed(try #require(copy), duplicateOf: pair.caller)
         #expect(fcntl(pair.caller, F_GETFD) >= 0)
         let outcome = try await withTimeout(.seconds(5)) { [stream] in
             guard let stream else { return Outcome.timeout }
@@ -253,7 +253,7 @@ struct UTUNDeviceTests {
             let old = try Self.device(on: oldPair.caller)
             let oldCopy = try #require(old.duplicateDescriptor)
             old.close()
-            try await Self.waitUntilClosed(oldCopy)
+            try await Self.waitUntilClosed(oldCopy, duplicateOf: oldPair.caller)
             oldPair.closeAll()
 
             let freshPair = try SocketPair()
@@ -425,9 +425,18 @@ struct UTUNDeviceTests {
     // MARK: 도우미
 
     /// 복제본이 닫혔는지 기다린다. `close(2)`는 읽기 원천의 취소 처리기가 하므로 곧바로는 아니다.
-    private static func waitUntilClosed(_ descriptor: Int32) async throws {
+    ///
+    /// 번호가 `EBADF`인지만 보면 안 된다. 병렬로 도는 다른 시험이 닫힌 번호를 곧바로 받아 가면 `EBADF`가 영영 나오지
+    /// 않는다. 그래서 그 번호가 아직 `original`과 같은 소켓인지(`fstat`의 inode)를 본다. 닫혔거나 다른 것이 됐으면 닫힌 것이다.
+    private static func waitUntilClosed(_ descriptor: Int32, duplicateOf original: Int32) async throws {
+        var identity = stat()
+        guard fstat(original, &identity) == 0 else {
+            Issue.record("원래 기술자의 fstat 실패")
+            return
+        }
         for _ in 0..<200 {
-            if fcntl(descriptor, F_GETFD) < 0 && errno == EBADF { return }
+            var current = stat()
+            if fstat(descriptor, &current) != 0 || current.st_ino != identity.st_ino { return }
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("복제본이 닫히지 않았다")

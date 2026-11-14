@@ -229,7 +229,7 @@ public actor TailnetNode {
         }
         let socket: DatagramSocket
         do {
-            socket = try openSocket(port: 0)
+            socket = try openSocketOnAnyPort()
         } catch {
             tunnel?.close()
             tunnel = nil

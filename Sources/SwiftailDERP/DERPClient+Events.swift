@@ -11,8 +11,8 @@ extension DERPClient {
     /// - `connected`·`disconnected`: 버리지 않는다. 다만 읽지 않은 연결 상태 사건은 가장 새 것 하나만 남긴다. 지난
     ///   상태는 이미 뜻이 없고, 이렇게 해야 소비가 멈춘 채 재연결이 되풀이되어도 큐가 자라지 않는다.
     ///
-    /// `AsyncStream`의 버퍼는 종류를 가려 버리지 못해, 넘치면 `connected`가 밀려 사라졌다(노드가 `reconnecting`에
-    /// 머물렀다). 그래서 버퍼를 여기서 쥐고 `AsyncStream(unfolding:)`으로 소비자가 당겨 가게 한다. 구독자는 하나다.
+    /// `AsyncStream`의 버퍼는 종류를 가려 버리지 못해, 넘치면 `connected`가 밀려 사라졌다(노드가 연결이 끊긴 줄로
+    /// 알았다). 그래서 버퍼를 여기서 쥐고 `AsyncStream(unfolding:)`으로 소비자가 당겨 가게 한다. 구독자는 하나다.
     final class EventQueue: Sendable {
         private struct State {
             var events: [Event] = []

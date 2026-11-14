@@ -14,9 +14,8 @@ import SwiftailBase
 ///   환경이 있다(AWS Lambda 등).
 /// - 나머지는 `regular`다. 각 목록은 주소 오름차순이다.
 ///
-/// 노드가 시작할 때 한 번 읽어 `Magicsock`에 넘긴다.
+/// 노드가 시작할 때와 `setDefaultInterface`를 받을 때마다 읽어 `Magicsock`에 넘긴다. 스스로 변경을 감시하지는 않는다.
 ///
-/// - `shortcut:` 주소 변경 감지는 하지 않는다. 필요해지는 시점: M5(링크 변경과 함께. `disco-magicsock.md` 4.11).
 /// - `shortcut:` IPv6 주소는 읽지 않는다(소켓이 IPv4 하나다). 필요해지는 시점: `DatagramSocket`에 IPv6를 넣을 때.
 package enum LocalInterfaceAddresses {
     /// 고르는 규칙의 입력. `getifaddrs`가 돌려준 인터페이스 하나의 IPv4 주소들이다.
