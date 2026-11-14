@@ -48,7 +48,8 @@ let package = Package(
             dependencies: ["SwiftailEngine", "SwiftailBase", "SwiftailWireGuard", "SwiftailControl"],
             resources: [.copy("Fixtures")]
         ),
-        .target(name: "Swiftail", dependencies: ["SwiftailEngine", "SwiftailControl", "SwiftailDERP", "SwiftailIO"]),
+        .target(name: "Swiftail", dependencies: ["SwiftailBase", "SwiftailEngine", "SwiftailControl", "SwiftailDERP", "SwiftailIO"]),
+        .testTarget(name: "SwiftailTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailDERP"]),
         .testTarget(name: "SwiftailInteropTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl"]),
     ],
     swiftLanguageModes: [.v6]
