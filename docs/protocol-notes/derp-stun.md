@@ -393,4 +393,3 @@ Swiftail이 만날 조건: 연결 주소 `127.0.0.1:<port>`, Host `127.0.0.1:<po
 - 운영 DERP 서버(Tailscale 운영 인프라)가 `FramePing`·`FrameHealth`·`FrameRestarting`을 언제 보내는지, `TokenBucketBytesPerSecond`를 광고하는지. 공개 소스의 `derpserver`에는 보내는 곳이 없다(3.2).
 - Network 프레임워크 TLS가 Go `crypto/tls` 서버와 맺는 실제 버전·암호 조합, IP 주소 이름(`127.0.0.1`)일 때 SNI를 보내는지. 실행해 보지 않았다.
 - testcontrol이 Swiftail의 `DiscoKey`·`PreferredDERP`를 받아 Go 피어의 맵에 반영하는 시점(맵 스트림 갱신 지연). 코드 경로만 확인했다(`testcontrol.go:1471-1498`).
-- Go 피어가 Swiftail에서 disco 응답을 받지 못할 때 disco ping을 얼마나 자주 DERP로 보내는지. `disco-magicsock.md` 검증 범위다.
