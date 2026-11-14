@@ -1,0 +1,1985 @@
+{
+  "reference": "gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72",
+  "caseCount": 49,
+  "cases": [
+    {
+      "name": "ipv4-syn-mss-ws",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffffb49a0000020404c401030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c401030303",
+          "mss": 1220,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c401030303",
+          "mss": 1220,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-synack",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407012ffffb4790000020404d801030300",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 18,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d801030300",
+          "mss": 1240,
+          "windowScale": 0,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 18,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d801030300",
+          "mss": 1240,
+          "windowScale": 0,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-odd-payload",
+      "packet": "4500002d00004000400672486440000164400002a411238cfffffff0102030405018ffffde540000000102fffe",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 24,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 5
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 24,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 5
+        }
+      }
+    },
+    {
+      "name": "ipv4-checksum-carries",
+      "packet": "4500003100004000400672446440000164400002a411238cfffffff0102030405010ffffe0580000ffffffffffffffffff",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 9
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 9
+        }
+      }
+    },
+    {
+      "name": "ipv4-fin-ack",
+      "packet": "45000028000040004006724d6440000164400002a411238cfffffff0102030405011ffffdf610000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 17,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 17,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-rst",
+      "packet": "45000028000040004006724d6440000164400002a411238cfffffff0102030405004ffffdf6e0000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 4,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 4,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-non-syn-options",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407010ffffb4940000020404b00103030f",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404b00103030f",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404b00103030f",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-no-options",
+      "packet": "45000028000040004006724d6440000164400002a411238cfffffff0102030405002ffffdf700000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-mss-zero",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffffb95e00000204000001030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0204000001030303",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0204000001030303",
+          "mss": 536,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor는 MSS 0에서 옵션 해석을 중단해 WS도 읽지 않는다. 계약은 기본 MSS로 바꾸고 뒤의 WS를 읽는다."
+    },
+    {
+      "name": "ipv4-shift-15",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffffb48e0000020404c40103030f",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c40103030f",
+          "mss": 1220,
+          "windowScale": 14,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c40103030f",
+          "mss": 1220,
+          "windowScale": 14,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-bad-checksum",
+      "packet": "4500002b000040004006724a6440000164400002a411238cfffffff0102030405010ffffdb5d0000010202",
+      "go": {
+        "error": "badChecksum",
+        "ipChecksumValid": true,
+        "checksumValid": false,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 3
+        }
+      },
+      "swiftail": {
+        "error": "badChecksum",
+        "ipChecksumValid": true,
+        "checksumValid": false,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 3
+        }
+      }
+    },
+    {
+      "name": "ipv6-syn-mss-ws",
+      "packet": "60000000001c0640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030407002ffff1bac0000020404c401030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c401030303",
+          "mss": 1220,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c401030303",
+          "mss": 1220,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-synack",
+      "packet": "60000000001c0640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030407012ffff1b8b0000020404d801030300",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 18,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d801030300",
+          "mss": 1240,
+          "windowScale": 0,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 18,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d801030300",
+          "mss": 1240,
+          "windowScale": 0,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-odd-payload",
+      "packet": "6000000000190640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030405018ffff45660000000102fffe",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 24,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 5
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 24,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 5
+        }
+      }
+    },
+    {
+      "name": "ipv6-checksum-carries",
+      "packet": "60000000001d0640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030405010ffff476a0000ffffffffffffffffff",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 9
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 9
+        }
+      }
+    },
+    {
+      "name": "ipv6-fin-ack",
+      "packet": "6000000000140640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030405011ffff46730000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 17,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 17,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-rst",
+      "packet": "6000000000140640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030405004ffff46800000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 4,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 4,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-non-syn-options",
+      "packet": "60000000001c0640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030407010ffff1ba60000020404b00103030f",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404b00103030f",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404b00103030f",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-no-options",
+      "packet": "6000000000140640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030405002ffff46820000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": 1220,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2·T5: gVisor ParseSynOptions의 기본 MSS는 계열과 무관하게 536, 계약의 IPv6 기본값은 1220이다."
+    },
+    {
+      "name": "ipv6-mss-zero",
+      "packet": "60000000001c0640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030407002ffff207000000204000001030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0204000001030303",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0204000001030303",
+          "mss": 1220,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor는 MSS 0에서 옵션 해석을 중단해 WS도 읽지 않는다. 계약은 기본 MSS로 바꾸고 뒤의 WS를 읽는다."
+    },
+    {
+      "name": "ipv6-shift-15",
+      "packet": "60000000001c0640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030407002ffff1ba00000020404c40103030f",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c40103030f",
+          "mss": 1220,
+          "windowScale": 14,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404c40103030f",
+          "mss": 1220,
+          "windowScale": 14,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-bad-checksum",
+      "packet": "6000000000170640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030405010ffff426f0000010202",
+      "go": {
+        "error": "badChecksum",
+        "ipChecksumValid": null,
+        "checksumValid": false,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 3
+        }
+      },
+      "swiftail": {
+        "error": "badChecksum",
+        "ipChecksumValid": null,
+        "checksumValid": false,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 20,
+          "optionsHex": "",
+          "mss": null,
+          "windowScale": null,
+          "dataLength": 3
+        }
+      }
+    },
+    {
+      "name": "ipv4-options",
+      "packet": "460000340000400040067041644000016440000201000000a411238cfffffff0102030407002ffffb4860000020404d801030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 24,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d801030303",
+          "mss": 1240,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 24,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d801030303",
+          "mss": 1240,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "nop-unaligned",
+      "packet": "4500003400004000400672416440000164400002a411238cfffffff0102030408002ffffcc57000001020404d801030302010101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "01020404d801030302010101",
+          "mss": 1240,
+          "windowScale": 2,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "01020404d801030302010101",
+          "mss": 1240,
+          "windowScale": 2,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "eol-ignores-tail",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffffb78a0000020404d8000300ff",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d8000300ff",
+          "mss": 1240,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d8000300ff",
+          "mss": 1240,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "unknown-option",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffff0fcc0000fe04aabb020404d8",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "fe04aabb020404d8",
+          "mss": 1240,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "fe04aabb020404d8",
+          "mss": 1240,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "sack-timestamp-options",
+      "packet": "4500003c00004000400672396440000164400002a411238cfffffff010203040a002ffff766f00000402080a0000000100000000020404d803030301",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 40,
+          "optionsHex": "0402080a0000000100000000020404d803030301",
+          "mss": 1240,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 40,
+          "optionsHex": "0402080a0000000100000000020404d803030301",
+          "mss": 1240,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "shift-14",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffffb47b0000020404d80103030e",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d80103030e",
+          "mss": 1240,
+          "windowScale": 14,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d80103030e",
+          "mss": 1240,
+          "windowScale": 14,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "max-tcp-header",
+      "packet": "4500005000004000400672256440000164400002a411238cfffffff010203040f002ffff34660000020404d8010303030000000000000000000000000000000000000000000000000000000000000000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 60,
+          "optionsHex": "020404d8010303030000000000000000000000000000000000000000000000000000000000000000",
+          "mss": 1240,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 60,
+          "optionsHex": "020404d8010303030000000000000000000000000000000000000000000000000000000000000000",
+          "mss": 1240,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "small-mss",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffffb95d00000204000101030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0204000101030303",
+          "mss": 48,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0204000101030303",
+          "mss": 1,
+          "windowScale": 3,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2·X9: gVisor는 0이 아닌 MSS를 최소 48로 올린다. 계약의 코덱은 광고한 값 1을 보존하고 연결 상태 기계가 64 미만을 거절한다."
+    },
+    {
+      "name": "unknown-length-zero",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffd06a0000fe000101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "fe000101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "fe000101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "unknown-length-one",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffd0690000fe010101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "fe010101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "fe010101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "unknown-length-outside",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffd0650000fe050101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "fe050101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "fe050101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "missing-option-length",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcc6d0000010101fe",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "010101fe",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "010101fe",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "mss-length-three",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcc68000002030101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "02030101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "02030101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "ws-length-two",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcb69000003020101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "03020101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "03020101",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "mss-outside",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406002ffffcc67000001010204",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "01010204",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "01010204",
+          "mss": 536,
+          "windowScale": -1,
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "tcp-truncated-0",
+      "packet": "4500001400004000400672616440000164400002",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "tcp-truncated-1",
+      "packet": "4500001500004000400672606440000164400002a4",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "tcp-truncated-19",
+      "packet": "45000027000040004006724e6440000164400002a411238cfffffff0102030405002ffffdf7000",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "ip-truncated-0",
+      "packet": "",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "ip-truncated-1",
+      "packet": "60",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "ip-truncated-19",
+      "packet": "6000000000140640fd7a115ca1e00000000000",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "ip-truncated-39",
+      "packet": "6000000000140640fd7a115ca1e000000000000000000001fd7a115ca1e0000000000000000000",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": null,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "data-offset-4",
+      "packet": "45000028000040004006724d6440000164400002a411238cfffffff0102030404002ffffdf700000",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "data-offset-6",
+      "packet": "45000028000040004006724d6440000164400002a411238cfffffff0102030406002ffffdf700000",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "data-offset-15",
+      "packet": "45000028000040004006724d6440000164400002a411238cfffffff010203040f002ffffdf700000",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "data-offset-16-wraps-zero",
+      "packet": "45000028000040004006724d6440000164400002a411238cfffffff0102030400002ffffdf700000",
+      "go": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    },
+    {
+      "name": "not-tcp",
+      "packet": "4500002800004000401172426440000164400002a411238cfffffff0102030405002ffffdf700000",
+      "go": {
+        "error": "notTCP",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      },
+      "swiftail": {
+        "error": "notTCP",
+        "ipChecksumValid": true,
+        "checksumValid": null,
+        "decoded": null
+      }
+    }
+  ]
+}

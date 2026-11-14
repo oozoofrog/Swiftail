@@ -44,11 +44,15 @@ type command struct {
 	AuthKey     *string         `json:"authKey"`
 	AuthURL     string          `json:"authURL"`
 	Enabled     *bool           `json:"enabled"`
+	Send        *uint64         `json:"send"`
+	Seed        *uint64         `json:"seed"`
+	TimeoutSec  *int            `json:"timeoutSec"`
 }
 type peer struct {
-	server  *tsnet.Server
-	dir     string
-	capture *peerCapture
+	server    *tsnet.Server
+	dir       string
+	capture   *peerCapture
+	transfers *peerTransfers
 }
 type network struct {
 	control            *testcontrol.Server
@@ -63,6 +67,7 @@ type network struct {
 	controlConnections int
 	derpConnections    int
 	stunRequests       int
+	transfers          []*transfer
 }
 
 func newNetwork() (*network, error) {
@@ -106,7 +111,8 @@ func newNetwork() (*network, error) {
 	n.derpHTTP = httptest.NewUnstartedServer(mux)
 	n.derpHTTP.StartTLS()
 	port := n.derpHTTP.Listener.Addr().(*net.TCPAddr).Port
-	n.control = &testcontrol.Server{MagicDNSDomain: "tail0001.test", AllOnline: true, DERPMap: &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{1: {RegionID: 1, RegionCode: "test", RegionName: "test", Nodes: []*tailcfg.DERPNode{{Name: "1a", RegionID: 1, HostName: "127.0.0.1", IPv4: "127.0.0.1", IPv6: "none", DERPPort: port, STUNPort: n.stun.LocalAddr().(*net.UDPAddr).Port, InsecureForTests: true}}}}}}
+	// testcontrol의 기본 등록 로그가 공개 nodeKey를 기록하므로 끈다.
+	n.control = &testcontrol.Server{Logf: func(string, ...any) {}, MagicDNSDomain: "tail0001.test", AllOnline: true, DERPMap: &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{1: {RegionID: 1, RegionCode: "test", RegionName: "test", Nodes: []*tailcfg.DERPNode{{Name: "1a", RegionID: 1, HostName: "127.0.0.1", IPv4: "127.0.0.1", IPv6: "none", DERPPort: port, STUNPort: n.stun.LocalAddr().(*net.UDPAddr).Port, InsecureForTests: true}}}}}}
 	n.http = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.started = true
@@ -122,6 +128,7 @@ func newNetwork() (*network, error) {
 }
 func (n *network) close() {
 	for _, p := range n.peers {
+		p.transfers.close()
 		if p.capture != nil {
 			p.capture.close()
 		}
@@ -203,7 +210,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 				}
 			}()
 		}
-		n.peers[c.Name] = &peer{server: s, dir: dir}
+		n.peers[c.Name] = &peer{server: s, dir: dir, transfers: newPeerTransfers()}
 		ok = true
 		result = map[string]any{"event": "peer", "name": c.Name, "nodeKey": st.Self.PublicKey.String(), "addresses": st.TailscaleIPs, "fqdn": st.Self.DNSName}
 	case "removePeer":
@@ -212,6 +219,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 			return nil, errors.New("피어가 없습니다")
 		}
 		delete(n.peers, c.Name)
+		p.transfers.close()
 		if p.capture != nil {
 			p.capture.close()
 		}
@@ -315,6 +323,8 @@ func (n *network) execute(c command) (map[string]any, error) {
 			}
 			result = map[string]any{"event": "peerPing", "name": c.Name, "result": ping}
 		}
+	case "peerServe", "peerDial", "peerClose", "transfers":
+		return n.executeTransfer(c)
 	case "peerSend":
 		p := n.peers[c.Name]
 		if p == nil {

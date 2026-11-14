@@ -65,6 +65,42 @@ GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-s
 
 기본 등록은 자동 승인이다. testcontrol의 기본 맵은 self Node, 전체 Peers, DERPMap, DNSConfig, PacketFilter 등을 포함하며 ControlTime은 고정 시각이다. 시험 로그 업로드는 `logtail.Disable()`과 `TS_NO_LOGS_NO_SUPPORT=true`로 끄고 portmapper도 비활성화한다. testcontrol의 인증 키 비교는 상수 시간이 아닌 upstream 구현이므로 시험용 값만 사용한다.
 
+## M6 TCP 전송 명령
+
+모든 명령은 기존 JSON 줄 규약대로 `id`를 받고 같은 `id`로 곧바로 답한다. `peerDial`의 연결·전송과 `peerServe`의 accept·전송은 뒤에서 돌며 표준 출력에 비동기 사건을 쓰지 않는다. 진행은 `transfers`로 조회한다. 피어는 먼저 `addPeer`로 만든다.
+
+```json
+{"id":1,"cmd":"peerServe","name":"go-peer-b","port":9100,"timeoutSec":60}
+{"id":2,"cmd":"peerDial","name":"go-peer-a","to":"100.64.0.2","port":9100,"send":104857600,"seed":1,"timeoutSec":60}
+{"id":3,"cmd":"transfers"}
+{"id":4,"cmd":"peerClose","name":"go-peer-b","port":9100}
+```
+
+- `peerServe`: `name`, `port`(1…65535), 선택 `timeoutSec`. 응답은 `{"id":1,"event":"peerServe","name":"go-peer-b","port":9100}`다. 같은 피어에서 여러 포트를 들을 수 있고 중복 포트는 오류다. 연결마다 아래 16바이트 머리를 읽어 송신 길이·씨앗을 정한다.
+- `peerDial`: `name`, `to`(zone 없는 IPv4·IPv6 리터럴), `port`, `send`(0…4294967296의 정수), `seed`(0…18446744073709551615의 정수), 선택 `timeoutSec`. `send`·`seed`는 필수이며 null을 허용하지 않는다. 응답은 `{"id":2,"event":"peerDial","name":"go-peer-a","transferID":1}`다. 연결 거절·전송 실패는 이 응답 이후 전송 기록의 `error`로 나타난다. UInt64 씨앗은 부동소수점으로 읽지 않는다.
+- `transfers`: `{"id":3,"event":"transfers","transfers":[...]}`. 선택 `name`은 피어 이름 필터다. 빈 목록은 `[]`, 순서는 시작 순서다. 항목은 `transferID`(프로세스 안에서 1부터 증가), `name`, `remote`(IP:port, IPv6는 대괄호), `sent`, `sentSHA256`, `received`, `receivedSHA256`, `elapsedMs`, `error`, `state`를 항상 가진다. `state`는 `dialing`, `running`, `complete`, `error`다. 미완료 중에도 누적 바이트와 그 구간의 해시를 읽을 수 있다. 해시는 소문자 hex이며 빈 흐름은 SHA-256(empty)다. `remote`는 Dial 시작 때 목적지, accept 쪽은 머리를 다 읽은 뒤 실제 원격 주소가 된다(그전에는 빈 문자열). `elapsedMs`는 Dial 시작 또는 Accept부터의 경과 시간이다. 정상은 빈 `error`, 실패는 원래 Go 오류를 감싼 문장이다. 완료 기록은 피어·리스너를 닫아도 프로세스 종료까지 남는다.
+- `peerClose`: `name`, `port`. 그 리스너만 닫고 `{"id":4,"event":"peerClose","name":"go-peer-b","port":9100}`로 답한다. 이미 받은 연결은 계속되며 포트는 다시 열 수 있다. 없는 리스너는 오류다. `removePeer`·`quit`·EOF는 관련 리스너·연결·진행 중 Dial을 취소하고 goroutine을 회수한다.
+
+`timeoutSec`는 생략 또는 null이면 15, 지정하면 1…3600의 정수다. Dial은 연결 시작부터, accept는 연결을 받은 때부터 머리·양방향 전송 전체에 한 번 적용한다. 리스너 자체에는 기한이 없다. `peerClose`는 기한이 필요 없다.
+
+### 전송 바이트 규약
+
+연결을 건 쪽만 먼저 16바이트를 쓴다: 처음 8바이트는 **듣는 쪽이 보낼 바이트 수 UInt64 big endian**, 다음 8바이트는 **듣는 쪽이 쓸 씨앗 UInt64 big endian**이다. ACK나 응답 머리는 없다. Go `peerDial`은 자기 `send`·`seed`를 이 머리에도 넣으므로 두 방향이 같은 길이·씨앗으로 전송된다. Swift가 걸 때는 자기 송신 길이·씨앗을 독립적으로 골라도 된다. 머리가 잘렸거나 요구 길이가 4GiB를 넘으면 해당 전송은 오류로 끝난다.
+
+머리 뒤에는 각자 별도 쓰기 흐름과 읽기 흐름을 동시에 돌린다. 쓰기는 정한 길이의 데이터를 보낸 뒤 `CloseWrite`(FIN)하고, 읽기는 상대의 EOF까지 계속한다. **16바이트 머리는 양쪽의 바이트 수와 해시에서 제외한다.** 받은 데이터의 길이나 내용은 자동으로 같은 값이라고 가정하지 않는다. 시험 호출자가 상대의 `sent`/`sentSHA256`과 자기의 `received`/`receivedSHA256`을 교차 비교한다. 서로 다른 길이의 반닫힘도 같은 규약으로 검증할 수 있다.
+
+가짜 난수 흐름은 운영 암호용이 아닌 공개 시험용 **LCG64**다. 상태는 `x₀ = seed`(UInt64), `xₙ₊₁ = (6364136223846793005 × xₙ + 1442695040888963407) mod 2⁶⁴`. 매 갱신 뒤의 `xₙ₊₁`을 **little endian 8바이트**(최하위 바이트 먼저)로 내보낸다. 필요한 길이에서 마지막 낱말을 자른다. 읽기·쓰기 청크 경계와 무관하게 남은 낱말 바이트를 이어 쓴다. 씨앗 0도 그대로 허용한다. Swift는 `&*`·`&+`로 같은 순환 산술을 쓸 수 있다. 씨앗 1의 처음 32바이트는 다음과 같다.
+
+```text
+7c00fd43ac6f576c1b1b4a86b38668820eaa972099e1faa5c5579311cd550362
+```
+
+이 32바이트의 SHA-256은 `d96bbb8821f933a5b368b9c127d725ed65b2d2f89f5b6d4505545306e834537d`다. 전송마다 32KiB 송신 버퍼와 32KiB 수신 버퍼, SHA-256 상태만 유지하므로 100MiB 이상도 전체 데이터를 보관하지 않는다.
+
+공개 nodeKey를 반복 기록하는 testcontrol 기본 등록 로그도 끈다.
+
+Go 쪽 손실·지연 주입 명령은 없다. M6 관문 8·9는 계약의 Swift `setInProcessLoss(rate:seed:)`를 쓴다. `addKernelPeer`는 **아직 없음**이다.
+
 # h2server
 
 `sh Scripts/build-interop-tools.sh h2server`으로 빌드한다. `127.0.0.1`의 임의 포트에서 TLS·HTTP/1 업그레이드 없는 prior knowledge HTTP/2를 받는다. 준비 출력은 `{"event":"ready","port":12345}` 한 줄이다. `golang.org/x/net/http2` v0.60.0의 `Server.ServeConn`을 기본 설정으로 사용한다. Go 1.27.3에서는 이것이 표준 라이브러리 HTTP/2 서버에 위임된다. `ConfigureServer`는 `http.Server.Shutdown`의 정상 GOAWAY 경로를 연결하기 위해 사용한다(testcontrol의 ServeConn과 같은 프레임 구현).
@@ -434,3 +470,51 @@ M5 메모리 관문의 관측 명령:
 - `networkStatus`: `controlConnections`(`/ts2021` 요청 수), `derpConnections`(`/derp` 요청 수), `stunRequests`(유효 STUN Binding 요청 수)를 반환한다. 인터페이스 재결속·같은 인터페이스 재평가를 주소 없이 관측하기 위한 프로세스 전체 누적 수다.
 
 - `setMagicDNS`(`enabled` bool): 첫 제어 요청 전에 `DNSConfig.Proxied`를 설정하고 `magicDNS`로 답한다. `MagicDNSDomain`은 이름 접미사만 정하므로 DNS 관문은 이 명령으로 MagicDNS를 켠 뒤 피어·Swift 노드를 등록한다. 누락된 bool·등록 뒤 변경은 거절한다.
+
+# TCP 세그먼트 기준 자료 생성 (`tcpfixtures`)
+
+고정 gVisor `v0.0.0-20260915211658-a6f909f08a72`의 `pkg/tcpip/header`·`checksum` 공개 API를 호출한다. `IPv4.Encode`·`IPv6.Encode`·`TCP.Encode`·옵션 인코더로 패킷을 만들고 `TCPValid`·`ParseSynOptions`로 읽는다. Swift 구현은 읽거나 부르지 않는다. 바이트 변형은 잘못된 경계를 만들 때만 한다. 네트워크·난수·시각을 사용하지 않는다.
+
+```sh
+fixture_tool="$(sh Scripts/build-interop-tools.sh tcpfixtures)"
+"$fixture_tool" Tests/SwiftailNetstackTests/Fixtures
+```
+
+인자는 필수 폴더이며 `tcp-segments.json`을 쓴다. 자료 머리는 `reference`, `caseCount: 49`, `cases`다. 사례는 `name`, `packet`(IP 머리를 포함한 소문자 hex), `go`, `swiftail`, 선택 `swiftailDiffers`다. `go`는 실제 Go 반환값, `swiftail`은 W2·T5·X9에서 의도적으로 정한 차이만 적용한 기대값이다. 차이가 없으면 두 객체가 같다.
+
+각 결과의 키:
+
+| 키 | 뜻 |
+| --- | --- |
+| `error` | 성공은 빈 문자열, 실패는 `malformed`, `badChecksum`, `notTCP`. gVisor의 bool 결과를 도구가 정규화한 이름이며 Go 오류 문자열이 아님 |
+| `ipChecksumValid` | IPv4 머리 체크섬. IPv6 또는 검사 전 잘림이면 null |
+| `checksumValid` | TCP 체크섬. data offset 등 구조를 읽을 수 없으면 null |
+| `decoded` | TCP 구조를 읽었으면 해석 객체. 체크섬 오류에서도 진단용으로 남기며 `error`가 있으면 수용할 패킷이 아님. 머리를 읽을 수 없으면 null |
+
+`decoded`에는 `ipVersion`, `source`, `destination`, `ipHeaderLength`, `sourcePort`, `destinationPort`, `sequenceNumber`, `ackNumber`, `flags`(8비트 원값), `window`(와이어의 16비트 원값), `tcpHeaderLength`, `optionsHex`, `mss`, `windowScale`, `dataLength`가 있다. `mss`는 SYN의 **유효 MSS**로 옵션 생략 시 기본값도 포함한다. `windowScale`은 SYN에서 옵션 없으면 -1이며, SYN이 아니면 MSS·WS 모두 null이다. data offset 길이는 바이트 단위다. `swiftail.error`가 `malformed`인 사례의 `decoded`는 Go가 읽은 진단 값이며 성공한 Swift 해석을 뜻하지 않는다.
+
+49개 사례:
+
+- 각 IPv4·IPv6에 SYN(MSS·WS), SYN-ACK, 홀수 길이 데이터, 반복 올림 체크섬, FIN-ACK, RST, SYN 아닌 MSS·WS, 옵션 생략, MSS 0, shift 15, 틀린 체크섬(22개).
+- IPv4 옵션, NOP로 어긋난 정렬, EOL 뒤 잘못된 바이트 무시, 모르는 옵션, SACK·timestamp와 MSS·WS 조합, shift 14, 최대 60바이트 TCP 머리, 작은 MSS 1(8개).
+- 옵션 길이 0·1·머리 밖, 마지막 옵션 길이 필드 누락, MSS 길이 3·WS 길이 2, MSS 본문 잘림(7개).
+- TCP 0·1·19바이트, IP 0·1·19·39바이트 잘림(7개).
+- data offset 4·6·15(세그먼트 밖), 16을 넣으면 4비트가 0으로 순환하는 사례(4개). 와이어에는 16을 담을 수 없다.
+- 프로토콜이 TCP가 아닌 IPv4(1개).
+
+`swiftailDiffers`는 **11개**다: IPv6 기본 MSS(Go 536, 계약 1220) 1개, MSS 0에서 Go가 옵션 해석을 중단하여 뒤 WS를 무시하는 사례 2개(IPv6 MSS도 536), 작은 MSS(Go 48, 계약 코덱 1) 1개, 옵션 오류에서 Go가 앞부분만 반환하지만 계약은 `malformed`로 버리는 7개다. 작은 MSS는 코덱에서 올리지 않고 연결 상태 기계가 X9에 따라 64 미만을 거절한다. shift 15는 양쪽 모두 14로 읽으므로 차이 표시가 없다. 일반 `ParseTCPOptions`에 MSS·WS가 없다는 사실을 SYN 옵션의 동작 차이로 표시하지 않는다.
+
+다음 검증은 저장 자료와 재생성 결과의 바이트 일치·연속 실행의 재현성, gVisor 접근자 경계의 결정적인 임의 바이트 1만 입력, 새 명령의 경계 입력·JSON `id`·빈 목록·제어 머리 오류, 실제 tsnet 피어 둘의 양방향 100MiB와 IPv6 동시 전송·빈 전송·3바이트 대 1MiB의 비대칭 반닫힘·연결 거절·취소를 확인한다. 임의 입력 시험은 Go 도구의 안전성 검사이며 Swift 코덱의 별도 1만 입력 시험을 대신하지 않는다.
+
+```sh
+check_dir="$(eyebuild dir m6-tools)"
+mkdir -p "$check_dir/tmp"
+export TMPDIR="$check_dir/tmp"
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
+(cd Tools/interop && go test -count=1 ./cmd/tcpfixtures ./cmd/tailnet)
+eyebuild rm m6-tools
+```
+
+`Package.swift`의 `SwiftailNetstackTests`에는 아직 Fixtures 리소스 선언이 없다. Swift 대조 시험을 붙이는 세션에서 `resources: [.copy("Fixtures")]`를 더해야 한다. 이 도구 작업은 Swift 코드와 패키지 선언을 바꾸지 않는다.
