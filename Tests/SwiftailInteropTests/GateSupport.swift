@@ -108,6 +108,7 @@ struct Gate: Sendable {
     let peer: GatePeer
     let witness: GatePeer?
     let runningAt: ContinuousClock.Instant
+    var controlURL: URL? = nil
 
     /// 기존 M3 시험도 직접 경로가 선 뒤 본문을 시작해 M4 회귀 관문으로 쓴다.
     func prepareDirectPath() async throws {
@@ -228,7 +229,8 @@ func running(_ node: TailnetNode, containing marker: IPAddress? = nil) async thr
 }
 
 /// 매 시험의 도구·노드·상태를 격리하고 성공·실패·취소에서 모두 회수한다.
-func withGate(witness: Bool = false, direct: Bool = true, _ body: (Gate) async throws -> Void) async throws {
+func withGate(witness: Bool = false, direct: Bool = true, device: TunnelDevice = .memory(),
+              _ body: (Gate) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-m3-\(UUID().uuidString)")
     let tool = GoTailnet(temporaryDirectory: directory)
     defer {
@@ -246,7 +248,7 @@ func withGate(witness: Bool = false, direct: Bool = true, _ body: (Gate) async t
         if witness { other = try GatePeer(await tool.command(.init(cmd: "addPeer", name: "go-peer-b"), expecting: "peer")) }
         else { other = nil }
         let node = try TailnetNode(configuration: .init(stateDirectory: directory, hostname: "rd-mac-1a2b3c4d",
-                                                      controlURL: try #require(ready.controlURL)))
+                                                      controlURL: try #require(ready.controlURL)), device: device)
         run = Task { try await node.run() }
         let addresses = try await running(node)
         let runningAt = ContinuousClock.now
@@ -254,7 +256,8 @@ func withGate(witness: Bool = false, direct: Bool = true, _ body: (Gate) async t
         let local = try #require(nodes.first { Set($0.addresses) == Set(addresses.map(\.description)) })
         // 공개 목록에서 공개 키만 읽는다. 신원 파일·개인 키에는 접근하지 않는다.
         let localPeer = GatePeer(key: local.nodeKey, addresses: addresses)
-        let gate = Gate(tool: tool, node: node, local: localPeer, peer: peer, witness: other, runningAt: runningAt)
+        let gate = Gate(tool: tool, node: node, local: localPeer, peer: peer, witness: other,
+                        runningAt: runningAt, controlURL: ready.controlURL)
         if direct { try await gate.prepareDirectPath() }
         try await body(gate)
         run?.cancel()
