@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,9 @@ type command struct {
 	Name        string          `json:"name"`
 	To          string          `json:"to"`
 	Type        string          `json:"type"`
+	Port        int             `json:"port"`
+	Proto       string          `json:"proto"`
+	Payload     string          `json:"payload"`
 	NodeKey     string          `json:"nodeKey"`
 	Response    json.RawMessage `json:"response"`
 	RequireAuth *bool           `json:"requireAuth"`
@@ -239,6 +243,47 @@ func (n *network) execute(c command) (map[string]any, error) {
 			}
 			result = map[string]any{"event": "peerPing", "name": c.Name, "result": ping}
 		}
+	case "peerSend":
+		p := n.peers[c.Name]
+		if p == nil {
+			return nil, errors.New("피어가 없습니다")
+		}
+		addr, e := netip.ParseAddr(c.To)
+		if e != nil || addr.Zone() != "" {
+			return nil, errors.New("to 주소가 잘못되었습니다")
+		}
+		if c.Port < 1 || c.Port > 65535 {
+			return nil, errors.New("port는 1…65535여야 합니다")
+		}
+		if c.Proto != "udp" && c.Proto != "tcp" {
+			return nil, errors.New("proto는 udp 또는 tcp여야 합니다")
+		}
+		payload, e := hex.DecodeString(c.Payload)
+		if e != nil || len(payload) > 65507 {
+			return nil, errors.New("payload는 65507바이트 이하의 hex여야 합니다")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		conn, sendErr := p.server.Dial(ctx, c.Proto, netip.AddrPortFrom(addr, uint16(c.Port)).String())
+		sent := false
+		if sendErr == nil {
+			defer conn.Close()
+			sendErr = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			if sendErr == nil {
+				var count int
+				count, sendErr = conn.Write(payload)
+				sent = sendErr == nil && count == len(payload)
+				if sendErr == nil && !sent {
+					sendErr = io.ErrShortWrite
+				}
+			}
+		}
+		message := ""
+		if sendErr != nil {
+			message = sendErr.Error()
+		}
+		// TCP 제한 시간은 SYN 송신의 증거가 아니다. 수신자가 패킷을 직접 확인한다.
+		result = map[string]any{"event": "peerSend", "name": c.Name, "attempted": true, "sent": sent, "error": message}
 	case "injectMapResponse":
 		var k key.NodePublic
 		if e := k.UnmarshalText([]byte(c.NodeKey)); e != nil {
