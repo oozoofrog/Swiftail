@@ -58,6 +58,130 @@ struct DERPClientTests {
         #expect(server.acceptedCount >= 2)
     }
 
+    // MARK: 쓰기 묶기와 쓰기 감시
+
+    @Test("한 덩어리에는 첫 패킷을 늘 넣고, 패킷 프레임의 합이 64KiB를 넘기 전까지 더 넣는다")
+    func packetsPerWrite() {
+        let frameOverhead = DERPFrame.headerSize + DERPFrame.keySize
+        #expect(DERPClient.packetCountForNextWrite([]) == 0)
+        // 흔한 WireGuard 데이터그램 32개(큐 한도)는 한 덩어리에 다 들어간다.
+        #expect(DERPClient.packetCountForNextWrite(Array(repeating: 1_400, count: DERPClient.queuedPacketLimit)) == 32)
+        // 가장 큰 패킷은 혼자서 한도를 넘어도 한 덩어리가 된다.
+        let largest = DERPConnection.maximumPacketSize
+        #expect(DERPClient.packetCountForNextWrite([largest, largest, 1]) == 1)
+        #expect(DERPClient.packetCountForNextWrite([1, largest]) == 1)
+        // 합이 한도와 같으면 넣고, 1바이트라도 넘으면 다음 덩어리로 미룬다.
+        let half = DERPClient.maximumWriteBytes / 2 - frameOverhead
+        #expect(DERPClient.packetCountForNextWrite([half, half, 0]) == 2)
+        #expect(DERPClient.packetCountForNextWrite([half, half + 1]) == 1)
+    }
+
+    /// 묶어 쓰더라도 프레임은 `send`를 부른 순서대로 빠짐없이 나간다. 큐가 넘치지 않게 덩어리마다 비기를 기다린다.
+    @Test("묶어 쓴 패킷은 보낸 순서대로 빠짐없이 서버에 닿는다")
+    func batchedWritesKeepOrder() async throws {
+        let server = try FakeDERPServer(.reading(keep: true))
+        defer { server.close() }
+        let client = try Self.client(port: try await server.port(), writeTimeout: .seconds(5))
+        let log = EventLog()
+        let peer = try DERPFixtures.nodeKey(7)
+        let total = 3_000
+        var rng = SplitMix64(state: 1)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            defer { group.cancelAll() }
+            group.addTask { await client.run() }
+            group.addTask { await log.record(client.events) }
+            try await log.wait(for: ["connected"], within: .seconds(10))
+            var index = 0
+            while index < total {
+                let burst = min(Int.random(in: 1...DERPClient.queuedPacketLimit, using: &rng), total - index)
+                for _ in 0..<burst {
+                    let size = Int.random(in: 4...3_000, using: &rng)
+                    await client.send(Self.indexed(index, size: size), to: peer)
+                    index += 1
+                }
+                while await !client.queuedPackets.isEmpty { await Task.yield() }
+            }
+            let deadline = ContinuousClock.now + .seconds(10)
+            while server.sentPacketIndices().count < total, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        #expect(server.sentPacketIndices() == Array(0..<total))
+    }
+
+    /// 고치기 전에는 쓰기마다 `withTimeout`을 걸어, 쓰기가 곧 끝나도 기한 쪽 Task와 타이머가 기한까지 남았다(쓰기
+    /// 하나에 약 700바이트). 기한을 60초로 두면 이 시험 동안 하나도 풀리지 않으므로 남는 것이 모두 쌓인다.
+    @Test("곧 끝나는 쓰기를 수없이 해도 메모리가 쌓이지 않는다")
+    func manyQuickWritesDoNotAccumulate() async throws {
+        let server = try FakeDERPServer(.reading(keep: false))
+        defer { server.close() }
+        let client = try Self.client(port: try await server.port(), writeTimeout: .seconds(60))
+        let log = EventLog()
+        let peer = try DERPFixtures.nodeKey(7)
+        let packet = [UInt8](repeating: 0x5A, count: 100)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            defer { group.cancelAll() }
+            group.addTask { await client.run() }
+            group.addTask { await log.record(client.events) }
+            try await log.wait(for: ["connected"], within: .seconds(10))
+            let before = try #require(Self.footprint())
+            let started = ContinuousClock.now
+            var writes = 0
+            // 패킷 하나를 보내고 큐가 비기를 기다리므로 덩어리 하나에 패킷 하나, 곧 쓰기 하나다.
+            while ContinuousClock.now - started < .seconds(4) {
+                await client.send(packet, to: peer)
+                while await !client.queuedPackets.isEmpty { await Task.yield() }
+                writes += 1
+            }
+            let growth = try #require(Self.footprint()) - before
+            // 다른 시험이 같은 프로세스에서 함께 돌므로 여유를 크게 둔다.
+            #expect(writes > 10_000, "쓰기가 너무 적어 남는 것을 가려내지 못한다: \(writes)")
+            #expect(growth < 16 << 20, "쓰기 \(writes)번 뒤 phys_footprint가 \(growth)바이트 늘었다")
+            #expect(server.acceptedCount == 1)
+        }
+    }
+
+    /// 쓰기 감시는 연결의 TaskGroup 자식이다. 기한이 60초여도 연결이 끊기면 다음 연결로 넘어가고, 취소하면 곧바로 멈춘다.
+    @Test("연결이 끊기면 다시 잇고, 취소하면 쓰기 감시와 함께 run()이 곧 돌아온다")
+    func watchStopsWithConnection() async throws {
+        let server = try FakeDERPServer(.reading(keep: false))
+        defer { server.close() }
+        let client = try Self.client(port: try await server.port(), writeTimeout: .seconds(60))
+        let log = EventLog()
+        let running = Task { await client.run() }
+        let recording = Task { await log.record(client.events) }
+        try await log.wait(for: ["connected"], within: .seconds(10))
+        await client.send([1, 2, 3], to: try DERPFixtures.nodeKey(7))
+        server.dropConnections()
+        try await log.wait(for: ["connected", "disconnected", "connected"], within: .seconds(15))
+        let cancelled = ContinuousClock.now
+        running.cancel()
+        await running.value
+        await recording.value
+        #expect(ContinuousClock.now - cancelled < .seconds(2))
+    }
+
+    /// 이 프로세스의 `phys_footprint`(바이트). 읽지 못하면 nil.
+    ///
+    /// `task_info`는 C 구조체를 포인터로 채우는 호출이라 포인터를 이 함수 안에만 가둔다.
+    private static func footprint() -> Int? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Int(info.phys_footprint) : nil
+    }
+
+    /// 앞 4바이트에 빅엔디언 번호를 담은 `size`바이트 패킷.
+    private static func indexed(_ index: Int, size: Int) -> [UInt8] {
+        let value = UInt32(index)
+        return [UInt8(value >> 24), UInt8(truncatingIfNeeded: value >> 16), UInt8(truncatingIfNeeded: value >> 8),
+                UInt8(truncatingIfNeeded: value)] + [UInt8](repeating: 0, count: size - 4)
+    }
+
     /// 고치기 전에는 읽을 때마다 Pong을 꺼내 기다리지 않는 소켓에 넘겨, 쓰기가 막혀도 대기 한도(64KiB)가 걸리지 않고
     /// `NWConnection`의 버퍼만 자랐다.
     @Test("쓰기가 막힌 동안 서버가 Ping을 계속 보내면 Pong이 한도를 넘게 밀려 연결 오류로 끊긴다")
@@ -261,13 +385,15 @@ private final class EventLog: Sendable {
 }
 
 /// 루프백의 가짜 DERP 서버(평문). 받아들인 연결마다 101 응답, ServerKey, ServerInfo를 보낸 뒤 `behavior`대로 한다.
-/// 클라이언트가 보낸 바이트는 읽지 않는다.
+/// `reading`이 아니면 클라이언트가 보낸 바이트는 읽지 않는다.
 private final class FakeDERPServer: Sendable {
     enum Behavior: Sendable {
         /// 핸드셰이크 뒤 아무것도 하지 않는다.
         case silent
         /// 핸드셰이크 뒤 2바이트 번호(0부터)를 담은 RecvPacket을 이만큼 보낸다.
         case packets(Int)
+        /// 핸드셰이크 뒤 클라이언트가 보낸 바이트를 끝까지 읽는다. `keep`이면 `received`에 모은다.
+        case reading(keep: Bool)
         /// 핸드셰이크 뒤 1초를 기다렸다가 Ping을 끝없이 보낸다. 100개(1,300바이트)씩 5ms 간격으로 보내, 한 번 읽은 조각에서
         /// 나오는 Pong은 한도(64KiB)에 한참 못 미친다. 한도를 넘는다면 쓰지 못한 Pong이 쌓였기 때문이다.
         case pingFlood
@@ -279,6 +405,7 @@ private final class FakeDERPServer: Sendable {
     private final class Accepted: Sendable {
         let connections = Mutex<[NWConnection]>([])
         let floods = Mutex<[Task<Void, Never>]>([])
+        let received = Mutex<[UInt8]>([])
     }
 
     var acceptedCount: Int { accepted.connections.withLock { $0.count } }
@@ -301,6 +428,9 @@ private final class FakeDERPServer: Sendable {
                     DERPFixtures.Server.recvPacket(from: sender, [UInt8(index >> 8), UInt8(index & 0xFF)])
                 }
                 connection.send(content: Data(handshake + frames), completion: .contentProcessed { _ in })
+            case .reading(let keep):
+                connection.send(content: Data(handshake), completion: .contentProcessed { _ in })
+                Self.read(from: connection, keep: keep, into: accepted)
             case .pingFlood:
                 connection.send(content: Data(handshake), completion: .contentProcessed { _ in })
                 let flood = Task {
@@ -318,6 +448,44 @@ private final class FakeDERPServer: Sendable {
     private static func write(_ bytes: [UInt8], to connection: NWConnection) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             connection.send(content: Data(bytes), completion: .contentProcessed { error in continuation.resume(returning: error == nil) })
+        }
+    }
+
+    /// 끝까지 읽는다. 읽은 바이트는 `keep`일 때만 모은다.
+    private static func read(from connection: NWConnection, keep: Bool, into accepted: Accepted) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, isComplete, error in
+            if keep, let data { accepted.received.withLock { $0 += data } }
+            guard error == nil, !isComplete else { return }
+            read(from: connection, keep: keep, into: accepted)
+        }
+    }
+
+    /// 클라이언트가 보낸 SendPacket 프레임들의 패킷 앞 4바이트 번호(빅엔디언). HTTP 요청 머리를 건너뛰고, 끝의 덜 온
+    /// 프레임은 무시한다.
+    func sentPacketIndices() -> [Int] {
+        let bytes = accepted.received.withLock { $0 }
+        let headEnd = Array("\r\n\r\n".utf8)
+        guard var offset = bytes.indices.first(where: { bytes[$0...].starts(with: headEnd) }).map({ $0 + headEnd.count }) else {
+            return []
+        }
+        var indices: [Int] = []
+        while offset + DERPFrame.headerSize <= bytes.count {
+            let length = bytes[(offset + 1)..<(offset + 5)].reduce(0) { $0 << 8 | Int($1) }
+            let body = offset + DERPFrame.headerSize
+            guard body + length <= bytes.count else { break }
+            if bytes[offset] == DERPFrame.Kind.sendPacket.rawValue {
+                let packet = body + DERPFrame.keySize
+                indices.append(bytes[packet..<(packet + 4)].reduce(0) { $0 << 8 | Int($1) })
+            }
+            offset = body + length
+        }
+        return indices
+    }
+
+    /// 받아들인 연결을 모두 끊는다. 듣기는 계속한다.
+    func dropConnections() {
+        accepted.connections.withLock { connections in
+            for connection in connections { connection.cancel() }
         }
     }
 

@@ -8,7 +8,7 @@ import SwiftailIO
 /// 이 패키지에서 소켓과 시계를 갖는 곳은 여기뿐이다. 프로토콜의 판단은 입출력 없는 상태 기계(`DERPConnection`)가
 /// 하고, 이 actor는 바이트와 시각을 거기에 넣고 결과를 사건(`events`)으로 내보낸다.
 ///
-/// 동시성은 구조적이다. `run()`이 연결 하나의 수명 동안 읽기 루프, 쓰기 루프, 유휴 감시를 한 TaskGroup의 자식으로
+/// 동시성은 구조적이다. `run()`이 연결 하나의 수명 동안 읽기 루프, 쓰기 루프, 쓰기 감시, 유휴 감시를 한 TaskGroup의 자식으로
 /// 돌리므로, `run()`을 부른 Task를 취소하면 모두 멈추고 소켓이 닫힌다. 분리된 Task는 만들지 않는다.
 ///
 /// ```swift
@@ -29,10 +29,12 @@ import SwiftailIO
 /// - 읽지 않은 받은 사건은 개수(`eventBufferLimit`)와 패킷 바이트 합(`eventBufferByteLimit`) 둘 다로 묶는다.
 /// - `send`는 기다리지 않고 패킷을 큐에 넣는다. 큐는 연결 상태와 무관하게 `queuedPacketLimit`개까지만 쥐고, 넘치면
 ///   가장 오래된 것을 버린다.
-/// - 쓰기 루프가 큐의 패킷과 상태 기계가 낸 답(Pong)을 한 덩어리씩 `NetworkSocket.write`로 쓰고, 소켓이 받아 갈
-///   때까지 다음 덩어리를 꺼내지 않는다. 그래서 쓰기가 막힌 동안 Pong은 상태 기계 안에 쌓이고, 64KiB를 넘으면
-///   상태 기계가 연결 오류(`tooManyPendingReplies`)로 끝낸다. 쓰기 하나가 `writeTimeout` 안에 끝나지 않아도 연결
-///   오류다. 어느 쪽이든 끊고 다시 잇는다.
+/// - 쓰기 루프가 그때까지 쌓인 Pong과 큐의 패킷들(프레임 합 `maximumWriteBytes`까지)을 한 덩어리로
+///   `NetworkSocket.write`에 넘기고, 소켓이 받아 갈 때까지 다음 덩어리를 꺼내지 않는다. 그래서 쓰기가 막힌 동안
+///   Pong은 상태 기계 안에 쌓이고, 64KiB를 넘으면 상태 기계가 연결 오류(`tooManyPendingReplies`)로 끝낸다. 덩어리
+///   하나가 `writeTimeout` 안에 넘어가지 않아도 연결 오류다(쓰기 감시). 어느 쪽이든 끊고 다시 잇는다.
+/// - 쓰기 기한은 쓰기마다 Task나 타이머를 만들지 않고, 연결 하나에 하나뿐인 감시가 진행 중인 쓰기의 시작 시각을 보고
+///   지킨다. 쓰기마다 `withTimeout`을 걸면 취소된 타이머 Task가 기한(5초)까지 남아 쓰기 속도에 비례해 메모리가 쌓였다.
 /// - 쓰기는 부른 순서대로 나가므로 프레임 하나는 통째로, 순서대로 나간다.
 ///
 /// 읽기는 쓰기가 막혀도 멈추지 않는다(따로 도는 자식이다). 서버는 2초 안에 쓰지 못하면 연결을 끊는다.
@@ -63,11 +65,17 @@ public actor DERPClient {
     /// 것을 버리는 것도 `magicsock.go`의 `sendDerp`와 같다. Go의 주석대로 TCP 버퍼 위의 큐는 거의 순수한 버퍼
     /// 부풀림이므로 깊게 두지 않는다.
     static let queuedPacketLimit = 32
-    /// 쓰기 하나(패킷 하나와 함께 나갈 Pong)가 소켓에 넘어가기까지의 기한. 넘으면 연결을 끊는다.
+    /// 한 덩어리로 묶는 패킷 프레임의 바이트 합 한도(64KiB). 첫 패킷은 크기와 무관하게 넣는다.
+    ///
+    /// 덩어리 하나는 패킷 프레임 64KiB(가장 큰 패킷 하나면 그 프레임 65,573바이트)와 Pong(64KiB 이하)을 넘지 않고, 패킷은
+    /// 큐 한도대로 32개를 넘지 않는다. 흔한 WireGuard 데이터그램(약 1.3KB) 32개는 한 덩어리에 다 들어간다. 소켓에 넘긴
+    /// 덩어리는 `NWConnection`이 따로 복사해 쥐므로, 덩어리를 작게 두어 큐(최대 약 2MiB)와 겹쳐 쥐는 양을 줄인다.
+    static let maximumWriteBytes = 64 * 1024
+    /// 덩어리 하나가 소켓에 넘어가기까지의 기한. 넘으면 연결을 끊는다.
     ///
     /// Go `derp/derp_client.go`의 `ForwardPacket`이 쓰기마다 거는 5초 타이머(`writeTimeoutFired`가 연결을 닫는다)를
     /// 따랐다. Go의 `send`(SendPacket)에는 기한이 없고 쓰는 goroutine이 TCP에서 막힌다. 여기서는 막힌 연결이 큐와
-    /// Pong을 쥔 채 남지 않게 모든 쓰기에 같은 5초를 건다.
+    /// Pong을 쥔 채 남지 않게 모든 쓰기에 같은 5초를 건다. 묶은 덩어리 하나에 5초다.
     static let writeTimeout = Duration.seconds(5)
     /// 서버 하나로의 TCP 연결 시도 기한.
     static let tcpTimeout = Duration.milliseconds(1500)
@@ -95,6 +103,8 @@ public actor DERPClient {
     private(set) var queuedPackets: [(peer: NodePublicKey, packet: [UInt8])] = []
     /// 지금 연결의 쓰기 루프를 깨운다. 연결이 없으면 nil.
     private var writeSignal: AsyncStream<Void>.Continuation?
+    /// 지금 소켓에 넘기는 중인 덩어리의 쓰기 시작 시각. 쓰는 중이 아니면 nil. 쓰기 감시의 기준이다.
+    private var writeStartedAt: ContinuousClock.Instant?
     /// 마지막으로 바이트를 받은 시각. 유휴 감시의 기준이다.
     private var lastReceive = ContinuousClock.now
     /// 연속 실패 수. 프레임을 받은 연결이 끊기면 1로 돌아간다.
@@ -196,7 +206,8 @@ public actor DERPClient {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 defer { group.cancelAll() }
                 group.addTask { try await self.readLoop(from: opened.socket) }
-                group.addTask { try await self.writeLoop(to: opened.socket, signals: signals) }
+                group.addTask { await self.writeLoop(to: opened.socket, signals: signals) }
+                group.addTask { try await self.watchForStalledWrite() }
                 group.addTask { try await self.watchForIdleness() }
                 try await group.next()
             }
@@ -227,25 +238,54 @@ public actor DERPClient {
         }
     }
 
-    /// 큐의 패킷과 상태 기계가 낸 답을 한 덩어리씩 쓴다. 덩어리 하나가 `writeTimeout` 안에 소켓에 넘어가지 않으면
-    /// 던진다. 취소되면 돌아온다.
-    private func writeLoop(to socket: NetworkSocket, signals: AsyncStream<Void>) async throws {
-        let writeTimeout = writeTimeout
+    /// 큐의 패킷과 상태 기계가 낸 답을 한 덩어리씩 쓴다. 쓰는 동안 시작 시각을 `writeStartedAt`에 남긴다.
+    /// 취소되면 돌아온다(소켓은 쓰던 중이면 닫힌다).
+    private func writeLoop(to socket: NetworkSocket, signals: AsyncStream<Void>) async {
         for await _ in signals {
             while let bytes = nextWrite() {
-                try await withTimeout(writeTimeout) { await socket.write(bytes) }
+                writeStartedAt = .now
+                await socket.write(bytes)
+                writeStartedAt = nil
             }
         }
     }
 
-    /// 다음에 쓸 덩어리: 큐의 가장 오래된 패킷 하나와 그때까지 쌓인 Pong. 쓸 것이 없으면 nil.
+    /// 쓰기 하나가 `writeTimeout` 안에 끝나지 않으면 던진다.
+    ///
+    /// 쓰는 중이면 그 쓰기의 기한까지, 아니면 지금부터 `writeTimeout`만큼 잔 뒤 다시 본다. 깨어 보니 다른 쓰기가
+    /// 진행 중이면 그 쓰기의 기한까지 다시 잔다. 그래서 막힌 쓰기는 시작한 뒤 `writeTimeout`과 거의 같은 때에 걸리고,
+    /// 이 감시가 만드는 타이머는 `writeTimeout`마다 하나다.
+    private func watchForStalledWrite() async throws {
+        while true {
+            try await Task.sleep(until: (writeStartedAt ?? .now) + writeTimeout, clock: .continuous)
+            if let writeStartedAt, ContinuousClock.now >= writeStartedAt + writeTimeout { throw Disconnection.writeStalled }
+        }
+    }
+
+    /// 다음에 쓸 덩어리: 그때까지 쌓인 Pong과 큐의 앞쪽 패킷들(`packetCountForNextWrite`개). 쓸 것이 없으면 nil.
+    ///
+    /// 프레임은 상태 기계에 들어간 순서대로 나간다. Pong은 먼저 쌓였으므로 이 덩어리의 패킷보다 앞선다.
     private func nextWrite() -> [UInt8]? {
-        if !queuedPackets.isEmpty {
-            let next = queuedPackets.removeFirst()
+        let count = Self.packetCountForNextWrite(queuedPackets.lazy.map(\.packet.count))
+        for next in queuedPackets.prefix(count) {
             try? connection?.send(next.packet, to: next.peer)
         }
+        queuedPackets.removeFirst(count)
         let bytes = connection?.takeOutboundBytes() ?? []
         return bytes.isEmpty ? nil : bytes
+    }
+
+    /// 큐 앞에서부터 한 덩어리에 넣을 패킷 수. 크기가 `packetSizes`인 패킷들의 SendPacket 프레임 합이
+    /// `maximumWriteBytes`를 넘기 전까지 넣되, 첫 패킷은 크기와 무관하게 넣는다.
+    static func packetCountForNextWrite(_ packetSizes: some Sequence<Int>) -> Int {
+        var count = 0
+        var frameBytes = 0
+        for size in packetSizes {
+            frameBytes += DERPFrame.headerSize + DERPFrame.keySize + size
+            guard count == 0 || frameBytes <= maximumWriteBytes else { break }
+            count += 1
+        }
+        return count
     }
 
     /// `idleTimeout` 동안 아무것도 오지 않으면 던진다.
@@ -271,6 +311,7 @@ public actor DERPClient {
 enum Disconnection: Error {
     case closedByServer
     case idle
+    case writeStalled
     case noServers
 }
 
