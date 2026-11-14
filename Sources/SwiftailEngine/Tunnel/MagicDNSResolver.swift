@@ -19,7 +19,9 @@ import SwiftailControl
 struct MagicDNSResolver: Sendable {
     /// 노드 색인의 출처. nil이면 노드 이름을 하나도 모른다.
     let netmap: Netmap?
-    /// 응답기가 권한을 갖는 영역. 소문자이고, 끝 점을 포함한 표기의 바이트 순이다(Go `LocalDomains`의 순서).
+    /// 응답기가 권한을 갖는 영역. 소문자이고, 끝 점을 포함한 표기의 바이트 순이다.
+    /// (Go의 `LocalDomains`는 만든 순서 그대로다: 접미사, ip6.arpa, in-addr.arpa. 영역이 서로 겹치지 않으면
+    /// 순서는 답에 영향을 주지 않는다. Go 기준값 자료에는 겹치는 영역이 없다.)
     /// 이름을 포함하는 첫 영역이 부정 응답의 SOA가 된다.
     let zones: [DNSMessage.Name]
     /// `ExtraRecords`의 A·AAAA. 노드 색인보다 먼저 찾는다.

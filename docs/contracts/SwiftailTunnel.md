@@ -332,6 +332,8 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
 
 ### 응답기 구현에서 정해진 것 (M5-1, 2026-11-15)
 
+Go 기준값 대조(`GoMagicDNSComparisonTests`, `GoTunnelSettingsComparisonTests`): MagicDNS 85단계 가운데 81단계는 Go와 응답 바이트까지 같고, 3단계는 표시된 차이(4via6, 서브도메인 규칙), 1단계는 아래의 질문 누출이다. 터널 설정 32단계 가운데 15단계는 Go와 같고 16단계는 표시된 차이(검색 도메인을 내지 않음, 전역 리졸버·분할 DNS를 무시 등), 1단계는 만료 시각이 지난 피어의 경로다(Go의 경로 산출은 `Expired` 표시만 보고, 그 표시는 앞 단계가 단다. Swiftail은 `keyExpiry <= now`인 피어를 스스로 뺀다).
+
 - 진입점: `MagicDNSResolver(netmap: Netmap?, localZones: [String])`와 `response(to:at:) -> [UInt8]`(internal). 늘 응답 바이트를 낸다(무응답인 경우가 없다). 12바이트보다 짧은 질의에도 Go처럼 ID 0의 FORMERR로 답한다.
 - netmap이 없거나 자기 키가 만료되어 `netmap`이 nil이어도 서비스 IP의 PTR 같은 고정 이름에는 답한다(Go와 같다). 그 밖의 이름은 SERVFAIL.
 - **Go와 일부러 다르게 한 것**: Go는 머리가 짧거나 응답 비트가 켜진 질의에 답할 때, 다시 쓰는 파서에 남아 있던 **앞 질의의 질문**을 응답에 싣는다(다른 앱의 질의 이름이 새어 나갈 수 있다. Go 출력에서 확인). Swiftail은 질문 없이 답한다. `ExtraRecords`의 이름과 MagicDNS 접미사는 소문자로 맞춰 비교한다(Go는 대소문자 그대로 쓴다).
