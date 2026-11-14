@@ -15,10 +15,12 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
 	"tailscale.com/derp/derpserver"
+	"tailscale.com/envknob"
 	"tailscale.com/logtail"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
@@ -41,6 +43,7 @@ type command struct {
 	RequireAuth *bool           `json:"requireAuth"`
 	AuthKey     *string         `json:"authKey"`
 	AuthURL     string          `json:"authURL"`
+	Enabled     *bool           `json:"enabled"`
 }
 type peer struct {
 	server *tsnet.Server
@@ -204,7 +207,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 			if v.Online != nil {
 				online = *v.Online
 			}
-			nodes = append(nodes, map[string]any{"nodeKey": v.Key.String(), "name": v.Name, "addresses": addresses(v), "online": online})
+			nodes = append(nodes, map[string]any{"nodeKey": v.Key.String(), "name": v.Name, "addresses": addresses(v), "online": online, "endpoints": append([]netip.AddrPort{}, v.Endpoints...)})
 		}
 		result = map[string]any{"event": "nodes", "nodes": nodes}
 	case "peerStatus", "peerPing":
@@ -225,9 +228,13 @@ func (n *network) execute(c command) (map[string]any, error) {
 			}
 			peers := []any{}
 			for _, v := range st.Peer {
-				peers = append(peers, map[string]any{"nodeKey": v.PublicKey.String(), "addresses": v.TailscaleIPs, "online": v.Online, "curAddr": v.CurAddr, "relay": v.Relay})
+				peers = append(peers, map[string]any{"nodeKey": v.PublicKey.String(), "addresses": v.TailscaleIPs, "online": v.Online, "curAddr": v.CurAddr, "relay": v.Relay, "active": v.Active, "lastWrite": v.LastWrite})
 			}
-			result = map[string]any{"event": "peerStatus", "name": c.Name, "peers": peers}
+			selfAddrs := []string{}
+			if st.Self != nil {
+				selfAddrs = append(selfAddrs, st.Self.Addrs...)
+			}
+			result = map[string]any{"event": "peerStatus", "name": c.Name, "peers": peers, "selfAddrs": selfAddrs}
 		} else {
 			addr, e := netip.ParseAddr(c.To)
 			if e != nil {
@@ -321,6 +328,13 @@ func (n *network) execute(c command) (map[string]any, error) {
 			n.mu.Unlock()
 		}
 		result = map[string]any{"event": "auth"}
+	case "setNeverDirectUDP":
+		if c.Enabled == nil {
+			return nil, errors.New("enabled에 bool이 필요합니다")
+		}
+		// 시험 계약의 런타임 전환이며, envknob의 동시 읽기 안전성 한계는 README에 적는다.
+		envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", strconv.FormatBool(*c.Enabled))
+		result = map[string]any{"event": "neverDirectUDP", "enabled": *c.Enabled}
 	case "quit":
 		result = map[string]any{"event": "quit"}
 	default:
