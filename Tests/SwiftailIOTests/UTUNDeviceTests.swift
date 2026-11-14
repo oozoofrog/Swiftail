@@ -166,7 +166,7 @@ struct UTUNDeviceTests {
     @Test("상대가 닫힌 소켓에 써도 신호로 죽지 않고 sendFailed(EPIPE)다")
     func writeToClosedPeerDoesNotRaiseSIGPIPE() throws {
         let pair = try SocketPair(type: SOCK_STREAM)
-        defer { pair.closeAll() }
+        defer { close(pair.caller) }  // 상대는 아래에서 이미 닫았다. 같은 번호를 두 번 닫으면 병렬로 도는 다른 시험의 기술자를 닫는다.
         let device = try Self.device(on: pair.caller)
         pair.closePeer()
         #expect(throws: SocketError.sendFailed("EPIPE")) { try device.write(Self.ipv4Packet) }
