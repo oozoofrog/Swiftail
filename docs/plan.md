@@ -123,7 +123,7 @@ M4에서 정한 것: `SwiftailEngine`은 `SwiftailMagicsock`에 의존하지 않
 ### 노트에서 확인해 설계에 반영한 것
 
 - WireGuard(포크)에는 엔드포인트 로밍이 없다. 피어의 경로는 magicsock이 고른다. `SwiftailWireGuard`는 주소를 다루지 않고 "이 피어에게 보낼 데이터그램"만 내놓는다.
-- Tailscale은 PSK를 쓰지 않는다(0). cookie는 상대가 부하 상태일 때만 오므로 M1에서 수신 처리만 넣는다. mac1은 처음부터 정확해야 한다.
+- Tailscale은 PSK를 쓰지 않는다(0). cookie는 상대가 부하 상태일 때만 오므로 M1에서는 수신 처리만 넣었고, cookie reply를 보내는 쪽(부하 판정, mac2 검사, 출처별 속도 제한)은 실제 인터넷에 UDP 포트를 열기 전인 M4 뒤에 넣었다(`docs/contracts/SwiftailWireGuard.md` "cookie reply 보내기"). mac1은 처음부터 정확해야 한다.
 - 제어 Noise의 레코드 nonce는 빅엔디언 카운터이고 레코드는 4096바이트가 한도다. HTTP/2 프레임을 레코드에 나눠 싣는다. 핸드셰이크 뒤 서버가 먼저 보내는 early payload를 처리해야 한다.
 - 맵 스트림과 상태 갱신(엔드포인트, Hostinfo)은 별도 요청이다. `null`·빈 배열·생략의 차이가 증분 적용의 의미를 가른다.
 - 피어별 AllowedIPs와 경로는 netmap에서 계산한다. iOS는 피어별 /32가 기본이다. 유휴 피어는 WireGuard에 올리지 않는다.
