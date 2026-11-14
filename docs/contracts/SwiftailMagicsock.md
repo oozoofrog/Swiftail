@@ -111,7 +111,7 @@ public struct Magicsock: Sendable {
         case endpointsChanged([Endpoint])
         /// 홈 DERP 지역이 바뀌었다. `NetInfo.preferredDERP`로 올리고 그 지역에 연결한다.
         case homeRegionChanged(Int64)
-        /// 피어의 경로가 바뀌었다. nil은 그 피어가 빠졌다는 뜻이다.
+        /// 피어의 경로가 바뀌었다. nil은 그 피어가 빠졌거나 유휴라는 뜻이다(동작 G3).
         case pathChanged(NodePublicKey, PeerPath?)
         /// 버린 것. 진단과 시험용이다.
         case dropped(Drop)
@@ -386,7 +386,7 @@ package enum LocalInterfaceAddresses {
 5. **주기**(노트 4.9 5, Go `magicsock.go:887-923`, `:3683-3712`): 회차가 끝나면 `isActive`일 때 20–26초 무작위 뒤에 다음 회차를 건다. `isActive`는 "피어가 하나 이상 있고, 어느 피어든 마지막 송신(`lastSend`) 뒤 45초가 지나지 않음"이다. 아니면 주기를 멈추고, 다음 `send`가 다시 건다. `setRegions`의 변경과 CallMeMaybe를 보내려는데 엔드포인트가 낡은 경우(F2)는 곧바로 회차를 시작한다.
    - Go의 유휴 판단은 TUN 송수신 시각이다(`net/tstun/wrap.go:842-853`, `wgengine/userspace.go:435`). 이 계약은 WireGuard 송신 시각으로 대신한다. 차이는 트래픽이 멈춘 뒤 WireGuard keepalive만큼(최대 둘, 약 20초. wireguard-go의 `needAnotherKeepalive`를 옮긴 동작이다) STUN이 더 돌고 유휴 판정(G3의 nil)이 늦는 것이다. Go 피어와 맞춰 본 값(2026-11-15): 마지막 트래픽 뒤 약 55~64초에 nil.
 6. **홈 지역 선택**(DERP 노트 4.10 5, Go `netcheck.go:1426-1531`): 회차가 끝날 때 최근 5분 5초의 회차 기록에서 지역별 최소 지연에 `score`(양수일 때)를 곱해 가장 작은 지역을 고르고, 기존 홈이 아직 닿으면(이번 회차에 지연이 있거나 회차 시작 뒤 또는 8초 안에 그 지역에서 DERP 패킷을 받음) 차이가 10 ms 미만이거나 새 후보가 기존의 2/3보다 크면 유지한다. 측정이 하나도 없으면 120초 안에 DERP 패킷을 받은 기존 홈을 유지하고, 그래도 0이면 기존 홈을 유지한다(DERP 노트 4.8 1).
-   - **대체 홈**: 홈이 0인 채로 `setRegions`가 오면 곧바로 지역 ID가 가장 작은 것을 홈으로 낸다(M3 규칙). 첫 회차(3초)를 기다리지 않고 DERP에 붙기 위해서다. 회차가 끝나면 6의 규칙으로 다시 고른다.
+   - **대체 홈**: 홈이 0인 채로 `setRegions`가 오면 곧바로 지역 ID가 가장 작은 것을 홈으로 낸다(M3 규칙). 첫 회차(3초)를 기다리지 않고 DERP에 붙기 위해서다. 회차가 끝나면 6의 규칙으로 다시 고른다. 대체 홈은 6의 "기존 홈"이 아니다: 유지 조건의 기준은 **앞 회차가 측정해서 고른 홈**이고(Go는 앞 보고서의 `PreferredDERP`, `netcheck.go:1431`. magicsock의 대체 홈은 거기에 되들어가지 않는다), 처음 측정한 회차는 유지 조건 없이 가장 빠른 지역을 고른다. 측정이 없는 회차 뒤에는 120초 안에 DERP 패킷을 받은 경우에만 그 기준이 이어진다(M4 검토 A, 2026-11-15).
    - 홈이 바뀌면 `.homeRegionChanged`. `shortcut:` Go는 제어 서버와 맵 스트림이 끊긴 동안 홈을 바꾸지 않는다(DERP 노트 4.8 2). 이 계약은 바꾸되, 노드가 옛 홈 연결을 닫지 않으므로(엔진 계약 M4 동작 N3) 아직 옛 홈으로 보내는 피어의 패킷도 받는다. 바뀐 홈은 제어가 다시 이어진 뒤 올라간다.
    - `shortcut:` UDP가 막혀 STUN 응답이 없을 때의 HTTPS 지연 측정(DERP 노트 4.10 4)은 하지 않는다. 그때는 위 규칙대로 기존 홈을 유지한다.
    - DERP 활동은 `receiveDERP`로 받은 패킷만 센다. `DERPClient`는 KeepAlive를 올리지 않는다. 기존 홈이 STUN에는 답하지 않고 KeepAlive만 오는 드문 경우에 홈을 더 일찍 옮길 수 있다.

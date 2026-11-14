@@ -16,6 +16,7 @@ extension Magicsock {
         /// netmap의 `Endpoints`. IPv4만 후보로 쓴다.
         public var endpoints: [IPEndpoint]
 
+        /// netmap의 피어 하나를 옮긴다. disco를 하지 않는 피어는 `discoKey`에, 홈을 모르는 피어는 `homeDERP`에 0을 넣는다.
         public init(key: NodePublicKey, discoKey: DiscoPublicKey, homeDERP: Int64, endpoints: [IPEndpoint]) {
             self.key = key
             self.discoKey = discoKey
@@ -33,6 +34,7 @@ extension Magicsock {
         /// DERPMap `HomeParams.RegionScore`. 양수일 때만 지연에 곱한다. 없으면 0.
         public var score: Double
 
+        /// 홈 후보 지역 하나. `score`의 기본값 0은 지연을 그대로 비교한다는 뜻이다.
         public init(id: Int64, stunServers: [IPEndpoint], score: Double = 0) {
             self.id = id
             self.stunServers = stunServers
@@ -55,6 +57,7 @@ extension Magicsock {
         /// 주소의 출처.
         public var source: Source
 
+        /// 주소와 그 출처로 엔드포인트를 만든다.
         public init(address: IPEndpoint, source: Source) {
             self.address = address
             self.source = source

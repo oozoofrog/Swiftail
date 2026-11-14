@@ -36,7 +36,7 @@ extension PeerPathState {
     /// UDP로 온 Ping(노트 4.2 4.2). 출처를 후보로 넣고, Pong을 보내야 하면 true를 돌려준다.
     ///
     /// 같은 후보에서 직전과 같은 TxID가 오면 재전송으로 보고 false다. 후보 표가 가득 차 넣지 못해도 Pong은
-    /// 보낸다(Pong은 Ping보다 작아 증폭이 없고, 받은 Ping에 답하는 Go와 같다). 받을 수 없는 출처(IPv6, 포트 0)는
+    /// 보낸다(Ping은 공유 키 없이는 만들 수 없고 Pong은 Ping과 크기가 비슷해 증폭 수단이 되지 않는다. 받은 Ping에 답하는 Go와 같다). 받을 수 없는 출처(IPv6, 포트 0)는
     /// 답할 수도 없으므로 false다.
     mutating func receivePing(_ txID: TransactionID, from source: IPEndpoint, at now: ContinuousClock.Instant) -> Bool {
         guard let address = Self.candidateAddress(source) else { return false }

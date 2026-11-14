@@ -508,7 +508,9 @@ struct NetcheckTests {
     func keepsHomeUnderTenMilliseconds() {
         var harness = Harness()
         _ = harness.setRegions([Self.region(1), Self.region(2)])
+        // 유지의 기준은 측정해서 고른 홈이다. 지역 1만 답한 회차로 홈 1을 세운다.
         _ = harness.advance(toMs: 3000)
+        _ = harness.runRound(startMs: 10_000, latencies: [1: 29])
         #expect(!harness.runRound(startMs: 30_000, latencies: [1: 29, 2: 20]).contains(.homeRegionChanged(2)))
         #expect(harness.netcheck.homeRegion == 1)
     }
@@ -518,6 +520,7 @@ struct NetcheckTests {
         var harness = Harness()
         _ = harness.setRegions([Self.region(1), Self.region(2)])
         _ = harness.advance(toMs: 3000)
+        _ = harness.runRound(startMs: 10_000, latencies: [1: 100])
         // 100 ms 대 70 ms: 30 ms 차이지만 70 > 66.6이다.
         #expect(!harness.runRound(startMs: 30_000, latencies: [1: 100, 2: 70]).contains(.homeRegionChanged(2)))
         #expect(harness.netcheck.homeRegion == 1)
@@ -530,6 +533,7 @@ struct NetcheckTests {
         var harness = Harness()
         _ = harness.setRegions([Self.region(1), Self.region(2)])
         _ = harness.advance(toMs: 3000)
+        _ = harness.runRound(startMs: 10_000, latencies: [1: 30])
         // 옛 홈 30 ms, 새 후보 20 ms: 차이 10 ms(미만이 아님), 20 > 20(= 30/3×2)도 아니다.
         #expect(harness.runRound(startMs: 30_000, latencies: [1: 30, 2: 20]).contains(.homeRegionChanged(2)))
     }
@@ -588,7 +592,9 @@ struct NetcheckTests {
         func scenario(activityMsBeforeEnd: Int?) -> Int64 {
             var harness = Harness()
             _ = harness.setRegions([Self.region(1), Self.region(2)])
+            // 지역 1만 답한 회차로 홈 1을 세운다(유지의 기준은 측정해서 고른 홈이다).
             _ = harness.advance(toMs: 3000)
+            _ = harness.runRound(startMs: 10_000, latencies: [1: 20])
             // 이번 회차에서 지역 2만 20 ms에 답한다. 회차는 지역 1을 기다리다 3초에 끝난다.
             let endMs = 100_000 + 3000
             if let activityMsBeforeEnd {
@@ -615,6 +621,42 @@ struct NetcheckTests {
         #expect(harness.netcheck.derpActivity == [1: harness.at(5)])
         _ = harness.setRegions([Self.region(2)], atMs: 10)
         #expect(harness.netcheck.derpActivity.isEmpty)
+    }
+
+    @Test("대체 홈은 유지의 기준이 아니다: 처음 측정한 회차는 차이가 작아도 가장 빠른 지역을 고른다")
+    func firstMeasuredRoundIgnoresFallbackHome() {
+        var harness = Harness()
+        #expect(harness.setRegions([Self.region(1), Self.region(2)]).first == .homeRegionChanged(1))
+        // 측정 없이 끝난 회차도 기준을 만들지 않는다.
+        _ = harness.advance(toMs: 3000)
+        // 30 ms 대 25 ms: 차이 5 ms이고 25 > 20이라 유지 조건에 둘 다 걸리지만, 홈 1은 측정해서 고른 것이 아니다.
+        #expect(harness.runRound(startMs: 30_000, latencies: [1: 30, 2: 25]).contains(.homeRegionChanged(2)))
+        // 이제 2가 측정해서 고른 홈이므로 같은 차이에서는 유지된다.
+        #expect(!harness.runRound(startMs: 60_000, latencies: [1: 20, 2: 25]).contains(.homeRegionChanged(1)))
+        #expect(harness.netcheck.homeRegion == 2)
+    }
+
+    @Test("측정이 끊긴 회차 뒤에는 120초 안에 DERP 패킷을 받은 홈만 유지의 기준으로 남는다")
+    func measuredHomeSurvivesGapOnlyWithDERPActivity() {
+        func homeAfterGap(activityMsBeforeEnd: Int?) -> Int64 {
+            var harness = Harness()
+            _ = harness.setRegions([Self.region(1), Self.region(2)])
+            _ = harness.advance(toMs: 3000)
+            _ = harness.runRound(startMs: 10_000, latencies: [1: 30])
+            // 아무도 답하지 않는 회차. 3초 마감(203,000 ms)에 끝난다.
+            if let activityMsBeforeEnd {
+                harness.netcheck.noteDERPActivity(region: 1, at: harness.at(203_000 - activityMsBeforeEnd))
+            }
+            _ = harness.runRound(startMs: 200_000, latencies: [:])
+            #expect(harness.netcheck.homeRegion == 1)
+            // 차이 5 ms: 기준이 남았으면 1을 유지하고, 사라졌으면 2로 옮긴다.
+            _ = harness.runRound(startMs: 400_000, latencies: [1: 30, 2: 25])
+            return harness.netcheck.homeRegion
+        }
+        #expect(homeAfterGap(activityMsBeforeEnd: nil) == 2)
+        #expect(homeAfterGap(activityMsBeforeEnd: 119_999) == 1)
+        // 정확히 120초 전은 "안"이 아니다(`>`).
+        #expect(homeAfterGap(activityMsBeforeEnd: 120_000) == 2)
     }
 
     @Test("측정이 하나도 없으면 옛 홈을 유지한다")

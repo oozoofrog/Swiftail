@@ -49,6 +49,8 @@ struct Netcheck: Sendable {
     static let homeAbsoluteDifference = Duration.milliseconds(10)
     /// 이 안에 DERP 패킷을 받은 지역은 STUN 응답이 없어도 닿는다고 본다(`netcheck.go:1396` `PreferredDERPFrameTime`).
     static let homeFrameRecency = Duration.seconds(8)
+    /// 측정이 없는 회차 뒤에도 측정해서 고른 홈을 기준으로 남기는 DERP 활동의 나이(Go `PreferredDERPKeepAliveTimeout`, 2 × 60초).
+    static let homeKeepAliveTimeout = Duration.seconds(120)
 
     // MARK: 입력
 
@@ -76,6 +78,8 @@ struct Netcheck: Sendable {
 
     /// 지금 홈 지역. 0이면 아직 없다.
     var homeRegion: Int64 = 0
+    /// 마지막 회차가 측정해서 고른 홈(Go의 앞 보고서 `PreferredDERP`). 대체 홈이거나 측정이 끊겼으면 0. 홈 유지 조건의 기준이다.
+    var measuredHome: Int64 = 0
     /// 마지막으로 정한 자기 엔드포인트 목록. 첫 회차가 끝나기 전에는 비어 있다.
     var endpoints: [Magicsock.Endpoint] = []
     /// 마지막으로 회차를 끝낸 시각. CallMeMaybe의 27초 신선도(노트 4.8 4.1)를 판단하는 데 쓴다.
@@ -111,6 +115,9 @@ struct Netcheck: Sendable {
         guard let fallback = unique.map(\.id).min() else { return [] }
 
         var actions: [Action] = []
+        if !unique.contains(where: { $0.id == measuredHome }) {
+            measuredHome = 0
+        }
         if homeRegion == 0 || !unique.contains(where: { $0.id == homeRegion }) {
             homeRegion = fallback
             actions.append(.homeRegionChanged(fallback))

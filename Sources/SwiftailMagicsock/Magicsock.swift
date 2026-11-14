@@ -32,7 +32,7 @@ public struct Magicsock: Sendable {
         case endpointsChanged([Endpoint])
         /// 홈 DERP 지역이 바뀌었다. `NetInfo.preferredDERP`로 올리고 그 지역에 연결한다.
         case homeRegionChanged(Int64)
-        /// 피어의 경로가 바뀌었다. nil은 그 피어가 빠졌다는 뜻이다.
+        /// 피어의 경로가 바뀌었다. nil은 그 피어가 빠졌거나 유휴라는 뜻이다(동작 G3).
         case pathChanged(NodePublicKey, PeerPath?)
         /// 버린 것. 진단과 시험용이다.
         case dropped(Drop)
