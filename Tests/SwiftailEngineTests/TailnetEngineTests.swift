@@ -8,7 +8,7 @@ import Testing
 
 import SwiftailBase
 import SwiftailControl
-import SwiftailEngine
+@testable import SwiftailEngine
 import SwiftailWireGuard
 
 /// 메모리에서 이어진 엔진 둘.
@@ -225,11 +225,18 @@ struct TailnetEngineTests {
         #expect(delivery.drops[.alice] == [.wireGuard(.disallowedSource)])
     }
 
-    @Test("TSMP는 엔진이 소비하고 위로 올리지 않는다")
+    @Test("TSMP는 엔진이 소비하고 위로 올리지 않는다: 장치에서 온 것은 보내는 쪽이, 피어가 보낸 것은 받는 쪽이")
     func tsmpIsConsumed() throws {
         var pair = try EnginePair()
         let tsmp = TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 99, transport: Array("p12345678".utf8))
-        let delivery = pair.send(tsmp, from: .bob)
+        // 장치에서 읽은 TSMP는 WireGuard로 가지 않는다(계약 동작 L4).
+        #expect(pair.bob.send(tsmp, at: clockStart) == [.dropped(.consumedControlPacket)])
+
+        // 다른 구현의 피어가 보낸 TSMP는 장치를 거쳐 직접 만든다. 세션을 세운 뒤 transport로 보낸다.
+        _ = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
+        let datagrams = pair.bob.route(try pair.bob.device.send(tsmp, to: PublicKey(pair.publicKey(.alice)), at: clockStart))
+        #expect(!datagrams.isEmpty)
+        let delivery = pair.deliver(datagrams, from: .bob)
         #expect(delivery.packets[.alice] == nil)
         #expect(delivery.drops[.alice] == [.consumedControlPacket])
     }
