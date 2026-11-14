@@ -17,7 +17,7 @@ M4의 목표는 **직접 연결**이다. Go 피어와 루프백·LAN에서 직�
 
 `SwiftailMagicsock`은 `SwiftailControl`·`SwiftailDERP`·`SwiftailWireGuard`·`SwiftailEngine`에 의존하지 않는다. netmap·DERPMap(tailcfg)에서 필요한 값(피어의 disco 키·엔드포인트·홈 지역, 지역별 STUN 주소)은 노드가 뽑아 넘긴다. `SwiftailDERP`가 `DERPServer`를 받는 것과 같은 방식이다.
 
-`docs/plan.md` 5절의 의존 그림은 `SwiftailEngine`이 `SwiftailMagicsock`에 기대는 모양이지만, 이 계약은 노드가 둘을 잇는다(아래 총괄 확인 필요 Q1). 모듈 표의 "UDP 소켓과 재결속"은 소켓 감싸개가 `SwiftailIO`로, 재결속이 M5로 간다.
+`docs/plan.md` 5절의 의존 그림은 `SwiftailEngine`이 `SwiftailMagicsock`에 기대는 모양이지만, 이 계약은 노드가 둘을 잇는다(아래 총괄 확정 Q1). 모듈 표의 "UDP 소켓과 재결속"은 소켓 감싸개가 `SwiftailIO`로, 재결속이 M5로 간다.
 
 ## 구조
 
@@ -431,7 +431,9 @@ package enum LocalInterfaceAddresses {
 | 직접 경로 차단 시험 수단 | 둘 다: Swift 쪽 소켓 경계의 거르개 + 도구의 Go 노브 | 아래 "M4 관문" 3·4 |
 | 경로 조회 API | Go `curAddr`과 같은 뜻(`PeerPath`) | Go 쪽 `peerStatus`와 같은 기준으로 관문을 판정할 수 있다 |
 
-### 총괄 확인 필요
+### 총괄 확정 (2026-11-15)
+
+세 결정 모두 권고대로 정했다: Q1 (가), Q2 (가), Q3 (나). 아래 표는 선택지와 근거의 기록이다.
 
 | # | 결정 | 선택지 | 권고 |
 | --- | --- | --- | --- |

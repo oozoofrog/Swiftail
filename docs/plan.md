@@ -90,6 +90,8 @@ SwiftailCrypto ◄─ SwiftailWireGuard ◄─┐
        ▲◄──────── SwiftailMagicsock ◄─┘
 ```
 
+M4에서 정한 것: `SwiftailEngine`은 `SwiftailMagicsock`에 의존하지 않는다. 엔진은 "이 피어에게 보낼 데이터그램"만 내고, 노드(`Swiftail`)가 엔진과 `Magicsock`을 잇는다(`docs/contracts/SwiftailMagicsock.md`).
+
 `SwiftailBase`(IP 주소·접두·키 같은 공용 값 타입)는 모든 타깃이 쓴다. `SwiftailIO`(소켓 감싸기 등)는 소켓을 여는 타깃(`SwiftailControl`, `SwiftailDERP`, `Swiftail`)이 쓴다.
 
 ### 코드 기준
