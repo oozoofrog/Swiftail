@@ -1,0 +1,161 @@
+import CryptoKit
+import Foundation
+import SwiftailBase
+import SwiftailControl
+import SwiftailWireGuard
+
+/// 한 노드의 데이터면: netmap, WireGuard, 패킷 필터를 묶은 상태 기계.
+///
+/// 입출력이 없다. 소켓·시계·actor를 갖지 않고, 시각을 인자로 받아 "DERP로 보낼 데이터그램"과
+/// "위로 올릴 IP 패킷"을 돌려준다. 모든 진입점은 던지지 않는다. 버린 것은 `.dropped`로 알린다.
+///
+/// M3은 DERP 중계만 쓴다. 피어에게 보내는 메시지는 그 피어의 홈 DERP 지역으로 나가고, 그 지역이 우리 홈
+/// 지역이 아니면 보낼 길이 없다. 지원하지 않는 패킷과 피어는 닫힌 쪽으로 처리한다.
+///
+/// 이 파일은 상태와 netmap 적용, 타이머를 담는다. 패킷의 송수신은 `TailnetEngine+Packets.swift`에 있다.
+/// `docs/protocol-notes/netmap-engine.md` 4.2·6.1, `docs/contracts/SwiftailEngine.md` 동작 3·7.
+public struct TailnetEngine: Sendable {
+    /// 상태 기계가 내놓는 일.
+    public enum Output: Sendable, Equatable {
+        /// DERP로 보낼 WireGuard 메시지.
+        case datagram([UInt8], to: NodePublicKey, derpRegion: Int64)
+        /// 필터를 통과해 위로 올릴 IP 패킷.
+        case ipPacket([UInt8])
+        /// 버린 패킷. 진단과 시험용이다.
+        case dropped(Drop)
+    }
+
+    /// 버린 까닭.
+    public enum Drop: Sendable, Equatable {
+        /// 받은 패킷을 필터가 버렸다.
+        case inbound(PacketFilter.DropReason)
+        /// IP 패킷으로 해석할 수 없다.
+        case malformedPacket
+        /// 조각, IPv6 확장 헤더.
+        case unsupportedPacket
+        /// TSMP. 엔진이 소비하고 위로 올리지 않는다.
+        case consumedControlPacket
+        /// 목적지 주소를 가진 피어가 없다.
+        case noPeerForDestination
+        /// 피어의 홈 DERP를 모르거나 우리 홈 지역이 아니다.
+        case noRouteToPeer
+        /// M3은 disco를 처리하지 않는다.
+        case discoMessage
+        /// WireGuard가 받거나 보내지 못했다.
+        case wireGuard(WireGuardError)
+    }
+
+    /// 키 만료를 다시 볼 때까지의 최대 간격. 아주 먼 만료 시각을 단조 시각으로 바꾸다 넘치지 않게 한다.
+    private static let maximumExpiryCheckInterval = Duration.seconds(24 * 60 * 60)
+
+    /// node 개인 키와 WireGuard 세션을 쥔다. `customMirror`가 감춘다.
+    var device: WireGuardDevice
+    var filter = PacketFilter.allowNone
+    /// 데이터면에 올린 피어. 키 → 피어.
+    var peers: [NodePublicKey: EnginePeer] = [:]
+    /// 피어의 한 주소짜리 `addresses` → 그 피어. 보낼 피어를 고른다.
+    var peerByAddress: [IPAddress: NodePublicKey] = [:]
+    /// 우리 홈 DERP 지역. 0이면 아직 모른다.
+    var homeDERP: Int64 = 0
+    /// 마지막으로 적용한 netmap. 키 만료 시각에 피어를 다시 계산할 때 쓴다.
+    private var netmap: Netmap?
+    /// 다음으로 키가 만료되는 피어가 생기는 시각.
+    private var peerExpiryDeadline: ContinuousClock.Instant?
+    /// 단조 시각을 벽시계로 바꾸는 기준점: `clockAnchor` 시점의 벽시계는 `wallClockAnchor`다.
+    private var clockAnchor: ContinuousClock.Instant
+    private var wallClockAnchor: Date
+
+    /// - Parameters:
+    ///   - nodeKey: 이 노드의 node 개인 키. WireGuard 정적 키다.
+    ///   - now: 지금의 단조 시각.
+    ///   - wallClock: `now` 시점의 벽시계 시각.
+    public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, now: ContinuousClock.Instant, wallClock: Date) {
+        device = WireGuardDevice(privateKey: nodeKey, now: now, wallClock: wallClock)
+        clockAnchor = now
+        wallClockAnchor = wallClock
+    }
+
+    /// netmap을 적용한다: 피어를 더하고 빼고, 필터를 바꾼다. 나가야 할 것이 있으면 돌려준다.
+    ///
+    /// 올릴 수 있는 피어는 모두 미리 WireGuard에 올린다(Go의 지연 생성은 하지 않는다). 사라졌거나 올릴 수
+    /// 없게 된 키는 내린다. 같은 키의 AllowedIPs가 바뀌어도 세션은 이어진다. 필터는 규칙만 바꾸고 UDP 흐름
+    /// 기록은 잇는다. 피어를 더하고 빼는 일은 메시지를 만들지 않으므로 지금은 늘 빈 목록이다.
+    ///
+    /// - Parameters:
+    ///   - homeDERP: 우리 홈 DERP 지역. 이 지역에 있는 피어에게만 보낸다.
+    ///   - wallClock: `now` 시점의 벽시계 시각. 피어 키 만료를 이것으로 판단한다.
+    public mutating func apply(_ netmap: Netmap, homeDERP: Int64, at now: ContinuousClock.Instant, wallClock: Date) -> [Output] {
+        clockAnchor = now
+        wallClockAnchor = wallClock
+        self.netmap = netmap
+        self.homeDERP = homeDERP
+        let localAddresses = netmap.selfNode.addresses.filter(EnginePeer.isSingleAddress).map(\.address)
+        filter.replaceRules(netmap.packetFilter, localAddresses: localAddresses)
+        configurePeers(at: now)
+        return []
+    }
+
+    /// now까지 기한이 지난 타이머를 처리한다(WireGuard 타이머, 피어 키 만료).
+    public mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
+        if let deadline = peerExpiryDeadline, deadline <= now {
+            configurePeers(at: now)
+        }
+        return route(device.advance(to: now))
+    }
+
+    /// 다음에 advance를 불러야 하는 시각.
+    public var nextDeadline: ContinuousClock.Instant? {
+        [device.nextDeadline, peerExpiryDeadline].compactMap { $0 }.min()
+    }
+
+    // MARK: - 피어 동기화
+
+    /// 마지막 netmap에서 now 시점의 피어를 계산해 WireGuard와 송신 색인을 맞춘다.
+    private mutating func configurePeers(at now: ContinuousClock.Instant) {
+        guard let netmap else { return }
+        let wallNow = wallClock(at: now)
+
+        var current: [NodePublicKey: EnginePeer] = [:]
+        var addressIndex: [IPAddress: NodePublicKey] = [:]
+        // 같은 키나 같은 주소를 여러 노드가 내세우면 node ID가 작은 쪽을 쓴다.
+        for (node, peer) in EnginePeer.eligibleNodes(in: netmap, at: wallNow) where current[peer.key] == nil {
+            current[peer.key] = peer
+            for prefix in node.addresses where EnginePeer.isSingleAddress(prefix) && addressIndex[prefix.address] == nil {
+                addressIndex[prefix.address] = peer.key
+            }
+        }
+
+        for key in peers.keys where current[key] == nil {
+            device.removePeer(PublicKey(key))
+        }
+        for peer in current.values {
+            device.addPeer(PublicKey(peer.key), allowedIPs: peer.allowedIPs)
+        }
+        peers = current
+        peerByAddress = addressIndex
+        peerExpiryDeadline = nextExpiry(in: netmap, after: wallNow).map { now + $0 }
+    }
+
+    /// wallNow 뒤에 오는 가장 이른 키 만료까지의 시간. 하루보다 멀면 하루 뒤에 다시 본다.
+    private func nextExpiry(in netmap: Netmap, after wallNow: Date) -> Duration? {
+        let upcoming = netmap.peers.compactMap(\.keyExpiry).filter { $0 > wallNow }.min()
+        return upcoming.map { min(.seconds($0.timeIntervalSince(wallNow)), Self.maximumExpiryCheckInterval) }
+    }
+
+    /// 단조 시각 now의 벽시계 시각.
+    private func wallClock(at now: ContinuousClock.Instant) -> Date {
+        let elapsed = (now - clockAnchor).components
+        return wallClockAnchor.addingTimeInterval(Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18)
+    }
+}
+
+extension TailnetEngine: CustomReflectable {
+    /// node 개인 키와 WireGuard 세션 키가 `dump`·디버거에 나오지 않도록 자식을 감추고 공개된 값만 보인다.
+    public var customMirror: Mirror {
+        Mirror(
+            self,
+            children: ["publicKey": NodePublicKey(device.publicKey), "homeDERP": homeDERP, "peerCount": peers.count],
+            displayStyle: .struct
+        )
+    }
+}
