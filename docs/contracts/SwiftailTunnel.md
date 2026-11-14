@@ -346,6 +346,8 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
 
 ## 총괄 확인 필요
 
+총괄 판단(2026-11-15, 첫 사용처의 검토 전): T1~T6은 아래 권고대로 간다. 다만 T1(사건 모양)과 T3(`setDefaultInterface`의 인자)는 첫 사용처의 호출 지점과 맞아야 하므로 검토 의견을 받은 뒤 확정한다. T7(실기기 시험 앱)은 권고와 달리 첫 사용처 쪽과 협의해 정한다: 실기기 확인과 서명은 첫 사용처 세션이 맡기로 되어 있다.
+
 | # | 무엇 | 선택지 | 권고 |
 | --- | --- | --- | --- |
 | T1 | `NodeEvent`의 모양 | (가) `loginRequired`·`running(addresses:)`·`reconnecting`을 없애고 `stateChanged(NodeState)`로 바꾼다. 주소는 `status`로 읽는다 / (나) 기존 셋을 두고 `stateChanged`를 더한다 | (가). 같은 사실을 두 길로 알리지 않는다. Go 상태에 `reconnecting`에 해당하는 값이 없고 첫 사용처도 쓰지 않는다. 대가: M3·M4 관문 시험(`Tests/SwiftailInteropTests`)의 사건 기다림을 고친다(구현 단위 M5-8이 함께 한다) |
