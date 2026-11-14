@@ -149,7 +149,7 @@ public struct MapSession: Sendable {
 ```
 
 - 증분 적용은 노트 4.3절의 알고리즘과 순서를 따른다: `Peers`(전체 교체), `PeersChanged`, `PeersRemoved`, `PeersChangedPatch`, `PeerSeenChange`, `OnlineChange`, `DERPMap`(부분 유지 규칙), `DNSConfig`, `PacketFilter`·`PacketFilters`(이름 붙은 증분, 빈 배열은 "모두 차단"), `UserProfiles`, `Domain`, `TKAInfo`, `ControlTime`.
-- 한도(프레임): 64MiB(Go의 256MiB보다 낮춘다. 확장의 메모리 한도 때문이다), JSON 중첩 깊이 64, 값(배열 원소 + 객체 멤버) 1,000,000개. 깊이와 값 수는 `JSONDecoder`에 넘기기 전에 바이트를 훑어 센다. 넘으면 `malformed`. 0 바이트가 든 페이로드도 `malformed`다(UTF-16·UTF-32로 쓴 JSON을 걸러 UTF-8만 해독기에 넘긴다).
+- 한도(프레임): 8MiB(Go는 256MiB다. iOS 확장의 메모리 한도 때문에 낮춘다. 한도를 채운 정상 자료의 해독 최고치가 프레임 크기의 약 1.7배로 재어져, 8MiB면 약 14MB다. 큰 tailnet의 실제 맵 크기는 재지 못했다), JSON 중첩 깊이 64, 값(배열 원소 + 객체 멤버) 1,000,000개. 깊이와 값 수는 `JSONDecoder`에 넘기기 전에 바이트를 훑어 센다. 넘으면 `malformed`. 0 바이트가 든 페이로드도 `malformed`다(UTF-16·UTF-32로 쓴 JSON을 걸러 UTF-8만 해독기에 넘긴다).
 - 한도(세션): 피어 20,000, 사용자 프로필 40,000, 이름 붙은 필터 256개, 필터 규칙 합 50,000. 넘으면 `stateTooLarge`. Go처럼 프로필은 세션 동안 지우지 않는다.
 - 실패한 프레이머와 세션은 받아 둔 바이트·상태를 버리고 같은 오류만 반복한다.
 - 상태 필드가 없는 응답(KeepAlive, 서버 시각·핑만 있는 것)은 netmap을 다시 만들지 않는다.
@@ -239,6 +239,9 @@ public actor ControlClient {
 
     /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도). 연결을 새로 맺으므로 `disconnected`가 먼저 나간다.
     public func startInteractiveLogin()
+
+    /// 연결을 내보낼 인터페이스를 바꾼다(nil이면 묶지 않는다). 지금 연결을 끊고 물러남 없이 다시 잇는다.
+    public func setNetworkInterface(_ interface: NWInterface?)
 }
 ```
 
@@ -264,6 +267,12 @@ public actor ControlClient {
 6. **Hostinfo**: 노트 3.3절의 최소 필드. OS 이름과 버전, 호스트 이름, 앱 버전 자리에는 Swiftail임을 드러내는 값을 넣는다(공식 클라이언트로 가장하지 않는다).
 7. **신원 파일**: 디렉터리 안의 파일 하나(JSON, 키는 `privkey:` + 16진). 원자적으로 쓰고 소유자만 읽게(0600) 한다. 키를 로그·오류·description에 넣지 않는다.
 8. **비밀의 출력**: `NodeIdentity`와 `Configuration`은 `CustomStringConvertible`·`CustomReflectable`을 채택해 `print`·`dump`에 개인 키와 인증 키를 드러내지 않는다(공개 키와 "가림" 표시만).
+9. **인터페이스 묶기**(M5, `SwiftailTunnel` 계약 동작 N): `setNetworkInterface(_:)`로 받은 인터페이스로만 업그레이드 연결을 내보낸다(Network 프레임워크의 `requiredInterface`). 목적지가 루프백 주소나 `localhost`면 묶지 않는다.
+   - 부를 때마다 지금 연결을 끊고 물러남 없이 다시 잇는다. 연결 중이든 맵을 받는 중이든 물러나는 대기 중이든 같다. 같은 인터페이스를 다시 알려도 다시 잇는다(같은 Wi-Fi에서 주소만 바뀌면 옛 연결은 죽어 있다. 다시 이을지는 부르는 쪽이 정한다). 연달아 부르면 가장 나중 값으로 한 번 다시 잇는다.
+   - 등록 상태와 마지막 netmap은 유지되고, 끊긴 연결은 `disconnected`로 나온다. 물러나기 횟수는 0으로 되돌린다(옛 망의 실패가 새 망의 첫 시도를 늦추지 않게 한다).
+   - `run()` 전에 부르면 값만 기억해 첫 연결에 쓴다.
+   - `shortcut:` `/key` 조회는 URLSession이라 묶지 않는다. 터널이 잡는 경로는 tailnet 주소와 서비스 IP뿐이라 물리 인터페이스로 나간다고 본다. 실기기에서 터널로 들어가는 것이 보이면 `NetworkSocket` 위의 HTTP/1.1로 바꾼다.
+   - `shortcut:` 망이 내려간 것(만족된 경로 없음)은 따로 다루지 않는다. 연결 오류와 물러나기로 처리된다.
 
 구조: 연결 하나(소켓, `ControlSession`, `HTTP2ClientConnection`, 읽기 루프)를 감싼 internal 타입을 두고, 그 위에 "요청 하나를 보내 응답을 받는다"와 "응답 본문을 흘려 받는다" 두 가지를 얹는다. 등록·맵·상태 올리기는 그 둘로 쓴다. 구조적 동시성을 쓴다(분리된 Task를 흩뿌리지 않는다. 취소는 `run()`을 부른 Task의 취소로 전파된다).
 
