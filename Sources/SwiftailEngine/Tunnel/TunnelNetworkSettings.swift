@@ -22,6 +22,7 @@ public struct TunnelNetworkSettings: Sendable, Equatable {
     public var dnsServers: [IPAddress]
     /// 끝 점 없는 소문자 이름. `dnsServers`가 비어 있지 않으면 이것도 비어 있지 않다.
     public var dnsMatchDomains: [String]
+    /// 장치의 MTU. 산출에 넘긴 값 그대로이고, 앱은 이 값을 터널 설정에 그대로 적용한다.
     public var mtu: Int
 
     /// netmap에서 설정을 산출한다(계약 동작 S). 자기 주소가 없으면 nil.

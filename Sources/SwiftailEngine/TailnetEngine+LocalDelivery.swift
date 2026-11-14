@@ -14,7 +14,7 @@ extension TailnetEngine {
     ///
     /// 순서는 서비스 IP → TSMP → 자기 주소다. Go도 TSMP를 자기 주소 확인보다 먼저 버린다(계약은 자기 주소를 먼저
     /// 적었지만 자기 주소로 가는 TSMP는 되돌리지 않는다).
-    mutating func deliverLocally(_ packet: IPPacket, at now: ContinuousClock.Instant) -> Output? {
+    func deliverLocally(_ packet: IPPacket, at now: ContinuousClock.Instant) -> Output? {
         if ServiceIP.contains(packet.destination) {
             return answerServiceIP(packet, at: now)
         }

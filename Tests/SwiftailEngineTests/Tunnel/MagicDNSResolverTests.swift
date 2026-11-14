@@ -225,6 +225,15 @@ struct MagicDNSResolverTests {
         #expect(response.authority?.name == "tail0001.ts.net.")
     }
 
+    /// 고치기 전에는 빈 이름의 노드가 색인에 들어가 `.`의 A 질의에 그 노드의 주소가 답으로 나왔다.
+    @Test("이름이 빈 노드는 색인에 없다: 루트 이름의 질의는 영역 밖이라 SERVFAIL이다")
+    func namelessNodeIsNotIndexed() throws {
+        let peer = Self.node(id: 3, name: "", addresses: ["100.64.0.3/32"])
+        let response = try ask(Self.resolver(try Self.netmap(peers: [peer])), ".", type: 1)
+        #expect(response.responseCode == 2)
+        #expect(response.answer == nil)
+    }
+
     @Test("A가 없는 노드의 A는 NOERROR 빈 답 + SOA")
     func missingFamilyGetsNoData() throws {
         let peer = Self.node(id: 3, name: "rd-tv-11223344.tail0001.ts.net.", addresses: ["fd7a:115c:a1e0::3/128"])

@@ -65,7 +65,8 @@ extension MagicDNSResolver {
     ///
     /// 노드마다 두 키가 있다: 끝 점을 뗀 소문자 `Name`, 그리고 그것이 MagicDNS 접미사로 끝나면 접미사를 뗀 짧은 이름.
     /// `Proxied`(MagicDNS)가 꺼져 있으면 점 없는 이름은 찾지 않는다. 같은 키를 가진 노드가 여럿이면 Go 색인처럼
-    /// 피어 목록의 뒤쪽이 이긴다.
+    /// 피어 목록의 뒤쪽이 이긴다. `Name`이 빈 노드는 색인에 없다(Go `addNodeNameLocked`). 넣으면 루트 이름 `.`의
+    /// 질의가 그 노드의 주소로 답해진다.
     private func node(named name: DNSMessage.Name, in netmap: Netmap) -> Node? {
         guard netmap.dnsConfig?.proxied == true || name.labels.count > 1 else { return nil }
         let dot = UInt8(ascii: ".")
@@ -74,6 +75,7 @@ extension MagicDNSResolver {
         // 짧은 이름 키가 `key`인 노드는 정식 키가 `key.접미사`인 노드다.
         let qualifiedKey = suffix.isEmpty ? nil : key + [dot] + suffix
         let matches = { (node: Node) -> Bool in
+            guard !node.name.isEmpty else { return false }
             let canonical = Self.canonicalKey(of: node.name)
             if canonical.elementsEqual(key) { return true }
             guard let qualifiedKey else { return false }
