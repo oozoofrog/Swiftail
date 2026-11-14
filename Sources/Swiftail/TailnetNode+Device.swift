@@ -10,6 +10,8 @@ import SwiftailIO
 /// ```
 ///
 /// 메모리 장치는 `send`가 utun 읽기 자리에, `inboundPackets`가 utun 쓰기 자리에 들어간다. 그 사이의 처리는 같다.
+/// `.inProcess` 장치는 TCP 스택이 장치다: 스택의 출력이 utun 읽기 자리에, 스택의 입력이 utun 쓰기 자리에 들어간다
+/// (`TailnetNode+Netstack.swift`).
 extension TailnetNode {
     /// 장치에서 읽은 IP 패킷 하나를 엔진에 넣는다. 등록 전이면 버린다.
     func deliverFromDevice(_ ipPacket: [UInt8]) {
@@ -19,10 +21,12 @@ extension TailnetNode {
 
     /// 엔진이 장치로 쓰라고 낸 IP 패킷 하나를 쓴다. 기다리지 않고 큐도 없다. utun 쓰기 실패(`EAGAIN`, `ENOBUFS`,
     /// `EMSGSIZE` 등)는 그 패킷을 버리고 계속한다(동작 U5. IP는 원래 그렇다).
-    func deliverToDevice(_ ipPacket: [UInt8]) {
+    func deliverToDevice(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) {
         switch device {
         case .memory:
             inboundContinuation.yield(ipPacket)
+        case .inProcess:
+            deliverToNetstack(ipPacket, at: now)
         case .utun:
             do {
                 try tunnel?.write(ipPacket)

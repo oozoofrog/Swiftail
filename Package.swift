@@ -61,7 +61,7 @@ let package = Package(
             dependencies: ["SwiftailNetstack", "SwiftailBase"],
             resources: [.copy("Fixtures")]
         ),
-        .target(name: "Swiftail", dependencies: ["SwiftailBase", "SwiftailEngine", "SwiftailControl", "SwiftailDERP", "SwiftailIO", "SwiftailMagicsock"]),
+        .target(name: "Swiftail", dependencies: ["SwiftailBase", "SwiftailEngine", "SwiftailControl", "SwiftailDERP", "SwiftailIO", "SwiftailMagicsock", "SwiftailNetstack"]),
         .testTarget(name: "SwiftailTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailDERP", "SwiftailMagicsock"]),
         .testTarget(name: "SwiftailInteropTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailMagicsock"]),
     ],

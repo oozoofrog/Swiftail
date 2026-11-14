@@ -65,6 +65,8 @@ public enum TunnelDevice: Sendable {
     case utun(fileDescriptor: Int32, mtu: Int = 1280)
     /// 메모리 장치. `TailnetNode.send(_:)`로 넣고 `inboundPackets`로 받는다. 시험과 관문용이며 utun과 같은 처리를 거친다.
     case memory(mtu: Int = 1280)
+    /// (M6) 프로세스 안의 TCP 스택. `TailnetNode.listen(port:)`·`connect(to:port:)`는 이 장치에서만 쓴다. MTU는 1280 고정.
+    case inProcess
 }
 
 /// 노드의 상태. Go `ipn.State`에서 앱이 쓰는 것만 남겼다(DNS 노트 4.5).
@@ -198,7 +200,7 @@ public struct TunnelNetworkSettings: Sendable, Equatable {
 - `TunnelNetworkSettings`의 값은 문자열이 아니라 `IPPrefix`·`IPAddress`다(검증된 값을 넘긴다). 앱은 `description`으로 CIDR 문자열을 얻는다.
 - `setDefaultInterface`가 이름 대신 `NWInterface`를 받는다(총괄 확인 필요 T3).
 - `init`이 던진다(총괄 확인 필요 T4).
-- `TunnelDevice.inProcess`(M6)는 M6에서 더한다.
+- `TunnelDevice.inProcess`(M6, `docs/contracts/SwiftailNetstack.md` 동작 N 1): 노드는 utun도 메모리 흐름도 쓰지 않는다. 엔진이 장치로 쓰라고 낸 패킷(동작 L의 되돌린 패킷 포함)은 스택이 받고, 스택이 낸 패킷이 엔진의 보내기를 거친다. 이 장치에서 `inboundPackets`는 아무것도 내지 않고 `send(_:)`는 버린다. `networkSettings`는 다른 장치와 같이 나온다(앱은 읽지 않아도 된다). MTU는 1280 고정이고 인자가 없다.
 
 ## 동작
 
