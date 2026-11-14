@@ -1,0 +1,90 @@
+// 호출 대상: tailscale.com v1.104.6 ipn/ipnlocal/local.go·node_backend.go (BSD-3-Clause).
+// 실제 LocalBackend.authReconfigLocked가 Engine.Reconfig에 넘긴 설정을 받는다.
+package ipnlocal
+
+import (
+	"errors"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/dns"
+	"tailscale.com/tsd"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/persist"
+	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/wgcfg"
+)
+
+type swiftailCaptureEngine struct {
+	wgengine.Engine
+	dns    *dns.Config
+	router *router.Config
+}
+
+func (e *swiftailCaptureEngine) Reconfig(_ *wgcfg.Config, r *router.Config, d *dns.Config) error {
+	e.dns, e.router = d, r
+	return nil
+}
+
+// SwiftailFixtureBackend은 제어 연결 없이 고정 netmap만 받는 시험 노드다.
+type SwiftailFixtureBackend struct {
+	b   *LocalBackend
+	e   *swiftailCaptureEngine
+	sys *tsd.System
+}
+
+// NewSwiftailFixtureBackend는 upstream LocalBackend 시험과 같은 메모리 store·fake TUN을 쓴다.
+func NewSwiftailFixtureBackend() (*SwiftailFixtureBackend, error) {
+	sys := tsd.NewSystem()
+	sys.Set(new(mem.Store))
+	engine, err := wgengine.NewFakeUserspaceEngine(logger.Discard, sys.Set, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get())
+	if err != nil {
+		sys.Bus.Get().Close()
+		return nil, err
+	}
+	e := &swiftailCaptureEngine{Engine: engine}
+	sys.Set(e)
+	dialer := sys.Dialer.Get()
+	b, err := NewLocalBackend(logger.Discard, logid.PublicID{}, sys, 0)
+	if err != nil {
+		engine.Close()
+		dialer.Close()
+		sys.Bus.Get().Close()
+		return nil, err
+	}
+	b.goos = "ios"
+	return &SwiftailFixtureBackend{b, e, sys}, nil
+}
+
+// Capture는 DNS 산출·라우터 산출 로직을 복제하지 않고 실제 재설정을 실행한다.
+func (f *SwiftailFixtureBackend) Capture(nm *netmap.NetworkMap, expired bool) (*dns.Config, *router.Config, error) {
+	b := f.b
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p := ipn.NewPrefs()
+	p.WantRunning = true
+	p.CorpDNS = true
+	p.RouteAll = false
+	p.Persist = new(persist.Persist)
+	if err := b.pm.setPrefsNoPermCheck(p.View()); err != nil {
+		return nil, nil, err
+	}
+	b.currentNode().SetNetMap(nm)
+	b.keyExpired = expired
+	f.sys.ControlKnobs().UpdateFromNodeAttributes(nm.SelfNode.CapMap().AsMap())
+	f.e.dns = nil
+	f.e.router = nil
+	b.authReconfigLocked()
+	if f.e.dns == nil || f.e.router == nil {
+		return nil, nil, errors.New("엔진에 설정이 전달되지 않았습니다")
+	}
+	return f.e.dns, f.e.router, nil
+}
+
+// Close는 노드와 시험용 자원을 모두 닫는다.
+func (f *SwiftailFixtureBackend) Close() {
+	f.b.Shutdown()
+	f.sys.Bus.Get().Close()
+}
