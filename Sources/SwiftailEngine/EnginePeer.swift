@@ -67,10 +67,13 @@ public struct EnginePeer: Sendable, Equatable {
         return expiry <= now
     }
 
-    /// M3이 지원하지 않는 피어: WireGuard 전용, jailed, masquerade 주소가 있는 피어.
+    /// M3이 지원하지 않는 피어: WireGuard 전용, jailed, masquerade 주소가 있는 피어, 그리고 tailnet lock의
+    /// 서명이 없어 PeerAPI만 허용되는 피어(`UnsignedPeerAPIOnly`). 마지막 것은 Go가 필터의 패킷 규칙과
+    /// 겹치면 규칙 전체를 비우는 안전장치를 두는 피어다(노트 4.5의 4). 여기서는 아예 올리지 않는다.
     private static func isSupported(_ node: Node) -> Bool {
         !node.isWireGuardOnly
             && !node.isJailed
+            && !node.unsignedPeerAPIOnly
             && node.selfNodeV4MasqAddrForThisPeer == nil
             && node.selfNodeV6MasqAddrForThisPeer == nil
     }

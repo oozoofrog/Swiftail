@@ -81,8 +81,9 @@ struct EnginePeerTests {
         #expect(peers.first?.allowedIPs == ["100.64.0.9/32", "10.1.2.3/32", "fd7a:115c:a1e0::9/128"].compactMap(IPPrefix.init))
     }
 
-    @Test("지원하지 않는 피어(WireGuard 전용, jailed, masquerade)는 올리지 않는다")
+    @Test("지원하지 않는 피어(WireGuard 전용, jailed, masquerade, 서명 없는 피어)는 올리지 않는다")
     func unsupportedPeers() throws {
+        #expect(try peers(Self.reachable + #","UnsignedPeerAPIOnly":true"#).isEmpty)
         #expect(try peers(Self.reachable + #","IsWireGuardOnly":true"#).isEmpty)
         #expect(try peers(Self.reachable + #","IsJailed":true"#).isEmpty)
         #expect(try peers(Self.reachable + #","SelfNodeV4MasqAddrForThisPeer":"100.64.9.9""#).isEmpty)
