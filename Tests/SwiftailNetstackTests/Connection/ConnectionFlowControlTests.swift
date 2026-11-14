@@ -110,6 +110,90 @@ struct ConnectionFlowControlTests {
         #expect(segment.acknowledgmentNumber == peer.peerNext)
     }
 
+    /// 읽지 않은 `unread`바이트를 받아 둔 연결(창 확장 shift 3). 광고한 남은 창은 256KiB − `unread`다.
+    private static func peer(holding unread: Int) throws -> ManualPeer {
+        var peer = try ManualPeer.established(windowScale: 7)
+        for _ in 0..<(unread / 1_024) {
+            peer.send(flags: [.ack], payload: patternBytes(count: 1_024))
+        }
+        _ = peer.advance(by: .milliseconds(40))
+        return peer
+    }
+
+    @Test("창 갱신: 광고한 남은 창이 버퍼의 절반보다 크면 읽어도 순수 ACK를 내지 않는다(경계 바로 위)")
+    func noWindowUpdateWhileRemainingWindowAboveHalf() throws {
+        // 127KiB를 쥐면 남은 창은 129KiB(> 128KiB)다.
+        var peer = try Self.peer(holding: 127 * 1_024)
+        #expect(peer.connection.advertisedWindowEnd.distance(from: peer.connection.receiveNext) == 129 * 1_024)
+        let (bytes, outputs) = peer.connection.read(upTo: 64 * 1_024, at: peer.now)
+        #expect(bytes.count == 64 * 1_024)
+        #expect(outputs.segments.isEmpty)
+        // 새 창은 다음 데이터의 ACK가 싣는다(2×MSS가 쌓이면 곧바로).
+        peer.send(flags: [.ack], payload: patternBytes(count: 1_240))
+        let acknowledgment = peer.send(flags: [.ack], payload: patternBytes(count: 1_240)).segments
+        #expect(acknowledgment.count == 1)
+        #expect(acknowledgment.first?.acknowledgmentNumber == peer.peerNext)
+        // 쥔 것은 127KiB − 64KiB + 2,480바이트다. 남은 창은 그만큼 뺀 값을 shift 3으로 내린 것이다.
+        let held = 127 * 1_024 - 64 * 1_024 + 2_480
+        #expect(acknowledgment.first.map { Int($0.window) << 3 } == ((256 * 1_024 - held) >> 3) << 3)
+    }
+
+    @Test("창 갱신: 광고한 남은 창이 버퍼의 절반 이하면 문턱만큼 읽는 즉시 순수 ACK를 보낸다(경계 바로 아래)")
+    func windowUpdateWhenRemainingWindowAtMostHalf() throws {
+        // 129KiB를 쥐면 남은 창은 127KiB(=< 128KiB)다.
+        var peer = try Self.peer(holding: 129 * 1_024)
+        let (small, quiet) = peer.connection.read(upTo: 1_000, at: peer.now)
+        #expect(small.count == 1_000)
+        // 1,000바이트는 SWS 회피의 문턱(MSS 1,240) 아래다.
+        #expect(quiet.segments.isEmpty)
+        let (more, update) = peer.connection.read(upTo: 1_000, at: peer.now)
+        #expect(more.count == 1_000)
+        let segment = try #require(update.segments.first)
+        #expect(segment.payload.isEmpty)
+        #expect(segment.acknowledgmentNumber == peer.peerNext)
+        #expect(Int(segment.window) << 3 == ((256 * 1_024 - (129 * 1_024 - 2_000)) >> 3) << 3)
+    }
+
+    @Test("빈 곳이 있는 동안은 읽어도 창의 오른쪽 끝을 옮기지 않아 중복 ACK의 창이 같다. 메워지면 옮긴다")
+    func windowEdgeHeldWhileReceiveGap() throws {
+        // 129KiB를 쥐어 남은 창을 절반 아래로 둔다(읽으면 곧바로 창 갱신을 보낼 상태).
+        var peer = try Self.peer(holding: 129 * 1_024)
+        let base = peer.peerNext
+        let ahead = peer.segment(sequence: base.advanced(by: 1_240), flags: [.ack], payload: patternBytes(count: 1_240))
+        let first = try #require(peer.connection.receive(ahead, at: peer.now).segments.first)
+        let (bytes, quiet) = peer.connection.read(upTo: 64 * 1_024, at: peer.now)
+        #expect(bytes.count == 64 * 1_024)
+        #expect(quiet.segments.isEmpty)
+        let again = peer.segment(sequence: base.advanced(by: 2_480), flags: [.ack], payload: patternBytes(count: 1_240))
+        let second = try #require(peer.connection.receive(again, at: peer.now).segments.first)
+        #expect(second.acknowledgmentNumber == base)
+        #expect(second.window == first.window)
+        // 빈 곳을 메우는 ACK는 읽어서 열린 창을 싣는다.
+        let fill = peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 1_240))
+        let filled = try #require(peer.connection.receive(fill, at: peer.now).segments.first)
+        #expect(filled.acknowledgmentNumber == base.advanced(by: 3 * 1_240))
+        #expect(Int(filled.window) << 3 > Int(first.window) << 3)
+    }
+
+    @Test("창 갱신: 응용이 조금씩 읽어도 큰 전송이 멈추지 않는다")
+    func smallReadsDoNotStallTransfer() throws {
+        var pair = try ConnectionPair.established()
+        let data = patternBytes(count: 2 * 1_024 * 1_024)
+        let start = pair.now
+        var offset = pair.write(data, from: .client)
+        var received: [UInt8] = []
+        while received.count < data.count {
+            received += pair.read(.server, upTo: 1_000)
+            if offset < data.count { offset += pair.write(Array(data[offset...]), from: .client) }
+            try pair.run(for: .milliseconds(1))
+            try #require(pair.now - start < .seconds(10), "전송이 멈췄다: \(received.count)바이트")
+        }
+        #expect(received == data)
+        // 1ms마다 1,000바이트를 읽으므로 2MiB는 약 2.1초다. 창이 닫혀 탐침·override를 기다렸다면 더 걸린다.
+        #expect(pair.now - start < .milliseconds(2_300))
+        #expect(!pair.clientSent.contains { $0.segment.payload == [0] })
+    }
+
     @Test("창 갱신: 오래된 ACK와 앞선 SEQ(WL1)의 세그먼트는 창을 바꾸지 않는다")
     func windowUpdateRules() throws {
         var peer = try ManualPeer.established(ackWindow: 10_000)

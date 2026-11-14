@@ -17,9 +17,9 @@ import SwiftailNetstack
 /// 스택은 노드 actor의 저장 프로퍼티인 값이고, 스택·엔진·`Magicsock` 사이의 주고받기는 한 번의 actor 실행 안에서 `await`
 /// 없이 끝난다. 그래서 노드와 스택 사이에 버퍼·버림·둘째 타이머가 없다(구조 3).
 ///
-/// 사건 하나에서 비롯된 일은 재귀가 아니라 대기열(`Netstack.inbox`)로 돈다(동작 N4): 스택의 출력을 처리하다 엔진이 되돌린
-/// 패킷(자기 주소로 건 연결)은 대기열에 쌓이고, 가장 바깥의 처리가 출력을 낸 순서대로 다 처리한 뒤 차례로 스택에 넣는다.
-/// 대기열이 비면 같은 시각으로 `advance(to:)`를 불러 미뤄 둔 ACK를 낸다.
+/// 사건 하나에서 비롯된 일은 재귀가 아니라 대기열(`Netstack.inbox`)로 돈다(동작 N4): 엔진이 장치로 낸 패킷(피어가 보낸 것,
+/// 자기 주소로 건 연결에서 되돌린 것)은 대기열에 쌓이고, 노드의 가장 바깥 처리가 닫힐 때 차례로 스택에 넣는다
+/// (`settleNetstack(at:)`). 대기열이 비면 같은 시각으로 `advance(to:)`를 불러 미뤄 둔 ACK를 낸다.
 ///
 /// 기다리는 호출은 `suspend(until:)`로 멈추고 스택의 사건이 깨운다. 깨우는 통로는 값을 나르지 않는다: 깨어난 호출이 상태를
 /// 다시 보고 무엇을 할지 정한다. 그래서 취소와 깨우기가 겹쳐도 데이터나 연결을 잃지 않는다.
@@ -91,22 +91,29 @@ extension TailnetNode {
 
     // MARK: 출력 처리 (동작 N2~N5)
 
-    /// 엔진이 장치로 쓰라고 낸 패킷 하나를 스택에 넣는다(동작 N2). TCP가 아닌 것은 스택이 버린다.
-    func deliverToNetstack(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) {
+    /// 엔진이 장치로 쓰라고 낸 패킷 하나를 스택의 대기열에 넣는다(동작 N2). 노드의 처리 안에서만 불리고, 가장 바깥 처리가
+    /// 닫힐 때 스택에 들어간다. TCP가 아닌 것은 스택이 버린다.
+    func deliverToNetstack(_ ipPacket: [UInt8]) {
         guard netstack != nil, inProcessLoss?.dropsNext() != true else { return }
         netstack?.inbox.append(ipPacket)
-        process([TCPStack.Output](), at: now)
+        netstack?.needsSettling = true
     }
 
-    /// 스택의 출력을 낸 순서대로 처리한다. 스택을 바꾼 모든 호출 뒤에 부른다.
-    ///
-    /// 가장 바깥의 호출이면 그동안 쌓인 대기열을 스택에 넣고, 대기열이 빈 뒤 같은 시각으로 `advance(to:)`를 불러 미뤄 둔
-    /// ACK를 낸다. 그 ACK가 되돌아와 대기열이 다시 차면 되풀이한다(버퍼가 묶으므로 끝난다). 안쪽 호출이면 출력만 처리한다.
+    /// 스택의 출력을 낸 순서대로 처리한다. 스택을 바꾼 모든 호출 뒤에 부른다. 대기열과 미뤄 둔 ACK는 가장 바깥 처리가
+    /// 닫힐 때 마무리한다.
     func process(_ outputs: [TCPStack.Output], at now: ContinuousClock.Instant) {
-        guard let isProcessing = netstack?.isProcessing else { return }
-        netstack?.isProcessing = true
+        guard netstack != nil else { return }
+        beginProcessing()
+        netstack?.needsSettling = true
         handle(outputs, at: now)
-        guard !isProcessing else { return }
+        endProcessing(at: now)
+    }
+
+    /// 이번 처리에서 스택을 움직였으면 대기열의 패킷을 차례로 스택에 넣고, 대기열이 빈 뒤 같은 시각으로 `advance(to:)`를 불러
+    /// 기한이 된 ACK를 낸다. 그 출력이 되돌아와(자기 주소로 건 연결) 대기열이 다시 차면 되풀이한다(버퍼가 묶으므로 끝난다).
+    /// 노드의 가장 바깥 처리가 닫힐 때(`endProcessing(at:)`) 부른다. 받은 UDP 묶음 전체가 한 번의 `advance`로 끝난다.
+    func settleNetstack(at now: ContinuousClock.Instant) {
+        guard netstack?.needsSettling == true else { return }
         repeat {
             while let batch = netstack?.inbox, !batch.isEmpty {
                 netstack?.inbox = []
@@ -116,8 +123,7 @@ extension TailnetNode {
             }
             handle(netstack?.stack.advance(to: now) ?? [], at: now)
         } while netstack?.inbox.isEmpty == false
-        netstack?.isProcessing = false
-        rearmTimer()
+        netstack?.needsSettling = false
     }
 
     private func handle(_ outputs: [TCPStack.Output], at now: ContinuousClock.Instant) {
@@ -257,8 +263,8 @@ struct Netstack: Sendable {
     var connections: [TCPStack.ConnectionID: ConnectionRecord] = [:]
     /// 엔진이 장치로 낸 뒤 아직 스택에 넣지 않은 패킷(동작 N4).
     var inbox: [[UInt8]] = []
-    /// 스택의 출력을 처리하는 중이다. 그동안 온 패킷은 `inbox`에 쌓고 가장 바깥의 처리가 넣는다.
-    var isProcessing = false
+    /// 이번 처리에서 스택을 움직였거나 대기열에 패킷이 들어왔다. 가장 바깥 처리가 닫힐 때 대기열을 넣고 `advance`한다.
+    var needsSettling = false
     /// 상한에 닿아 버린 SYN 수(로그용).
     var limitDropCount = 0
 }

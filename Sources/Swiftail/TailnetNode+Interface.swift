@@ -112,11 +112,18 @@ extension TailnetNode {
         }
     }
 
+    /// 데이터그램이 오면 그동안 소켓에 쌓인 것까지 묶음 하나로 처리한다. 묶음 전체가 처리 하나라서, 스택의 대기열과
+    /// `advance`, 타이머 다시 걸기가 묶음 끝에 한 번 일어난다(netstack 계약 동작 N4). 묶음은 소켓의 받은 큐의 한도(256개)를
+    /// 넘지 않으므로 actor를 오래 잡지 않는다.
     private func receiveUDP(from socket: DatagramSocket) async {
-        for await (bytes, source) in socket.datagrams {
-            guard !blockedUDPPorts.contains(source.port) else { continue }
+        for await datagram in socket.datagrams {
             let now = ContinuousClock.now
-            process(magicsock?.receiveUDP(bytes, from: source, at: now) ?? [], at: now)
+            beginProcessing()
+            receiveUDP(datagram, at: now)
+            for queued in socket.takeQueuedDatagrams() {
+                receiveUDP(queued, at: now)
+            }
+            endProcessing(at: now)
         }
         // 닫지도 취소하지도 않았는데 흐름이 끝났다면 소켓의 읽기가 오류로 멈춘 것이다. 그대로 두면 보내기만 하고 받지
         // 못하는 소켓이 남으므로 새로 연다.
@@ -124,6 +131,11 @@ extension TailnetNode {
             Self.log.error("UDP 수신이 멈춤: 소켓을 다시 연다")
             rebindContinuation.yield()
         }
+    }
+
+    private func receiveUDP(_ datagram: DatagramSocket.Datagram, at now: ContinuousClock.Instant) {
+        guard !blockedUDPPorts.contains(datagram.source.port) else { return }
+        process(magicsock?.receiveUDP(datagram.bytes, from: datagram.source, at: now) ?? [], at: now)
     }
 
     /// 재결속 요청마다 소켓을 지금 인터페이스로 다시 연다(3). 겹친 요청은 하나로 합쳐지고, 기다리는 동안 인터페이스가 또

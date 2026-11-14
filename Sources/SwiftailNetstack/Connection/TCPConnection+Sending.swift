@@ -28,6 +28,7 @@ extension TCPConnection {
                 length = min(length, Int(sendNext.distance(from: transmitNext)))
             }
             let windowRoom = max(0, Int(sendWindowEnd.distance(from: transmitNext)))
+            if !isRetransmission, length > 0, hasReceiveGap { break }
             if !isRetransmission, length > 0 {
                 // 보내는 쪽 SWS 회피(계약 동작 F7): min(D, U) >= MSS, D <= U, min(D, U) >= Max(SND.WND)/2, 또는 override.
                 let pending = unsentDataCount
@@ -74,6 +75,18 @@ extension TCPConnection {
             override = false
         }
         updateTransmissionTimers(at: now, blockedBySillyWindow: blockedBySillyWindow)
+    }
+
+    /// 받는 버퍼에 빈 곳이 있다(RCV.NXT 너머에 먼저 온 데이터가 있다). 그동안은 새 데이터를 보내지 않고(재전송은 보낸다.
+    /// 계약 동작 F5), 광고하는 창의 오른쪽 끝을 옮기지 않는다(계약 동작 F3, `advertisedWindowField()`).
+    ///
+    /// 빈 곳이 있는 동안 이 쪽의 ACK는 상대의 손실 회복 신호다: 중복 ACK(RFC 5681 3.2)와 fast recovery의 partial ACK
+    /// (RFC 6582 3.2). 둘 다 데이터가 없는 ACK여야 한다(RFC 5681 2 (b)). gVisor는 SACK이 없으면 데이터가 실린 세그먼트를 받을
+    /// 때 중복 ACK 수를 0으로 되돌리고, 데이터가 실린 partial ACK로는 다음 빈 곳을 다시 보내지 않는다(`snd.go`의
+    /// `checkDuplicateAck`·`isDupAck`, `reno_recovery.go`의 `DoRecovery`). 양방향으로 보내는 중에 ACK가 데이터에 실리면 상대는
+    /// 손실마다 RTO를 기다린다(관문 (가) 손실 1%에서 관찰). 상대가 빈 곳을 메우는 동안(보통 왕복 몇 번)만 이 쪽 송신을 멈춘다.
+    var hasReceiveGap: Bool {
+        receiveBuffer.outOfOrderRangeCount > 0
     }
 
     /// `transmitNext`부터 아직 보내지 않은(또는 go-back-N으로 다시 보낼) 데이터 바이트 수.
@@ -193,11 +206,14 @@ extension TCPConnection {
     /// 받는 쪽 SWS 회피(RFC 9293 3.8.6.2.2, 계약 동작 F3): 버퍼가 허락하는 오른쪽 끝이 광고한 끝보다
     /// `min(버퍼/2, Eff.snd.MSS)` 이상 멀어졌을 때만 광고한 끝을 옮긴다. 옮긴 끝은 shift로 내림한 값이고, 줄이지 않는다
     /// (SHLD-14). 내림 탓에 필드가 가리키는 끝이 전보다 앞이어도 전에 광고한 끝까지는 받는다(RFC 7323 2.4).
+    ///
+    /// 받는 버퍼에 빈 곳이 있는 동안은 옮기지 않는다. 그동안의 중복 ACK는 창이 같아야 상대가 중복으로 센다(RFC 5681 2 (e).
+    /// gVisor의 `isDupAck`도 본다). 빈 곳은 광고한 창 안이므로 상대는 그 사이에도 다시 보낼 수 있다.
     mutating func advertisedWindowField() -> UInt16 {
         let receiveNext = self.receiveNext
         let candidateEnd = receiveBuffer.windowEnd
         let threshold = min(receiveBuffer.capacity / 2, sendMaximumSegmentSize)
-        if Int(candidateEnd.distance(from: advertisedWindowEnd)) >= threshold {
+        if !hasReceiveGap, Int(candidateEnd.distance(from: advertisedWindowEnd)) >= threshold {
             let span = max(0, Int(candidateEnd.distance(from: receiveNext)))
             let field = min(Int(UInt16.max), span >> receiveWindowShift)
             let quantizedEnd = receiveNext.advanced(by: UInt32(field << receiveWindowShift))
@@ -209,8 +225,15 @@ extension TCPConnection {
         return UInt16(min(Int(UInt16.max), span >> receiveWindowShift))
     }
 
-    /// 응용이 읽어 광고한 끝을 SWS 회피의 문턱 이상 옮길 수 있게 됐다(창 갱신 ACK를 보낼 때다. 계약 동작 F3).
+    /// 응용이 읽은 뒤 순수 창 갱신 ACK를 곧바로 보낼 때다(계약 동작 F3): 마지막으로 광고한 남은 창(광고한 오른쪽 끝 − RCV.NXT)이
+    /// 받는 버퍼의 절반 이하이고, 광고한 끝을 SWS 회피의 문턱(`min(버퍼/2, MSS)`) 이상 옮길 수 있다.
+    ///
+    /// 남은 창이 절반보다 크면 상대는 아직 보낼 자리가 넉넉하다. 그때 새 창은 데이터에 대한 ACK(2×MSS 또는 40ms)와 나가는
+    /// 데이터에 실린다. 그래서 응용이 조금씩 읽을 때마다 순수 ACK가 나가지 않는다. 창이 0이거나 작으면 남은 창이 절반 이하이므로
+    /// 읽어서 문턱만큼 열리는 즉시 알린다(멈춤이 없다).
     var windowUpdateIsDue: Bool {
+        let remaining = Int(advertisedWindowEnd.distance(from: receiveNext))
+        guard !hasReceiveGap, remaining <= receiveBuffer.capacity / 2 else { return false }
         let threshold = min(receiveBuffer.capacity / 2, sendMaximumSegmentSize)
         return Int(receiveBuffer.windowEnd.distance(from: advertisedWindowEnd)) >= threshold
     }

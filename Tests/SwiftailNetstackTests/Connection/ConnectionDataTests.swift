@@ -60,19 +60,63 @@ struct ConnectionDataTests {
         #expect(filledACK.first?.acknowledgmentNumber == base.advanced(by: 150))
     }
 
-    @Test("묶음 안의 세그먼트들에는 ACK를 하나만 낸다(MUST-58·59)")
-    func acknowledgmentsAreCoalesced() throws {
+    @Test("묶음 안의 어긋난 세그먼트마다 receive가 ACK를 하나씩 낸다(RFC 5681 4.2)")
+    func outOfOrderAcknowledgmentsPerSegment() throws {
         var peer = try ManualPeer.established()
         let base = peer.peerNext
-        var outputs: [TCPConnection.Output] = []
         for index in 0..<3 {
             let segment = peer.segment(
                 sequence: base.advanced(by: UInt32(200 + index * 100)), flags: [.ack], payload: patternBytes(count: 50))
-            outputs += peer.connection.receive(segment, at: peer.now)
+            let acknowledgments = peer.connection.receive(segment, at: peer.now).segments
+            #expect(acknowledgments.count == 1)
+            #expect(acknowledgments.first?.acknowledgmentNumber == base)
         }
-        #expect(outputs.segments.isEmpty)
-        let acknowledgments = peer.connection.advance(to: peer.now).segments
-        #expect(acknowledgments.count == 1)
+        // 상대는 중복 ACK 셋을 받아 fast retransmit을 한다. 묶음 끝의 advance에는 남은 ACK가 없다.
+        #expect(peer.connection.advance(to: peer.now).segments.isEmpty)
+        let fill = peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 200))
+        let filled = peer.connection.receive(fill, at: peer.now).segments
+        #expect(filled.count == 1)
+        #expect(filled.first?.acknowledgmentNumber == base.advanced(by: 250))
+    }
+
+    @Test("묶음 안의 순서대로 온 데이터는 2×MSS마다 ACK 하나로 합쳐지고 나머지는 40ms 뒤에(MUST-58·59)")
+    func inOrderAcknowledgmentsCoalescePerTwoSegments() throws {
+        var peer = try ManualPeer.established()
+        let base = peer.peerNext
+        var acknowledged: [SequenceNumber] = []
+        for index in 0..<5 {
+            let segment = peer.segment(
+                sequence: base.advanced(by: UInt32(index * 1_240)), flags: [.ack], payload: patternBytes(count: 1_240))
+            acknowledged += peer.connection.receive(segment, at: peer.now).segments.map(\.acknowledgmentNumber)
+        }
+        #expect(acknowledged == [base.advanced(by: 2 * 1_240), base.advanced(by: 4 * 1_240)])
+        #expect(peer.connection.advance(to: peer.now).segments.isEmpty)
+        let delayed = peer.connection.advance(to: peer.now + .milliseconds(40)).segments
+        #expect(delayed.map(\.acknowledgmentNumber) == [base.advanced(by: 5 * 1_240)])
+    }
+
+    @Test("받는 쪽에 빈 곳이 있는 동안은 새 데이터를 싣지 않아 중복 ACK와 partial ACK가 순수 ACK로 나간다")
+    func holdsNewDataWhileReceiveGap() throws {
+        var peer = try ManualPeer.established()
+        let base = peer.peerNext
+        let ahead = peer.segment(sequence: base.advanced(by: 100), flags: [.ack], payload: patternBytes(count: 50))
+        let duplicate = peer.connection.receive(ahead, at: peer.now).segments
+        #expect(duplicate.map(\.payload.count) == [0])
+        let (accepted, written) = peer.connection.write(patternBytes(count: 500)[...], at: peer.now)
+        #expect(accepted == 500)
+        #expect(written.segments.isEmpty)
+
+        // 빈 곳의 앞부분만 메운다(상대의 fast recovery에서는 partial ACK가 된다).
+        let partial = peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 40))
+        let partialACK = peer.connection.receive(partial, at: peer.now).segments
+        #expect(partialACK.map(\.payload.count) == [0])
+        #expect(partialACK.first?.acknowledgmentNumber == base.advanced(by: 40))
+
+        // 빈 곳이 다 메워지면 기다리던 데이터가 ACK를 싣고 나간다.
+        let fill = peer.segment(sequence: base.advanced(by: 40), flags: [.ack], payload: patternBytes(count: 60))
+        let resumed = peer.connection.receive(fill, at: peer.now).segments
+        #expect(resumed.map(\.payload.count) == [500])
+        #expect(resumed.first?.acknowledgmentNumber == base.advanced(by: 150))
     }
 
     @Test("나가는 데이터가 있으면 ACK는 거기에 실린다")
@@ -98,7 +142,8 @@ struct ConnectionDataTests {
             return true
         }
         let sentAt = pair.now
-        let data = patternBytes(count: 5 * 1_240)
+        // 뒤따르는 세그먼트는 둘이라 중복 ACK가 둘뿐이다(셋이면 fast retransmit이 RTO보다 먼저 다시 보낸다).
+        let data = patternBytes(count: 3 * 1_240)
         _ = pair.write(data, from: .client)
         try pair.deliver()
         #expect(pair.server.readableByteCount == 0)

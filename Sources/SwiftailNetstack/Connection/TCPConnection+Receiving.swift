@@ -4,7 +4,9 @@
 extension TCPConnection {
     /// 상대가 보낸 세그먼트 하나를 처리한다. 4-튜플이 이 연결의 것인지는 스택이 이미 보았다.
     ///
-    /// 순수 ACK는 내지 않고 기한으로 둔다(타입 문서 참고). 그 밖의 출력(데이터 세그먼트, RST, 사건)은 곧바로 나온다.
+    /// 곧바로 보낼 ACK(순서가 어긋난 데이터, 빈 곳을 메운 데이터, 2×MSS가 쌓인 데이터, FIN, 창 밖 세그먼트 등)는 이 세그먼트의
+    /// 출력으로 나온다. 그래서 묶음으로 받아도 세그먼트마다 ACK가 하나씩 나간다(RFC 5681 4.2의 immediate ACK. 상대의 fast
+    /// retransmit이 중복 ACK 셋을 센다). 미룰 수 있는 ACK(순서대로 온 데이터가 2×MSS 미만)만 40ms 기한으로 둔다(타입 문서).
     /// 어떤 세그먼트를 넣어도 죽지 않는다(계약 동작 X1).
     package mutating func receive(_ segment: TCPSegment, at now: ContinuousClock.Instant) -> [Output] {
         var outputs: [Output] = []
@@ -19,6 +21,8 @@ extension TCPConnection {
             refreshKeepalive(at: now)
         }
         transmit(at: now, into: &outputs)
+        // 나가는 데이터가 있었으면 ACK는 거기에 실려 기한이 지워졌다. 남은 "지금" 기한의 ACK를 여기서 낸다.
+        flushAcknowledgment(at: now, into: &outputs)
         return outputs
     }
 

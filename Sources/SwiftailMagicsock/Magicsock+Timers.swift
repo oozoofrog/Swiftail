@@ -28,10 +28,14 @@ extension Magicsock {
 
     /// 다음에 `advance`를 불러야 하는 시각. 걸린 타이머가 없으면 nil.
     ///
-    /// 피어마다 경로 상태 기계의 기한과, 알린 경로가 유휴로 nil이 되는 시각(동작 G3)을 넣는다.
+    /// 피어마다 경로 상태 기계의 기한과, 알린 경로가 유휴로 nil이 되는 시각(동작 G3)을 넣는다. 노드가 처리마다 부르므로
+    /// 배열을 만들지 않는다.
     public var nextDeadline: ContinuousClock.Instant? {
-        let peerDeadlines = peers.values.flatMap { [$0.path.nextDeadline, Self.idleDeadline(of: $0)] }
-        return (peerDeadlines + [netcheck.nextDeadline]).compactMap { $0 }.min()
+        var earliest = netcheck.nextDeadline
+        for entry in peers.values {
+            earliest = earliest.earlier(entry.path.nextDeadline).earlier(Self.idleDeadline(of: entry))
+        }
+        return earliest
     }
 
     /// `setRegions(_:at:)`과 같다. 난수를 `generator`에서 뽑는다.
@@ -95,5 +99,14 @@ extension Magicsock {
             }
         }
         return outputs
+    }
+}
+
+extension Optional<ContinuousClock.Instant> {
+    /// 두 기한 가운데 이른 것. nil은 기한이 없다는 뜻이라 다른 쪽이 남는다. 기한 계산이 배열을 만들지 않게 쓴다.
+    func earlier(_ other: ContinuousClock.Instant?) -> ContinuousClock.Instant? {
+        guard let self else { return other }
+        guard let other else { return self }
+        return Swift.min(self, other)
     }
 }

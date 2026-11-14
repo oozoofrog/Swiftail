@@ -167,9 +167,11 @@ struct PeerPathState: Sendable {
     /// 신뢰는 `trustedUntil`과 같은 시각까지 남으므로 만료 기한은 그보다 1나노초 뒤다. 그 시각의 `advance` 뒤
     /// `path(at:)`가 `.relayed`로 바뀌어 `Magicsock`이 경로 사건을 낼 수 있다(계약 D7).
     var nextDeadline: ContinuousClock.Instant? {
-        let pingDeadlines = sentPings.values.map { $0.sentAt + Self.pingTimeout }
-        let trustExpiry = trustedUntil.map { $0 + .nanoseconds(1) }
-        return (pingDeadlines + [heartbeatDeadline, trustExpiry].compactMap { $0 }).min()
+        var earliest = heartbeatDeadline.earlier(trustedUntil.map { $0 + .nanoseconds(1) })
+        for ping in sentPings.values {
+            earliest = earliest.earlier(ping.sentAt + Self.pingTimeout)
+        }
+        return earliest
     }
 
     /// 피어의 지금 경로. Go `curAddr`와 같은 뜻이다(노트 7.1).

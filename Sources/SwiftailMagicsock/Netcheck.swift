@@ -191,13 +191,8 @@ struct Netcheck: Sendable {
 
     /// 다음에 `advance`를 불러야 하는 시각. 회차도 주기도 없으면 nil.
     var nextDeadline: ContinuousClock.Instant? {
-        var deadlines: [ContinuousClock.Instant] = []
-        if let round {
-            deadlines.append(round.start + Self.roundTimeout)
-            if let next = round.pending.first { deadlines.append(next.due) }
-        }
-        if let periodicAt { deadlines.append(periodicAt) }
-        return deadlines.min()
+        guard let round else { return periodicAt }
+        return periodicAt.earlier(round.start + Self.roundTimeout).earlier(round.pending.first?.due)
     }
 
     // MARK: 값 변환

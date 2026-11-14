@@ -21,12 +21,12 @@ extension TailnetNode {
 
     /// 엔진이 장치로 쓰라고 낸 IP 패킷 하나를 쓴다. 기다리지 않고 큐도 없다. utun 쓰기 실패(`EAGAIN`, `ENOBUFS`,
     /// `EMSGSIZE` 등)는 그 패킷을 버리고 계속한다(동작 U5. IP는 원래 그렇다).
-    func deliverToDevice(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) {
+    func deliverToDevice(_ ipPacket: [UInt8]) {
         switch device {
         case .memory:
             inboundContinuation.yield(ipPacket)
         case .inProcess:
-            deliverToNetstack(ipPacket, at: now)
+            deliverToNetstack(ipPacket)
         case .utun:
             do {
                 try tunnel?.write(ipPacket)

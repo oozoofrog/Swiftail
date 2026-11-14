@@ -8,7 +8,8 @@ extension TCPStack {
     /// 목적지 포트의 리스너 → 어디에도 없으면 RST로 답한다(S2). TIME-WAIT 기록이 리스너보다 앞이라, 기록이 있는 동안 같은
     /// 4-튜플의 SYN은 새 연결이 되지 않는다.
     ///
-    /// 연결이 내는 순수 ACK는 여기서 나오지 않는다. 묶음을 다 넣은 뒤 같은 시각으로 `advance(to:)`를 부른다.
+    /// 곧바로 보낼 순수 ACK는 이 패킷의 출력으로 나온다. 40ms 기한으로 미룬 ACK는 `advance(to:)`가 낸다. 묶음을 다 넣은 뒤
+    /// 같은 시각으로 `advance(to:)`를 부른다.
     package mutating func receive(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output] {
         let segment: TCPSegment
         do {

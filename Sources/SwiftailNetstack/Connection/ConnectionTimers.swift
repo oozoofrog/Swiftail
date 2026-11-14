@@ -18,7 +18,8 @@ struct ConnectionTimers: Sendable, Equatable {
         case sillyWindowOverride
         /// keep-alive(계약 동작 T8).
         case keepalive
-        /// 미뤄 둔 ACK(RFC 9293 3.8.6.3, 계약 동작 F5). "곧바로" 보낼 ACK도 기한을 지금으로 두어 여기서 나간다.
+        /// 미뤄 둔 ACK(RFC 9293 3.8.6.3, 계약 동작 F5). "곧바로" 보낼 ACK는 기한을 지금으로 두고, 그 기한을 둔 `receive`나
+        /// 응용 호출의 끝에서 나간다.
         case acknowledgment
     }
 

@@ -116,9 +116,11 @@ public struct TailnetEngine: Sendable {
         return route(device.advance(to: now))
     }
 
-    /// 다음에 advance를 불러야 하는 시각.
+    /// 다음에 advance를 불러야 하는 시각. 노드가 처리마다 부르므로 배열을 만들지 않는다.
     public var nextDeadline: ContinuousClock.Instant? {
-        [device.nextDeadline, keyExpiryDeadline].compactMap { $0 }.min()
+        guard let deviceDeadline = device.nextDeadline else { return keyExpiryDeadline }
+        guard let keyExpiryDeadline else { return deviceDeadline }
+        return min(deviceDeadline, keyExpiryDeadline)
     }
 
     // MARK: - 피어와 응답기 동기화

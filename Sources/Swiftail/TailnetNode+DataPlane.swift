@@ -17,8 +17,12 @@ import SwiftailMagicsock
 /// ```
 ///
 /// 사건 하나는 `process`로 시작해 두 상태 기계 사이의 주고받기를 `await` 없이 끝까지 돈다. 입출력은 기다리지 않는
-/// 통로(소켓 `send`, 지역 연결의 통로, 사건 흐름)에 넣기만 한다. 출력 목록은 받은 순서대로 처리한다(`Magicsock`의 호출 규칙).
+/// 통로(UDP 송신 묶음, 지역 연결의 통로, 사건 흐름)에 넣기만 한다. 출력 목록은 받은 순서대로 처리한다(`Magicsock`의 호출 규칙).
 /// 한 사건 안의 호출은 모두 같은 시각 `now`를 쓴다.
+///
+/// 처리는 겹쳐 열린다(`process` 안에서 다른 `process`를 부른다). 가장 바깥 처리가 닫힐 때 한 번만 마무리한다
+/// (`endProcessing(at:)`): 스택의 대기열과 미뤄 둔 ACK, 모은 UDP 데이터그램을 소켓에 넘기기, 타이머 다시 걸기. 여러 사건을
+/// 한 번에 처리하는 입구(UDP 묶음, 타이머)는 그 전체를 처리 하나로 연다.
 ///
 /// 계약 `docs/contracts/SwiftailEngine.md` "M4에서 바뀌는 것" N5·N6·N8, `docs/contracts/SwiftailTunnel.md` 동작 L·B.
 extension TailnetNode {
@@ -28,13 +32,15 @@ extension TailnetNode {
     ///
     /// - Parameter source: `engine.receive`의 출력이면 그 데이터그램이 온 길. `.cookieReply`를 이 길로 되돌린다.
     func process(_ outputs: [TailnetEngine.Output], repliesTo source: Magicsock.Source? = nil, at now: ContinuousClock.Instant) {
+        beginProcessing()
+        defer { endProcessing(at: now) }
         for output in outputs {
             switch output {
             case let .datagram(bytes, to: peer):
                 process(magicsock?.send(bytes, to: peer, at: now) ?? [], at: now)
             case let .ipPacket(bytes):
                 // 엔진은 로컬 응답, 자기 주소로 되돌린 패킷, 피어가 보낸 패킷을 모두 "장치로 쓸 것"으로 낸다.
-                deliverToDevice(bytes, at: now)
+                deliverToDevice(bytes)
             case let .cookieReply(bytes):
                 // 피어를 아직 모르므로 경로 선택(`magicsock.send`)을 거치지 않고 받은 길로 보낸다.
                 if let source {
@@ -44,11 +50,12 @@ extension TailnetNode {
                 break
             }
         }
-        rearmTimer()
     }
 
     /// `Magicsock`의 출력을 처리한다. `Magicsock`을 바꾼 모든 호출 뒤에 부른다.
     func process(_ outputs: [Magicsock.Output], at now: ContinuousClock.Instant) {
+        beginProcessing()
+        defer { endProcessing(at: now) }
         for output in outputs {
             switch output {
             case let .udp(bytes, to: destination):
@@ -74,28 +81,62 @@ extension TailnetNode {
                 break
             }
         }
+    }
+
+    // MARK: 처리의 시작과 끝
+
+    /// 처리를 하나 연다. 같은 수의 `endProcessing(at:)`과 짝을 이룬다.
+    func beginProcessing() {
+        processingDepth += 1
+    }
+
+    /// 처리를 닫는다. 가장 바깥 처리면 그동안 쌓인 일을 마무리한다.
+    ///
+    /// 1. 스택: 대기열의 패킷을 넣고 같은 시각으로 `advance(to:)`한다(`settleNetstack(at:)`). 그 출력의 처리는 안쪽 처리로 돈다.
+    /// 2. 모은 UDP 데이터그램을 소켓의 송신 큐에 한꺼번에 넘긴다.
+    /// 3. 타이머를 다시 건다. 기한은 모든 상태 기계를 바꾼 뒤 한 번만 계산한다.
+    func endProcessing(at now: ContinuousClock.Instant) {
+        guard processingDepth == 1 else {
+            processingDepth -= 1
+            return
+        }
+        settleNetstack(at: now)
+        processingDepth = 0
+        flushUDP()
         rearmTimer()
     }
 
     // MARK: UDP
 
-    /// 데이터그램 하나를 소켓으로 보낸다. 실패는 버린다(DERP로 함께 나가거나 WireGuard·disco가 다시 보낸다).
-    // shortcut: 송신 오류(`EHOSTUNREACH`·`EPERM` 등)에 따른 재결속은 하지 않는다(터널 계약 동작 N 6). 필요해지는 시점:
-    // 실기기 전환 시험에서 `setDefaultInterface` 없이 소켓이 죽을 때.
+    /// 데이터그램 하나를 이번 처리의 UDP 송신 묶음에 넣는다. 가장 바깥 처리가 닫힐 때 소켓으로 넘어간다(`flushUDP()`).
     private func sendUDP(_ bytes: [UInt8], to destination: IPEndpoint) {
         guard !blockedUDPPorts.contains(destination.port) else { return }
-        do {
-            try socket?.send(bytes, to: destination)
-        } catch {
-            return
-        }
+        outgoingUDP.append((bytes, destination))
+    }
+
+    /// 모은 데이터그램을 지금 소켓의 송신 큐에 한꺼번에 넘긴다. `sendto`는 소켓의 직렬 큐가 이 actor 밖에서 한다(터널 계약
+    /// 동작 M의 "UDP 송신 큐"). 소켓이 없으면(재결속 중) 버린다. 보내기 실패도 버린다(DERP로 함께 나가거나 WireGuard·disco가
+    /// 다시 보낸다). 처리 안에서는 기다리지 않으므로 묶음을 넘기는 사이에 소켓이 바뀌지 않는다.
+    // shortcut: 송신 오류(`EHOSTUNREACH`·`EPERM` 등)에 따른 재결속은 하지 않는다(터널 계약 동작 N 6). 필요해지는 시점:
+    // 실기기 전환 시험에서 `setDefaultInterface` 없이 소켓이 죽을 때.
+    private func flushUDP() {
+        guard !outgoingUDP.isEmpty else { return }
+        socket?.enqueue(outgoingUDP)
+        outgoingUDP.removeAll(keepingCapacity: true)
     }
 
     // MARK: 타이머
 
-    /// 엔진·`Magicsock`·스택의 다음 기한 가운데 이른 것(netstack 계약 동작 N6).
+    /// 엔진·`Magicsock`·스택의 다음 기한 가운데 이른 것(netstack 계약 동작 N6). 처리마다 부르므로 배열을 만들지 않는다.
     private var nextDeadline: ContinuousClock.Instant? {
-        [engine?.nextDeadline, magicsock?.nextDeadline, netstack?.stack.nextDeadline].compactMap { $0 }.min()
+        var earliest = engine?.nextDeadline
+        if let deadline = magicsock?.nextDeadline, earliest.map({ deadline < $0 }) ?? true {
+            earliest = deadline
+        }
+        if let deadline = netstack?.stack.nextDeadline, earliest.map({ deadline < $0 }) ?? true {
+            earliest = deadline
+        }
+        return earliest
     }
 
     /// 다음 기한에 깨어나 엔진·`Magicsock`·스택의 `advance`를 부른다. 기한이 앞당겨지면 다시 계산한다. 취소될 때까지 돈다.
@@ -120,9 +161,11 @@ extension TailnetNode {
             }
             // 일찍 깨어났어도 괜찮다. 기한 전의 advance는 아무것도 하지 않는다.
             let now = ContinuousClock.now
+            beginProcessing()
             process(engine?.advance(to: now) ?? [], at: now)
             process(magicsock?.advance(to: now) ?? [], at: now)
             process(netstack?.stack.advance(to: now) ?? [], at: now)
+            endProcessing(at: now)
         }
         timerChanged = nil
     }

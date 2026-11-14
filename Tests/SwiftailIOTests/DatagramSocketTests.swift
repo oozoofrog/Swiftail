@@ -280,6 +280,130 @@ struct DatagramSocketTests {
         #expect(try #require(numbers.first) > total - 256)
     }
 
+    // MARK: 송신 큐
+
+    @Test("enqueue한 데이터그램을 넣은 순서대로 보낸다")
+    func enqueueSendsInOrder() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        for start in stride(from: 0, to: 60, by: 20) {
+            sender.enqueue((start..<start + 20).map { ([UInt8($0)], Self.destination(receiver)) })
+        }
+        var numbers: [UInt8] = []
+        while numbers.count < 60, let datagram = await Self.next(from: receiver) {
+            numbers += datagram.bytes
+        }
+        #expect(numbers == (0..<60).map(UInt8.init))
+    }
+
+    @Test("송신 큐는 256개를 넘으면 오래된 것부터 버린다")
+    func sendQueueKeepsNewest256() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        let total = 1000
+        // 한 번에 넣으므로 보내기가 꺼내 가기 전에 한도가 적용된다.
+        sender.enqueue((0..<total).map { ([UInt8($0 >> 8), UInt8($0 & 0xff)], Self.destination(receiver)) })
+        var numbers: [Int] = []
+        while let datagram = await Self.next(from: receiver, within: .seconds(1)) {
+            numbers.append(Int(datagram.bytes[0]) << 8 | Int(datagram.bytes[1]))
+        }
+        #expect(!numbers.isEmpty)
+        #expect(numbers.count <= 256)
+        #expect(numbers == numbers.sorted())
+        #expect(try #require(numbers.first) >= total - 256)
+    }
+
+    @Test("송신 큐는 바이트 합 1MiB를 넘으면 오래된 것부터 버린다")
+    func sendQueueKeepsNewestWithinByteLimit() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        // 8,000바이트 × 200개 = 1.6MB. 개수 한도(256) 안이므로 바이트 한도가 앞의 것을 버린다: 1MiB에는 131개가 든다.
+        let total = 200
+        sender.enqueue((0..<total).map { number in
+            var payload = [UInt8](repeating: 0xab, count: 8000)
+            payload[0] = UInt8(number)
+            return (payload, Self.destination(receiver))
+        })
+        var numbers: [Int] = []
+        while let datagram = await Self.next(from: receiver, within: .seconds(1)) {
+            numbers.append(Int(datagram.bytes[0]))
+        }
+        // 커널이 일부를 버렸을 수 있으므로 버려야 할 것이 오지 않았는지만 본다.
+        #expect(!numbers.isEmpty)
+        #expect(numbers == numbers.sorted())
+        #expect(try #require(numbers.first) >= total - (1 << 20) / 8000)
+    }
+
+    @Test("닫은 뒤의 enqueue는 아무것도 보내지 않는다")
+    func enqueueAfterCloseSendsNothing() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        sender.close()
+        sender.enqueue([([1], Self.destination(receiver))])
+        #expect(await Self.next(from: receiver, within: .milliseconds(300)) == nil)
+    }
+
+    @Test("닫은 소켓의 송신 큐에 남은 것은 같은 번호를 받은 새 소켓으로 나가지 않는다")
+    func closedSendQueueDoesNotUseReusedDescriptor() async throws {
+        // 송신 큐를 채운 소켓을 곧바로 닫고 새 소켓을 연다(닫힌 번호를 받기 쉽다). 옛 소켓의 데이터그램이 오더라도
+        // 옛 소켓의 포트에서 와야 한다. 새 소켓의 포트에서 오면 닫힌 번호에 쓴 것이다.
+        let peer = try DatagramSocket()
+        for round in 0..<20 {
+            let old = try DatagramSocket()
+            let oldPort = old.localPort
+            old.enqueue((0..<200).map { _ in ([0xee, UInt8(round)], Self.destination(peer)) })
+            old.close()
+            let fresh = try DatagramSocket()
+            try fresh.send([0x55, UInt8(round)], to: Self.destination(peer))
+            while let datagram = await Self.next(from: peer, within: .seconds(2)) {
+                if datagram.bytes == [0x55, UInt8(round)] {
+                    #expect(datagram.source.port == fresh.localPort)
+                    break
+                }
+                #expect(datagram.bytes.first == 0xee)
+                #expect(datagram.source.port == oldPort)
+            }
+            fresh.close()
+            // 앞 회차의 늦게 도착한 것을 비운다.
+            while await Self.next(from: peer, within: .milliseconds(50)) != nil {}
+        }
+    }
+
+    @Test("closeAfterSending은 이미 넣은 것을 보낸 뒤 닫고 포트를 놓는다")
+    func closeAfterSendingFlushesQueue() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        let port = sender.localPort
+        sender.enqueue((0..<10).map { ([UInt8($0)], Self.destination(receiver)) })
+        sender.closeAfterSending()
+        var numbers: [UInt8] = []
+        while numbers.count < 10, let datagram = await Self.next(from: receiver) {
+            numbers += datagram.bytes
+        }
+        #expect(numbers == (0..<10).map(UInt8.init))
+        var rebound: DatagramSocket?
+        for _ in 0..<100 where rebound == nil {
+            rebound = try? DatagramSocket(port: port)
+            if rebound == nil { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        #expect(rebound != nil)
+    }
+
+    @Test("takeQueuedDatagrams는 쌓인 것을 순서대로 한꺼번에 꺼낸다")
+    func takeQueuedDatagramsDrainsInOrder() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        for number in 0..<30 {
+            try sender.send([UInt8(number)], to: Self.destination(receiver))
+        }
+        // 흐름에서 하나를 받은 뒤 나머지가 큐에 쌓일 때까지 기다렸다 꺼낸다.
+        let first = try #require(await Self.next(from: receiver))
+        try await Task.sleep(for: .milliseconds(200))
+        let rest = receiver.takeQueuedDatagrams()
+        #expect(first.bytes + rest.flatMap(\.bytes) == (0..<30).map(UInt8.init))
+        #expect(receiver.takeQueuedDatagrams().isEmpty)
+    }
+
     // MARK: 인터페이스 묶기
 
     @Test("루프백 인터페이스에 묶은 소켓 둘이 루프백에서 주고받는다")
