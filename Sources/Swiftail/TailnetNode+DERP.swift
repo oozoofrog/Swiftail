@@ -9,7 +9,7 @@ import SwiftailMagicsock
 ///   통로는 클라이언트가 돌기 전부터 받으므로 첫 데이터그램도 잃지 않는다.
 /// - **돌리기**(`maintainDERP`): 넘겨받은 연결마다 자식 묶음(`serve`) 하나를 띄운다. `run()`이 취소되면 모두 멈춘다.
 /// - **닫기**(`closeDERPLink`): 표에서 빼고 보낼 통로를 닫는다. 통로가 끝나면 그 연결의 묶음이 스스로 접힌다.
-///   DERPMap에서 지역이 사라지거나 node 키가 바뀌면 닫는다. 홈이 바뀌어도 옛 홈은 닫지 않는다(magicsock 계약 E6).
+///   DERPMap에서 지역이 사라지거나 서버 정의가 바뀌거나 node 키가 바뀌면 닫는다. 홈이 바뀌어도 옛 홈은 닫지 않는다(magicsock 계약 E6).
 ///
 /// 계약 `docs/contracts/SwiftailEngine.md` "M4에서 바뀌는 것" N3·N7.
 // shortcut: 홈이 아닌 연결의 60초 미사용 정리(DERP 노트 4.9 5)는 하지 않는다. 열린 연결 수는 DERPMap 지역 수로 묶인다.
@@ -24,6 +24,8 @@ extension TailnetNode {
         }
 
         let region: Int64
+        /// 이 연결을 만들 때의 서버 목록. DERPMap의 정의가 이것과 달라지면 연결을 닫는다.
+        let servers: [DERPServer]
         let client: DERPClient
         let outbound: AsyncStream<Datagram>
         let outboundContinuation: AsyncStream<Datagram>.Continuation
@@ -36,15 +38,14 @@ extension TailnetNode {
     @discardableResult
     func openDERPLink(to region: Int64) -> DERPLink? {
         if let link = derpLinks[region] { return link }
-        guard let nodeKey,
-              let servers = lastNetmap?.derpMap?.regions?[region]?.nodes.compactMap(DERPServer.init),
-              !servers.isEmpty
-        else { return nil }
+        let servers = DERPServer.servers(of: lastNetmap?.derpMap?.regions?[region])
+        guard let nodeKey, !servers.isEmpty else { return nil }
         let (outbound, continuation) = AsyncStream.makeStream(
             of: DERPLink.Datagram.self, bufferingPolicy: .bufferingNewest(Self.outboundDatagramLimit)
         )
         let link = DERPLink(
             region: region,
+            servers: servers,
             client: DERPClient(servers: servers, privateKey: nodeKey, isPreferred: region == homeRegion),
             outbound: outbound,
             outboundContinuation: continuation
@@ -54,7 +55,7 @@ extension TailnetNode {
         return link
     }
 
-    /// 지역 `region`의 연결을 닫는다. 그 연결의 묶음이 남은 데이터그램을 넘긴 뒤 접힌다.
+    /// 지역 `region`의 연결을 닫는다. 보낼 통로가 끝나면 그 연결의 묶음이 접힌다. 아직 보내지 못한 데이터그램은 버려진다.
     func closeDERPLink(to region: Int64) {
         connectedDERPRegions.remove(region)
         derpLinks.removeValue(forKey: region)?.outboundContinuation.finish()

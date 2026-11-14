@@ -301,6 +301,7 @@ func errnoName(_ code: Int32) -> String {
     case EAGAIN: "EAGAIN"
     case EBADF: "EBADF"
     case ECONNREFUSED: "ECONNREFUSED"
+    case ECONNRESET: "ECONNRESET"
     case EHOSTDOWN: "EHOSTDOWN"
     case EHOSTUNREACH: "EHOSTUNREACH"
     case EINVAL: "EINVAL"
@@ -312,6 +313,7 @@ func errnoName(_ code: Int32) -> String {
     case ENOBUFS: "ENOBUFS"
     case ENOMEM: "ENOMEM"
     case ENXIO: "ENXIO"
+    case EPIPE: "EPIPE"
     case EPERM: "EPERM"
     default: "errno \(code)"
     }

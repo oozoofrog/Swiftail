@@ -164,6 +164,12 @@ public actor TailnetNode {
         defer {
             socket.close()
             self.socket = nil
+            // 끝난 노드는 키·세션·연결을 쥐지 않는다. `path(toPeerNamed:)`는 nil이 되고 `send`는 버린다.
+            closeAllDERPLinks()
+            openedDERPLinkContinuation.finish()
+            engine = nil
+            magicsock = nil
+            nodeKey = nil
         }
         // 읽지 못하면 local 엔드포인트 없이 계속한다. STUN이 찾은 엔드포인트만 올라간다(계약 N1).
         interfaceAddresses = (try? LocalInterfaceAddresses.current()) ?? ([], [])

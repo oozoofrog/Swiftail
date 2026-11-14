@@ -16,6 +16,9 @@ import SwiftailControl
 public struct EnginePeer: Sendable, Equatable {
     /// 피어의 node 키. WireGuard 공개 키와 같다.
     public var key: NodePublicKey
+    /// netmap의 `Name` 그대로(끝에 점이 붙은 FQDN). 비어 있을 수 있다. 같은 키를 여러 노드가 내세워도 데이터면에 오른
+    /// 바로 그 노드의 이름이다.
+    public var name: String
     /// 이 피어가 출발지로 쓸 수 있는 주소. WireGuard AllowedIPs가 된다.
     public var allowedIPs: [IPPrefix]
     /// 이 피어에게 보낼 때 쓸 DERP 지역. 0이면 모른다.
@@ -73,6 +76,7 @@ public struct EnginePeer: Sendable, Equatable {
         guard !allowedIPs.isEmpty else { return nil }
 
         key = node.key
+        name = node.name
         self.allowedIPs = allowedIPs
         homeDERP = node.homeDERP
         discoKey = node.discoKey

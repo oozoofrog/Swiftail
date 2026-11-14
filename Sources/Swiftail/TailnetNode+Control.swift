@@ -1,6 +1,7 @@
 import Foundation
 import SwiftailBase
 import SwiftailControl
+import SwiftailDERP
 import SwiftailEngine
 import SwiftailMagicsock
 
@@ -49,8 +50,11 @@ extension TailnetNode {
         guard let socket else { return }
         nodeKey = privateKey
         // 새 키는 새 WireGuard 신원이다. 이전 세션과 경로 상태, 옛 키로 연 DERP 연결은 쓸 수 없으므로 모두 새로 만든다.
-        closeAllDERPLinks()
         let now = ContinuousClock.now
+        // 옛 `Magicsock`을 버리기 전에 피어를 비워, 앱에 알렸던 경로를 nil로 거둔다. 새 `Magicsock`의 피어는 유휴(nil)로
+        // 시작하고 사건을 내지 않으므로, 이렇게 하지 않으면 앱의 마지막 사건이 옛 경로로 남는다.
+        process(magicsock?.setPeers([], at: now) ?? [], at: now)
+        closeAllDERPLinks()
         engine = TailnetEngine(nodeKey: privateKey, now: now, wallClock: Date())
         magicsock = Magicsock(
             discoKey: discoKey,
@@ -86,20 +90,25 @@ extension TailnetNode {
         }
     }
 
-    /// netmap을 엔진과 `Magicsock`에 넣는다. DERPMap에서 사라진 지역의 연결을 닫는다.
+    /// netmap을 엔진과 `Magicsock`에 넣는다. DERPMap에서 사라졌거나 서버 정의가 바뀐 지역의 연결을 닫는다.
     ///
     /// 피어가 빠지면 `Magicsock`이 그 피어의 경로 사건(nil)을 낸다. 그 사건에는 표를 바꾸기 전의 이름을 쓴다(N6).
     private func configureDataPlane(_ netmap: Netmap) {
         let now = ContinuousClock.now
         let wallClock = Date()
         let regions = netmap.derpMap?.regions ?? [:]
-        for region in derpLinks.keys where regions[region] == nil {
+        // 연결은 만들 때의 서버 목록으로만 다시 붙으므로, 정의가 바뀐 지역은 닫아야 새 서버로 간다(Go `derp.go`의
+        // `derp-region-redefined`). 홈은 곧바로 다시 열고, 나머지는 다음에 보낼 때 열린다.
+        for (region, link) in derpLinks where DERPServer.servers(of: regions[region]) != link.servers {
             closeDERPLink(to: region)
+            if region == homeRegion {
+                openDERPLink(to: region)
+            }
         }
 
         process(engine?.apply(netmap, at: now, wallClock: wallClock) ?? [], at: now)
         let peers = EnginePeer.peers(in: netmap, at: wallClock)
-        let directory = PeerDirectory(netmap: netmap, peers: peers)
+        let directory = PeerDirectory(peers: peers)
         peerDirectory = directory.keepingNames(of: peerDirectory)
         // 순서는 node ID 오름차순이다. disco 키의 주인을 정한다(magicsock 계약 B1).
         let sockPeers = peers.map {

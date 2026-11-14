@@ -1,5 +1,4 @@
 import SwiftailBase
-import SwiftailControl
 import SwiftailEngine
 
 /// 데이터면 피어의 node 키와 이름(FQDN)의 표. 경로 사건에 이름을 붙이고, 이름으로 피어의 경로를 찾는다.
@@ -20,10 +19,9 @@ struct PeerDirectory: Sendable, Equatable {
     init() {}
 
     /// - Parameter peers: 데이터면에 올린 피어(`EnginePeer.peers(in:at:)`, node ID 오름차순).
-    init(netmap: Netmap, peers: [EnginePeer]) {
+    init(peers: [EnginePeer]) {
         entries = peers.map { peer in
-            let name = netmap.peers.first { $0.key == peer.key }?.name ?? ""
-            return Entry(key: peer.key, name: name.hasSuffix(".") ? String(name.dropLast()) : name)
+            Entry(key: peer.key, name: peer.name.hasSuffix(".") ? String(peer.name.dropLast()) : peer.name)
         }
     }
 
@@ -41,8 +39,9 @@ struct PeerDirectory: Sendable, Equatable {
 
     /// `other`에만 있는 피어를 뒤에 덧붙인 표. 빠지는 피어의 경로 사건에 옛 이름을 붙이는 동안만 쓴다.
     func keepingNames(of other: PeerDirectory) -> PeerDirectory {
+        let present = Set(entries.map(\.key))
         var merged = self
-        merged.entries += other.entries.filter { old in !entries.contains { $0.key == old.key } }
+        merged.entries += other.entries.filter { !present.contains($0.key) }
         return merged
     }
 

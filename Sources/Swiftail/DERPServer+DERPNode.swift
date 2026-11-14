@@ -6,6 +6,11 @@ import SwiftailDERP
 ///
 /// 계약 `docs/contracts/SwiftailEngine.md` 노드 API 동작 3, `docs/protocol-notes/derp-stun.md` 4.1.
 extension DERPServer {
+    /// 지역의 노드 가운데 연결할 수 있는 서버들(DERPMap의 순서대로). 지역이 없거나 쓸 수 있는 노드가 없으면 빈 목록.
+    static func servers(of region: DERPRegion?) -> [DERPServer] {
+        region?.nodes.compactMap(DERPServer.init) ?? []
+    }
+
     /// tailcfg의 DERP 노드 하나를 연결할 서버로 바꾼다. 이 노드로 연결할 수 없으면 nil.
     ///
     /// - `stunOnly` 노드, 빈 `hostName`, 범위 밖 `derpPort`는 쓰지 않는다.

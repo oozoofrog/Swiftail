@@ -109,6 +109,7 @@ package final class UTUNDevice: Sendable {
         do throws(SocketError) {
             try verify(copy)
             try Self.makeNonBlocking(copy)
+            try Self.suppressSIGPIPE(copy)
         } catch {
             Darwin.close(copy)
             throw error
@@ -200,6 +201,15 @@ package final class UTUNDevice: Sendable {
     private static func makeNonBlocking(_ descriptor: Int32) throws(SocketError) {
         let flags = fcntl(descriptor, F_GETFL)
         guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+            throw .readFailed(errnoName(errno))
+        }
+    }
+
+    /// 끊긴 소켓에 써도 SIGPIPE가 나지 않게 한다. 신호의 기본 동작은 프로세스 종료이고, 이 코드는 패킷 터널 확장 안에서 돈다.
+    /// 걸어 두면 그런 쓰기는 `EPIPE`로 돌아와 `write`가 `sendFailed`로 알린다. 같은 소켓을 가리키는 호출자의 기술자에도 걸린다.
+    private static func suppressSIGPIPE(_ descriptor: Int32) throws(SocketError) {
+        var enabled: Int32 = 1
+        guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
             throw .readFailed(errnoName(errno))
         }
     }

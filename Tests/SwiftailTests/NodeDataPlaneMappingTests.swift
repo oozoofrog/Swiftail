@@ -33,11 +33,27 @@ struct NodeDataPlaneMappingTests {
 
     private static func directory(_ peers: [(id: Int64, key: UInt8, name: String)]) throws -> PeerDirectory {
         let netmap = try netmap(peers: peers)
-        return PeerDirectory(netmap: netmap, peers: EnginePeer.peers(in: netmap, at: Date()))
+        return PeerDirectory(peers: EnginePeer.peers(in: netmap, at: Date()))
     }
 
     private static func nodeKey(_ byte: UInt8) throws -> NodePublicKey {
         try #require(NodePublicKey(rawValue: [UInt8](repeating: byte, count: 32)))
+    }
+
+    /// 고치기 전에는 이름을 netmap에서 키로 다시 찾아, 같은 키를 가진 노드 가운데 자격과 무관하게 ID가 가장 작은 노드의 이름이 붙었다.
+    @Test("같은 키를 가진 노드가 둘이면 데이터면에 오른 노드의 이름을 쓴다")
+    func nameComesFromChosenNode() throws {
+        // ID 3은 tailnet 주소가 없어 데이터면에 오르지 않고, 같은 키의 ID 5가 오른다.
+        let json = #"{"Node":{"ID":1,"Name":"self.tail0001.ts.net.","User":101,"Key":"\#(Self.key(0x01))","Addresses":["100.64.0.1/32"]},"#
+            + #""Peers":[{"ID":3,"Name":"ineligible.tail0001.ts.net.","User":101,"Key":"\#(Self.key(0x07))","AllowedIPs":["10.0.0.0/8"],"HomeDERP":1},"#
+            + #"{"ID":5,"Name":"onplane.tail0001.ts.net.","User":101,"Key":"\#(Self.key(0x07))","Addresses":["100.64.0.5/32"],"AllowedIPs":["100.64.0.5/32"],"HomeDERP":1}]}"#
+        let response = try JSONDecoder().decode(MapResponse.self, from: Data(json.utf8))
+        var session = MapSession()
+        let netmap = try #require(try session.apply(response, receivedAt: Date()).netmap)
+        let directory = PeerDirectory(peers: EnginePeer.peers(in: netmap, at: Date()))
+        #expect(directory.name(of: try Self.nodeKey(0x07)) == "onplane.tail0001.ts.net")
+        #expect(directory.key(named: "onplane.tail0001.ts.net") == (try Self.nodeKey(0x07)))
+        #expect(directory.key(named: "ineligible.tail0001.ts.net") == nil)
     }
 
     // MARK: N4

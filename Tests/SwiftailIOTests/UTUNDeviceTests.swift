@@ -162,6 +162,16 @@ struct UTUNDeviceTests {
         #expect(pair.receive() == [0, 0, 0, 2] + Self.ipv4Packet)
     }
 
+    /// 고치기 전에는 끊긴 스트림 소켓에 쓰면 SIGPIPE로 시험 프로세스가 죽었다(신호 13).
+    @Test("상대가 닫힌 소켓에 써도 신호로 죽지 않고 sendFailed(EPIPE)다")
+    func writeToClosedPeerDoesNotRaiseSIGPIPE() throws {
+        let pair = try SocketPair(type: SOCK_STREAM)
+        defer { pair.closeAll() }
+        let device = try Self.device(on: pair.caller)
+        pair.closePeer()
+        #expect(throws: SocketError.sendFailed("EPIPE")) { try device.write(Self.ipv4Packet) }
+    }
+
     // MARK: 파일 기술자의 소유
 
     @Test("복제본은 호출자의 기술자와 다른 번호이고 FD_CLOEXEC·O_NONBLOCK이 있다")
