@@ -6,7 +6,7 @@ import SwiftailIO
 extension ControlError {
     init(_ error: SocketError) {
         switch error {
-        case .connectFailed(let message), .readFailed(let message):
+        case .connectFailed(let message), .readFailed(let message), .bindFailed(let message), .sendFailed(let message):
             self = .connection(message)
         }
     }
