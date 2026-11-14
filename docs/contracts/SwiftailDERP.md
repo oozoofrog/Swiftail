@@ -20,7 +20,7 @@ M2의 `ControlClient`와 M3의 `DERPClient`가 같은 것을 둘씩 갖지 않�
 
 1. `Sources/SwiftailControl/Keys.swift` → `Sources/SwiftailBase/Keys.swift`. 공개 이름은 그대로다. 시험도 `SwiftailBaseTests`로 옮긴다. `PrefixedKey.init(_: Curve25519.KeyAgreement.PublicKey)`(지금 `NodeIdentity.swift`에 internal로 있다)도 같이 옮겨 `public`으로 둔다.
 2. 새 타깃 `SwiftailIO`에 `package` 접근 수준으로 둔다:
-   - `NetworkSocket`: NWConnection 하나를 async 바이트 스트림으로 감싼다(지금 `SwiftailControl/Client/NetworkSocket.swift`). 오류는 자체 타입 `SocketError`(연결 실패, 읽기 실패. 쓰기는 기다리지 않으므로 그 실패는 다음 읽기에서 드러난다)로 내고 `ControlError`로 옮기는 일은 부르는 쪽이 한다. TLS는 세 가지다: 없음, 시스템 검증(서버 이름 지정), 시험용 검증 생략(서버 이름 지정).
+   - `NetworkSocket`: NWConnection 하나를 async 바이트 스트림으로 감싼다(지금 `SwiftailControl/Client/NetworkSocket.swift`). 오류는 자체 타입 `SocketError`(연결 실패, 읽기 실패. 쓰기는 기다리지 않으므로 그 실패는 다음 읽기에서 드러난다)로 내고 `ControlError`로 옮기는 일은 부르는 쪽이 한다. TLS는 세 가지다: 없음, 시스템 검증(서버 이름 지정), 시험용 검증 생략(서버 이름 지정). `write`는 네트워크 스택이 바이트를 받아 갈 때까지 기다리고(`send`는 기다리지 않는다), 버린 소켓은 연결을 닫는다.
    - `withTimeout`(지금 `Client/Timeout.swift`).
    - `Backoff.delay(failures:maximum:jitter:)`: `min(n² × 10ms, maximum) × (0.5 + jitter)`, `jitter`는 [0, 1)의 난수. 제어(30초)와 DERP(5초)가 같은 식에 상한만 다르다(Go도 `util/backoff` 하나를 쓴다). `RetryPolicy`의 `Retry-After` 해석은 제어 쪽에 남긴다.
    - `HTTPResponseHead`: HTTP/1.1 응답 머리를 조각난 입력에서 읽어 상태 코드와 헤더, 머리 뒤에 이미 도착한 바이트를 돌려준다(16KiB 한도, 줄 안의 제어 문자 거절, 실패 시 버퍼 비움). `UpgradeResponseParser`는 이것을 써서 `Upgrade` 값만 검사하는 얇은 층이 된다. 공개 API와 오류 종류는 그대로다.
@@ -126,10 +126,10 @@ public actor DERPClient {
 `DERPClient`(노트 4.1, 4.4~4.6):
 
 1. **연결**: 서버 목록을 앞에서부터 TCP로 시도해(서버당 1.5초) 처음 붙는 곳에 TLS를 맺는다(`shortcut:` 소켓 감싸개가 TCP와 TLS를 한 번에 맺으므로, 마지막이 아닌 서버는 평문 TCP로 닿는지만 먼저 본 뒤 TLS로 다시 맺는다). TLS 실패는 다음 서버로 넘어가지 않고 이번 시도의 실패다. 연결부터 `ready`까지 10초를 넘기면 실패다.
-2. **읽기**: 연결이 살아 있는 동안 소켓 읽기를 멈추지 않는다(서버의 쓰기 기한이 2초다). 120초 동안 아무것도 오지 않으면 끊는다. `events`의 소비가 느리면 오래된 `packet` 사건부터 버린다(버퍼 256). 패킷은 데이터그램이므로 버려도 된다.
-3. **쓰기**: 연결되어 있으면 곧바로 쓴다(프레임 하나는 통째로). 연결되어 있지 않은 동안의 패킷은 32개까지 쥐고, 가득 차면 가장 오래된 것을 버린다.
+2. **읽기**: 연결이 살아 있는 동안 소켓 읽기를 멈추지 않는다(서버의 쓰기 기한이 2초다). 120초 동안 아무것도 오지 않으면 끊는다. `events`의 소비가 느리면 `packet`·`peerGone`은 가장 새 것 256개까지만 쥐고 오래된 것부터 버린다(패킷은 데이터그램이므로 버려도 된다). `connected`·`disconnected`는 버리지 않고, 읽지 않은 것 가운데 가장 새 것 하나만 남긴다.
+3. **쓰기**: 연결 상태와 무관하게 보낼 패킷을 32개까지 쥐고, 가득 차면 가장 오래된 것을 버린다(Go의 지역별 쓰기 큐와 같다). 패킷 하나와 그때까지 쌓인 Pong을 한 덩어리로 쓰고, 소켓이 받아 가기 전에는 다음 덩어리를 꺼내지 않는다. 덩어리 하나가 5초 안에 소켓으로 넘어가지 않으면 연결 오류로 보고 끊은 뒤 다시 잇는다(Go는 일반 송신에 기한이 없다. 메모리를 묶기 위한 Swiftail의 선택이다). 쓰기가 막힌 동안 Pong이 64KiB를 넘게 쌓이면 `tooManyPendingReplies`로 끊긴다. 읽기는 쓰기가 막혀도 멈추지 않는다.
    - `connected`는 ClientInfo를 보낸 시점이다. 서버가 이 클라이언트를 등록하기 전에 보낸 패킷은 서버가 버릴 수 있다. 위 계층(WireGuard)의 재시도가 이를 메운다.
-4. **재연결**: 오류가 나면 소켓을 닫고 `disconnected`를 낸 뒤 `min(n² × 10ms, 5초) × [0.5, 1.5)`만큼 기다렸다가 처음부터 다시 잇는다. 핸드셰이크 뒤의 프레임(보통 ServerInfo)을 하나라도 받으면 n을 0으로 되돌린다(ServerKey만 주고 끊는 서버에 물러나기 없이 다시 붙지 않게 한다). 이전 소켓을 닫은 뒤에만 새로 잇는다(같은 키의 연결이 둘이면 서버가 한쪽에만 패킷을 넘긴다).
+4. **재연결**: 오류가 나면 소켓을 닫고 `disconnected`를 낸 뒤 `min(n² × 10ms, 5초) × [0.5, 1.5)`만큼 기다렸다가 처음부터 다시 잇는다. 핸드셰이크 뒤의 프레임(보통 ServerInfo)을 하나라도 처리에 성공하면 n을 0으로 되돌린다(ServerKey만 주고 끊는 서버에 물러나기 없이 다시 붙지 않게 한다). 이전 소켓을 닫은 뒤에만 새로 잇는다(같은 키의 연결이 둘이면 서버가 한쪽에만 패킷을 넘긴다).
 5. **구조적 동시성**: `run()`을 부른 Task의 취소로 모든 것이 멈춘다. 분리된 Task를 만들지 않는다. 소켓과 continuation이 새지 않는다.
 
 제외(`shortcut:` 주석으로 남긴다):
