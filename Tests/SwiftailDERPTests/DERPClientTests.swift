@@ -7,7 +7,9 @@ import Testing
 @testable import SwiftailDERP
 
 /// `DERPClient`의 메모리 상한과 사건 버퍼. 루프백의 가짜 서버(평문)에 붙는다.
-@Suite("DERP 클라이언트의 상한")
+///
+/// 차례로 돌린다. 64KiB 패킷을 수 MiB씩 쥐는 시험이 함께 돌면 `phys_footprint`의 증가를 재는 시험이 흔들린다.
+@Suite("DERP 클라이언트의 상한", .serialized)
 struct DERPClientTests {
     private static let packet = [UInt8](repeating: 0x5A, count: DERPConnection.maximumPacketSize)
 
