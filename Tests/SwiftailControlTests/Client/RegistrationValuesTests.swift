@@ -58,6 +58,27 @@ struct RegistrationValuesTests {
         #expect(!String(describing: configuration).contains("secretvalue"))
     }
 
+    @Test("거절 메시지에서 인증 키(원문과 --TL 앞부분)를 가린다", arguments: [
+        ("invalid authkey: tskey-auth-fake--TLc2ln-cHJpdg", "invalid authkey: <가림>"),
+        ("invalid authkey: tskey-auth-fake", "invalid authkey: <가림>"),
+        ("tskey-auth-fake and tskey-auth-fake", "<가림> and <가림>"),
+        ("invalid authkey", "invalid authkey"),
+    ])
+    func rejectionHidesAuthKey(message: String, expected: String) {
+        #expect(ControlClient.rejectionMessage(message, authKey: "tskey-auth-fake--TLc2ln-cHJpdg") == expected)
+    }
+
+    @Test("인증 키가 없거나 비었으면 메시지를 그대로 두고, 긴 메시지는 자른다")
+    func rejectionLength() {
+        #expect(ControlClient.rejectionMessage("invalid authkey", authKey: nil) == "invalid authkey")
+        #expect(ControlClient.rejectionMessage("invalid authkey", authKey: "") == "invalid authkey")
+        #expect(ControlClient.rejectionMessage("--TL", authKey: "--TL") == "<가림>")
+        let long = String(repeating: "가", count: 10_000)
+        let shortened = ControlClient.rejectionMessage(long, authKey: nil)
+        #expect(shortened.count == ControlClient.maximumRejectionLength + 1)
+        #expect(shortened.hasSuffix("…"))
+    }
+
     @Test("/key 응답에서 Noise 키를 꺼낸다")
     func serverKey() throws {
         let key = "mkey:" + String(repeating: "cd", count: 32)

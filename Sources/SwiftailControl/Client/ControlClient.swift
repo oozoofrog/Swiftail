@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// 제어 서버 클라이언트. 등록하고, 이 노드의 상태를 올리고, 맵 스트림으로 netmap을 받아 유지한다.
@@ -75,10 +76,36 @@ public actor ControlClient {
         case ping(PingRequest)
     }
 
+    /// 응답을 기다리는 요청의 기한. 넘기면 연결 오류로 보고 물러났다가 다시 잇는다.
+    ///
+    /// Go는 맵 요청(스트림과 상태 갱신 모두)에만 120초 감시 타이머를 두고, 등록과 Followup에는 기한이 없다
+    /// (`direct.go` `sendMapRequest`의 `watchdogTimeout`, `doLogin`). 응답 없는 서버에 영영 묶이지 않게 등록에도
+    /// 같은 120초를 두고, 사용자의 로그인을 기다리는 Followup 긴 폴링에는 10분을 둔다. Followup을 끊어도 후보 키와
+    /// Followup URL을 유지하므로 다시 이으면 같은 로그인을 이어서 기다린다.
+    struct Timeouts: Sendable {
+        /// 등록(Followup이 아닌 것)과 상태 올리기.
+        var request = Duration.seconds(120)
+        /// Followup 긴 폴링.
+        var followup = Duration.seconds(600)
+    }
+
     let configuration: Configuration
     let identityStore: NodeIdentityStore
+    let timeouts: Timeouts
     let eventContinuation: AsyncStream<Event>.Continuation
     private let eventStream: AsyncStream<Event>
+
+    /// 확정 전의 등록: 후보 node 키와 서버가 준 Followup URL. 사용자가 그 URL에서 로그인하면 이 키로 등록이 끝나므로,
+    /// 등록이 확정되거나 새 로그인을 요청받을 때까지 재연결 너머로 쥔다. 저장하지 않는다(Go `Direct.tryingNewKey`와
+    /// `LoginGoal.url`).
+    struct PendingRegistration {
+        var nodeKey: Curve25519.KeyAgreement.PrivateKey
+        var oldNodeKey: NodePublicKey
+        var followup: String
+    }
+
+    /// 버리지 않고 쥐는 사건 수. 구독자가 읽지 않으면 오래된 것부터 버린다.
+    static let eventBufferLimit = 64
 
     /// 지금의 신원. `run()`이 읽거나 만든다.
     var identity = NodeIdentity()
@@ -88,6 +115,15 @@ public actor ControlClient {
     var needsRegistration = true
     /// 다음 등록에서 새 node 키를 만든다(대화형 로그인, 만료).
     var rotateNodeKey = false
+    /// `startInteractiveLogin()`을 부른 횟수. 등록은 시작할 때의 값과 끝날 때의 값이 같을 때만 그 요청을 채운 것으로 본다.
+    var loginRequests = 0
+    var pendingRegistration: PendingRegistration?
+    /// 만료로 새 키를 등록했고, 아직 만료되지 않은 self 노드를 받지 못했다. 이때 또 만료면 끝낸다.
+    var renewedExpiredKey = false
+    /// 지금 연결에서 받은 마지막 netmap의 self 노드 키 만료 시각. 감시가 이 시각에 깨어난다.
+    var selfKeyExpiry: Date?
+    /// `selfKeyExpiry`가 바뀌면 잠든 감시를 깨운다.
+    var selfKeyExpiryChanged: AsyncStream<Void>.Continuation?
     /// 연속 실패 수. 전체 netmap을 받으면 0이 된다.
     var consecutiveFailures = 0
     /// 지금 맵 스트림이 열려 있다.
@@ -98,15 +134,24 @@ public actor ControlClient {
     var lastPingURL: String?
     /// 지금 연결의 신호 통로. 연결이 없으면 nil.
     var signals: AsyncStream<SessionSignal>.Continuation?
-    private var isRunning = false
+    private var hasRun = false
 
     public init(configuration: Configuration, identityStore: NodeIdentityStore) {
+        self.init(configuration: configuration, identityStore: identityStore, timeouts: Timeouts())
+    }
+
+    /// 기한을 정해 만든다. 시험이 짧은 기한을 넣을 때 쓴다.
+    init(configuration: Configuration, identityStore: NodeIdentityStore, timeouts: Timeouts) {
         self.configuration = configuration
         self.identityStore = identityStore
-        (eventStream, eventContinuation) = AsyncStream.makeStream(of: Event.self)
+        self.timeouts = timeouts
+        (eventStream, eventContinuation) = AsyncStream.makeStream(of: Event.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
     }
 
     /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 이 흐름도 끝난다.
+    ///
+    /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. `netmap`은 늘 전체 상태이므로 마지막 것만
+    /// 읽어도 된다.
     public nonisolated var events: AsyncStream<Event> { eventStream }
 
     /// 상태를 바꾼다. 연결되어 있으면 곧 올리고, 아니면 다음 연결 때 올린다. 마지막 값만 남는다.
@@ -120,18 +165,18 @@ public actor ControlClient {
     public func startInteractiveLogin() {
         rotateNodeKey = true
         needsRegistration = true
+        loginRequests += 1
+        pendingRegistration = nil
         signals?.yield(.loginRequested)
     }
 
     /// 등록하고, 상태를 올리고, 맵 스트림을 유지한다. 끊기면 물러났다가 다시 잇는다.
     /// 호출한 Task가 취소될 때까지 돌아오지 않는다. 다시 시도해도 소용없는 실패는 던진다.
+    /// 클라이언트 하나에 한 번만 부른다. 실행 중이든 끝난 뒤든 다시 부르면 `invalidConfiguration`이다.
     public func run() async throws(ControlError) {
-        guard !isRunning else { throw .invalidConfiguration("run()이 이미 실행 중이다") }
-        isRunning = true
-        defer {
-            isRunning = false
-            eventContinuation.finish()
-        }
+        guard !hasRun else { throw .invalidConfiguration("run()은 클라이언트 하나에 한 번만 부른다") }
+        hasRun = true
+        defer { eventContinuation.finish() }
 
         let endpoint = try ControlEndpoint(serverURL: configuration.serverURL)
         guard !configuration.hostname.isEmpty else { throw .invalidConfiguration("호스트 이름이 비었다") }
@@ -189,6 +234,8 @@ public actor ControlClient {
         let (signalStream, continuation) = AsyncStream.makeStream(of: SessionSignal.self)
         signals = continuation
         uploadedStatus = nil
+        selfKeyExpiry = nil
+        selfKeyExpiryChanged = nil
         defer {
             continuation.finish()
             signals = nil
@@ -226,10 +273,17 @@ public actor ControlClient {
 enum SessionInterruption: Error {
     /// 대화형 로그인을 요청받았다. 곧바로 다시 연결해 등록한다.
     case loginRequested
-    /// self 노드의 키가 만료되었다. 물러났다가 새 키로 다시 등록한다.
+    /// self 노드의 키가 만료되었다(맵 응답 또는 만료 시각의 도래). 물러났다가 새 키로 다시 등록한다.
     case nodeKeyExpired
     /// 서버가 기다리라고 했다(429, `Retry-After`가 붙은 503).
     case rateLimited(Duration)
+}
+
+extension ControlClient.PendingRegistration: CustomReflectable {
+    /// 후보 node 키는 공개 키만 보인다.
+    var customMirror: Mirror {
+        Mirror(self, children: ["nodePublicKey": NodePublicKey(nodeKey.publicKey), "oldNodeKey": oldNodeKey, "followup": followup])
+    }
 }
 
 extension ControlClient.Configuration: CustomStringConvertible, CustomReflectable {
