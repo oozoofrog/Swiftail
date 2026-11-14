@@ -63,7 +63,7 @@ TCPStack (값)        리스너 표, 4-튜플 → 연결, 맺는 중인 연결�
 // SwiftailNetstack (package). 모양만 적는다. 이름과 인자는 구현 단위가 확정한다.
 package struct TCPSegment: Sendable, Equatable {
     package init(parsingIPPacket bytes: [UInt8]) throws(ParseError)   // 동작 W
-    package func ipPacket(hopLimit: UInt8 = 64) -> [UInt8]
+    package func ipPacket(hopLimit: UInt8 = 64) -> [UInt8]?   // nil: 주소 계열이 다르거나 IP 패킷 하나에 들어가지 않음
 }
 
 package struct TCPConnection: Sendable {
@@ -207,6 +207,12 @@ tsnet과의 대응:
 2. **옵션**(TCP 노트 3.2): EOL에서 멈추고 NOP는 건너뛴다. MSS(kind 2, 길이 4)와 Window Scale(kind 3, 길이 3)만 읽고, SYN이 아닌 세그먼트의 둘은 무시한다. 모르는 옵션은 길이로 건너뛴다. 길이가 2보다 작거나 머리 밖으로 나가면 세그먼트를 `malformed`로 버린다(MUST-7의 대비. 연결을 끊지 않는다). MSS 0은 536(IPv4)·1220(IPv6)으로, shift가 14를 넘으면 14로 읽는다(RFC 7323 2.3).
 3. **만들기**: 머리 20바이트 + 옵션(SYN에만 MSS, 협상 중이면 Window Scale, NOP로 4바이트 경계) + 데이터. 체크섬을 채운다. IP 머리는 IPv4면 IHL 5, DF 켬, 식별자 0, TTL 64. IPv6면 hop limit 64, flow label 0. 64는 Go·gVisor의 기본값이다(터널 계약 동작 L2).
 4. urgent pointer와 CWR·ECE는 보낼 때 0, 받을 때 무시한다.
+구현에서 정해진 것(M6-1, 2026-11-15):
+
+- 검사 순서는 IP 머리의 구조 → 프로토콜(`notTCP`) → 조각 → IPv4 머리 체크섬 → TCP 머리 → TCP 체크섬 → 옵션이다. IPv4 머리 체크섬도 본다(틀리면 `badChecksum`). IPv4 조각(MF나 오프셋)은 `malformed`, IPv6 확장 헤더·조각 헤더(next header가 6이 아님)는 `notTCP`다.
+- 길이가 규격과 다른 MSS(4가 아님)·Window Scale(3이 아님)은 값을 읽지 않고 길이로 건너뛴다. 같은 옵션이 여럿이면 뒤의 것이 남는다(gVisor와 같다). SYN이 아닌 세그먼트도 옵션의 길이는 검사한다.
+- 선언: `TCPSegment`의 필드는 `source`·`destination`(`IPEndpoint`), `sequenceNumber`·`acknowledgmentNumber`(`SequenceNumber`), `flags`(`fin`·`syn`·`rst`·`psh`·`ack`), `window`(머리의 16비트 그대로), `maximumSegmentSize`·`windowScale`(SYN에만), `payload`, 그리고 `sequenceLength`(SEG.LEN)다. 체크섬은 `SwiftailBase`의 `InternetChecksum`(`add`, `addPseudoHeader`, `value`)이다.
+
 5. 시퀀스 번호는 2^32 순환 타입(`SequenceNumber`)으로만 다룬다. 비교와 차이는 부호 있는 32비트 차이로 한다. `UInt32`를 직접 견주는 코드가 없어야 한다.
 
 ### T. 연결 상태 기계 (`TCPConnection`)
