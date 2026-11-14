@@ -20,9 +20,9 @@ M2의 `ControlClient`와 M3의 `DERPClient`가 같은 것을 둘씩 갖지 않�
 
 1. `Sources/SwiftailControl/Keys.swift` → `Sources/SwiftailBase/Keys.swift`. 공개 이름은 그대로다. 시험도 `SwiftailBaseTests`로 옮긴다. `PrefixedKey.init(_: Curve25519.KeyAgreement.PublicKey)`(지금 `NodeIdentity.swift`에 internal로 있다)도 같이 옮겨 `public`으로 둔다.
 2. 새 타깃 `SwiftailIO`에 `package` 접근 수준으로 둔다:
-   - `NetworkSocket`: NWConnection 하나를 async 바이트 스트림으로 감싼다(지금 `SwiftailControl/Client/NetworkSocket.swift`). 오류는 자체 타입 `SocketError`(연결 실패, 읽기·쓰기 실패)로 내고 `ControlError`로 옮기는 일은 부르는 쪽이 한다. TLS는 세 가지다: 없음, 시스템 검증(서버 이름 지정), 시험용 검증 생략(서버 이름 지정).
+   - `NetworkSocket`: NWConnection 하나를 async 바이트 스트림으로 감싼다(지금 `SwiftailControl/Client/NetworkSocket.swift`). 오류는 자체 타입 `SocketError`(연결 실패, 읽기 실패. 쓰기는 기다리지 않으므로 그 실패는 다음 읽기에서 드러난다)로 내고 `ControlError`로 옮기는 일은 부르는 쪽이 한다. TLS는 세 가지다: 없음, 시스템 검증(서버 이름 지정), 시험용 검증 생략(서버 이름 지정).
    - `withTimeout`(지금 `Client/Timeout.swift`).
-   - `Backoff.delay(failures:maximum:jitter:)`: `min(n² × 10ms, maximum) × jitter`. 제어(30초)와 DERP(5초)가 같은 식에 상한만 다르다(Go도 `util/backoff` 하나를 쓴다). `RetryPolicy`의 `Retry-After` 해석은 제어 쪽에 남긴다.
+   - `Backoff.delay(failures:maximum:jitter:)`: `min(n² × 10ms, maximum) × (0.5 + jitter)`, `jitter`는 [0, 1)의 난수. 제어(30초)와 DERP(5초)가 같은 식에 상한만 다르다(Go도 `util/backoff` 하나를 쓴다). `RetryPolicy`의 `Retry-After` 해석은 제어 쪽에 남긴다.
    - `HTTPResponseHead`: HTTP/1.1 응답 머리를 조각난 입력에서 읽어 상태 코드와 헤더, 머리 뒤에 이미 도착한 바이트를 돌려준다(16KiB 한도, 줄 안의 제어 문자 거절, 실패 시 버퍼 비움). `UpgradeResponseParser`는 이것을 써서 `Upgrade` 값만 검사하는 얇은 층이 된다. 공개 API와 오류 종류는 그대로다.
 3. `Package.swift`에 M3 타깃을 미리 만든다(자리만): `SwiftailIO`, `SwiftailDERP`, `SwiftailEngine`, `Swiftail`과 시험 타깃 `SwiftailIOTests`, `SwiftailDERPTests`, `SwiftailDERPInteropTests`, `SwiftailEngineTests`, `SwiftailInteropTests`. 뒤 단위들이 `Package.swift`를 건드리지 않고 병렬로 일하게 하기 위해서다.
 
