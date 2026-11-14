@@ -7,8 +7,9 @@
 
 import Foundation
 import SwiftailBase
-import SwiftailControl
 import Testing
+
+@testable import SwiftailControl
 
 private let realAuthKeyFile = ProcessInfo.processInfo.environment["SWIFTAIL_REAL_AUTHKEY_FILE"].flatMap { $0.isEmpty ? nil : $0 }
 
@@ -67,6 +68,12 @@ struct RealTailnetGateTests {
 
         if let failure {
             Issue.record("run()이 오류로 끝났다: \(redacted(String(describing: failure)))")
+        }
+        // tailnet lock 진단: 서버가 TKAInfo를 보냈는지와 그 모양만 본다(해시 값은 찍지 않는다).
+        if let info = await client.lastTKAInfo {
+            print("마무리 관문 진단: TKAInfo 받음, Head 비어 있음 \(info.head.isEmpty), Disabled \(info.disabled)")
+        } else {
+            print("마무리 관문 진단: TKAInfo 없음")
         }
         #expect(disconnectCount != -1, "인증 키가 받아들여지지 않아 대화형 로그인을 요구받았다")
         #expect(didRegister, "등록되지 않았다")

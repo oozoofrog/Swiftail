@@ -136,6 +136,8 @@ public actor ControlClient {
     var lastMapActivity = ContinuousClock.now
     /// 이미 답한 핑의 URL. 서버가 같은 핑을 다시 보내도 한 번만 답한다.
     var lastPingURL: String?
+    /// 서버가 마지막으로 보낸 tailnet lock 상태. `tailnetLockEnabled`로 끝난 까닭을 진단할 때 본다.
+    var lastTKAInfo: TKAInfo?
     /// 지금 연결의 신호 통로. 연결이 없으면 nil.
     var signals: AsyncStream<SessionSignal>.Continuation?
     private var hasRun = false

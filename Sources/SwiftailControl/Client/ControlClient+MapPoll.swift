@@ -79,6 +79,7 @@ extension ControlClient {
                 throw ControlError.connection("맵 프레임 오류: \(error)")
             }
             for response in responses {
+                if let info = response.tkaInfo { lastTKAInfo = info }
                 let update: MapSession.Update
                 do {
                     update = try session.apply(response, receivedAt: Date())
