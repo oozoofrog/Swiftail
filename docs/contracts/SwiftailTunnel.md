@@ -557,7 +557,7 @@ M3 `filterfixtures`·M2 `mapfixtures`와 같은 방식이다. 자료는 `Tools/i
 | `TestTunnelEngineDeath` | `failMemoryDevice()` 뒤 `run()`이 `tunnelDeviceClosed`를 던지고, 흐름이 끝나고, 더 사건이 나오지 않는다 |
 | `TestTunnelRestartKeepsNode` | 같은 디렉터리로 다시 띄우면 `.needsLogin` 없이 같은 주소, 새 디렉터리면 다른 주소, 옮긴 디렉터리면 원래 주소. `identity.json`이 생긴다 |
 | `TestTunnelInUse` | 같은 디렉터리의 두 번째 노드 → `stateDirectoryInUse`, 첫째를 멈춘 뒤 다시 가능(다른 디렉터리는 막지 않음, F1 질문 1) |
-| `TestTunnelSlotReleasedOnFailedStart` | 첫째 `run()`이 실패(`udpUnavailable`을 시험 훅으로)해도 같은 디렉터리로 다음 노드가 돈다 |
+| `TestTunnelSlotReleasedOnFailedStart` | 첫째 `run()`이 실패해도 같은 디렉터리로 다음 노드가 돈다. `udpUnavailable`을 일으키는 시험 훅은 두지 않았다(묶지 못하면 묶지 않은 소켓으로 버티게 된 뒤로 그 실패를 만들 길이 없다). 대신 단위 시험 `failMemoryDeviceEndsRun`이 `run()`이 실패로 끝난 뒤 상태 디렉터리가 풀리는 것을 확인한다(점유는 `run()`의 `defer` 하나로 풀린다) |
 | `TestTunnelInvalidConfig` | `.utun` -1, 파이프 기술자 → `init`의 `invalidConfiguration`. MTU 1, 1000, 1279, 1421, 1500, 9000, -1280 → MTU 메시지. 거절된 경우 상태 디렉터리에 아무것도 생기지 않음 |
 | `TestTunnelMTUBounds` | MTU 1280·1420·기본값이 시작되고 `networkSettings.mtu`가 1280·1420·1280 |
 | `TestTunnelSetDefaultInterface`, `…Reevaluates` | `NWPathMonitor`에서 얻은 실제 인터페이스로 `setDefaultInterface`를 부르면 UDP 소켓이 다시 묶이고(포트 같음) 엔드포인트가 다시 올라가며(`nodes`의 `endpoints`), DERP·제어가 다시 이어진 뒤에도 에코가 되고 Go 피어와 직접 경로가 다시 선다(M4 관문 2의 기준). 루프백 목적지는 묶지 않으므로 루프백 tailnet에서 돈다 |
