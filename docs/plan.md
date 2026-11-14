@@ -118,7 +118,7 @@ M4에서 정한 것: `SwiftailEngine`은 `SwiftailMagicsock`에 의존하지 않
 | `SwiftailMagicsock` | M4 | disco, STUN, 지연 측정과 홈 지역 선택, 엔드포인트 상태 기계, UDP 소켓과 재결속, WireGuard에 대한 송수신 창구 | |
 | `SwiftailEngine` | M3~M5 | netmap → WireGuard 피어·필터·경로·DNS, 패킷 필터, MagicDNS 응답기, 상태 저장, TUN(utun fd, 메모리) | |
 | `Swiftail` | M3~ | 공개 API(`TailnetNode`) | |
-| `SwiftailNetstack` | M6 | Swift로 쓴 TCP: 리스너·다이얼 | |
+| `SwiftailNetstack` | M6 | Swift로 쓴 TCP의 값 타입 상태 기계(세그먼트 코덱, 연결, 스택). `package` 접근이고 제품으로 내보내지 않는다. 듣기·걸기의 공개 API는 `Swiftail`에 둔다(`listen(port:)`·`connect(to:port:)`). **`Swiftail`이 이 타깃에 의존한다**(아래 그림과 6절 초안의 `dial`·의존 방향은 `docs/contracts/SwiftailNetstack.md`가 고쳤다) | TLS·HTTP. TLS는 M7에서 루프백 다리로 한다 |
 
 ### 노트에서 확인해 설계에 반영한 것
 
@@ -196,7 +196,7 @@ extension TailnetNode {
 | M3 ✅ | DERP만으로 통신 | UDP 직접 경로 없이 로컬 DERP 서버만으로 Go tsnet 피어의 UDP 에코와 왕복. TCP SYN에 SYN-ACK가 돌아온다. ACL이 막은 포트의 패킷은 버려진다 |
 | M4 ✅ (실제 tailnet 마무리 관문은 남음) | 직접 연결 | Go 피어와 루프백·LAN에서 직접 경로가 잡힌다(Go 쪽 상태에서 직접 주소 확인). 직접 경로를 막으면 DERP로 내려가고 풀면 다시 올라온다. 마무리: 실제 tailnet에서 NAT 뒤의 기기와 직접 경로 |
 | M5 (관문 (가) 메모리 장치 통과, (나) 실기기 남음) | iOS 패킷 터널 | MagicDNS는 UDP 질의만 답한다(아래 8절 위험 12). 메모리 TUN으로 RemoteDebug `docs/tunnel.md`의 시험 계약에 대응하는 항목(설정 산출, UDP·TCP·MagicDNS, 다시 시작, 엔진 정지) 통과. 실기기: 시험용 터널 앱으로 Mac의 tailnet HTTPS에 접속, FQDN 해석, Wi-Fi ↔ 셀룰러 전환 뒤 복구, 유휴·전송 중 `phys_footprint` 기록 |
-| M6 | 프로세스 내 리스너(Swift TCP) | 상태 기계 단위 시험(손실·재정렬·중복·지연 주입)과, Go 피어(gVisor)·macOS 커널 스택을 상대로 한 100MB 양방향 전송의 해시 일치. 손실 1%·5% 조건에서 전송이 멈추지 않고 처리량을 기록한다 |
+| M6 (계약 확정, 구현 중) | 프로세스 내 리스너(Swift TCP) | 상태 기계 단위 시험(손실·재정렬·중복·지연 주입)과, Go 피어(gVisor)·macOS 커널 스택을 상대로 한 100MB 양방향 전송의 해시 일치. 손실 1%·5% 조건에서 전송이 멈추지 않고 처리량을 기록한다 |
 | M7 | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
 
 메모리 목표(M5): 유휴 상주 20MiB 이하를 목표로 두고 실기기 측정으로 확정한다. Go 코어의 권장 한도 설정은 28MiB였다.

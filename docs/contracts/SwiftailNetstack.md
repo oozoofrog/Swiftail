@@ -536,7 +536,7 @@ RemoteDebug 세션이 F1~F13에 답했다(그쪽 `2814b2c`의 Go 코드에서 �
 | 단위 | 내용 | 소유 파일 | 선후 |
 | --- | --- | --- | --- |
 | M6-0 | 총괄: 이 계약 확정(N1~N11, F의 답), TCP 노트 검증(다른 세션), `Package.swift`에 타깃 `SwiftailNetstack`·`SwiftailNetstackTests` 추가, plan 갱신 | `docs/contracts/SwiftailNetstack.md`, `docs/plan.md`, `Package.swift`, `docs/protocol-notes/` | 먼저 |
-| M6-1 | 체크섬 옮기기, `SequenceNumber`, `TCPSegment` 코덱(동작 W) | `Sources/SwiftailBase/InternetChecksum.swift`, `Sources/SwiftailEngine/Tunnel/ServiceIPReply+Checksum.swift`(호출만), `Sources/SwiftailNetstack/Wire/*`, `Tests/SwiftailNetstackTests/Wire/*`, `Tests/SwiftailBaseTests/InternetChecksumTests.swift` | M6-0 뒤. **2·3·7·9a와 병렬** |
+| M6-1 | 체크섬 옮기기, `TCPSegment` 코덱(동작 W). `SequenceNumber`는 M6-0에서 총괄이 만들었다(`Sources/SwiftailNetstack/Wire/SequenceNumber.swift`. 병렬 단위가 함께 쓰는 타입이다) | `Sources/SwiftailBase/InternetChecksum.swift`, `Sources/SwiftailEngine/Tunnel/ServiceIPReply+Checksum.swift`(호출만), `Sources/SwiftailNetstack/Wire/*`, `Tests/SwiftailNetstackTests/Wire/*`, `Tests/SwiftailBaseTests/InternetChecksumTests.swift` | M6-0 뒤. **2·3·7·9a와 병렬** |
 | M6-2 | 보내는 버퍼와 받는 버퍼(순서가 어긋난 구간 포함. 동작 F1·F4·F6) | `Sources/SwiftailNetstack/Buffers/*`, `Tests/SwiftailNetstackTests/Buffers/*` | **병렬**(`SequenceNumber`의 모양만 M6-1과 맞춘다) |
 | M6-3 | RTO 추정기와 NewReno(동작 R1~R3·R6·R8). 입력과 출력이 수뿐인 값 타입 | `Sources/SwiftailNetstack/Recovery/*`, `Tests/SwiftailNetstackTests/Recovery/*` | **병렬** |
 | M6-4 | 연결 상태 기계(동작 T, R4·R5·R7, F2·F3·F5·F7~F9, X2~X5·X9) | `Sources/SwiftailNetstack/Connection/*`, `Tests/SwiftailNetstackTests/Connection/*`(시험 3·4·5·9의 기본 길) | M6-1·2·3 뒤. 가장 크다 |
