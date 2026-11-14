@@ -88,9 +88,11 @@ struct LinkPropertyTests {
         #expect(try link.connection(.client).unacknowledgedSendByteCount == 262_144)
         var received = 0
         try link.run(for: .seconds(60), application: { link in
-            let chunk = try link.read(from: .server)
-            #expect(chunk.elementsEqual(bytes[received..<(received + chunk.count)]))
-            received += chunk.count
+            // 응용은 읽을 수 있는 것을 다 읽는다. 읽기가 늘 창 갱신 ACK를 내지는 않으므로(F3) 다음 사건을 기다리면 남는다.
+            while case let chunk = try link.read(from: .server), !chunk.isEmpty {
+                #expect(chunk.elementsEqual(bytes[received..<(received + chunk.count)]))
+                received += chunk.count
+            }
             if accepted < bytes.count, try link.connection(.client).writableByteCount > 0 {
                 accepted += try link.write(bytes[accepted...], from: .client)
             }
@@ -158,21 +160,25 @@ struct LinkPropertyTests {
         let payloads = [scenarioBytes(size, salt: 11), scenarioBytes(size, salt: 29)]
         var accepted = [0, 0]
         var received = [0, 0]
-        try link.run(for: .seconds(14_400), application: { link in
+        // R1의 RTO 상한은 120초다. 손실 20%에서 상한에 닿은 재전송과 그 ACK가 연달아 사라지면 480초 넘게 진행이 없을 수 있다
+        // (F3의 창 갱신 규칙이 바뀐 뒤 seed=1에서 494초를 관찰했다. 2026-11-15). 멈춤 판정은 RTO 상한의 8배로 둔다.
+        try link.run(for: .seconds(14_400), stallLimit: .seconds(960), application: { link in
             for side in LinkSimulator.Side.allCases {
                 let index = side.rawValue
                 if accepted[index] < size, try link.connection(side).writableByteCount > 0 {
                     accepted[index] += try link.write(payloads[index][accepted[index]...], from: side)
                 }
-                let chunk = try link.read(from: side.peer)
-                // 읽힌 부분마다 원본과 비교하므로 중복·순서 역전·누락을 마지막 해시보다 일찍 잡는다.
-                guard received[index] + chunk.count <= size else {
-                    throw LinkSimulator.Failure.invariant(seed: link.seed, detail: "보낸 것보다 많이 읽음")
+                // 읽을 수 있는 것을 다 읽는다. 읽기가 늘 창 갱신 ACK를 내지는 않으므로(F3) 다음 사건을 기다리면 남는다.
+                while case let chunk = try link.read(from: side.peer), !chunk.isEmpty {
+                    // 읽힌 부분마다 원본과 비교하므로 중복·순서 역전·누락을 마지막 해시보다 일찍 잡는다.
+                    guard received[index] + chunk.count <= size else {
+                        throw LinkSimulator.Failure.invariant(seed: link.seed, detail: "보낸 것보다 많이 읽음")
+                    }
+                    guard chunk.elementsEqual(payloads[index][received[index]..<(received[index] + chunk.count)]) else {
+                        throw LinkSimulator.Failure.invariant(seed: link.seed, detail: "받은 바이트열이 원본의 앞부분이 아님")
+                    }
+                    received[index] += chunk.count
                 }
-                guard chunk.elementsEqual(payloads[index][received[index]..<(received[index] + chunk.count)]) else {
-                    throw LinkSimulator.Failure.invariant(seed: link.seed, detail: "받은 바이트열이 원본의 앞부분이 아님")
-                }
-                received[index] += chunk.count
             }
         }, until: { link in
             received == [size, size] && link.connections.allSatisfy { $0?.unacknowledgedSendByteCount == 0 }

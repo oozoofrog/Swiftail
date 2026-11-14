@@ -18,8 +18,8 @@ extension TCPConnection {
         return (accepted, outputs)
     }
 
-    /// 읽을 수 있는 바이트를 앞에서부터 `maximumLength`까지 꺼낸다. 읽은 만큼 받는 창이 열리고, SWS 회피의 문턱을 넘으면
-    /// 창 갱신 ACK가 나간다(계약 동작 F3).
+    /// 읽을 수 있는 바이트를 앞에서부터 `maximumLength`까지 꺼낸다. 읽은 만큼 받는 창이 열리고, 광고한 남은 창이 버퍼의 절반
+    /// 이하이며 SWS 회피의 문턱을 넘으면 창 갱신 ACK가 나간다(계약 동작 F3, `windowUpdateIsDue`).
     package mutating func read(
         upTo maximumLength: Int, at now: ContinuousClock.Instant
     ) -> (bytes: [UInt8], outputs: [Output]) {

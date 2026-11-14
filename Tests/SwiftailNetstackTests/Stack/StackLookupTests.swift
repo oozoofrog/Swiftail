@@ -115,7 +115,7 @@ struct StackLookupTests {
         #expect(stack.receive(corrupted, at: .now) == [.dropped(.badChecksum)])
     }
 
-    @Test("묶음으로 받은 데이터 세그먼트 둘에는 receive가 ACK를 내지 않고, 같은 시각의 advance가 ACK 하나를 낸다")
+    @Test("묶음으로 받은 데이터 세그먼트 둘(2×MSS)에는 둘째의 receive가 ACK 하나를 내고, 같은 시각의 advance는 내지 않는다")
     func batchAcknowledgment() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -128,10 +128,9 @@ struct StackLookupTests {
         let first = pair.server.receive(packets[0], at: pair.now)
         let second = pair.server.receive(packets[1], at: pair.now)
         #expect(first.packets.isEmpty)
-        #expect(second.packets.isEmpty)
         #expect(first.events == [.readable(ids.server)])
-        let flushed = pair.server.advance(to: pair.now)
-        let acknowledgments = flushed.segments
+        #expect(pair.server.advance(to: pair.now).packets.isEmpty)
+        let acknowledgments = second.segments
         #expect(acknowledgments.count == 1)
         let expected = try #require(pair.clientSent.last).sequenceNumber.advanced(by: 1_240)
         #expect(acknowledgments.first?.acknowledgmentNumber == expected)

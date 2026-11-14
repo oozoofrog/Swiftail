@@ -46,9 +46,10 @@ struct ConnectionRecoveryScenarioTests {
         let lost = link.transmissions.filter { $0.side == .client && $0.segment.sequenceNumber == lostSequence && !$0.segment.payload.isEmpty }
         #expect(lost.count == 2)
         let retransmission = try #require(lost.last)
-        let timerStart = segmentCount == 1 ? start : start + .milliseconds(2)
+        // 열 개면 앞 아홉 개의 ACK 가운데 마지막(아홉째, 2×MSS에 못 미침)이 F5의 40ms 지연 ACK라 RTO가 42ms에 다시 걸린다.
+        let timerStart = segmentCount == 1 ? start : start + .milliseconds(42)
         #expect(retransmission.time - timerStart == .milliseconds(200))
-        #expect(link.elapsed - start == .milliseconds(segmentCount == 1 ? 242 : 244))
+        #expect(link.elapsed - start == .milliseconds(segmentCount == 1 ? 242 : 284))
         #expect(try link.read(from: .server).elementsEqual(bytes))
         print("회복 data segments=\(segmentCount), seed=\(link.seed): retransmit=\(retransmission.time - start), ACK=\(link.elapsed - start)")
     }
@@ -126,9 +127,10 @@ struct ConnectionRecoveryScenarioTests {
         peer = try ScriptedTCPPeer()
         _ = peer.connection.receive(first, at: peer.now)
         let second = peer.segment(sequence: peer.peerStart.advanced(by: 1240), payload: scenarioBytes(1240))
-        #expect(peer.connection.receive(second, at: peer.now).scenarioSegments.isEmpty)
-        #expect(peer.connection.nextDeadline == peer.now)
-        #expect(peer.connection.advance(to: peer.now).scenarioSegments.count == 1)
+        // 곧바로 보낼 ACK는 그 세그먼트의 receive 출력으로 나온다(F5, 2026-11-15).
+        #expect(peer.connection.receive(second, at: peer.now).scenarioSegments.map(\.acknowledgmentNumber)
+            == [peer.peerStart.advanced(by: 2480)])
+        #expect(peer.connection.advance(to: peer.now).scenarioSegments.isEmpty)
 
         peer = try ScriptedTCPPeer()
         #expect(peer.receive(second).scenarioSegments.first?.acknowledgmentNumber == peer.peerStart)

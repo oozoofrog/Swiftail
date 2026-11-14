@@ -144,6 +144,8 @@ public actor TailnetNode {
     var localStatus = ControlClient.LocalStatus()
     /// 시험용: 이 원격 포트로 보낼 UDP와 이 포트에서 온 UDP를 소켓 경계에서 버린다.
     var blockedUDPPorts: Set<UInt16> = []
+    /// 이번 처리에서 보낼 UDP 데이터그램. 가장 바깥 처리가 닫힐 때 소켓의 송신 큐로 넘긴다.
+    var outgoingUDP: [DatagramSocket.OutgoingDatagram] = []
 
     // MARK: 기본 인터페이스 (동작 N)
 
@@ -166,6 +168,11 @@ public actor TailnetNode {
     var nextListenerToken: UInt64 = 1
     /// 시험용: 스택과 엔진 사이에서 패킷을 버리는 확률과 난수(계약 동작 N11). nil이면 버리지 않는다.
     var inProcessLoss: PacketLoss?
+
+    // MARK: 처리의 깊이
+
+    /// 열려 있는 처리의 수(`beginProcessing()`). 0으로 돌아갈 때 쌓인 일을 마무리한다(`endProcessing(at:)`).
+    var processingDepth = 0
 
     // MARK: 타이머를 깨우는 통로
 
@@ -265,8 +272,8 @@ public actor TailnetNode {
         defer {
             isRunning = false
             // 끝난 노드는 키·세션·연결·기술자를 쥐지 않는다. `path(toPeerNamed:)`는 nil이 되고 `send`는 버린다.
-            // utun은 복제본만 닫는다(동작 U2).
-            self.socket?.close()
+            // utun은 복제본만 닫는다(동작 U2). 소켓은 `stopNetstack()`이 송신 큐에 넣은 RST를 보낸 뒤 닫힌다.
+            self.socket?.closeAfterSending()
             self.socket = nil
             tunnel?.close()
             tunnel = nil

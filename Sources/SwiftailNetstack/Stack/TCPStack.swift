@@ -8,8 +8,9 @@ import SwiftailBase
 ///
 /// 노드가 부르는 순서:
 /// 1. 만든 뒤 `setLocalAddresses(_:)`로 자기 tailnet 주소를 넘긴다(netmap을 적용할 때마다 다시).
-/// 2. 받은 패킷 묶음을 하나씩 `receive(_:at:)`에 넣고, 묶음이 끝나면 **같은 시각으로 `advance(to:)`를 불러** 미뤄 둔 ACK를
-///    받는다. 연결은 `receive`에서 순수 ACK를 내지 않는다(계약 동작 F5, M6-4에서 정해진 것).
+/// 2. 받은 패킷 묶음을 하나씩 `receive(_:at:)`에 넣고, 묶음이 끝나면 **같은 시각으로 `advance(to:)`를 부른다**. 곧바로 보낼
+///    ACK(순서가 어긋난 데이터 등)는 그 패킷의 `receive` 출력으로 나오고, 순서대로 온 데이터의 ACK만 2×MSS마다 하나로
+///    합쳐진다(계약 동작 F5).
 /// 3. `nextDeadline`에 타이머를 맞추고, 깨면 `advance(to:)`를 부른다.
 ///
 /// 연결은 `ConnectionID`로, 리스너는 `ListenerID`로 가리킨다. 둘 다 스택 하나 안에서 다시 쓰지 않는 번호라, 끝난 연결의
