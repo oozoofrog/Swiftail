@@ -83,7 +83,7 @@ public enum NodeState: Sendable, Equatable {
 public enum NodeEvent: Sendable, Equatable {
     /// 상태가 바뀌었다. 같은 상태는 다시 내지 않는다.
     case stateChanged(NodeState)
-    /// 피어의 경로가 바뀌었다. nil은 그 피어가 데이터면에서 빠졌다는 뜻이다(M4 그대로).
+    /// 피어의 경로가 바뀌었다. nil은 그 피어가 데이터면에서 빠졌거나 유휴라는 뜻이다(M4 그대로).
     case peerPathChanged(fqdn: String, path: PeerPath?)
 }
 
