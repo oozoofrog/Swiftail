@@ -1,0 +1,564 @@
+# Swiftail 터널 계약 (M5, 초안)
+
+M5의 목표는 **iOS 패킷 터널 노드**다. 앱의 Network Extension(패킷 터널 제공자)이 찾아 준 utun 파일 기술자로 IP 패킷을 주고받고, OS에 줄 주소·경로·DNS 설정을 산출하고, 서비스 IP(`100.100.100.100`, `fd7a:115c:a1e0::53`)로 오는 MagicDNS 질의에 답하고, 다시 시작해도 같은 노드로 뜨고, Wi-Fi ↔ 셀룰러 전환 뒤 복구한다(`docs/plan.md` 7절 M5). 첫 사용처는 iPhone의 패킷 터널 확장이고, 지금 그 자리의 Go 코어(`rd_start`·`rd_next_event`·`rd_status`·`rd_tunnel_*`·`rd_stop`)를 이 계약의 `TailnetNode`로 바꾸는 것이 목적이다. 라이브러리는 NetworkExtension 프레임워크에 의존하지 않는다. `NEPacketTunnelNetworkSettings` 적용, utun 찾기, `NWPathMonitor`는 앱의 몫이다.
+
+이 문서는 **초안**이다. "첫 사용처 확인 필요" 절을 첫 사용처 쪽에 보내 호출 지점과 맞는지 검토받은 뒤 확정한다.
+
+프로토콜 세부는 다음 노트를 따른다(모두 검증됨). 이 문서는 모듈 경계, M5 범위, 공개 API, 시험과 관문만 정한다.
+
+- [dns-state-node.md](../protocol-notes/dns-state-node.md)(아래에서 "DNS 노트"): DNS 산출 4.1.4, 응답기 3.1·4.2, 서비스 IP 4.3, 상태 저장 4.4, 상태 기계 4.5, 네트워크 전환 4.6, 결정 표 6.4.
+- [netmap-engine.md](../protocol-notes/netmap-engine.md)(아래에서 "엔진 노트") 4.8: 주소와 OS 경로 산출.
+- [disco-magicsock.md](../protocol-notes/disco-magicsock.md)(아래에서 "magicsock 노트") 4.11: 재결속.
+
+기존 계약과의 관계: [SwiftailEngine.md](SwiftailEngine.md)(M3, "M4에서 바뀌는 것" 포함)와 [SwiftailMagicsock.md](SwiftailMagicsock.md)(M4)의 내용은 그대로 두고, 이 문서가 M5의 변경을 덧붙인다. 어긋나면 이 문서가 앞선다. M4 단위 4(`Magicsock` 통합)가 끝난 상태를 출발점으로 삼는다.
+
+## 타깃
+
+| 타깃 | M5에서 더하는 것 | 근거 |
+| --- | --- | --- |
+| `SwiftailEngine` | DNS 메시지 코덱, MagicDNS 응답기, 서비스 IP 응답 패킷 만들기, 터널 설정 산출(`TunnelNetworkSettings`), `TailnetEngine.send`의 로컬 처리(서비스 IP·자기 주소). 모두 입출력 없는 값 타입 | plan 5절 모듈 표가 "netmap → 경로·DNS, MagicDNS 응답기, TUN"을 엔진 몫으로 둔다. 소켓·시계 없이 시험할 수 있다 |
+| `SwiftailIO` (package) | `UTUNDevice`(utun 파일 기술자의 검사·복제·읽기·쓰기), 소켓을 인터페이스에 묶기(`DatagramSocket`의 `IP_BOUND_IF`, `NetworkSocket`의 `requiredInterface`) | POSIX 호출을 가장자리 한 곳에 가둔다(plan 5절 코드 기준) |
+| `SwiftailControl` | `ControlClient.setNetworkInterface(_:)`(연결을 끊고 새 인터페이스로 다시 잇기), 맵 프레임 한도를 줄임 | 제어 연결의 재결속(DNS 노트 4.6.3 4)과 메모리 |
+| `SwiftailDERP` | `DERPClient`가 인터페이스를 받음, 받은 패킷 버퍼의 바이트 한도 | DERP 연결의 재결속(DNS 노트 4.6.3 2)과 메모리 |
+| `SwiftailMagicsock` | `Magicsock.rebind(localPort:localAddresses:loopbackAddresses:at:)` | magicsock 노트 4.11 2 |
+| `Swiftail` | 공개 API: `TunnelDevice`, `NodeState`, `NodeStatus`, `TailnetNode`의 M5 모양, 상태 기계, utun 읽기 루프, 상태 디렉터리 중복 거절 | 공개 API는 `Swiftail`에만 둔다(기존 구조) |
+
+새 타깃은 만들지 않는다. 의존 방향도 바뀌지 않는다. `Swiftail`이 Network 프레임워크의 `NWInterface`를 공개 API에 쓴다(plan 4절(c)가 허용한 프레임워크다).
+
+`TunnelNetworkSettings`는 `SwiftailEngine`의 공개 타입이다(`PeerPath`가 `SwiftailMagicsock`의 것인 것과 같다). 앱은 `import Swiftail`, `import SwiftailEngine`(설정 타입), `import SwiftailBase`(`IPAddress`·`IPPrefix`)를 쓴다.
+
+## M5에서 지원하는 범위
+
+지원: utun 하나, IPv4·IPv6 tailnet 주소, 피어별 경로(iOS 규칙), MagicDNS의 UDP 질의(tailnet 이름·역방향 영역·`ExtraRecords`), 서비스 IP의 ICMP echo, `setDefaultInterface`로 알린 기본 인터페이스 전환.
+
+지원하지 않는 것은 닫힌 쪽으로 처리한다(아래 "제외" 표에 근거와 필요해지는 시점). 서브넷 경로·exit node는 M3부터 그대로 받지 않는다.
+
+## 공개 API (`Swiftail`, M5 시점 전체)
+
+```swift
+import Network
+import SwiftailBase
+import SwiftailEngine
+import SwiftailMagicsock
+
+/// `TailnetNode` 하나를 띄우는 데 필요한 설정. (M3에서 바뀐 것: `defaultControlURL`)
+public struct NodeConfiguration: Sendable {
+    /// Tailscale 제어 서버(`https://controlplane.tailscale.com`, Go `ipn.DefaultControlURL`).
+    public static let defaultControlURL: URL
+    /// 신원 파일(`identity.json`)을 둘 디렉터리. 파일 URL이어야 한다. 노드 둘이 같은 디렉터리를 동시에 쓰지 못한다.
+    public var stateDirectory: URL
+    public var hostname: String
+    public var controlURL: URL
+    /// 첫 등록에만 쓴다. 저장하지 않는다.
+    public var authKey: String?
+    public var ephemeral: Bool
+    public init(stateDirectory: URL, hostname: String, controlURL: URL = Self.defaultControlURL,
+                authKey: String? = nil, ephemeral: Bool = false)
+}
+
+/// 노드가 IP 패킷을 주고받는 장치.
+public enum TunnelDevice: Sendable {
+    /// Network Extension이 만든 utun 제어 소켓. 노드는 이 기술자를 복제해 쓰고 원래 기술자는 닫지도 읽지도 않는다.
+    ///
+    /// - Parameter mtu: 앱이 `NEPacketTunnelNetworkSettings.mtu`로 적용하는 값. 1280…1420. 노드는 utun의 MTU를
+    ///   바꾸지 않고, 이 값을 `TunnelNetworkSettings.mtu`로 돌려준다.
+    case utun(fileDescriptor: Int32, mtu: Int = 1280)
+    /// 메모리 장치. `TailnetNode.send(_:)`로 넣고 `inboundPackets`로 받는다. 시험과 관문용이며 utun과 같은 처리를 거친다.
+    case memory(mtu: Int = 1280)
+}
+
+/// 노드의 상태. Go `ipn.State`에서 앱이 쓰는 것만 남겼다(DNS 노트 4.5).
+public enum NodeState: Sendable, Equatable {
+    /// 등록·netmap·첫 연결을 기다린다.
+    case starting
+    /// 사용자가 이 URL에서 로그인해야 한다. 노드가 등록을 시작하면 제어 서버가 늘 URL을 준다.
+    case needsLogin(URL)
+    /// tailnet 관리자가 이 기기를 승인해야 한다(netmap 자기 노드의 `MachineAuthorized`가 거짓).
+    case needsMachineAuth
+    /// netmap을 받았고, 홈 DERP 연결이 섰거나 피어 하나와 WireGuard 핸드셰이크를 마친 적이 있다.
+    case running
+}
+
+/// 노드가 알리는 변화. `TailnetNode.events`로 받는다. (M4에서 바뀐 것: 아래 "총괄 확인 필요" T1)
+public enum NodeEvent: Sendable, Equatable {
+    /// 상태가 바뀌었다. 같은 상태는 다시 내지 않는다.
+    case stateChanged(NodeState)
+    /// 피어의 경로가 바뀌었다. nil은 그 피어가 데이터면에서 빠졌다는 뜻이다(M4 그대로).
+    case peerPathChanged(fqdn: String, path: PeerPath?)
+}
+
+/// 지금 노드의 모습. 앱의 상태 화면과 진단이 읽는다.
+public struct NodeStatus: Sendable, Equatable {
+    public var state: NodeState
+    /// 자기 tailnet 주소(netmap 자기 노드의 `Addresses`). netmap 전에는 비어 있다.
+    public var addresses: [IPAddress]
+    /// 자기 MagicDNS 이름에서 끝의 점을 뗀 것(`rd-phone-1a2b3c4d.tail0001.ts.net`). netmap 전에는 nil.
+    public var fqdn: String?
+    /// 자기 노드의 `StableID`. 첫 사용처의 페어링이 이 값에 묶인다. netmap 전에는 nil.
+    public var stableID: String?
+    /// ts.net 인증서를 받을 수 있는 이름(netmap `DNSConfig.CertDomains`). M5는 읽어 보여 주기만 한다.
+    public var certDomains: [String]
+    /// netmap의 피어 수.
+    public var peerCount: Int
+    /// 마지막으로 `networkSettings`에 낸 설정. 아직 내지 않았으면 nil.
+    public var networkSettings: TunnelNetworkSettings?
+}
+
+public enum NodeError: Error, Sendable {
+    case control(ControlError)
+    /// 설정이 잘못되었다: 상태 디렉터리, 제어 서버 URL, 호스트 이름, utun 기술자, MTU. `run()`을 두 번 부른 것도 여기다.
+    /// 메시지는 무엇이 잘못됐는지만 담는다(경로·키 없음).
+    case invalidConfiguration(String)
+    /// UDP 소켓을 열거나 묶지 못했다(M4).
+    case udpUnavailable(String)
+    /// 새로 더함. 같은 프로세스의 다른 노드가 이 상태 디렉터리로 돌고 있다.
+    case stateDirectoryInUse
+    /// 새로 더함. 터널 장치를 더 읽을 수 없다(utun 읽기 오류나 끝). 메시지에는 errno 이름만 담는다.
+    case tunnelDeviceClosed(String)
+}
+
+public actor TailnetNode {
+    /// 설정과 장치를 검사한다. 파일·소켓·Task를 만들지 않는다(utun 검사는 읽기만 하는 시스템 호출이다).
+    public init(configuration: NodeConfiguration, device: TunnelDevice = .memory()) throws(NodeError)
+
+    /// 상태와 경로 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    public nonisolated var events: AsyncStream<NodeEvent> { get }
+
+    /// 앱이 OS에 적용할 터널 설정. 바뀐 경우에만 나오고, 읽지 않은 것은 **가장 새 것 하나만** 남는다.
+    /// 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    public nonisolated var networkSettings: AsyncStream<TunnelNetworkSettings> { get }
+
+    /// 메모리 장치일 때 피어가 보냈고 필터를 통과한 IP 패킷과 노드가 로컬에서 만든 응답(MagicDNS 등).
+    /// utun 장치일 때는 아무것도 내지 않는다(패킷은 utun으로 간다). 그 밖은 M3 그대로.
+    public nonisolated var inboundPackets: AsyncStream<[UInt8]> { get }
+
+    /// 등록하고 데이터면을 유지한다. 호출한 Task가 취소될 때까지 돌아오지 않는다. 노드 하나에 한 번만 부른다.
+    /// 다시 시도해도 소용없는 실패(제어의 끝난 실패, 장치 닫힘, 상태 디렉터리 사용 중)만 던진다.
+    public func run() async throws(NodeError)
+
+    /// 메모리 장치일 때 IP 패킷 하나를 넣는다(utun에서 읽은 것과 같은 처리). utun 장치일 때는 버린다.
+    public func send(_ ipPacket: [UInt8])
+
+    /// 지금 상태.
+    public var status: NodeStatus { get }
+
+    /// 대화형 로그인 URL을 새로 요청한다. URL은 `.stateChanged(.needsLogin(url))`로 온다.
+    public func startInteractiveLogin()
+
+    /// 기기의 기본 경로가 이 인터페이스로 간다(앱의 `NWPathMonitor`). 노드의 제어·DERP·UDP 소켓을 이 인터페이스에
+    /// 묶고, 바뀌었으면 다시 묶는다. 만족된 경로를 받을 때마다 불러도 된다(같은 인터페이스·같은 주소면 STUN만 다시 한다).
+    public func setDefaultInterface(_ interface: NWInterface)
+
+    /// 이름이 `fqdn`인 피어의 지금 경로(M4 그대로).
+    public func path(toPeerNamed fqdn: String) -> PeerPath?
+}
+```
+
+`SwiftailEngine`의 공개 타입:
+
+```swift
+/// 앱이 `NEPacketTunnelNetworkSettings`로 옮겨 적용할 값. 라이브러리는 NetworkExtension에 의존하지 않는다.
+/// 목록의 순서는 정해져 있다(같은 netmap이면 같은 값이 나온다).
+public struct TunnelNetworkSettings: Sendable, Equatable {
+    /// 자기 주소. IPv4는 /32, IPv6는 /128. 비어 있지 않다.
+    public var addresses: [IPPrefix]
+    /// 터널로 보낼 경로. 피어 경로(정렬) 뒤에 서비스 IP 경로. 자기 주소가 없는 계열의 경로는 없다.
+    public var routes: [IPPrefix]
+    /// 비어 있으면 DNS를 설정하지 않는다. 있으면 IPv4 서비스 IP가 먼저다.
+    public var dnsServers: [IPAddress]
+    /// 끝 점 없는 소문자 이름. `dnsServers`가 비어 있지 않으면 이것도 비어 있지 않다.
+    public var dnsMatchDomains: [String]
+    public var mtu: Int
+
+    /// netmap에서 설정을 산출한다(아래 동작 S). 자기 주소가 없으면 nil.
+    /// - Parameter now: 피어와 자기 노드의 키 만료를 판단할 시각(엔진 계약 M3 동작 2와 같은 시계).
+    public init?(netmap: Netmap, mtu: Int, at now: Date)
+}
+```
+
+`docs/plan.md` 6절 초안과 다른 점(이유):
+
+- `start()`/`stop()` 대신 `run()` + Task 취소(M3 그대로). 정지는 `runTask.cancel()` 뒤 `await runTask.value`다.
+- `NodeState`에 `stopped`·`failed`가 없다. 정지는 `run()`이 돌아온 것이고, 실패는 `run()`이 던진 `NodeError`다. 둘 다 사건이 아니라 `run()`의 결과로 알린다.
+- `NodeEvent.networkSettings` 대신 별도 흐름 `networkSettings`(총괄 확인 필요 T2).
+- `TunnelNetworkSettings`의 값은 문자열이 아니라 `IPPrefix`·`IPAddress`다(검증된 값을 넘긴다). 앱은 `description`으로 CIDR 문자열을 얻는다.
+- `setDefaultInterface`가 이름 대신 `NWInterface`를 받는다(총괄 확인 필요 T3).
+- `init`이 던진다(총괄 확인 필요 T4).
+- `TunnelDevice.inProcess`(M6)는 M6에서 더한다.
+
+## 동작
+
+번호는 시험과 검토에서 가리키는 이름이다.
+
+### U. utun 장치 (`SwiftailIO.UTUNDevice`, 노드의 읽기 루프)
+
+1. **검사(`init`)**: 기술자가 0 이상이고, `getpeername`의 주소 계열이 `AF_SYSTEM`(32)이고, `getsockopt(SYSPROTO_CONTROL=2, UTUN_OPT_IFNAME=2)`의 이름이 `utun`으로 시작해야 한다. 아니면 `invalidConfiguration`. MTU가 1280…1420 밖이면 `invalidConfiguration`. 검사는 읽기만 하는 호출이므로 부작용이 없다. 근거: 첫 사용처 Go의 `CheckUTUN`(`core/internal/tunnel/utun_darwin.go`), wireguard-go `tun/tun_darwin.go:199-214`의 `Name()`. MTU 범위는 첫 사용처 시험 계약(`docs/tunnel.md` "설정")과 wireguard-go 기본 1420(`device/tun.go:13`).
+2. **복제(`run()` 시작)**: `fcntl(F_DUPFD_CLOEXEC)`로 복제하고 복제본에 `O_NONBLOCK`을 건다. `O_NONBLOCK`은 같은 열린 파일 설명을 공유하는 원래 기술자에도 걸린다. 앱은 원래 기술자로 읽고 쓰지 않으므로 문제가 없다(첫 사용처 `docs/tunnel.md` "설정"과 같다). 노드는 `run()`이 끝날 때 **복제본만** 닫는다. 원래 기술자는 끝까지 닫지 않는다.
+3. **프로토콜 머리**: utun은 패킷마다 앞에 4바이트를 둔다. 읽을 때 4바이트보다 짧으면 버리고, 머리 값은 보지 않고 나머지를 IP 패킷으로 넘긴다. 쓸 때 IP 버전이 4면 `00 00 00 02`(`AF_INET`), 6이면 `00 00 00 1e`(`AF_INET6`), 그 밖이면 쓰지 않는다. 근거: wireguard-go `tun/tun_darwin.go:224-262`(`Read`는 `n < 4`를 버리고 머리를 보지 않음, `Write`는 버전으로 `AF_INET`/`AF_INET6`을 씀), Darwin 상수 `golang.org/x/sys@v0.49.0/unix/zerrors_darwin_arm64.go:27-28`.
+4. **읽기**: `DispatchSource` 읽기 사건으로 깨어나 `EAGAIN`까지 읽는다(폴링하지 않는다. M4 `DatagramSocket`과 같다). `read` 한 번이 패킷 하나다. 버퍼는 재사용하는 하나(4 + 65,535바이트)이고, 읽은 길이만큼만 복사해 넘긴다. `EINTR`는 다시 읽는다. 0바이트(끝)나 `EAGAIN`·`EINTR`가 아닌 오류는 장치가 닫힌 것이다: `run()`이 `tunnelDeviceClosed(errno 이름)`을 던지고 끝난다. Go도 TUN 읽기 오류면 장치를 닫는다(wireguard-go `device/send.go:436-450`). 첫 사용처의 "엔진이 스스로 멈추면 `Error`, `rd_stop` 전까지 풀리지 않음"은 `run()`이 끝나 있는 것으로 같다.
+5. **쓰기**: 노드가 만든 패킷마다 한 번 `write`한다. 기다리지 않는다. 실패(`EAGAIN`, `ENOBUFS`, `EMSGSIZE` 등)는 그 패킷을 버리고 계속한다(IP는 원래 그렇다. Go도 TUN 쓰기 오류를 기록만 하고 계속한다, wireguard-go `device/receive.go:552-555`). 쓰기 큐는 없다.
+6. POSIX 호출과 주소 재해석은 `UTUNDevice.swift` 한 파일에 가두고 이유를 주석으로 남긴다. 기술자는 `Mutex`로 지킨다.
+7. **메모리 장치**: `send`가 3의 읽기 결과 자리에, `inboundPackets`가 5의 쓰기 자리에 들어간다. 그 사이의 처리는 같다. 시험용 `package func failMemoryDevice()`는 4의 읽기 오류와 같은 결과(`tunnelDeviceClosed("test")`)를 낸다.
+
+### L. 로컬 처리 (`TailnetEngine.send`, 장치에서 읽은 패킷)
+
+M3 동작 4(보내기)의 앞에 다음을 둔다. 엔진 출력은 그대로 `.datagram`·`.ipPacket`·`.dropped`이고, 로컬 응답은 `.ipPacket`(장치로 쓸 것)으로 나온다.
+
+1. 패킷 해석(M3 동작 1). 실패는 M3과 같다.
+2. **서비스 IP**(DNS 노트 4.3): 목적지가 `100.100.100.100` 또는 `fd7a:115c:a1e0::53`이면 WireGuard로 보내지 않는다.
+   - UDP 53: 응답기(동작 D)의 답을 출발·목적 주소와 포트를 맞바꾼 UDP로 돌려준다. 답이 없으면(동작 D의 무응답) 아무것도 내지 않는다. UDP 체크섬은 IPv4·IPv6 모두 계산한다(IPv6는 필수, RFC 8200 8.1).
+   - ICMP echo request(v4 type 8, v6 type 128): echo reply(v4 0, v6 129)로 주소를 맞바꾸고 identifier·sequence·payload를 그대로 돌려준다(Go `net/tstun/wrap.go:752-769`. 결정 D5).
+   - TCP: RST로 답한다(결정 D4). 들어온 세그먼트에 ACK가 있으면 `seq = SEG.ACK`, RST만. 없으면 `seq = 0`, `ack = SEG.SEQ + SEG.LEN`(SYN·FIN은 1씩), RST+ACK. 들어온 것이 RST면 답하지 않는다(RFC 9293 3.10.7.1).
+   - 그 밖(다른 UDP 포트, 다른 프로토콜, ICMP의 다른 타입): 버린다. 응답(ICMP unreachable 포함)을 보내지 않는다(Go와 같다, DNS 노트 4.3 3).
+   - 만드는 응답의 TTL·hop limit은 64다(Go `net/packet/ip4.go:49`, `ip6.go:42`. gVisor `pkg/tcpip/network/ipv4/ipv4.go:59`의 기본값도 64).
+   - 새 `Drop` 사례: `.serviceIPPacket`(4번째 갈래로 버린 것).
+3. **자기 주소**: 목적지가 자기 tailnet 주소면 필터를 거치지 않고 그 패킷을 그대로 `.ipPacket`으로 되돌린다. Network Extension은 터널 주소로 가는 패킷을 커널에서 되돌리지 않고 터널로 보낸다(Go `wgengine/userspace.go:652-667`의 주석과 동작).
+4. **TSMP**: 장치에서 온 TSMP(IP 프로토콜 99)는 버린다(`.consumedControlPacket`). 엔진 계약 M3의 `shortcut:`(위에서 내려온 TSMP를 버리지 않음)을 여기서 푼다.
+5. 나머지는 M3·M4 그대로(피어 선택 → 흐름 기록 → WireGuard).
+
+### S. 설정 산출 (`TunnelNetworkSettings.init?(netmap:mtu:at:)`)
+
+1. **주소**: 자기 노드 `Addresses` 가운데 한 주소짜리 접두(IPv4 /32, IPv6 /128)를 netmap 순서대로. 없으면 nil(설정을 내지 않는다).
+2. **피어 경로**(엔진 노트 4.8 표): 데이터면에 올린 피어(`EnginePeer.peers(in:at:)`)의 AllowedIPs에서 계산한다.
+   - CGNAT(`100.64.0.0/10`) 안의 IPv4 /32: 고유한 것이 10,000개 이하면 하나씩, 넘으면 `100.64.0.0/10` 하나. 자기 노드 `CapMap`에 `one-cgnat?v=true`가 있으면 문턱이 1이다(둘부터 /10). `one-cgnat?v=false`이거나 둘 다 없으면 기본(iOS 규칙: 문턱 10,000). 키 문자열은 Go `tailcfg/nodecap/nodecap.go:148`, `:153`. 제어 지시를 자기 노드 `CapMap`에서 읽는 것은 Go `control/controlclient/map.go:197`, `control/controlknobs/controlknobs.go:155-198`.
+   - Tailscale ULA(`fd7a:115c:a1e0::/48`) 안의 IPv6 /128: 하나라도 있으면 `fd7a:115c:a1e0::/48` 하나.
+   - M3부터 AllowedIPs에는 Tailscale 범위의 한 주소짜리와 피어 자신의 주소만 남으므로(엔진 계약 M3 동작 2) 그 밖의 접두는 나오지 않는다.
+   - 피어 경로는 정렬한다: IPv4가 먼저, 같은 계열은 주소 바이트 순, 같으면 접두 길이 순. 자기 주소는 경로를 만들지 않는다.
+3. **서비스 경로**: 자기 주소에 IPv4가 있으면 `100.100.100.100/32`, IPv6가 있으면 `fd7a:115c:a1e0::53/128`을 피어 경로 뒤에 이 순서로 붙인다(엔진 노트 4.8 2).
+4. **계열 거르기**: 자기 주소가 없는 계열의 경로는 뺀다(첫 사용처 `core/internal/tunnel/settings.go`의 `buildSettings`와 같다).
+5. **DNS**: DNS 노트 4.1.4의 1~5를 그대로 따른다. 요약: 자기 키가 만료됐으면 DNS 없음 → `localZones` = (`Proxied`면 MagicDNS 접미사 + `0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.` + `64`~`127.100.in-addr.arpa.`) ∪ (리졸버가 빈 `Routes` 키) ∪ (어느 영역에도 덮이지 않는 유효한 `ExtraRecords` 이름) → 비면 DNS 없음 → `dnsServers`는 자기 주소 계열에 맞춰 IPv4 서비스 IP 먼저(자기 노드 `CapMap`에 `force-register-magicdns-ipv4-only`가 있으면 IPv4만) → `dnsMatchDomains`는 `localZones`를 끝 점 포함 문자열 순으로 정렬하고 끝 점을 뗀 것. `Resolvers`와 리졸버가 있는 `Routes`는 쓰지 않는다(결정 D1·D2).
+6. **MTU**: 장치의 MTU 그대로.
+7. 같은 `localZones`와 netmap이 동작 D의 응답기 설정이 된다(DNS 노트 4.1.4 6). 엔진이 netmap을 적용할 때 응답기를 함께 바꾼다.
+
+### E. 설정을 내는 규칙 (`networkSettings` 흐름)
+
+첫 사용처의 규칙(`docs/tunnel.md` "이벤트 `network-settings`", DNS 노트 8.2)을 그대로 따른다.
+
+1. netmap을 적용할 때마다 동작 S로 산출한다. nil(자기 주소 없음)이면 내지 않는다.
+2. 마지막으로 낸 값과 같으면(`==`, 목록 순서 포함) 내지 않는다. 설정 적용 → utun 링크 변화 → 다시 적용으로 도는 고리를 막는다. DNS만 바뀌어도(서버, match 도메인) 낸다.
+3. 흐름의 버퍼는 `.bufferingNewest(1)`이다. 앱이 아직 읽지 않은 설정은 새 것이 대신한다.
+4. `NodeState`가 `.needsLogin`·`.needsMachineAuth`로 바뀌어도 빈 설정을 내지 않는다(1과 같다. 첫 사용처도 주소가 없을 때 내지 않는다). 그동안 데이터면은 netmap이 없거나 만료된 피어를 올리지 않으므로 패킷이 나가지 않는다.
+5. `run()`이 끝날 때 설정을 내지 않는다. `status.networkSettings`는 마지막으로 낸 값이다.
+
+### D. MagicDNS 응답기 (`SwiftailEngine`, internal)
+
+DNS 노트 6.1 2의 최소 구현을 그대로 한다. 입력은 질의 바이트와 지금 시각(SOA의 SERIAL)이고, 출력은 응답 바이트 또는 무응답이다. 소켓·시계가 없다.
+
+1. **코덱**(DNS 노트 3.1): 머리와 첫 질문만 읽는다. 이름은 포인터를 10번까지 따라가며 읽고, 응답은 압축 없이 쓴다. 응답 머리는 질의 머리를 복사한 뒤 QR=1, AA=1, RD=1이면 RA=1. 질문·답변 이름은 질의의 대소문자 그대로 쓰고, 비교는 ASCII 소문자로 한다. TTL은 A·AAAA·PTR 5초, SOA 10초.
+2. **판정**(DNS 노트 3.1 RCODE 표와 4.2.2의 1~3·5): FORMERR(머리·질문 없음, QR=1 / 유효하지 않은 FQDN은 질문 포함) → PTR은 역방향 규칙 → `.onion`은 NXDOMAIN → `magicdns.localhost-tailscale-daemon.`의 A·AAAA → `ExtraRecords` 호스트 표 → 노드 색인(4.2.1: 자기 노드와 피어의 `Name`, MagicDNS 접미사를 뗀 짧은 이름, 주소가 하나도 없는 노드는 모름) → 타입별 결과(A·AAAA·ANY 하나, 그 타입 주소가 없으면 NOERROR + SOA, NS·SOA·AXFR·HINFO는 NOTIMP, 그 밖은 NOERROR 빈 답) → 모르는 이름이 `localZones` 안이면 NXDOMAIN + SOA.
+3. **피어 AAAA**: Go 규칙(결정 D7). 대상에 IPv4가 있고 자기 노드 `capabilities`·`CapMap` 키에 `magicdns-aaaa`가 없으면 IPv6를 답하지 않는다. 자기가 IPv6 전용이면 대상의 IPv6만(DNS 노트 4.2.1 `magicDNSAddrs`).
+4. **역방향**(DNS 노트 4.2.2 5): Bonjour 역방향 이름은 NXDOMAIN(질문 포함, RA = RD, AA 없음). `in-addr.arpa`·`ip6.arpa`(니블 32개)를 주소로 읽고, 4to6 범위는 `100.x.y.z`로 먼저 찾는다. 서비스 IP는 `magicdns.localhost-tailscale-daemon.`. 못 찾으면 `localZones` 안이면 NXDOMAIN + SOA.
+5. **영역 밖**: 로컬 답이 없고 `localZones` 밖이면 SERVFAIL(질문 포함, AA=1, RA는 질의 값). 상위로 전달하지 않는다(DNS 노트 4.2.3. 결정 D2).
+6. **UDP 크기**(DNS 노트 4.2.4): 질의 끝 11바이트가 유효한 OPT면 그 광고 크기, 아니면 512바이트를 넘을 때 TC만 켠다. 자르지 않는다. 응답에 OPT를 싣지 않는다.
+7. **자기 키 만료·netmap 없음**: 응답기의 `localZones`가 비고 색인도 비므로 모든 이름이 SERVFAIL이다(닫힌 쪽).
+8. 생략(DNS 노트 6.1 "생략 가능"): 4via6 이름, `dns-subdomain-resolve` 서브도메인 규칙, 상위 전달 전체.
+
+### B. 상태 기계 (`Swiftail`, internal 값 타입)
+
+DNS 노트 4.5의 대응표를 Swiftail의 입력으로 옮긴다. 입력: 제어 사건(`loginRequired`, `registered`, `netmap`), 홈 DERP 연결이 섬, 엔진이 어떤 피어와 핸드셰이크를 마침. 출력: `NodeState`. 바뀔 때만 `.stateChanged`를 낸다.
+
+| # | 조건(위에서부터) | 결과 | Go 표 |
+| --- | --- | --- | --- |
+| 1 | 제어가 `loginRequired(url)`를 냈고 그 뒤 `registered`가 오지 않았다 | `.needsLogin(url)` | 2, 5 |
+| 2 | netmap 없음 | `.starting` | 3 |
+| 3 | 자기 노드가 `MachineAuthorized`가 아님 | `.needsMachineAuth` | 6 |
+| 4 | 이전이 `.running` | `.running` | 9 |
+| 5 | 홈 DERP 연결이 선 적이 있거나 핸드셰이크를 마친 피어가 있음 | `.running` | 8(결정 D9) |
+| 6 | 그 밖 | `.starting` | 7, 10 |
+
+- 자기 키 만료(Go 표 5)는 `ControlClient`가 새 키로 다시 등록하며 처리한다(SwiftailControl 계약 단위 4). 대화형 로그인이 필요하면 `loginRequired`가 오므로 1로 간다. 새 키도 만료면 `ControlClient`가 `nodeKeyExpired`로 끝나고 `run()`이 그것을 던진다.
+- `registered`를 받으면 1의 URL을 지운다(Go가 `Running` 진입 때 URL을 지우는 것과 같은 효과, DNS 노트 4.5).
+- 첫 사용처의 "URL도 인증 키도 없는 `NeedsLogin`에서 30초마다 로그인 재요청"(DNS 노트 4.5 끝)은 필요 없다. Swiftail의 `ControlClient`는 등록을 시작하면 서버가 준 `AuthURL`로 늘 `loginRequired`를 낸다(`Sources/SwiftailControl/Client/ControlClient+Registration.swift` 문서 주석 3). URL 없는 `needsLogin`이 없으므로 `NodeState.needsLogin`의 URL은 옵셔널이 아니다.
+- Go의 `Stopped`·`NoState`·`InUseOtherUser`는 없다. 정지는 `run()`의 끝이다.
+- `.running` 뒤 제어·DERP 연결이 끊겨도 `.running`이다(Go 표 9와 같다). M3·M4의 `reconnecting`은 없앤다(총괄 확인 필요 T1).
+
+### N. 네트워크 전환 (`setDefaultInterface`)
+
+DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없으므로 앱이 부르는 `setDefaultInterface`가 유일한 통지원이다(결정 D6).
+
+1. **무시하는 것**: 인터페이스 이름이 이 노드의 utun 이름(동작 U1에서 읽은 것)과 같으면 무시한다(Go `net/netns/netns_darwin.go:57-145`가 Tailscale utun을 무효로 보는 것과 같다). `run()` 전이나 끝난 뒤의 호출은 마지막 값만 기억한다.
+2. **판정**: 노드는 마지막 인터페이스(이름과 `index`)와 마지막으로 읽은 로컬 IPv4 주소(`LocalInterfaceAddresses.current()`)를 쥔다. 호출마다 주소를 다시 읽는다.
+   - 처음 받은 인터페이스, 또는 인터페이스나 로컬 주소가 바뀜 → 3의 **재결속**. Go `RebindLikelyRequired`(DNS 노트 4.6.2)의 Swiftail판이다(가용 프로토콜·비용·PAC 변화는 보지 않는다).
+   - 같음 → `Magicsock`에 STUN 회차만 다시 시작하게 한다(Go: 링크 변경마다 `ReSTUN`, DNS 노트 4.6.3 1).
+3. **재결속**(Go 엔진의 순서, DNS 노트 4.6.3 1):
+   1. 새 인터페이스를 노드의 "지금 인터페이스"로 둔다. 이후 여는 모든 소켓이 이 인터페이스에 묶인다.
+   2. DERP: 열린 모든 지역 연결을 닫고 홈 지역부터 다시 연다(`DERPClient`를 새 인터페이스로 새로 만든다). `shortcut:` Go는 로컬 주소가 기본 인터페이스 주소인 연결은 남기고 3초 Ping으로 확인한다(DNS 노트 4.6.3 2). 모두 다시 여는 것이 단순하고, 비용은 홈이 아닌 연결의 재연결뿐이다. 필요해지는 시점: 실기기 전환에서 재연결 지연이 문제일 때.
+   3. UDP: 소켓을 닫고 같은 포트로 다시 묶는다. 실패하면 포트 0으로 묶는다. 그것도 실패하면 `run()`이 `udpUnavailable`을 던진다. 이어서 `Magicsock.rebind(localPort:localAddresses:loopbackAddresses:at:)`: 모든 피어의 `bestAddr`·신뢰·Ping 기록을 지우고(magicsock 노트 4.11 2) STUN 회차를 곧바로 시작한다. 엔드포인트가 바뀌면 M4 N4대로 제어 서버에 올린다.
+   4. 제어: `ControlClient.setNetworkInterface(_:)`가 지금 연결을 닫고 물러남 없이 새 인터페이스로 다시 잇는다(Go `tsdial`이 기본 인터페이스가 바뀐 시스템 연결을 닫는 것, DNS 노트 4.6.3 4). 등록 상태와 마지막 netmap은 유지된다.
+   5. 설정: 다시 산출하지 않는다. netmap이 바뀌지 않았으므로 동작 E 2에 따라 나갈 것이 없다.
+4. **소켓 묶기**(DNS 노트 4.6.4): UDP 소켓은 `setsockopt(IPPROTO_IP, IP_BOUND_IF, index)`. 제어·DERP의 `NWConnection`은 `NWParameters.requiredInterface = interface`. 목적지가 루프백 주소면 묶지 않는다(Go `netns_darwin.go:38-55`. macOS 관문의 루프백 testcontrol·DERP가 이 규칙으로 돈다). 인터페이스를 아직 모르면 묶지 않고 연다.
+5. `shortcut:` 망이 내려감(만족된 경로 없음)의 처리(Go: DERP 닫기, 제어 일시 정지, DNS 노트 4.6.3 1·3)는 없다. 앱은 만족된 경로만 알린다. 끊긴 동안 연결은 각자의 재시도·물러남으로 버틴다. 필요해지는 시점: 실기기에서 망이 없는 동안의 재시도가 배터리·메모리에 문제일 때.
+6. `shortcut:` UDP 송신 오류(`EPERM`·broken pipe)에 따른 자동 재결속(magicsock 노트 4.11 3)은 없다. 필요해지는 시점: 실기기 전환 시험에서 `setDefaultInterface` 없이 소켓이 죽는 경우.
+
+### P. 상태 저장과 재시작
+
+1. 신원은 지금의 `identity.json`(머신 키 + 노드 키)이 전부다. DNS 노트 4.4.3이 "다시 시작해도 같은 노드"의 최소 집합으로 확인한 것과 같다. 더 저장하지 않는다. disco 키는 저장하지 않는다(M4 그대로).
+2. **파일 보호**(iOS): `identity.json`에 데이터 보호 등급 `completeUntilFirstUserAuthentication`과 `isExcludedFromBackup`을 노드가 직접 건다. 신원 파일은 개인 키이므로 다른 기기로 복원되면 같은 머신 키를 가진 기기가 둘이 된다(총괄 확인 필요 T6). 디렉터리의 위치(App Group 컨테이너)와 디렉터리 자체의 보호는 앱이 정한다.
+3. **중복 거절**: 프로세스 전역 표(`Mutex<Set<String>>`, 표준화한 디렉터리 경로)에 `run()`이 시작할 때 디렉터리를 올리고 끝날 때 내린다. 이미 있으면 `run()`이 곧바로 `stateDirectoryInUse`를 던진다(파일·소켓을 열기 전). 다른 프로세스 사이는 막지 않는다(첫 사용처 Go도 프로세스 안에서만 막는다, DNS 노트 4.4.3).
+4. 상태 디렉터리는 첫 사용처 Go 코어의 것과 따로 둔다(결정 D8). Go `tailscaled.state`에서의 이관은 M7 결정이다.
+
+### M. 메모리
+
+목표: 유휴 상주 20MiB 이하(plan 7절), 확장 한도 50MiB(첫 사용처 `docs/tunnel.md` "메모리와 크기"의 보고치. Apple 문서로 확인한 값이 아니다). 확정은 실기기 측정이다(관문 (나)). 계약은 **신뢰할 수 없는 입력이 쌓을 수 있는 버퍼마다 개수와 바이트 합의 상한**을 둔다.
+
+| 버퍼 | 지금 | M5 | 넘으면 |
+| --- | --- | --- | --- |
+| utun 읽기 | 없음 | 재사용 버퍼 하나 4 + 65,535바이트(동작 U4) | 해당 없음 |
+| utun 쓰기 | 없음 | 큐 없음(동작 U5) | 그 패킷을 버림 |
+| 맵 응답 프레임(`MapResponseFramer`) | 64MiB | **8MiB**(총괄 확인 필요 T5) | `malformed`. 64MiB 프레임의 해독 최고치는 약 110MB로 측정됐다(SwiftailControl 계약 단위 3 `shortcut:`). 8MiB면 같은 비율로 약 14MB |
+| `DERPClient` 받은 사건 | 256개(패킷당 최대 65,536바이트, 최악 16MiB) | 256개 **그리고 1MiB** | 오래된 것부터 버림 |
+| `DatagramSocket` 받은 데이터그램 | 256개(최대 65,535바이트, 최악 16MiB) | 256개 **그리고 1MiB** | 오래된 것부터 버림 |
+| 노드 → DERP 송신 큐 | 256개 | 256개 그리고 1MiB | 오래된 것부터 버림 |
+| `inboundPackets`(메모리 장치) | 256개 | 그대로 | 오래된 것부터 버림 |
+| `events` | 64개 | 그대로 | 오래된 것부터 버림 |
+| `networkSettings` | 없음 | 1개(동작 E 3) | 새 것이 대신 |
+
+- 바이트 한도 1MiB는 이 계약의 제안값이다. 근거는 "최악 16MiB가 한도 50MiB의 3분의 1이라 버퍼 셋이면 넘친다"는 계산뿐이다. 실기기 처리량 측정에서 버림이 보이면 조정한다.
+- 기존 `shortcut:` 가운데 M5에서 **조이는 것**: 맵 프레임 한도(SwiftailControl 계약 단위 3. 값 수로 묶던 것을 프레임 크기로 먼저 묶는다).
+- 기존 `shortcut:` 가운데 M5에서 **측정 뒤 판단하는 것**(계약은 바꾸지 않고 관문 (나)의 기록으로 결정): 피어 선등록(엔진 계약 M3 동작 3, 엔진 노트 6.3), 홈이 아닌 DERP 연결 정리(엔진 계약 M4 N3), WireGuard 패킷마다의 할당(`Sources/SwiftailWireGuard/Transport.swift`, `WireGuardDevice.swift`의 `shortcut:`), HTTP/2 받는 쪽 역압(SwiftailHTTP2 계약. 프레임 한도가 쌓이는 양을 묶는다).
+
+### C. 한도와 실패
+
+1. 어떤 바이트열을 장치에서 읽어도, 어떤 DNS 질의를 받아도 죽지 않는다. 범위를 넘는 인덱스, 정수 넘침(체크섬 합, `SEG.SEQ + SEG.LEN`의 `UInt32` 넘침은 순환), 끝없는 이름 포인터가 없어야 한다.
+2. 응답기의 실패는 닫힌 쪽이다: 해석할 수 없으면 FORMERR, 모르면 NXDOMAIN 또는 SERVFAIL. 질의를 상위로 내보내지 않는다.
+3. 서비스 IP로 간 패킷은 어떤 경우에도 WireGuard로 나가지 않는다(동작 L2).
+4. `init`의 검사 실패, `stateDirectoryInUse`는 파일·소켓·Task를 만들기 전에 끝난다.
+
+### K. 비밀
+
+1. node·머신·disco 개인 키, 인증 키를 사건·오류·`description`·`dump`에 넣지 않는다(기존 그대로). `NodeStatus`에는 키가 없다.
+2. `NodeError.tunnelDeviceClosed`·`udpUnavailable`의 메시지는 errno 이름만 담는다. `invalidConfiguration`의 메시지에 경로·기술자 번호 밖의 값을 넣지 않는다.
+3. DNS 질의 내용(이름)을 기록하지 않는다. 이 계약은 로그 API를 만들지 않는다(첫 사용처 확인 필요 F6).
+
+## 결정 (DNS 노트 6.4)
+
+| # | 결정 | 정한 것 | 근거 |
+| --- | --- | --- | --- |
+| D1 | DNS를 OS에 주는 방식 | (가) match 도메인만 | 1차 리졸버 모드는 상위 전달과 확장 안에서 OS 기본 리졸버를 읽는 방법이 필요한데 후자를 확인하지 못했다. 첫 사용처도 이렇게 좁힌다 |
+| D2 | 전역 `Resolvers`·리졸버가 있는 `Routes` | (가) 무시하고 로컬 영역만 match | 그 이름은 OS 기본 DNS로 간다. 지원하지 않음을 이 문서(제외 표)에 기록한다. 첫 사용처 시험 계약 `TestTunnelIOSDNS`와 같은 결과 |
+| D3 | 검색 도메인 | (가) 내지 않음. 앱은 `matchDomainsNoSearch = true` | 첫 사용처 그대로. 짧은 이름은 풀리지 않는다 |
+| D4 | 서비스 IP의 TCP | (나) RST | Go도 53·80·8080 밖은 RST다. 53은 M6 TCP 스택 뒤 (다) |
+| D5 | 서비스 IP의 ICMP echo | 응답 | Go와 같고 진단에 쓰인다 |
+| D6 | 링크 변경의 통지원 | (가) `setDefaultInterface`만 | 경로 감시 정책은 앱에 둔다. 같은 인터페이스로 다시 불러도 주소를 다시 읽고 STUN을 다시 한다(Go `InjectEvent`와 같은 뜻). 인자의 타입은 T3 |
+| D7 | 피어 AAAA | Go 규칙 | 동작 D3 |
+| D8 | 상태 디렉터리 | 별도 | 이관은 M7. 첫 사용처의 기존 사용자에게는 새 노드가 된다(첫 사용처 확인 필요 F9) |
+| D9 | `Running` 판정 | Go 규칙 | 피어 없는 tailnet에서도 DERP로 `running`이 된다(동작 B 5) |
+
+## 총괄 확인 필요
+
+| # | 무엇 | 선택지 | 권고 |
+| --- | --- | --- | --- |
+| T1 | `NodeEvent`의 모양 | (가) `loginRequired`·`running(addresses:)`·`reconnecting`을 없애고 `stateChanged(NodeState)`로 바꾼다. 주소는 `status`로 읽는다 / (나) 기존 셋을 두고 `stateChanged`를 더한다 | (가). 같은 사실을 두 길로 알리지 않는다. Go 상태에 `reconnecting`에 해당하는 값이 없고 첫 사용처도 쓰지 않는다. 대가: M3·M4 관문 시험(`Tests/SwiftailInteropTests`)의 사건 기다림을 고친다(구현 단위 M5-8이 함께 한다) |
+| T2 | 설정 사건의 통로 | (가) 별도 `AsyncStream<TunnelNetworkSettings>`, `.bufferingNewest(1)` / (나) plan 6절대로 `NodeEvent.networkSettings` | (가). 첫 사용처 규칙 "큐에는 최신 것 하나만"이 버퍼 정책 하나로 표현된다. (나)는 섞인 사건 버퍼(64개)에서 옛 설정만 골라 지울 수 없다 |
+| T3 | `setDefaultInterface`의 인자 | (가) `NWInterface`(이름과 `index`가 있고 `Sendable`, iPhoneOS 27.2 SDK `Network.swiftinterface`) / (나) 이름 문자열(plan 6절, Go와 같음) | (가). 제어·DERP 연결은 `NWConnection`이고 그것을 인터페이스에 묶는 길은 `NWParameters.requiredInterface(NWInterface)`뿐이다. 이름만으로는 `NWInterface`를 만들 수 없어 라이브러리 안에 경로 감시가 필요해진다(D6과 어긋남). 앱은 이미 `NWPath.availableInterfaces`의 `NWInterface`를 쥐고 있다. 이름 검사(15자, 허용 문자)도 필요 없어진다 |
+| T4 | 설정 검사의 시점 | (가) `init`이 던진다(`throws(NodeError)`) / (나) M3처럼 `run()` 안에서 | (가). 첫 사용처는 잘못된 fd·MTU를 시작 호출에서 곧바로 실패로 받는다(`rd_start`의 `invalid_config`). `run()`은 비동기로 돌기 시작하므로 (나)면 앱이 "시작됨"을 알린 뒤에 실패를 알게 된다. 대가: 기존 `init(configuration:)` 호출에 `try`가 붙는다 |
+| T5 | 맵 프레임 한도 | 64MiB 유지 / 8MiB / 실기기 측정 뒤 결정 | 8MiB로 줄이고 관문 (나)에서 확인. 피어 1,000개 tailnet의 비압축 맵이 수 MB라는 것은 추정이며 확인하지 못했다. 큰 tailnet을 쓰는 Mac 호스트(M6·M7)에서 문제가 되면 그때 플랫폼별로 나눈다 |
+| T6 | `identity.json`의 보호 등급·백업 제외 | (가) 노드가 파일에 직접 건다(iOS에서만) / (나) 앱의 몫으로 둔다(지금 첫 사용처가 디렉터리에 건다) | (가). 개인 키 파일의 성질이라 라이브러리가 보장하는 편이 안전하다. 확인 필요: 디렉터리의 보호 등급을 새 파일이 물려받는지, 임시 파일 → 이름 바꾸기 뒤에도 유지되는지(Apple 문서 항목으로 확인하지 못했다) |
+| T7 | 실기기 관문의 시험용 터널 앱 | (가) Swiftail 저장소에 최소 앱(`Tools/TunnelHarness/`: 컨테이너 앱 + 패킷 터널 확장, 라이브러리 타깃 밖) / (나) 첫 사용처 확장에 Swiftail 빌드 변형 | (가)로 관문을 통과한 뒤 (나)로 교체. 첫 사용처 저장소를 바꾸는 일은 별도 승인이 필요하다(plan 7절 M7). 서명 팀·NE 권한은 plan 9절의 열린 결정이다 |
+
+## 첫 사용처 확인 필요
+
+이 절은 첫 사용처의 커밋된 호출 지점(`Apps/iOSTunnel/PacketTunnelProvider.swift`, `docs/tunnel.md`, `docs/protocol-addenda.md` N.3, `core/internal/tunnel/`, `core/capi/include/rdcore.h`의 `rd_tunnel_*`)을 읽고, 이 계약으로 대체할 수 있다고 본 근거와 확인할 질문을 항목별로 적는다.
+
+### F1. 시작과 정지
+
+대응:
+
+```swift
+// startTunnel: utun을 찾은 뒤(기존 UTUNLocator 그대로)
+let node = try TailnetNode(
+    configuration: .init(stateDirectory: stateDir, hostname: config.hostname,
+                         controlURL: config.controlURL ?? NodeConfiguration.defaultControlURL,
+                         authKey: authKey.isEmpty ? nil : authKey),
+    device: .utun(fileDescriptor: found.fd, mtu: 1280))
+let runTask = Task { try await node.run() }   // 실패는 F3
+// stopTunnel
+runTask.cancel(); _ = await runTask.result
+```
+
+- `rd_start`의 `invalid_config`(fd·MTU)는 `init`이 던지는 `invalidConfiguration`(T4). `tunnel_in_use`·`state_dir_in_use` 가운데 같은 디렉터리는 `run()`의 `stateDirectoryInUse`.
+- `rd_stop`과 "엔진 종료가 몇 초 걸릴 수 있어 직렬 큐에서 부른다"는 Task 취소와 `await`로 바뀐다. 직렬 큐가 필요 없다.
+- `goMemLimitMiB`, `logPath`, `hostDisplayName`, `appVersion`에 대응하는 것은 없다.
+
+질문:
+
+1. 다른 상태 디렉터리로 두 번째 터널 노드를 띄우는 것(`tunnel_in_use`)을 Swiftail은 막지 않는다. 확장은 노드를 하나만 띄우므로 앱 쪽 `TunnelLifecycle`로 충분한가?
+2. `startTunnel`의 완료를 `init` 성공 직후(`run()`을 기다리지 않고) 알려도 되는가? 지금도 `Running`을 기다리지 않는다. `run()`이 곧바로 던지는 경우(`stateDirectoryInUse`, `udpUnavailable`)는 완료 뒤 `cancelTunnelWithError`로 끝내게 된다.
+3. `controlURL`이 빈 문자열이면 기본 제어 서버라는 규칙을 앱이 `NodeConfiguration.defaultControlURL`로 옮겨도 되는가?
+
+### F2. 설정 적용
+
+대응: `for await settings in node.networkSettings { applier.submit(SettingsTranslator.translate(settings)) }`. 규칙은 첫 사용처와 같다(동작 E: 주소가 없거나 같으면 내지 않음, DNS만 바뀌어도 냄, 최신 하나만). `dnsServers`가 비면 `dnsSettings = nil`, `matchDomainsNoSearch = true`, `tunnelRemoteAddress = "127.0.0.1"`, 한 번에 하나만 적용하는 `SerialApplier`는 그대로 둔다.
+
+질문:
+
+4. `SettingsTranslator.translate`는 지금 문자열 CIDR(`NetworkSettingsEvent`)을 받는다. `IPPrefix.description`·`IPAddress.description`으로 같은 문자열을 만들어 넘기는 얇은 변환을 앱에 두는 것으로 충분한가, 아니면 `TunnelNetworkSettings`를 직접 받게 고치는가?
+5. 피어 경로는 macOS에서도 iOS 규칙(피어별 /32)으로 나온다. Go는 macOS에서 `100.64.0.0/10` 하나를 낼 수 있었다(`docs/tunnel.md` "routes"). e2e 시험이 /10을 기대하는 곳이 있는가?
+
+### F3. 상태와 오류 표시
+
+대응(첫 사용처 `backendState`):
+
+| 첫 사용처 | Swiftail |
+| --- | --- |
+| `Starting` | `.stateChanged(.starting)` |
+| `NeedsLogin` + `authURL` | `.stateChanged(.needsLogin(url))` |
+| `NeedsMachineAuth` | `.stateChanged(.needsMachineAuth)` |
+| `Running` | `.stateChanged(.running)` |
+| `Error` + `errorMessage`(인증 키 거부, 제어 서버 오류) | `run()`이 던진 `NodeError.control(…)` |
+| `Error` + `"TUN 장치가 닫혔습니다."` | `run()`이 던진 `NodeError.tunnelDeviceClosed` → 지금처럼 `cancelTunnelWithError` |
+| `Stopped` | `run()`이 돌아옴 |
+| `rd_status`의 `fqdn`·`tailscaleIPs`·`certDomains`·`tunnel{…}`·`peerCount` | `await node.status`의 `fqdn`·`addresses`·`certDomains`·`networkSettings`·`peerCount` |
+
+질문:
+
+6. `NodeError`는 사람이 읽을 문장을 주지 않는다(종류와 짧은 진단 문자열뿐이다). 앱이 종류마다 한국어 안내를 고르는 것(`TunnelProviderError`처럼)으로 충분한가? 지금 `backendErrorMessage(cause:)`가 원인으로 붙이는 코어 문장에 해당하는 것은 `NodeError`의 진단 문자열이다.
+7. Go와 달리 인증 키 거부·등록 거절이면 노드가 끝난다(`run()`이 던진다). 다시 시도하려면 VPN을 다시 켜야 한다. 지금 UI의 "다시 연결"·"인증 키로 켜기"가 모두 VPN을 다시 켜는 동작이므로 맞는다고 보았다. 맞는가?
+8. `NeedsLogin`의 URL이 늘 있으므로 30초마다 로그인을 다시 시작하던 것(`needLoginKick`)이 필요 없다. URL 없는 `NeedsLogin`을 따로 보여 주는 화면이 있는가?
+9. 상태 응답에 `stableID`를 더할 수 있다(`NodeStatus.stableID`). 폰 쪽 화면이나 진단에서 쓰는가? 쓰지 않으면 계약에서 뺀다. `peerCount`도 같은 질문이다(시험 계약에는 있다).
+
+### F4. 기본 인터페이스 통지
+
+대응: `PacketTunnelProvider.defaultInterfaceName(_:)`가 이름 대신 `NWInterface`를 돌려주게 하고 `node.setDefaultInterface(interface)`를 부른다(T3). 이름 검사(`bad_request`)는 없어진다.
+
+질문:
+
+10. 지금은 이름이 바뀔 때만 부른다(`TunnelRuntime.updateDefaultInterface`). Swiftail에는 Go `netmon`의 경로 소켓 감시가 없어서, 같은 Wi-Fi에서 주소만 바뀐 경우(다른 AP, DHCP 갱신)는 앱이 알려야만 안다. 만족된 경로를 받을 때마다 거르지 않고 불러 주는 것으로 바꿀 수 있는가? 같은 인터페이스·같은 주소면 노드는 STUN만 다시 한다.
+11. 고르는 규칙(루프백·`other`·`utun*`·`ipsec*` 제외의 첫 인터페이스)은 그대로 둔다. 노드도 자기 utun 이름과 같은 인터페이스는 무시한다.
+
+### F5. 경로 상태
+
+대응: `rd_tunnel_set_path_peer(fqdn)` + 상태의 `peerPath` → 상태를 만들 때 `await node.path(toPeerNamed: fqdn)`, 또는 `peerPathChanged`에서 그 피어의 마지막 값을 기억. `PeerPath.direct(endpoint)` → `{"direct": true, "addr": "<endpoint>"}`, `.relayed(derpRegion:)` → `{"direct": false, "relay": …}`.
+
+질문:
+
+12. 첫 사용처의 `relay`는 지역 코드 문자열(`"tok"` 등)인데 Swiftail은 지역 ID(`Int64`)를 준다. 화면에 코드가 필요한가? 필요하면 `NodeStatus`에 DERPMap의 ID → 코드 표를 더하거나 `PeerPath`에 코드를 싣는 변경을 M4 계약에 요청해야 한다.
+13. 첫 사용처는 "최근에 주고받은 것이 없는 피어는 경로를 모르므로 넣지 않는다"(`docs/protocol-addenda.md` N.3). Swiftail의 `path(toPeerNamed:)`는 유휴 피어도 `.relayed`(또는 신뢰 기간 안이면 `.direct`)를 준다. 유휴일 때 표시를 빼야 하는가?
+
+### F6. 로그
+
+Swiftail은 로그 API도 로그 사건도 없다. 첫 사용처는 코어 로그를 `os.Logger`에 비공개로 남겨 왔다.
+
+질문:
+
+14. 실기기 진단에 라이브러리 내부 로그가 필요한가? 필요하면 라이브러리 안에서 `os.Logger(subsystem: "Swiftail")`로 비밀 없는 요약만 남기는 방안을 총괄에 올린다(공개 API는 늘리지 않는다).
+
+### F7. 메모리
+
+- `goMemLimitMiB`에 해당하는 설정은 없다. 버퍼 상한은 계약이 고정한다(동작 M).
+- 질문 15: `TunnelStatusReply.physFootprintMiB`(앱이 `TASK_VM_INFO`로 잼)를 관문 (나)의 메모리 기록에 그대로 쓰겠다. 유휴·전송 중을 가르는 기록 방법(예: 상태 요청을 일정 간격으로 보내 기록)을 첫 사용처 쪽에서 준비할 수 있는가?
+
+### F8. 상태 파일과 로그인 초기화
+
+- 저장은 `stateDir/identity.json` 하나다. `resetsLogin`의 디렉터리 지우기는 그대로 쓸 수 있다(노드가 돌지 않을 때 지워야 한다. 지금처럼 `startTunnel`에서 시작 전에 지운다).
+- 데이터 보호 등급·백업 제외는 노드가 파일에 건다(T6). `TunnelStorage.prepareStateDirectory`의 디렉터리 설정은 그대로 둔다.
+
+### F9. 기존 사용자의 전환 (D8)
+
+16. Swiftail은 Go의 `tailscaled.state`를 읽지 않는다(이관은 M7 결정). 지금 Go 코어로 로그인한 기기가 Swiftail로 바뀌면 새 노드(새 IP, 새 StableID)로 로그인하고 Mac과 다시 페어링해야 한다. 이 전환을 M5 교체 때 받아들일 수 있는가, 아니면 M7 이관을 M5 교체 전으로 당겨야 하는가?
+
+## 제외 (`shortcut:` 주석으로 남긴다)
+
+| 제외 | 근거 | 필요해지는 시점 |
+| --- | --- | --- |
+| 서브넷 경로·exit node(받기·주기), VIP·4via6 경로 | plan 3절 제외. M3부터 `RouteAll=false` 고정(엔진 계약 M3) | plan 범위를 넓힐 때 |
+| 전역 리졸버(`Resolvers`), 리졸버가 있는 `Routes`, 상위 전달(UDP·TCP·DoH), `FallbackResolvers`, `GetBaseConfig`·1차 리졸버 모드 | D1·D2. OS가 match 도메인 밖의 이름을 quad-100에 보내지 않는다(DNS 노트 4.2.3) | 사용자 지정 분할 DNS를 터널로 풀어야 할 때 |
+| 검색 도메인 | D3 | 짧은 이름 해석이 요구될 때 |
+| 서비스 IP의 TCP 53(DNS over TCP) | D4. 로컬 응답에 TC가 서지 않는다(DNS 노트 4.2.4) | M6 TCP 스택 뒤 |
+| 4via6 이름, `dns-subdomain-resolve` 서브도메인 | DNS 노트 6.1 | 그 기능을 쓰는 tailnet을 만날 때 |
+| tailnet lock 지원 | plan 3절. 켜진 tailnet은 M2부터 접속을 거절한다(`ControlError.tailnetLockEnabled`) | lock을 쓰는 사용처가 생길 때 |
+| IPv6 UDP 소켓·IPv6 엔드포인트 | magicsock 계약 제외 표. DERP(TLS, 호스트 이름)는 IPv6 전용 망에서도 된다 | 실기기에서 IPv6 전용 셀룰러 망을 만나 직접 경로가 필요할 때 |
+| 망이 내려감의 처리, UDP 송신 오류의 자동 재결속, DERP 연결의 선별 유지 | 동작 N 3.2·5·6 | 동작 N에 적음 |
+| 다른 프로세스 사이의 상태 디렉터리 중복 막기 | 동작 P 3. App Group 컨테이너의 파일 잠금은 앱 일시 정지와 얽힐 수 있어 들이지 않는다 | 두 프로세스가 같은 디렉터리를 쓰는 사용처가 생길 때 |
+| TSMP pong·거절·disco 광고 보내기 | 엔진 계약 M3·M4 그대로 | 해당 없음 |
+| 로그 | F6 | F6의 답에 따라 |
+
+## 시험
+
+### 단위 시험 (소켓·파일 기술자 없음, 시각을 넘겨 결정적으로)
+
+`Tests/SwiftailEngineTests/Tunnel/`:
+
+1. **DNS 코덱**: 머리 플래그 복사 규칙(QR·AA·RA, RD 0·1, Opcode·TC·AD·CD 보존), 질문 0·2개, QR=1, 포인터(정상, 앞으로 가는 포인터, 자기 자신을 가리키는 고리, 11번째 포인터), 01·10 레이블 형식, 레이블 안의 `.`, 254바이트 경계, 압축 없는 쓰기의 바이트, 임의 입력으로 죽지 않음.
+2. **응답기**: DNS 노트 7절 2~4의 항목 — A·AAAA·ANY·PTR(IPv4·IPv6·4to6·서비스 IP)·NS·SOA·TXT·모르는 타입, 짧은 이름·FQDN·대소문자 섞임·끝 점 없음, 주소 없는 노드, 영역 밖(SERVFAIL), `.onion`, Bonjour 역방향, `magicdns-aaaa` 있음·없음, IPv6 전용 자기 노드, `ExtraRecords`가 노드 색인보다 먼저, EDNS 광고 크기와 512 경계의 TC, 응답에 OPT 없음, SOA의 SERIAL이 넘긴 시각.
+3. **설정 산출**: 엔진 노트 7절 10과 DNS 노트 7절 1 — 피어별 /32, 10,000/10,001 경계, `one-cgnat?v=true`·`v=false`·없음, ULA 피어가 있을 때 /48, 자기 주소 계열별 서비스 경로와 DNS 서버, IPv4 전용·IPv6 전용 자기 노드, 자기 주소 없음 → nil, MagicDNS 켬·끔, 빈 라우트, 리졸버가 있는 라우트(무시), 전역 `Resolvers`(무시), `ExtraRecords`(덮임·안 덮임·잘못된 이름), `force-register-magicdns-ipv4-only`, 자기 키 만료 → DNS 없음, match 도메인 정렬과 끝 점, 같은 netmap이면 같은 값(순서 포함).
+4. **로컬 처리**(`TailnetEngine.send`. 이 시험만 `Tests/SwiftailEngineTests/TailnetEngineTests.swift`에 두고 M5-8이 쓴다): UDP 53 질의 → 응답 패킷(주소·포트 맞바꿈, IPv4·IPv6 체크섬 검증), ICMP·ICMPv6 echo → reply, TCP SYN·ACK 세그먼트·RST → 동작 L2의 RST 규칙(`UInt32` 순환 포함), 다른 UDP 포트·다른 프로토콜 → `.serviceIPPacket`, 서비스 IP로 간 어떤 패킷도 `.datagram`을 내지 않음, 자기 주소로 간 패킷 → 같은 바이트의 `.ipPacket`, 장치에서 온 TSMP → 버림.
+
+`Tests/SwiftailTests`:
+
+5. **상태 기계**(동작 B 표): 각 행의 경계, `registered`가 URL을 지움, `.running` 뒤 끊김에도 유지, 같은 상태를 다시 내지 않음.
+6. **설정 내기**(동작 E): 주소 없음 → 내지 않음, 같은 값 → 내지 않음, DNS 서버만·match 도메인만 바뀜 → 냄, 읽지 않은 설정을 새 것이 대신함(흐름에서 하나만 나옴).
+7. **전환 판정**(동작 N 1·2): 처음, 같은 인터페이스·같은 주소(STUN만), 주소만 바뀜(재결속), 인터페이스 바뀜(재결속), utun 이름과 같은 인터페이스(무시). 판정은 입출력 없는 함수로 둔다.
+8. **상태 디렉터리 표**(동작 P 3): 같은 경로(표준화 전 다른 표기 포함) 두 번 → 둘째가 `stateDirectoryInUse`, 첫째가 끝난 뒤 다시 가능.
+
+`Tests/SwiftailIOTests`:
+
+9. **`UTUNDevice`**: utun이 아닌 기술자(파이프, `socketpair`, 닫힌 기술자, -1)를 거절하고 호출자의 기술자는 열려 있음. 검사를 건너뛰는 시험 전용 생성자로 `socketpair(AF_UNIX, SOCK_DGRAM)`를 utun 대신 써서: 4바이트 머리 붙이기·떼기(IPv4 → 2, IPv6 → 30, 그 밖 → 쓰지 않음), 4바이트보다 짧은 읽기 버림, 상대가 닫히면 장치 닫힘 오류, 복제본만 닫히고 원래 기술자는 열려 있음, `FD_CLOEXEC`가 복제본에 있음. utun을 만드는 시험은 관리자 권한이 필요하므로 두지 않는다(실기기 관문이 덮는다).
+10. **소켓 묶기**: `DatagramSocket`에 루프백 인터페이스 `index`로 `IP_BOUND_IF`를 걸어도 루프백 송수신이 되고, 없는 `index`는 `bindFailed`.
+
+### Go 기준값 대조
+
+M3 `filterfixtures`·M2 `mapfixtures`와 같은 방식이다. 자료는 `Tools/interop`의 Go 도구가 Go의 실제 코드를 실행해 만들고, 대조 시험은 구현자와 다른 세션이 쓴다. 자료에 현재 시각·운영 키·실제 이름이 없다(이름은 `tail0001.ts.net` 같은 가짜).
+
+- **`Tools/interop/cmd/dnsfixtures`**(새 도구): `tailscale.com/net/dns/resolver`의 `New` + `SetConfig`(호스트 표, `LocalDomains`) + `SetMagicDNSHosts`(`tsdns.go:270-300`) + `Query(…, "udp", …)`로, 위 단위 시험 2의 질의 바이트를 넣어 응답 바이트를 얻는다. SOA SERIAL은 자료에 표시해 비교에서 뺀다. 자료: `Tests/SwiftailEngineTests/Fixtures/magicdns-fixtures.json`. 한계: Go의 노드 색인 구현(`MagicDNSHosts`를 채우는 `ipnlocal` 쪽, AAAA 거르기와 짧은 이름)은 내보내지 않은 코드라 도구가 고정 표로 대신한다. 이 자료는 바이트 형식·RCODE·SOA·TC를 대조하고, 색인 규칙(DNS 노트 4.2.1)은 관문 (가)의 Go 피어 상대 질의와 단위 시험이 덮는다.
+- **`Tools/interop/cmd/tunnelfixtures`**(새 도구): 경로는 내보낸 `tailscale.com/net/routemanager`(`New`, `Begin`, `UpsertPeer`, `SetTailnetConfig`, `Commit`, `OSRoutes`, `routemanager.go:219-511`)에 같은 피어 집합을 넣어 얻는다. DNS는 Go의 `dnsConfigForNetmap`이 내보내지 않은 함수라(`ipn/ipnlocal/node_backend.go:1435`) 도구가 Go 노드 하나를 띄워 `LocalBackend`가 엔진에 넘기는 `dns.Config`를 가로채고, 그것을 `dns.NewManager(…, goos "ios", …)`(`net/dns/manager.go:97`)와 값을 받기만 하는 `OSConfigurator`로 컴파일해 `OSConfig`를 얻는다. 결과를 동작 S의 형태(D1·D2로 좁힌 뒤)로 옮겨 쓴다. 자료: `Tests/SwiftailEngineTests/Fixtures/tunnel-settings-fixtures.json`. 사례는 단위 시험 3의 netmap들(JSON).
+- 일부러 다르게 한 것(D1·D2의 좁히기, 4via6·서브도메인 생략)은 자료에 표시해 따로 본다.
+
+## M5 관문
+
+### (가) 메모리 장치로 첫 사용처의 터널 시험 계약에 대응하는 항목
+
+`Tools/interop`의 `tailnet`(testcontrol + DERP + STUN + Go tsnet 피어, 포트 7 에코)을 상대로, Swift 노드를 `.memory(mtu:)`로 띄운다. 시험은 `Tests/SwiftailInteropTests/TunnelTests.swift`에 두고 `SWIFTAIL_TAILNET`이 없으면 건너뛴다. 왼쪽은 첫 사용처 `docs/tunnel.md` "테스트 계약"의 이름이다.
+
+| 첫 사용처 시험 | Swiftail 관문 항목 |
+| --- | --- |
+| `TestTunnelDataPath/network-settings` | `.running` 뒤 `networkSettings`의 첫 값: `addresses`에 자기 /32, `routes`에 Go 피어 주소의 /32, `dnsServers[0] == 100.100.100.100`, `dnsMatchDomains`에 tailnet 접미사(끝 점 없음), `mtu == 1280`. `status.networkSettings`가 같은 값이고 `peerCount ≥ 1` |
+| `…/udp` | Go 피어 포트 7로 보낸 UDP의 에코가 `inboundPackets`로 온다(1초마다 재시도) |
+| `…/tcp` | Go 피어 포트 7로 보낸 SYN에 SYN-ACK가 온다 |
+| `…/magicdns` | `100.100.100.100:53`으로 보낸 Go 피어 FQDN의 A 질의에 피어 IPv4가 답으로 온다. 더해서: AAAA → NOERROR 빈 답 + SOA, 피어 주소의 PTR → 피어 FQDN, 영역 안 모르는 이름 → NXDOMAIN, `example.com` → SERVFAIL, `fd7a:115c:a1e0::53`로도 같은 답, ICMP echo → reply, TCP 53 SYN → RST, 그 동안 Go 피어 쪽에서 서비스 IP로 간 패킷이 보이지 않음 |
+| `…/stop` | `run()` Task를 취소하면 `run()`이 돌아오고 세 흐름이 끝난다. 그 뒤 Go 피어의 `peerStatus`에서 마지막 송신 시각이 더 늘지 않는다 |
+| `TestTunnelEngineDeath` | `failMemoryDevice()` 뒤 `run()`이 `tunnelDeviceClosed`를 던지고, 흐름이 끝나고, 더 사건이 나오지 않는다 |
+| `TestTunnelRestartKeepsNode` | 같은 디렉터리로 다시 띄우면 `.needsLogin` 없이 같은 주소, 새 디렉터리면 다른 주소, 옮긴 디렉터리면 원래 주소. `identity.json`이 생긴다 |
+| `TestTunnelInUse` | 같은 디렉터리의 두 번째 노드 → `stateDirectoryInUse`, 첫째를 멈춘 뒤 다시 가능(다른 디렉터리는 막지 않음, F1 질문 1) |
+| `TestTunnelSlotReleasedOnFailedStart` | 첫째 `run()`이 실패(`udpUnavailable`을 시험 훅으로)해도 같은 디렉터리로 다음 노드가 돈다 |
+| `TestTunnelInvalidConfig` | `.utun` -1, 파이프 기술자 → `init`의 `invalidConfiguration`. MTU 1, 1000, 1279, 1421, 1500, 9000, -1280 → MTU 메시지. 거절된 경우 상태 디렉터리에 아무것도 생기지 않음 |
+| `TestTunnelMTUBounds` | MTU 1280·1420·기본값이 시작되고 `networkSettings.mtu`가 1280·1420·1280 |
+| `TestTunnelSetDefaultInterface`, `…Reevaluates` | `NWPathMonitor`에서 얻은 실제 인터페이스로 `setDefaultInterface`를 부르면 UDP 소켓이 다시 묶이고(포트 같음) 엔드포인트가 다시 올라가며(`nodes`의 `endpoints`), DERP·제어가 다시 이어진 뒤에도 에코가 되고 Go 피어와 직접 경로가 다시 선다(M4 관문 2의 기준). 루프백 목적지는 묶지 않으므로 루프백 tailnet에서 돈다 |
+| `TestTunnelIOSDNS`, `TestTunnelScopeDNS`, `TestTunnelSettingsBuild`, `…Equal`, `…SinkFlush`, `…EventReplaced` | 단위 시험 3·6과 Go 기준값 대조(`tunnelfixtures`) |
+| `TestTunnelLoginRecovers`, `TestTunnelOpenUTUNKeepsCallerFD` | 해당 없음(Go 패닉 회복) / 단위 시험 9 |
+| (더함) 대화형 로그인 | `setAuth`로 대화형 인증을 요구하면 `.needsLogin(url)`, 그 URL로 끝내면 `.starting` → `.running` |
+| (더함) M3·M4 관문 회귀 | M3 관문 2~7, M4 관문 2~9가 `.memory` 장치에서 그대로 통과(사건 기다림만 T1에 맞게 고침) |
+
+### (나) 실기기
+
+| 확인할 것 | Swiftail 쪽이 준비 | 첫 사용처 쪽이 함 |
+| --- | --- | --- |
+| utun 기술자로 시작, 4바이트 머리, 복제본만 닫힘 | 시험용 터널 앱(T7) | (나) 교체 단계에서 같은 확인 |
+| Mac의 tailnet HTTPS(Go tsnet 호스트)에 FQDN으로 접속 | 시험용 앱이 FQDN으로 HTTPS 요청을 보내는 버튼과 결과 표시 | 호스트 Mac을 띄우고 페어링 상태를 준비 |
+| match 도메인 66개 + `matchDomainsNoSearch`에서 FQDN·PTR이 quad-100으로 풀리고, 인터넷 이름은 기기 리졸버로 풀림(첫 사용처 실기기 항목 4·8) | 시험용 앱이 이름 해석 결과를 보여 줌 | — |
+| 셀룰러에서 피어별 /32가 통신사 CGNAT와 부딪히지 않음(첫 사용처 실기기 항목 3) | 셀룰러에서 일반 인터넷 접속 확인 절차 | — |
+| Wi-Fi ↔ 셀룰러, 비행기 모드 해제 뒤 복구: DERP·UDP·제어가 새 인터페이스로 다시 붙기까지의 시간, 전환 뒤 FQDN 해석 | `setDefaultInterface`부터 `peerPathChanged`·에코 복구까지의 시각을 앱 화면에 기록 | — |
+| 확장의 `phys_footprint`: 유휴 10분, 전송 중(100MB 내려받기) | 시험용 앱이 `TASK_VM_INFO`로 1초마다 기록. 동작 M의 버퍼 한도·T5 결정 확인 | F7 질문 15 |
+| 첫 잠금 해제 전 주문형 시작과 `identity.json`의 보호 등급(첫 사용처 실기기 항목 7, T6) | 보호 등급을 읽어 보여 줌 | — |
+| 실제 tailnet(마무리, plan 4절(b)) | 총괄이 사용자에게 먼저 알리고 비밀 입력으로 인증 키를 받음 | — |
+| 첫 사용처 확장의 교체 | — | 별도 승인 뒤(plan 7절 M7, T7) |
+
+## 구현 단위
+
+소유 파일이 겹치지 않게 나눈다. M4 단위 4가 `Sources/Swiftail/**`, `Sources/SwiftailEngine/**`(기존 파일), `Sources/SwiftailMagicsock/Magicsock*.swift`, `Tests/SwiftailEngineTests/*`, `Tests/SwiftailTests/*`를 고치는 중이므로, **M4보다 먼저 시작할 수 있는 단위는 새 파일만 만든다**. 새 파일은 하위 폴더(`Tunnel/`)에 두어 M4의 파일과 이름이 겹치지 않게 한다.
+
+| 단위 | 내용 | 소유 파일 | 선후 |
+| --- | --- | --- | --- |
+| M5-0 | 총괄: 이 계약 확정(T1~T7, F 질문의 답 반영) | `docs/contracts/SwiftailTunnel.md` | 먼저 |
+| M5-1 | DNS 코덱과 응답기(동작 D) | `Sources/SwiftailEngine/Tunnel/{DNSMessage,MagicDNSResolver}*.swift`, `Tests/SwiftailEngineTests/Tunnel/{DNSMessageTests,MagicDNSResolverTests}.swift` | **M4와 병렬** |
+| M5-2 | 설정 산출(동작 S, `TunnelNetworkSettings`) | `Sources/SwiftailEngine/Tunnel/TunnelNetworkSettings*.swift`, `Tests/SwiftailEngineTests/Tunnel/TunnelNetworkSettingsTests.swift` | **M4와 병렬**(`EnginePeer.peers`는 M3 시그니처 그대로 읽기만 한다) |
+| M5-3 | 서비스 IP 응답 패킷 만들기(UDP·ICMP echo·RST, 체크섬) — 엔진에 붙이기 전의 순수 함수 | `Sources/SwiftailEngine/Tunnel/ServiceIPReply*.swift`, `Tests/SwiftailEngineTests/Tunnel/ServiceIPReplyTests.swift` | **M4와 병렬** |
+| M5-4 | `UTUNDevice`(동작 U) | `Sources/SwiftailIO/UTUNDevice.swift`, `Tests/SwiftailIOTests/UTUNDeviceTests.swift` | **M4와 병렬** |
+| M5-5 | Go 기준값 도구와 자료 | `Tools/interop/cmd/{dnsfixtures,tunnelfixtures}/`, `Tests/SwiftailEngineTests/Fixtures/{magicdns-fixtures,tunnel-settings-fixtures}.json`, `Tools/interop/README.md`의 새 절 | **M4와 병렬**. 대조 시험은 M5-1·2 뒤 다른 세션이 |
+| M5-6 | 묶기와 메모리 한도의 가장자리: `NetworkSocket` `requiredInterface`, `ControlClient.setNetworkInterface`, 맵 프레임 8MiB, `DERPClient` 인터페이스 인자·사건 바이트 한도 | `Sources/SwiftailIO/NetworkSocket*.swift`, `Sources/SwiftailControl/Client/ControlClient*.swift`, `Sources/SwiftailControl/Netmap/MapResponseFramer.swift`, `Sources/SwiftailDERP/DERPClient*.swift`와 각 시험 | **M4와 병렬**(M4가 고치지 않는 파일). `DERPClient`의 생성자 변경은 M4 단위 4의 호출 지점과 맞물리므로 기본값 있는 인자로 더한다 |
+| M5-7 | UDP 묶기와 재결속: `DatagramSocket`의 `IP_BOUND_IF`·바이트 한도, `Magicsock.rebind` | `Sources/SwiftailIO/DatagramSocket.swift`, `Sources/SwiftailMagicsock/Magicsock*.swift`와 시험 | **M4 단위 3·4 병합 뒤** |
+| M5-8 | 엔진·노드 통합: `TailnetEngine.send`의 로컬 처리(동작 L), 응답기 설치, 상태 기계(동작 B), 설정 내기(동작 E), `TunnelDevice`·utun 읽기 루프, `setDefaultInterface`(동작 N), 상태 디렉터리 표·파일 보호(동작 P), 공개 API 모양(T1~T4), 기존 관문 시험의 사건 기다림 고치기 | `Sources/SwiftailEngine/TailnetEngine*.swift`, `Sources/Swiftail/*`, `Tests/SwiftailEngineTests/TailnetEngineTests.swift`, `Tests/SwiftailTests/*`, `Tests/SwiftailInteropTests/*`(사건 기다림만), `Sources/SwiftailControl/Client/NodeIdentityStore.swift`(보호 등급) | **M4 단위 4 병합 뒤**, M5-1~4·6·7 뒤. 가장 크다. 나눈다면 8a(엔진: 동작 L과 응답기 설치)와 8b(노드)로 나누고 8b는 8a 병합 뒤 빌드한다 |
+| M5-9 | 관문 (가): `tailnet` 도구 명령 보강(필요하면), `TunnelTests.swift` | `Tools/interop/cmd/tailnet/*`, `Tests/SwiftailInteropTests/TunnelTests.swift` | 도구는 M4 단위 5 병합 뒤 언제든. Swift 시험은 M5-8 뒤 |
+| M5-10 | 관문 (나): 시험용 터널 앱(T7) | `Tools/TunnelHarness/`(라이브러리 타깃 밖) | M5-8 뒤. 서명 결정(plan 9절) 뒤 |
+
+순서: M5-0 → (M5-1, 2, 3, 4, 5, 6) M4와 병렬 → M4 단위 3·4 병합 → M5-7 → M5-8 → M5-9 → 다른 세션의 검토 → 총괄이 관문 (가)를 다시 돌림 → M5-10과 관문 (나) → 첫 사용처 교체(별도 승인). 대조 시험(자료를 읽는 시험)은 구현자와 다른 세션이 쓴다.
