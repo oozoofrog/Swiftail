@@ -14,8 +14,11 @@ import Synchronization
 /// - 기다리던 Task가 취소되면 continuation을 곧바로 오류로 풀고 연결을 닫는다. 이미 취소된 Task에서 부르면
 ///   취소 처리기가 continuation보다 먼저 돌므로, 그 결과를 `ResumeOnce`에 담아 두었다가 continuation을 다는
 ///   즉시 넘긴다(취소된 `NWConnection`의 콜백이 오리라고 기대하지 않는다).
-/// - 보내기는 기다리지 않는다. `NWConnection`이 부른 순서대로 내보내므로 Noise 레코드의 순서(nonce 순서)가
-///   지켜진다. 보내기 실패는 연결을 실패 상태로 만들고, 그 사실은 다음 `receive()`가 알린다.
+/// - 보내기는 두 가지다. `send`는 기다리지 않고, `write`는 네트워크 스택이 바이트를 받아 갈 때까지 기다린다.
+///   둘 다 `NWConnection`이 부른 순서대로 내보내므로 Noise 레코드의 순서(nonce 순서)와 프레임의 순서가 지켜진다.
+///   보내기 실패는 연결을 실패 상태로 만들고, 그 사실은 다음 `receive()`가 알린다.
+/// - 버린 소켓은 연결을 닫는다(`deinit`). 시간 초과와 연결 완료가 겹쳐 결과를 받을 쪽이 없어진 소켓도 상대에게
+///   남지 않는다.
 ///
 /// 바이트의 경계는 뜻이 없다. TCP 조각을 그대로 돌려주고 레코드·프레임은 위 계층이 모은다.
 package final class NetworkSocket: Sendable {
@@ -25,6 +28,10 @@ package final class NetworkSocket: Sendable {
 
     private init(connection: NWConnection) {
         self.connection = connection
+    }
+
+    deinit {
+        connection.cancel()
     }
 
     /// 연결이 준비될 때까지 기다린다.
@@ -72,9 +79,34 @@ package final class NetworkSocket: Sendable {
     }
 
     /// 바이트를 보낸다. 기다리지 않는다(형식 설명 참고).
+    ///
+    /// 상대가 읽지 않거나 업링크가 느리면 `NWConnection`의 버퍼가 끝없이 자란다. 보낼 양에 상한이 필요하면 `write`를 쓴다.
     package func send(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         connection.send(content: Data(bytes), completion: .contentProcessed { _ in })
+    }
+
+    /// 바이트를 보내고, 네트워크 스택이 그 바이트를 받아 갈 때까지 기다린다.
+    ///
+    /// 상대가 읽지 않거나 업링크가 느리면 돌아오지 않는다. 그래서 부르는 쪽이 쥔 미전송 바이트는 지금 쓰는 덩어리
+    /// 하나뿐이고, 막힘은 `withTimeout`으로 건 기한으로 알아챈다. 보낸 양을 세어 알려 주는 형태보다 부르는 쪽이
+    /// 단순하다(줄어들 때를 따로 기다릴 필요가 없다).
+    ///
+    /// 실패는 던지지 않는다. `send`처럼 연결이 실패 상태가 되고 다음 `receive()`가 알린다. 기다리던 Task가 취소되면
+    /// 연결을 닫고 돌아온다.
+    package func write(_ bytes: [UInt8]) async {
+        guard !bytes.isEmpty else { return }
+        let connection = connection
+        let once = ResumeOnce<Void>()
+        await withTaskCancellationHandler {
+            _ = try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                guard once.install(continuation) else { return }
+                connection.send(content: Data(bytes), completion: .contentProcessed { _ in once.resume(with: .success(())) })
+            }
+        } onCancel: {
+            once.resume(with: .success(()))
+            connection.cancel()
+        }
     }
 
     /// 도착한 바이트를 받는다. 상대가 연결을 닫았으면 nil.

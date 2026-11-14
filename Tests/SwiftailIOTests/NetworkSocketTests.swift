@@ -57,6 +57,54 @@ struct NetworkSocketTests {
         }
         #expect(outcome != "받음")
     }
+
+    /// 고치기 전에는 보내기가 기다리지 않아 `NWConnection`의 버퍼가 끝없이 자랐다(256MiB를 보내자 RSS가 수백 MB).
+    @Test("읽지 않는 상대에게 write는 막히고, 막히기 전까지 받아 간 양은 상한이 있다")
+    func writeBlocksWhenPeerDoesNotRead() async throws {
+        let listener = try LoopbackListener()
+        defer { listener.close() }
+        let socket = try await NetworkSocket.connect(host: "127.0.0.1", port: try await listener.port(), tls: .none)
+        defer { socket.close() }
+        let chunk = [UInt8](repeating: 0xA5, count: 64 << 10)
+        let attemptLimit = 256 << 20
+        var accepted = 0
+        var blocked = false
+        while accepted < attemptLimit {
+            do {
+                try await withTimeout(.milliseconds(500)) { await socket.write(chunk) }
+                accepted += chunk.count
+            } catch {
+                blocked = true
+                break
+            }
+        }
+        #expect(blocked)
+        // 루프백의 커널 버퍼(보내는 쪽과 받는 쪽)만큼은 들어간다. 그보다 훨씬 큰 32MiB를 넘지 않는다.
+        #expect(accepted < 32 << 20)
+    }
+
+    @Test("버린 소켓은 연결을 닫는다")
+    func droppedSocketCloses() async throws {
+        let listener = try LoopbackListener()
+        defer { listener.close() }
+        var socket: NetworkSocket? = try await NetworkSocket.connect(host: "127.0.0.1", port: try await listener.port(), tls: .none)
+        #expect(socket != nil)
+        let accepted = try await listener.firstConnection()
+        socket = nil
+        let outcome = try await finishes(within: .seconds(3)) {
+            await Self.waitUntilClosed(accepted) ? "닫힘" : "받음"
+        }
+        #expect(outcome == "닫힘")
+    }
+
+    /// 상대가 닫을 때까지 읽는다. 닫혔거나 실패했으면 true, 바이트가 오면 false.
+    private static func waitUntilClosed(_ connection: NWConnection) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { data, _, isComplete, error in
+                continuation.resume(returning: (data?.isEmpty ?? true) && (isComplete || error != nil))
+            }
+        }
+    }
 }
 
 /// `operation`이 `duration` 안에 끝나는지 본다. 끝나지 않으면 시험 실패로 던진다.
@@ -131,6 +179,15 @@ private final class LoopbackListener: Sendable {
             }
             listener.start(queue: .global())
         }
+    }
+
+    /// 처음 받아들인 연결. 아직 없으면 올 때까지 기다린다.
+    func firstConnection() async throws -> NWConnection {
+        for _ in 0..<300 {
+            if let first = accepted.connections.withLock({ $0.first }) { return first }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw CancellationError()
     }
 
     func close() {

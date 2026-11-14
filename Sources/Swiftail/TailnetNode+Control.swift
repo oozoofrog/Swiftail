@@ -52,7 +52,7 @@ extension TailnetNode {
         derpChanged?.yield()
     }
 
-    private func apply(_ netmap: Netmap, reportingTo control: ControlClient) async {
+    func apply(_ netmap: Netmap, reportingTo control: ControlClient) async {
         lastNetmap = netmap
         let previousHome = home
         home = DERPHome.choose(from: netmap.derpMap, keeping: home?.regionID ?? 0)
@@ -64,7 +64,10 @@ extension TailnetNode {
         let addresses = netmap.selfNode.addresses
             .filter { $0.length == $0.address.bytes.count * 8 }
             .map(\.address)
-        let recovered = brokenLinks.remove(.control) != nil && brokenLinks.isEmpty
+        // 홈이 없으면 DERP 클라이언트도 없으므로 DERP를 끊긴 연결로 세지 않는다. 세면 `running`이 다시 나오지 않는다.
+        let derpDropped = home == nil && brokenLinks.remove(.derp) != nil
+        let controlRestored = brokenLinks.remove(.control) != nil
+        let recovered = (derpDropped || controlRestored) && brokenLinks.isEmpty
         if !addresses.isEmpty, addresses != announcedAddresses || recovered {
             announcedAddresses = addresses
             eventContinuation.yield(.running(addresses: addresses))
