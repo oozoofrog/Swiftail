@@ -336,6 +336,8 @@ tailnet 피어는 WireGuard로 인증되고 출발 주소는 그 피어의 Allow
 - **주인 바뀜(X10)**: 연결마다 키를 적지 않고, netmap마다 데이터면 피어 주소의 주인 키를 앞의 것과 견주어 없어지거나 바뀐 주소에 `removeConnections(toRemoteAddress:)`를 부른다. AllowedIPs 출발지 검사가 있으므로 한 주소의 연결은 모두 그때의 주인과 맺은 것이다.
 - **이름 해석**: 이름이 겹치면 Go처럼 나중 노드가 이긴다(자기 노드 → 피어를 ID 순으로. `path(toPeerNamed:)`의 "ID가 작은 쪽"과 다르다). 짧은 이름의 접미사는 대소문자를 바꾸지 않고 견준다(Go와 같다).
 - **공개 API의 세부**: `read(upTo:)`의 0 이하 길이는 `invalidConfiguration`. 리스너를 두 Task가 동시에 돌면 나중 Task의 흐름이 곧바로 끝난다(`Failure = Never`라 던질 수 없다). `finishWriting()`을 두 번 불러도 오류가 아니다. `connect`는 상태가 `.running`이어야 한다(앱이 `events`로 기다린다).
+- **버려진 리스너**(M6 검토 B 반영): 리스너 기록은 핸들을 약한 참조로 쥔다. `listen(port:)`과 `run()`의 시작이 핸들이 버려진 리스너를 먼저 닫으므로, 버린 리스너는 `run()` 전에도 중에도 포트와 상한(16)을 쥐지 않는다. `run()` 중 스택의 리스너와 대기열 연결(RST)을 닫는 일은 버려진 핸들을 거두는 자식 또는 다음 `listen`이 한다(그 사이에 들어온 SYN은 맺혔다가 RST로 끊긴다).
+- `connect`는 맺어진 직후 돌아오기 전에 상대의 RST가 오면 `reset`을 던질 수 있다.
 - **손실 훅**: `package func setInProcessLoss(rate:seed:)`. 스택과 엔진 사이의 패킷을 양방향으로 버린다(SplitMix64). 0이면 끈다. 자기 주소로 건 연결의 패킷은 두 번 걸린다.
 - 재지 않은 것: iOS 터널 확장의 바이너리 크기 증가(N1), 처리량(관문).
 
