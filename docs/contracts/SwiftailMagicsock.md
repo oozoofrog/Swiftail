@@ -395,6 +395,7 @@ package enum LocalInterfaceAddresses {
 
 1. `Magicsock`은 상태를 바꾼 모든 호출 끝에서, 영향을 받은 피어의 `path(at:)`가 마지막으로 알린 값과 다르면 `.pathChanged`를 낸다. `advance`에서는 신뢰가 만료된 피어도 본다(D7).
 2. 같은 값은 다시 내지 않는다. `.direct(a)` → `.direct(b)`는 바뀐 것이다.
+3. 유휴 피어의 경로는 nil이다(2026-11-15 첫 사용처 검토 뒤 더함): 그 피어로 마지막 WireGuard 데이터그램을 보낸 지 45초(유휴 판단, D의 타이머 값)가 넘었으면 `path(to:at:)`는 nil이고, 넘는 시각의 `advance`가 `.pathChanged(key, nil)`을 낸다. 다시 보내면 그때의 경로로 `.pathChanged`가 나온다.
 
 ### H. 한도 (신뢰할 수 없는 입력)
 

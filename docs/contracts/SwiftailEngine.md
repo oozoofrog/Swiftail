@@ -340,6 +340,7 @@ extension TailnetNode {
   - netmap: `engine.apply` 뒤 `magicsock.setPeers(EnginePeer.peers(in: netmap, at: Date()).map { Magicsock.Peer(key: $0.key, discoKey: $0.discoKey, homeDERP: $0.homeDERP, endpoints: $0.endpoints) })`. 순서는 node ID 오름차순이다(disco 키의 주인, magicsock 계약 B1). `shortcut:` 키 만료로 엔진이 `advance`에서 내린 피어는 다음 netmap까지 `Magicsock`에 남는다. 엔진이 그 피어에게 데이터그램을 내지 않으므로 heartbeat는 45초 뒤 멈추고, 받은 WireGuard는 장치가 버린다.
   - 타이머: `min(engine.nextDeadline, magicsock.nextDeadline)`에 깨어나 둘 다 `advance`.
 - **N6 (경로 사건과 조회)**: 노드는 netmap마다 데이터면 피어의 키 → 이름 표를 만든다(이름은 `Node.name`에서 끝의 점 하나를 뗀 것). `.pathChanged(k, p)`는 그 표의 이름으로 `peerPathChanged`를 낸다. 피어가 빠지는 경우의 이름은 표를 바꾸기 전의 것을 쓴다. 이름이 빈 피어는 사건을 내지 않는다. `path(toPeerNamed:)`는 이름 → 키(N6의 비교 규칙) → `magicsock.path(to:at: .now)`.
+  - 경로는 **실제로 알 때만** 알린다(첫 사용처 검토, 2026-11-15): 최근 45초(Go의 유휴 판단, `Magicsock`이 피어별 마지막 WireGuard 송신 시각으로 본다) 안에 그 피어와 주고받은 것이 없으면 `path(toPeerNamed:)`는 nil이고, 유휴가 되는 순간과 다시 주고받기 시작하는 순간에 `peerPathChanged`(nil, 그리고 그때의 경로)가 나온다. 유휴 피어를 `.relayed`로 보이면 트래픽이 생기면 직접으로 붙을 연결이 "중계"로 표시되기 때문이다. `Magicsock.path(to:at:)`가 이 규칙으로 nil을 내게 하고 경로 사건(`pathChanged`)도 같은 값으로 낸다(유휴가 되는 시각을 `nextDeadline`에 넣는다).
 - **N7 (구조적 동시성)**: `run()`의 TaskGroup 자식이 바뀐다.
 
   ```
