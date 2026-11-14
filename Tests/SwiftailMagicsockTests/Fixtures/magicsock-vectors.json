@@ -1,0 +1,533 @@
+{
+  "reference": "tailscale.com v1.104.6",
+  "keys": [
+    {
+      "name": "a",
+      "seed": "3a98bb8afebf90d84862efcb9b9f08321a9af6e3e8e62e0a51ce49115c3a542f",
+      "public": "543e6a8fa60e9dd8f351c91da72e9a7aa538f26e45c209b746186b5afb873948"
+    },
+    {
+      "name": "b",
+      "seed": "480b77338da9b3eb6fa0b41dd006d696e1ed9da8dc008ce0442bf22b345bab91",
+      "public": "59b87664867ed4bf7de80d91fb76f1ba9ece5c96f42962995dd90d49ca55323d"
+    }
+  ],
+  "disco": {
+    "messages": [
+      {
+        "name": "Ping, NodeKey 있음",
+        "sender": "a",
+        "receiver": "b",
+        "message": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "nodeKey": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+          "padding": 0
+        },
+        "plaintext": "0100112233445566778899aabbcc303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+        "nonce": "000102030405060708090a0b0c0d0e0f1011121314151617",
+        "packet": "5453f09f92ac543e6a8fa60e9dd8f351c91da72e9a7aa538f26e45c209b746186b5afb873948000102030405060708090a0b0c0d0e0f101112131415161713747c6e3489ada003e80f60f7ddd3c11bed12b396a05d037b564196e38657a90fd4726b717c529a1271572da1d085b4fc92bc63226efb84ec5d848628f7"
+      },
+      {
+        "name": "Ping, NodeKey 없음",
+        "sender": "a",
+        "receiver": "b",
+        "message": {
+          "kind": "ping",
+          "txID": "c0c1c2c3c4c5c6c7c8c9cacb",
+          "padding": 0
+        },
+        "plaintext": "0100c0c1c2c3c4c5c6c7c8c9cacb",
+        "nonce": "18191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        "packet": "5453f09f92ac543e6a8fa60e9dd8f351c91da72e9a7aa538f26e45c209b746186b5afb87394818191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f9b274da838167bac8080a70abe9dc6efb6c04e1f49c37588edba46f19ecf"
+      },
+      {
+        "name": "Ping, NodeKey와 패딩 10",
+        "sender": "a",
+        "receiver": "b",
+        "message": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "nodeKey": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+          "padding": 10
+        },
+        "plaintext": "0100112233445566778899aabbcc303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f00000000000000000000",
+        "nonce": "303132333435363738393a3b3c3d3e3f4041424344454647",
+        "packet": "5453f09f92ac543e6a8fa60e9dd8f351c91da72e9a7aa538f26e45c209b746186b5afb873948303132333435363738393a3b3c3d3e3f4041424344454647ae9ede17db2625b39d34d2bf14021428ad0ef7e0e080c297cc02151935a0ff80e4b334ce5f11cac6e6f2c9b52f69acb40b607259cb566bbb04dd9426c127367f5ceaf1bb0f01cbd2"
+      },
+      {
+        "name": "Pong, IPv4",
+        "sender": "b",
+        "receiver": "a",
+        "message": {
+          "kind": "pong",
+          "txID": "112233445566778899aabbcc",
+          "src": "127.0.0.1:41641"
+        },
+        "plaintext": "0200112233445566778899aabbcc00000000000000000000ffff7f000001a2a9",
+        "nonce": "48494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "packet": "5453f09f92ac59b87664867ed4bf7de80d91fb76f1ba9ece5c96f42962995dd90d49ca55323d48494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f9d7d425ef1a35180f420b47882cd1fbea9077d1467221ec201166df48ea748e64f863ae3fb29c666b3acdfc07c635b40"
+      },
+      {
+        "name": "Pong, IPv6",
+        "sender": "b",
+        "receiver": "a",
+        "message": {
+          "kind": "pong",
+          "txID": "c0c1c2c3c4c5c6c7c8c9cacb",
+          "src": "[2001:db8::7]:5060"
+        },
+        "plaintext": "0200c0c1c2c3c4c5c6c7c8c9cacb20010db800000000000000000000000713c4",
+        "nonce": "606162636465666768696a6b6c6d6e6f7071727374757677",
+        "packet": "5453f09f92ac59b87664867ed4bf7de80d91fb76f1ba9ece5c96f42962995dd90d49ca55323d606162636465666768696a6b6c6d6e6f70717273747576779d4d90c9abf79679c4293204c286ba2ec5ed068e90b8508726b8b0c758defc21c78df683e939279043dadbc6367654d6"
+      },
+      {
+        "name": "CallMeMaybe, 주소 0개",
+        "sender": "a",
+        "receiver": "b",
+        "message": {
+          "kind": "callMeMaybe"
+        },
+        "plaintext": "0300",
+        "nonce": "78797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+        "packet": "5453f09f92ac543e6a8fa60e9dd8f351c91da72e9a7aa538f26e45c209b746186b5afb87394878797a7b7c7d7e7f808182838485868788898a8b8c8d8e8fd07b3b8da0bf97dbcc55a60fff741af0fa97"
+      },
+      {
+        "name": "CallMeMaybe, 주소 1개",
+        "sender": "a",
+        "receiver": "b",
+        "message": {
+          "kind": "callMeMaybe",
+          "endpoints": [
+            "192.0.2.1:41641"
+          ]
+        },
+        "plaintext": "030000000000000000000000ffffc0000201a2a9",
+        "nonce": "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7",
+        "packet": "5453f09f92ac543e6a8fa60e9dd8f351c91da72e9a7aa538f26e45c209b746186b5afb873948909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7f3324f6baebc349bab637c967254f7aa8a6c9878736f03a328929826d2da5a35a545d4ec"
+      },
+      {
+        "name": "CallMeMaybe, 주소 3개(IPv4 둘, IPv6 하나)",
+        "sender": "b",
+        "receiver": "a",
+        "message": {
+          "kind": "callMeMaybe",
+          "endpoints": [
+            "127.0.0.1:41641",
+            "[2001:db8::7]:5060",
+            "198.51.100.9:1"
+          ]
+        },
+        "plaintext": "030000000000000000000000ffff7f000001a2a920010db800000000000000000000000713c400000000000000000000ffffc63364090001",
+        "nonce": "a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "packet": "5453f09f92ac59b87664867ed4bf7de80d91fb76f1ba9ece5c96f42962995dd90d49ca55323da8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf0ef0673528c1a2d454e58626cef2de00b623c4f5bd38673bf5f0e6336e3815b677699cd3ecd23dab45c056586ea430be7eaaeb2c819d7fad8aa26f6a726cabfb93c81dbc6b6af862"
+      }
+    ],
+    "parse": [
+      {
+        "name": "평문 0바이트",
+        "plaintext": "",
+        "error": "short message"
+      },
+      {
+        "name": "평문 1바이트",
+        "plaintext": "01",
+        "error": "short message"
+      },
+      {
+        "name": "Ping 본문 11바이트",
+        "plaintext": "0100112233445566778899aabb",
+        "error": "short message"
+      },
+      {
+        "name": "Ping 본문 12바이트(TxID만)",
+        "plaintext": "0100112233445566778899aabbcc",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "padding": 0
+        }
+      },
+      {
+        "name": "Ping 본문 13바이트(NodeKey 자리가 모자람)",
+        "plaintext": "0100112233445566778899aabbccaa",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "padding": 1
+        }
+      },
+      {
+        "name": "Ping 본문 43바이트(NodeKey 자리가 1바이트 모자람)",
+        "plaintext": "0100112233445566778899aabbcc303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "padding": 31
+        }
+      },
+      {
+        "name": "Ping 본문 44바이트(NodeKey)",
+        "plaintext": "0100112233445566778899aabbcc303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "nodeKey": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+          "padding": 0
+        }
+      },
+      {
+        "name": "Ping 본문 45바이트(NodeKey와 패딩 1)",
+        "plaintext": "0100112233445566778899aabbcc303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f00",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "nodeKey": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+          "padding": 1
+        }
+      },
+      {
+        "name": "Ping 본문 44바이트, 32바이트가 모두 0인 NodeKey",
+        "plaintext": "0100112233445566778899aabbcc0000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "padding": 32
+        }
+      },
+      {
+        "name": "Ping 본문 76바이트, 0 NodeKey와 패딩",
+        "plaintext": "0100112233445566778899aabbcc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "padding": 64
+        }
+      },
+      {
+        "name": "Ping version 7",
+        "plaintext": "0107112233445566778899aabbcc303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "nodeKey": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+          "padding": 0
+        }
+      },
+      {
+        "name": "Ping 본문 1000바이트(NodeKey와 긴 패딩)",
+        "plaintext": "0100112233445566778899aabbcc303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "ping",
+          "txID": "112233445566778899aabbcc",
+          "nodeKey": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+          "padding": 956
+        }
+      },
+      {
+        "name": "Pong 본문 29바이트",
+        "plaintext": "0200112233445566778899aabbcc00000000000000000000ffffc000020103",
+        "error": "short message"
+      },
+      {
+        "name": "Pong 본문 30바이트, IPv4-mapped",
+        "plaintext": "0200112233445566778899aabbcc00000000000000000000ffffc00002011388",
+        "result": {
+          "kind": "pong",
+          "txID": "112233445566778899aabbcc",
+          "src": "192.0.2.1:5000"
+        }
+      },
+      {
+        "name": "Pong 본문 30바이트, IPv6",
+        "plaintext": "0200112233445566778899aabbcc20010db80000000000000000000000011388",
+        "result": {
+          "kind": "pong",
+          "txID": "112233445566778899aabbcc",
+          "src": "[2001:db8::1]:5000"
+        }
+      },
+      {
+        "name": "Pong 본문 31바이트(뒤 바이트 무시)",
+        "plaintext": "0200112233445566778899aabbcc00000000000000000000ffffc00002011388ee",
+        "result": {
+          "kind": "pong",
+          "txID": "112233445566778899aabbcc",
+          "src": "192.0.2.1:5000"
+        }
+      },
+      {
+        "name": "Pong version 1",
+        "plaintext": "0201112233445566778899aabbcc00000000000000000000ffffc00002011388",
+        "result": {
+          "kind": "pong",
+          "txID": "112233445566778899aabbcc",
+          "src": "192.0.2.1:5000"
+        }
+      },
+      {
+        "name": "CallMeMaybe 본문 0바이트",
+        "plaintext": "0300",
+        "result": {
+          "kind": "callMeMaybe"
+        }
+      },
+      {
+        "name": "CallMeMaybe 본문 17바이트",
+        "plaintext": "030000000000000000000000ffffc000020103",
+        "result": {
+          "kind": "callMeMaybe"
+        }
+      },
+      {
+        "name": "CallMeMaybe 본문 18바이트(주소 1개, IPv4-mapped)",
+        "plaintext": "030000000000000000000000ffffc000020103e9",
+        "result": {
+          "kind": "callMeMaybe",
+          "endpoints": [
+            "192.0.2.1:1001"
+          ]
+        }
+      },
+      {
+        "name": "CallMeMaybe 본문 19바이트",
+        "plaintext": "030000000000000000000000ffffc000020103e900",
+        "result": {
+          "kind": "callMeMaybe"
+        }
+      },
+      {
+        "name": "CallMeMaybe 본문 35바이트",
+        "plaintext": "030000000000000000000000ffffc000020103e900000000000000000000ffffc000020203",
+        "result": {
+          "kind": "callMeMaybe"
+        }
+      },
+      {
+        "name": "CallMeMaybe 본문 36바이트(주소 2개, IPv4-mapped와 IPv6)",
+        "plaintext": "030000000000000000000000ffffc000020103e920010db800000000000000000000000207d2",
+        "result": {
+          "kind": "callMeMaybe",
+          "endpoints": [
+            "192.0.2.1:1001",
+            "[2001:db8::2]:2002"
+          ]
+        }
+      },
+      {
+        "name": "CallMeMaybe version 1, 본문 18바이트",
+        "plaintext": "030100000000000000000000ffffc000020103e9",
+        "result": {
+          "kind": "callMeMaybe"
+        }
+      },
+      {
+        "name": "종류 0x00",
+        "plaintext": "0000000000000000000000000000000000000000000000000000000000000000",
+        "error": "unknown message type 0x00"
+      },
+      {
+        "name": "종류 0x0a",
+        "plaintext": "0a00000000000000000000000000000000000000000000000000000000000000",
+        "error": "unknown message type 0x0a"
+      },
+      {
+        "name": "종류 0xff",
+        "plaintext": "ff00000000000000000000000000000000000000000000000000000000000000",
+        "error": "unknown message type 0xff"
+      },
+      {
+        "name": "종류 0x04(BindUDPRelayEndpoint), 본문 72바이트",
+        "plaintext": "0400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "relay"
+        }
+      },
+      {
+        "name": "종류 0x05, 본문 72바이트",
+        "plaintext": "0500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "relay"
+        }
+      },
+      {
+        "name": "종류 0x06, 본문 72바이트",
+        "plaintext": "0600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "relay"
+        }
+      },
+      {
+        "name": "종류 0x07(CallMeMaybeVia), 본문 142바이트",
+        "plaintext": "070000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "relay"
+        }
+      },
+      {
+        "name": "종류 0x08, 본문 68바이트",
+        "plaintext": "08000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "relay"
+        }
+      },
+      {
+        "name": "종류 0x09, 본문 146바이트",
+        "plaintext": "09000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "kind": "relay"
+        }
+      }
+    ]
+  },
+  "stun": {
+    "requests": [
+      {
+        "txID": "0123456789abcdeffedcba98",
+        "packet": "000100142112a4420123456789abcdeffedcba98802200087461696c6e6f646580280004ab2b7729"
+      }
+    ],
+    "parse": [
+      {
+        "name": "IPv4 응답",
+        "packet": "0101000c2112a4420123456789abcdeffedcba9800200008000183bb5e12a443",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "127.0.0.1:41641"
+      },
+      {
+        "name": "IPv4 응답, 포트 65535",
+        "packet": "0101000c2112a4420123456789abcdeffedcba98002000080001deede112a60f",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "192.0.2.77:65535"
+      },
+      {
+        "name": "IPv6 응답",
+        "packet": "010100182112a4420123456789abcdeffedcba9800200014000232d60113a9fa0123456789abcdeffedcba9f",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "[2001:db8::7]:5060"
+      },
+      {
+        "name": "XOR-MAPPED-ADDRESS 0x8020",
+        "packet": "0101000c2112a4420123456789abcdeffedcba9880200008000183bb5e12a443",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "127.0.0.1:41641"
+      },
+      {
+        "name": "MAPPED-ADDRESS만 있는 응답",
+        "packet": "0101000c2112a4420123456789abcdeffedcba980001000800010bb8c0000205",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "192.0.2.5:3000"
+      },
+      {
+        "name": "SOFTWARE 속성 뒤의 XOR-MAPPED-ADDRESS",
+        "packet": "010100182112a4420123456789abcdeffedcba988022000568656c6c6f00000000200008000183bb5e12a443",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "127.0.0.1:41641"
+      },
+      {
+        "name": "선언 길이 뒤에 붙은 바이트",
+        "packet": "0101000c2112a4420123456789abcdeffedcba9800200008000183bb5e12a443deadbeef",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "127.0.0.1:41641"
+      },
+      {
+        "name": "XOR와 MAPPED가 함께 있으면 XOR가 정본",
+        "packet": "010100182112a4420123456789abcdeffedcba9800200008000183bb5e12a44300010008000100500a000001",
+        "looksLikeSTUN": true,
+        "txID": "0123456789abcdeffedcba98",
+        "mapped": "127.0.0.1:41641"
+      },
+      {
+        "name": "19바이트",
+        "packet": "0101000c2112a4420123456789abcdeffedcba",
+        "looksLikeSTUN": false,
+        "error": "response is not a STUN packet"
+      },
+      {
+        "name": "cookie가 틀림",
+        "packet": "0101000c2012a4420123456789abcdeffedcba9800200008000183bb5e12a443",
+        "looksLikeSTUN": false,
+        "error": "response is not a STUN packet"
+      },
+      {
+        "name": "요청 타입 00 01",
+        "packet": "0001000c2112a4420123456789abcdeffedcba9800200008000183bb5e12a443",
+        "looksLikeSTUN": true,
+        "error": "STUN packet is not a response"
+      },
+      {
+        "name": "타입 01 11(오류 응답)",
+        "packet": "0111000c2112a4420123456789abcdeffedcba9800200008000183bb5e12a443",
+        "looksLikeSTUN": false,
+        "error": "STUN packet is not a response"
+      },
+      {
+        "name": "상위 2비트가 0이 아님",
+        "packet": "4101000c2112a4420123456789abcdeffedcba9800200008000183bb5e12a443",
+        "looksLikeSTUN": false,
+        "error": "response is not a STUN packet"
+      },
+      {
+        "name": "선언 길이가 남은 바이트보다 큼",
+        "packet": "0101000d2112a4420123456789abcdeffedcba9800200008000183bb5e12a443",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "속성 길이가 남은 바이트보다 큼",
+        "packet": "0101000c2112a4420123456789abcdeffedcba98002000ff000183bb5e12a443",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "속성 머리가 4바이트 모자람",
+        "packet": "010100032112a4420123456789abcdeffedcba98002000",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "family 3",
+        "packet": "0101000c2112a4420123456789abcdeffedcba9800200008000383bb5e12a443",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "family 0",
+        "packet": "0101000c2112a4420123456789abcdeffedcba9800200008000083bb5e12a443",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "XOR 주소가 family보다 짧음",
+        "packet": "0101000c2112a4420123456789abcdeffedcba98002000080002123401020304",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "주소 속성 없음(SOFTWARE만)",
+        "packet": "0101000c2112a4420123456789abcdeffedcba98802200087461696c6e6f6465",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "속성 없음",
+        "packet": "010100002112a4420123456789abcdeffedcba98",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      },
+      {
+        "name": "MAPPED-ADDRESS family 3",
+        "packet": "0101000c2112a4420123456789abcdeffedcba980001000800030bb8c0000205",
+        "looksLikeSTUN": true,
+        "error": "STUN response has malformed attributes"
+      }
+    ]
+  }
+}

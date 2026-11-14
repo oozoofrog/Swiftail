@@ -278,3 +278,24 @@ Swift 시험은 `SWIFTAIL_CONTROLFAULTS`에 도구 경로를 넣어 돌린다. �
 ```sh
 SWIFTAIL_CONTROLFAULTS="$(sh Scripts/build-interop-tools.sh controlfaults)" eyebuild swift <용도> -- test --filter ControlFaultsTests
 ```
+
+# magicsockvectors
+
+`SwiftailMagicsock` 단위 시험의 고정 벡터를 `tailscale.com` v1.104.6의 공개 패키지(`disco`, `types/key`, `net/stun`)와 `golang.org/x/crypto/nacl`로 만들어 `Tests/SwiftailMagicsockTests/Fixtures/magicsock-vectors.json`에 쓴다. Swift 구현은 읽거나 실행하지 않는다. 키는 `SHA-256("swiftail-vectors/disco/<번호>")`(1, 2)를 X25519 개인 키 입력으로 쓰는 시험용 공개 값이고 nonce는 메시지 번호에서 정해진다. 시각·난수·운영 값이 없어 같은 입력이면 출력이 바이트 단위로 같다. 빌드 정보에서 기준 버전과 replace 부재를 확인한다.
+
+저장소 루트에서 실행한다. `interop-tools`·`ref-src`는 지우지 않는다.
+
+```sh
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
+(cd Tools/interop && go vet ./... && go run ./cmd/magicsockvectors ../../Tests/SwiftailMagicsockTests/Fixtures/magicsock-vectors.json)
+```
+
+출력 파일을 주지 않으면 표준 출력에 쓴다. 담는 것:
+
+- `keys`: 시험용 disco 키 `a`, `b`의 `seed`(개인 키 입력)와 `public`.
+- `disco.messages`: Ping(NodeKey 있음·없음·패딩), Pong(IPv4·IPv6), CallMeMaybe(주소 0·1·3개)의 `plaintext`(`AppendMarshal` 바이트)와, 같은 평문을 `box.Precompute` + `secretbox.Seal`(고정 `nonce`)로 봉한 겉 형식 전체 `packet`. 도구는 `packet`을 `key.DiscoPrivate.Shared(...).Open`으로 다시 열어 평문과 같은지, `disco.Source`가 보낸 쪽 키를 돌려주는지 확인한 뒤에 쓴다. Go의 `Seal`은 nonce를 안에서 뽑아 고정 nonce 봉인은 같은 계산을 직접 부른다.
+- `disco.parse`: 경계 평문(0·1바이트, Ping 11·12·13·43·44·45바이트와 0 NodeKey, Pong 29·30·31바이트, CallMeMaybe 17·18·19·35·36바이트와 version 1, 종류 0x00·0x04–0x09·0x0a·0xff)을 `disco.Parse`에 넣은 결과. 해석되면 `result`, 아니면 Go의 오류 문장이 `error`다. `kind: "relay"`는 Go가 해석하지만 Swiftail은 해석하지 않는 종류(0x04–0x09)다.
+- `stun.requests`: `stun.Request(txID)`의 바이트.
+- `stun.parse`: `stun.Response`로 만든 IPv4·IPv6 응답과 손으로 바꾼 응답(0x8020, MAPPED-ADDRESS만, 속성 앞 SOFTWARE, 선언 길이 뒤의 바이트, 거절 사례)을 `stun.ParseResponse`에 넣은 결과와, 같은 패킷이 `looksLikeSTUN`(`stun.Is`와 바이트 1이 `0x01`)인지.
