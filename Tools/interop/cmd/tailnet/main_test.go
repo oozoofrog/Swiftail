@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
-	"tailscale.com/ipn/ipnstate"
 	"testing"
 	"time"
+
+	"tailscale.com/envknob"
+	"tailscale.com/ipn/ipnstate"
 )
 
 func TestTailnet(t *testing.T) {
@@ -65,6 +72,44 @@ func TestTailnet(t *testing.T) {
 	if err != nil || refused["sent"] != false || refused["error"] == "" {
 		t.Fatalf("닫힌 TCP 포트: %v %v", refused, err)
 	}
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		status, err := n.execute(command{Cmd: "peerStatus", Name: "peer-a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := status["peers"].([]any)[0].(map[string]any)
+		if active, ok := p["active"].(bool); !ok || !active {
+			t.Fatal("송신한 피어의 active가 true가 아닙니다")
+		}
+		if lastWrite, ok := p["lastWrite"].(time.Time); !ok || lastWrite.IsZero() || lastWrite.After(time.Now()) {
+			t.Fatal("송신한 피어의 lastWrite가 유효한 과거 시각이 아닙니다")
+		}
+		selfAddrs := status["selfAddrs"].([]string)
+		nodes, err := n.execute(command{Cmd: "nodes"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, value := range nodes["nodes"].([]any) {
+			node := value.(map[string]any)
+			if node["nodeKey"] != a["nodeKey"] {
+				continue
+			}
+			for _, endpoint := range node["endpoints"].([]netip.AddrPort) {
+				if endpoint.Addr().IsLoopback() && endpoint.Port() != 0 && slices.Contains(selfAddrs, endpoint.String()) {
+					found = true
+				}
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("selfAddrs와 제어 서버 endpoints에서 같은 loopback 엔드포인트를 찾지 못했습니다")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	dir := n.peers["peer-a"].dir
 	_, err = n.execute(command{Cmd: "removePeer", Name: "peer-a"})
 	if err != nil {
@@ -76,7 +121,164 @@ func TestTailnet(t *testing.T) {
 	if n.peers["peer-a"] != nil {
 		t.Fatal("피어가 남았습니다")
 	}
-	_ = a
+}
+
+func TestSetNeverDirectUDP(t *testing.T) {
+	envknob.SetenvForTest(t, "TS_DEBUG_NEVER_DIRECT_UDP", "false")
+	read := envknob.RegisterBool("TS_DEBUG_NEVER_DIRECT_UDP")
+	n := &network{}
+	for _, enabled := range []bool{true, false, true, false} {
+		result, err := n.execute(command{Cmd: "setNeverDirectUDP", Enabled: &enabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result["event"] != "neverDirectUDP" || result["enabled"] != enabled || read() != enabled {
+			t.Fatalf("노브 전환: 응답 %v, 캐시 값 %v", result, read())
+		}
+	}
+	if _, err := n.execute(command{Cmd: "setNeverDirectUDP"}); err == nil || read() {
+		t.Fatal("enabled 누락을 상태 변경 없이 거절해야 합니다")
+	}
+}
+
+func TestSetNeverDirectUDPJSON(t *testing.T) {
+	envknob.SetenvForTest(t, "TS_DEBUG_NEVER_DIRECT_UDP", "false")
+	input := strings.NewReader(`{"id":{"step":1},"cmd":"setNeverDirectUDP","enabled":true}
+{"id":"off","cmd":"setNeverDirectUDP","enabled":false}
+{"id":3,"cmd":"setNeverDirectUDP"}
+{"id":4,"cmd":"setNeverDirectUDP","enabled":null}
+{"id":5,"cmd":"setNeverDirectUDP","enabled":"true"}
+{"id":6,"cmd":"setNeverDirectUDP","enabled":1}
+{"cmd":"setNeverDirectUDP","enabled":true}
+{"id":null,"cmd":"setNeverDirectUDP","enabled":true}
+{"id":9,"cmd":"quit"}
+`)
+	var output bytes.Buffer
+	if err := run(input, &output); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(&output)
+	for i, want := range []struct {
+		event string
+		id    string
+	}{
+		{"ready", ""},
+		{"neverDirectUDP", `{"step":1}`},
+		{"neverDirectUDP", `"off"`},
+		{"error", "3"},
+		{"error", "4"},
+		{"error", "5"},
+		{"error", "6"},
+		{"error", ""},
+		{"error", "null"},
+		{"quit", "9"},
+	} {
+		var result struct {
+			Event   string          `json:"event"`
+			ID      json.RawMessage `json:"id"`
+			Enabled *bool           `json:"enabled"`
+			Message string          `json:"message"`
+		}
+		if err := decoder.Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Event != want.event || string(result.ID) != want.id {
+			t.Fatalf("응답 %d: event=%s id=%s", i, result.Event, result.ID)
+		}
+		if want.event == "neverDirectUDP" && (result.Enabled == nil || *result.Enabled != (i == 1)) {
+			t.Fatalf("응답 %d: enabled가 요청과 다릅니다", i)
+		}
+		if want.event == "error" && result.Message == "" {
+			t.Fatalf("응답 %d: 오류 설명이 없습니다", i)
+		}
+	}
+	if envknob.RegisterBool("TS_DEBUG_NEVER_DIRECT_UDP")() {
+		t.Fatal("잘못된 요청이 노브를 바꿨습니다")
+	}
+}
+
+func TestNeverDirectUDPLeavesUDPData(t *testing.T) {
+	envknob.SetenvForTest(t, "TS_DEBUG_NEVER_DIRECT_UDP", "false")
+	n, err := newNetwork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.close()
+	for _, name := range []string{"peer-a", "peer-b"} {
+		if _, err := n.execute(command{Cmd: "addPeer", Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	lc, err := n.peers["peer-b"].server.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := lc.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := netip.AddrPortFrom(status.TailscaleIPs[0], 7).String()
+	conn, err := n.peers["peer-a"].server.Dial(ctx, "udp", to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	echo := func() {
+		t.Helper()
+		if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		payload := []byte{1, 2, 3}
+		if _, err := conn.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		var got [3]byte
+		if _, err := io.ReadFull(conn, got[:]); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(payload, got[:]) {
+			t.Fatal("UDP 에코가 원문과 다릅니다")
+		}
+	}
+	waitPath := func(direct bool) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			echo()
+			matched := true
+			for _, name := range []string{"peer-a", "peer-b"} {
+				r, err := n.execute(command{Cmd: "peerStatus", Name: name})
+				if err != nil {
+					t.Fatal(err)
+				}
+				peers := r["peers"].([]any)
+				if len(peers) != 1 || (peers[0].(map[string]any)["curAddr"] != "") != direct {
+					matched = false
+				}
+			}
+			if matched {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("15초 안에 양쪽 direct=%v가 되지 않았습니다", direct)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	waitPath(true)
+	enabled := true
+	if _, err := n.execute(command{Cmd: "setNeverDirectUDP", Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	waitPath(false)
+	// DERP 서버와 리스너를 닫아 UDP 에코가 중계로 성공할 가능성을 없앤다.
+	n.derp.Close()
+	n.derpHTTP.Close()
+	for range 3 {
+		echo()
+	}
 }
 
 func TestPeerSendRejectsInvalidInput(t *testing.T) {
