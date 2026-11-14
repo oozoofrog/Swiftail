@@ -216,6 +216,12 @@ M3 동작 4(보내기)의 앞에 다음을 둔다. 엔진 출력은 그대로 `.
 4. **TSMP**: 장치에서 온 TSMP(IP 프로토콜 99)는 버린다(`.consumedControlPacket`). 엔진 계약 M3의 `shortcut:`(위에서 내려온 TSMP를 버리지 않음)을 여기서 푼다.
 5. 나머지는 M3·M4 그대로(피어 선택 → 흐름 기록 → WireGuard).
 
+구현에서 정해진 것(M5-8a, 2026-11-15):
+
+- 판정 순서는 서비스 IP(2) → TSMP(4) → 자기 주소(3)다. Go도 TSMP를 자기 주소 확인보다 먼저 버린다. 자기 주소로 가는 TSMP는 되돌리지 않고, 서비스 IP로 가는 TSMP는 `.serviceIPPacket`이다.
+- UDP 53의 payload는 UDP 길이 필드가 가리키는 만큼만 응답기에 넣는다. 길이 필드가 8보다 작거나 IP 패킷보다 길면 `.serviceIPPacket`이다. 들어온 RST에 답하지 않는 경우도 `.serviceIPPacket`이다.
+- 공개 시그니처(`send(_:at:)`, `apply(_:at:wallClock:)`, `advance(to:)`)는 바뀌지 않는다. 노드는 `.ipPacket`을 "장치로 쓸 것"으로 한 가지로 다룬다(로컬 응답, 되돌린 패킷, 피어가 보낸 패킷이 모두 `.ipPacket`이다).
+
 ### S. 설정 산출 (`TunnelNetworkSettings.init?(netmap:mtu:at:)`)
 
 1. **주소**: 자기 노드 `Addresses` 가운데 한 주소짜리 접두(IPv4 /32, IPv6 /128)를 netmap 순서대로. 없으면 nil(설정을 내지 않는다).
@@ -250,7 +256,7 @@ DNS 노트 6.1 2의 최소 구현을 그대로 한다. 입력은 질의 바이�
 4. **역방향**(DNS 노트 4.2.2 5): Bonjour 역방향 이름은 NXDOMAIN(질문 포함, RA = RD, AA 없음). `in-addr.arpa`·`ip6.arpa`(니블 32개)를 주소로 읽고, 4to6 범위는 `100.x.y.z`로 먼저 찾는다. 서비스 IP는 `magicdns.localhost-tailscale-daemon.`. 못 찾으면 `localZones` 안이면 NXDOMAIN + SOA.
 5. **영역 밖**: 로컬 답이 없고 `localZones` 밖이면 SERVFAIL(질문 포함, AA=1, RA는 질의 값). 상위로 전달하지 않는다(DNS 노트 4.2.3. 결정 D2).
 6. **UDP 크기**(DNS 노트 4.2.4): 질의 끝 11바이트가 유효한 OPT면 그 광고 크기, 아니면 512바이트를 넘을 때 TC만 켠다. 자르지 않는다. 응답에 OPT를 싣지 않는다.
-7. **자기 키 만료·netmap 없음**: 응답기의 `localZones`가 비고 색인도 비므로 모든 이름이 SERVFAIL이다(닫힌 쪽).
+7. **자기 키 만료·netmap 없음**: 응답기의 `localZones`가 비고 색인도 비므로 모든 이름이 SERVFAIL이다(닫힌 쪽). 서비스 IP의 고정 이름(`magicdns.localhost-tailscale-daemon.`)에는 계속 답한다(Go와 같다). 자기 키 만료 시각은 엔진의 `nextDeadline`에 들어가고 `advance`가 그 시각에 응답기를 비운다(새 netmap을 기다리지 않는다). SOA SERIAL의 시각은 `apply`의 `wallClock`을 기준점으로 한 엔진의 벽시계다.
 8. 생략(DNS 노트 6.1 "생략 가능"): 4via6 이름, `dns-subdomain-resolve` 서브도메인 규칙, 상위 전달 전체.
 
 ### B. 상태 기계 (`Swiftail`, internal 값 타입)
@@ -338,6 +344,7 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
 
 Go 기준값 대조(`GoMagicDNSComparisonTests`, `GoTunnelSettingsComparisonTests`): MagicDNS 85단계 가운데 81단계는 Go와 응답 바이트까지 같고, 3단계는 표시된 차이(4via6, 서브도메인 규칙), 1단계는 아래의 질문 누출이다. 터널 설정 32단계 가운데 15단계는 Go와 같고 16단계는 표시된 차이(검색 도메인을 내지 않음, 전역 리졸버·분할 DNS를 무시 등), 1단계는 만료 시각이 지난 피어의 경로다(Go의 경로 산출은 `Expired` 표시만 보고, 그 표시는 앞 단계가 단다. Swiftail은 `keyExpiry <= now`인 피어를 스스로 뺀다).
 
+- 서비스 IP 상수는 `ServiceIP` 한 곳이다(응답기, DNS 서버·경로 산출, 엔진의 로컬 처리가 함께 쓴다).
 - 진입점: `MagicDNSResolver(netmap: Netmap?, localZones: [String])`와 `response(to:at:) -> [UInt8]`(internal). 늘 응답 바이트를 낸다(무응답인 경우가 없다). 12바이트보다 짧은 질의에도 Go처럼 ID 0의 FORMERR로 답한다.
 - netmap이 없거나 자기 키가 만료되어 `netmap`이 nil이어도 서비스 IP의 PTR 같은 고정 이름에는 답한다(Go와 같다). 그 밖의 이름은 SERVFAIL.
 - **Go와 일부러 다르게 한 것**: Go는 머리가 짧거나 응답 비트가 켜진 질의에 답할 때, 다시 쓰는 파서에 남아 있던 **앞 질의의 질문**을 응답에 싣는다(다른 앱의 질의 이름이 새어 나갈 수 있다. Go 출력에서 확인). Swiftail은 질문 없이 답한다. `ExtraRecords`의 이름과 MagicDNS 접미사는 소문자로 맞춰 비교한다(Go는 대소문자 그대로 쓴다).
@@ -586,7 +593,7 @@ M3 `filterfixtures`·M2 `mapfixtures`와 같은 방식이다. 자료는 `Tools/i
 | M5-5 | Go 기준값 도구와 자료 | `Tools/interop/cmd/{dnsfixtures,tunnelfixtures}/`, `Tests/SwiftailEngineTests/Fixtures/{magicdns-fixtures,tunnel-settings-fixtures}.json`, `Tools/interop/README.md`의 새 절 | **M4와 병렬**. 대조 시험은 M5-1·2 뒤 다른 세션이 |
 | M5-6 | 묶기와 메모리 한도의 가장자리: `NetworkSocket` `requiredInterface`, `ControlClient.setNetworkInterface`, 맵 프레임 8MiB, `DERPClient` 인터페이스 인자·사건 바이트 한도 | `Sources/SwiftailIO/NetworkSocket*.swift`, `Sources/SwiftailControl/Client/ControlClient*.swift`, `Sources/SwiftailControl/Netmap/MapResponseFramer.swift`, `Sources/SwiftailDERP/DERPClient*.swift`와 각 시험 | **M4와 병렬**(M4가 고치지 않는 파일). `DERPClient`의 생성자 변경은 M4 단위 4의 호출 지점과 맞물리므로 기본값 있는 인자로 더한다 |
 | M5-7 | UDP 묶기와 재결속: `DatagramSocket`의 `IP_BOUND_IF`·바이트 한도, `Magicsock.rebind` | `Sources/SwiftailIO/DatagramSocket.swift`, `Sources/SwiftailMagicsock/Magicsock*.swift`와 시험 | **M4 단위 3·4 병합 뒤**. 7a(`DatagramSocket`)는 M4 단위 4와 파일이 겹치지 않아 먼저, 7b(`Magicsock.rebind`)는 단위 4 병합 뒤 |
-| M5-8 | 엔진·노드 통합: `TailnetEngine.send`의 로컬 처리(동작 L), 응답기 설치, 상태 기계(동작 B), 설정 내기(동작 E), `TunnelDevice`·utun 읽기 루프, `setDefaultInterface`(동작 N), 상태 디렉터리 표·파일 보호(동작 P), 공개 API 모양(T1~T4), 기존 관문 시험의 사건 기다림 고치기 | `Sources/SwiftailEngine/TailnetEngine*.swift`, `Sources/Swiftail/*`, `Tests/SwiftailEngineTests/TailnetEngineTests.swift`, `Tests/SwiftailTests/*`, `Tests/SwiftailInteropTests/*`(사건 기다림만), `Sources/SwiftailControl/Client/NodeIdentityStore.swift`(보호 등급) | **M4 단위 4 병합 뒤**, M5-1~4·6·7 뒤. 가장 크다. 나눈다면 8a(엔진: 동작 L과 응답기 설치)와 8b(노드)로 나누고 8b는 8a 병합 뒤 빌드한다 |
+| M5-8 | 엔진·노드 통합(8a 엔진은 끝남: b503d5f): `TailnetEngine.send`의 로컬 처리(동작 L), 응답기 설치, 상태 기계(동작 B), 설정 내기(동작 E), `TunnelDevice`·utun 읽기 루프, `setDefaultInterface`(동작 N), 상태 디렉터리 표·파일 보호(동작 P), 공개 API 모양(T1~T4), 기존 관문 시험의 사건 기다림 고치기 | `Sources/SwiftailEngine/TailnetEngine*.swift`, `Sources/Swiftail/*`, `Tests/SwiftailEngineTests/TailnetEngineTests.swift`, `Tests/SwiftailTests/*`, `Tests/SwiftailInteropTests/*`(사건 기다림만), `Sources/SwiftailControl/Client/NodeIdentityStore.swift`(보호 등급) | **M4 단위 4 병합 뒤**, M5-1~4·6·7 뒤. 가장 크다. 나눈다면 8a(엔진: 동작 L과 응답기 설치)와 8b(노드)로 나누고 8b는 8a 병합 뒤 빌드한다 |
 | M5-9 | 관문 (가): `tailnet` 도구 명령 보강(필요하면), `TunnelTests.swift` | `Tools/interop/cmd/tailnet/*`, `Tests/SwiftailInteropTests/TunnelTests.swift` | 도구는 M4 단위 5 병합 뒤 언제든. Swift 시험은 M5-8 뒤 |
 | M5-10 | 관문 (나): 시험용 터널 앱(T7) | `Tools/TunnelHarness/`(라이브러리 타깃 밖) | M5-8 뒤. 서명 결정(plan 9절) 뒤 |
 

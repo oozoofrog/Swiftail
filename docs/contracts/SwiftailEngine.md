@@ -22,7 +22,7 @@ netmap을 데이터면으로 바꾸는 층이다. M3의 목표는 **직접 UDP �
 
 - 서브넷 경로·exit node(`RouteAll=false`, exit node 없음으로 고정), WireGuard 전용 피어(`isWireGuardOnly`), jailed 피어(`isJailed`), masquerade 주소가 있는 피어, tailnet lock 서명이 없는 피어(`unsignedPeerAPIOnly`. Go는 이런 피어와 겹치는 패킷 규칙이 있으면 규칙 전체를 비운다), `cap:` 출발지 규칙, shields-up.
 - IP 조각과 IPv6 확장 헤더: 버린다(Go는 일부를 통과시킨다. 재조립하는 스택이 없으므로 M3은 받지 않는다).
-- TSMP(IP 프로토콜 99): 받으면 엔진이 소비하고 위로 올리지 않는다. pong·거절·disco 광고는 보내지 않는다. `shortcut:` 위에서 내려온 TSMP를 버리지 않는다(Go는 host가 만든 TSMP를 버린다). TUN을 붙이는 M5에서 넣는다.
+- TSMP(IP 프로토콜 99): 받으면 엔진이 소비하고 위로 올리지 않는다. pong·거절·disco 광고는 보내지 않는다. 위에서 내려온 TSMP는 버린다(Go도 host가 만든 TSMP를 버린다. M5-8a에서 넣음, `SwiftailTunnel` 계약 동작 L 4).
 - 옛 형식의 규칙(`SrcBits`, `DstPorts[].Bits`)이 있으면 규칙을 모두 비운다. 자기 주소와 UDP 흐름 기록은 남으므로 먼저 보낸 UDP의 응답은 계속 받는다(Go와 같다).
 - 직접 UDP, disco, STUN, 홈이 아닌 DERP 지역: M4.
 
