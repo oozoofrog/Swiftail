@@ -225,11 +225,12 @@ public actor ControlClient {
     public init(configuration: Configuration, identityStore: NodeIdentityStore)
 
     /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// 읽지 않은 사건은 가장 새 것 64개만 남고 오래된 것부터 버린다(netmap 사건은 늘 전체 상태다).
     public nonisolated var events: AsyncStream<Event> { get }
 
     /// 등록하고, 상태를 올리고, 맵 스트림을 유지한다. 끊기면 물러났다가 다시 잇는다.
     /// 호출한 Task가 취소될 때까지 돌아오지 않는다. 다시 시도해도 소용없는 실패는 던진다.
-    /// 클라이언트 하나에 한 번만 부른다. 다시 부르면 `invalidConfiguration`.
+    /// 클라이언트 하나에 한 번만 부른다. 겹쳐 부르든 끝난 뒤에 부르든 다시 부르면 `invalidConfiguration`.
     public func run() async throws(ControlError)
 
     /// 상태를 바꾼다. 연결되어 있으면 곧 올리고, 아니면 다음 연결 때 올린다. 마지막 값만 남는다.
@@ -248,13 +249,16 @@ public actor ControlClient {
 2. **등록**: 저장된 node 키가 있으면 그것으로, 없으면 새 후보 키로 `POST /machine/register`.
    - 인증 키가 `--TL`을 담고 있으면 그 앞부분만 보낸다.
    - `AuthURL`이 오면 `loginRequired`를 내고 같은 후보 키로 `Followup` 요청(긴 폴링)을 반복한다. 후보 키는 인증이 끝난 뒤에만 확정·저장한다.
-   - `NodeKeyExpired`면 새 키로 한 번 더. `Error`면 `registrationRejected`.
-3. **상태 올리기**: `Stream=false, OmitPeers=true`인 맵 요청으로 Hostinfo·NetInfo·DiscoKey·Endpoints를 올린다. 응답 본문은 끝까지 읽고 버린다. 스트림이 열린 뒤의 변경도 이 형태로만 보낸다(다른 형태는 서버가 기존 스트림을 끊는다).
+   - `NodeKeyExpired`면 새 키로 한 번 더. `Error`면 `registrationRejected`. 그 메시지에서 인증 키(원문과 `--TL` 앞부분)는 가리고 200자로 자른다.
+   - 기한: 등록 요청 120초(Go에는 없는 값이다), Followup 긴 폴링 10분. 넘기면 연결 오류로 보고 물러났다가 다시 잇는다.
+   - 확정 전의 후보 키와 Followup URL은 재연결 너머로 유지한다(사용자가 보고 있는 로그인 URL이 그 후보 키에 묶여 있다). 확정·거절·새 로그인 요청 때만 버린다.
+   - 등록이 진행 중일 때 요청한 `startInteractiveLogin()`은 그 등록이 끝난 뒤에도 남아 새 등록을 일으킨다. `shortcut:` Followup 긴 폴링 중의 요청은 그 응답이 오거나 기한이 지날 때 반영된다.
+3. **상태 올리기**: `Stream=false, OmitPeers=true`인 맵 요청으로 Hostinfo·NetInfo·DiscoKey·Endpoints를 올린다. 응답 본문은 끝까지 읽고 버린다. 응답을 120초 안에 다 받지 못하면 연결 오류다(Go의 감시와 같다). 스트림이 열린 뒤의 변경도 이 형태로만 보낸다(다른 형태는 서버가 기존 스트림을 끊는다).
 4. **맵 스트림**: `Stream=true, KeepAlive=true, Compress=""`. 바이트를 `MapResponseFramer` → `MapSession`에 넣고 netmap이 바뀌면 `netmap` 사건을 낸다. 120초 동안 아무것도 오지 않으면 끊고 다시 잇는다. 다시 이을 때는 새 `MapSession`으로 시작한다.
    - `TKAInfo`로 tailnet lock이 켜진 것을 알면 `tailnetLockEnabled`로 끝낸다.
-   - self 노드의 키가 만료되면 등록부터 다시 한다.
+   - self 노드의 키가 만료되면 등록부터 다시 한다. 새 맵이 오지 않아도 만료 시각이 지나면 그렇게 한다. 새 키로 다시 등록했는데도 만료면 `nodeKeyExpired`로 `run()`을 끝낸다.
    - `PingRequest`(Types가 빈 것)는 그 URL에 HEAD로 답한다. 나머지 종류는 무시한다.
-5. **물러나기**: `min(n² × 10ms, 30s) × [0.5, 1.5)`. 전체 netmap을 받으면 초기화한다. 429와 `Retry-After`가 붙은 503은 그 시간만큼 기다린다(최대 5분).
+5. **물러나기**: `min(n² × 10ms, 30s) × [0.5, 1.5)`. 전체 netmap을 받으면 초기화한다(self 키가 만료된 netmap은 초기화하지 않는다). 429와 `Retry-After`가 붙은 503은 그 시간만큼 기다린다(최대 5분).
 6. **Hostinfo**: 노트 3.3절의 최소 필드. OS 이름과 버전, 호스트 이름, 앱 버전 자리에는 Swiftail임을 드러내는 값을 넣는다(공식 클라이언트로 가장하지 않는다).
 7. **신원 파일**: 디렉터리 안의 파일 하나(JSON, 키는 `privkey:` + 16진). 원자적으로 쓰고 소유자만 읽게(0600) 한다. 키를 로그·오류·description에 넣지 않는다.
 8. **비밀의 출력**: `NodeIdentity`와 `Configuration`은 `CustomStringConvertible`·`CustomReflectable`을 채택해 `print`·`dump`에 개인 키와 인증 키를 드러내지 않는다(공개 키와 "가림" 표시만).
