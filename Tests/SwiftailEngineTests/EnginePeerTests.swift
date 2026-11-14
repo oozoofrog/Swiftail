@@ -90,6 +90,30 @@ struct EnginePeerTests {
         #expect(try peers(Self.reachable + #","SelfNodeV6MasqAddrForThisPeer":"fd7a:115c:a1e0::99""#).isEmpty)
     }
 
+    @Test("같은 접두를 두 노드가 내세우면 node ID가 작은 쪽만 갖는다 (출발 주소는 피어 하나에 묶인다)")
+    func prefixHasOneOwner() throws {
+        let bob = makeNodeJSON(id: 2, key: makeNodeKey(byte: 2), addresses: ["100.64.0.2/32"], extra: Self.reachable)
+        // carol은 자기 주소에 더해 bob의 주소도 AllowedIPs에 내세운다.
+        let carol = makeNodeJSON(
+            id: 3, key: makeNodeKey(byte: 3), addresses: ["100.64.0.3/32"],
+            extra: Self.reachable + #","AllowedIPs":["100.64.0.3/32","100.64.0.2/32"]"#)
+        let netmap = try makeNetmap(selfNode: Self.selfNode, peers: [carol, bob])
+        let peers = EnginePeer.peers(in: netmap, at: wallClockStart)
+        #expect(peers.map(\.key) == [makeNodeKey(byte: 2), makeNodeKey(byte: 3)])
+        #expect(peers.map { $0.allowedIPs.map(\.description) } == [["100.64.0.2/32"], ["100.64.0.3/32"]])
+    }
+
+    @Test("남의 접두만 내세운 노드와 같은 키를 다시 내세운 노드는 올리지 않는다")
+    func duplicateKeyAndOnlyClaimedPrefixes() throws {
+        let bob = makeNodeJSON(id: 2, key: makeNodeKey(byte: 2), addresses: ["100.64.0.2/32"], extra: Self.reachable)
+        let sameAddress = makeNodeJSON(id: 3, key: makeNodeKey(byte: 3), addresses: ["100.64.0.2/32"], extra: Self.reachable)
+        let sameKey = makeNodeJSON(id: 4, key: makeNodeKey(byte: 2), addresses: ["100.64.0.4/32"], extra: Self.reachable)
+        let netmap = try makeNetmap(selfNode: Self.selfNode, peers: [sameKey, sameAddress, bob])
+        let peers = EnginePeer.peers(in: netmap, at: wallClockStart)
+        #expect(peers.map(\.key) == [makeNodeKey(byte: 2)])
+        #expect(peers.first?.allowedIPs.map(\.description) == ["100.64.0.2/32"])
+    }
+
     @Test("순서는 node ID 오름차순이다")
     func ordering() throws {
         let nodes = [5, 3, 4].map { id in

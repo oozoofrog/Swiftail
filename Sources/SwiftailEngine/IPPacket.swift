@@ -12,7 +12,20 @@ import SwiftailBase
 public struct IPPacket: Sendable, Equatable {
     /// 전송 계층 프로토콜. 번호는 IP 머리의 protocol(IPv4)·next-header(IPv6) 필드다.
     public enum TransportProtocol: Sendable, Equatable {
-        case tcp, udp, sctp, icmpv4, icmpv6, tsmp, other(UInt8)
+        /// 6. 포트가 있고, 새 연결의 시작(SYN)만 필터 규칙을 본다.
+        case tcp
+        /// 17. 포트가 있고, 먼저 보낸 흐름의 응답은 규칙 없이 받는다.
+        case udp
+        /// 132. 필터에서는 UDP와 같다.
+        case sctp
+        /// 1.
+        case icmpv4
+        /// 58.
+        case icmpv6
+        /// 99. Tailscale이 터널 안에서 주고받는 제어 메시지. 엔진이 소비한다.
+        case tsmp
+        /// 그 밖의 번호. 포트가 없다.
+        case other(UInt8)
     }
 
     /// 해석할 수 없거나 M3에서 받지 않는 패킷.
@@ -27,11 +40,15 @@ public struct IPPacket: Sendable, Equatable {
 
     /// 선언된 길이로 자른 패킷 전체.
     public let bytes: [UInt8]
+    /// IP 머리의 출발 주소.
     public let source: IPAddress
+    /// IP 머리의 목적 주소.
     public let destination: IPAddress
+    /// 전송 계층 프로토콜.
     public let transportProtocol: TransportProtocol
-    /// TCP·UDP·SCTP의 포트. 그 밖에는 0.
+    /// TCP·UDP·SCTP의 출발 포트. 그 밖에는 0.
     public let sourcePort: UInt16
+    /// TCP·UDP·SCTP의 목적 포트. 그 밖에는 0.
     public let destinationPort: UInt16
     /// TCP에서 SYN이 켜지고 ACK가 꺼진 패킷(새 연결의 시작).
     public let isTCPSYN: Bool

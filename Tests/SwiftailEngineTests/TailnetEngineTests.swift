@@ -273,6 +273,28 @@ struct TailnetEngineTests {
         #expect(after.drops[.alice] == [.wireGuard(.unknownPeer)])
     }
 
+    @Test("아주 먼 키 만료는 하루마다 다시 보고, 그 시각이 오면 피어를 내린다")
+    func distantPeerKeyExpiry() throws {
+        var pair = try EnginePair()
+        let day = Duration.seconds(24 * 60 * 60)
+        // 9999년의 만료: 단조 시각으로 바꿀 때 넘치지 않게 하루 뒤에 다시 본다.
+        let distant = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"9999-12-31T00:00:00Z""#)
+        _ = pair.alice.apply(distant, homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        #expect(pair.alice.nextDeadline == clockStart + day)
+        _ = pair.alice.advance(to: clockStart + day)
+        #expect(pair.alice.nextDeadline == clockStart + day + day)
+
+        // 하루하고 1초 뒤의 만료(wallClockStart는 2027-01-15T08:00:00Z): 하루 뒤에 한 번 보고, 1초 뒤에 내린다.
+        let soon = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"2027-01-16T08:00:01Z""#)
+        _ = pair.alice.apply(soon, homeDERP: EnginePair.homeDERP, at: clockStart, wallClock: wallClockStart)
+        #expect(pair.alice.nextDeadline == clockStart + day)
+        _ = pair.alice.advance(to: clockStart + day)
+        #expect(pair.alice.nextDeadline == clockStart + day + .seconds(1))
+        _ = pair.alice.advance(to: clockStart + day + .seconds(1))
+        let packet = TestPacket.udp(from: "100.64.0.1", 7, to: "100.64.0.2", 1)
+        #expect(pair.alice.send(packet, at: clockStart + day + .seconds(1)) == [.dropped(.noPeerForDestination)])
+    }
+
     @Test("WireGuard 타이머를 advance로 처리하고 nextDeadline에 반영한다")
     func wireGuardTimers() throws {
         var pair = try EnginePair()

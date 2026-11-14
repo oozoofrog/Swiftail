@@ -117,8 +117,8 @@ public struct TailnetEngine: Sendable {
 
         var current: [NodePublicKey: EnginePeer] = [:]
         var addressIndex: [IPAddress: NodePublicKey] = [:]
-        // 같은 키나 같은 주소를 여러 노드가 내세우면 node ID가 작은 쪽을 쓴다.
-        for (node, peer) in EnginePeer.eligibleNodes(in: netmap, at: wallNow) where current[peer.key] == nil {
+        // 키와 접두의 주인은 `eligibleNodes`가 하나로 정해 준다. 송신 색인도 같은 규칙(node ID가 작은 쪽)이다.
+        for (node, peer) in EnginePeer.eligibleNodes(in: netmap, at: wallNow) {
             current[peer.key] = peer
             for prefix in node.addresses where EnginePeer.isSingleAddress(prefix) && addressIndex[prefix.address] == nil {
                 addressIndex[prefix.address] = peer.key

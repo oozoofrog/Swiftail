@@ -18,7 +18,9 @@ import SwiftailControl
 public struct PacketFilter: Sendable {
     /// 판정.
     public enum Verdict: Sendable, Equatable {
+        /// 위로 올린다.
         case accept
+        /// 버린다.
         case drop(DropReason)
     }
 
@@ -36,7 +38,7 @@ public struct PacketFilter: Sendable {
     private var localAddresses: Set<IPAddress>
     private var flows = FlowTable()
 
-    /// 규칙이 없다. 모든 새 흐름을 버린다(netmap을 받기 전의 상태).
+    /// 규칙도 자기 주소도 없다. 모든 패킷을 버린다(netmap을 받기 전의 상태).
     public static var allowNone: PacketFilter {
         PacketFilter(matches: [], localAddresses: [])
     }

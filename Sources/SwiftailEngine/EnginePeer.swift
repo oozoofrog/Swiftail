@@ -14,6 +14,7 @@ import SwiftailControl
 ///
 /// `docs/protocol-notes/netmap-engine.md` 4.1·4.3, `docs/contracts/SwiftailEngine.md` 동작 2.
 public struct EnginePeer: Sendable, Equatable {
+    /// 피어의 node 키. WireGuard 공개 키와 같다.
     public var key: NodePublicKey
     /// 이 피어가 출발지로 쓸 수 있는 주소. WireGuard AllowedIPs가 된다.
     public var allowedIPs: [IPPrefix]
@@ -22,6 +23,10 @@ public struct EnginePeer: Sendable, Equatable {
 
     /// netmap에서 데이터면에 올릴 피어들을 고른다. 순서는 node ID 오름차순이다.
     ///
+    /// 키 하나는 피어 하나에만, 접두 하나도 피어 하나에만 준다. 같은 키나 같은 접두를 여러 노드가 내세우면
+    /// node ID가 작은 쪽이 갖는다. 접두의 주인이 하나여야 "이 출발 주소는 이 피어"가 성립한다
+    /// (wireguard-go의 AllowedIPs도 접두마다 주인이 하나다).
+    ///
     /// - Parameter now: 키 만료를 판단할 지금 시각(로컬 벽시계).
     public static func peers(in netmap: Netmap, at now: Date) -> [EnginePeer] {
         eligibleNodes(in: netmap, at: now).map(\.peer)
@@ -29,9 +34,18 @@ public struct EnginePeer: Sendable, Equatable {
 
     /// 올릴 피어와 그 노드. 엔진이 노드의 주소로 송신 경로 색인을 만들 때 쓴다.
     static func eligibleNodes(in netmap: Netmap, at now: Date) -> [(node: Node, peer: EnginePeer)] {
-        netmap.peers
-            .sorted { $0.id < $1.id }
-            .compactMap { node in EnginePeer(node: node, at: now).map { (node, $0) } }
+        var claimedKeys: Set<NodePublicKey> = []
+        var claimedPrefixes: Set<IPPrefix> = []
+        var result: [(node: Node, peer: EnginePeer)] = []
+        for node in netmap.peers.sorted(by: { $0.id < $1.id }) {
+            guard var peer = EnginePeer(node: node, at: now), !claimedKeys.contains(peer.key) else { continue }
+            peer.allowedIPs.removeAll { claimedPrefixes.contains($0) }
+            guard !peer.allowedIPs.isEmpty else { continue }
+            claimedKeys.insert(peer.key)
+            claimedPrefixes.formUnion(peer.allowedIPs)
+            result.append((node, peer))
+        }
+        return result
     }
 
     /// 노드를 올릴 수 없으면 `nil`.

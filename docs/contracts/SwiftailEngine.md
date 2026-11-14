@@ -60,7 +60,7 @@ public struct PacketFilter: Sendable {
     }
     public enum DropReason: Sendable, Equatable { case notForUs, noRuleMatched, multicastOrLinkLocal }
 
-    /// 규칙이 없다. 모든 새 흐름을 버린다(netmap을 받기 전의 상태).
+    /// 규칙도 자기 주소도 없다. 모든 패킷을 버린다(netmap을 받기 전의 상태).
     public static var allowNone: PacketFilter { get }
 
     /// - Parameters:
@@ -130,6 +130,7 @@ public struct TailnetEngine: Sendable {
 2. **피어 계산**(노트 4.1, `RouteAll=false`·exit node 없음):
    - 올리지 않는 피어: `id`가 0, `key`가 0, 만료(`expired`이거나 0이 아닌 `keyExpiry <= now`), `discoKey`가 0이고 `homeDERP`가 0, 위 "지원하지 않는 것"의 피어.
    - AllowedIPs: 피어의 `allowedIPs` 가운데 (한 주소짜리이고 Tailscale 주소 범위) 또는 (피어의 `addresses`에 있는 것)만 남긴다. Tailscale 주소 범위는 `100.64.0.0/10`(단 `100.115.92.0/23` 제외)과 `fd7a:115c:a1e0::/48`. 남는 것이 없으면 올리지 않는다.
+   - 키 하나는 피어 하나에만, 접두 하나도 피어 하나에만 준다. 같은 키나 같은 접두를 여러 노드가 내세우면 node ID가 작은 쪽이 갖는다(출발 주소가 피어 하나에 묶여야 한다. wireguard-go의 AllowedIPs도 접두마다 주인이 하나다).
    - `shortcut:` 만료는 로컬 시계로 판단한다(Go는 ControlTime으로 1분 넘는 시계 차를 보정한다). 접두의 호스트 비트가 남은 원문은 구분하지 못한다(`IPPrefix`가 해독 때 지운다).
 3. **netmap 적용**(노트 4.2의 설계 선택, 6.1): 계산한 피어를 모두 `WireGuardDevice.addPeer`로 미리 올린다(Go의 지연 생성은 하지 않는다). 사라졌거나 올릴 수 없게 된 키는 `removePeer`. 같은 키의 AllowedIPs 변경은 세션을 유지한다. 필터는 규칙만 바꾸고 UDP 흐름 기록은 잇는다. 다음 키 만료 시각을 `nextDeadline`에 넣어 그때 피어를 내린다.
 4. **보내기**: 패킷 해석 → 목적지가 어느 피어의 한 주소짜리 `addresses`와 같은지로 피어를 고른다(없으면 `noPeerForDestination`) → 피어의 `homeDERP`가 우리 홈 지역이 아니면 `noRouteToPeer` → `recordOutbound` → `WireGuardDevice.send`. 장치가 내놓은 `.datagram`에 지역을 붙여 돌려준다. 나가는 패킷에는 ACL을 적용하지 않는다(Go와 같다).
