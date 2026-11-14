@@ -52,7 +52,8 @@ public struct DERPConnection: Sendable {
     private var pendingReplyBytes = 0
     /// 서버와의 NaCl 공유 키. ServerKey를 받은 뒤에 있고, ServerInfo를 여는 데 쓴다.
     private var sharedKey: [UInt8] = []
-    /// 핸드셰이크 뒤에 프레임을 하나라도 받았다(서버가 ClientInfo를 받아들이고 ServerInfo를 보냈다는 뜻).
+    /// 핸드셰이크 뒤에 프레임을 하나라도 받아 처리했다(서버가 ClientInfo를 받아들이고 ServerInfo를 보냈다는 뜻).
+    /// 처리에 실패한 프레임(열리지 않는 ServerInfo 등)은 치지 않는다. Go도 수신이 성공했을 때만 물러나기를 되돌린다.
     /// `DERPClient`가 물러나기 횟수를 되돌릴 때 쓴다. 실패한 뒤에도 남는다.
     private(set) var hasReceivedFrameAfterHandshake = false
 
@@ -141,14 +142,13 @@ public struct DERPConnection: Sendable {
             try acceptServerKey(frame, into: &events)
             return
         }
-        hasReceivedFrameAfterHandshake = true
         switch frame.kind {
         case .recvPacket:
             // 보낸 쪽 키(32)가 없는 프레임은 버린다.
-            guard let sender = NodePublicKey(rawValue: frame.body.prefix(DERPFrame.keySize)) else { return }
+            guard let sender = NodePublicKey(rawValue: frame.body.prefix(DERPFrame.keySize)) else { break }
             events.append(.packet(Array(frame.body.dropFirst(DERPFrame.keySize)), from: sender))
         case .peerGone:
-            guard let peer = NodePublicKey(rawValue: frame.body.prefix(DERPFrame.keySize)) else { return }
+            guard let peer = NodePublicKey(rawValue: frame.body.prefix(DERPFrame.keySize)) else { break }
             events.append(.peerGone(peer, reason: Self.reason(frame.body.dropFirst(DERPFrame.keySize).first)))
         case .ping:
             try reply(toPing: frame.body)
@@ -159,6 +159,7 @@ public struct DERPConnection: Sendable {
             // Go magicsock도 상태 기록 말고는 하지 않는다(노트 4.5절 5).
             break
         }
+        hasReceivedFrameAfterHandshake = true
     }
 
     private mutating func acceptServerKey(_ frame: DERPFrame, into events: inout [Event]) throws(DERPError) {

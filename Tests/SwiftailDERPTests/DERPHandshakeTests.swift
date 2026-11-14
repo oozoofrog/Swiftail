@@ -58,6 +58,20 @@ struct DERPHandshakeTests {
         #expect(!connection.hasReceivedFrameAfterHandshake)
     }
 
+    /// 고치기 전에는 프레임을 처리하기 전에 표시를 켜, 열리지 않는 ServerInfo만 주고 끊는 서버에 물러나기 없이 다시 붙었다.
+    @Test("열리지 않거나 JSON이 아닌 ServerInfo는 핸드셰이크 뒤 프레임을 받은 것으로 치지 않는다")
+    func failedFrameIsNotProgress() throws {
+        var tampered = try DERPFixtures.readyConnection()
+        var frame = try DERPFixtures.Server.serverInfoFrame()
+        frame[frame.count - 1] ^= 0x01
+        #expect(throws: DERPError.handshakeFailed) { try tampered.receive(frame) }
+        #expect(!tampered.hasReceivedFrameAfterHandshake)
+
+        var notJSON = try DERPFixtures.readyConnection()
+        #expect(throws: DERPError.malformed) { try notJSON.receive(DERPFixtures.Server.serverInfoFrame(Array("not json".utf8))) }
+        #expect(!notJSON.hasReceivedFrameAfterHandshake)
+    }
+
     @Test("101 머리와 ServerKey가 한 조각에 와도, 머리만 먼저 와도 같다")
     func headAndServerKeyInOneChunkOrTwo() throws {
         var together = try DERPFixtures.connection()

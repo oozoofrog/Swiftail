@@ -7,7 +7,7 @@ import SwiftailIO
 /// 이 패키지에서 소켓과 시계를 갖는 곳은 여기뿐이다. 프로토콜의 판단은 입출력 없는 상태 기계(`DERPConnection`)가
 /// 하고, 이 actor는 바이트와 시각을 거기에 넣고 결과를 사건(`events`)으로 내보낸다.
 ///
-/// 동시성은 구조적이다. `run()`이 연결 하나의 수명 동안 읽기 루프와 유휴 감시를 한 TaskGroup의 자식으로
+/// 동시성은 구조적이다. `run()`이 연결 하나의 수명 동안 읽기 루프, 쓰기 루프, 유휴 감시를 한 TaskGroup의 자식으로
 /// 돌리므로, `run()`을 부른 Task를 취소하면 모두 멈추고 소켓이 닫힌다. 분리된 Task는 만들지 않는다.
 ///
 /// ```swift
@@ -17,8 +17,17 @@ import SwiftailIO
 /// for await event in client.events { … }
 /// ```
 ///
-/// 쓰기는 기다리지 않는다. `NetworkSocket.send`가 부른 순서대로 내보내므로 프레임 하나는 통째로, 순서대로 나간다.
-/// 읽기는 멈추지 않는다. 서버는 2초 안에 쓰지 못하면 연결을 끊는다.
+/// 메모리 상한(iOS 네트워크 확장은 약 50MB다):
+///
+/// - `send`는 기다리지 않고 패킷을 큐에 넣는다. 큐는 연결 상태와 무관하게 `queuedPacketLimit`개까지만 쥐고, 넘치면
+///   가장 오래된 것을 버린다.
+/// - 쓰기 루프가 큐의 패킷과 상태 기계가 낸 답(Pong)을 한 덩어리씩 `NetworkSocket.write`로 쓰고, 소켓이 받아 갈
+///   때까지 다음 덩어리를 꺼내지 않는다. 그래서 쓰기가 막힌 동안 Pong은 상태 기계 안에 쌓이고, 64KiB를 넘으면
+///   상태 기계가 연결 오류(`tooManyPendingReplies`)로 끝낸다. 쓰기 하나가 `writeTimeout` 안에 끝나지 않아도 연결
+///   오류다. 어느 쪽이든 끊고 다시 잇는다.
+/// - 쓰기는 부른 순서대로 나가므로 프레임 하나는 통째로, 순서대로 나간다.
+///
+/// 읽기는 쓰기가 막혀도 멈추지 않는다(따로 도는 자식이다). 서버는 2초 안에 쓰지 못하면 연결을 끊는다.
 ///
 /// 계약 `docs/contracts/SwiftailDERP.md` "DERPClient", `docs/protocol-notes/derp-stun.md` 4.1·4.4~4.6절
 /// (출처: tailscale.com `derp/derphttp/derphttp_client.go`·`wgengine/magicsock/derp.go`, BSD-3-Clause).
@@ -30,10 +39,20 @@ public actor DERPClient {
         case peerGone(NodePublicKey)
     }
 
-    /// 읽지 않은 사건 수의 한도. 넘으면 오래된 것부터 버린다.
+    /// 읽지 않은 `packet`·`peerGone` 사건 수의 한도. 넘으면 오래된 것부터 버린다.
     static let eventBufferLimit = 256
-    /// 연결되기 전에 쌓아 두는 패킷 수의 한도. 넘으면 가장 오래된 것을 버린다.
+    /// 아직 소켓에 쓰지 않은 패킷 수의 한도. 연결 상태와 무관하다. 넘으면 가장 오래된 것을 버린다.
+    ///
+    /// Go `wgengine/magicsock/derp.go`의 `derpWriteQueueDepth = 32`(지역 연결 하나의 쓰기 큐)와 같고, 넘칠 때 오래된
+    /// 것을 버리는 것도 `magicsock.go`의 `sendDerp`와 같다. Go의 주석대로 TCP 버퍼 위의 큐는 거의 순수한 버퍼
+    /// 부풀림이므로 깊게 두지 않는다.
     static let queuedPacketLimit = 32
+    /// 쓰기 하나(패킷 하나와 함께 나갈 Pong)가 소켓에 넘어가기까지의 기한. 넘으면 연결을 끊는다.
+    ///
+    /// Go `derp/derp_client.go`의 `ForwardPacket`이 쓰기마다 거는 5초 타이머(`writeTimeoutFired`가 연결을 닫는다)를
+    /// 따랐다. Go의 `send`(SendPacket)에는 기한이 없고 쓰는 goroutine이 TCP에서 막힌다. 여기서는 막힌 연결이 큐와
+    /// Pong을 쥔 채 남지 않게 모든 쓰기에 같은 5초를 건다.
+    static let writeTimeout = Duration.seconds(5)
     /// 서버 하나로의 TCP 연결 시도 기한.
     static let tcpTimeout = Duration.milliseconds(1500)
     /// 연결부터 `ready`까지의 기한.
@@ -45,15 +64,19 @@ public actor DERPClient {
     private let servers: [DERPServer]
     private let privateKey: Curve25519.KeyAgreement.PrivateKey
     private let isPreferred: Bool
+    private let writeTimeout: Duration
+    /// 시험에서 TLS 없이 루프백의 가짜 서버에 붙을 때만 true다.
+    private let plaintextForTests: Bool
     private let eventStream: AsyncStream<Event>
-    private let eventContinuation: AsyncStream<Event>.Continuation
+    private let eventQueue = EventQueue()
 
     private var hasRun = false
     /// 지금 연결. 준비되기 전과 끊긴 뒤에는 nil이다.
-    private var socket: NetworkSocket?
     private var connection: DERPConnection?
-    /// 연결되기 전에 `send`로 받은 패킷. 준비되면 순서대로 보낸다.
-    private var queuedPackets: [(peer: NodePublicKey, packet: [UInt8])] = []
+    /// 아직 소켓에 쓰지 않은 패킷. 쓰기 루프가 앞에서부터 꺼낸다.
+    private(set) var queuedPackets: [(peer: NodePublicKey, packet: [UInt8])] = []
+    /// 지금 연결의 쓰기 루프를 깨운다. 연결이 없으면 nil.
+    private var writeSignal: AsyncStream<Void>.Continuation?
     /// 마지막으로 바이트를 받은 시각. 유휴 감시의 기준이다.
     private var lastReceive = ContinuousClock.now
     /// 연속 실패 수. 프레임을 받은 연결이 끊기면 1로 돌아간다.
@@ -61,17 +84,28 @@ public actor DERPClient {
 
     /// - Parameter servers: 한 지역의 서버들. 앞에서부터 차례로 시도한다.
     public init(servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool) {
+        self.init(servers: servers, privateKey: privateKey, isPreferred: isPreferred, writeTimeout: Self.writeTimeout, plaintextForTests: false)
+    }
+
+    /// 시험이 짧은 쓰기 기한과 평문 연결을 넣을 때 쓴다.
+    init(
+        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool,
+        writeTimeout: Duration, plaintextForTests: Bool
+    ) {
         self.servers = servers
         self.privateKey = privateKey
         self.isPreferred = isPreferred
-        (eventStream, eventContinuation) = AsyncStream.makeStream(of: Event.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
+        self.writeTimeout = writeTimeout
+        self.plaintextForTests = plaintextForTests
+        let queue = eventQueue
+        eventStream = AsyncStream(unfolding: { await queue.next() })
     }
 
     /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
     ///
-    /// 읽지 않은 사건은 가장 새 것 256개까지만 쥐고 오래된 것부터 버린다. 패킷은 데이터그램이므로 버려도 된다.
-    // shortcut: 버리는 것은 오래된 `packet`만이 아니라 오래된 사건 전부다. 256개가 쌓이면 이미 소비자가 막힌 것이고,
-    // 그때는 연결 상태 사건도 믿을 수 없다. `AsyncStream`으로는 종류를 가려 버릴 수 없어 따로 큐를 만들지 않았다.
+    /// 소비가 느리면 `packet`·`peerGone`은 가장 새 것 256개까지만 쥐고 오래된 것부터 버린다. 패킷은 데이터그램이므로
+    /// 버려도 된다. `connected`·`disconnected`는 버리지 않고, 읽지 않은 것 가운데 가장 새 것 하나만 남긴다
+    /// (`EventQueue`).
     public nonisolated var events: AsyncStream<Event> { eventStream }
 
     /// 연결하고, 읽고, 끊기면 다시 잇는다. 호출한 Task가 취소될 때까지 돌아오지 않는다.
@@ -80,7 +114,7 @@ public actor DERPClient {
     public func run() async {
         guard !hasRun else { return }
         hasRun = true
-        defer { eventContinuation.finish() }
+        defer { eventQueue.finish() }
 
         while !Task.isCancelled {
             let receivedFrame = await serveOneConnection()
@@ -95,20 +129,14 @@ public actor DERPClient {
         }
     }
 
-    /// 패킷을 보낸다. 연결되어 있지 않으면 다음 연결 때까지 큐에 둔다. 기다리지 않는다.
+    /// 패킷을 보낸다. 큐에 넣고 기다리지 않는다. 연결되어 있지 않으면 다음 연결 때 보낸다.
     ///
-    /// 65,536바이트를 넘는 패킷은 버린다.
-    // shortcut: 연결된 동안에는 큐 없이 바로 소켓에 쓴다. `NetworkSocket.send`가 기다리지 않으므로 소켓이 막혀도
-    // 여기서 패킷이 쌓이는 것을 막지 못한다. 쓰기 완료를 알려 주는 API가 `SwiftailIO`에 생기면 큐를 32개로 묶는다.
+    /// 큐는 32개까지 쥐고 넘치면 가장 오래된 것을 버린다. 65,536바이트를 넘는 패킷은 버린다.
     public func send(_ packet: [UInt8], to peer: NodePublicKey) {
         guard packet.count <= DERPConnection.maximumPacketSize else { return }
-        guard let socket, connection != nil else {
-            if queuedPackets.count == Self.queuedPacketLimit { queuedPackets.removeFirst() }
-            queuedPackets.append((peer, packet))
-            return
-        }
-        try? connection?.send(packet, to: peer)
-        socket.send(connection?.takeOutboundBytes() ?? [])
+        if queuedPackets.count == Self.queuedPacketLimit { queuedPackets.removeFirst() }
+        queuedPackets.append((peer, packet))
+        writeSignal?.yield()
     }
 
     // MARK: 연결 하나
@@ -117,38 +145,43 @@ public actor DERPClient {
     private func serveOneConnection() async -> Bool {
         let opened: OpenedConnection
         do {
-            let (servers, privateKey, isPreferred) = (servers, privateKey, isPreferred)
+            let (servers, privateKey, isPreferred, plaintextForTests) = (servers, privateKey, isPreferred, plaintextForTests)
             opened = try await withTimeout(Self.readyTimeout) {
-                try await Self.open(servers: servers, privateKey: privateKey, isPreferred: isPreferred)
+                try await Self.open(servers: servers, privateKey: privateKey, isPreferred: isPreferred, plaintextForTests: plaintextForTests)
             }
         } catch {
             return false
         }
 
-        socket = opened.socket
         connection = opened.connection
         lastReceive = .now
-        eventContinuation.yield(.connected)
+        let (signals, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        writeSignal = signal
+        // 큐에 남은 패킷과 핸드셰이크 조각에 붙어 온 Ping의 Pong을 곧바로 쓰게 한다.
+        signal.yield()
+        eventQueue.push(.connected)
         deliver(opened.events)
-        flushQueuedPackets(to: opened.socket)
 
         do {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 defer { group.cancelAll() }
                 group.addTask { try await self.readLoop(from: opened.socket) }
+                group.addTask { try await self.writeLoop(to: opened.socket, signals: signals) }
                 group.addTask { try await self.watchForIdleness() }
                 try await group.next()
             }
         } catch {
-            // 읽기 오류, 서버가 닫음, 유휴, 취소. 어느 쪽이든 이 연결은 끝났고 호출한 쪽이 물러났다가 다시 잇는다.
+            // 읽기 오류, 서버가 닫음, 쓰기 기한, Pong 적체, 유휴, 취소. 어느 쪽이든 이 연결은 끝났고 호출한 쪽이 물러났다가
+            // 다시 잇는다.
         }
 
         // 소켓을 닫은 뒤에만 새로 잇는다. 같은 키의 연결이 둘이면 서버가 한쪽에만 패킷을 넘긴다.
         opened.socket.close()
+        signal.finish()
+        writeSignal = nil
         let receivedFrame = connection?.hasReceivedFrameAfterHandshake ?? false
-        socket = nil
         connection = nil
-        eventContinuation.yield(.disconnected)
+        eventQueue.push(.disconnected)
         return receivedFrame
     }
 
@@ -159,9 +192,30 @@ public actor DERPClient {
             lastReceive = .now
             guard let events = try connection?.receive(bytes) else { throw DERPError.closed }
             deliver(events)
-            // Ping에 대한 Pong. 실패한 연결에서는 비어 있다.
-            socket.send(connection?.takeOutboundBytes() ?? [])
+            // Ping에 대한 Pong이 생겼을 수 있다. 쓰기 루프가 꺼내 쓴다.
+            writeSignal?.yield()
         }
+    }
+
+    /// 큐의 패킷과 상태 기계가 낸 답을 한 덩어리씩 쓴다. 덩어리 하나가 `writeTimeout` 안에 소켓에 넘어가지 않으면
+    /// 던진다. 취소되면 돌아온다.
+    private func writeLoop(to socket: NetworkSocket, signals: AsyncStream<Void>) async throws {
+        let writeTimeout = writeTimeout
+        for await _ in signals {
+            while let bytes = nextWrite() {
+                try await withTimeout(writeTimeout) { await socket.write(bytes) }
+            }
+        }
+    }
+
+    /// 다음에 쓸 덩어리: 큐의 가장 오래된 패킷 하나와 그때까지 쌓인 Pong. 쓸 것이 없으면 nil.
+    private func nextWrite() -> [UInt8]? {
+        if !queuedPackets.isEmpty {
+            let next = queuedPackets.removeFirst()
+            try? connection?.send(next.packet, to: next.peer)
+        }
+        let bytes = connection?.takeOutboundBytes() ?? []
+        return bytes.isEmpty ? nil : bytes
     }
 
     /// `idleTimeout` 동안 아무것도 오지 않으면 던진다.
@@ -176,18 +230,10 @@ public actor DERPClient {
         for event in events {
             switch event {
             case .ready: break
-            case let .packet(bytes, from: sender): eventContinuation.yield(.packet(bytes, from: sender))
-            case let .peerGone(peer, reason: _): eventContinuation.yield(.peerGone(peer))
+            case let .packet(bytes, from: sender): eventQueue.push(.packet(bytes, from: sender))
+            case let .peerGone(peer, reason: _): eventQueue.push(.peerGone(peer))
             }
         }
-    }
-
-    private func flushQueuedPackets(to socket: NetworkSocket) {
-        for queued in queuedPackets {
-            try? connection?.send(queued.packet, to: queued.peer)
-        }
-        queuedPackets = []
-        socket.send(connection?.takeOutboundBytes() ?? [])
     }
 }
 

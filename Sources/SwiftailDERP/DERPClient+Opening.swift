@@ -19,9 +19,9 @@ extension DERPClient {
     /// shortcut: IPv4·IPv6 동시 시도는 없다. `address`가 있으면 그 주소 하나만, 없으면 `NWConnection`이 `hostName`을
     /// 해석해 고른다.
     static func open(
-        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool
+        servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool, plaintextForTests: Bool
     ) async throws -> OpenedConnection {
-        let (socket, server) = try await connect(to: servers)
+        let (socket, server) = try await connect(to: servers, plaintextForTests: plaintextForTests)
         do {
             var connection = try DERPConnection(
                 privateKey: privateKey, host: hostHeader(for: server), isPreferred: isPreferred, clientInfoNonce: randomNonce()
@@ -39,12 +39,13 @@ extension DERPClient {
         }
     }
 
-    /// 서버 목록에서 처음 닿는 곳에 TLS 소켓을 연다.
+    /// 서버 목록에서 처음 닿는 곳에 TLS 소켓을 연다. `plaintextForTests`면 TLS 없이 연다(시험의 가짜 서버용).
     ///
-    /// `NetworkSocket.connect`는 TCP와 TLS를 한 번에 맺으므로, TCP 실패와 TLS 실패를 가르려고 마지막이 아닌
-    /// 서버는 평문 TCP로 먼저 닿는지만 본다(연결을 맺자마자 닫는다). 마지막 서버는 어느 쪽 실패든 이번 시도의
-    /// 실패이므로 곧바로 TLS를 맺는다.
-    private static func connect(to servers: [DERPServer]) async throws -> (NetworkSocket, DERPServer) {
+    /// 마지막 서버는 어느 쪽 실패든 이번 시도의 실패이므로 곧바로 TLS를 맺는다.
+    // shortcut: `NetworkSocket.connect`는 TCP와 TLS를 한 번에 맺으므로, TCP 실패와 TLS 실패를 가르려고 마지막이 아닌
+    // 서버는 평문 TCP로 먼저 닿는지만 보고(맺자마자 닫는다) TLS로 다시 맺는다. 서버마다 TCP 연결이 하나 더 생긴다.
+    // TCP 연결을 맺은 뒤 그 위에 TLS를 얹는 길이 `SwiftailIO`에 생기면 한 번만 맺는다.
+    private static func connect(to servers: [DERPServer], plaintextForTests: Bool) async throws -> (NetworkSocket, DERPServer) {
         for (index, server) in servers.enumerated() {
             try Task.checkCancellation()
             let host = server.address?.description ?? server.hostName
@@ -58,7 +59,8 @@ extension DERPClient {
                     continue
                 }
             }
-            return (try await NetworkSocket.connect(host: host, port: server.port, tls: tls(for: server)), server)
+            let security = plaintextForTests ? NetworkSocket.TLS.none : tls(for: server)
+            return (try await NetworkSocket.connect(host: host, port: server.port, tls: security), server)
         }
         throw Disconnection.noServers
     }
