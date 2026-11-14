@@ -116,6 +116,119 @@ Node 투영은 `ID`, `StableID`, `Name`, `Key`, `DiscoKey`, `Addresses`, `Allowe
 (cd Tools/interop && go vet ./... && go test -count=1 ./...)
 ```
 
+# filterfixtures
+
+`tailscale.com` v1.104.6의 공개 `wgengine/filter`를 직접 실행하여
+`Tests/SwiftailEngineTests/Fixtures/filter-verdicts.json`을 만든다.
+Swift 구현은 읽거나 실행하지 않는다. `mapfixtures`와 같은 캐시 환경을 쓰며,
+필터 함수들은 공개되어 있어 임시 복사본·overlay가 필요 없다. Go 모듈 캐시는 고치지 않는다.
+빌드 정보에서 기준 버전과 replace 부재를 확인한다.
+
+저장소 루트에서 실행한다. `interop-tools`·`ref-src`는 지우지 않는다.
+
+```sh
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
+sh Scripts/build-interop-tools.sh filterfixtures
+(cd Tools/interop && go vet ./... && go run ./cmd/filterfixtures ../../Tests/SwiftailEngineTests/Fixtures)
+```
+
+시나리오의 규칙 **원문 문자열**을 Go `[tailcfg.FilterRule]`로 해독하여
+`filter.MatchesFromFilterRules` → `filter.New`를 호출한다.
+`localNets`는 자기 주소의 /32·/128만 넣으며 `logIPs=nil`, `logger.Discard`, 실행 플래그 0으로
+로그를 끈다. 주소 문자열 오류는 오류와 함께 반환된 부분 일치 목록을 그대로 설치한다.
+`SrcBits`·`DstPorts.Bits` 오류 때 반환되는 nil도 그대로 설치한다. 모든 변환 오류를 nil로
+바꾸는 것은 실제 Go 동작이 아니다(`wgengine/filter/tailcfg.go:30-118`).
+
+각 패킷마다 새 `packet.Parsed`에 `Decode`하고 수신은 `RunIn`의 최종 Accept/Drop을 기록한다.
+송신은 `RunOut`을 호출해 역방향 흐름을 적고 Accept인지 확인한다.
+같은 시나리오 안에서는 필터를 유지하며, 규칙 교체는 `filter.New`의 `shareStateWith`에 이전
+필터를 넘긴다. 시나리오 사이에는 상태를 공유하지 않는다.
+모든 시나리오를 새 필터들로 한 번 더 실행하고 판정·변환 오류를 포함한 JSON 전체가 같은지
+확인한 뒤 쓴다. 현재 시각·난수·소켓을 사용하지 않는다.
+
+자료는 최상위 `reference`(기준 모듈·버전)와 `scenarios` 배열을 가진다.
+
+| 시나리오 키 | 뜻 |
+| --- | --- |
+| `name` | 한국어 시나리오 이름. 유일하며 IPv4·IPv6를 구별한다 |
+| `rules` | `tailcfg.FilterRule` 배열의 원문 JSON **문자열**. Swift도 그대로 `[FilterRule]`로 해독한다 |
+| `localAddresses` | 자기 주소 문자열 배열. 접두사나 경로가 아니다 |
+| `capabilitySources` | 선택 사항. 이 가짜 출발지들에만 `fixture:test` capability를 주는 결정적 Go callback을 설치한다. 생략하면 callback은 nil. Swift는 이 능력을 지원하지 않는다 |
+| `conversionError` | 선택 사항. 최초 규칙 변환에서 Go가 반환한 오류 문자열. 판정을 대체하지 않는다 |
+| `steps` | 같은 필터 상태를 이어 가며 실행하는 단계 배열 |
+
+| 단계 키 | 뜻 |
+| --- | --- |
+| `name` | 해당 단계의 설명 |
+| `direction` | `in` 수신, `out` 송신 상태 기록, `replace` 규칙·자기 주소 교체 |
+| `packet` | `in`·`out`의 완전한 IP 패킷을 보존한 소문자 hex. 이름에 적은 잘못된 길이·조각 등도 그대로 보존 |
+| `verdict` | `in`에서 실제 `RunIn`이 내놓은 `accept` 또는 `drop`. `out`·`replace`에는 없다 |
+| `rules`, `localAddresses` | `replace`에서 새로 적용하는 규칙 원문과 자기 주소. 빈 규칙 `"[]"`도 교체다 |
+| `conversionError` | 선택 사항. `replace`에서 실제 Go 변환 오류 |
+| `swiftailDiffers` | 선택 사항. Go 판정과 별개로 M3 계약을 확인해야 하는 이유. 값이 같아도 의도한 처리 경계가 다르면 표시한다 |
+| `swiftailExpected` | 차이 표시와 함께 존재하는 Swift 계약 기대값. 아래 표 참조 |
+
+| `swiftailExpected` | Swift 시험이 확인하는 것 | 단계 수 |
+| --- | --- | --- |
+| `fragment` | `IPPacket.ParseError.fragment` | 7 |
+| `extensionHeader` | `IPPacket.ParseError.extensionHeader` | 8 |
+| `malformed` | `IPPacket.ParseError.malformed`(IHL 4, 선언 길이 밖의 UDP 머리) | 3 |
+| `accept`, `drop` | 해석 성공 후 `checkInbound` 판정. `cap:` 항목만 제거, ICMPv4 type 12·18의 차이 | 12 |
+| `trimmedAccept` | 선언 길이로 자른 바이트와 허용 판정을 함께 확인 | 2 |
+| `tsmp` | `.tsmp` 해석을 확인. 엔진에서 소비하는 동작은 이 필터 시험의 API 범위 밖 | 2 |
+
+전체는 **91개 시나리오·2,429개 단계**(수신 333개·송신 2,058개·교체 38개),
+차이 표시 **34개**다. IPv4·IPv6에 각각 아래 공통 43개 시나리오를 둔다.
+각 행은 자료의 시나리오 이름을 묶은 것이며, 별도 명시한 개수만큼 각각 독립된 필터를 만든다.
+
+| 공통 시나리오 이름·목록 | 계열당 개수 |
+| --- | --- |
+| 출발지 전체·CIDR·단일 주소·양끝 포함 범위 | 4 |
+| 프로토콜 6 포트 범위·프로토콜 17 포트 범위·포트 전체와 역순 범위 | 3 |
+| 기본 프로토콜 빈 배열·null, TCP만·UDP만·ICMP만·기타 47만·기타 254만, 범위 밖 번호만·범위 밖 번호와 UDP | 9 |
+| 기타 프로토콜은 포트 전체만·명시 프로토콜 번호 경계·SCTP 번호 132의 특별 취급·IPProto 생략 | 4 |
+| 호스트 비트 CIDR·해석 불가 주소·역순 주소 범위 각각의 출발지와 목적지(오류 항목만/유효 항목 추가) | 6 |
+| SrcBits 전체 닫힘·DstPorts.Bits 전체 닫힘(넓은 이전 규칙과 교체 포함) | 2 |
+| CapGrant만으로 열리지 않음·TCP 플래그와 무상태 허용 | 2 |
+| UDP 역방향 튜플·수신 허용은 흐름을 만들지 않음·규칙 교체와 흐름 유지 | 3 |
+| UDP LRU 513개 조회갱신=false·true | 2 |
+| ICMP 응답과 오류는 무상태·ICMP는 프로토콜과 포트 무시 | 2 |
+| 목적지 자기 주소 검사·multicast와 link-local 목적지(자기 주소로 등록한 경우도 거절) | 2 |
+| cap 출발지는 항목만 버림·TSMP는 엔진 제어 패킷 | 2 |
+| 선언 길이 뒤의 바이트·선언 길이 밖의 전송 머리 | 2 |
+
+추가로 IPv4에는 조각(MF·오프셋 1·10), IHL 최솟값, ICMPv4 type 18의 주소 규칙을
+각각 한 시나리오로 둔다. IPv6에는 조각(atomic·첫 조각·오프셋 1·10)과 확장 헤더
+(0·43·50·51·60·135·139·140)를 각각 한 시나리오로 둔다. 따라서 IPv4 46개·IPv6 45개다.
+UDP 튜플 시험은 목적 주소만 다른 입력도 자기 주소에 포함하여 `notForUs`가 캐시 비교를
+가리지 않게 한다. LRU는 512개 삽입 뒤 513번째를 넣는 경우와, 그 직전에 흐름 0을 조회하는
+경우를 분리하여 FIFO와 조회 순서 갱신을 구별한다.
+
+실행 결과가 드러낸 **계약의 누락**은 다음과 같다. 의도한 M3 차이로 합의된 항목이 아니므로
+`swiftailDiffers`를 달지 않아 대조 시험이 불일치를 드러내게 했다.
+
+- 와이어 프로토콜 0·255는 명시적인 전체 포트 규칙으로도 Go가 거절한다. 0은 Unknown이고
+  255는 파서가 Unknown으로 바꾼다. 계약의 0…255와 “그 밖의 프로토콜” 문구에는 이 예외가 없다
+  (`net/packet/packet.go:243-248`, `:359-364`). IPv6의 0은 이미 확장 헤더 차이로 따로 표시한다.
+- SCTP(132)는 Go에서 UDP와 같은 포트 판정·송신 역방향 캐시를 쓴다. 계약은 SCTP를 별도
+  프로토콜로 두지 않으며 UDP만 기록한다고 명시한다. 따라서 일부 포트만 여는 규칙과
+  규칙 없는 응답의 Go 허용 판정은 계약만으로 재현되지 않는다
+  (`wgengine/filter/filter.go:538-550`, `:600-612`, `:642-650`).
+
+두 동작은 노트 3.2·4.5·4.6에는 이미 적혀 있다. 그 밖에 노트와 다른 새 Go 동작은 찾지 못했다.
+또한 `IPProto`가 전부 범위 밖이어도 주소 규칙이 남으면 ICMP 요청은 허용된다.
+이는 ICMP에서 프로토콜·포트를 무시하는 노트 4.4와 일치한다.
+
+Swift 대조 시험은 `IPPacket(parsing:)`, `bytes`, `transportProtocol`, `ParseError`,
+`PacketFilter(rules:localAddresses:)`, `checkInbound`, `recordOutbound`,
+`replaceRules(_:localAddresses:)`, `Verdict.accept`에만 의존한다(`@testable` 없음).
+구현이 없는 worktree에서 작성하여 시험 타깃의 컴파일·실행은 하지 않았다.
+병합 뒤 총괄이 계약 시그니처와 실제 구현의 일치를 확인해야 한다.
+TSMP의 `TailnetEngine.receive` 소비, 실제 WireGuard·AllowedIPs·DERP 경로, 시간 경과는
+이 값 타입 필터 대조에서 확인하지 않는다. UDP 캐시는 Go와 계약 모두 TTL이 없다.
+
 # controlfaults
 
 `ControlClient`의 회귀 시험용 제어 서버다. 빌드는 `sh Scripts/build-interop-tools.sh controlfaults`, 실행은 `controlfaults <모드>`이다. `127.0.0.1`의 임의 포트에서 듣고 표준 출력의 첫 줄에 서버 URL(`http://127.0.0.1:12345`)을 쓴다. 표준 입력이 닫히면(EOF) 끝난다. 로그는 표준 오류로 보내며 요청 본문과 키는 출력하지 않는다. 서버 키는 실행할 때마다 새로 만든다.
