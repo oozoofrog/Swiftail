@@ -501,6 +501,7 @@ RemoteDebug 세션이 F1~F13에 답했다(그쪽 `2814b2c`의 Go 코드에서 �
 
 - `peerServe`: `{"cmd":"peerServe","name":"go-peer-a","port":9100}`. 그 피어의 tsnet 리스너를 연다. 받은 연결마다 아래 "전송"을 한다.
 - `peerDial`: `{"cmd":"peerDial","name":"go-peer-a","to":"100.64.0.2","port":9100,"send":104857600,"seed":1,"timeoutSec":15}`. 그 피어가 Swift 노드로 건다.
+- 구현에서 정해진 것(M6-9a, 2026-11-15. 정확한 규약은 `Tools/interop/README.md`): `peerDial`은 곧바로 `transferID`를 돌려주고 전송은 뒤에서 돈다. 거는 쪽이 먼저 보내는 16바이트 머리는 **받는 쪽이 보낼 길이(UInt64 BE) + 씨앗(UInt64 BE)**이고 바이트 수와 SHA-256에 들지 않는다. 데이터는 LCG64(`x₀ = seed`, `xₙ₊₁ = 6364136223846793005 × xₙ + 1442695040888963407 mod 2⁶⁴`)의 갱신한 상태를 little endian 8바이트씩 이어 붙이고 마지막 낱말은 길이에서 자른다. 두 방향이 동시에 흐르고, 다 보내면 `CloseWrite`, 받는 쪽은 EOF까지 읽는다. `peerClose`는 리스너만 닫는다. 손실·지연 주입은 Go 쪽에 없다(Swift 노드의 손실 훅으로 한다). `addKernelPeer`는 만들지 않았다(N7). Go 피어 둘 사이의 100MB 양방향 전송은 약 1.8초였다(루프백).
 - `transfers`: 끝났거나 도는 전송의 목록. 항목은 `{"name","remote","sent","sentSHA256","received","receivedSHA256","elapsedMs","error","state"}`.
 - `peerClose`: 리스너를 닫는다.
 - "전송": 한쪽 Task가 `send`바이트의 가짜 난수 흐름(씨앗에서 만든다. Swift와 Go가 같은 생성식을 쓴다)을 쓰고 `CloseWrite`, 다른 쪽이 EOF까지 읽으며 SHA-256과 바이트 수를 센다. `peerServe`가 보낼 양은 연결의 첫 16바이트(보낼 바이트 수와 씨앗)로 정한다.
