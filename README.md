@@ -26,3 +26,7 @@ wireguard-go와의 상호 운용 시험은 Go(1.27 이상)가 필요하고 실�
 ```sh
 SWIFTAIL_WGPEER="$(sh Scripts/build-interop-tools.sh)" swift test --filter SwiftailWireGuardInteropTests
 ```
+
+## 라이선스
+
+BSD-3-Clause(`LICENSE`). 다른 프로젝트의 코드를 옮겨 적은 파일은 머리말에 출처와 라이선스를 적었고, 그 원문은 `THIRD-PARTY-NOTICES.md`에 모았다.
