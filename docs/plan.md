@@ -46,7 +46,7 @@ RemoteDebug의 Go 코어가 쓰는 Tailscale 기능과 Swiftail에서 대응하�
 
 서브넷 라우터, 출구 노드(제공·사용), Tailscale SSH, Taildrop, Taildrive, Funnel·Serve, 피어 릴레이, 포트 매핑(UPnP·NAT-PMP·PCP), 앱 커넥터, 로그 업로드, 자동 업데이트, 기기 상태(posture) 보고, Linux·Windows.
 
-tailnet lock(노드 키 서명 검증)은 1차 범위에서 제외한다. 이 기능을 켠 tailnet에서 Swiftail이 어떻게 동작해야 하는지는 M2에서 정한다(8절 위험 8).
+tailnet lock(노드 키 서명 검증)은 1차 범위(M0~M7)에서 제외했다. 그동안은 lock이 켜진 tailnet을 감지해 `tailnetLockEnabled`로 끝낸다(8절 위험 8). **M8에서 넣는다**(사용자 결정, 2026-11-15: "RemoteDebug의 Go 코어가 되는 것은 Swiftail도 된다". RemoteDebug의 Go 코어는 tailnet lock을 빼지 않고 빌드한다. 그 저장소 `scripts/build-core.sh`의 제외 태그에 `ts_omit_tailnetlock`이 없다). Swiftail이 서명 기기 노릇을 하는 것(다른 노드의 키에 서명, lock 켜기·끄기, 서명 권한 관리)은 넣지 않는다.
 
 ## 4. 결정
 
@@ -200,6 +200,7 @@ extension TailnetNode {
 | M5 (관문 (가) 메모리 장치 통과, (나) 실기기: 시작·유휴 메모리 통과(8.7MiB, Go 13.0MiB), 셀룰러→Wi-Fi 4초·비행기 모드 해제 2초 통과, **Wi-Fi→셀룰러는 41초 동안 복구 안 됨(원인 조사 중)**, 전송·잠금 전 시작은 남음) | iOS 패킷 터널 | MagicDNS는 UDP 질의만 답한다(아래 8절 위험 12). 메모리 TUN으로 RemoteDebug `docs/tunnel.md`의 시험 계약에 대응하는 항목(설정 산출, UDP·TCP·MagicDNS, 다시 시작, 엔진 정지) 통과. 실기기: 시험용 터널 앱으로 Mac의 tailnet HTTPS에 접속, FQDN 해석, Wi-Fi ↔ 셀룰러 전환 뒤 복구, 유휴·전송 중 `phys_footprint` 기록 |
 | M6 (관문 (가) Go 피어 통과, (나) 커널 스택 실기기 남음) | 프로세스 내 리스너(Swift TCP) | 상태 기계 단위 시험(손실·재정렬·중복·지연 주입)과, Go 피어(gVisor)·macOS 커널 스택을 상대로 한 100MB 양방향 전송의 해시 일치. 손실 1%·5% 조건에서 전송이 멈추지 않고 처리량을 기록한다 |
 | M7 (계약 `docs/contracts/SwiftailHost.md`. **관문 (가) 1~10 통과**(2026-11-15: `HostTests` 9개, 다리로 TLS 100MiB 38MiB/s, 전체 1,801개 통과). 남음: 11 Go 상태 이관(사용자 결정 U1 뒤), 관문 (나) 실제 tailnet·Let's Encrypt·실기기(U3 뒤), App Sandbox 안의 확인(첫 사용처)) | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. 관문은 (가) 계정 없이(시험 제어 서버 + 시험용 ACME 서버), (나) 실제 tailnet·Let's Encrypt·실기기로 나눈다. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
+| M8 (범위 확정 2026-11-15, 노트 작성 중) | 운영 동등성: Go 코어가 되는데 Swiftail이 안 돼서 막히는 것 | ① **Tailnet Lock**: lock이 켜진 tailnet에 등록(서명된 인증 키, 서명 기기가 뒤에 서명하는 경우), 서명 권한 상태(TKA)의 받기·검증·저장, 서명되지 않은 피어 거르기, lock 끄기의 처리. Go 구현과 같은 판정을 내는지 Go 기준값과 대조하고, 계정 없이(testcontrol) 관문을 연다. ② **바깥쪽 IPv6**: IPv6 전용 망(실기기의 셀룰러)에서 DERP·UDP·STUN·엔드포인트. DERP 동시 연결이 먼저다(진행 중). ③ **운영 DERP의 남은 모양**: 인증서 이름이 호스트 이름과 다른 노드, `sha256-raw:` 고정. 관문 (나): lock이 켜진 실제 tailnet, IPv6 전용 셀룰러의 실기기 |
 
 메모리 목표(M5): 유휴 상주 20MiB 이하를 목표로 두고 실기기 측정으로 확정한다. Go 코어의 권장 한도 설정은 28MiB였다.
 
@@ -230,7 +231,7 @@ extension TailnetNode {
 | 1차 목표를 M5(iOS 터널)로 둘지 | M5 전 | M5(M0~M4는 어느 쪽이든 같다) |
 | 실제 tailnet을 마무리 관문에 쓸지, 어떤 tailnet·태그로 등록할지 | M2 마무리 전 | 임시 노드 |
 | 실기기 시험용 터널 앱의 서명(팀, Network Extension 권한) | M5 전 | |
-| tailnet lock이 켜진 tailnet의 처리 | M2 | 접속 거부(Go 피어도 서명 없는 노드를 netmap에서 뺀다) |
+| tailnet lock이 켜진 tailnet의 처리 | M2 → M8 | M8 전까지 접속 거부(Go 피어도 서명 없는 노드를 netmap에서 뺀다). M8에서 지원한다(3절) |
 | 선언할 CapabilityVersion | M2 | 148(기준 소스와 같게) |
 | Go 상태 파일(`tailscaled.state`)에서 노드 신원을 이관할지 | M7 | 사용자 결정 대기(`SwiftailHost.md` U1). 설계(읽기 전용, 한 번, 신원만)는 계약에 있고 구현은 결정 뒤에 연다 |
 | 라이선스, 공개 여부 | 공개 전 | |
