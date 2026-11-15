@@ -100,6 +100,9 @@ public actor ControlClient {
         var tkaRequest = Duration.seconds(60)
         /// 검증한 상태 없이 닫혀 있을 때(`.unverified`) 부트스트랩을 다시 시도하는 간격의 범위(동작 N6).
         var lockRetry = Duration.seconds(5)...Duration.seconds(300)
+        /// `logOut()`: 서버 키 받기·연결·응답까지 합한 기한. Go에는 로그아웃만의 기한이 없어(부른 쪽의 context) 계약
+        /// `docs/contracts/SwiftailHost.md` "로그아웃" 동작 O5의 10초다.
+        var logout = Duration.seconds(10)
     }
 
     let configuration: Configuration
@@ -177,8 +180,8 @@ public actor ControlClient {
     var isStatusChangeQueued = false
     var queuedPings = 0
     static let queuedPingLimit = 8
-    /// 연결을 묶을 인터페이스. nil이면 묶지 않는다. `run()`이 연결을 시작할 때 읽는다.
-    private var networkInterface: NWInterface?
+    /// 연결을 묶을 인터페이스. nil이면 묶지 않는다. `run()`이 연결을 시작할 때, `logOut()`이 연결할 때 읽는다.
+    private(set) var networkInterface: NWInterface?
     /// `setNetworkInterface`를 부른 횟수. 연결 시도는 시작할 때의 값과 달라지면 그 시도를 버린다. 신호가 시도 사이에
     /// 들어와도 잃지 않게 하는 기준이다(`loginRequests`와 같은 방식).
     private var interfaceGeneration = 0

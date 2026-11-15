@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"time"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
@@ -45,6 +46,10 @@ type LockRegistration struct {
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
 	NLKey      key.NLPublic
+	// Auth는 요청에 Auth(인증 키)가 실렸는지다. 로그아웃 관문이 Go와 Swift의 요청을 견줄 때 쓴다.
+	Auth bool
+	// Expiry는 요청의 Expiry다(0이면 없음). 과거 시각이면 로그아웃이다(logout.go).
+	Expiry time.Time
 	// Signature는 요청의 NodeKeySignature에 대한 판정이다:
 	// "none"(없음), "noLock"(lock이 꺼져 있어 보지 않음), "accepted", "rejected".
 	Signature      string
@@ -232,7 +237,7 @@ func (s *Server) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 // node는 nk로 이미 s.nodes에 있다. 재서명 요청이면 응답에 실을 서명을 돌려준다. s.mu를 쥔 채 부른다.
 func (s *Server) applyRegisterLockLocked(req *tailcfg.RegisterRequest, body []byte) (resign []byte) {
 	nk := req.NodeKey
-	rec := LockRegistration{NodeKey: nk, OldNodeKey: req.OldNodeKey, NLKey: req.NLKey, Signature: "none", Body: bytes.Clone(body)}
+	rec := LockRegistration{NodeKey: nk, OldNodeKey: req.OldNodeKey, NLKey: req.NLKey, Auth: req.Auth != nil, Expiry: req.Expiry, Signature: "none", Body: bytes.Clone(body)}
 	node := s.nodes[nk]
 	if len(req.NodeKeySignature) > 0 {
 		if s.tkaStorage == nil {

@@ -307,10 +307,28 @@ func (n *network) lockRegistrations() map[string]any {
 		out = append(out, map[string]any{
 			"nodeKey": r.NodeKey.String(), "oldNodeKey": oldNodeKey, "nlKey": nlKey,
 			"signature": r.Signature, "signatureError": r.SignatureError, "resignRequested": r.ResignRequested,
+			"auth": r.Auth, "expiry": expiryText(r.Body), "expiryUnix": expiryUnix(r.Expiry),
 			"wrappedKeyTrace": wrappedKeyTrace(r.Body, wrapped),
 		})
 	}
 	return map[string]any{"event": "lockRegistrations", "registrations": out}
+}
+
+// expiryText는 등록 요청 JSON의 Expiry 문자열을 선 위의 표기 그대로 돌려준다. 없거나 읽지 못하면 "".
+func expiryText(body []byte) string {
+	var fields struct{ Expiry string }
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return ""
+	}
+	return fields.Expiry
+}
+
+// expiryUnix는 Expiry의 Unix 초다. 0 시각이면 0.
+func expiryUnix(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 // wrappedKeyTrace는 등록 요청 JSON의 문자열 값 가운데 감싼 인증 키의 흔적("--TL", 또는 이 도구가 만든
