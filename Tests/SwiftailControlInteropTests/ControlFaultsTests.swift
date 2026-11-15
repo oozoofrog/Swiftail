@@ -180,7 +180,9 @@ struct ControlFaultsTests {
     @Test("거절 메시지가 되풀이한 인증 키는 오류에 남지 않는다")
     func rejectionHidesEchoedAuthKey() async throws {
         let controlValue = "tskey-auth-" + UUID().uuidString
-        try await withFaultClient("authEcho", authKey: controlValue + "--TLsynthetic-material") { _, client, _ in
+        // 해석되지 않는 `--TL` 접미사는 이제 등록 전에 거절하므로(`SwiftailTailnetLock.md` 결정 L12) 평범한 인증 키로 본다.
+        // 접미사와 감싼 키가 서버로 가지 않는 것은 `RegistrationSigningTests`가 본다.
+        try await withFaultClient("authEcho", authKey: controlValue) { _, client, _ in
             let error = try await client.result(timeout: .seconds(10))
             guard case .authKeyRejected(let message)? = error else {
                 Issue.record("authKeyRejected가 아니다")
@@ -191,7 +193,6 @@ struct ControlFaultsTests {
             dump(error, to: &dumped)
             for rendered in [message, dumped, String(describing: error)] {
                 #expect(!rendered.contains(controlValue))
-                #expect(!rendered.contains("synthetic-material"))
             }
         }
     }

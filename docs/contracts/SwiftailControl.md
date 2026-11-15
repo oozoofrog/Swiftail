@@ -265,7 +265,7 @@ public actor ControlClient {
    - `PingRequest`(Types가 빈 것)는 그 URL에 HEAD로 답한다. 나머지 종류는 무시한다.
 5. **물러나기**: `min(n² × 10ms, 30s) × [0.5, 1.5)`. 전체 netmap을 받으면 초기화한다(self 키가 만료된 netmap은 초기화하지 않는다). 429와 `Retry-After`가 붙은 503은 그 시간만큼 기다린다(최대 5분).
 6. **Hostinfo**: 노트 3.3절의 최소 필드. OS 이름과 버전, 호스트 이름, 앱 버전 자리에는 Swiftail임을 드러내는 값을 넣는다(공식 클라이언트로 가장하지 않는다).
-7. **신원 파일**: 디렉터리 안의 파일 하나(JSON, 키는 `privkey:` + 16진). 원자적으로 쓰고 소유자만 읽게(0600) 한다. 키를 로그·오류·description에 넣지 않는다.
+7. **신원 파일**: 디렉터리 안의 파일 하나(JSON, 키는 `privkey:` + 16진). 원자적으로 쓰고 소유자만 읽게(0600) 한다. 키를 로그·오류·description에 넣지 않는다. M8부터 `"NLKey":"nlpriv:<시드 32바이트 ‖ 공개 키 32바이트의 16진>"`이 더 있다(tailnet lock 키. `SwiftailTailnetLock.md` 동작 R1). `NLKey`가 없는 옛 파일은 `run()`이 첫 연결 전에 같은 machine·node 키에 새 NL 키를 채워 다시 쓴다(같은 노드로 뜬다). 깨진 `NLKey`(길이, 접두사, 16진, 뒤 32바이트가 시드의 공개 키와 다름)는 `storage`다.
 8. **비밀의 출력**: `NodeIdentity`와 `Configuration`은 `CustomStringConvertible`·`CustomReflectable`을 채택해 `print`·`dump`에 개인 키와 인증 키를 드러내지 않는다(공개 키와 "가림" 표시만).
 9. **인터페이스 묶기**(M5, `SwiftailTunnel` 계약 동작 N): `setNetworkInterface(_:)`로 받은 인터페이스로만 업그레이드 연결을 내보낸다(Network 프레임워크의 `requiredInterface`). 목적지가 루프백 주소나 `localhost`면 묶지 않는다.
    - 부를 때마다 지금 연결을 끊고 물러남 없이 다시 잇는다. 연결 중이든 맵을 받는 중이든 물러나는 대기 중이든 같다. 같은 인터페이스를 다시 알려도 다시 잇는다(같은 Wi-Fi에서 주소만 바뀌면 옛 연결은 죽어 있다. 다시 이을지는 부르는 쪽이 정한다). 연달아 부르면 가장 나중 값으로 한 번 다시 잇는다.
