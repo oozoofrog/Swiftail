@@ -69,16 +69,24 @@ func (n *network) startACME(c command) (map[string]any, error) {
 		}()
 	}
 	quiet := log.New(io.Discard, "", 0)
-	// challtestsrv는 미리 연 소켓을 받지 않으므로 TCP·UDP 모두 빈 같은 포트를 골라 시작 후 확인한다.
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	address := listener.Addr().String()
-	udp, err := net.ListenPacket("udp4", address)
-	if err != nil {
+	// challtestsrv는 미리 연 소켓을 받지 않으므로 TCP·UDP 모두 빈 같은 포트를 골라 시작 후 확인한다. OS가 고른 TCP 포트의
+	// UDP 쪽을 다른 시험(STUN, 노드의 UDP 소켓)이 쓰고 있을 수 있으므로 그때는 다른 포트를 고른다.
+	var listener net.Listener
+	var udp net.PacketConn
+	var address string
+	var err error
+	for attempt := 0; ; attempt++ {
+		if listener, err = net.Listen("tcp4", "127.0.0.1:0"); err != nil {
+			return nil, err
+		}
+		address = listener.Addr().String()
+		if udp, err = net.ListenPacket("udp4", address); err == nil {
+			break
+		}
 		listener.Close()
-		return nil, err
+		if attempt == 19 {
+			return nil, err
+		}
 	}
 	challenge, err := challtestsrv.New(challtestsrv.Config{Log: quiet, DNSAddrs: []string{address}})
 	if err != nil {
