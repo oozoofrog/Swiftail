@@ -3,6 +3,8 @@ module swiftail/interop
 go 1.27.3
 
 require (
+	filippo.io/edwards25519 v1.2.0
+	github.com/hdevalence/ed25519consensus v0.2.0
 	github.com/letsencrypt/challtestsrv v1.4.2
 	github.com/letsencrypt/pebble/v2 v2.10.3
 	github.com/miekg/dns v1.1.73
@@ -12,7 +14,6 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
 	github.com/axiomhq/hyperloglog v0.2.6 // indirect
@@ -31,7 +32,6 @@ require (
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/kamstrup/intmap v0.5.2 // indirect

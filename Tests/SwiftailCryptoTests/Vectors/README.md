@@ -15,3 +15,10 @@ curl -fsSL https://raw.githubusercontent.com/BLAKE2/BLAKE2/master/testvectors/bl
 ```
 
 지정된 `device/kdf_test.go`에는 별도의 HMAC 기대값이 없으며, HMAC은 교차 벡터로 검증한다.
+
+## Ed25519 검증
+
+| 파일 | 출처 | 생성 명령 | 라이선스 |
+| --- | --- | --- | --- |
+| `rfc8032-ed25519.json` | [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.txt) 7.1 Ed25519 벡터 5개(TEST 1, 2, 3, 1024, SHA(abc)). 공개 키·메시지·서명만 옮겼다 | RFC 원문 텍스트에서 7.1절의 16진 줄을 기계적으로 모았다(길이를 원문의 "length N bytes"와 대조) | IETF Trust(코드 구성 요소, Revised BSD) |
+| `ed25519-verify.json` | Go 1.27.3 `crypto/ed25519`와 `github.com/hdevalence/ed25519consensus` v0.2.0의 판정. 입력은 고정 씨앗으로 만들고, 일부러 만든 서명은 `filippo.io/edwards25519` v1.2.0으로 계산한다. 앞의 196개는 `ed25519consensus/zip215_test.go`의 벡터다 | `"$(sh Scripts/build-interop-tools.sh ed25519fixtures)" Tests/SwiftailCryptoTests/Vectors` (`Tools/interop/README.md`의 `ed25519fixtures`) | Go·ed25519consensus·edwards25519: BSD-3-Clause |
