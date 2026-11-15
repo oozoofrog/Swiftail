@@ -213,7 +213,7 @@ Go STUN 서버(`net/stunserver`, `stuntest`, `Tools/interop`의 `tailnet`)는 `P
 4. 지역 클라이언트(magicsock이 쓰는 `NewRegionClient`)는 항상 TLS다. 평문은 URL을 `http://`로 준 `NewClient`나 환경 변수 `TS_DEBUG_USE_DERP_HTTP`일 때만이다(`derphttp_client.go:252`, `:261-270`). 따라서 Go 피어와 맞물리는 시험에서도 DERP는 TLS다.
 5. TLS 서버 이름은 `HostName`이다(`derphttp_client.go:273-278`, `:667`). 인증서 검증:
    - `InsecureForTests`가 참이면 검증하지 않는다(`derphttp_client.go:669-672`).
-   - `CertName`이 `sha256-raw:<hex>`면 meta 인증서를 뺀 인증서가 정확히 하나이고, 그 DER 전체의 SHA-256 hex가 같아야 한다(`derphttp_client.go:673-679`, `tailscale.com/net/tlsdial/tlsdial.go:316-346`).
+   - `CertName`이 `sha256-raw:<hex>`면 meta 인증서를 뺀 인증서가 정확히 하나이고, 그 DER 전체의 SHA-256 hex가 같아야 한다. 그 인증서는 지금 유효 기간 안이어야 하고, SNI로 나간 이름이 있으면 그 이름에 유효해야 한다. `HostName`이 IP 리터럴이면 SNI가 나가지 않으므로(`crypto/tls`의 `hostnameInSNI`) 이름은 보지 않는다(`derphttp_client.go:673-679`, `tailscale.com/net/tlsdial/tlsdial.go:316-358`. 2026-11-15 M8 ③ 구현 때 소스로 확인해 보탬).
    - 그 밖의 `CertName`은 그 이름으로 인증서를 검증한다. 비어 있으면 `HostName`으로 검증한다(`tailscale.com/tailcfg/derpmap.go:204-214`, `tlsdial.go:242-272`).
 6. 연결 전체(DNS·TCP·TLS·HTTP·DERP 핸드셰이크)의 상한은 10초, 노드 하나의 TCP 시도는 1.5초다(`derphttp_client.go:359-363`, `:733`, `:764`).
 
@@ -352,7 +352,7 @@ M3에서 고정 선택으로 충분한 근거: netcheck 결과가 없을 때 Go�
 | --- | --- |
 | STUN·netcheck 전체 | DERP 송수신은 node 키만으로 주소를 정한다(3.2). 피어는 Swiftail의 `HomeDERP`로 보내므로 Swiftail의 바깥 주소가 필요 없다(4.8 4, 4.9). 지역 측정과 홈 변경은 M4 범위다(`docs/plan.md` 5절 모듈 표의 `SwiftailMagicsock`) |
 | fast-start | 시험 서버는 meta 인증서를 붙이지 않아 Go 클라이언트도 쓰지 않는다(4.2, 7절) |
-| `sha256-raw:` 인증서 고정 | 시험 DERPMap은 `CertName`을 쓰지 않는다(7절). 운영 DERP 지도와의 연결 전에 넣는다 |
+| `sha256-raw:` 인증서 고정 | M8 ③에서 넣었다(계약 `SwiftailDERP.md` "M8 ③") |
 | 다중 지역·역방향 경로·비홈 연결 정리 | 시험 지역이 하나다. 4.9 2의 1번만으로 모든 피어에 닿는다 |
 | 클라이언트 토큰 버킷 | 이 버전 서버는 값을 보내지 않는다(3.5). 넣더라도 몇 줄이다 |
 | `Ideal-Node`, `AppName` | 서버 통계용이다(3.7, `tailscale.com/derp/derp_client.go:89-95`) |
