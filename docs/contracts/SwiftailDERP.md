@@ -181,3 +181,40 @@ public actor DERPClient {
 3. 없는 키로 보내도 연결이 끊기지 않는다.
 4. B를 취소하면 A가 그 뒤에도 정상이고, B를 다시 띄우면 다시 주고받는다.
 5. 70초 넘게 유지된다(서버 KeepAlive를 넘긴다).
+
+## M8 ③: 인증서 이름과 인증서 고정
+
+운영 DERPMap에는 `CertName`이 `HostName`과 다른 노드와 `sha256-raw:`로 인증서를 고정한 노드(자체 서명 derper)가 있을 수 있다. 지금은 엔진이 그런 노드를 건너뛴다(`DERPServer.init?(_:)`). 이 단위에서 건너뛰지 않고 Go와 같은 규칙으로 검증한다. 근거: 노트 `derp-stun.md` 4.1 5, Go `derp/derphttp/derphttp_client.go`의 `tlsClient`, `net/tlsdial/tlsdial.go`의 `SetConfigExpectedCert`·`SetConfigExpectedCertHash`, `derp/derpconst`.
+
+fast-start는 이 단위의 범위가 아니다.
+
+### API
+
+`DERPServer.Verification`에 두 경우를 더한다.
+
+- `.named(String)`: 시스템 신뢰 저장소로 사슬을 검증하되 인증서의 이름은 이 값으로 본다. SNI와 HTTP `Host`는 그대로 `hostName`이다.
+- `.pinned(sha256Hex: String)`: 서버가 낸 인증서의 SHA-256이 이 값과 같아야 한다. 사슬은 검증하지 않는다.
+
+`DERPServer.init?(_ node:)`가 고르는 규칙(Go `tlsClient`와 같은 차례):
+
+1. `certName`이 `sha256-raw:`로 시작하면 `.pinned(나머지)`. 나머지는 고치지 않고 그대로 담는다(대문자나 길이가 다른 값은 Go에서도 어떤 인증서와도 맞지 않아 연결이 실패한다. 건너뛰지 않는다).
+2. `certName`이 비어 있지 않고 `hostName`과 다르면 `.named(certName)`.
+3. 그 밖에는 지금처럼 `insecureForTests`면 `.noneForTests`, 아니면 `.system`.
+
+1·2는 `insecureForTests`보다 앞선다(Go에서도 `CertName`이 있으면 검증 훅이 다시 걸린다).
+
+### 동작 V: 검증
+
+1. `.named`: 서버가 낸 사슬을 시스템 신뢰 저장소로 검증하고, 이름은 `certName`으로 확인한다. Go에 있는 내장 Let's Encrypt 루트로의 대체 검증은 두지 않는다(시스템 저장소에 그 루트가 있다).
+2. `.pinned`: 서버가 낸 인증서 가운데 주체 CN이 `derpconst.MetaCertCommonNamePrefix`로 시작하는 것(DERP 서버가 덧붙이는 meta 인증서)을 뺀 나머지가 **정확히 하나**여야 한다. 그 하나에 대해 ① DER 전체의 SHA-256을 소문자 16진으로 쓴 것이 고정 값과 글자 그대로 같고 ② `hostName`이 비어 있지 않으면 인증서가 그 이름(IP 리터럴이면 IP SAN)에 유효하고 ③ 지금이 유효 기간 안이어야 한다. 하나도 없거나 둘 이상이면 실패다.
+3. 검증 실패는 지금의 TLS 실패와 같은 길로 간다(이번 연결 시도의 실패, `attemptFailed`). 다음 서버로 넘어가지 않는다(Go와 같다).
+4. 검증 판정은 연결 없이 시험할 수 있어야 한다(인증서 DER 목록, 이름, 시각, 고정 값을 받는 함수. `.named`는 시험이 앵커를 넣을 수 있게 `package` 범위에서만 연다).
+5. `hostName`이 IP 리터럴일 때의 SNI는 Go(`crypto/tls`는 IP에 SNI를 보내지 않는다)와 플랫폼의 동작을 확인해 적는다.
+
+②③을 플랫폼의 `SecTrust`(그 인증서만 앵커로, SSL 서버 정책과 이름)로 볼지 직접 볼지는 구현이 정하되, Go의 derper가 실제로 만드는 자체 서명 인증서(`cmd/derper`의 수동 인증서 모드, IP 주소용)가 통과하는 것을 시험으로 보인다. 플랫폼이 Go보다 엄격해 그 인증서를 거절하면 규칙을 풀지 말고 보고한다.
+
+### 시험과 관문
+
+- 단위: 맞는 고정, 다른 해시, meta 인증서가 섞인 목록, meta가 아닌 것이 둘, 하나도 없음, 이름 불일치, 기한 지남·아직 아님, 대문자 고정 값, `.named`의 이름 일치·불일치(시험 앵커). `DERPServer.init?(_:)`의 세 갈래와 `insecureForTests`와의 차례.
+- 상호 운용: `Tools/interop`의 tailnet 도구가 DERP 노드를 `InsecureForTests` 대신 `CertName: sha256-raw:<그 서버 인증서의 해시>`로 알리는 모드. Swiftail 노드가 그 DERP로 Go 피어와 통신한다(Go derper는 meta 인증서를 함께 낸다). 틀린 해시를 알리면 DERP 연결이 실패한다.
+- 고정 검사를 일부러 망가뜨려(해시 비교를 건너뜀, meta가 아닌 인증서 수를 세지 않음) 시험이 잡는지 확인한다.
