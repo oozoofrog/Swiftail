@@ -1,9 +1,10 @@
 /// 수신 쪽: 데이터그램을 해석해 type별로 처리한다.
 ///
 /// - initiation: 응답자로서 초기자를 인증하고 response를 보낸다. 새 keypair는 확인 전까지 next에 둔다.
-/// - response: 초기자로서 응답자를 인증하고 세션을 연다. 응답자의 next를 확인시키려고 곧바로 보낸다.
+/// - response: 초기자로서 응답자를 인증하고 세션을 연다. priority message와, 응답자의 next를 확인시키려고 대기열이나
+///   keepalive를 곧바로 보낸다.
 /// - cookie reply: 다음 핸드셰이크 메시지의 mac2에 쓸 cookie를 보관한다.
-/// - transport: 복호화, 재전송 검사, next 확인, IP 패킷 검사와 AllowedIPs 검사.
+/// - transport: 복호화, 재전송 검사, next 확인(이때 priority message와 대기열을 보낸다), IP 패킷 검사와 AllowedIPs 검사.
 ///
 /// initiation과 response는 먼저 mac1을 보고, 부하 상태이면 mac2와 출처별 속도 제한을 본다(`admitHandshake`).
 /// mac2가 틀리면 X25519를 하기 전에 cookie reply로 답하고 메시지는 처리하지 않는다.
@@ -129,8 +130,9 @@ extension WireGuardDevice {
         peer.keypairs.install(Keypair(keys: keys, localIndex: pending.localIndex, remoteIndex: message.sender, isInitiator: true, created: now))
         peer.timers.sessionDerived(at: now)
         peer.timers.handshakeComplete()
-        // 응답자는 이 키로 온 첫 패킷을 받아야 next를 확정한다. 대기열이 비어 있으면 keepalive라도 보낸다.
-        return sendKeepalive(&peer, at: now)
+        // priority message를 먼저 보낸다. 응답자는 이 키로 온 첫 패킷을 받아야 next를 확정한다. 대기열이 비어 있으면
+        // keepalive라도 보낸다(wireguard-go도 priority message 뒤에 `SendKeepalive`를 부른다).
+        return sendPriorityMessage(&peer, at: now) + sendKeepalive(&peer, at: now)
     }
 
     private mutating func receiveCookieReply(_ reply: CookieReply, at now: ContinuousClock.Instant) throws(WireGuardError) {
@@ -164,7 +166,7 @@ extension WireGuardDevice {
         var outputs: [Output] = []
         if peer.keypairs.confirm(slot) {
             peer.timers.handshakeComplete()
-            // shortcut: 확인 시점의 priority message(포크의 SetPriorityMessageOnEstablishmentFunc)는 보내지 않는다. 엔진이 필요로 하는 M3–M4에서 올린다.
+            outputs += sendPriorityMessage(&peer, at: now)
             outputs += sendStagedPackets(&peer, at: now)
         }
         outputs += keepKeyFreshReceiving(&peer, at: now)

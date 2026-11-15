@@ -20,3 +20,9 @@ Unknown으로 버리고, SCTP(132)는 일부 목적 포트 허용과 송신 응�
 
 TSMP 표시 단계는 `.tsmp` 해석만 확인한다. `TailnetEngine.receive`의 제어 패킷 소비와
 WireGuard 인증·AllowedIPs 검사는 이 필터 대조의 범위 밖이다.
+
+# TSMP disco 키 광고 자료
+
+`tsmp-vectors.json`은 `tailscale.com` v1.104.6의 `packet.TSMPDiscoKeyAdvertisement.Marshal`과
+`Parsed.AsTSMPDiscoAdvertisement`로 만든다(v1.104.7과 코드가 같다). 재생성은
+[interop 도구 설명](../../../Tools/interop/README.md#tsmpvectors)을 따른다. `TSMPVectorTests`가 읽는다.

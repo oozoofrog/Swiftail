@@ -65,7 +65,7 @@ extension TailnetNode {
         // 시작하고 사건을 내지 않으므로, 이렇게 하지 않으면 앱의 마지막 사건이 옛 경로로 남는다.
         process(magicsock?.setPeers([], at: now) ?? [], at: now)
         closeAllDERPLinks()
-        engine = TailnetEngine(nodeKey: privateKey, now: now, wallClock: Date())
+        engine = TailnetEngine(nodeKey: privateKey, discoKey: DiscoPublicKey(discoKey.publicKey), now: now, wallClock: Date())
         magicsock = Magicsock(
             discoKey: discoKey,
             nodeKey: key,

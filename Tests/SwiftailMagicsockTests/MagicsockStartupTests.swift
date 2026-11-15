@@ -88,4 +88,31 @@ struct MagicsockStartupTests {
         #expect(tunnelDirect.time < keyArrives + .seconds(1))
         #expect(network.deadlineViolations == 0)
     }
+
+    @Test("호스트가 터널의 옛 disco 키를 쥔 채여도 WireGuard 세션이 서며 온 TSMP 광고로 netmap 갱신 없이 1초 안에 양쪽이 직접이 된다")
+    func staleDiscoKeyWithAdvertisement() throws {
+        let tunnel = try TestIdentity(2, address: "192.0.2.2:50000")
+        let oldDisco = try TestIdentity(3, address: "192.0.2.2:49999").discoPublicKey
+        let stale = Magicsock.Peer(key: tunnel.nodeKey, discoKey: oldDisco, homeDERP: 7, endpoints: [tunnel.address])
+        var network = try lateStartNetwork(hostKnowsTunnel: stale)
+        let host = network.nodes[0].identity
+        let first = sockTime(135_000)
+        network.run(until: first)
+        network.sendRepeatedly(from: 1, to: 0, every: .milliseconds(500))
+        // 터널의 첫 데이터가 연 WireGuard 핸드셰이크는 DERP로 오간다(initiation·response 각 10 ms). 시작한 터널은
+        // response를 받아(+20 ms) 광고를 보내고 호스트가 +30 ms에 받는다. 호스트는 그 광고로 세션을 확인하고 자기
+        // 광고를 보내 터널이 +40 ms에 받는다(wireguard-go `device/receive.go`).
+        network.run(until: first + .milliseconds(30))
+        network.advertiseDiscoKey(from: 1, to: 0)
+        network.run(until: first + .milliseconds(40))
+        network.advertiseDiscoKey(from: 0, to: 1)
+        network.run(until: first + .seconds(10))
+
+        #expect(network.nodes[0].sock.peers[tunnel.nodeKey]?.discoKey == tunnel.discoPublicKey)
+        let hostDirect = try #require(network.pathEvents(0, peer: 1).first { $0.path == .direct(tunnel.address) })
+        let tunnelDirect = try #require(network.pathEvents(1, peer: 0).first { $0.path == .direct(host.address) })
+        #expect(hostDirect.time < first + .seconds(1))
+        #expect(tunnelDirect.time < first + .seconds(1))
+        #expect(network.deadlineViolations == 0)
+    }
 }

@@ -1,6 +1,6 @@
 // 받은 UDP의 분류 순서와 disco 받기는 Go 구현을 따랐다.
 // 출처: tailscale.com v1.104.6 `wgengine/magicsock/magicsock.go` (`packetLooksLike`, `handleDiscoMessage`,
-// `handlePingLocked`), `wgengine/magicsock/derp.go` (`processDERPReadResult`).
+// `handlePingLocked`, v1.104.7의 `unambiguousNodeKeyOfPingLocked`), `wgengine/magicsock/derp.go` (`processDERPReadResult`).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
 import SwiftailBase
@@ -155,7 +155,11 @@ extension Magicsock {
         let owner = discoPeer.node
         var outputs: [Output]
         switch message {
-        case .ping(let txID, _):
+        case .ping(let txID, let nodeKey):
+            // UDP로 온 Ping의 node 키가 주인이면 비활성 키도 활성으로 바꾼다(Go `unambiguousNodeKeyOfPingLocked`).
+            if case .udp = path, nodeKey == owner {
+                _ = noteDiscoKeySeen(sender, from: owner)
+            }
             outputs = receivePing(txID, from: sender, owner: owner, via: path, at: now, using: &generator)
         case .pong(let txID, _):
             // false면 이 피어의 Ping이 아니다. 같은 disco 키의 다른 피어가 없으므로 넘길 곳 없이 무시한다(동작 C3).
@@ -168,7 +172,7 @@ extension Magicsock {
         return outputs
     }
 
-    /// Ping에 온 길로 Pong을 보낸다(노트 4.2 4). Ping의 `nodeKey`는 쓰지 않는다(disco 키가 피어를 정한다).
+    /// Ping에 온 길로 Pong을 보낸다(노트 4.2 4). 피어는 disco 키가 정한다(Ping의 `nodeKey`는 활성 키 전환에만 쓴다).
     ///
     /// UDP로 왔으면 출처가 그 피어의 후보가 되고, 같은 후보의 같은 TxID(재전송)에는 답하지 않는다. DERP로 왔으면
     /// 후보를 넣지 않고 DERP 보낸 쪽이 아는 피어일 때만 같은 지역으로 그 피어에게 답한다.
@@ -196,8 +200,9 @@ extension Magicsock {
         }
     }
 
-    /// CallMeMaybe는 DERP로 왔고, DERP 보낸 쪽 피어의 disco 키가 메시지의 보낸 쪽 키일 때만 받는다(동작 C4,
-    /// 노트 4.2 3). 받으면 그 주소들을 후보로 삼고 모든 후보에 곧바로 Ping한다(노트 4.8 5).
+    /// CallMeMaybe는 DERP로 왔고, 메시지의 보낸 쪽 키가 DERP 보낸 쪽 피어의 disco 키(netmap 키나 TSMP 키)일 때만
+    /// 받는다(동작 C4, 노트 4.2 3). 비활성 키였으면 활성을 그쪽으로 바꾼다(Go `checkAndUpdateDiscoKey`). 받으면 그
+    /// 주소들을 후보로 삼고 모든 후보에 곧바로 Ping한다(노트 4.8 5).
     private mutating func receiveCallMeMaybe(
         _ endpoints: [IPEndpoint],
         from sender: DiscoPublicKey,
@@ -205,7 +210,7 @@ extension Magicsock {
         at now: ContinuousClock.Instant,
         using generator: inout some RandomNumberGenerator
     ) -> [Output] {
-        guard case .derp(let derpSender, _) = path, peers[derpSender]?.discoKey == sender,
+        guard case .derp(let derpSender, _) = path, noteDiscoKeySeen(sender, from: derpSender),
               let actions = peers[derpSender]?.path.receiveCallMeMaybe(endpoints, at: now, using: &generator)
         else { return [.dropped(.misroutedDisco)] }
         return handle(actions, for: derpSender, at: now, using: &generator)

@@ -229,51 +229,32 @@ func (n *network) execute(c command) (map[string]any, error) {
 		if c.AuthKey != nil { // lockWrapAuthKey로 감싼 인증 키로 등록할 때
 			authKey = *c.AuthKey
 		}
-		s := &tsnet.Server{Dir: dir, Hostname: c.Name, ControlURL: n.control.ExplicitBaseURL, AuthKey: authKey, UserLogf: func(string, ...any) {}}
-		ok := false
-		defer func() {
-			if !ok {
-				s.Close()
-				os.RemoveAll(dir)
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		st, e := s.Up(ctx)
+		s, st, e := startPeer(c.Name, dir, n.control.ExplicitBaseURL, authKey)
 		if e != nil {
-			return nil, fmt.Errorf("피어 시작 실패: %w", e)
-		}
-		tcp, e := s.Listen("tcp", ":7")
-		if e != nil {
+			os.RemoveAll(dir)
 			return nil, e
 		}
-		go func() {
-			for {
-				conn, e := tcp.Accept()
-				if e != nil {
-					return
-				}
-				go func() { defer conn.Close(); _, _ = io.Copy(conn, conn) }()
-			}
-		}()
-		for _, ip := range st.TailscaleIPs {
-			udp, e := s.ListenPacket("udp", netip.AddrPortFrom(ip, 7).String())
-			if e != nil {
-				return nil, e
-			}
-			go func() {
-				var b [65536]byte
-				for {
-					count, a, e := udp.ReadFrom(b[:])
-					if e != nil {
-						return
-					}
-					_, _ = udp.WriteTo(b[:count], a)
-				}
-			}()
-		}
 		n.peers[c.Name] = &peer{server: s, dir: dir, transfers: newPeerTransfers()}
-		ok = true
+		result = map[string]any{"event": "peer", "name": c.Name, "nodeKey": st.Self.PublicKey.String(), "addresses": st.TailscaleIPs, "fqdn": st.Self.DNSName}
+	case "restartPeer":
+		// 같은 상태 폴더로 tsnet을 다시 띄운다. node 키는 상태 파일에 있어 그대로이고, disco 키는 magicsock이 시작할 때
+		// 새로 만든다(`wgengine/magicsock/magicsock.go` `newConn`). UDP 포트도 바뀐다.
+		p := n.peers[c.Name]
+		if p == nil {
+			return nil, errors.New("피어가 없습니다")
+		}
+		if p.stopped {
+			return nil, errors.New("멈춘 피어입니다")
+		}
+		if e := p.server.Close(); e != nil {
+			return nil, e
+		}
+		s, st, e := startPeer(c.Name, p.dir, n.control.ExplicitBaseURL, n.authKey)
+		if e != nil {
+			p.stopped = true
+			return nil, e
+		}
+		p.server = s
 		result = map[string]any{"event": "peer", "name": c.Name, "nodeKey": st.Self.PublicKey.String(), "addresses": st.TailscaleIPs, "fqdn": st.Self.DNSName}
 	case "removePeer":
 		p := n.peers[c.Name]
@@ -616,4 +597,52 @@ func main() {
 		log.Print(e)
 		os.Exit(1)
 	}
+}
+
+// startPeer는 상태 폴더 dir로 tsnet 피어를 띄우고 TCP·UDP 포트 7의 에코를 연다. 실패하면 연 것을 닫는다.
+func startPeer(name, dir, controlURL, authKey string) (*tsnet.Server, *ipnstate.Status, error) {
+	s := &tsnet.Server{Dir: dir, Hostname: name, ControlURL: controlURL, AuthKey: authKey, UserLogf: func(string, ...any) {}}
+	ok := false
+	defer func() {
+		if !ok {
+			s.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, e := s.Up(ctx)
+	if e != nil {
+		return nil, nil, fmt.Errorf("피어 시작 실패: %w", e)
+	}
+	tcp, e := s.Listen("tcp", ":7")
+	if e != nil {
+		return nil, nil, e
+	}
+	go func() {
+		for {
+			conn, e := tcp.Accept()
+			if e != nil {
+				return
+			}
+			go func() { defer conn.Close(); _, _ = io.Copy(conn, conn) }()
+		}
+	}()
+	for _, ip := range st.TailscaleIPs {
+		udp, e := s.ListenPacket("udp", netip.AddrPortFrom(ip, 7).String())
+		if e != nil {
+			return nil, nil, e
+		}
+		go func() {
+			var b [65536]byte
+			for {
+				count, a, e := udp.ReadFrom(b[:])
+				if e != nil {
+					return
+				}
+				_, _ = udp.WriteTo(b[:count], a)
+			}
+		}()
+	}
+	ok = true
+	return s, st, nil
 }

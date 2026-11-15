@@ -92,6 +92,23 @@ public struct WireGuardDevice: Sendable {
         )
     }
 
+    /// 이 피어와의 세션 키가 새로 설 때마다 터널 안으로 먼저 보낼 평문 IP 패킷을 정한다. nil이면 지운다.
+    ///
+    /// Tailscale 포크 wireguard-go의 priority message와 같다(`device/send.go` `SendPriorityMessage`,
+    /// `device/receive.go`). 핸드셰이크를 시작한 쪽은 response를 받아 세션이 섰을 때, 응답한 쪽은 새 세션으로 온 첫
+    /// transport를 받았을 때 그 세션으로 한 번 보낸다. 대기열의 패킷과 keepalive보다 앞서 나가고, 데이터로 센다. 보내려고
+    /// 핸드셰이크를 시작하지는 않는다. Tailscale은 이것으로 자기 disco 키를 알린다(TSMP disco 키 광고).
+    ///
+    /// - Throws: 등록되지 않은 피어면 `unknownPeer`, 빈 패킷이면 `malformed`, 512바이트를 넘으면 `packetTooLarge`.
+    public mutating func setPriorityMessage(_ message: [UInt8]?, for peer: PublicKey) throws(WireGuardError) {
+        if let message {
+            guard !message.isEmpty else { throw .malformed }
+            guard message.count <= Constants.maxPriorityMessageSize else { throw .packetTooLarge }
+        }
+        guard peers[peer] != nil else { throw .unknownPeer }
+        peers[peer]?.priorityMessage = message
+    }
+
     /// 피어와 그 키 재료를 지운다. 그 피어의 index로 오는 메시지는 이후 `unknownPeer`다.
     public mutating func removePeer(_ peer: PublicKey) {
         guard let removed = peers.removeValue(forKey: peer) else { return }

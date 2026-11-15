@@ -647,3 +647,33 @@ Go는 WireGuard 세션 키가 생길 때마다 자기 disco 공개 키를 터널
 - 상태 기계: 위 조사의 회귀 시험 "호스트가 터널의 옛 disco 키를 쥔 동안"에서 **netmap을 바꾸지 않고도** WireGuard 핸드셰이크 뒤 1초 안에 양쪽이 direct가 된다.
 - 상호 운용(`tailnet` 도구, 실제 Go 피어): ① Swift 노드를 다시 띄워 disco 키를 바꾸고, Go 피어에게 가는 netmap 갱신을 막은 채로(도구의 맵 억제) 직접 경로가 선다(Go가 Swiftail의 광고를 받아 쓴다). ② 반대로 Go 피어의 disco 키가 바뀌고 Swift 노드에게 가는 netmap 갱신을 막은 채로 직접 경로가 선다(Swiftail이 Go의 광고를 받아 쓴다). 도구로 만들 수 없는 쪽은 까닭을 적는다.
 - Swift ↔ Swift: 같은 프로세스의 두 노드로 한쪽을 다시 띄웠을 때 netmap 갱신 없이 직접 경로가 서는 시간을 잰다.
+
+### 구현하며 정해진 것 (2026-11-16)
+
+근거는 tailscale.com v1.104.7과 Tailscale 포크 wireguard-go `v0.0.0-20261106233718-9e0ab45c16ca`다. 광고에 쓰이는 함수(`PriorityMessageForPeer`, `HandleDiscoKeyAdvertisement`, `endpoint.go`, `peermap.go`, `tsmp.go`, `wrap.go`)는 관문 도구가 쓰는 v1.104.6과 글자 하나 다르지 않다.
+
+1. **보내는 때와 횟수**(`device/receive.go:416`, `:483`, `device/send.go:111-140`): 시작한 쪽은 response를 받아 세션이 선 직후 광고 → keepalive(대기열이 비었을 때) 또는 대기열 순서다. 응답한 쪽은 새 keypair로 온 첫 transport가 AEAD·재전송 검사를 통과해 next를 확인할 때 광고 → 대기열 순서이고, 그다음 받은 패킷을 올린다. keypair 하나에 한 번이고 rekey(시작한 쪽 keypair 120초)마다 양쪽이 다시 보낸다. 대기열(staged)을 거치지 않으므로 대기 중인 데이터보다 앞선다. 보낼 세션이 없으면 핸드셰이크를 시작하지 않고 그만둔다. 데이터 송신으로 센다(새 핸드셰이크 타이머). 크기 한도는 512바이트(`MaxPriorityMessageContentSize`)이고 광고는 IPv4 53바이트, IPv6 73바이트다. Swiftail은 `WireGuardDevice.setPriorityMessage(_:for:)`로 옮겼고, 엔진이 netmap을 적용할 때(키 만료 재계산 포함) 피어마다 광고 바이트를 정한다.
+2. **내용**: 출발지는 netmap의 자기 `Addresses` 가운데 피어의 첫 `Addresses` 주소(Go `endpoint.nodeAddr`)와 계열이 같은 첫 한 주소짜리 주소, 목적지는 그 첫 주소, 키는 `Magicsock.discoPublicKey`(엔진 `init`의 `discoKey`)다. 맞는 주소가 없거나 키가 0이면 보내지 않는다. WireGuard 전용 피어는 엔진에 오르지 않으므로 따로 거르지 않는다. 바이트(ID 0, TTL 64, IPv4 머리 체크섬)는 Go `Marshal`의 출력과 같다(`Tools/interop/cmd/tsmpvectors`, `Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json`, `TSMPVectorTests`).
+3. **받는 길**: 엔진은 WireGuard가 복호화하고 그 피어의 AllowedIPs로 출발지를 검사한 패킷만 TSMP로 해석한다. TSMP 종류 `'a'`이고 본문이 33바이트 이상이며(뒤에 남는 바이트는 Go처럼 무시한다) 키가 0이 아니면 `.discoKeyAdvertised(키, from: 그 WireGuard 피어)`를 내고, 노드가 `Magicsock.receiveDiscoKeyAdvertisement(_:from:at:)`에 넘긴다. Go는 출발 주소로 피어를 찾지만(`wgengine/userspace.go:618`) 출발지 검사를 통과한 주소의 주인은 그 WireGuard 피어 하나이므로 결과가 같다. 인증되지 않은 길은 쓰이지 않는다: UDP·DERP로 온 맨 패킷은 WireGuard가 형식 오류로 버리고, AllowedIPs 밖 출발지는 `disallowedSource`로 버리며, 앱·netstack에서 내려온 TSMP는 엔진이 보내지 않고 버린다(엔진 시험 `unauthenticatedAdvertisementsAreIgnored`).
+4. **활성 키 판정표**(`endpoint.go:382-436`, `:1552-1688`, `magicsock.go:4579-4622`, 값 타입 `PeerDiscoKeys`, 시험 `PeerDiscoKeysTests`). "다시 찾기"는 `PeerPathState.resetForNewDiscoKey()`(Go `changedActiveDiscoLocked`: 신뢰·송신 기록·진행 중인 Ping을 지운다)다.
+
+   | 지금 | 들어온 것 | 활성 | 다시 찾기 |
+   | --- | --- | --- | --- |
+   | netmap 키 C만 | 광고 T(≠C) | T | 예 |
+   | netmap 키 C만 | 처음 온 광고 C | C(TSMP 쪽) | 예. Go는 값이 같아도 바뀐 것으로 본다 |
+   | TSMP 키 T 활성 | 같은 광고 T | T | 아니오 |
+   | TSMP 키 T 활성 | netmap이 다른 키 C2를 줌 | T | 예 |
+   | TSMP 키 T 활성 | netmap이 T를 줌(따라잡음) | T | 예 |
+   | 키 없음 | 광고 T, 뒤에 netmap C | T, 그대로 T | 예, 예 |
+   | netmap 키 C2 | netmap보다 낡은 광고 C | C. 광고가 늘 이긴다(Go는 순서를 따지지 않는다) | 예 |
+   | TSMP 키 T 활성 | netmap 키 C로 봉한 UDP Ping(Ping의 node 키가 그 피어) 또는 DERP CallMeMaybe(DERP 보낸 쪽이 그 피어) | C | 예 |
+   | 위처럼 C로 돌아간 뒤 | 같은 광고 T | C | 아니오(이전 TSMP 키와 같으면 "바뀌지 않음") |
+   | 두 키 | netmap 키가 사라짐(0이거나 다른 피어가 가져감) | T | 예 |
+
+   계약 T4는 "활성 키가 바뀌면 지운다"였다. Go는 갱신 함수가 참을 돌려줄 때마다 지우므로(위 표의 "값이 같아도") Go를 따랐다. Pong은 활성을 바꾸지 않는다(Go와 같다). 받은 disco의 보낸 쪽 키는 두 키 모두로 찾고(Go `knownPeerDiscoKey`), 보내는 disco는 활성 키로 봉한다. 앞 TSMP 키는 새 광고가 오면 잊는다(netmap 키와 같으면 남는다).
+5. **같은 disco 키를 두 피어가 쓸 때**: Go는 disco 키 하나에 여러 피어를 둔다(`peermap.go` `nodesOfDisco`, `upsertEndpoint`). Swiftail은 동작 B1(키 하나에 피어 하나)을 TSMP 키에도 쓴다: 다른 피어가 netmap 키나 TSMP 키로 이미 가진 키를 광고하면 받지 않는다. 광고한 피어도 그 키를 가진 피어도 바뀌지 않는다(시험 `advertisingAnotherPeersKey`). `setPeers`는 netmap 키를 목록 순서대로 먼저 나누고 남은 피어의 TSMP 키를 그 뒤에 나누므로, 다른 피어가 netmap으로 그 키를 내세우면 TSMP 키를 잃는다(`netmapKeepsTSMPKey`). **Go와 다른 점**: Go는 광고한 피어도 그 키를 쓰게 한다. B1의 근거(같은 disco 키가 둘인 정상 경우가 없다)가 그대로 맞아 넓히지 않았다.
+6. **계산**: 공유 키(X25519)는 바뀐 광고 키에만, WireGuard가 인증한 피어에게서만 계산한다(Go `discoInfoForKnownPeerLocked`와 같다). 모르는 키를 내세운 UDP·DERP 쓰레기는 여전히 계산을 일으키지 못한다.
+7. **로그**: 노드는 광고를 받을 때 `TSMP disco 키 광고 받음`(debug)만 남긴다. 키·주소·이름은 남기지 않는다.
+8. **상태 기계 회귀 시험**(`MagicsockStartupTests.staleDiscoKeyWithAdvertisement`): 호스트가 터널의 옛 disco 키를 쥔 채로 핸드셰이크 시각(+30·+40 ms)에 광고를 넣으면 netmap 갱신 없이 첫 데이터 뒤 0.51초(다음 데이터 송신)에 양쪽이 직접이 된다. 광고가 없으면 같은 상황이 netmap까지 중계로 남는다(`staleDiscoKeyUntilNetmap`).
+9. **상호 운용 관문**(`Tests/SwiftailInteropTests/DiscoAdvertisementTests.swift`, `tailnet` 도구, 루프백): ① Swift 노드를 다시 띄우고 Go 피어의 자동 맵을 막은 채 10.3~10.5초, ② Go 피어를 다시 띄우고(새 도구 명령 `restartPeer`: 같은 상태 폴더, 같은 node 키, 새 disco 키·포트) Swift 노드의 맵을 막은 채 10.5~10.8초, Swift ↔ Swift(한쪽을 다시 띄움) 10.8초에 양쪽이 직접이 된다(각 3회). 시간의 대부분은 광고 전의 WireGuard 세션 수립이다: 오래 떠 있는 쪽은 다시 띄우기 전 주소를 마지막 Pong 뒤 6.5초 동안 믿어 핸드셰이크 응답을 그 죽은 주소로만 보내고, 다시 띄운 쪽은 5초마다 다시 시도한다(Go와 같은 규칙). 광고를 받은 뒤에는 노드 로그에서 0.1초 안에 양쪽이 직접이 됐다. 이 단위 전의 코드로 같은 시험을 돌리면 셋 다 20초 안에 직접이 되지 않고 중계로 남는다. 두 Swift 노드가 같은 순간마다 보내면 initiation이 서로 엇갈려(받은 initiation이 자기 것을 지우고, 다음 재시도도 같은 송신에 맞춰진다) 5초씩 늦어진다. WireGuard 규칙대로이므로 시험의 송신 간격을 다르게 두었다.
+10. **이 절 밖의 줄**: 결정 표의 "TSMP 광고" 줄과 제외 표의 "TSMP 광고 보내기, TSMP 키 활성 전환" 줄은 이 절로 바뀌었다. 동작 B1·C2(Ping의 `nodeKey`는 이제 활성 키 전환에 쓴다)·C3·C4(CallMeMaybe는 그 피어의 netmap 키나 TSMP 키)도 위 4·5로 넓어졌다. 이 줄들은 이 단위의 범위 밖이라 고치지 않았다.

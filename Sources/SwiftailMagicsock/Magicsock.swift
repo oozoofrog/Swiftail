@@ -15,7 +15,7 @@ import SwiftailCrypto
 /// 호출 규칙: `now`는 호출마다 줄어들지 않아야 한다. 노드는 `nextDeadline`에 맞춰 `advance(to:)`를 부르고,
 /// 진입점이 돌려준 출력을 목록의 순서대로 처리한다.
 ///
-/// 파일: 여기는 상태·출력·조회, `+Peers`는 피어 표와 disco 키, `+Receiving`은 받은 것의 분류와 disco 받기,
+/// 파일: 여기는 상태·출력·조회, `+Peers`는 피어 표와 disco 키(netmap과 TSMP 광고), `+Receiving`은 받은 것의 분류와 disco 받기,
 /// `+Sending`은 WireGuard 송신과 disco 보내기·CallMeMaybe, `+Timers`는 기한과 STUN 회차, `+Rebind`는 망이 바뀐 뒤의
 /// 재결속과 STUN 다시 하기다.
 /// `docs/contracts/SwiftailMagicsock.md` "공개 API"·동작 A~I, `docs/protocol-notes/disco-magicsock.md` 4절.
@@ -61,12 +61,15 @@ public struct Magicsock: Sendable {
 
     /// 피어 하나의 상태.
     struct PeerEntry: Sendable {
-        /// 이 피어와 disco를 하면 그 disco 키(동작 B1의 주인이고 공유 키가 있다). nil이면 DERP만 쓴다.
-        var discoKey: DiscoPublicKey?
+        /// netmap 키와 TSMP 키. 둘 다 이 피어가 주인이고 공유 키가 있는 키만 담는다(동작 B1, T4).
+        var discoKeys = PeerDiscoKeys()
         var path: PeerPathState
         /// 마지막으로 `.pathChanged`로 알린 경로. nil은 아직 알리지 않았거나 유휴를 알렸다는 뜻이다.
         /// 같은 값은 다시 알리지 않는다(동작 G2).
         var reportedPath: PeerPath?
+
+        /// 이 피어와 disco를 하면 보내는 disco를 봉할 활성 키. nil이면 DERP만 쓴다.
+        var discoKey: DiscoPublicKey? { discoKeys.active }
     }
 
     /// disco 키 하나의 주인과 공유 키. 공유 키는 `setPeers`에서 키마다 한 번만 계산한다(동작 B2).

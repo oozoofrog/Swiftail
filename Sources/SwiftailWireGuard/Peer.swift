@@ -18,6 +18,8 @@ struct Peer {
     var keypairs = Keypairs()
     /// 세션이 서기 전에 보내려 한 IP 패킷. 빈 배열은 keepalive다.
     var staged: [[UInt8]] = []
+    /// 이 피어와의 세션이 설 때마다 대기열보다 먼저 보낼 평문 IP 패킷. nil이면 보내지 않는다.
+    var priorityMessage: [UInt8]?
     var timers = PeerTimers()
 
     /// 마지막으로 받아들인 initiation timestamp. 키 재료를 지워도 남긴다(옛 initiation 재전송 방지).

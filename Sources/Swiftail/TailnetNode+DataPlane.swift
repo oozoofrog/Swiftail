@@ -13,7 +13,8 @@ import SwiftailMagicsock
 /// 소켓 ─► magicsock.receiveUDP ─┐
 /// DERP ─► magicsock.receiveDERP ┴ .wireGuard(from: 길) ─► engine.receive ─ .ipPacket ─► 장치
 ///                                                                      ├ .datagram(핸드셰이크 응답 등) ─► magicsock.send …
-///                                                                      └ .cookieReply ─► 받은 길(UDP 주소, DERP 보낸 쪽)
+///                                                                      ├ .cookieReply ─► 받은 길(UDP 주소, DERP 보낸 쪽)
+///                                                                      └ .discoKeyAdvertised ─► magicsock.receiveDiscoKeyAdvertisement
 /// ```
 ///
 /// 사건 하나는 `process`로 시작해 두 상태 기계 사이의 주고받기를 `await` 없이 끝까지 돈다. 입출력은 기다리지 않는
@@ -46,6 +47,10 @@ extension TailnetNode {
                 if let source {
                     process([source.reply(bytes)], at: now)
                 }
+            case let .discoKeyAdvertised(key, from: peer):
+                // 키는 공개 키지만 로그에는 남기지 않는다(magicsock 계약 동작 T6).
+                Self.log.debug("TSMP disco 키 광고 받음")
+                process(magicsock?.receiveDiscoKeyAdvertisement(key, from: peer, at: now) ?? [], at: now)
             case .dropped:
                 break
             }
@@ -182,14 +187,14 @@ extension TailnetNode {
 extension TailnetEngine.Output {
     /// 피어와의 WireGuard 세션이 섰다는 증거인가. `engine.receive`의 출력에만 묻는다.
     ///
-    /// 복호화한 전송 패킷에서만 나오는 출력(올릴 패킷, 필터·해석·TSMP로 버린 것)이면 참이다. 엔진은 핸드셰이크를 마친
+    /// 복호화한 전송 패킷에서만 나오는 출력(올릴 패킷, 필터·해석·TSMP로 버린 것, TSMP disco 키 광고)이면 참이다. 엔진은 핸드셰이크를 마친
     /// 시각을 내지 않으므로 이것으로 상태 기계의 "세션을 맺은 피어가 있음"(동작 B 5)을 잰다.
     // shortcut: Go는 핸드셰이크를 마친 순간(`LastHandshake`)을 본다. 여기서는 그 세션의 첫 전송 패킷(keepalive 제외)을
     // 받을 때라 조금 늦을 수 있다. 홈 DERP 연결이 서면 그보다 먼저 `.running`이 되므로 보통은 차이가 없다. 필요해지는
     // 시점: DERP 없이 직접 경로만 쓰는 tailnet에서 `.running`이 늦는 것이 보일 때(엔진에 세션 사건을 더한다).
     var provesSession: Bool {
         switch self {
-        case .ipPacket: true
+        case .ipPacket, .discoKeyAdvertised: true
         case .datagram, .cookieReply: false
         case let .dropped(reason):
             switch reason {

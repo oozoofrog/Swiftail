@@ -22,7 +22,7 @@ netmap을 데이터면으로 바꾸는 층이다. M3의 목표는 **직접 UDP �
 
 - 서브넷 경로·exit node(`RouteAll=false`, exit node 없음으로 고정), WireGuard 전용 피어(`isWireGuardOnly`), jailed 피어(`isJailed`), masquerade 주소가 있는 피어, tailnet lock 서명이 없는 피어(`unsignedPeerAPIOnly`. Go는 이런 피어와 겹치는 패킷 규칙이 있으면 규칙 전체를 비운다), `cap:` 출발지 규칙, shields-up.
 - IP 조각과 IPv6 확장 헤더: 버린다(Go는 일부를 통과시킨다. 재조립하는 스택이 없으므로 M3은 받지 않는다).
-- TSMP(IP 프로토콜 99): 받으면 엔진이 소비하고 위로 올리지 않는다. pong·거절·disco 광고는 보내지 않는다. 위에서 내려온 TSMP는 버린다(Go도 host가 만든 TSMP를 버린다. M5-8a에서 넣음, `SwiftailTunnel` 계약 동작 L 4).
+- TSMP(IP 프로토콜 99): 받으면 엔진이 소비하고 위로 올리지 않는다. 그 가운데 0이 아닌 disco 키 광고는 보낸 WireGuard 피어와 함께 `.discoKeyAdvertised`로 낸다. pong·거절은 보내지 않는다. disco 키 광고는 피어마다 WireGuard 세션이 설 때 보낸다(2026-11-16, `SwiftailMagicsock` 계약 "TSMP disco 키 광고"). 위에서 내려온 TSMP는 버린다(Go도 host가 만든 TSMP를 버린다. M5-8a에서 넣음, `SwiftailTunnel` 계약 동작 L 4).
 - 옛 형식의 규칙(`SrcBits`, `DstPorts[].Bits`)이 있으면 규칙을 모두 비운다. 자기 주소와 UDP 흐름 기록은 남으므로 먼저 보낸 UDP의 응답은 계속 받는다(Go와 같다).
 - 직접 UDP, disco, STUN, 홈이 아닌 DERP 지역: M4.
 
@@ -261,6 +261,8 @@ public struct TailnetEngine: Sendable {
         /// 새로 더함(2026-11-15). 방금 `receive`한 데이터그램의 출처로 그 길 그대로 되돌릴 WireGuard cookie reply.
         /// 보낸 피어를 모르므로 피어 경로 선택을 거치지 않는다. `receive`의 출력에만 나온다.
         case cookieReply([UInt8])
+        /// 새로 더함(2026-11-16). 피어가 터널 안으로 알린 disco 키(TSMP 광고, 0이 아닌 키). `receive`의 출력에만 나온다.
+        case discoKeyAdvertised(DiscoPublicKey, from: NodePublicKey)
     }
     public enum Drop: Sendable, Equatable {
         case inbound(PacketFilter.DropReason)
@@ -274,7 +276,8 @@ public struct TailnetEngine: Sendable {
     /// 새로 더함(2026-11-15). 받은 데이터그램이 온 곳. 노드가 경로에서 만든 불투명한 값이고 엔진은 장치에 넘기기만 한다.
     public typealias Source = WireGuardDevice.Source
 
-    public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, now: ContinuousClock.Instant, wallClock: Date)   // 그대로
+    /// `discoKey`는 2026-11-16에 더했다. 세션이 설 때 피어에게 광고할 자기 disco 공개 키다. 기본값 0은 광고하지 않는다.
+    public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, discoKey: DiscoPublicKey = .zero, now: ContinuousClock.Instant, wallClock: Date)
     /// `homeDERP` 인자를 지운다. 엔진은 지역을 모른다.
     public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]   // 그대로
@@ -291,7 +294,7 @@ public struct TailnetEngine: Sendable {
 - **M-E1 (동작 4 보내기)**: "피어의 `homeDERP`가 우리 홈 지역이 아니면 `noRouteToPeer`"를 지운다. 데이터면에 올린 모든 피어에게 `.datagram(_, to:)`를 낸다. 보낼 곳이 없는 피어는 `Magicsock`이 `noRouteToPeer`로 버린다. 핸드셰이크 응답·재시도·keepalive도 같다(`route`에서 지역을 붙이지 않는다).
 - **M-E2 (동작 5 받기)**: disco 판정을 지운다. 엔진에 들어오는 것은 `Magicsock`이 WireGuard로 분류한 것뿐이다(magicsock 계약 동작 A). DERP 프레임의 보낸 쪽 키는 M3에서도 쓰지 않았으므로 인자를 지운다. 나머지(WireGuard → AllowedIPs 출발지 검사 → TSMP 소비 → 필터)는 그대로다.
 - **M-E3 (동작 2 피어 계산)**: `EnginePeer`에 `discoKey`와 `endpoints`를 그대로 옮겨 담는다. 올리는 조건은 그대로다(disco 키가 0이어도 홈 DERP가 있으면 올린다. 그 피어는 DERP만 쓴다).
-- **M-E4 (TSMP)**: 그대로 소비만 한다. Go 피어의 disco 키 광고(`disco-magicsock.md` 3.8)도 여기서 소비된다. 보내지 않는다(magicsock 계약 결정 표).
+- **M-E4 (TSMP)**: 소비하고 올리지 않는다. 2026-11-16부터 disco 키 광고(`disco-magicsock.md` 3.8)는 `.discoKeyAdvertised(키, from: 피어)`로 알리고(노드가 `Magicsock.receiveDiscoKeyAdvertisement`에 넘긴다), `init`의 `discoKey`가 0이 아니면 피어마다 광고를 WireGuard priority message로 정해 세션이 설 때 보낸다(magicsock 계약 "TSMP disco 키 광고").
 - 시험: 엔진 둘을 맞물리는 시험은 출력 모양만 바뀐다. "홈 지역이 다른 피어" 시험은 이제 데이터그램이 나오는지 본다. disco 메시지 시험은 엔진에서 지우고 `MagicsockTests`로 간다.
 
 ### 노드 (`Swiftail`)

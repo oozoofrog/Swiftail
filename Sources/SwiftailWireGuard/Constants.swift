@@ -35,4 +35,6 @@ enum Constants {
     static let defaultMTU = 1420
     /// 세션이 서기 전 피어마다 쌓아 두는 IP 패킷 수. 넘치면 가장 오래된 것을 버린다(계약 값).
     static let maxStagedPackets = 64
+    /// 세션이 설 때 먼저 보내는 priority message의 상한(Tailscale 포크 wireguard-go `MaxPriorityMessageContentSize`).
+    static let maxPriorityMessageSize = 512
 }
