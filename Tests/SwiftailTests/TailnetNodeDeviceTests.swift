@@ -117,6 +117,8 @@ struct TailnetNodeDeviceTests {
             _ = await NodeTestSupport.drain(node.networkSettings)
             _ = await NodeTestSupport.drain(node.inboundPackets)
             #expect(await node.path(toPeerNamed: "rd-phone-1a2b3c4d.tail0001.ts.net") == nil)
+            #expect(await node.path(toPeerWithStableID: "n1234567890CNTRL") == nil)
+            #expect(await node.path(toPeerWithStableID: "") == nil)
             do throws(NodeError) {
                 try await node.run()
                 Issue.record("두 번째 run()이 던지지 않았다")

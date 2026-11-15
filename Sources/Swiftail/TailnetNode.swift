@@ -371,6 +371,15 @@ public actor TailnetNode {
         return magicsock?.path(to: key, at: .now)
     }
 
+    /// `stableID`인 피어까지의 경로. `path(toPeerNamed:)`와 뜻이 같고 찾는 열쇠만 다르다.
+    ///
+    /// 이름은 바뀔 수 있지만 `StableID`는 바뀌지 않으므로, 피어를 오래 기억하는 쪽(허용 목록, 페어링 기록)은 이것으로
+    /// 묻는다. netmap에 그 ID의 피어가 없으면 nil이다. 빈 문자열은 어떤 피어와도 맞지 않는다.
+    public func path(toPeerWithStableID stableID: String) -> PeerPath? {
+        guard !stableID.isEmpty, let key = lastNetmap?.peers.first(where: { $0.stableID == stableID })?.key else { return nil }
+        return magicsock?.path(to: key, at: .now)
+    }
+
     /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도). URL은 `.stateChanged(.needsLogin(url))`로 온다.
     public func startInteractiveLogin() {
         loginContinuation.yield()

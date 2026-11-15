@@ -19,6 +19,14 @@ public struct PeerIdentity: Sendable, Equatable {
     public var computedName: String
     /// 노드를 만든 사용자의 로그인 이름(`alice@example.com`). 표시용이다. 태그 노드에서는 사람을 가리키지 않는다.
     public var loginName: String
+
+    /// 값을 직접 채운다. 노드는 netmap에서 만들므로 쓰지 않는다. 이 타입을 받는 쪽의 코드를 노드 없이 시험할 때 쓴다.
+    public init(stableID: String, name: String, computedName: String, loginName: String) {
+        self.stableID = stableID
+        self.name = name
+        self.computedName = computedName
+        self.loginName = loginName
+    }
 }
 
 // MARK: 주소로 찾기(동작 W1~W3)

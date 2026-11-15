@@ -120,6 +120,10 @@ struct Gate: Sendable {
             let status = try await tool.command(.init(cmd: "peerStatus", name: "go-peer-a"), expecting: "peerStatus")
             if case .direct = await node.path(toPeerNamed: fqdn),
                status.peers?.first(where: { $0.nodeKey == local.key })?.curAddr?.isEmpty == false {
+                // 안정 ID로 물은 경로는 이름으로 물은 것과 같아야 한다.
+                let stableID = try #require(await node.whoIs(try peer.address())?.stableID)
+                #expect(await node.path(toPeerWithStableID: stableID) == node.path(toPeerNamed: fqdn))
+                #expect(await node.path(toPeerWithStableID: stableID + "-없는-피어") == nil)
                 await tool.checkpoint("항목 9: M3 본문 시작 전 양쪽 직접 경로 확인")
                 return
             }

@@ -24,6 +24,27 @@ public struct NodeStatus: Sendable, Equatable {
     /// 확인하지 못해 피어를 올리지 않음(`.unverified`). `docs/contracts/SwiftailTailnetLock.md` 결정 L4.
     public var tailnetLock: TailnetLockStatus
 
+    /// 값을 직접 채운다. 노드는 netmap에서 만들므로 쓰지 않는다. 이 타입을 받는 쪽의 코드를 노드 없이 시험할 때 쓴다.
+    public init(
+        state: NodeState,
+        addresses: [IPAddress] = [],
+        fqdn: String? = nil,
+        stableID: String? = nil,
+        certDomains: [String] = [],
+        peerCount: Int = 0,
+        networkSettings: TunnelNetworkSettings? = nil,
+        tailnetLock: TailnetLockStatus = TailnetLockStatus()
+    ) {
+        self.state = state
+        self.addresses = addresses
+        self.fqdn = fqdn
+        self.stableID = stableID
+        self.certDomains = certDomains
+        self.peerCount = peerCount
+        self.networkSettings = networkSettings
+        self.tailnetLock = tailnetLock
+    }
+
     /// 마지막 netmap에서 읽는다.
     init(state: NodeState, netmap: Netmap?, networkSettings: TunnelNetworkSettings?) {
         self.state = state

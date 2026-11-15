@@ -12,4 +12,12 @@ public struct CertificateStatus: Sendable, Equatable {
     /// 다음에 발급이나 갱신을 시도할 시각. ACME 서버가 `Retry-After`로 알려 준 시각이 더 늦으면 그 시각이다(7일로 묶는다.
     /// 동작 X5). 조건(로그인, MagicDNS, HTTPS, cert 도메인)을 기다리는 중이면 nil이다: 시간으로 다시 시도하지 않는다.
     public var nextAttempt: Date?
+
+    /// 값을 직접 채운다. 관리자는 자기 상태에서 만들므로 쓰지 않는다. 이 타입을 받는 쪽의 코드를 관리자 없이 시험할 때 쓴다.
+    public init(domain: String? = nil, notAfter: Date? = nil, lastFailure: CertificateFailure? = nil, nextAttempt: Date? = nil) {
+        self.domain = domain
+        self.notAfter = notAfter
+        self.lastFailure = lastFailure
+        self.nextAttempt = nextAttempt
+    }
 }
