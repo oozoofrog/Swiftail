@@ -632,6 +632,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 5. **이름**(동작 C2): 끝 레이블이 숫자뿐인 이름(`100.64.0.1` 꼴)은 `domainNotAllowed`다.
 6. **`set-dns` 이름의 비교**(동작 D4): 바이트로 견준다(`String`의 `==`는 유니코드 정준 동치다).
 7. **`ACMEOrderFlow.start`**는 한 번만 받는다. 전송의 시험용 앵커 길도 빠진 중간 인증서를 네트워크에서 받아 오지 않는다.
+8. **전송의 시험용 앵커가 한 번도 돌지 않았다**(관문 (가) 시험이 찾음): `URLSession.bytes(for:)`는 서버 인증서 확인을 작업 수준의 대리자 메서드로만 묻는데 세션 수준만 구현돼 있어, 시험용 루트를 준 전송이 모든 TLS 서버를 거절했다(운영 경로는 영향 없음). 작업 수준 처리기가 세션 수준 처리기를 부르게 했다. 단위 시험이 평문 루프백만 써서 놓쳤고, 이제 pebble을 상대하는 관문이 이 길을 지난다.
 
 고치지 않고 적어 두는 것:
 
@@ -652,7 +653,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 
 ## 6. 첫 사용처가 직접 쓰는 것의 조각
 
-계약의 일부가 아니라 H5의 근거로 적은 길이다. 쓰는 함수는 SDK 선언에서 확인됐지만(노트 4.6: `SecKeyCreateWithData`의 입력 `04 ‖ X ‖ Y ‖ K` 97바이트, `SecIdentityCreate`는 키가 맞지 않으면 NULL) **이 조각을 돌린 기록은 없다**. 작성 세션이 적은 TLS·ALPN 협상과 "키체인에 쓰지 않음"의 실험은 확인되지 않았다(노트 8장, 9장 V188·V189). 구현의 근거로 쓰지 않는다: 샌드박스 판에서 돌리는 확인은 첫 사용처 세션이 한다(첫 사용처 검토 결과 5).
+계약의 일부가 아니라 H5의 근거로 적은 길이다. 쓰는 함수는 SDK 선언에서 확인됐지만(노트 4.6: `SecKeyCreateWithData`의 입력 `04 ‖ X ‖ Y ‖ K` 97바이트, `SecIdentityCreate`는 키가 맞지 않으면 NULL) **이 조각은 관문 (가)의 시험용 서버(`Tests/SwiftailInteropTests/Support/MinimalHTTPServer.swift`)가 샌드박스 밖에서 돌려 확인했다**(Go 피어가 시험 루트로 TLS를 검증해 통과, ALPN `http/1.1`. 2026-11-15). 키체인에 아무것도 쓰이지 않는지는 들여다보지 않았다. 작성 세션이 적은 TLS·ALPN 협상과 "키체인에 쓰지 않음"의 실험은 확인되지 않았다(노트 8장, 9장 V188·V189). 구현의 근거로 쓰지 않는다: 샌드박스 판에서 돌리는 확인은 첫 사용처 세션이 한다(첫 사용처 검토 결과 5).
 
 ```swift
 // TailnetCertificate → NWListener의 TLS 신원. 키체인을 쓰지 않는다.
@@ -660,7 +661,8 @@ let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRan
 let key = SecKeyCreateWithData(Data(certificate.privateKey.x963Representation) as CFData, attributes as CFDictionary, nil)
 let leaf = SecCertificateCreateWithData(nil, Data(certificate.chain[0]) as CFData)
 let identity = SecIdentityCreate(nil, leaf, key)            // SecIdentity.h, macOS 10.12·iOS 11.2부터
-// 중간 인증서는 sec_identity_create_with_certificates(identity, 나머지 사슬)로 싣는다(돌려 보지 않았다)
+// 중간 인증서는 sec_identity_create_with_certificates(identity, leaf를 뺀 나머지 사슬)로 싣는다.
+// 사슬 전체를 넘기면 leaf가 한 번 더 붙어 나간다(관문 (가) 시험이 확인했다. 2026-11-15)
 sec_protocol_options_set_local_identity(tls.securityProtocolOptions, sec_identity_create(identity))
 sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
 sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, "http/1.1")
