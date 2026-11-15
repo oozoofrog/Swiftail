@@ -81,12 +81,8 @@ public struct PeerIdentity: Sendable, Equatable {
     /// 표시용 이름. Go `Node.ComputedName`의 규칙이다: 이름에서 tailnet 접미사를 뗀 것, 없으면 호스트 이름,
     /// 그것도 없으면 node 공개 키의 텍스트.
     public var computedName: String
-    /// ACL 태그. 사람의 기기면 비어 있다.
-    public var tags: [String]
     /// 노드를 만든 사용자의 로그인 이름(`alice@example.com`). 표시용이다. 태그 노드에서는 사람을 가리키지 않는다.
     public var loginName: String
-    /// 그 사용자의 표시 이름.
-    public var displayName: String
 }
 ```
 
@@ -141,6 +137,10 @@ public actor CertificateManager {
 
     /// 지금의 모습: 쥔 인증서의 만료 시각, 마지막 실패, 다음 시도 시각.
     public var status: CertificateStatus { get }
+
+    /// 물러나 기다리는 중이면 기다림을 끝내고 곧바로 다시 시도한다. 사용자가 tailnet 설정을 고친 뒤 누르는 "지금 다시 시도"다.
+    /// 발급이 돌고 있거나 인증 기관의 속도 제한(`rateLimited`)으로 기다리는 중이면 아무 일도 하지 않는다.
+    public func retryNow()
 }
 
 public struct CertificateStatus: Sendable, Equatable {
@@ -158,7 +158,9 @@ public struct CertificateStatus: Sendable, Equatable {
 public enum CertificateFailure: Sendable, Equatable {
     /// 노드가 `.running`이 아니다.
     case nodeNotRunning
-    /// tailnet에서 HTTPS 인증서가 꺼져 있다(netmap `DNSConfig.CertDomains`가 비었다).
+    /// tailnet에서 MagicDNS가 꺼져 있다. 사용자가 관리 콘솔에서 켜야 한다.
+    case magicDNSDisabled
+    /// tailnet에서 HTTPS 인증서가 꺼져 있다(netmap `DNSConfig.CertDomains`가 비었다). 사용자가 관리 콘솔에서 켜야 한다.
     case httpsNotEnabled
     /// 노드의 이름이 netmap의 cert 도메인에 없다.
     case domainNotAllowed
@@ -526,6 +528,22 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 | F14 | 호스트의 나머지(REST, 페어링, 세션, 게시, 직접 연결, 업데이트 페이지, 사건 큐)는 모두 첫 사용처가 Swift로 쓴다. Swiftail에 바라는 것이 4절 표 밖에 더 있는가? | 없다 | 범위 |
 | F15 | Mac 호스트를 임시(ephemeral) 노드로 띄우는 일이 시험 밖에도 있는가? 임시 노드가 같은 이름으로 다시 뜰 때마다 상태가 비어 있으면 인증서를 새로 받게 되고 7일에 5장 한도에 닿는다 | 운영에서는 없다 | 있으면 임시 노드에서 발급하지 않는 규칙을 더한다 |
 | F16 | `WhoIs`의 5초 기한은 없어진다(`origin`·`whoIs`는 기다리지 않는다). 기한에 기대는 곳이 있는가? | 없다 | — |
+
+### 첫 사용처 검토 결과 (2026-11-15)
+
+첫 사용처 세션이 F1~F16에 답했다(그쪽 저장소 `2814b2c` 이후의 코드 기준). 가정이 그대로 선 것: F1, F4, F5, F6, F8, F10, F11, F13, F14, F15, F16. 초안이 바뀌는 것만 적는다.
+
+1. **신원(F1·F2)**: 연결마다 고정한 `Origin.peer.stableID`를 요청마다 허용 목록에 견주는 것으로 지금과 같은 판정이다(허용 목록에서 지우면 다음 요청부터 막히는 것은 서버가 요청마다 목록을 보아 채운다). 호스트가 읽는 것은 `stableID`, `computedName`, `loginName`뿐이라 `PeerIdentity`에서 `tags`와 `displayName`을 뺐다. `name`은 경로 조회(`path(toPeerNamed:)`)의 열쇠라 둔다(F10: 첫 사용처가 접속한 기기의 `StableID` ↔ 이름을 기억한다. 지금 연결이 없는 기기도 이름으로 묻는다). `loginName`은 빈 문자열일 수 있다.
+2. **실패의 종류(F3)**: 사용자가 스스로 고칠 수 있는 둘(`magicDNSDisabled`, `httpsNotEnabled`)이 나머지와 갈리면 된다. 앱이 그 둘에 "DNS 설정 페이지 열기"를 붙인다. `magicDNSDisabled`를 더했다. 실패를 사건으로 낼 필요는 없다(2초마다 `status`를 읽는다).
+3. **갱신과 리스너(F4·F5)**: 갱신되면 첫 사용처가 새 `NWListener`를 띄워 그 포트로 `forward`를 부른다. 이미 맺은 연결은 옛 리스너에서 끝까지 가고, 옛 리스너는 새 연결만 받지 않다가 남은 연결이 끝나면 닫는다(큰 전송 중의 갱신이 끊기지 않는다). 그래서 다리는 **포트마다가 아니라 연결마다** 동작해야 하고, 옛 포트로 잇던 연결을 새 포트 때문에 끊지 않는다.
+4. **다시 시도(F12)**: `status`의 다음 시도 시각을 화면에 보여 준다. 사용자가 설정을 고친 뒤 누를 **`retryNow()`**를 더했다.
+5. **샌드박스(F7)**: 두 빌드가 모두 돌아야 하고 **관문의 기준은 샌드박스 판**이다. 공개 저장소의 Mac 앱은 샌드박스를 쓰지 않고(커밋된 권한 파일이 빈 것이 맞다), 스토어판이 App Sandbox(네트워크 서버·클라이언트, 사용자가 고른 파일, 북마크)를 켠다. 샌드박스 판의 상태 디렉터리는 앱 컨테이너 안이다. **샌드박스 안의 실행 확인(`SecIdentity` 만들기, 루프백 듣기, 다리)은 첫 사용처 세션이 맡는다.** 샌드박스 판에서 키체인은 쓸 수 있으므로, 키체인 없이 신원을 만드는 길이 막히면 첫 사용처가 키체인에 넣는 길로 간다(Swiftail의 API는 그대로다: 사슬과 키를 낸다).
+6. **DER 부품(F9)**: 첫 사용처는 직접 연결 리스너의 자체 서명 인증서(X.509 v3)를 Swift로 새로 써야 하고, Swiftail이 DER 쓰기 부품을 공개로 내주면 쓰겠다고 했다(급하지 않다). **지금은 내지 않는다**(H14 그대로): 쓰는 곳이 CSR 하나인 내부 부품을 공개 API로 굳히지 않는다. M7-3이 끝나 부품의 모양이 선 뒤, 첫 사용처가 직접 연결을 옮길 때 다시 본다.
+7. **끊김의 전달(API 의견)**: 서버가 루프백 연결을 닫으면 다리가 tailnet 쪽을 정리한다(동작 B4·B5 그대로). 반대로 **tailnet 쪽이 오류로 끝나면 루프백 쪽은 정상 닫기로 보이면 안 된다**(반쯤 받은 본문을 끝까지 받은 것으로 읽지 않게). TLS 리스너에서는 `close_notify` 없이 끝난 연결이라 서버의 TLS가 잘림으로 안다. 평문 리스너(`listenTLS=false`)에서는 RST로 끊겨야 한다. 동작 B5의 "루프백 쪽 취소"를 구현할 때 `NWConnection`의 어느 호출이 RST를 내는지 확인하고 시험으로 고정한다(관문 (가)에 항목을 더한다: tailnet 쪽을 `abort()`하면 평문 루프백 서버의 읽기가 오류로 끝난다).
+8. **묻는 시점**: 서버는 `NWListener`가 넘긴 연결이 `.ready`가 된 뒤(핸드셰이크 끝) 첫 수신 전에 `origin(forLoopbackSourcePort:)`를 묻는다. H4 (가)가 선다.
+9. **시험 상대(F13)**: 호스트를 옮긴 뒤 첫 사용처의 가짜 iPhone은 빠른 시험에는 Swiftail 노드(`connect`), 상호 운용에는 이 저장소 `Tools/interop`의 Go tsnet 피어를 쓴다. 그쪽 저장소에 Go 시험 도구를 새로 두지 않는다. 그래서 `Tools/interop`의 `tailnet` 도구와 README의 "Swift 노드 둘을 시험 제어 서버에 붙이기"는 첫 사용처가 쓰는 접점이다(바꿀 때 알린다).
+10. **대응표**: 사실과 다른 곳은 없다. `rd_update_page_set`은 공식 Tailscale 앱에 기대는 기능이라 샌드박스 판에서는 이미 빠져 있다.
+11. **관문 (가)의 최소 HTTP 서버에 대한 참고**(첫 사용처의 보안 검토에서 넘어온 것. 계약에는 영향이 없다): 상태를 바꾸는 요청의 출처 검사, 요청 본문 크기 상한과 기기별 제한, 페어링 승인은 사람이 화면에서만. 시험 타깃의 서버도 본문 크기 상한은 둔다.
 
 ### 사용자 확인 필요
 
