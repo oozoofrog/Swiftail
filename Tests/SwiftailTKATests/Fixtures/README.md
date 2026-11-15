@@ -15,3 +15,15 @@ CBOR 항목 수준의 판정 벡터 63개. 출처는 노트 `docs/protocol-notes
 | `aum` | 노트가 적은 Go `AUM` 디코딩(`Unmarshal`)의 판정, `accept`·`reject`. `cbor`가 `accept`인데 `reject`이면 구조 수준(TL-2)의 거절이다. 정적 검사는 포함하지 않는다 |
 | `canonical` | 받아들인 값을 정준(맵 키는 인코딩 바이트 사전순, 같은 키는 받은 순서)으로 다시 쓴 바이트. 모르는 필드를 지우지 않은 일반 CBOR 값의 다시 쓰기이고, AUM으로 다시 인코딩한 바이트가 아니다. 음수·단순값·실수가 든 값은 없다 |
 | `note` | 판정에 덧붙일 것 |
+
+## `tka-fixtures.json` (`tkafixtures`)
+
+출처: `Tools/interop/cmd/tkafixtures`가 `tailscale.com` v1.104.6의 `tka` 공개 API(피어 집합만 `ipn/ipnlocal`의 `tkaFilterNetmapLocked`를 overlay로)로 낸 Go 판정. Go 1.27.3. 키는 `SHA-256("swiftail-fixtures/tka/<역할>/<번호>")`에서 나온 공개된 시험 전용 값이고, `bootstrap/go-test-genesis`와 `authKeys`의 `go-test-string`은 Go 시험 파일(`tka/aum_test.go:181`, `tka/sig_test.go:479`)의 값이다. JSON의 모양과 시나리오 목록은 `Tools/interop/README.md`의 "TKA 기준 자료 생성" 절에 있다.
+
+다시 뽑기(저장소 루트에서, 환경 변수는 그 절과 같다):
+
+```sh
+fixture_tool="$(sh Scripts/build-interop-tools.sh tkafixtures)"
+(cd Tools/interop && "$fixture_tool" ../../Tests/SwiftailTKATests/Fixtures)
+(cd Tools/interop && go test -count=1 ./cmd/tkafixtures)
+```

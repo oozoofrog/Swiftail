@@ -1,0 +1,24 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+
+	"tailscale.com/ipn/ipnlocal"
+)
+
+func main() {
+	input, err := io.ReadAll(os.Stdin)
+	if err == nil {
+		var output []byte
+		output, err = ipnlocal.SwiftailFixturePeerSets(input)
+		if err == nil {
+			_, err = os.Stdout.Write(output)
+		}
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
