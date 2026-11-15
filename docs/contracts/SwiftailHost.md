@@ -445,6 +445,8 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 9. **권한**: 루프백에서 듣는 쪽은 App Sandbox의 들어오는 연결 권한(`com.apple.security.network.server`), 다리와 노드의 소켓·`URLSession`은 나가는 연결 권한(`com.apple.security.network.client`)이 든다. 그 밖의 권한은 쓰지 않는다. Swiftail은 키체인을 쓰지 않는다(사슬과 키를 값으로 낸다). 키체인 없이 TLS 신원을 만드는 길(`SecKeyCreateWithData`·`SecIdentityCreate`)은 SDK 선언만 확인됐고, 샌드박스 안의 실행과 "키체인에 쓰지 않음"은 확인되지 않았다(노트 4.6·8장, 9장 V188·V189·V191). 이것을 구현의 근거로 쓰지 않는다: **첫 사용처 세션이 샌드박스 판에서 확인한다**(첫 사용처 검토 결과 5. 막히면 첫 사용처가 키체인에 넣는 길로 가고 Swiftail의 API는 그대로다).
 10. **비용**: 바이트가 Swift TCP → 다리의 복사 → 커널의 루프백 TCP → TLS를 거친다. 4GiB 전송에서의 처리량과 CPU는 관문에서 잰다.
 
+구현에서 정해진 것(M7-9): 루프백 쪽 RST는 `NWConnection.forceCancel()`이고(평문 서버의 읽기가 `ECONNRESET`으로 끝난다. `cancel()`은 FIN), 쓰기 닫기는 내용 없는 `finalMessage`다. 루프백 소켓은 Task 취소로 닫히지 않아 B6 ②가 취소에서도 선다. 잇기 시작한 뒤의 끊김은 던지지 않고 정리한 뒤 돌아오며(취소만 `cancelled`), 출발 포트가 표에 이미 있으면 잇지 않는다(`loopbackUnavailable`).
+
 ### G. Go 상태에서 가져오기(U1 뒤)
 
 1. **한 번, 읽기 전용**: Go의 디렉터리는 읽기만 한다. 대상에 `identity.json`이 이미 있으면 `alreadyInitialized`다(가져오기가 살아 있는 Swiftail 신원을 덮지 않는다).
