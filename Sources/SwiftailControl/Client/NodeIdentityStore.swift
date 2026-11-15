@@ -4,11 +4,16 @@ import SwiftailBase
 
 /// 신원을 디렉터리의 파일 하나(`identity.json`)에 둔다. 다시 시작해도 같은 노드로 뜨게 하는 유일한 상태다.
 ///
-/// 파일은 JSON이고 키는 Go와 같은 텍스트(`privkey:` + 16진 64자리)다.
+/// 파일은 JSON이고 키는 Go와 같은 텍스트다: machine 키와 node 키는 `privkey:` + 16진 64자리, NL 키는 `nlpriv:` + 16진
+/// 128자리(Ed25519 시드 32바이트 ‖ 공개 키 32바이트).
 ///
 /// ```json
-/// {"MachineKey":"privkey:…","NodeKey":"privkey:…"}
+/// {"MachineKey":"privkey:…","NodeKey":"privkey:…","NLKey":"nlpriv:…"}
 /// ```
+///
+/// `NLKey`가 없는 옛 파일(tailnet lock 전)도 읽는다. 그때는 같은 machine 키·node 키에 새 NL 키를 채운다(`loadOrCreate()`가 첫
+/// 요청 전에 저장한다). `NLKey`의 뒤 32바이트가 시드로 만든 공개 키와 다르면 손상으로 본다(Go는 이것을 보지 않는다).
+/// `docs/contracts/SwiftailTailnetLock.md` 동작 R1.
 ///
 /// 개인 키를 담으므로 소유자만 읽게(0600) 만들고, 같은 디렉터리의 임시 파일에 다 쓴 뒤 이름을 바꿔 원자적으로
 /// 바꾼다. 쓰다가 멈춰도 이전 신원이 남는다. 오류 메시지에는 경로와 키를 넣지 않는다.
@@ -21,6 +26,7 @@ import SwiftailBase
 public struct NodeIdentityStore: Sendable {
     static let fileName = "identity.json"
     private static let keyPrefix = "privkey:"
+    private static let lockKeyPrefix = "nlpriv:"
 
     private let directory: URL
 
@@ -31,7 +37,28 @@ public struct NodeIdentityStore: Sendable {
     var fileURL: URL { directory.appending(path: Self.fileName, directoryHint: .notDirectory) }
 
     /// 저장된 신원을 읽는다. 파일이 없으면 nil.
+    ///
+    /// `NLKey`가 없는 옛 파일이면 새 NL 키를 채워 돌려주되 저장하지 않는다. 그 키를 등록에 쓰려면 저장해야 한다(`loadOrCreate()`).
     public func load() throws(ControlError) -> NodeIdentity? {
+        try read()?.identity
+    }
+
+    /// 제어 클라이언트가 시작할 때 쓴다. 파일이 없으면 새 신원을, `NLKey`가 없는 옛 파일이면 새 NL 키를 만들어 저장한 뒤 돌려준다.
+    ///
+    /// 첫 요청 전에 저장해야 한다. 저장하지 않은 NL 키로 등록하면 다시 시작할 때 다른 키가 나간다(동작 R1). machine 키도 등록 전에
+    /// 저장한다: 다시 시작해도 같은 기기로 보여야 한다.
+    func loadOrCreate() throws(ControlError) -> NodeIdentity {
+        guard let stored = try read() else {
+            let identity = NodeIdentity()
+            try save(identity)
+            return identity
+        }
+        if !stored.hasLockKey { try save(stored.identity) }
+        return stored.identity
+    }
+
+    /// 파일을 읽어 신원과, 파일에 NL 키가 있었는지를 돌려준다. 파일이 없으면 nil.
+    private func read() throws(ControlError) -> (identity: NodeIdentity, hasLockKey: Bool)? {
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
@@ -48,14 +75,19 @@ public struct NodeIdentityStore: Sendable {
             guard let key = Self.privateKey(text) else { throw .storage("신원 파일이 손상되었다") }
             nodeKey = key
         }
-        return NodeIdentity(machineKey: machineKey, nodeKey: nodeKey)
+        guard let text = file.lockKey else {
+            return (NodeIdentity(machineKey: machineKey, nodeKey: nodeKey), false)
+        }
+        guard let lockKey = Self.lockKey(text) else { throw .storage("신원 파일의 NL 키가 손상되었다") }
+        return (NodeIdentity(machineKey: machineKey, nodeKey: nodeKey, lockKey: lockKey), true)
     }
 
     /// 신원을 원자적으로 저장한다. 디렉터리가 없으면 소유자 전용(0700)으로 만든다.
     public func save(_ identity: NodeIdentity) throws(ControlError) {
         let file = IdentityFile(
             machineKey: Self.text(identity.machineKey),
-            nodeKey: identity.nodeKey.map(Self.text)
+            nodeKey: identity.nodeKey.map(Self.text),
+            lockKey: Self.text(identity.lockKey)
         )
         let data: Data
         do {
@@ -114,15 +146,35 @@ public struct NodeIdentityStore: Sendable {
         else { return nil }
         return try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: bytes)
     }
+
+    /// `nlpriv:` + 시드 ‖ 공개 키의 16진(Go `NLPrivate.MarshalText`).
+    static func text(_ key: Curve25519.Signing.PrivateKey) -> String {
+        lockKeyPrefix + ([UInt8](key.rawRepresentation) + [UInt8](key.publicKey.rawRepresentation)).hex
+    }
+
+    /// `nlpriv:` + 16진 128자리(대소문자 모두)를 읽는다. 뒤 32바이트가 앞 32바이트(시드)로 만든 공개 키와 다르면 nil(동작 R1).
+    /// 견주는 것은 공개 값이라 상수 시간 비교가 필요 없다.
+    static func lockKey(_ text: String) -> Curve25519.Signing.PrivateKey? {
+        guard text.hasPrefix(lockKeyPrefix),
+              let bytes = [UInt8](hex: String(text.dropFirst(lockKeyPrefix.count))),
+              bytes.count == 64,
+              let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: bytes[..<32]),
+              [UInt8](key.publicKey.rawRepresentation) == Array(bytes[32...])
+        else { return nil }
+        return key
+    }
 }
 
 /// 신원 파일의 JSON 모양.
 private struct IdentityFile: Codable {
     var machineKey: String
     var nodeKey: String?
+    /// 옛 파일에는 없다.
+    var lockKey: String?
 
     enum CodingKeys: String, CodingKey {
         case machineKey = "MachineKey"
         case nodeKey = "NodeKey"
+        case lockKey = "NLKey"
     }
 }

@@ -1,7 +1,12 @@
 import CryptoKit
 import Foundation
+import os
 import SwiftailBase
 import SwiftailIO
+import SwiftailTKA
+
+/// tailnet lock의 로그(계약 `docs/contracts/SwiftailTailnetLock.md` 동작 K5). 키·서명 바이트·인증 키는 남기지 않는다.
+private let tailnetLockLog = Logger(subsystem: "Swiftail", category: "tailnet-lock")
 
 /// 등록: `POST /machine/register`로 node 키를 제어 서버에 올린다.
 ///
@@ -10,7 +15,10 @@ import SwiftailIO
 ///    처음 등록할 때와, 키가 만료되거나 로그인을 새로 해서 키를 바꿀 때다(재사용 인증 키면 스스로 다시 인증된다).
 ///    이미 등록된 저장 키로 다시 붙을 때(재시작)는 보내지 않는다. 일회용 키는 이미 쓰였고, Go tsnet도 로그인이
 ///    필요한 상태에서만 인증 키를 넘긴다.
-/// 2. 응답은 `Error` → `NodeKeySignature` → `NodeKeyExpired` → `AuthURL` 순으로 본다.
+///    요청마다 NL 공개 키(`NLKey`)를 싣고, node 키 서명(`NodeKeySignature`)은 Go의 순서로 고른다(`nodeKeySignature`).
+/// 2. 응답은 `Error` → `NodeKeySignature` → `NodeKeyExpired` → `AuthURL` 순으로 본다. `NodeKeySignature`가 오면 서버가
+///    재서명을 요청한 것이다: 새 node 키를 만들어, 받은 서명을 NL 키로 이어 서명해 다시 등록한다. 한 번의 등록에서 한 번만
+///    따르고, 거듭 오면 연결 오류로 보고 물러났다가 다시 잇는다(Go는 두 번째 요청을 버린다).
 /// 3. `AuthURL`이 오면 `loginRequired`를 내고, 같은 후보 키로 `Followup` 요청(긴 폴링)을 되풀이한다.
 ///    후보 키는 인증이 끝난 뒤에만 확정하고 저장한다. 그 전에 연결이 끊기면 다시 이은 뒤 같은 후보 키와 Followup
 ///    URL로 이어서 기다린다. 사용자가 보고 있는 URL은 그 후보 키에 묶여 있기 때문이다.
@@ -18,13 +26,21 @@ import SwiftailIO
 ///    `loginGoal == goal` 확인). 받은 키는 확정하지만 다음 연결에서 새 키로 다시 등록한다. 로그인을 기다리는
 ///    Followup 긴 폴링은 그 자리에서 그만두고 새 키로 다시 시작한다(사용자가 새 URL을 곧바로 받는다).
 ///
-/// `docs/protocol-notes/control-map.md` 3.2, 4.1 (출처: tailscale.com `control/controlclient/direct.go`
-/// `doLogin`, `auto.go` `authRoutine`, BSD-3-Clause).
+/// `docs/protocol-notes/control-map.md` 3.2, 4.1, `docs/protocol-notes/tailnet-lock.md` 4.6, 계약
+/// `docs/contracts/SwiftailTailnetLock.md` 동작 R (출처: tailscale.com `control/controlclient/direct.go`
+/// `doLoginOrRegen`·`doLogin`, `auto.go` `authRoutine`, BSD-3-Clause).
 extension ControlClient {
     /// 등록 응답 본문의 한도(1MiB). Go와 같다.
     static let maximumRegisterResponseSize = 1 << 20
     /// `registrationRejected`에 담는 서버 메시지의 한도(문자 수). Go가 HTTP 오류 본문을 자르는 길이와 같다.
     static let maximumRejectionLength = 200
+
+    /// `run()`이 첫 연결 전에 한 번 부른다. 인증 키의 `--TL` 뒤를 해석하고(어긋나면 서버에 아무것도 보내지 않고 끝난다),
+    /// 신원을 읽거나 만든다. NL 키가 없던 옛 신원이면 새 NL 키를 저장한 뒤 돌아온다(동작 R1·R3).
+    func prepareRegistration() throws(ControlError) {
+        wrappedAuthKey = try AuthKey.wrapped(in: configuration.authKey)
+        identity = try identityStore.loadOrCreate()
+    }
 
     func register(over connection: ControlConnection) async throws {
         let loginRequest = loginRequests
@@ -37,19 +53,29 @@ extension ControlClient {
             attempt = PendingRegistration(nodeKey: .init(), oldNodeKey: identity.nodePublicKey ?? .zero, followup: "")
         }
         var regenerated = false
+        var resignRequested = false
+        /// 서버가 방금 준 옛 서명. 그 응답 다음의 요청 하나에만 쓴다(Go `loginOpt.OldNodeKeySignature`).
+        var previousSignature: [UInt8]?
         var repeatedURLs = 0
 
         while true {
             let publicKey = NodePublicKey(attempt.nodeKey.publicKey)
+            let auth = publicKey == identity.nodePublicKey
+                ? nil
+                : configuration.authKey.map { RegisterResponseAuth(authKey: AuthKey.controlValue(of: $0)) }
+            let signature = try nodeKeySignature(
+                for: publicKey, oldNodeKey: attempt.oldNodeKey, resigning: previousSignature, sendsAuthKey: auth != nil
+            )
+            previousSignature = nil
             let request = RegisterRequest(
                 nodeKey: publicKey,
                 oldNodeKey: attempt.oldNodeKey,
-                auth: publicKey == identity.nodePublicKey
-                    ? nil
-                    : configuration.authKey.map { RegisterResponseAuth(authKey: AuthKey.controlValue(of: $0)) },
+                nlKey: identity.lockPublicKey,
+                auth: auth,
                 followup: attempt.followup,
                 hostinfo: hostinfo,
-                ephemeral: configuration.ephemeral
+                ephemeral: configuration.ephemeral,
+                nodeKeySignature: signature
             )
             let httpRequest = connection.jsonRequest("POST", path: "/machine/register", nodeKey: publicKey)
             let body = try Self.encode(request)
@@ -74,8 +100,13 @@ extension ControlClient {
                 throw request.auth == nil ? ControlError.registrationRejected(message) : ControlError.authKeyRejected(message)
             }
             if !decoded.nodeKeySignature.isEmpty {
-                // 서버가 새 키에 tailnet lock 서명을 다시 해 달라고 한다. lock은 지원하지 않는다.
-                throw ControlError.tailnetLockEnabled
+                // 재서명 요청(동작 R6). 옛 node 키는 저장된 지금의 키이고, 재서명의 입력은 방금 받은 바이트다.
+                guard !resignRequested else { throw ControlError.connection("서버가 재서명을 거듭 요청했다") }
+                resignRequested = true
+                previousSignature = decoded.nodeKeySignature
+                attempt = PendingRegistration(nodeKey: .init(), oldNodeKey: identity.nodePublicKey ?? .zero, followup: "")
+                pendingRegistration = nil
+                continue
             }
             if decoded.nodeKeyExpired {
                 guard !regenerated else { throw ControlError.nodeKeyExpired }
@@ -115,6 +146,50 @@ extension ControlClient {
             eventContinuation.yield(.registered(publicKey))
             return
         }
+    }
+
+    /// 등록 요청에 실을 node 키 서명(동작 R5). Go `doLogin`의 순서 그대로다.
+    ///
+    /// 1. 옛 node 키가 있고 서버가 방금 옛 서명을 줬으면 그것을 NL 키로 이어 서명한다(`ResignNKS`). 실패하면 로그만 남기고
+    ///    서명 없이 등록한다.
+    /// 2. 아니고 서명된 인증 키를 실어 보내는 요청이면 감싼 키로 새 node 키에 서명한다(`SignByCredential`). 실패하면 이 등록을
+    ///    오류로 끝낸다(Go와 같이 물러났다가 다시 시도한다).
+    /// 3. 그 밖에는 서명이 없다(JSON `null`). 서명은 서명 기기가 뒤에 올린다.
+    private func nodeKeySignature(
+        for nodeKey: NodePublicKey, oldNodeKey: NodePublicKey, resigning previous: [UInt8]?, sendsAuthKey: Bool
+    ) throws(ControlError) -> [UInt8] {
+        if !oldNodeKey.isZero, let previous {
+            let signature: [UInt8]
+            do {
+                signature = try NodeKeySignature.resigned(previous, for: nodeKey, with: identity.lockKey)
+            } catch {
+                tailnetLockLog.error("재서명하지 못해 서명 없이 등록한다(\(String(describing: error), privacy: .public))")
+                return []
+            }
+            if !Self.rotates(previous, by: identity.lockPublicKey) {
+                // Go와 같이 그대로 보낸다(결정 L9). 노드는 서명 기기가 다시 서명할 때까지 잠기고, 다음 netmap이 그것을 드러낸다.
+                tailnetLockLog.notice("재서명: 옛 서명의 회전 키가 이 노드의 NL 키가 아니어서 새 서명은 검증되지 않는다")
+            }
+            return signature
+        }
+        guard sendsAuthKey, let wrappedAuthKey else { return [] }
+        do {
+            return try wrappedAuthKey.keySignature(for: nodeKey)
+        } catch {
+            throw .connection("서명된 인증 키로 node 키에 서명하지 못했다")
+        }
+    }
+
+    /// 옛 서명을 감쌀 rotation을 검증할 키(Go `wrappingPublic`: 가장 바깥의 비지 않은 `WrappingPubkey`)가 `lockKey`인가.
+    /// 아니면 재서명은 검증되지 않는다. 로그에만 쓴다. Go는 rotation이 아닌 서명의 `Nested`를 따라가지 않지만, 그런 서명은
+    /// 검증을 통과하지 못하므로 판정에 영향이 없다.
+    private static func rotates(_ previous: [UInt8], by lockKey: NLPublicKey) -> Bool {
+        var current = try? NodeKeySignature(decoding: previous)
+        while let signature = current {
+            if !signature.wrappingPublicKey.isEmpty { return signature.wrappingPublicKey == lockKey.rawValue }
+            current = signature.nested
+        }
+        return false
     }
 
     /// 로그인을 기다리는 긴 폴링을 돌리되, 그동안 `startInteractiveLogin()`이 불리면 그만두고
