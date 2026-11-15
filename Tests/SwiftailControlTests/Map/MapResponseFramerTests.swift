@@ -74,7 +74,7 @@ struct MapResponseFramerTests {
         #expect(netmap.packetFilter.count == 1)
         #expect(netmap.userProfiles.keys.sorted() == [100])
         #expect(netmap.derpMap?.regions?.keys.sorted() == [1])
-        #expect(netmap.tailnetLockEnabled == false)
+        #expect(netmap.tailnetLock == TailnetLockStatus())
     }
 
     @Test("무작위 바이트와 망가뜨린 JSON으로 죽지 않는다")

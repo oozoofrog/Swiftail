@@ -8,6 +8,9 @@ import Foundation
 /// 입출력도 시계도 없는 값이다. 피어가 "지금 보였다"(`PeerSeenChange` true)는 증분에 필요한 "지금"은
 /// 호출하는 쪽이 응답을 받은 시각으로 넘긴다.
 ///
+/// 여기서 나오는 netmap은 **tailnet lock으로 거르기 전**의 것이다(`tailnetLock`은 기본값). 서버가 알린 lock 상태는
+/// `Update.serverLock`으로 따로 내고, 검증과 거르기는 `ControlClient`가 한다.
+///
 /// 적용 순서와 규칙은 Go 클라이언트의 `mapSession`과 같다.
 /// `docs/protocol-notes/control-map.md` 4.3 (출처: tailscale.com `control/controlclient/map.go`
 /// `updateStateFromResponse`, `updatePeersStateFromResponse`, `netmap`, BSD-3-Clause).
@@ -18,6 +21,9 @@ public struct MapSession: Sendable {
         public var netmap: Netmap?
         /// 서버가 답을 요구한 핑. 호출하는 쪽이 처리한다.
         public var pingRequest: PingRequest?
+        /// 서버가 알린 tailnet lock 상태의 지금 값. netmap이 바뀌지 않은 응답에도 싣는다: 머리만 바뀐 응답은 netmap을
+        /// 바꾸지 않지만 동기화의 계기다(계약 `docs/contracts/SwiftailTailnetLock.md` 동작 N1).
+        package var serverLock = ServerLockState()
     }
 
     /// 세션이 쥐는 피어의 최대 수. 목표 규모(피어 10,000명)의 두 배다.
@@ -61,12 +67,12 @@ public struct MapSession: Sendable {
         }
         // KeepAlive에서 유효한 것은 핑과 서버 시각뿐이다(노트 3.5, 4.3의 1).
         guard !response.keepAlive else {
-            return Update(netmap: nil, pingRequest: response.pingRequest)
+            return Update(netmap: nil, pingRequest: response.pingRequest, serverLock: serverLock)
         }
         // 상태 필드가 없는 응답은 netmap을 다시 만들지 않는다. 바뀌는 것은 서버 시각뿐이다.
         if netmap != nil, !response.carriesState {
             netmap?.controlTime = controlTime
-            return Update(netmap: nil, pingRequest: response.pingRequest)
+            return Update(netmap: nil, pingRequest: response.pingRequest, serverLock: serverLock)
         }
         let currentSelf: Node
         if var node = response.node {
@@ -114,8 +120,12 @@ public struct MapSession: Sendable {
         netmap = current
         let ignoringControlTime = { (map: Netmap?) in var copy = map; copy?.controlTime = nil; return copy }
         let changed = ignoringControlTime(current) != ignoringControlTime(previous)
-        return Update(netmap: changed ? current : nil, pingRequest: response.pingRequest)
+        return Update(netmap: changed ? current : nil, pingRequest: response.pingRequest, serverLock: serverLock)
     }
+
+    /// 서버가 알린 lock 상태. 이 세션에서 `TKAInfo`를 받기 전에는 꺼진 것이고, `TKAInfo`가 없는 응답은 바꾸지 않는다
+    /// (동작 N1·O1).
+    private var serverLock: ServerLockState { ServerLockState(tkaInfo) }
 
     /// 피어 저장소에 증분을 적용한다(노트 4.3의 3~5).
     private mutating func applyPeerChanges(_ response: MapResponse, receivedAt now: Date) {
@@ -213,9 +223,6 @@ public struct MapSession: Sendable {
             packetFilter: namedPacketFilters.keys.sorted().flatMap { namedPacketFilters[$0] ?? [] },
             userProfiles: profiles,
             domain: domain,
-            // shortcut: Go는 Head가 AUM 해시로 해석되지 않으면 lock이 꺼졌다고 본다. 여기서는 해석하지 않고
-            // 켜진 것으로 본다. lock을 구현하지 않는 쪽에서는 이것이 안전한 방향이다.
-            tailnetLockEnabled: tkaInfo.map { !$0.disabled } ?? false,
             controlTime: controlTime
         )
     }

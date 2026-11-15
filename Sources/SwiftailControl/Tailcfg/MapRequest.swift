@@ -32,6 +32,9 @@ public struct MapRequest: Encodable, Sendable, Equatable {
     public var endpointTypes: [EndpointType]
     /// 응답에 피어 목록이 없어도 된다. 상태 갱신 요청에 쓴다.
     public var omitPeers: Bool
+    /// 로컬 tailnet lock 서명 권한 상태의 머리(base32). 상태가 없으면 빈 문자열이고 JSON에서 빠진다
+    /// (`docs/protocol-notes/tailnet-lock.md` 3.9).
+    public var tkaHead: String
 
     public init(
         version: Int = 148,
@@ -43,7 +46,8 @@ public struct MapRequest: Encodable, Sendable, Equatable {
         hostinfo: Hostinfo?,
         endpoints: [IPEndpoint] = [],
         endpointTypes: [EndpointType] = [],
-        omitPeers: Bool = false
+        omitPeers: Bool = false,
+        tkaHead: String = ""
     ) {
         self.version = version
         self.compress = compress
@@ -55,6 +59,7 @@ public struct MapRequest: Encodable, Sendable, Equatable {
         self.endpoints = endpoints
         self.endpointTypes = endpointTypes
         self.omitPeers = omitPeers
+        self.tkaHead = tkaHead
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -68,6 +73,7 @@ public struct MapRequest: Encodable, Sendable, Equatable {
         case endpoints = "Endpoints"
         case endpointTypes = "EndpointTypes"
         case omitPeers = "OmitPeers"
+        case tkaHead = "TKAHead"
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -82,6 +88,7 @@ public struct MapRequest: Encodable, Sendable, Equatable {
         try container.encodeUnlessEmpty(endpoints, forKey: .endpoints)
         try container.encodeUnlessEmpty(endpointTypes, forKey: .endpointTypes)
         try container.encodeUnlessEmpty(omitPeers, forKey: .omitPeers)
+        try container.encodeUnlessEmpty(tkaHead, forKey: .tkaHead)
     }
 }
 

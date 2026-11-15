@@ -8,7 +8,9 @@ import SwiftailIO
 ///   끝까지 읽어 버린다. 스트림이 열린 뒤의 변경도 이 형태로만 보낸다. 다른 형태(`Stream=false,
 ///   OmitPeers=false` 등)는 서버가 기존 스트림을 끊는다. 응답이 `timeouts.request` 안에 끝나지 않으면 연결 오류다.
 /// - 맵 스트림: `Stream=true, KeepAlive=true, Compress=""`. 본문을 `MapResponseFramer` → `MapSession`에 넣고
-///   netmap이 바뀌면 사건으로 낸다. 스트림마다 새 `MapSession`으로 시작한다(세션 재개는 하지 않는다).
+///   결과를 tailnet lock 처리(`receivedLock`)에 넘긴다. netmap은 거기서 걸러진 뒤에 사건이 된다. 스트림마다 새
+///   `MapSession`으로 시작한다(세션 재개는 하지 않는다).
+/// - 두 요청 모두 `TKAHead`에 로컬 서명 권한 상태의 머리를 싣는다. 저장된 상태가 있으면 첫 요청부터다.
 /// - 감시: 맵 스트림에서 120초 동안 아무것도 오지 않으면 끊는다. 서버는 1분 안쪽 간격으로 KeepAlive를 보낸다.
 ///   마지막 netmap의 self 노드 키 만료 시각에도 깨어나, 새 맵이 오지 않아도 만료를 알아챈다.
 /// - 만료: self 노드의 키가 만료되면 새 키로 다시 등록한다. 그렇게 받은 새 키도 곧바로 만료라면 `nodeKeyExpired`로
@@ -25,7 +27,8 @@ extension ControlClient {
 
     func uploadStatus(over connection: ControlConnection) async throws {
         let status = localStatus
-        guard status != uploadedStatus else { return }
+        let tkaHead = lockHeadText
+        guard status != uploadedStatus || tkaHead != uploadedTKAHead else { return }
         guard let nodeKey = nodePublicKey else { throw ControlError.connection("등록 전에는 상태를 올릴 수 없다") }
         let request = MapRequest(
             nodeKey: nodeKey,
@@ -33,7 +36,8 @@ extension ControlClient {
             hostinfo: hostinfo,
             endpoints: status.endpoints,
             endpointTypes: status.endpointTypes,
-            omitPeers: true
+            omitPeers: true,
+            tkaHead: tkaHead
         )
         let httpRequest = connection.jsonRequest("POST", path: "/machine/map", nodeKey: nodeKey)
         let body = try Self.encode(request)
@@ -43,6 +47,7 @@ extension ControlClient {
             while try await reader.nextChunk() != nil {}
         }
         uploadedStatus = status
+        uploadedTKAHead = tkaHead
     }
 
     // MARK: 맵 스트림
@@ -58,7 +63,8 @@ extension ControlClient {
             stream: true,
             hostinfo: hostinfo,
             endpoints: status.endpoints,
-            endpointTypes: status.endpointTypes
+            endpointTypes: status.endpointTypes,
+            tkaHead: lockHeadText
         )
         var reader = try await connection.responseStream(
             to: connection.jsonRequest("POST", path: "/machine/map", nodeKey: nodeKey),
@@ -79,7 +85,6 @@ extension ControlClient {
                 throw ControlError.connection("맵 프레임 오류: \(error)")
             }
             for response in responses {
-                if let info = response.tkaInfo { lastTKAInfo = info }
                 let update: MapSession.Update
                 do {
                     update = try session.apply(response, receivedAt: Date())
@@ -90,18 +95,14 @@ extension ControlClient {
                     queuedPings += 1
                     signals.yield(.ping(ping))
                 }
-                if let netmap = update.netmap {
-                    try accept(netmap)
-                }
+                try receivedLock(update)
             }
         }
         throw ControlError.connection("서버가 맵 스트림을 끝냈다")
     }
 
-    private func accept(_ netmap: Netmap) throws {
-        if netmap.tailnetLockEnabled {
-            throw ControlError.tailnetLockEnabled
-        }
+    /// 걸러진 netmap을 사건으로 내고 self 노드의 키 만료를 본다. tailnet lock 처리(`emitNetmap`)만 부른다.
+    func accept(_ netmap: Netmap) throws {
         eventContinuation.yield(.netmap(netmap))
         if netmap.selfNode.keyExpiry != selfKeyExpiry {
             selfKeyExpiry = netmap.selfNode.keyExpiry

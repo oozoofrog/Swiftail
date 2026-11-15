@@ -17,6 +17,8 @@ struct GoFixtureTests {
 
     private func check(_ scenario: GoMapScenario, framed: Bool) throws {
         var session = MapSession()
+        var wasLockEnabled = false
+        var current: Netmap?
         var framer = MapResponseFramer()
         var random = SeededRandom(seed: 0x6D61_7066_6978_0001)
         let now = try goFixtureDate("2026-01-02T03:04:05.123456789Z")
@@ -44,11 +46,16 @@ struct GoFixtureTests {
                     response = try JSONDecoder().decode(MapResponse.self, from: raw)
                 }
                 let update = try session.apply(response, receivedAt: now)
+                // Go의 netmap은 `TKAEnabled`를 담는다. Swift는 그것을 netmap 밖(`serverLock`)에 두므로, Go가 보는
+                // "바뀜"은 netmap이 바뀌었거나 서버가 알린 lock의 켜짐이 바뀐 것이다.
+                let changed = update.netmap != nil || update.serverLock.isEnabled != wasLockEnabled
+                wasLockEnabled = update.serverLock.isEnabled
+                current = update.netmap ?? current
                 if step.netmap == .null {
-                    let changed = update.netmap != nil
                     #expect(!changed, "\(context) $.netmap: 기대=null(변화 없음), 실제=netmap 있음")
-                } else if let map = update.netmap {
-                    try compareGoJSON(comparableGoNetmap(step.netmap), projectGoNetmap(map),
+                } else if changed, let map = current {
+                    try compareGoJSON(comparableGoNetmap(step.netmap),
+                                      projectGoNetmap(map, tkaEnabled: update.serverLock.isEnabled),
                                       context: context, netmap: true)
                 } else {
                     Issue.record("\(context) $.netmap: 기대=정규화 객체, 실제=null")

@@ -3,6 +3,7 @@
 
 import Foundation
 import SwiftailBase
+import SwiftailTKA
 import Testing
 
 @testable import SwiftailControl
@@ -366,13 +367,69 @@ struct MapSessionTests {
         #expect(netmap.selfNode.capMap["cap/x"] == [.integer(9_007_199_254_740_993)])
     }
 
-    @Test("TKAInfo: 처음 없으면 꺼짐, 한 번 오면 nil은 그대로, Disabled면 꺼짐")
-    func tailnetLock() throws {
+    // MARK: 서버가 알린 tailnet lock 상태 (계약 SwiftailTailnetLock 동작 N1·O1, 단위 시험 17)
+
+    /// 응답을 적용한 결과의 `serverLock`과, 그 응답이 netmap을 바꿨는지.
+    private func serverLock(_ json: String, in session: inout MapSession) throws -> (lock: ServerLockState, netmapChanged: Bool) {
+        let update = try session.apply(mapResponse(json), receivedAt: receivedAt)
+        return (update.serverLock, update.netmap != nil)
+    }
+
+    /// 시험용 머리. 바이트 하나로 채운 해시의 base32 텍스트다.
+    private func head(_ byte: UInt8) throws -> (hash: AUMHash, text: String) {
+        let hash = try #require(AUMHash([UInt8](repeating: byte, count: 32)))
+        return (hash, hash.text)
+    }
+
+    @Test("serverLock: 첫 응답에 TKAInfo가 없으면 꺼짐, 있으면 켜짐과 머리, 도중에 빠지면 그대로, Disabled면 꺼짐")
+    func serverLockFollowsTKAInfo() throws {
+        let first = try head(0x11)
         var session = MapSession()
-        #expect(try apply(#"{"Node":\#(selfNodeJSON)}"#, to: &session).tailnetLockEnabled == false)
-        #expect(try apply(#"{"TKAInfo":{"Head":"AAAA"}}"#, to: &session).tailnetLockEnabled == true)
-        #expect(try apply("{}", to: &session).tailnetLockEnabled == true)
-        #expect(try apply(#"{"TKAInfo":{"Disabled":true}}"#, to: &session).tailnetLockEnabled == false)
+        #expect(try serverLock(#"{"Node":\#(selfNodeJSON)}"#, in: &session).lock == ServerLockState())
+
+        var enabled = MapSession()
+        let started = try serverLock(#"{"Node":\#(selfNodeJSON),"TKAInfo":{"Head":"\#(first.text)"}}"#, in: &enabled)
+        #expect(started.lock == ServerLockState(isEnabled: true, head: first.hash))
+        // 도중에 TKAInfo가 빠진 응답은 "변화 없음"이다: 상태를 바꾸는 응답이든, null이든, KeepAlive든.
+        #expect(try serverLock(#"{"Domain":"tail0001.ts.net"}"#, in: &enabled).lock == started.lock)
+        #expect(try serverLock(#"{"TKAInfo":null}"#, in: &enabled).lock == started.lock)
+        #expect(try serverLock(#"{"KeepAlive":true}"#, in: &enabled).lock == started.lock)
+        #expect(try serverLock("{}", in: &enabled).lock == started.lock)
+
+        let disabled = try serverLock(#"{"TKAInfo":{"Disabled":true}}"#, in: &enabled)
+        #expect(disabled.lock.isEnabled == false)
+        // 꺼졌다는 응답에 머리가 실려 있으면 그 머리는 읽는다(끄기 비밀이 틀렸을 때 동기화할지를 정한다).
+        let both = try serverLock(#"{"TKAInfo":{"Head":"\#(first.text)","Disabled":true}}"#, in: &enabled)
+        #expect(both.lock == ServerLockState(isEnabled: false, head: first.hash))
+    }
+
+    @Test("serverLock: 읽히지 않는 Head는 꺼짐, 빈 Head는 켜짐이고 머리 없음")
+    func serverLockHeadParsing() throws {
+        for unreadable in ["AAAA", try head(0x11).text.lowercased(), try head(0x11).text + "A"] {
+            var session = MapSession()
+            let lock = try serverLock(#"{"Node":\#(selfNodeJSON),"TKAInfo":{"Head":"\#(unreadable)"}}"#, in: &session).lock
+            #expect(lock == ServerLockState(), "\(unreadable)")
+        }
+        var session = MapSession()
+        #expect(try serverLock(#"{"Node":\#(selfNodeJSON),"TKAInfo":{}}"#, in: &session).lock == ServerLockState(isEnabled: true))
+        #expect(try serverLock(#"{"TKAInfo":{"Head":""}}"#, in: &session).lock == ServerLockState(isEnabled: true))
+    }
+
+    @Test("serverLock: netmap은 그대로인데 Head만 바뀌어도 새 값을 싣는다. netmap 자체는 lock을 담지 않는다")
+    func serverLockChangesWithoutNetmap() throws {
+        let (first, second) = (try head(0x11), try head(0x22))
+        var session = MapSession()
+        let started = try serverLock(#"{"Node":\#(selfNodeJSON),"TKAInfo":{"Head":"\#(first.text)"}}"#, in: &session)
+        #expect(started.netmapChanged)
+        #expect(session.netmap?.tailnetLock == TailnetLockStatus(), "거르기 전의 netmap은 lock의 기본값을 싣는다")
+
+        let moved = try serverLock(#"{"TKAInfo":{"Head":"\#(second.text)"}}"#, in: &session)
+        #expect(moved.lock == ServerLockState(isEnabled: true, head: second.hash))
+        #expect(!moved.netmapChanged)
+        // 텍스트의 끝 글자가 달라도 같은 32바이트면 같은 머리다.
+        let sameBytes = String(second.text.dropLast()) + "B"
+        #expect(sameBytes != second.text)
+        #expect(try serverLock(#"{"TKAInfo":{"Head":"\#(sameBytes)"}}"#, in: &session).lock == moved.lock)
     }
 
     @Test("ControlTime: KeepAlive의 것도 기록하고, 0 시각은 무시한다")

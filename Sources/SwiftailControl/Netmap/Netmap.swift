@@ -19,8 +19,9 @@ public struct Netmap: Sendable, Equatable {
     public var userProfiles: [Int64: UserProfile]
     /// tailnet 이름. 아직 받지 못했으면 빈 문자열.
     public var domain: String
-    /// tailnet lock이 켜져 있다. Swiftail은 lock을 구현하지 않으므로 켜져 있으면 통신을 시작하지 않는다.
-    public var tailnetLockEnabled: Bool
     /// 제어 서버가 마지막으로 알린 서버 시각. 노드 키 만료를 계산할 때 시계 차이를 보정하는 데 쓴다.
     public var controlTime: Date?
+    /// tailnet lock의 모습. `ControlClient`가 내는 netmap의 `peers`는 이것으로 이미 걸러져 있다.
+    /// `MapSession`이 바로 내는 netmap은 거르기 전의 것이고 이 값은 기본값(`.disabled`)이다.
+    public var tailnetLock = TailnetLockStatus()
 }

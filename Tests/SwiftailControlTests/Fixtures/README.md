@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | `map-sessions.json` | `tailscale.com` v1.104.6 실제 `control/controlclient/map.go`의 mapSession, Go 1.27.3 | 아래 명령 | 기준 구현 BSD-3-Clause, 시험용 생성 자료 |
 | `requests.json` | 같은 버전의 `tailcfg.RegisterRequest`·`MapRequest`를 `encoding/json.Marshal` | 아래 명령 | 기준 구현 BSD-3-Clause, 시험용 생성 자료 |
+| `tka-peer-sets.json` | `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json`(Go `tka`·`ipnlocal`의 판정, `tkafixtures` 도구)의 `peerSets` 전부와 그것이 가리키는 `authorities`의 `name`·`aums`를 그대로 옮긴 것. 키는 공개된 시험 전용 값이다 | 맨 아래 명령 | 기준 구현 BSD-3-Clause, 시험용 생성 자료 |
 
 저장소 루트에서 실행한다.
 
@@ -21,3 +22,18 @@ export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
 정규화 필드명과 형식, 요청 input의 zero 기본값 규칙, 시나리오별 주의점은 [시험 도구 README](../../../Tools/interop/README.md)의 mapfixtures 절을 따른다. Swift 비교 시 64비트 ID를 부동소수점으로 바꾸지 않는다.
 
 기준 `control/controlclient/map.go` SHA-256: `96aea2fa89b642ea0679e78b50a0133c7780b7ed787792542187a20c76fbee1e`.
+
+`tka-peer-sets.json`은 다른 시험 타깃의 자료를 읽을 수 없어 옮겨 둔 것이다. `tka-fixtures.json`을 다시 만들면 이것도 다시 만든다.
+
+```sh
+python3 - <<'PY'
+import json
+source = json.load(open('Tests/SwiftailTKATests/Fixtures/tka-fixtures.json'))
+names = {peerSet['authority'] for peerSet in source['peerSets']}
+json.dump({
+    'reference': source['reference'],
+    'authorities': [{'name': a['name'], 'aums': a['aums']} for a in source['authorities'] if a['name'] in names],
+    'peerSets': source['peerSets'],
+}, open('Tests/SwiftailControlTests/Fixtures/tka-peer-sets.json', 'w'), indent=2)
+PY
+```
