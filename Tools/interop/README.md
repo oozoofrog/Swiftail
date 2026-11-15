@@ -585,3 +585,67 @@ eyebuild rm m6-tools
 ```
 
 `Package.swift`의 `SwiftailNetstackTests`에는 아직 Fixtures 리소스 선언이 없다. Swift 대조 시험을 붙이는 세션에서 `resources: [.copy("Fixtures")]`를 더해야 한다. 이 도구 작업은 Swift 코드와 패키지 선언을 바꾸지 않는다.
+
+# ACME 기준 자료 생성 (`acmefixtures`)
+
+`tailscale.com` v1.104.6의 `tempfork/acme`와 Go 1.27.3 표준 라이브러리를 직접 호출한다. Swift 소스는 읽거나 실행하지 않는다. `sha256("swiftail-fixtures/acme/<번호>")`를 `ecdsa.ParseRawPrivateKey`로 읽어 시험 키를 정한다. 첫 키와, 이후 X·Y 좌표의 첫 바이트가 각각 0인 키를 차례로 찾는다(최대 4096개 씨앗). **자료에 든 개인 키는 공개된 시험 전용 값이다. 운영에 쓰면 안 된다.** 네트워크·현재 시각·외부 난수는 자료 생성에 쓰지 않는다.
+
+```sh
+check_dir="$(eyebuild dir m7-acmefixtures)"
+mkdir -p "$check_dir/tmp"
+export TMPDIR="$check_dir/tmp" GOTMPDIR="$check_dir/tmp"
+export GOPROXY=off GOSUMDB=off
+fixture_tool="$(sh Scripts/build-interop-tools.sh acmefixtures)"
+"$fixture_tool" Tests/SwiftailCertificatesTests/Fixtures
+# 인자가 없으면 같은 JSON을 표준 출력에 쓴다.
+"$fixture_tool" > "$check_dir/recreated.json"
+cmp "$check_dir/recreated.json" Tests/SwiftailCertificatesTests/Fixtures/acme-fixtures.json
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-mod=readonly
+(cd Tools/interop && eyebuild run m7-acmefixtures -- go test -count=1 ./cmd/acmefixtures)
+eyebuild rm m7-acmefixtures
+```
+
+폴더 인자가 있으면 `acme-fixtures.json`을 쓴다. `reference`에는 실제 빌드의 `go`·`tailscale` 버전이 있고, tailscale 버전이 다르거나 replace되어 있으면 거절한다. `caseCount: 22`는 다음 네 배열 길이의 합이다. 모든 hex는 소문자, base64url은 채움 없는 정규형이다.
+
+| 배열 | 수 | 키와 뜻 |
+| --- | --- | --- |
+| `keys` | 3 | `id`(`account`, `leading-zero-x`, `leading-zero-y`), `testOnly: true`, 공개 씨앗 `seed`, 32바이트 개인 스칼라 `scalarHex`, 공개 JWK `publicKey`(`crv`, `kty`, 32바이트 좌표의 base64url `x`·`y`), RFC 7638 정규형 `jwkJSON` 문자열, `thumbprint`, SEC1 `sec1PEM`, PKCS#8 `pkcs8PEM` |
+| `challenges` | 9 | `keyID`, `token`, `keyAuthorization`(`token.thumbprint`), `dns01TXT`(따옴표 없는 43바이트). 키마다 서로 다른 token 세 개 |
+| `jws` | 6 | `keyID`, `mode`(`jwk`·`kid`), 복호화한 `protectedJSON`·`payloadJSON`, ASCII `signingInput`, `verifiedExample`(`protected`, `payload`, `signature`). 키마다 newAccount와 POST-as-GET 예 하나씩 |
+| `csrs` | 4 | `name`, `keyID`, `domain`, 전체 CSR의 `derHex`, 서명 입력 DER의 `certificationRequestInfoHex`, `cnStringTag`(19 = PrintableString) |
+
+CSR은 `account` 키로 짧은 이름(`a.ts.net`), 보통 이름(`rd-mac-1a2b3c4d.tail0001.ts.net`), 63자 레이블, 253자 이름을 만든다. 마지막 것은 DER 길이 경계 자료이며 `_acme-challenge.`를 붙이면 DNS 이름 한도를 넘으므로 실제 DNS-01 발급 대상 예시가 아니다. 각 CSR의 주체는 CN 하나, SAN은 같은 이름 하나, `ExtraExtensions`는 nil이다. x509가 SAN을 extensionRequest 속성에 넣는다.
+
+값을 얻는 경로와 직접 호출할 수 없는 부분:
+
+- JWK JSON과 JWS: 공개 `Client.Register`·`Client.GetAuthorization`이 만든 요청을 메모리 `http.RoundTripper`로 포착한다. 비공개 `jwkEncode`·`jwsEncodeJSON`을 복제하지 않는다. newAccount 본문은 `{}`, POST-as-GET 본문은 0바이트다. 가짜 URL은 `https://acme.invalid`, 고정 nonce는 `AAECAwQFBgcICQoLDA0ODw`, kid는 `https://acme.invalid/account/1`이다.
+- 지문은 `acme.JWKThumbprint`, 키 인가는 `Client.HTTP01ChallengeResponse`(같은 내부 `keyAuth`), TXT는 `Client.DNS01ChallengeRecord`를 부른다.
+- CSR의 `feature/acme.certRequest`는 비공개이고 이를 독립적으로 호출할 공개 경로가 없다. `ipn/ipnlocal/cert.go`는 feature hook으로 위임한다. 실제 발급 경로 `feature/acme/cert.go:578-589`의 `certRequest(key, domain, nil)`과 같은 일반 이름 템플릿(`certstore.go:306-320`)을 `x509.CreateCertificateRequest`에 넘긴다. wildcard는 이 자료의 범위 밖이다.
+- 계정·인증서 키 저장의 SEC1 형식은 `encodeECDSAKey`(`certstore.go:323-330`)와 같은 `x509.MarshalECPrivateKey` + `pem.EncodeToMemory`이다. PKCS#8은 `x509.MarshalPKCS8PrivateKey`로 만든다. Go 저장소의 `parsePrivateKey`(`certstore.go:340-359`)와 같은 표준 파서를 쓰되 이 도구는 P-256만 받는다.
+- 서명은 `crypto.Signer`가 `ecdsa.PrivateKey.Sign(nil, digest, opts)`를 불러 Go 표준 RFC 6979로 만든다. acme가 넘긴 난수 reader는 읽지 않는다. 자료 전체의 재현성을 위한 시험 정책이며 실제 Go 클라이언트의 무작위 서명 정책과 다르다. JWS·CSR 예는 생성 중 검증하며, 서명 바이트 자체는 Swift와 비교하지 않는다.
+
+세 검증 명령은 **표준 입력으로 JSON 객체 한 개**를 받아 JSON 한 줄을 쓰고 끝난다. 성공은 종료 코드 0과 `ok:true`, 오류는 종료 코드 1과 `{"ok":false,"error":"한국어 설명"}`이다. 입력은 256KiB 이하, DER·PEM은 각각 64KiB 이하, JSON 중첩은 32단계 이하다. 중복 멤버·알 수 없는 필드·필드명의 잘못된 대소문자·뒤따르는 JSON·비정규 base64url은 거절한다. 명령은 파일을 쓰거나 네트워크를 열지 않는다.
+
+`acmefixtures verify-jws` 입력:
+
+```json
+{"jws":{"protected":"<base64url>","payload":"<base64url 또는 빈 문자열>","signature":"<64바이트 R ‖ S의 base64url>"},"jwk":{"crv":"P-256","kty":"EC","x":"<32바이트 base64url>","y":"<32바이트 base64url>"},"expectedNonce":"AAECAwQFBgcICQoLDA0ODw","expectedURL":"https://acme.invalid/new-account"}
+```
+
+`expectedNonce`·`expectedURL`은 필수다. kid 머리에는 `expectedKID`도 필수이며, jwk 머리에서는 생략하거나 빈 문자열을 넣는다. 자료의 kid 예를 검증할 때 `expectedURL`은 `https://acme.invalid/authz/1`, `expectedKID`는 `https://acme.invalid/account/1`이다. 제공하는 공개 키는 자료에서 `keyID`로 찾은 `keys[].publicKey`, JWS는 `jws[].verifiedExample`이다.
+
+성공 출력은 `{"ok":true,"protected":{…},"payloadHex":"<복호화한 본문 hex>","signingInput":"<protected.payload>"}`다. `protected`는 문자열이 아닌 객체다. ES256·64바이트 서명·P-256 곡선과 좌표 길이, jwk/kid의 배타성, 포함 JWK와 제공 공개 키의 일치, nonce·URL·kid와 기대값의 일치를 검사하고 `ecdsa.Verify`로 실제 서명 입력을 검증한다. 머리는 8KiB 이하, URL·kid는 2048바이트 이하 HTTPS이며 userinfo·fragment가 없어야 한다. 서버 계정 소유권이나 nonce 사용 이력은 검사하지 않는다. 본문은 JSON으로 재직렬화하지 않고 받은 바이트를 검증한다.
+
+`acmefixtures verify-csr` 입력은 `{"derHex":"<CSR 전체 DER hex>"}`다. `x509.ParseCertificateRequest`와 `CheckSignature`가 모두 성공해야 한다. 성공 출력:
+
+```json
+{"ok":true,"commonName":"a.ts.net","dnsNames":["a.ts.net"],"publicKey":{"crv":"P-256","kty":"EC","x":"<32바이트 base64url>","y":"<32바이트 base64url>"},"signatureAlgorithm":"ECDSA-SHA256","certificationRequestInfoHex":"<DER hex>","cnStringTag":19}
+```
+
+CSR의 구문·자기 서명과 P-256 키를 검사한다. 이름·SAN·태그가 원하는 값인지와 Info 바이트가 같은지는 호출자가 비교한다. UTF8String도 유효한 CSR이면 받아들이고 `cnStringTag:12`를 반환한다.
+
+`acmefixtures parse-key` 입력은 `{"pem":"-----BEGIN EC PRIVATE KEY-----\n…\n-----END EC PRIVATE KEY-----\n"}`다. SEC1 `EC PRIVATE KEY`는 `x509.ParseECPrivateKey`, PKCS#8 `PRIVATE KEY`는 `x509.ParsePKCS8PrivateKey`로 읽는다. 성공 출력은 `{"ok":true,"format":"EC PRIVATE KEY","publicKey":{"crv":"P-256","kty":"EC","x":"<32바이트 base64url>","y":"<32바이트 base64url>"}}`다. PKCS#8의 `format`은 `PRIVATE KEY`다. 단일 블록·PEM header 없음·앞뒤 쓰레기 없음·P-256만 허용한다. 개인 키 바이트는 결과에 넣지 않는다.
+
+노트 7장 1·2대로 JWK 정규형·지문·키 인가·TXT는 **바이트 비교**, CSR Info는 같은 키·SAN 속성·CN 태그·DER 규칙을 택했을 때 **바이트 비교**한다. Go 보호 머리의 실제 순서는 `alg,jwk,nonce,url`과 `alg,kid,nonce,url`이지만, JWS JSON 순서·공백은 **의미 비교**한다. 서명은 Go↔Swift의 상대 검증이며 서명 바이트 일치를 요구하지 않는다. Go 시험은 저장 자료 일치·연속 재생성, 모든 예의 검증, 변조 JWS·CSR 거절, 순서를 바꿔 다시 서명한 JWS 수용, UTF8String CSR의 유효성과 Info 차이, 경계 입력 거절을 확인한다.
