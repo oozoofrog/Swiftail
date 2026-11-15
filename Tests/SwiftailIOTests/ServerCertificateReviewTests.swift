@@ -49,23 +49,26 @@ struct ServerCertificateReviewTests {
 
     /// TLS 핸드셰이크가 증명하는 것은 첫 인증서의 키뿐이다. 망 위의 공격자가 자기 키로 만든 CN `derpkey…` 인증서를 첫
     /// 자리에 내고, 누구나 받아 볼 수 있는 고정 인증서를 뒤에 붙이면 "meta가 아닌 것이 정확히 하나, 해시가 맞음"을
-    /// 채운다. Go도 받는다(`SetConfigExpectedCertHash`가 자리를 보지 않는다. 그 목록을 내는 TLS 서버에 Go 클라이언트와
-    /// Swiftail의 `.pinned` 연결이 모두 붙는 것을 실행으로 확인했다). 실제 derper는 서버 인증서를 첫 자리에, meta
+    /// 채운다. Go는 받는다(`SetConfigExpectedCertHash`가 자리를 보지 않는다. 그 목록을 내는 TLS 서버에 Go 클라이언트가
+    /// 붙는 것을 실행으로 확인했다. 고치기 전의 Swiftail도 붙었다). Swiftail은 Go와 달리 거절한다. 실제 derper는 서버 인증서를 첫 자리에, meta
     /// 인증서를 그 뒤에 낸다(`derpserver.ModifyTLSConfigToAddMetaCert`). meta 인증서의 개인 키는 만들 때 버려지므로
     /// meta 인증서가 첫 자리에 오는 정상 서버는 없다.
     @Test("고정: 고정한 인증서가 첫 자리(서버가 키를 증명한 자리)가 아니면 받지 않아야 한다")
     func pinnedCertificateMustBeTheHandshakeLeaf() {
-        withKnownIssue("Go와 같은 판정이지만 고정이 키 소유를 증명하지 못한다: meta 모양의 leaf 뒤에 고정 인증서를 붙인 목록이 통과한다") {
-            #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf]) != nil)
-        }
+        #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf]) == .candidateNotLeaf)
+        #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf, Fixture.meta]) == .candidateNotLeaf)
+        #expect(Self.pinned([Fixture.ipLeaf, Fixture.meta]) == nil)
     }
 
     /// Go의 x509는 주체 CN이 VisibleString이면 CommonName을 비운다. 그래서 Go에서는 meta가 아닌 인증서이고, 목록은
     /// 거절된다(첫 자리면 해시 불일치, 뒤면 "multiple certs"). `SecCertificateCopyCommonName`은 그 CN을 읽는다.
-    @Test("고정: Go가 meta로 보지 않는 CN(VisibleString)의 인증서를 meta로 빼면 안 된다")
+    ///
+    /// 첫 자리면 Swiftail도 거절한다(첫 자리가 meta 모양). 뒤에 붙은 경우만 갈린다: Swiftail은 meta로 보고 받는다. 그때도
+    /// 첫 자리의 고정 인증서는 TLS가 키를 증명했으므로 서버를 잘못 알아보는 것은 아니다. 그대로 둔다.
+    @Test("고정: Go가 meta로 보지 않는 CN(VisibleString)의 인증서")
     func visibleStringCommonNameIsNotMeta() {
-        withKnownIssue("Security 프레임워크가 Go보다 많은 문자열 형을 CN으로 읽어, Go가 세는 인증서를 세지 않는다") {
-            #expect(Self.pinned([Review.visibleStringMeta, Fixture.ipLeaf]) != nil)
+        #expect(Self.pinned([Review.visibleStringMeta, Fixture.ipLeaf]) == .candidateNotLeaf)
+        withKnownIssue("Security 프레임워크가 Go보다 많은 문자열 형을 CN으로 읽어, Go가 세는 뒤쪽 인증서를 세지 않는다(무해)") {
             #expect(Self.pinned([Fixture.ipLeaf, Review.visibleStringMeta]) == .multipleCandidates)
         }
     }
@@ -101,6 +104,9 @@ struct ServerCertificateReviewTests {
         withKnownIssue("SecTrust의 SSL 서버 정책이 Go보다 엄격하다: \(shape)") {
             #expect(Self.pinned([certificate], hash: hash, serverName: "derp1a.example.test") == nil)
         }
+        // IP로 붙는 DERP(고정의 흔한 쓰임)에서는 이름을 보지 않으므로 SSL 서버 정책을 쓰지 않는다. Go처럼 기간만 본다.
+        #expect(Self.pinned([certificate], hash: hash, serverName: "100.64.0.1") == nil, "IP 서버 이름: \(shape)")
+        #expect(Self.isUntrusted(Self.pinned([certificate], hash: hash, serverName: "100.64.0.1", at: Self.notBefore - 1)))
     }
 
     /// Go: `now.After(cert.NotAfter)`와 `now.Before(cert.NotBefore)`만 거절하므로 두 끝의 시각은 유효하다.
@@ -234,7 +240,7 @@ struct ServerCertificateReviewTests {
     /// Go와 갈리는 입력. 앞의 둘은 `IPAddress`가 `net.ParseIP`와 달리 다섯 자리 묶음의 IPv6를 받아서다: Swiftail은 IP
     /// 리터럴로 보아 이름 검사를 건너뛰고, Go는 이름으로 견준다. 마지막은 `%`에 결합 문자가 붙은 경우로, Go는 바이트로
     /// 잘라 IP로 보고 Swiftail은 글자 단위로 보아 이름으로 견준다(Swiftail이 더 엄격하다).
-    private static let knownServerNameDifferences: Set<String> = ["00000::1", "::00001", "::1%\u{301}"]
+    private static let knownServerNameDifferences: Set<String> = ["::1%\u{301}"]
 
     private static func sniHostNameMatchesGo(_ input: String, _ expected: String) {
         #expect(ServerCertificate.sniHostName(input) == (expected.isEmpty ? nil : expected), "입력 \(input.debugDescription)")
@@ -247,9 +253,11 @@ struct ServerCertificateReviewTests {
         }
     }
 
-    @Test("SNI 이름: Go가 IP로 읽지 않는 문자열에서 이름 검사를 건너뛰면 안 된다")
+    /// zone 자리에 결합 문자가 붙은 `%`는 Swift에서 한 글자가 아니라 zone으로 떼지 않는다. Go는 떼고 IP로 본다. Swiftail은
+    /// 이름으로 보아 이름 검사를 하므로 더 엄격한 쪽이다. 그대로 둔다.
+    @Test("SNI 이름: Go와 갈리는 입력(더 엄격한 쪽)")
     func sniHostNameDifferences() {
-        withKnownIssue("IP 리터럴 판정이 Go net.ParseIP와 다르다") {
+        withKnownIssue("zone의 `%`에 결합 문자가 붙으면 Go와 달리 이름으로 본다(더 엄격)") {
             for (input, expected) in Self.goServerNames where Self.knownServerNameDifferences.contains(input) {
                 Self.sniHostNameMatchesGo(input, expected)
             }

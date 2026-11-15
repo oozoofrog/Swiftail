@@ -229,3 +229,35 @@ fast-start는 이 단위의 범위가 아니다.
 - **SHA-256의 의존**: `SwiftailIO`가 CryptoKit(시스템 프레임워크)과 Security를 쓴다. `Package.swift`는 바꾸지 않았다.
 - **확인한 플랫폼 동작**: ① `SecTrust`가 derper 모양의 IP 자체 서명 인증서를 그 인증서만 앵커로 받는다. ② `sec_protocol_options_set_tls_server_name`에 IP 리터럴(`127.0.0.1`)을 주면 Network 프레임워크도 SNI를 보내지 않는다(도구가 본 ClientHello의 SNI가 빈 문자열. Go와 같다). ③ 검증 블록의 `sec_protocol_metadata_access_peer_certificate_chain`은 서버가 낸 인증서 전부를 낸 차례대로 준다(도구가 낸 [leaf, meta]의 해시를 그 차례로 받았다). 플랫폼이 사슬을 다시 짠 결과가 아니므로 "정확히 하나"를 서버가 낸 목록에서 센다.
 - **상호 운용 도구**: `tailnet`의 `setDERPCertificate`(`mode`: `pinned`·`wrongPin`, 첫 제어 요청 전)가 DERP 서버 인증서를 derper의 IP 수동 인증서 모드와 같은 것으로 바꾸고 `derpserver.ModifyTLSConfigToAddMetaCert`로 meta 인증서를 붙인다. DERPMap 노드는 `InsecureForTests: false`, `CertName: sha256-raw:<해시>`가 된다. `wrongPin`은 서버가 함께 내는 meta 인증서의 해시를 알린다. `networkStatus`가 TLS ClientHello 수(`derpTLSHandshakes`)와 본 SNI(`derpServerNames`)를 더해 돌려준다. 단위 시험의 고정 인증서는 같은 도구의 `tailnet certificate-fixtures`가 만든다.
+
+## M8 ③ 독립 검토 결과 (2026-11-15)
+
+작성한 세션과 다른 세션이 Go(v1.104.6, Go 1.27.3)를 실제로 돌려 얻은 판정과 견줬다. 재현 시험은 `Tests/SwiftailIOTests/ServerCertificateReviewTests.swift`. 치명 없음, 높음 1, 보통 2, 낮음 6. 아래가 위의 절들보다 앞선다.
+
+### 고친 것
+
+- **고정 인증서는 첫 자리여야 한다(높음. Go와 다르게, 더 엄격하게)**: TLS 핸드셰이크는 첫 인증서의 키만 증명한다. Go의 판정은 자리를 보지 않아서, 고정 인증서의 키가 없는 서버가 자기 키로 만든 CN `derpkey…` 인증서를 첫 자리에 내고 누구나 받아 볼 수 있는 고정 인증서를 뒤에 붙이면 통과한다(Go 클라이언트와 고치기 전의 Swiftail이 그런 서버에 붙는 것을 실행으로 확인). 그러면 고정은 서버를 알아보지 못한다. 동작 V 2에 조건을 더한다: **meta가 아닌 그 하나가 목록의 첫 자리여야 한다**(`Failure.candidateNotLeaf`). derper는 서버 인증서를 첫 자리에, meta 인증서를 뒤에 내므로 정상 서버는 걸리지 않는다. 관문: 도구의 `leafNotFirst` 모드에서 붙지 못한다. Go 쪽의 같은 동작을 Tailscale에 알릴지는 사용자가 정한다(총괄은 외부로 보내지 않는다).
+- **IP로 붙는 고정 DERP는 기간만 본다(보통)**: `SecTrust`의 SSL 서버 정책은 Go보다 엄격해 운영자가 직접 만든 자체 서명 인증서(유효 기간 826일 이상, 서버 인증 EKU 없음, RSA 1024, Ed25519 키)를 거절한다. `hostName`이 IP 리터럴이면 이름을 보지 않으므로 그때는 기본 X.509 정책으로 평가한다(기간과 자기 서명만). 10년짜리·EKU 없음·Ed25519 인증서가 통과하고 기간 밖은 거절된다. **이름으로 붙는 고정 DERP에서는 SSL 서버 정책이 그대로 걸린다**(`shortcut:` 이름과 기간을 직접 보려면 SAN 해석이 필요하다. 필요해지는 시점: 그런 DERP에 붙어야 할 때).
+- **`.named`의 연결 경로에 관문이 없었다(보통)**: 연결에서 검증을 빼도 시험이 통과했다. 도구의 `named` 모드를 더했다: `CertName`이 `HostName`과 다르고 서버 인증서가 시스템이 믿지 않는 것이면 `InsecureForTests`가 켜져 있어도 붙지 못한다. 맞는 이름으로 붙는 쪽은 시스템 신뢰 저장소가 필요해 단위 시험(시험 앵커)으로만 본다.
+- **재개된 세션은 검증 블록을 건너뛴다(낮음)**: 세션 표를 켠 TLS 1.2에서 재개된 연결은 블록이 불리지 않았다(실험). 기본 옵션에서는 재개가 일어나지 않았지만, 검증 블록을 거는 옵션에서는 재개와 세션 표를 명시적으로 끈다.
+- **끝에 점이 있는 `hostName`(낮음)**: Network 프레임워크는 그런 이름에 SNI를 보내지 않는다. Go는 점을 떼고 보낸다(`hostnameInSNI`). 점을 떼어 넘긴다. 관문: 도구의 `dottedHostName` 모드에서 SNI가 `localhost`로 온다.
+- **네 자리를 넘는 IPv6 묶음(낮음)**: `IPAddress`가 `00000::1`을 받았다(Go는 받지 않는다). 그런 문자열이 IP로 읽혀 이름 검사가 빠졌다. `IPAddress`가 거절한다.
+
+고침 셋(첫 자리 검사, `.named`의 검증, 점 떼기)을 하나씩 뺐을 때 새 시험이 잡는 것을 확인했다.
+
+### 그대로 둔 것
+
+- **읽히지 않는 인증서**: Network 프레임워크가 검증 블록에 주기 전에 버린다. `[고정, 깨진 DER]`을 Go는 핸드셰이크에서 거절하고 Swiftail은 받는다. 첫 자리의 고정 인증서는 검증되므로 서버를 잘못 알아보지 않는다. 위 절의 "읽히지 않는 인증서가 하나라도 있으면 실패"와 "서버가 낸 인증서 전부를 준다"는 판정 함수에만 맞고 연결 경로에는 맞지 않는다.
+- **CN의 문자열 형**: Security는 VisibleString CN을 읽고 Go는 비운다. 뒤에 붙은 그런 `derpkey…` 인증서를 Go는 세고(거절) Swiftail은 meta로 뺀다(받음). 첫 자리 조건이 있으므로 무해하다.
+- **앞자리 0이 붙은 점 십진 서버 이름**(`100.064.0.1`): SSL 정책이 IP로 읽어 IP SAN과 맞춘다(Go는 이름으로 견줘 거절). 고정 값이 맞는 인증서에서만 갈린다.
+- **zone의 `%`에 결합 문자가 붙은 서버 이름**: Swiftail이 이름으로 보아 더 엄격하다.
+- Apple 플랫폼의 Go는 시스템 검증에 같은 `SecTrust`를 쓴다. `.named`와 `.system`의 엄격함은 그쪽 Go와 같고 Linux의 Go와만 다르다.
+
+### 확인하지 못한 것
+
+- TLS 1.3 재개에서 검증 블록이 불리는지(재개를 일으키지 못했다. 재개를 껐으므로 지금은 해당 없음).
+- iOS에서의 동작(실행은 macOS에서만).
+- `.named`의 네트워크 가져오기가 빠진 중간 인증서를 받아 통과시키는지, 그 요청이 지정한 인터페이스 밖으로 나가는지.
+- SCT를 TLS 확장으로만 주는 서버에서 DER만 다시 평가해 거절되는지.
+- Go는 `CertName` 없는 IP `hostName` 노드에서 이름을 보지 않는다고 검토가 읽었다(`tlsdial.go`). Swiftail `.system`은 IP SAN을 본다(더 엄격). 실행으로 견주지 않았다.
+- `CertName`이 다른 실제 운영 DERP 노드, 운영 DERPMap 전체.

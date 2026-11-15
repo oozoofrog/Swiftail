@@ -24,6 +24,7 @@ import (
 	"net"
 	"time"
 
+	"tailscale.com/derp/derpconst"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/types/key"
 )
@@ -113,6 +114,31 @@ func newPinnedDERPCertificate(server *derpserver.Server, ip net.IP, wrong bool) 
 	}, nil
 }
 
+// newLeafNotFirstDERPCertificate는 고정 인증서의 키 없이 그 서버 행세를 하는 목록을 만든다: 자기 키로 만든 CN `derpkey…`
+// 인증서를 첫 자리(TLS가 키를 증명하는 자리)에 내고, 누구나 받아 볼 수 있는 고정 인증서를 뒤에 붙인다. `CertName`은 그
+// 고정 인증서의 해시다. Go 클라이언트는 이 목록을 받는다(`tlsdial.SetConfigExpectedCertHash`가 자리를 보지 않는다).
+func newLeafNotFirstDERPCertificate(ip net.IP) (*derpCertificateMode, error) {
+	now := time.Now()
+	pinned, err := selfSignedIPCert(ip, now, now.AddDate(1, 0, 0))
+	if err != nil {
+		return nil, err
+	}
+	template, priv, err := selfSignedTemplate(derpconst.MetaCertCommonNamePrefix+"00", now, now.AddDate(1, 0, 0))
+	if err != nil {
+		return nil, err
+	}
+	front, err := createCertificate(template, template, &priv.PublicKey, priv, priv)
+	if err != nil {
+		return nil, err
+	}
+	front.Certificate = append(front.Certificate, pinned.Certificate[0])
+	return &derpCertificateMode{
+		config:    &tls.Config{NextProtos: []string{"http/1.1"}, Certificates: []tls.Certificate{front}},
+		certName:  "sha256-raw:" + certSHA256(pinned.Certificate[0]),
+		presented: len(front.Certificate),
+	}, nil
+}
+
 // derpTLSConfig는 DERP TLS 서버의 GetConfigForClient다. ClientHello마다 불리므로 여기서 세고 SNI를 적는다. 고정 모드가
 // 아니면 nil을 돌려 httptest의 기본 인증서를 쓴다. (`GetCertificate`는 `Certificates`가 있고 SNI가 없으면 불리지 않는다.
 // httptest가 `Certificates`를 채우므로 그 자리에서는 IP로 붙는 클라이언트를 놓친다.)
@@ -130,20 +156,35 @@ func (n *network) derpTLSConfig(hi *tls.ClientHelloInfo) (*tls.Config, error) {
 
 // setDERPCertificate는 첫 제어 요청 전에 DERP 노드를 `InsecureForTests` 대신 `CertName: sha256-raw:<해시>`로 알리게 한다.
 func (n *network) setDERPCertificate(c command) (map[string]any, error) {
-	if c.Mode != "pinned" && c.Mode != "wrongPin" {
-		return nil, errors.New("mode는 pinned 또는 wrongPin이어야 합니다")
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.started {
 		return nil, errors.New("DERP 인증서는 첫 제어 요청 전에만 바꿀 수 있습니다")
 	}
-	mode, err := newPinnedDERPCertificate(n.derp, net.IPv4(127, 0, 0, 1), c.Mode == "wrongPin")
+	node := n.control.DERPMap.Regions[1].Nodes[0]
+	var mode *derpCertificateMode
+	var err error
+	switch c.Mode {
+	case "pinned", "wrongPin":
+		mode, err = newPinnedDERPCertificate(n.derp, net.IPv4(127, 0, 0, 1), c.Mode == "wrongPin")
+	case "leafNotFirst":
+		mode, err = newLeafNotFirstDERPCertificate(net.IPv4(127, 0, 0, 1))
+	case "named":
+		// 서버 인증서는 httptest의 기본 자체 서명 인증서 그대로다. `CertName`이 `HostName`과 다르면 `InsecureForTests`여도
+		// 그 이름으로 시스템 검증을 하므로(Go `tlsClient`) 붙지 못해야 한다.
+		node.CertName = "derp-cert.example.test"
+		return map[string]any{"event": "derpCertificate", "mode": c.Mode, "certName": node.CertName, "presented": 1}, nil
+	case "dottedHostName":
+		// 끝에 점이 있는 이름. Go는 점을 뗀 이름을 SNI로 보낸다(`crypto/tls` `hostnameInSNI`). 걸 곳은 `IPv4` 칸이다.
+		node.HostName = "localhost."
+		return map[string]any{"event": "derpCertificate", "mode": c.Mode, "certName": "", "presented": 1}, nil
+	default:
+		return nil, errors.New("mode는 pinned, wrongPin, leafNotFirst, named, dottedHostName 가운데 하나여야 합니다")
+	}
 	if err != nil {
 		return nil, err
 	}
 	n.derpCertMode = mode
-	node := n.control.DERPMap.Regions[1].Nodes[0]
 	node.InsecureForTests = false
 	node.CertName = mode.certName
 	return map[string]any{"event": "derpCertificate", "mode": c.Mode, "certName": mode.certName, "presented": mode.presented}, nil

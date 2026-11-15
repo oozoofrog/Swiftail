@@ -20,6 +20,8 @@ package enum ServerCertificate {
         case noCandidate
         /// meta 인증서를 뺀 인증서가 둘 이상이다.
         case multipleCandidates
+        /// 그 하나가 첫 자리가 아니다. TLS 핸드셰이크가 키 소유를 증명하는 것은 첫 인증서뿐이다.
+        case candidateNotLeaf
         /// 그 하나의 SHA-256이 고정 값과 다르다.
         case hashMismatch
         /// `SecTrust`가 받지 않았다: 이름, 유효 기간, 사슬 가운데 하나. `status`는 Security의 오류 코드다.
@@ -32,12 +34,19 @@ package enum ServerCertificate {
     /// `sha256-raw:` 고정의 판정(Go `SetConfigExpectedCertHash`).
     ///
     /// 주체 CN이 `derpkey`로 시작하는 meta 인증서를 뺀 나머지가 정확히 하나여야 하고, 그 하나는
-    /// ① DER 전체의 SHA-256을 소문자 16진으로 쓴 것이 `sha256Hex`와 글자 그대로 같고 ② `serverName`이 SNI로 나가는
-    /// 이름이면(IP 리터럴이 아니면) 그 이름에 유효하고 ③ `now`가 유효 기간 안이어야 한다. 사슬은 보지 않는다.
+    /// ⓪ 목록의 첫 자리에 있고 ① DER 전체의 SHA-256을 소문자 16진으로 쓴 것이 `sha256Hex`와 글자 그대로 같고
+    /// ② `serverName`이 SNI로 나가는 이름이면(IP 리터럴이 아니면) 그 이름에 유효하고 ③ `now`가 유효 기간 안이어야 한다.
+    /// 사슬은 보지 않는다.
     ///
-    /// ②③은 `SecTrust`가 본다: 그 인증서만 앵커로 두고 SSL 서버 정책으로 평가한다. 그래서 Go가 보지 않는 Apple의
-    /// TLS 서버 인증서 조건(서버 인증 EKU, 825일 이하의 유효 기간 등)도 함께 걸린다. Go의 derper가 만드는 자체 서명
-    /// 인증서는 이 조건을 지킨다.
+    /// ⓪은 Go에 없는 조건이다. TLS 핸드셰이크는 첫 인증서의 키만 증명하므로, Go처럼 자리를 보지 않으면 누구나 받아 볼 수
+    /// 있는 고정 인증서를 자기 키의 `derpkey…` 인증서 뒤에 붙여 낸 서버도 통과한다. derper는 서버 인증서를 첫 자리에,
+    /// meta 인증서를 그 뒤에 내므로(`derpserver.ModifyTLSConfigToAddMetaCert`) 정상 서버는 걸리지 않는다.
+    ///
+    /// ②③은 `SecTrust`가 본다: 그 인증서만 앵커로 두고, 이름이 있으면 SSL 서버 정책으로, 없으면 기본 X.509 정책으로
+    /// 평가한다. SSL 서버 정책에는 Go가 보지 않는 Apple의 TLS 서버 인증서 조건이 함께 걸린다(서버 인증 EKU, 825일 이하의
+    /// 유효 기간, RSA 2048비트 이상, Ed25519 키 안 됨 등). derper가 IP 주소에 스스로 만드는 인증서는 이 조건을 지킨다.
+    // shortcut: 이름으로 붙는 DERP에 운영자가 직접 만든 자체 서명 인증서(EKU 없음, 10년짜리 등)를 고정한 경우 Go는 붙고
+    // 여기서는 거절한다. 이름과 기간을 직접 보려면 X.509의 SAN 해석이 필요하다. 필요해지는 시점: 그런 DERP에 붙어야 할 때.
     ///
     /// - Parameters:
     ///   - certificates: 서버가 낸 순서의 DER 인증서들.
@@ -49,6 +58,7 @@ package enum ServerCertificate {
         let candidates = parsed.filter { !isMeta($0.ref) }
         guard let candidate = candidates.first else { throw .noCandidate }
         guard candidates.count == 1 else { throw .multipleCandidates }
+        guard !isMeta(parsed[0].ref) else { throw .candidateNotLeaf }
         // 공개된 인증서의 해시라 비밀이 아니다. 상수 시간 비교가 필요 없다.
         guard Array(SHA256.hash(data: candidate.der)).hex == sha256Hex else { throw .hashMismatch }
         try evaluate([candidate.ref], name: sniHostName(serverName), at: now, anchors: [candidate.ref], fetch: false)
@@ -101,7 +111,8 @@ package enum ServerCertificate {
         _ certificates: [SecCertificate], name: String?, at now: Date, anchors: [SecCertificate]?, fetch: Bool
     ) throws(Failure) {
         var created: SecTrust?
-        try check(SecTrustCreateWithCertificates(certificates as CFArray, SecPolicyCreateSSL(true, name as CFString?), &created))
+        let policy = name.map { SecPolicyCreateSSL(true, $0 as CFString) } ?? SecPolicyCreateBasicX509()
+        try check(SecTrustCreateWithCertificates(certificates as CFArray, policy, &created))
         guard let trust = created else { throw .untrusted(status: Int(errSecParam)) }
         try check(SecTrustSetVerifyDate(trust, now as CFDate))
         if !fetch { try check(SecTrustSetNetworkFetchAllowed(trust, false)) }

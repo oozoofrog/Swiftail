@@ -43,7 +43,8 @@ struct ServerCertificateTests {
     func pinnedMatches() {
         #expect(Self.pinned([Fixture.ipLeaf]) == nil)
         #expect(Self.pinned([Fixture.ipLeaf, Fixture.meta]) == nil)
-        #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf]) == nil)
+        // Go는 받는다. 첫 자리(TLS가 키를 증명한 자리)가 meta 모양이면 고정이 키 소유를 증명하지 못하므로 받지 않는다.
+        #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf]) == .candidateNotLeaf)
     }
 
     @Test("고정: 해시가 다르면 실패한다. 대문자로 쓴 같은 해시도, 서버가 함께 낸 meta 인증서의 해시도 맞지 않는다")

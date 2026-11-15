@@ -46,7 +46,7 @@ extension NetworkSocket {
                     }
                 }
             case .insecureForTests(let serverName):
-                // 인증서 검사 블록이 무조건 통과시킨다.
+                // 서버가 낸 인증서가 무엇이든 통과시킨다.
                 return Self.options(serverName: serverName) { _ in true }
             }
         }
@@ -56,8 +56,14 @@ extension NetworkSocket {
             serverName: String, verify: (@Sendable ([[UInt8]]) -> Bool)?
         ) -> NWProtocolTLS.Options {
             let options = NWProtocolTLS.Options()
-            sec_protocol_options_set_tls_server_name(options.securityProtocolOptions, serverName)
+            // Network 프레임워크는 끝에 점이 있는 이름에 SNI를 보내지 않는다. Go는 점을 떼고 보낸다(`hostnameInSNI`).
+            sec_protocol_options_set_tls_server_name(
+                options.securityProtocolOptions, ServerCertificate.sniHostName(serverName) ?? serverName
+            )
             if let verify {
+                // 재개된 세션에서는 검증 블록이 불리지 않는다(실험으로 확인). 판정이 연결마다 돌게 재개를 끈다.
+                sec_protocol_options_set_tls_resumption_enabled(options.securityProtocolOptions, false)
+                sec_protocol_options_set_tls_tickets_enabled(options.securityProtocolOptions, false)
                 sec_protocol_options_set_verify_block(
                     options.securityProtocolOptions,
                     { metadata, _, complete in
