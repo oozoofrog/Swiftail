@@ -637,7 +637,14 @@ M3 `filterfixtures`·M2 `mapfixtures`와 같은 방식이다. 자료는 `Tools/i
 
 각 한 번씩이다(항목 5의 기준은 세 번씩). 같은 Mac·같은 셀룰러 망에서 Go는 복구했으므로 망이나 Mac의 문제가 아니다. 그 구간의 Swiftail 로그는 없다. 그 밖에 받은 값(Swiftail 터널, Wi-Fi): Mac FQDN으로의 첫 HTTPS HEAD 0.27초에 성공, 27초 동안 실패 없음, 다시 시작 4.4초.
 
-**Wi-Fi → 셀룰러 실패의 가설(확인 전)**: Swiftail의 바깥쪽 통신이 IPv4 전용이다. UDP 소켓은 `AF_INET` 하나(`DatagramSocket`), DERP는 DERP 맵의 IPv4 리터럴로만 걸고(`DERPServer+DERPNode.swift`의 shortcut "IPv4·IPv6 동시 시도 없음"), STUN도 IPv4만 묻는다. 셀룰러가 IPv6 전용(NAT64)이면 `pdp_ip0`에 묶은 IPv4 UDP가 나가지 못하고 DERP도 붙지 못한다. 재결속 자체는 다른 두 전환에서 됐고 `pdp_ip0`에서만 죽은 것, 첫 실패가 즉시 오류가 아니라 시간 초과였던 것이 이와 맞는다. 첫 사용처 세션에 셀룰러 경로의 `supportsIPv4`·`supportsIPv6`와 그 구간의 Swiftail 로그를 부탁했다. 맞다면 고칠 것은 DERP를 IPv6로도 걸기(작음. DERP만 붙어도 중계로 산다)와 바깥쪽 UDP·STUN·엔드포인트의 IPv6(큼)이다.
+**Wi-Fi → 셀룰러 실패의 원인**(재시험으로 확인, 2026-11-15. 변형 빌드에 진단을 더함, Swiftail `597559c` 시점 소스, 셀룰러 66초):
+
+- 셀룰러 경로는 **IPv6 전용 + CLAT**이다. `pdp_ip0`의 `NWPath`는 `supportsIPv4` false·`supportsIPv6` true·`supportsDNS` true이고, 인터페이스에는 `192.0.0.x`(CLAT)의 IPv4 주소와 링크 로컬 밖의 IPv6 주소가 있다. Wi-Fi(`en0`)는 IPv4만 지원한다.
+- 그 66초 동안 Swiftail 로그에는 재결속 줄(`기본 인터페이스 재결속: pdp_ip0`, `재결속: UDP 포트 …`, `제어: 연결 끊김, 다시 잇는 중`)만 있고 `DERP 지역 …: 연결됨`이 한 번도 없다. `UDP 소켓을 기본 인터페이스에 묶지 못해…`도 없다(묶기는 됐다). Wi-Fi로 돌아오자 같은 초에 DERP가 붙고 경로가 직접이 됐다.
+- 탐침 실패 18번은 모두 3.00~3.01초 시간 초과다(즉시 실패 없음).
+- 전환 때 확장이 부른 순서: `en0`(경로는 아직 satisfied인데 `en0`에 주소가 하나도 없는 순간) → "경로 없음"(호출 없음) → `pdp_ip0` 세 번 → (머무는 동안 경로 갱신으로 두 번 더).
+
+읽은 것: Swiftail은 DERP를 DERP 맵의 **IPv4 리터럴 하나로만** 건다(`DERPServer+DERPNode.swift`). IPv4를 지원하지 않는 경로에서 그 연결은 서지 않고(`NetworkSocket`은 `.waiting`을 실패로 본다), `DERPClient`는 붙기 전의 실패를 사건으로도 로그로도 내지 않아 줄이 없었다. Go는 노드마다 IPv4와 IPv6를 함께 걸어 먼저 붙는 쪽을 쓴다(`derp/derphttp/derphttp_client.go` `dialNode`). 고칠 것: ① DERP를 두 주소 체계로 함께 걸기(DERP만 붙어도 중계로 산다) ② 붙지 못한 시도를 로그에 남기기. 그 뒤에 볼 것: `pdp_ip0`에 묶은 `AF_INET` UDP가 CLAT로 실제 나가는지(직접 경로가 서는지), 서지 않으면 바깥쪽 UDP·STUN·엔드포인트의 IPv6. 제어 연결이 셀룰러에서 다시 붙었는지는 로그에 성공 줄이 없어 모른다(제어는 이름으로 걸므로 DNS64의 덕을 본다고 추정).
 
 아직 보지 못한 것: 2(Mac의 tailnet HTTPS 요청)·6의 전송 중 메모리·100MiB 받기와 MagicDNS·경로 표시는 그 노드를 Mac에 페어링한 뒤(사용자 승인 대기), 5(Wi-Fi ↔ 셀룰러, 비행기 모드)와 7(첫 잠금 해제 전 시작)은 사용자가 기기를 손으로 조작해야 한다. 첫 사용처 확장의 정식 교체는 별도 승인 뒤다(plan 7절 M7, T7).
 
