@@ -259,12 +259,13 @@ extension ControlClient {
         }
         if !response.missingAUMs.isEmpty {
             let updates = try response.missingAUMs.map { bytes throws(TKAError) in try AUM(decoding: bytes) }
-            let countBefore = authority.aums.count
             // 하나라도 통과하지 못하면 아무것도 들지 않고, 예전 상태로 계속 거른다.
             try authority.inform(updates)
             lockAuthority = authority
             saveLock(authority)
-            Self.lockLog.info("tailnet lock: AUM \(authority.aums.count - countBefore, privacy: .public)개를 들임")
+            // 쥔 수는 받은 수만큼 늘지 않을 수 있다: 이미 쥔 것은 다시 세지 않고, 활성 사슬 밖의 것은 한도에서 버린다.
+            Self.lockLog.info(
+                "tailnet lock: AUM \(updates.count, privacy: .public)개를 받아 들임(쥔 수 \(authority.aums.count, privacy: .public))")
         }
         let sent = try await tkaSyncSend(head: authority.head, missing: unknownToServer, over: connection)
         guard let serverHead = AUMHash(text: sent.head) else { throw LockResponseError.unreadableHash }
