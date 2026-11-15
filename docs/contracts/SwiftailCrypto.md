@@ -86,3 +86,40 @@ public func constantTimeEqual(_ a: [UInt8], _ b: [UInt8]) -> Bool
 2. Go `golang.org/x/crypto`로 만든 교차 벡터(여러 길이, 블록 경계 포함).
 3. 변조 시험: 태그·암호문·nonce·AAD의 한 비트를 바꾸면 `authenticationFailed`.
 4. 구현을 쓴 제공자와 다른 제공자의 코드 검토.
+
+## Ed25519 서명 검증(M8)
+
+Tailnet Lock의 서명 검증에 쓴다. 서명을 만들지 않고 비밀 값을 다루지 않는다. Go와 모든 입력에서 같은 판정을 내기 위해 CryptoKit의 검증 함수를 쓰지 않고 edwards25519를 순수 Swift로 구현한다(`docs/protocol-notes/tailnet-lock.md` 3.7·6.1).
+
+```swift
+public enum Ed25519Verification {
+    /// ZIP-215 규칙(Go `github.com/hdevalence/ed25519consensus`의 `Verify`와 같은 판정).
+    public static func isValidZIP215(signature: [UInt8], message: [UInt8], publicKey: [UInt8]) -> Bool
+    /// Go 표준 라이브러리 `crypto/ed25519`의 `Verify`와 같은 판정.
+    public static func isValidStandard(signature: [UInt8], message: [UInt8], publicKey: [UInt8]) -> Bool
+}
+```
+
+두 규칙의 정의(Ed25519 순수 변형, k = SHA-512(R ‖ A ‖ M) mod L, R과 A는 받은 바이트 그대로 해시):
+
+| 검사 | `isValidZIP215` | `isValidStandard` |
+| --- | --- | --- |
+| 길이(서명 64, 공개 키 32) | 아니면 거짓 | 아니면 거짓(Go는 공개 키 길이가 틀리면 panic) |
+| `sig[63] & 224 == 0` | 필요 | 필요 |
+| A 해독 | 비정준(y ≥ p, x = 0에 부호 비트) 허용, 곡선 밖은 거절 | 같음 |
+| R | 같은 규칙으로 해독 | 해독하지 않고 바이트로 비교 |
+| S | 정준(S < L) | 정준(S < L) |
+| 식 | [8]([S]B − [k]A − R) = 0 | ([S]B − [k]A)의 정준 인코딩 = `sig[0..<32]` |
+
+구현 규칙:
+
+- 필드 GF(2^255−19)는 Go `crypto/internal/fips140/edwards25519/field`의 51비트 림 표현을 옮겼다(출처와 BSD-3-Clause는 `Sources/SwiftailCrypto/Edwards25519/FieldElement.swift` 머리). 점·스칼라·필드 타입은 `internal`이다.
+- 입력이 모두 공개 값이므로 이중 스칼라 곱과 비교는 가변 시간이다. 표를 미리 계산하지 않는다(릴리스 빌드에서 서명 하나 0.08~0.21ms).
+- 어떤 입력으로도 트랩하지 않는다. 길이가 틀리면 거짓이다.
+
+시험 기준(`Tests/SwiftailCryptoTests/Ed25519VerificationTests.swift`):
+
+1. RFC 8032 7.1 벡터 5개: 두 규칙 모두 참.
+2. `ed25519consensus` `zip215_test.go`의 196개: ZIP-215는 모두 참, 표준이 참인 번호 집합은 Go 표준과 같다.
+3. `Tools/interop/cmd/ed25519fixtures`가 뽑은 Go 두 구현의 판정(`Vectors/ed25519-verify.json`): 모든 사례에서 두 규칙 모두 Go와 같다. `SWIFTAIL_ED25519FIXTURES`에 도구 경로를 주면 새로 뽑은 판정과도 견준다.
+4. 필드·스칼라 경계와 점 해독 실패의 단위 시험.
