@@ -863,8 +863,10 @@ eyebuild rm tl5-fixtures
 | `limits` | 뿌리에서 2,000개가 넘는 사슬: 묶음마다 `pool`(같은 AUM을 쓰는 `sync` 묶음 이름), `extra`(그 pool 뒤에 잇는 AUM), `cases`(`baseCount`: 번호 0부터 그만큼으로 부트스트랩+한 묶음, `baseHead`, `steps`: `aums` 번호, `ok`, `error`, `head`) |
 | `padded` | Swiftail 바이트 한도(NKS 8KiB, AUM 512KiB)를 넘긴 입력. 바이트 대신 만드는 법을 싣는다: 입력 = (`base`의 맵 머리 + 1) ‖ `base[1:]` ‖ uint(`padKey`) ‖ bstr(0 × `padLength`), 길이 `length`. `kind`(`authorize`·`resign`·`inform`·`authKey`)마다 Go의 `ok`·`error`·`head`·`sigHash`·`verdict`. `authKey`의 입력 문자열은 `controlValue` ‖ `--TL` ‖ RawStd(입력) ‖ `-` ‖ RawStd(`privateKey`) |
 | `openedStates` | Bootstrap으로는 만들 수 없는 상태(Key25519가 아닌 키)를 `CommitVerifiedAUMs`·`SetLastActiveAncestor`·`tka.Open`으로 연 뒤의 `NodeKeyAuthorizedWithDetails`: `checkpoint`, `openOK`, `nodeKey`, `nks`, 판정 |
+| `reviewChains` | TL-11a 검토가 더한 사슬(`review.go`). 모양은 `chains`와 같다 |
+| `reviewSignatures` | TL-11a 검토가 더한 NKS 판정(`review.go`). 모양은 `signatures`와 같다 |
 
-`caseCount`에는 `unorderedPeerSets`·`padded`·`openedStates`의 줄과 `limits`의 `cases`도 든다.
+`caseCount`에는 `unorderedPeerSets`·`padded`·`openedStates`·`reviewChains`·`reviewSignatures`의 줄과 `limits`의 `cases`도 든다.
 
 `cbor` 사례 이름의 앞머리는 노트·계약이 예상한 디코딩 판정이다: `accept/`는 디코딩되는 것, `reject/`는 디코딩에서 거절되는 것(자료에서 그대로 맞는지 확인했다), `probe/`는 노트·계약이 Go 판정을 실행으로 확인하지 않았던 입력, `value/`는 `tka.AUM` 값을 `Serialize`한 정적 검사의 경계다. 판정 자체는 이름이 아니라 `decoded`·`accepted`로 견준다. 계약 동작 E6·D8대로 정적 검사를 통과하지 못한 AUM은 Swift가 판정만 견준다.
 
@@ -891,5 +893,10 @@ TL-5 대조 시험이 더한 것(계약 5절 "구현하며 정해진 것"에서 
 - `limits`: 뿌리에서 2,000개가 넘는 직선 사슬(빠른 길), 뿌리에서 1,999·2,000번째 갈래, 이미 쥔 AUM이 섞인 묶음과 그 뒤(실패한 묶음이 Go 저장소에 남는다), 체크포인트부터 부모까지 2,000·2,001개.
 - `padded`: NKS 8,192·8,193바이트의 판정, 재서명의 옛 서명 8,193바이트, AUM 524,288·524,289바이트의 들이기, credential 8,193바이트의 감싼 인증 키.
 - `openedStates`: Key25519가 아닌 키가 서명 키 앞·뒤에 있는 상태.
+
+TL-11a 검토(`SwiftailTKA` 보안 검토)가 더한 것(`review.go`, Swift 쪽 대조는 `TKAReviewTests.swift`):
+
+- `reviewChains`: 서명 목록만 바꾼 변종(서명 되풀이로 해시가 더 작은 변종이 원본을 이기고 원본의 자식 RemoveKey가 진 갈래에 남음, 더 큰 변종은 짐, 한 묶음에 원본·변종을 두 순서로), 서명 둘의 순서만 바꾼 형제, 서명 목록 변조(믿지 않는 키 덧붙임, 틀린 사본 앞·뒤, 다른 AUM의 서명, 빈 목록, 같은 서명 1,024번), 모르는 필드로 1KiB 부풀린 사본과 원본, 지운 키를 같은 KeyID로 다시 더하기(그 사이의 서명, 두 번 더하기, 마지막 키 제거), Votes 0·4,096·4,097과 Meta 512·513바이트(AddKey·UpdateKey), 빈 Meta(`07a0`)만 있는 UpdateKey와 Votes·Meta가 다 없는 UpdateKey, `Votes` 최댓값으로 갱신, 무거운 서명 둘 대 가벼운 하나, 진 갈래 안의 체크포인트(그 아래는 체크포인트의 키로 검증), 같은 AUM 나무를 세 순서의 한 묶음·나눈 묶음·자식이 먼저인 묶음으로, 지울 키가 더 무거울 때 지워진 키가 옛 부모에서 만든 형제, 부모 해시가 31·32·33바이트·빈 값인 체크포인트의 부트스트랩, 믿지 않는 서명이 섞이거나 서명을 되풀이한 부트스트랩.
+- `reviewSignatures`: direct·rotation 서명 63·65·0바이트, 33바이트 회전 키, 같은 node 키로의 회전, 바깥 rotation의 KeyID(쓰이지 않음), 회전 키가 신뢰 키 자신, 지운 키(전후)의 credential, credential을 감싼 rotation 위의 rotation(가운데 `WrappingPubkey`, 틀린 서명 키), 잘린 NKS, 비최단 `SigKind`.
 
 `tkafixtures verify-nks`는 표준 입력으로 JSON 객체 하나 `{"aums":["<16진>",…],"nodeKey":"<32바이트 16진>","nks":"<16진>"}`를 받는다. `aums`의 첫 것으로 부트스트랩하고 나머지를 `Inform`한 상태에서 `NodeKeyAuthorizedWithDetails`로 판정해 `{"ok":true,"authorized":…,"error":…,"rotation":…}` 한 줄을 쓰고 0으로 끝난다(판정이 거절이어도 0이다). 입력이 4MiB를 넘거나, JSON 객체 하나가 아니거나, 모르는 필드·대문자 16진이 있거나, 부트스트랩·`Inform`이 실패하면 `{"ok":false,"error":"…"}`를 쓰고 1로 끝난다. Swift가 만든 서명(`SignByCredential`·재서명. CryptoKit 서명은 결정적이지 않다)을 이것으로 확인한다.

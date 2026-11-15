@@ -126,6 +126,7 @@ func evaluate() ([]byte, error) {
 	sigs, resigns := signatureCases(all), resignCases(all)
 	dis, authKeys := disablementCases(all), authKeyCases(all)
 	padded, opened := paddedCases(all), openedCases()
+	reviewChains, reviewSigs := reviewChainCases(), reviewSignatureCases(all)
 	sections := []section{
 		{"keys", keyCases(), 0},
 		{"authorities", auths, 0},
@@ -143,6 +144,8 @@ func evaluate() ([]byte, error) {
 		{"limits", limits, limitCount},
 		{"padded", padded, len(padded)},
 		{"openedStates", opened, len(opened)},
+		{"reviewChains", reviewChains, len(reviewChains)},
+		{"reviewSignatures", reviewSigs, len(reviewSigs)},
 	}
 	return encode(ref, sections)
 }

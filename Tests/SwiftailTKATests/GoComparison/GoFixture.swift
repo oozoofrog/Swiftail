@@ -298,11 +298,14 @@ struct GoFixture: Decodable, Sendable {
     let limits: [LimitGroup]
     let padded: [Padded]
     let openedStates: [Opened]
+    /// TL-11a 검토가 더한 사슬과 NKS(`TKAReviewTests`가 견준다).
+    let reviewChains: [Chain]
+    let reviewSignatures: [Signature]
 
     /// 최상위 배열의 이름. 자료에 이것 말고 다른 배열이 있으면 대조하지 않은 줄이 생긴 것이다.
     static let sectionNames: Set<String> = [
         "keys", "authorities", "text", "encodings", "cbor", "chains", "sync", "signatures", "peerSets", "disablement",
-        "authKeys", "resign", "unorderedPeerSets", "limits", "padded", "openedStates",
+        "authKeys", "resign", "unorderedPeerSets", "limits", "padded", "openedStates", "reviewChains", "reviewSignatures",
     ]
 
     /// `caseCount`에 드는 줄의 수(`keys`·`authorities`는 입력이라 세지 않는다. `sync`·`limits`는 안쪽 `cases`).
@@ -312,7 +315,8 @@ struct GoFixture: Decodable, Sendable {
             "sync": sync.reduce(0) { $0 + $1.cases.count }, "signatures": signatures.count, "peerSets": peerSets.count,
             "disablement": disablement.count, "authKeys": authKeys.count, "resign": resign.count,
             "unorderedPeerSets": unorderedPeerSets.count, "limits": limits.reduce(0) { $0 + $1.cases.count },
-            "padded": padded.count, "openedStates": openedStates.count,
+            "padded": padded.count, "openedStates": openedStates.count, "reviewChains": reviewChains.count,
+            "reviewSignatures": reviewSignatures.count,
         ]
     }
 
