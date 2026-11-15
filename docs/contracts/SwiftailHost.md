@@ -370,6 +370,8 @@ else { nwConnection.cancel(); return }      // 다리가 이은 연결이 아니
 
 구현에서 정해진 것(M7-3): JWS 보호 머리는 Go `jwsEncodeJSON`과 같은 직렬화(멤버 순서 `alg`·`kid` 또는 `jwk`·`nonce`·`url`, 공백 없음, 문자열은 Go `json.Marshal`의 이스케이프 `\u003c` 등)로 적는다. 그래서 시험 6의 머리·서명 입력 바이트 일치를 Go 대조에서 요구할 수 있다. CSR의 SubjectPublicKeyInfo는 DER 쓰기로 직접 조립하며 CryptoKit `derRepresentation`과 같은 바이트임을 시험이 고정한다. 고정 키(RFC 7515 A.3)의 `certificationRequestInfo`는 Go `x509.CreateCertificateRequest`(go1.27.3)와 바이트가 같았다(구현 세션의 일회성 확인. 기준값 자료는 M7-8).
 
+구현에서 정해진 것(M7-4): 주문 절차는 값 타입 `ACMEOrderFlow`이고 출력은 `send`·`wait(until:)`·`publishTXT`·`finished`다. 인증서 키는 시도마다 입력으로 받고 CSR은 첫 finalize 때 만들어 그 시도 내내 쓴다(C5의 새 주문은 CSR 전이므로 같은 키). 계정 만들기는 약관 URL이 없어도 `termsOfServiceAgreed`를 보내고, `valid`가 아닌 계정은 `unexpectedResponse`다. finalize가 `orderNotReady`로 거절된 뒤의 `ready`·`pending`도 H17의 되풀이 한 번에 센다. 요청 하나의 기한 초과는 `timedOut`, 닿지 못함은 `network`다. `CertificateFailure`가 `Error`가 아니므로 TXT 올리기 클로저는 실패를 던지지 않고 돌려준다.
+
 ### S. 저장
 
 1. **자리와 이름**: `<상태 디렉터리>/certs/` 아래 `<이름>.crt`(사슬, `CERTIFICATE` PEM 블록을 leaf부터), `<이름>.key`(개인 키 PEM), `acme-account.key.pem`(계정 키 PEM)이다. 자리와 이름은 Go와 같다(노트 3.7, DNS 노트 4.9 1. 총괄 확인 필요 H7). **권한**: `certs/`를 새로 만들 때는 0700이다. 이미 있는 디렉터리의 권한은 고치지 않는다(Go의 `MkdirAll`도 고치지 않는다. 생성 때의 권한은 이미 있는 항목의 검사를 대신하지 않는다. 노트 3.7·4.8). 다만 이미 있는 `certs/`를 그룹이나 기타가 쓸 수 있으면 쓰지 않고 실패한다(`run()`이 `CertificateError.storage`로 끝난다). 그런 디렉터리에서는 읽지도 않는다: 다른 사용자가 키나 계정 키를 바꿔 넣었을 수 있다(총괄 확인 필요 H20).
@@ -422,6 +424,8 @@ ACME 서버의 응답, 제어 서버의 응답, 디스크의 파일, 루프백�
 6. **제어 서버**: `set-dns`의 응답은 동작 D3의 한도로 읽는다. netmap의 `CertDomains`는 제어 서버가 정한다. 제어 서버는 이미 이 노드의 이름과 피어를 정하는 위치이므로 더 넓어지는 권한은 없다.
 7. **디스크**: `certs/`의 인증서와 키 파일은 동작 S3으로 읽는다. 크기 한도를 넘거나 해석되지 않으면 없는 것으로 본다. 계정 키 파일은 동작 C4(읽지 못하면 실패), 디렉터리의 권한은 동작 S1이다. Go 상태 파일은 동작 G2다.
 8. **루프백의 다른 프로세스**: 동작 B6·B7.
+
+구현에서 정해진 것(M7-4): `Retry-After`는 어느 응답에 오든 그 시각 전의 모든 요청을 막는다. HTTP 날짜는 RFC 7231 7.1.1.1의 세 형식을 모두 읽는다. 시험용 평문 `http` 길은 전송(`URLSessionACMETransport`의 시험용 초기화 인자, 루프백 호스트만)에만 있고 주문 절차는 늘 `https`만 받는다. `User-Agent`의 버전은 저장소에 버전 문자열이 없어 전송의 상수(`Swiftail/0.1.0`)다.
 
 ### B. 루프백 다리
 
