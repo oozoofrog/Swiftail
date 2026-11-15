@@ -83,9 +83,8 @@ public actor TailnetNode {
     private let eventStream: AsyncStream<NodeEvent>
     private let inboundStream: AsyncStream<[UInt8]>
     private let settingsStream: AsyncStream<TunnelNetworkSettings>
-    /// 인증서 관리자에게 낼 사실(`certificateFacts`). 마지막 것만 의미가 있다.
-    let certificateFactsStream: AsyncStream<CertificateFacts>
-    let certificateFactsContinuation: AsyncStream<CertificateFacts>.Continuation
+    /// 인증서 관리자에게 낼 사실(`certificateFacts`)의 구독.
+    nonisolated let certificateFactsPublisher = CertificateFactsPublisher(CertificateFacts(state: .starting, netmap: nil))
     /// `startInteractiveLogin()`이 `run()` 밖에서도 불릴 수 있으므로 요청을 흐름에 담아 두고 자식이 제어로 넘긴다.
     private let loginRequests: AsyncStream<Void>
     private let loginContinuation: AsyncStream<Void>.Continuation
@@ -161,8 +160,6 @@ public actor TailnetNode {
 
     var stateMachine = NodeStateMachine()
     var settingsPublisher = NetworkSettingsPublisher()
-    /// 마지막으로 `certificateFacts`에 낸 사실.
-    var publishedCertificateFacts = CertificateFacts(state: .starting, netmap: nil)
     /// `run()` 동안의 제어 클라이언트. `setDNS`가 쓴다.
     var control: ControlClient?
 
@@ -201,7 +198,6 @@ public actor TailnetNode {
         (eventStream, eventContinuation) = AsyncStream.makeStream(of: NodeEvent.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
         (inboundStream, inboundContinuation) = AsyncStream.makeStream(of: [UInt8].self, bufferingPolicy: .bufferingNewest(Self.inboundPacketLimit))
         (settingsStream, settingsContinuation) = AsyncStream.makeStream(of: TunnelNetworkSettings.self, bufferingPolicy: .bufferingNewest(1))
-        (certificateFactsStream, certificateFactsContinuation) = AsyncStream.makeStream(of: CertificateFacts.self, bufferingPolicy: .bufferingNewest(1))
         (loginRequests, loginContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         (interfaceRequests, interfaceContinuation) = AsyncStream.makeStream(of: NWInterface.self, bufferingPolicy: .bufferingNewest(1))
         (statusUploads, statusUploadContinuation) = AsyncStream.makeStream(of: ControlClient.LocalStatus.self, bufferingPolicy: .bufferingNewest(1))
@@ -210,8 +206,6 @@ public actor TailnetNode {
         (rebindRequests, rebindContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         (handleReleaseStream, handleReleases) = AsyncStream.makeStream(of: HandleRelease.self)
         (failures, failureContinuation) = AsyncStream.makeStream(of: NodeError.self, bufferingPolicy: .bufferingOldest(1))
-        // 구독하면 지금 값부터 나오게 처음 값을 넣어 둔다.
-        certificateFactsContinuation.yield(publishedCertificateFacts)
     }
 
     /// 상태와 경로 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
@@ -252,7 +246,7 @@ public actor TailnetNode {
             eventContinuation.finish()
             inboundContinuation.finish()
             settingsContinuation.finish()
-            certificateFactsContinuation.finish()
+            certificateFactsPublisher.finish()
         }
         let directory = configuration.stateDirectory
         guard StateDirectoryClaims.shared.claim(directory) else { throw .stateDirectoryInUse }

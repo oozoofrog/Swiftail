@@ -228,6 +228,19 @@ struct ACMEOrderFlowFailureTests {
         #expect(directory.failure == .unexpectedResponse)
     }
 
+    /// 서버가 준 URL을 따라 다른 호스트(루프백 포함)로 계정 키로 서명한 요청을 보내지 않는다.
+    @Test("디렉터리와 출처가 다른 URL로는 요청하지 않고 unexpectedResponse", arguments: [
+        "https://other.invalid/order/1/finalize", "https://127.0.0.1:8443/finalize", "https://acme.invalid:8443/finalize",
+    ])
+    func crossOriginURLs(_ url: String) {
+        let finalize = ACMEScript().run(Steps.accountFound + [Steps.newOrder(Body.order("ready", finalize: url))])
+        #expect(finalize.failure == .unexpectedResponse)
+        let authorization = ACMEScript().run(Steps.accountFound + [Steps.newOrder(Body.order("pending", authorizations: [url]))])
+        #expect(authorization.failure == .unexpectedResponse)
+        let nonce = ACMEScript().run([.get(Fake.directoryURL, 200, Body.directory(newNonce: url))])
+        #expect(nonce.failure == .unexpectedResponse)
+    }
+
     @Test("디렉터리 URL이 https가 아니면 요청 없이 끝난다")
     func plainDirectoryURL() {
         var script = ACMEScript()

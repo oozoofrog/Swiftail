@@ -82,8 +82,29 @@ struct CertificateFactsTests {
         // 같은 사실이 되는 netmap(다시 받음)과 같은 상태(다시 연결)는 내지 않는다.
         await node.apply(try Self.netmap(name: renamed + ".", certDomains: [], proxied: false))
         await node.markConnectedForTesting()
-        await node.certificateFactsContinuation.finish()
+        node.certificateFactsPublisher.finish()
         #expect(await facts.next() == nil)
+    }
+
+    /// 고치기 전에는 흐름이 노드에 하나뿐이라, 관리자를 멈추고(읽던 Task의 취소로 흐름이 끝난다) 같은 노드에 새 관리자를
+    /// 두면 곧바로 끝난 흐름을 받아 영영 "노드가 돌지 않는다"로 남았다.
+    @Test("다시 구독하면 지금 값부터 새로 받고, 앞선 구독은 끝난다")
+    func resubscribing() async throws {
+        let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
+        var first = node.certificateFacts.makeAsyncIterator()
+        _ = await first.next()
+        await node.apply(try Self.netmap())
+        await node.markConnectedForTesting()
+
+        var second = node.certificateFacts.makeAsyncIterator()
+        let current = Self.facts(running: true, fqdn: Self.fqdn, certDomains: [Self.fqdn], magicDNS: true)
+        #expect(await second.next() == current)
+        await node.apply(try Self.netmap(proxied: false))
+        #expect(await second.next() == Self.facts(running: true, fqdn: Self.fqdn, certDomains: [Self.fqdn], magicDNS: false))
+        // 앞선 구독은 읽지 않은 것 하나를 낸 뒤 끝난다.
+        var rest: [CertificateFacts] = []
+        while let facts = await first.next() { rest.append(facts) }
+        #expect(rest.count <= 1)
     }
 
     @Test("netmap의 다른 부분만 바뀌면 내지 않는다")
@@ -96,7 +117,7 @@ struct CertificateFactsTests {
         await node.apply(try NodeTestSupport.netmap(
             addresses: ["100.64.0.9/32"], dnsConfig: #"{"Proxied":true,"CertDomains":["\#(Self.fqdn)"]}"#, peerAddress: "100.64.0.2/32"
         ))
-        await node.certificateFactsContinuation.finish()
+        node.certificateFactsPublisher.finish()
         #expect(await facts.next() == nil)
     }
 
@@ -106,7 +127,7 @@ struct CertificateFactsTests {
         await node.apply(try Self.netmap())
         await node.markConnectedForTesting()
         await node.apply(try Self.netmap(proxied: false))
-        await node.certificateFactsContinuation.finish()
+        node.certificateFactsPublisher.finish()
 
         let seen = await NodeTestSupport.drain(node.certificateFacts)
         #expect(seen == [Self.facts(running: true, fqdn: Self.fqdn, certDomains: [Self.fqdn], magicDNS: false)])

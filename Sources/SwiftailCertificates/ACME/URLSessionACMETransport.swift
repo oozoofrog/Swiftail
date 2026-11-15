@@ -156,6 +156,7 @@ private final class SessionDelegate: NSObject, URLSessionTaskDelegate, Sendable 
         guard anchors.count == trustAnchors.count,
               SecTrustSetAnchorCertificates(trust, anchors as CFArray) == errSecSuccess,
               SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess,
+              SecTrustSetNetworkFetchAllowed(trust, false) == errSecSuccess,
               SecTrustEvaluateWithError(trust, nil)
         else { return (.cancelAuthenticationChallenge, nil) }
         return (.useCredential, URLCredential(trust: trust))

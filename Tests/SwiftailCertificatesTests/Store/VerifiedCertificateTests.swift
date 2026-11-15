@@ -73,6 +73,21 @@ struct VerifiedCertificateTests {
         #expect(verified.chain == Array(received.prefix(2)))
     }
 
+    /// 고치기 전에는 주체와 발급자가 같은 인증서를 모두 뗐다. 키를 바꿀 때 쓰는 자기 발급 중간 인증서(이름은 루트와 같고
+    /// 키가 다르다)가 빠져 상대가 사슬을 잇지 못했다.
+    @Test("자기 발급 중간 인증서는 chain에 남고, 평가가 고른 신뢰 앵커만 빠진다")
+    func selfIssuedIntermediateIsKept() throws {
+        let selfIssued = pki.root.intermediate(
+            pki.root.commonName, from: TestPKI.now - 365 * TestPKI.day, to: TestPKI.now + 1825 * TestPKI.day)
+        let leaf = selfIssued.leaf(
+            TestPKI.domainName, publicKey: pki.key.publicKey, from: TestPKI.leafStart, to: TestPKI.leafEnd)
+        let received = [leaf, selfIssued.certificate, pki.root.certificate]
+        let verified = try pki.verify(pemChain(received))
+        #expect(verified.chain == [leaf, selfIssued.certificate])
+        // 루트를 보내지 않은 사슬에서는 아무것도 빠지지 않는다.
+        #expect(try pki.verify(pemChain([leaf, selfIssued.certificate])).chain == [leaf, selfIssued.certificate])
+    }
+
     @Test("PRIVATE KEY 블록이 낀 응답은 전체를 버린다(RFC 8555 11.4)")
     func privateKeyBlock() {
         let keyBlock = Array(pki.key.pemRepresentation.utf8)

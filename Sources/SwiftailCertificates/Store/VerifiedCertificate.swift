@@ -79,7 +79,7 @@ struct VerifiedCertificate: Sendable {
         let facts = try Self.evaluate(der, publicKey: privateKey.publicKey, domain: domain, at: now, anchors: anchors)
         lifetime = CertificateLifetime(domain: domain, notBefore: facts.notBefore, notAfter: facts.notAfter)
         receivedChain = der
-        chain = der.enumerated().filter { index, _ in index == 0 || !facts.isSelfSigned[index] }.map(\.element)
+        chain = der.enumerated().filter { index, certificate in index == 0 || certificate != facts.anchor }.map(\.element)
         self.privateKey = privateKey
     }
 
@@ -87,8 +87,8 @@ struct VerifiedCertificate: Sendable {
     private struct Facts {
         var notBefore: Date
         var notAfter: Date
-        /// 사슬의 각 인증서가 자기 서명(정규화한 주체와 발급자가 같음)인가.
-        var isSelfSigned: [Bool]
+        /// 평가가 고른 사슬의 신뢰 앵커(DER). 사슬이 leaf 하나뿐이면 nil.
+        var anchor: [UInt8]?
     }
 
     private static func evaluate(
@@ -132,15 +132,12 @@ struct VerifiedCertificate: Sendable {
             throw .untrusted(status: error.map { CFErrorGetCode($0) } ?? Int(errSecNotTrusted))
         }
 
-        // 동작 S6: 자기 서명의 판별은 정규화한 주체와 발급자의 DER 비교다(`SecCertificate.h`의
-        // `SecCertificateCopyNormalizedSubjectSequence`·`…IssuerSequence`).
-        let isSelfSigned = certificates.map { certificate in
-            guard let subject = SecCertificateCopyNormalizedSubjectSequence(certificate) as Data?,
-                  let issuer = SecCertificateCopyNormalizedIssuerSequence(certificate) as Data?
-            else { return false }
-            return subject == issuer
-        }
-        return Facts(notBefore: notBefore, notAfter: notAfter, isSelfSigned: isSelfSigned)
+        // 동작 S6: 서버가 함께 보낸 신뢰 앵커는 `chain`에서 뗀다. 평가가 고른 사슬의 마지막이 앵커다
+        // (`SecTrust.h`의 `SecTrustCopyCertificateChain`). 주체와 발급자가 같다는 것만으로 떼지 않는다: 키를 바꿀 때 쓰는
+        // 자기 발급 중간 인증서(이름이 같고 키가 다르다)는 상대가 사슬을 잇는 데 필요하다.
+        let evaluated = SecTrustCopyCertificateChain(trust) as? [SecCertificate] ?? []
+        let anchor = evaluated.count > 1 ? evaluated.last.map { [UInt8](SecCertificateCopyData($0) as Data) } : nil
+        return Facts(notBefore: notBefore, notAfter: notAfter, anchor: anchor)
     }
 
     private static func check(_ status: OSStatus) throws(CertificateVerificationError) {

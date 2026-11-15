@@ -289,7 +289,11 @@ public actor CertificateManager {
             }
             schedule.recordSuccess()
             attemptFailure = nil
-            adopt(verified)
+            // 도는 동안 이름이 바뀌었으면 받은 것은 저장만 하고 내지 않는다. 지금 이름의 것이 아닌 인증서가 앱의 TLS 신원이
+            // 되지 않게 한다. 다음 판정이 지금 이름으로 디스크를 읽거나 새로 발급한다.
+            if let facts = latestFacts, Self.eligibility(of: facts) == .eligible(domain) {
+                adopt(verified)
+            }
             Self.log.info("인증서를 받았다. 만료 \(Self.format(verified.lifetime.notAfter), privacy: .public)")
         case .failed(let failure, let retryNotBefore, let url):
             if let url { accountURL = url }

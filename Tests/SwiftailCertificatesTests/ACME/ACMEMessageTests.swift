@@ -74,8 +74,22 @@ struct ACMEMessageTests {
         #expect(ACMEInputRules.isAcceptableURL("https://acme.invalid/x"))
         #expect(ACMEInputRules.isAcceptableURL("HTTPS://acme.invalid/x"))
         for invalid in ["http://acme.invalid/x", "ftp://acme.invalid", "https://", "//acme.invalid/x", "not a url",
-                        "https://acme.invalid/" + String(repeating: "a", count: 2028)] {
+                        "https://acme.invalid/" + String(repeating: "a", count: 2028),
+                        // 다시 인코딩되어 서명한 url과 실제 요청이 달라지는 문자열, userinfo.
+                        "https://acme.invalid/a b", "https://acme.invalid/%zz", "https://user@acme.invalid/x",
+                        "https://user:secret@acme.invalid/x"] {
             #expect(!ACMEInputRules.isAcceptableURL(invalid), "\(invalid)")
+        }
+    }
+
+    @Test("같은 출처: 스킴·호스트·포트가 같아야 한다(대소문자 무시)")
+    func sameOrigin() {
+        let directory = "https://acme.invalid:14000/dir"
+        #expect(ACMEInputRules.hasSameOrigin("https://acme.invalid:14000/order/1", as: directory))
+        #expect(ACMEInputRules.hasSameOrigin("HTTPS://ACME.invalid:14000/x", as: directory))
+        for other in ["https://acme.invalid/order/1", "https://acme.invalid:14001/x", "https://other.invalid:14000/x",
+                      "https://127.0.0.1:14000/x", "https://acme.invalid.evil.invalid:14000/x", "not a url"] {
+            #expect(!ACMEInputRules.hasSameOrigin(other, as: directory), "\(other)")
         }
     }
 

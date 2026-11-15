@@ -75,8 +75,8 @@ struct CertificateBoundaryScenarios {
             config.directoryOrderURL = FakeACMEServer.base + "/new%2forder?literal=a%2Bb&other=%26"
             succeeds = true
         case .differentHost:
+            // 디렉터리와 출처가 다른 URL로는 요청하지 않는다(계약 X1. 처음에는 받았으나 검토 뒤 닫았다).
             config.directoryOrderURL = "https://other-acme.invalid/new-order"
-            succeeds = true
         }
         let scenario = CertificateScenario(config)
         let result = try await scenario.run()

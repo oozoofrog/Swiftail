@@ -111,7 +111,7 @@ struct ACMEOrderFlow: Sendable {
 
     /// 절차를 시작한다. 기한(5분)은 이 시각부터 센다.
     mutating func start(at now: Date) -> Step {
-        guard result == nil, inFlight == nil else { return misuse(at: now) }
+        guard result == nil, inFlight == nil, deadline == .distantFuture else { return misuse(at: now) }
         deadline = now.addingTimeInterval(Self.attemptDuration)
         guard ACMEInputRules.isAcceptableURL(directoryURL) else { return fail(.unexpectedResponse, at: now) }
         return request(.directory, at: now)
@@ -252,11 +252,15 @@ struct ACMEOrderFlow: Sendable {
             inFlight = request
             return .send(ACMEHTTPRequest(method: .get, url: directoryURL, body: []))
         case .newNonce:
-            guard let directory else { return fail(.unexpectedResponse, at: now) }
+            guard let directory, ACMEInputRules.hasSameOrigin(directory.newNonce, as: directoryURL) else {
+                return fail(.unexpectedResponse, at: now)
+            }
             inFlight = request
             return .send(ACMEHTTPRequest(method: .head, url: directory.newNonce, body: []))
         default:
-            guard let nonce, let parts = signedParts(of: request) else { return fail(.unexpectedResponse, at: now) }
+            guard let nonce, let parts = signedParts(of: request),
+                  ACMEInputRules.hasSameOrigin(parts.url, as: directoryURL)
+            else { return fail(.unexpectedResponse, at: now) }
             let jws: JWS
             do {
                 jws = try JWS(payload: parts.payload, url: parts.url, nonce: nonce, keyReference: parts.key, signedWith: accountKey)

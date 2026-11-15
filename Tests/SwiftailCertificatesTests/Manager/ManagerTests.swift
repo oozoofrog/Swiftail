@@ -192,6 +192,12 @@ struct ManagerTests {
         let newName = "rd-mac-9z8y7x6w.tail0001.ts.net"
         h.dns.hold()
         h.transport.append(h.issuance())
+        // 나온 인증서를 하나도 빠짐없이 본다. 옛 이름으로 끝난 발급의 인증서는 저장만 되고 나오지 않아야 한다.
+        let emitted = Task { () -> [String] in
+            var domains: [String] = []
+            for await certificate in h.manager.certificates { domains.append(certificate.domain) }
+            return domains
+        }
         let run = h.start()
 
         try await eventually { h.dns.calls.count == 1 }
@@ -208,7 +214,7 @@ struct ManagerTests {
 
         run.cancel()
         #expect(await run.value == nil)
-        #expect(await drain(h.manager.certificates).map(\.domain) == [newName])
+        #expect(await emitted.value == [newName])
     }
 
     @Test("발급 중에 이름이 바뀌어 set-dns가 이름을 거절해도, 바뀐 사실로 곧 다시 판정해 새 이름으로 발급한다")

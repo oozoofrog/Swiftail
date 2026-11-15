@@ -11,7 +11,7 @@ struct CertificateDomainTests {
         ("rd-mac-1a2b3c4d.tail0001.ts.net", "rd-mac-1a2b3c4d.tail0001.ts.net"),
         ("rd-mac-1a2b3c4d.tail0001.ts.net.", "rd-mac-1a2b3c4d.tail0001.ts.net"),  // 끝의 점 하나는 뗀다
         ("a.b", "a.b"),
-        ("0.9", "0.9"),
+        ("0.9a", "0.9a"),
         ("a--b.c-d", "a--b.c-d"),
     ])
     func accepted(input: String, name: String) throws {
@@ -28,6 +28,7 @@ struct CertificateDomainTests {
         "_acme.a.b", "a_b.c", "*.a.b",                 // 밑줄, 와일드카드
         "a/b.c", "a\\b.c", "a:b.c", "a\u{0}b.c", "../a.b", "a b.c",
         "é.a.b", "ａ.b",                                // ASCII 밖
+        "100.64.0.1", "a.b.123", "0.9",                // 끝 레이블이 숫자뿐(IP 주소 꼴)
     ])
     func rejected(_ input: String) {
         #expect(CertificateDomain(input) == nil)

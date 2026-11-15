@@ -24,7 +24,10 @@ struct CertificateDomain: Sendable, Hashable {
     init?(_ fqdn: String) {
         let name = fqdn.hasSuffix(".") ? String(fqdn.dropLast()) : fqdn
         let labels = name.utf8.split(separator: UInt8(ascii: "."), omittingEmptySubsequences: false)
-        guard name.utf8.count <= Self.maximumLength, labels.count >= 2, labels.allSatisfy(Self.isValidLabel) else {
+        guard name.utf8.count <= Self.maximumLength, labels.count >= 2, labels.allSatisfy(Self.isValidLabel),
+              // 끝 레이블이 숫자뿐이면 이름이 아니라 IP 주소 꼴이다(`100.64.0.1`). 인증 기관이 받지 않는다.
+              let last = labels.last, !last.allSatisfy({ (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) })
+        else {
             return nil
         }
         self.name = name

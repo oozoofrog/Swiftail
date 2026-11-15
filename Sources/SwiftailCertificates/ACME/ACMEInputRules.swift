@@ -18,16 +18,26 @@ enum ACMEInputRules {
 
     /// 디렉터리·주문·authorization·challenge·finalize·인증서·계정의 URL로 쓸 수 있는가.
     ///
-    /// `https` 스킴(대소문자 무시, RFC 3986 3.1), 호스트가 있음, 2,048바이트 이하. 호스트가 디렉터리와 같아야 한다는
-    /// 제한은 두지 않는다(RFC 8555가 요구하지 않는다). 통과한 문자열은 다시 인코딩하지 않고 JWS `url`에 그대로 넣는다
-    /// (RFC 8555 6.4).
+    /// `https` 스킴(대소문자 무시, RFC 3986 3.1), 호스트가 있음, userinfo가 없음, 2,048바이트 이하, 그리고 `URL`로 만들어도
+    /// 글자가 바뀌지 않음. 통과한 문자열은 다시 인코딩하지 않고 JWS `url`에 그대로 넣는데(RFC 8555 6.4), 공백이나 깨진
+    /// `%`가 든 문자열은 `URL(string:)`이 고쳐 인코딩해 서명한 `url`과 실제 요청이 달라지므로 받지 않는다.
     static func isAcceptableURL(_ text: String) -> Bool {
         guard text.utf8.count <= maximumURLByteCount,
               let components = URLComponents(string: text),
               components.scheme?.lowercased() == "https",
-              let host = components.host, !host.isEmpty
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil,
+              URL(string: text)?.absoluteString == text
         else { return false }
         return true
+    }
+
+    /// 두 URL의 출처(스킴·호스트·포트)가 같은가. 주문 절차는 디렉터리와 같은 출처로만 요청한다: TLS로 확인한 것은 디렉터리
+    /// 서버뿐이므로, 그 서버가 준 URL을 따라 다른 호스트(루프백 포함)로 계정 키로 서명한 요청을 보내지 않는다. RFC 8555는
+    /// 같은 출처를 요구하지 않지만 Let's Encrypt와 pebble은 모든 자원을 디렉터리의 출처에 둔다.
+    static func hasSameOrigin(_ text: String, as other: String) -> Bool {
+        guard let a = URLComponents(string: text), let b = URLComponents(string: other) else { return false }
+        return a.scheme?.lowercased() == b.scheme?.lowercased() && a.host?.lowercased() == b.host?.lowercased() && a.port == b.port
     }
 
     /// `Replay-Nonce`의 값으로 쓸 수 있는가: 채움 없는 base64url 문자만으로 된 1~512바이트(RFC 8555 6.5.1의 ABNF
