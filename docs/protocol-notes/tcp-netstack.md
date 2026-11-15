@@ -290,3 +290,160 @@ challenge ACK는 속도를 제한하는 것이 SHOULD다. 예로 든 값은 5초
 5. RFC 6675·8985 본문, RFC 7323 5절 PAWS의 전체 처리 절차는 이번 범위에서 대조하지 않았다. SACK 생성 규칙은 RFC 2018 4절을 읽어 4.8·9절의 허용 조건을 확인했으나 전체 SACK 구현·회복 알고리즘 검증은 하지 않았다.
 6. utun 생성의 관리자 권한 요구. XNU 소스를 읽지 않았으며, 저장소의 `docs/contracts/SwiftailTunnel.md` 시험 9의 전제만 확인했다.
 7. gVisor의 SYN 127초와 ACK 전송 경로는 소스에서 계산·추적했다. 실행 시각·스케줄러 지연·실제 패킷 간격은 측정하지 않았다.
+
+## 12. 보내는 쪽 SACK 회복 (RFC 6675)
+
+- 기준: RFC 6675(2012, RFC 3517을 대체), RFC 2018의 보내는 쪽 규칙(5·5.1·8절)과 그 정오표 1610, RFC 2883(D-SACK). RFC Editor 공식 원문(`https://www.rfc-editor.org/rfc/rfc6675.txt`, `rfc2018.txt`, `rfc2883.txt`)과 정오표 검색(`https://www.rfc-editor.org/errata/rfc6675`, `rfc2018`)을 2026-11-15에 받아 읽었다. RFC 6675에는 등록된 정오표가 없다. RFC 2018에는 검증된 정오표 1610 하나가 있다(12.5).
+- gVisor 대조: 2절의 고정 버전, `gvisor/transport/tcp/`의 `sack_recovery.go`, `sack_scoreboard.go`, `snd.go`와 옵션 해석 `gvisor/header/tcp.go`.
+- 작성: Claude Opus 5.5, 2026-11-15. **검증 전**이다. 1~11절의 검증 범위에 들지 않는다.
+- 범위: 받은 SACK 블록으로 무엇을 다시 보낼지와 회복 중 보낼 양을 정하는 **보내는 쪽**만 다룬다. SACK-Permitted 협상과 SACK 블록 만들기(받는 쪽, RFC 2018 2·4절)는 다루지 않는다. 혼잡 제어 알고리즘(CUBIC 등), RACK·TLP(RFC 8985), PRR, F-RTO는 읽지 않았다.
+
+### 12.1 와이어 형식에서 보내는 쪽이 알아야 할 것
+
+- SACK 옵션(kind 5)은 블록마다 왼쪽 끝(블록의 첫 번호)과 오른쪽 끝(마지막 번호의 다음) 32비트 둘이고 길이는 `8*n+2`다. 옵션 자리 40바이트에 4개까지, 타임스탬프와 함께면 3개까지다(RFC 2018 3). 블록은 "받아서 대기열에 둔, 이어진 바이트"이고 블록 바로 아래(`왼쪽 끝 − 1`)와 바로 위(`오른쪽 끝`)는 받지 않은 것이다(RFC 2018 3).
+- 첫 블록은 이 ACK를 일으킨 세그먼트를 담은 구간이어야 하고(그 세그먼트가 ACK 번호를 올렸으면 예외), 나머지 블록은 최근에 알린 순서로 되풀이하되 순서는 임의다(RFC 2018 4). 그래서 보내는 쪽은 블록이 정렬되어 있다고 가정하면 안 된다.
+- SACK은 "권고"다. 받는 쪽은 SACK으로 알린 데이터를 나중에 버릴 수 있다(reneging, RFC 2018 3·8). 버린 경우에도 첫 블록은 가장 새 세그먼트를 알려야 하고, 그 밖의 블록은 더는 쥐지 않은 데이터를 알리면 안 된다(RFC 2018 8).
+- ACK 번호의 뜻은 SACK이 있어도 바뀌지 않는다(RFC 2018 3).
+
+### 12.2 용어 (RFC 6675 2)
+
+| 이름 | 뜻 | Swiftail의 값으로 |
+| --- | --- | --- |
+| HighACK | 누적 확인된 가장 높은 바이트의 번호 | `SND.UNA − 1` |
+| HighData | 지금까지 보낸 가장 높은 번호 | `SND.NXT − 1` |
+| HighRxt | 이번 회복에서 다시 보낸 가장 높은 번호 | 새 변수 |
+| RescueRxt | ACK 시계가 멈추지 않게 낙관적으로 다시 보낸 가장 높은 번호 | 새 변수(쓸 때만) |
+| Pipe | 망에 있다고 보는 바이트 수의 추정 | 새로 계산 |
+| DupAcks | 마지막 누적 ACK 뒤의 중복 ACK 수 | 지금의 `duplicateACKCount`와 뜻이 다르다(아래) |
+| DupThresh | 재전송을 일으키는 중복 ACK 수. RFC 5681을 따라 3 | `duplicateACKThreshold` |
+| RecoveryPoint | 회복을 시작할 때의 HighData(5절 (4.1)) | 지금의 `recover`(그때의 `SND.NXT`)에서 1을 뺀 값 |
+
+- **중복 ACK의 정의가 바뀐다.** RFC 6675의 중복 ACK는 "HighACK과 HighData 사이에서 아직 확인도 SACK도 되지 않은 바이트를 가리키는 SACK 블록을 실은 세그먼트"다. 데이터를 실었거나, 창을 바꿨거나, 누적 ACK 번호를 올렸어도 중복 ACK로 센다. RFC 5681 2절의 정의와 다르다고 RFC가 밝힌다(RFC 6675 2).
+- 범위 `[A,B]`가 S를 "덮는다"는 `A <= S <= B`다(RFC 6675 2). RFC의 번호는 바이트(octet) 단위이고 HighACK·HighData·HighRxt는 닫힌 끝(그 번호 자체)이다. Swiftail의 반열린 구간 `[start, end)`로 옮길 때 하나씩 어긋나기 쉬운 자리다.
+
+### 12.3 scoreboard와 네 함수 (RFC 6675 3·4)
+
+scoreboard의 자료 구조는 RFC 범위 밖이다. 다만 임의의 번호 범위를 SACK된 것으로 표시할 수 있어야 하고, 범위로 관리하는 구현을 허용한다. 이 알고리즘은 보낸 뒤 세그먼트 경계를 기억하지 않는 보내는 쪽을 가정한다(RFC 6675 3).
+
+1. **Update()**: ACK가 누적 확인하거나 SACK한 바이트를 표시하고 SACK된 바이트 수를 기록한다. SACK된 데이터는 누적 확인될 때까지 재전송 버퍼에서 지우면 **안 된다**(MUST NOT, RFC 6675 4가 RFC 2018을 인용).
+2. **IsLost(SeqNum)**: SeqNum 위에 **불연속인 SACK 구간이 DupThresh개** 왔거나, SeqNum보다 큰 번호의 **SACK된 바이트가 `(DupThresh − 1) * SMSS`보다 많으면** 참이다(RFC 6675 4). 바이트 문턱은 RFC 3517의 `DupThresh * SMSS`에서 낮춘 것이고 "그 번호 뒤 세 세그먼트가 SACK되었다"는 요구는 그대로라고 RFC가 밝힌다(RFC 6675 9). "불연속인 SACK 구간"을 세그먼트로 셀지 구간으로 셀지는 원문이 더 정하지 않는다.
+3. **SetPipe()**: HighACK부터 HighData까지 SACK되지 않은 바이트 S1마다, ① `IsLost(S1)`이 거짓이면 1, ② `S1 <= HighRxt`이면 1을 더한다. 잃었다고 보지 않은 채 다시 보낸 바이트는 두 번 센다(RFC 6675 4). 이 결과는 MUST다.
+4. **NextSeg()**: 다음에 보낼 구간을 다음 차례로 고른다(RFC 6675 4).
+   1. 다음 셋을 모두 만족하는 **가장 작은 SACK되지 않은 번호 S2**가 있으면 S2부터 SMSS까지의 한 세그먼트(MUST): (1.a) `S2 > HighRxt`, (1.b) S2가 받은 어떤 SACK이 덮은 가장 높은 바이트보다 작다, (1.c) `IsLost(S2)`.
+   2. 없고, 보내지 않은 데이터가 있고 상대의 창이 허락하면 `HighData + 1`부터 SMSS까지의 새 데이터(MUST).
+   3. 둘 다 아니고 (1.a)·(1.b)만 만족하는 SACK되지 않은 번호 S3가 있으면 S3부터 SMSS까지(SHOULD. RFC 3517의 MAY에서 올렸다, RFC 6675 9).
+   4. 셋 다 아니고 SACK되지 않은 미확인 데이터가 있으면, 회복 한 번에 한 번의 **rescue 재전송**: HighACK이 RescueRxt보다 크면(또는 RescueRxt가 정해지지 않았으면) 미확인·SACK되지 않은 가장 높은 번호를 **포함하는** SMSS 이하의 한 세그먼트(SHOULD), RescueRxt를 RecoveryPoint로 둔다. HighRxt는 바꾸면 안 된다(MUST NOT).
+   5. 아무것도 없으면 실패를 알린다(MUST).
+   - 규칙 3·4는 덜 확실할 때의 마지막 수단이라 같은 데이터 둘이 망에 있게 되고 pipe를 적게 볼 수 있다고 RFC가 적는다(RFC 6675 4).
+
+### 12.4 알고리즘 (RFC 6675 5)
+
+- SACK을 실은 ACK가 오면 늘 Update()(MUST). 누적 ACK면 DupAcks를 0으로(MUST).
+- 회복 중이 아닐 때 받은 ACK가 12.2의 중복 ACK이면(누적 ACK인지와 상관없이) DupAcks를 하나 늘리고(MUST):
+  1. `DupAcks >= DupThresh`면 (4)로. SMSS보다 작은 세그먼트 여럿이 SACK되어 IsLost가 참이 되지 못하는 경우를 덮는다.
+  2. `DupAcks < DupThresh`이지만 `IsLost(HighACK + 1)`이면 (4)로.
+  3. 그 밖에는 limited transmit(RFC 5681)로 새 데이터를 보낼 수 있다(MAY). 다만 양은 pipe와 cwnd로 정한다: (3.1) HighRxt = HighACK, (3.2) SetPipe(), (3.3) `cwnd − pipe >= 1 SMSS`이고 새 데이터가 있고 창이 허락하면 `HighData + 1`부터 SMSS까지 보내고 HighData를 고친 뒤 (3.2)로, (3.4) 이 ACK의 처리를 끝낸다.
+  4. fast retransmit으로 회복에 들어간다: (4.1) `RecoveryPoint = HighData`, (4.2) `ssthresh = cwnd = FlightSize / 2`(RFC 5681. limited transmit으로 보낸 것은 이 FlightSize에 넣지 않는다), (4.3) `HighACK + 1`에서 시작하는 세그먼트를 다시 보내고 **HighRxt와 RescueRxt를 둘 다 그 세그먼트의 가장 높은 번호로** 둔다(같은 데이터의 반복 재전송과 이른 rescue를 막는다), (4.4) SetPipe(), (4.5) (C)로.
+- 회복 중에는 ACK마다(MUST):
+  - (A) RecoveryPoint보다 큰 번호의 누적 ACK가 오면 회복을 끝낸다(MUST). 새 HighACK보다 위의 scoreboard 정보는 지우지 않는다(SHOULD NOT clear).
+  - (B) RecoveryPoint를 덮지 않는 ACK: (B.1) Update(), (B.2) SetPipe().
+  - (C) `cwnd − pipe >= 1 SMSS`면 보낸다(SHOULD): (C.1) NextSeg()로 고른 구간을 보내고, 실패면 멈춘다. (C.2) 보낸 것이 HighData 아래면 HighRxt를 그 세그먼트의 가장 높은 번호로 한다(규칙 4로 보낸 것은 제외, MUST). (C.3) HighData 위면 HighData를 고친다. (C.4) pipe에 보낸 바이트 수를 더한다. (C.5) `cwnd − pipe >= 1 SMSS`면 (C.1)로.
+  - 큰 누적 ACK나 창 뒷부분의 많은 손실에서 (A)·(C)가 세그먼트를 잇달아 낼 수 있다고 RFC가 적는다.
+- RFC 6675는 회복 중 cwnd를 키우거나 회복을 마칠 때 cwnd를 고치는 규칙을 두지 않는다. (4.2)에서 정한 cwnd로 pipe를 견준다. SACK에 따른 결정은 혼잡 제어와 대체로 떨어져 있다(RFC 6675 1).
+
+### 12.5 재전송 타임아웃과 SACK 정보 (RFC 6675 5.1·6, RFC 2018 5·5.1·8)
+
+1. 받는 쪽이 SACK한 데이터를 버릴 수 있으므로 RTO가 나면 모아 둔 SACK 정보를 지우는 것이 SHOULD다(RFC 2018 5 "turn off all of the SACKed bits", RFC 6675 5.1이 인용).
+2. RTO 뒤 무엇을 다시 보낼지 정할 때 이전 SACK 정보를 무시한다. RFC 2018 5.1 원문은 MUST지만 **검증된 정오표 1610이 SHOULD로 고쳤다**(근거: Linux가 RTO 뒤에도 SACK 정보를 지켜 이득을 본다. reneging과 모순된 scoreboard를 견고하게 검사해야 한다는 주의도 붙어 있다). RFC 6675 5.1도 견고한 reneging 검사가 있으면 RTO 뒤에 SACK 정보를 지킬 수 있다는 제안을 소개하되 RFC 2018의 규정은 바꾸지 않는다고 적는다.
+3. RTO 뒤 창의 왼쪽 끝 세그먼트는 SACK 표시와 상관없이 다시 보내야 한다(MUST, RFC 2018 5). 세그먼트는 창의 왼쪽 끝이 그것을 넘어가기 전에는 버퍼에서 빼지 않는다(RFC 2018 5, 8의 MUST NOT).
+4. RTO 뒤에 받은 SACK 정보는 모두 쓰는 것이 SHOULD다. RTO 뒤의 회복에는 NextSeg()가 맞지 않으며, 빠졌다고 알려진 구간을 채워 나가는 단순한 방법이면 된다(RFC 6675 5.1. 정확한 알고리즘은 정하지 않는다).
+5. 회복 중 RTO가 나면 `RecoveryPoint = HighData`로 두고 그 값을 지키며 회복을 끝낸다(MUST). 새 회복은 **`HighACK >= RecoveryPoint`가 될 때까지** 시작하면 안 된다(MUST NOT, RFC 6675 5.1).
+6. 타이머(RFC 6675 6): RFC 6298대로 누적 ACK가 나아갈 때마다 다시 켜도 되고(기본), 회복 중 재전송마다 다시 켜는 더 보수적인 변형을 써도 된다(MAY). SACK 회복은 ACK 시계를 오래 유지해 손실 사건이 RTO보다 길어질 수 있고, 그때 RTO가 일찍 만료될 수 있다는 것이 그 까닭이다.
+7. 혼잡 제어: 한 ACK가 순서가 어긋났다고 알리는 것만으로 회복을 시작하지 않으며, RTO가 손실 감지의 마지막 수단인 것은 SACK이 있어도 그대로다(RFC 2018 5.1).
+
+### 12.6 D-SACK (RFC 2883): 받으면 무엇이 오는가
+
+- D-SACK은 따로 협상하지 않는다. SACK을 협상한 상대는 D-SACK을 보낼 수 있고, 이해하지 못하는 보내는 쪽은 D-SACK 블록을 버리고 나머지 블록을 평소대로 처리하면 된다(RFC 2883 2).
+- 형식은 같다. D-SACK 블록은 **첫 블록**이고 가장 최근 패킷에서 두 번 받은 이어진 구간을 알린다. 그 구간이 누적 ACK 위의 더 큰 블록의 일부면 둘째 블록이 그 큰 블록이다. 같은 중복은 한 번만 알린다(RFC 2883 4 (1)~(5)).
+- 알아보는 법: 첫 블록을 **같은 패킷의 누적 ACK**와 견주어 그보다 아래면 D-SACK이다. 위면 둘째 블록과 견주어 판단한다. `snd.una`와 견주면 안 된다(MUST NOT, ACK 순서가 뒤바뀌면 틀린다. RFC 2883 5). 받는 쪽이 정확한 정보를 보낸다고 믿을 수 없다는 점도 적혀 있다(같은 절).
+- 이 RFC는 감지한 뒤 보내는 쪽이 무엇을 해야 하는지 정하지 않는다(RFC 2883 5). 따라서 D-SACK을 무시하는 보내는 쪽도 규격에 맞는다.
+
+### 12.7 1~11절과 달라지는 곳
+
+| 절 | 지금 | SACK 회복을 넣으면 |
+| --- | --- | --- |
+| 4.7 7 | 중복 ACK는 RFC 5681 2의 정의(데이터 없음, 창 같음 등) | SACK을 협상한 연결에서는 RFC 6675 2의 정의(새 SACK 정보)가 회복 판단의 기준이 된다. 데이터·창 변경이 있어도 센다 |
+| 4.7 5·6 | 셋째 중복 ACK에서 fast retransmit, `cwnd = ssthresh + 3*SMSS`, 중복 ACK마다 부풀리기, partial ACK마다 한 세그먼트 | 들어가는 조건에 `IsLost(HighACK + 1)`이 더해진다. `cwnd = ssthresh = FlightSize/2`이고 부풀리기가 없다. 보낼 양은 `cwnd − pipe`이고, 한 ACK에 빈 곳 여럿을 다시 보낼 수 있다 |
+| 4.7 6 | NewReno의 `recover`: `SEG.ACK − 1 > recover`일 때만 들어간다 | RTO 뒤의 제한은 `HighACK >= RecoveryPoint`(5.1)이다. NewReno의 식보다 한 바이트 느슨하다. NewReno 규칙에서는 recover 바로 다음 세그먼트(회복 중 처음 보낸 새 데이터)를 잃으면 들어가지 못해 RTO를 기다린다 |
+| 4.5 6 | 만료되면 가장 오래된 미확인 세그먼트를 다시 보낸다 | 그대로다(RFC 2018 5의 MUST). 그 뒤 SACK 정보를 지우는 것(SHOULD)과 RTO 뒤에 받은 SACK을 쓰는 것(SHOULD)이 더해진다 |
+| 4.8 SACK 행 | "한 창에 손실이 여럿이면 회복이 느리다" | 그대로 맞다. 차이가 얼마나 나는지의 추정은 계약 `docs/contracts/SwiftailNetstack.md`의 "M6-10b 초안" 6에 있다 |
+| 11절 5 | RFC 6675 본문을 대조하지 않았다 | 이 절에서 읽었다. RFC 8985는 여전히 읽지 않았다 |
+
+### 12.8 gVisor와의 대조
+
+gVisor는 Tailscale 설정에서 RACK이 꺼져 있고 SACK이 협상되면 이 회복을 쓴다(5절, `gvisor/transport/tcp/snd.go:356-361`). 아래는 정적 읽기이며 실행으로 확인하지 않았다.
+
+**RFC와 같은 곳**
+
+- 받는 블록은 누적 ACK 위, SND.UNA 위, SND.NXT 이하이고 이미 다 SACK된 것이 아닐 때만 넣는다. D-SACK 블록은 이 조건으로 빠진다(`snd.go:1572`).
+- 회복에 들어갈 때 HighRxt·RescueRxt를 첫 재전송의 마지막 번호로 두고 SetPipe를 부른다(`snd.go:513-537`. RFC 6675 (4.3)·(4.4)). rescue 재전송 뒤 RescueRxt를 `FastRecovery.Last`(RecoveryPoint)로 두고, 그 밖의 재전송은 HighRxt를 고친다(`sack_recovery.go:88-101`).
+- RTO에서 scoreboard를 모두 지운다(`snd.go:645-658`. RFC 2018 5의 SHOULD를 엄격하게 따른다고 주석이 밝힌다). RTO 뒤에 받은 SACK은 새로 쌓이고, 보내기는 SACK된 세그먼트를 건너뛴다(`snd.go:1118-1123`. RFC 6675 5.1의 "채워 나가기"). RTO 때 `Last = SND.NXT − 1`(RecoveryPoint = HighData)로 두고 회복을 끝낸다(`snd.go:621-628`).
+- 회복을 마치는 조건은 `Last < SEG.ACK`이다(`snd.go:1603`. RFC 6675 (A)). 누적 확인된 아래쪽만 지우고 위는 남긴다(`snd.go:1722`).
+
+**RFC와 다른 곳**
+
+1. **중복 ACK를 RFC 6675보다 좁게 센다.** SACK이 협상되면 새 SACK 정보가 있어야 하고, 그에 더해 RFC 5681의 조건(데이터 없음, SYN·FIN 없음, `SEG.ACK = SND.UNA`, 창 같음)도 모두 요구한다(`snd.go:1321-1342`, 특히 `:1326`, `:1333`, `:1341`). RFC 6675 2는 데이터·창 변경·누적 ACK 진행이 있어도 세라고 한다. 그래서 gVisor가 **보내는 쪽**일 때 데이터가 실린 ACK로는 회복에 들어가지 못한다(계약 동작 F5·"개선 단위 셋을 넣은 뒤의 결과"가 적은 양방향 약점의 소스상 근거).
+2. **IsLost의 바이트 문턱이 `>=`다**: `(DupThresh − 1) * SMSS` 이상이면 참이다(`sack_scoreboard.go:265`). RFC는 "보다 많으면"이다. 꽉 찬 세그먼트 둘만 SACK되어도 잃었다고 본다. 구간 수는 scoreboard에서 합쳐진 블록 수로 센다(같은 곳).
+3. **회복에 들어갈 때 cwnd를 `ssthresh + 3`(세그먼트)으로 둔다**(`snd.go:1150`). RFC 6675 (4.2)는 `cwnd = ssthresh`다. 회복을 마칠 때 `cwnd = ssthresh`(`snd.go:1186`). ssthresh는 혼잡 제어가 정하고(Tailscale은 CUBIC), Reno라면 미확인 세그먼트 수의 절반, 최소 2다(`gvisor/transport/tcp/reno.go:73-78`).
+4. **cwnd와 pipe를 세그먼트 수로 센다.** SetPipe는 SMSS 단위 덩어리마다 1을 더한다(`snd.go:1198-1252`). RFC는 바이트다. 회복 중 보내기는 `Outstanding < SndCwnd`로 견준다(`sack_recovery.go:46`).
+5. **DupAcks < DupThresh에서의 (3)**: HighRxt를 `SND.UNA − 1`로 두고 SetPipe를 부르지만(`snd.go:1290-1296`), SetPipe는 회복 중이 아니면 바로 돌아가므로(`snd.go:1207-1209`) RFC의 pipe 기반 limited transmit이 아니라 보통의 cwnd 규칙으로 보낸다.
+6. **RFC 6675 6절의 보수적 타이머**를 쓰려는 분기가 `err != nil`(보내기에 실패했을 때)에만 걸려 있다(`snd.go:1827-1838`, 조건은 `:1831`). 성공한 보통의 재전송에서는 이 분기가 돌지 않는다. 소스대로라면 의도와 다른 것으로 보인다(실행 확인 없음).
+7. **새 회복의 조건이 NewReno의 것이다**: RTO 뒤든 회복을 마친 뒤든 `Last < SEG.ACK − 1`일 때만 들어간다(`snd.go:1308`, RFC 6582 3.2 2). RFC 6675 5.1의 RTO 뒤 조건 `HighACK >= RecoveryPoint`(`SEG.ACK − 1 >= Last`)보다 한 바이트 엄격해, `Last + 1`에서 시작하는 세그먼트를 잃으면 회복에 들어가지 못한다.
+8. NextSeg의 규칙 2는 창을 보지 않고 다음 미전송 세그먼트를 돌려주며 창은 보내는 함수가 자른다(`snd.go:819-827`, `sack_recovery.go:67`).
+
+**RFC가 정하지 않아 gVisor가 고른 것**
+
+| 항목 | gVisor | 근거 |
+| --- | --- | --- |
+| scoreboard 구조 | 시작 번호순 B-tree, 겹치거나 맞닿은 블록을 합친다 | `sack_scoreboard.go:43-146` |
+| scoreboard 크기 한도 | 구간 100개. 넘으면 **새 블록을 아예 넣지 않는다**(합쳐서 수를 줄일 블록도 넣지 않는다) | `sack_scoreboard.go:30`, `:76-79` |
+| SMSS | 연결의 `MaxPayloadSize`(옵션 길이를 뺀 MSS) | `snd.go:309-312` |
+| 재전송 단위 | 보낸 세그먼트 경계. SMSS보다 큰 세그먼트(GSO)는 SMSS로 쪼갠다 | `snd.go:752-754`, `sack_recovery.go:38-43` |
+| 회복 중 범위 밖 ACK | `SND.UNA <= SEG.ACK <= SND.NXT`가 아니면 무시 | `sack_recovery.go:115-117` |
+| 회복 중 새 데이터의 크기 | SMSS 이하 | `sack_recovery.go:38-43`, `:65-69` |
+| D-SACK | RACK을 켰을 때만 감지해 통계와 RACK에 쓴다. SACK 회복은 쓰지 않는다 | `snd.go:1402-1443`, `:1591-1593` |
+| reneging 검사 | 없다. RTO에서 지우는 것뿐이다 | `snd.go:645-658` |
+| 받는 쪽이 내는 블록 | 데이터만 덮는다(FIN 번호 제외). 데이터 세그먼트에도 싣는다. 받는 쪽 목록은 6개, 한 옵션에 4개까지 | `rcv.go:459`, `:510`, `connect.go:1022-1025`, `:1052-1055`, `sack.go:25`, `gvisor/header/tcp.go:45` |
+
+### 12.9 신뢰할 수 없는 입력
+
+tailnet에서 SACK 블록을 보낼 수 있는 것은 그 연결의 인증된 상대뿐이다(계약 동작 X). 아래는 그 상대가 틀린 블록을 보낼 때다.
+
+| 입력 | 무엇을 할 수 있나 | RFC | gVisor |
+| --- | --- | --- | --- |
+| SND.UNA 아래 블록 | D-SACK이거나 늦게 온 ACK다. 받아들이면 이미 버린 데이터를 SACK된 것으로 표시하게 된다 | D-SACK이면 무시해도 된다(RFC 2883 2·5) | 넣지 않는다(`snd.go:1572`) |
+| SND.NXT 위 블록 | 보내지 않은 데이터를 SACK했다고 주장한다. 받아들이면 HighSACK이 올라가 손실 판정이 틀어지고, 그 데이터를 보낼 때 건너뛰면 영영 보내지 않을 수 있다 | 정하지 않는다 | 넣지 않는다(`snd.go:1572`) |
+| 왼쪽 끝 ≥ 오른쪽 끝 | 32비트 순환 산술에서 거꾸로 된 블록은 크기가 2³²에 가까운 값이 된다 | 정하지 않는다 | **검사하지 않는다.** 옵션 해석은 길이만 보고(`gvisor/header/tcp.go:540-560`), 넣는 조건(`snd.go:1572`)에도 `Start < End`가 없다. `Start > SND.UNA`이고 `End <= SND.NXT`인 거꾸로 된 블록은 들어갈 수 있고, 그때 SACK된 바이트 수(`sack_scoreboard.go:144`)가 순환해 커진다(소스로 계산한 결과. 실행 확인 없음) |
+| 겹치는 블록, 같은 블록 반복 | 합치면 무해하다. 합치지 않는 구조면 메모리가 는다 | 범위 표시면 된다(RFC 6675 3) | 합친다. 이미 다 덮인 블록은 넣지 않는다 |
+| 블록 수천 개를 유도 | ACK 하나에 4개까지지만 ACK마다 다른 블록을 보내 구간을 늘릴 수 있다. 상한이 없으면 scoreboard가 보낸 데이터의 세그먼트 수만큼(구간이 번갈아 있으면 그 절반) 자라고, SetPipe·NextSeg가 구간 수에 비례해 느려진다 | 정하지 않는다 | 100개 상한(`sack_scoreboard.go:30`) |
+| reneging(흉내 포함) | SACK한 데이터를 버리거나 처음부터 거짓으로 SACK한다. 보내는 쪽이 그 데이터를 다시 보내지 않으면 누적 ACK가 멈추고 RTO까지 간다. 버퍼에서 미리 지운 구현이라면 데이터를 잃는다 | 누적 ACK 전에는 버리지 않는다(MUST NOT, RFC 2018 8, RFC 6675 4). RTO 때 SACK 정보를 지운다(SHOULD). 정오표 1610은 견고한 reneging 검사를 요구한다 | 버퍼에서 지우지 않는다. RTO 때 지운다. 따로 검사하지 않는다 |
+| 거짓 SACK으로 pipe를 줄임 | 잃은 것으로 판정된 구간이 늘면 pipe가 줄어 `cwnd − pipe`만큼 더 보낸다. cwnd 자체는 (4.2)에서 반으로 줄었고 상대의 창과 보내는 버퍼가 날아가는 양의 상한이다 | RFC 6675 8: 위조된 중복 ACK로 cwnd를 줄이게 하는 공격에는 SACK이 더 견고하다. 창 밖 위조 세그먼트로 중복 ACK를 유도하는 공격(CPNI309)은 SACK 조건으로 막힌다 | 같다 |
+
+### 12.10 상수
+
+| 값 | 출처 |
+| --- | --- |
+| DupThresh 3 | RFC 6675 2(RFC 5681), gVisor `snd.go:45` |
+| IsLost의 바이트 문턱: `(DupThresh − 1) * SMSS`보다 많음 | RFC 6675 4·9. gVisor는 이상(`sack_scoreboard.go:265`) |
+| 한 SACK 옵션의 블록: 4개, 타임스탬프와 함께면 3개 | RFC 2018 3. gVisor `gvisor/header/tcp.go:45` |
+| rescue 재전송: 회복 한 번에 한 번, 1 SMSS 이하 | RFC 6675 4·9 |
+| gVisor scoreboard 구간 상한 100, 받는 쪽 블록 목록 6 | `sack_scoreboard.go:30`, `sack.go:25` |
+
+### 12.11 확인하지 못한 것
+
+1. RFC 6675 IsLost의 "DupThresh discontiguous SACKed sequences"를 세그먼트 수로 볼지 SACK 구간 수로 볼지. 원문은 더 풀지 않는다. gVisor는 합친 구간 수로 센다.
+2. RFC 8985(RACK·TLP), RFC 6937(PRR), RFC 5682(F-RTO), RFC 3042(limited transmit) 본문. RFC 6675가 인용하는 limited transmit은 RFC 6675 5 (3)의 서술만 읽었다.
+3. 정오표 1610이 말하는 "견고한 reneging 검사"의 구체적 방법. RFC는 정하지 않는다. Linux의 구현은 읽지 않았다.
+4. XNU(iPhone·macOS 커널)가 SACK-Permitted를 보내고 SACK 블록·D-SACK을 내는지, reneging을 하는지. 소스와 실기기 캡처를 보지 않았다(11절 2와 같은 미확인).
+5. gVisor의 실행 동작: 12.8의 다른 곳 6(타이머 분기)과 12.9의 거꾸로 된 블록은 소스를 읽어 낸 결론이다. 패킷 시험은 하지 않았다.
+6. gVisor가 받는 쪽일 때 데이터가 없는 상태에서 순서가 어긋난 세그먼트 묶음에 ACK를 세그먼트마다 내는지. `rcv.go:482-515`가 즉시 ACK를 부르는 것까지만 읽었고 묶음 처리에서 합쳐지는지는 추적하지 않았다.
