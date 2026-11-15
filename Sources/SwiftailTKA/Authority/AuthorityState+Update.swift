@@ -57,6 +57,14 @@ extension AuthorityState {
     /// 투표 문턱은 없다. 신뢰 키 하나의 서명으로 충분하다(동작 A4).
     func verify(_ update: AUM, isBootstrap: Bool) throws(TKAError) {
         try update.validate()
+        try verifyParentAndSignatures(of: update, isBootstrap: isBootstrap)
+    }
+
+    /// `verify(_:isBootstrap:)`에서 정적 검사(동작 A1)를 뺀 나머지: 부모, 서명, 마지막 키 제거(동작 A2~A5).
+    ///
+    /// 저장소를 다시 열 때는 이것만 본다(TL-11a 항목 2). 정적 검사를 통과하지 않은 AUM이 와도 트랩하지 않는다: 서명의 길이는
+    /// 검증이 떨어뜨리고, 적용(`applying`)은 필드가 없으면 거절하고, 가중치는 Go와 같이 넘쳐도 감긴다.
+    func verifyParentAndSignatures(of update: AUM, isBootstrap: Bool) throws(TKAError) {
         if !isBootstrap {
             guard let parent = update.prevAUMHash, !parent.isEmpty else { throw .missingParent }
             guard let lastAUMHash, lastAUMHash.bytes == parent else { throw .rejectedUpdate }
@@ -85,14 +93,18 @@ extension AuthorityState {
         var weight: UInt64 = 0
         for signature in update.signatures {
             guard let key = key(withID: signature.keyID), counted.insert(signature.keyID).inserted else { continue }
-            // 상태의 키는 `Votes`가 4,096 이하이고(정적 검사), 서로 다른 키는 상태의 키 수만큼이라 넘치지 않는다.
-            weight += key.votes
+            // 받아들인 상태의 키는 `Votes`가 4,096 이하라(정적 검사) 넘치지 않는다. 다시 연 저장소의 상태는 정적 검사를 거치지
+            // 않았으므로, Go `uint`와 같이 감기게 더한다(트랩하지 않는다).
+            weight &+= key.votes
         }
         return weight
     }
 
     /// KeyID가 같은 신뢰 키(Go `GetKey`). null 공개 키와 빈 공개 키는 같은 KeyID다(동작 E6).
+    ///
+    /// Go와 같이 앞에서부터 찾고, KeyID가 없는 키(`Key25519`가 아님)를 먼저 만나면 거기서 실패한다. 받아들인 상태에는 그런 키가
+    /// 없다(정적 검사). 정적 검사를 거치지 않는 다시 열기(TL-11a 항목 2)에서만 닿는다.
     func key(withID keyID: [UInt8]) -> TrustedKey? {
-        keys.first { $0.keyID == keyID }
+        keys.first { $0.keyID == nil || $0.keyID == keyID }.flatMap { $0.keyID == nil ? nil : $0 }
     }
 }

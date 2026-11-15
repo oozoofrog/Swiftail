@@ -124,15 +124,58 @@ struct AuthorityPropertyTests {
         try authority.inform([T.noOp(after: chain[1_998].hash, by: [a])])
         #expect(authority.aums.count == 2_003)
 
-        // 4,096개까지 채우고, 하나 더는 통째로 거절한다.
-        let rest = T.noOpChain(after: authority.head, count: Authority.maximumAUMCount - 2_003, by: a)
+        // 활성 사슬을 4,096개까지 채운다. 쥔 것 전체는 넘으므로 활성 사슬 밖의 것(갈래)을 버린다(TL-11a 항목 1).
+        let active = T.activeChain(of: authority).count
+        let rest = T.noOpChain(after: authority.head, count: Authority.maximumAUMCount - active, by: a)
+        #expect(authority.aums.count + rest.count > Authority.maximumAUMCount)
         try authority.inform(rest)
         #expect(authority.aums.count == Authority.maximumAUMCount)
+        #expect(T.activeChain(of: authority).count == Authority.maximumAUMCount)
+        // 활성 사슬이 넘는 묶음은 통째로 거절한다.
         let before = authority
         #expect(T.informError(&authority, [T.noOp(after: authority.head, by: [a])]) == .limitExceeded)
         #expect(authority.aums == before.aums && authority.head == before.head)
         // 이미 쥔 것만 든 묶음은 한도에 걸리지 않는다.
         try authority.inform([rest[0]])
+    }
+
+    /// 한 묶음으로 들인 결과가 같은 AUM을 하나씩 들인 것과 같다: 판정(첫 오류), 머리, 상태, 쥔 AUM. 실패한 묶음은 아무것도
+    /// 바꾸지 않는다. 하나씩 들이면 부모 상태를 늘 저장소에서 다시 찾으므로, 묶음 안에서 더는 부모로 쓰이지 않는 상태를
+    /// 놓는 것(TL-11a 항목 4)이 판정을 바꾸지 않음을 본다. 묶음에는 되풀이한 AUM과 떨어지는 AUM을 섞는다.
+    @Test(arguments: [UInt64(4), 5, 6])
+    func batchMatchesOneByOne(seed: UInt64) throws {
+        var random = CBORTesting.Random(state: seed)
+        let tree = try Self.randomTree(count: 60, random: &random)
+        let stranger = T.Signer()
+        let start = try Authority(bootstrappingWith: tree.root)
+        for round in 0..<8 {
+            var batch = Self.parentFirstOrder(tree.updates, root: start.bootstrap, random: &random)
+            for _ in 0..<Int.random(in: 0...8, using: &random) {
+                let repeated = try #require(batch.randomElement(using: &random))
+                batch.insert(repeated, at: Int.random(in: 0...batch.count, using: &random))
+            }
+            if round % 2 == 1 {
+                // 부모가 묶음에 있는 AUM에 모르는 키의 서명을 붙인 것. 그 자리에서 묶음이 떨어진다.
+                let parent = try #require(batch.randomElement(using: &random)).hash
+                batch.insert(T.noOp(after: parent, by: [stranger]), at: Int.random(in: 0...batch.count, using: &random))
+            }
+
+            var batched = start
+            let batchError = T.informError(&batched, batch)
+            var single = start
+            var singleError: TKAError?
+            for update in batch {
+                singleError = T.informError(&single, [update])
+                if singleError != nil { break }
+            }
+            #expect(batchError == singleError, "묶음 \(round)")
+            if batchError == nil {
+                Self.expectSame(batched, single)
+                Self.expectSame(batched, tree.reference)
+            } else {
+                Self.expectSame(batched, start)
+            }
+        }
     }
 
     /// 쥐는 AUM의 정준 바이트 합 한도(16MiB). 키 512개에 `Meta`를 채운 체크포인트(약 280KiB)를 잇는다.

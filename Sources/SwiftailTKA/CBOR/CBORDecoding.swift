@@ -1,5 +1,7 @@
 // CBOR 항목 하나를 Go TKA의 디코더(`tailscale.com/tka/tka.go`의 `cborDecOpts`, `fxamacker/cbor` v2.9.3
 // `valid.go`의 잘 짜임 검사)와 같은 규칙으로 읽는다. 계약 동작 D1·D2·D9, 노트 3.1·6.2·8.1.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
+// `fxamacker/cbor`: Copyright (c) 2019-present Faye Amacker. MIT.
 
 /// CBOR 항목 수준의 거절 까닭. 구조(AUM·NKS)에 맞지 않는 것은 여기가 아니라 구조를 읽는 쪽이 거절한다.
 package enum CBORError: Error, Sendable, Equatable {

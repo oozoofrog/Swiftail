@@ -1,4 +1,5 @@
 // 서명 권한을 가진 키(Go `tka.Key`, `tailscale.com/tka/key.go:36-132`). 노트 3.2, 계약 동작 E4·D5·A1.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 /// 서명 권한을 가진 키. KeyID는 `publicKey` 바이트 그 자체다(노트 3.2).
 package struct TrustedKey: Sendable, Equatable {

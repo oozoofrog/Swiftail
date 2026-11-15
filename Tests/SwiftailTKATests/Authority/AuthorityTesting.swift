@@ -100,6 +100,22 @@ enum AuthorityTesting {
         return chain
     }
 
+    /// 머리에서 뿌리까지 거꾸로 따라간 활성 사슬(머리가 먼저).
+    static func activeChain(of authority: Authority) -> [AUM] {
+        var chain: [AUM] = []
+        var cursor: AUMHash? = authority.head
+        while let hash = cursor, let position = authority.positions[hash] {
+            chain.append(authority.aums[position])
+            cursor = hash == authority.bootstrap ? nil : authority.aums[position].parentHash
+        }
+        return chain
+    }
+
+    /// 정준 바이트 수의 합.
+    static func byteCount(_ aums: [AUM]) -> Int {
+        aums.reduce(0) { $0 + $1.serialized().count }
+    }
+
     /// `inform`의 판정. 성공이면 nil, 아니면 오류.
     static func informError(_ authority: inout Authority, _ updates: [AUM]) -> TKAError? {
         do throws(TKAError) {

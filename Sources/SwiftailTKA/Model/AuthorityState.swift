@@ -1,4 +1,5 @@
 // 신뢰 상태(Go `tka.State`, `tailscale.com/tka/state.go:26-53`, `:258-316`). 노트 3.5, 계약 동작 E4·E6·D8·A1.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 /// 어느 AUM까지 적용한 뒤의 신뢰 상태. 체크포인트 AUM은 이것을 통째로 싣는다.
 ///
@@ -9,9 +10,11 @@ package struct AuthorityState: Sendable, Equatable {
     package var lastAUMHash: AUMHash?
     /// 끄기 비밀의 KDF 값(각 32바이트).
     package var disablementValues: [[UInt8]] = []
+    /// 신뢰 키. 순서가 있다: KeyID로 찾을 때 앞에서부터 본다(Go `GetKey`).
     package var keys: [TrustedKey] = []
     /// lock을 켤 때 정한 난수. 0이면 인코딩에서 빠진다(omitempty).
     package var stateID1: UInt64 = 0
+    /// `stateID1`과 함께 tailnet의 lock을 가린다. 체크포인트는 두 값이 부모 상태와 같아야 적용된다. 0이면 인코딩에서 빠진다.
     package var stateID2: UInt64 = 0
 
     /// 끄기 값의 개수 상한과 길이(Go `maxDisablementValues`, `disablementLength`).

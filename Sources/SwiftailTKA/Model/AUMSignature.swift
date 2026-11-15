@@ -1,4 +1,5 @@
 // AUM에 붙는 서명(Go `tkatype.Signature`, `tailscale.com/types/tkatype/tkatype.go:35-40`). 노트 3.3.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 /// AUM에 붙는 서명 하나. 서명의 입력은 그 AUM의 `signatureHash`다(노트 3.7).
 ///

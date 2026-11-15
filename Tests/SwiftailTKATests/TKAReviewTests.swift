@@ -6,10 +6,11 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// TL-11a 검토(`SwiftailTKA` 보안 검토)의 재현과, 검토가 `tkafixtures`에 더한 Go 판정(`reviewChains`·`reviewSignatures`)의 대조.
+/// TL-11a 검토(`SwiftailTKA` 보안 검토)의 발견 셋의 회귀 시험과, 검토가 `tkafixtures`에 더한 Go 판정(`reviewChains`·
+/// `reviewSignatures`)의 대조.
 ///
-/// **실패하는 시험이 발견이다.** 각 시험의 주석에 입력을 쥔 쪽(제어 서버·신뢰 키 보유자·피어)과 Go의 답을 어떻게 얻었는지
-/// 적었다. 라이브러리 코드는 고치지 않았다.
+/// 발견 1~3은 검토가 재현한 입력이고, 계약 5절 "독립 검토에서 고치는 것: 순수 로직 (TL-11a)"의 항목 1~3으로 고쳤다. 각 시험의
+/// 주석에 입력을 쥔 쪽(제어 서버·신뢰 키 보유자·피어)과 Go의 답을 어떻게 얻었는지 적었다.
 @Suite("TL-11a 검토: SwiftailTKA")
 struct TKAReviewTests {
     typealias G = GoComparison
@@ -63,61 +64,77 @@ struct TKAReviewTests {
         }
     }
 
-    // MARK: 발견 1 — 빈 Meta만 있는 UpdateKey는 들인 뒤 다시 열리지 않는다
+    // MARK: 발견 1 — 빈 Meta만 있는 UpdateKey를 들인 상태가 다시 열리지 않았다(항목 2로 고침)
 
     /// 입력을 쥔 쪽: 신뢰 키 보유자. UpdateKey{KeyID}의 SigHash에 서명하고, 보낼 때 `07a0`(빈 Meta)을 붙인다.
     ///
     /// 받은 값은 `meta == []`라 정적 검사(UpdateKey는 Votes나 Meta가 있어야 한다)를 통과하고 Go도 Swift도 받아들인다
     /// (`reviewChains`의 `review/votes-and-meta-bounds/update-meta-empty-wire-only`). 그런데 정준 바이트는 빈 Meta를 빼므로,
     /// 저장소(`TailnetLockStore`: `serialized()`를 적고 `AUM(decoding:)`으로 읽는다)에서 다시 읽은 AUM은 Votes도 Meta도 없어
-    /// 정적 검사에 떨어진다. 결정 L14의 재검증 때문에 `Authority(opening:)`이 던지고, 노드는 다시 시작할 때마다 `.unverified`
-    /// (피어 없음, 동작 T4는 다시 시도하지 않는다)가 된다. 앱이 상태 파일을 지울 때까지 풀리지 않는다.
+    /// 정적 검사에 떨어진다. 고치기 전에는 결정 L14의 재검증 때문에 `Authority(opening:)`이 던져, 노드가 다시 시작할 때마다
+    /// `.unverified`(피어 없음)에 갇혔다. 지금은 다시 열 때 부모와 서명만 본다(항목 2).
     ///
     /// Go의 답: `tka.Open`은 저장소를 다시 검증하지 않아 같은 사슬을 연다. 임시 Go 프로그램(`eyebuild dir tl11a-review`의
     /// `probe/main.go`, FS chonk에 Bootstrap → `07a0` UpdateKey를 Inform → 새 `ChonkDir`로 `Open`)의 출력:
     /// `wire Meta nil=false, StaticValidate=<nil>` / `inform ok` / `open ok`(머리 같음) /
     /// `stored Meta nil=true, StaticValidate=UpdateKey AUMs must contain an update to votes or key metadata`.
-    @Test("발견 1: 빈 Meta(07a0)만 있는 UpdateKey를 들인 상태가 저장 뒤 다시 열린다")
+    ///
+    /// 다시 연 상태는 그 키의 `Meta`만 다르다: 받은 AUM의 빈 `Meta`는 키의 `Meta`를 비우고(Go `state.go:206`의
+    /// `update.Meta != nil`), 정준 바이트로 다시 읽은 AUM은 `Meta`가 없어 옛 값을 둔다. Go도 같다: FS 저장소는 AUM을 CBOR로
+    /// 적고(`tka/tailchonk.go:658-673`, `Meta`는 omitempty) `Open`은 그것을 다시 적용한다(원본으로 확인했고 Go로 돌리지는
+    /// 않았다). `Meta`는 판정에 쓰이지 않는다.
+    @Test("발견 1(항목 2): 빈 Meta(07a0)만 있는 UpdateKey를 들인 상태가 저장 뒤 다시 열린다")
     func emptyMetaUpdateKeySurvivesReopen() throws {
         let fixture = try GoFixture.load()
         let chain = try #require(fixture.reviewChains.first { $0.name == "review/votes-and-meta-bounds" })
         var authority = try Authority(bootstrappingWith: G.aum(chain.bootstrap))
+        var previous = authority.state
         for step in chain.steps where step.ok {
+            previous = authority.state
             try authority.inform(step.aums.map { hex throws(TKAError) in try G.aum(hex) })
             if step.name == "update-meta-empty-wire-only" { break }
         }
         let wire = try #require(authority.aums.last)
+        let keyID = try #require(wire.keyID)
+        let previousMeta = try #require(previous.key(withID: keyID)?.meta)
+        #expect(!previousMeta.isEmpty && authority.state.key(withID: keyID)?.meta == [])
         #expect(wire.messageKind == AUM.Kind.updateKey && wire.meta == [] && wire.votes == nil)
 
         // 저장소가 하는 대로 정준 바이트를 적고 다시 읽는다.
         let stored = try authority.aums.map { aum throws(TKAError) in try AUM(decoding: aum.serialized()) }
         #expect(stored.last?.hash == wire.hash, "해시는 같다(빈 Meta는 해시에 들지 않는다)")
+        #expect(throws: TKAError.invalidAUM, "다시 읽은 AUM은 정적 검사에서 떨어진다") { try stored.last?.validate() }
         do {
             let reopened = try Authority(opening: stored, bootstrap: authority.bootstrap)
-            #expect(reopened.head == authority.head)
+            var expected = authority.state
+            for index in expected.keys.indices where expected.keys[index].keyID == keyID {
+                expected.keys[index].meta = previousMeta
+            }
+            #expect(reopened.head == authority.head && reopened.state == expected)
         } catch {
             Issue.record("받아들인 사슬을 다시 열지 못한다: \(error). Go `tka.Open`은 연다")
         }
     }
 
-    // MARK: 발견 2 — 제어 서버가 서명 목록만 바꾼 AUM으로 저장 한도를 채워 lock 상태를 얼린다
+    // MARK: 발견 2 — 제어 서버가 서명 목록만 바꾼 AUM으로 저장 한도를 채워 lock 상태를 얼렸다(항목 1로 고침)
 
     /// 입력을 쥔 쪽: 제어 서버(서명 키가 없다).
     ///
     /// AUM의 해시는 서명 목록을 담고, 서명 목록은 검증만 통과하면 되므로(같은 서명 되풀이, 일부만, 순서 바꿈) 신뢰 키 서명이
     /// 붙은 AUM 하나에서 서로 다른 해시의 "유효한" 형제 AUM을 얼마든지 만들 수 있다. Go와 Swift 모두 그것을 받아들인다
     /// (`reviewChains`의 `review/duplicate-signature-variant-*`, `review/signature-order-variant`). Go는 쥐는 AUM 수에 한도가
-    /// 없지만(`tka/tka.go:584-665`의 `InformIdempotent`) Swiftail은 4,096개·16MiB에서 묶음을 통째로 거절한다(동작 M, 결정
-    /// L7·L16). 그래서 서버가 변종으로 한도를 채우면 그 뒤의 **모든** AUM(키 제거, 복구 체크포인트)이 `limitExceeded`로
-    /// 떨어지고, 노드는 상태 파일을 지울 때까지 지워진 키를 계속 믿는다. 서버가 AUM을 주지 않는 것과 달리 서버가 정상으로
-    /// 돌아와도 풀리지 않고, 같은 서버에서 받는 Go 노드는 영향이 없다.
+    /// 없지만(`tka/tka.go:584-665`의 `InformIdempotent`) Swiftail은 쥔 AUM 4,096개·16MiB에서 묶음을 통째로 거절했다. 그래서
+    /// 서버가 변종으로 한도를 채우면 그 뒤의 **모든** AUM(키 제거, 복구 체크포인트)이 `limitExceeded`로 떨어지고, 노드는 상태
+    /// 파일을 지울 때까지 지워진 키를 계속 믿었다. 지금은 한도를 활성 사슬에만 걸고, 넘치면 활성 사슬 밖의 변종을 버린다
+    /// (항목 1).
     ///
     /// 재현: 키 64개, 그 64개가 서명한 NoOp 하나, 서버가 그 서명들로 만든 순서쌍 4,094개(검증 8,252번). 실제 tailnet의 AUM은
     /// 서명이 하나라 변종의 서명 수가 늘어날 뿐이다(`[s]×k`, 바이트 한도 16MiB를 k ≈ 570까지로 채운다).
     ///
     /// Go의 답: 같은 모양의 임시 Go 프로그램(`eyebuild dir tl11a-review`의 `probe2/main.go`, ChonkMem)의 출력은
-    /// `variants inform: <nil>` / `remove-key inform: <nil>` / `removed key still trusted: false keys: 63`이다.
-    @Test("발견 2: 서명 목록 변종으로 한도가 찬 뒤에도 신뢰 키의 RemoveKey를 따라간다", .timeLimit(.minutes(10)))
+    /// `variants inform: <nil>` / `remove-key inform: <nil>` / `removed key still trusted: false keys: 63`이다. 뒤의 체크포인트는
+    /// Go로 돌리지 않았다: `InformIdempotent`에는 개수 검사가 없어 RemoveKey와 같은 길로 받아들인다(원본으로 확인).
+    @Test("발견 2(항목 1): 서명 목록 변종으로 한도가 찬 뒤에도 신뢰 키의 RemoveKey와 체크포인트를 따라간다", .timeLimit(.minutes(10)))
     func controlServerCannotFreezeAuthority() throws {
         let signers = (0..<64).map { _ in T.Signer() }
         var authority = try Authority(bootstrappingWith: T.checkpoint(T.checkpointState(signers.map { $0.trusted() }), by: [signers[0]]))
@@ -138,22 +155,38 @@ struct TKAReviewTests {
         try authority.inform(variants)
         #expect(authority.aums.count == Authority.maximumAUMCount)
 
-        // 신뢰 키가 머리 위에서 signers[1]을 지운다. Go는 받아들이고 키를 지운다.
+        #expect(authority.head == original.hash, "서명 둘짜리 변종은 서명 64개의 원본에 진다")
+
+        // 신뢰 키가 머리 위에서 signers[1]을 지우고 체크포인트를 싣는다. Go는 받아들이고 키를 지운다.
         let removal = T.removeKey(signers[1].publicKey, after: authority.head, by: [signers[0]])
         let error = T.informError(&authority, [removal])
         #expect(error == nil, "서버가 만든 변종 \(room)개 뒤에 RemoveKey가 거절된다: \(String(describing: error))")
         #expect(authority.state.key(withID: signers[1].publicKey) == nil, "지운 키를 계속 믿는다")
+        #expect(authority.state.keys.count == 63)
+        let remaining = T.checkpointState(signers.filter { $0.publicKey != signers[1].publicKey }.map { $0.trusted() })
+        let checkpoint = T.checkpoint(remaining, parent: authority.head, by: [signers[0]])
+        try authority.inform([checkpoint])
+        #expect(authority.head == checkpoint.hash && authority.state.keys.count == 63)
+
+        // 활성 사슬(뿌리, 원본, RemoveKey, 체크포인트)은 남고, 나중에 든 변종 둘이 버려졌다.
+        #expect(authority.aums.count == Authority.maximumAUMCount)
+        #expect(T.activeChain(of: authority).map(\.hash) == [checkpoint.hash, removal.hash, original.hash, authority.bootstrap])
+        let kept = Set(authority.aums.map(\.hash))
+        #expect(variants.dropLast(2).allSatisfy { kept.contains($0.hash) } && variants.suffix(2).allSatisfy { !kept.contains($0.hash) })
+        let reopened = try Authority(opening: authority.aums, bootstrap: authority.bootstrap)
+        #expect(reopened.head == authority.head && reopened.state == authority.state)
     }
 
-    // MARK: 발견 3 — 서버의 조상 목록이 MissingAUMs 계산을 부풀린다
+    // MARK: 발견 3 — 서버의 조상 목록이 MissingAUMs 계산을 부풀렸다(항목 3으로 고침)
 
     /// 입력을 쥔 쪽: 제어 서버. sync/offer 응답의 `Ancestors`는 개수 한도가 없고(본문 8MiB ≈ 152,000개), `missingAUMs`는 목록을
     /// 앞에서부터 보며 로컬에 있는 조상마다 `state(at:)`(체크포인트까지 거꾸로 가며 다시 적용)과 앞으로 감기를 한다. 진 갈래의
     /// AUM(서버가 서명 목록 변종으로 언제든 만든다)을 되풀이해 넣으면 조상마다 그 깊이만큼 일하고 교차는 끝내 없다. Go도 같은
-    /// 반복이다(`tka/sync.go:188-209`, Go의 본문 한도는 512MiB). `ControlClient`는 actor 위에서 이것을 부른다.
+    /// 반복이다(`tka/sync.go:188-209`, Go의 본문 한도는 512MiB). `ControlClient`는 actor 위에서 이것을 부른다. 고치기 전에는
+    /// 릴리스에서 8MiB 응답 하나에 최악 71초였다. 지금은 조상의 중복을 지우고 1,001개까지만 본다(항목 3).
     ///
-    /// 시험은 조상 하나의 비용을 재고 8MiB 응답으로 늘려 적는다. 릴리스에서 한 번의 동기화가 1초를 넘으면 실패한다.
-    @Test("발견 3: 진 갈래 AUM을 되풀이한 조상 목록의 MissingAUMs 비용", .timeLimit(.minutes(10)))
+    /// 시험은 8MiB 응답에 담기는 수(약 152,000개)만큼 되풀이한 목록을 그대로 넣고 잰다. 릴리스에서 1초를 넘으면 실패한다.
+    @Test("발견 3(항목 3): 진 갈래 AUM을 되풀이한 조상 목록의 MissingAUMs 비용", .timeLimit(.minutes(10)))
     func missingAUMsAncestorAmplification() throws {
         let signer = T.Signer()
         let depth = Self.isOptimized ? 1_999 : 49
@@ -173,19 +206,46 @@ struct TKAReviewTests {
         #expect(authority.head == last.hash)
 
         let unknown = try #require(AUMHash(Array(repeating: 0x5a, count: 32)))
-        let ancestorCount = Self.isOptimized ? 2_000 : 20
-        let offer = SyncOffer(head: unknown, ancestors: Array(repeating: losing.hash, count: ancestorCount))
-        let clock = ContinuousClock()
-        let elapsed = clock.measure {
+        let worstCount = 8 * 1_024 * 1_024 / 55  // `"<52자>",` 하나가 55바이트
+        let offer = SyncOffer(head: unknown, ancestors: Array(repeating: losing.hash, count: worstCount))
+        let elapsed = ContinuousClock().measure {
             #expect(throws: TKAError.noIntersection) { try authority.missingAUMs(for: offer) }
         }
-        let perAncestor = elapsed / ancestorCount
-        let worstCount = 8 * 1_024 * 1_024 / 55  // `"<52자>",` 하나가 55바이트
-        let worst = perAncestor * worstCount
-        print("TL-11a 측정 조상 증폭: 깊이 \(depth), 조상 \(ancestorCount)개 \(elapsed), 하나 \(perAncestor), 8MiB(\(worstCount)개) ≈ \(worst)")
+        print("TL-11a 측정 조상 증폭: 깊이 \(depth), 같은 조상 \(worstCount)개(8MiB): \(elapsed)")
         if Self.isOptimized {
-            #expect(worst < .seconds(1), "제어 서버 하나의 sync/offer 응답으로 actor가 \(worst) 막힌다")
+            #expect(elapsed < .seconds(1), "제어 서버 하나의 sync/offer 응답으로 actor가 \(elapsed) 막힌다")
         }
+    }
+
+    /// 발견 3의 남는 최악: 서로 다른 진 갈래 AUM 1,001개(서명 목록 변종)를 각각 체크포인트에서 1,998개 아래에 두고 그 해시를
+    /// 조상 목록으로 준다. 중복을 지워도 1,001개는 모두 본다. 결과는 표준 출력의 `TL-11a 측정` 줄이다(릴리스).
+    @Test("측정: 서로 다른 진 갈래 조상 1,001개의 MissingAUMs", .enabled(if: isOptimized), .timeLimit(.minutes(10)))
+    func distinctLosingAncestors() throws {
+        let a = T.Signer()
+        let b = T.Signer()
+        var authority = try Authority(
+            bootstrappingWith: T.checkpoint(T.checkpointState([a.trusted(), b.trusted()]), by: [a])
+        )
+        let chain = T.noOpChain(after: authority.head, count: 1_998, by: a)
+        try authority.inform(chain)
+        let last = try #require(chain.last)
+        var tip = T.noOp(after: last.hash, by: [a, b])
+        // 서명 목록을 a·b의 이진 문자열로 바꾼 변종. 맨 앞이 늘 b라 서로 다르고 원본(`[a, b]`)과도 다르다.
+        let variants = (2..<1_200).map { number in
+            var variant = tip
+            variant.signatures = String(number, radix: 2).map { $0 == "1" ? tip.signatures[1] : tip.signatures[0] }
+            return variant
+        }
+        try authority.inform([tip] + variants)
+        tip = try #require(([tip] + variants).first { $0.hash == authority.head })
+        let losing = variants.filter { $0.hash != tip.hash }.prefix(Authority.maximumSyncAncestorCount).map(\.hash)
+        #expect(losing.count == Authority.maximumSyncAncestorCount)
+        let unknown = try #require(AUMHash(Array(repeating: 0x5a, count: 32)))
+        let offer = SyncOffer(head: unknown, ancestors: losing + [authority.bootstrap])
+        var result: Result<[AUM], TKAError> = .success([])
+        let elapsed = ContinuousClock().measure { result = Result { () throws(TKAError) in try authority.missingAUMs(for: offer) } }
+        #expect(throws: TKAError.noIntersection, "1,002번째의 뿌리는 보지 않는다") { try result.get() }
+        print("TL-11a 측정 조상 증폭: 깊이 1,999, 서로 다른 진 갈래 조상 \(losing.count)개: \(elapsed)")
     }
 
     // MARK: 퍼저

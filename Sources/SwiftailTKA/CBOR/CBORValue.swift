@@ -26,6 +26,8 @@ package enum CBORValue: Sendable, Equatable {
 
 /// 맵의 한 쌍.
 package struct CBORPair: Sendable, Equatable {
+    /// 받은 그대로의 키. 구조의 맵이면 정수나 텍스트여야 한다(구조를 읽는 쪽이 본다).
     package var key: CBORValue
+    /// 키에 붙은 값.
     package var value: CBORValue
 }
