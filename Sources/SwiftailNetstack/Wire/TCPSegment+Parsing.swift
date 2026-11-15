@@ -14,9 +14,11 @@ extension TCPSegment {
     /// 6. TCP 체크섬(의사 머리 포함)이 틀리면 `badChecksum`.
     /// 7. 옵션의 길이가 잘못됐으면 `malformed`.
     ///
-    /// 옵션은 EOL에서 멈추고 NOP는 건너뛴다. MSS(kind 2, 길이 4)와 Window Scale(kind 3, 길이 3)만 읽고 SYN이 켜진
-    /// 세그먼트에서만 담는다. 모르는 옵션과, 길이가 다른 MSS·Window Scale은 길이로 건너뛴다. 길이가 2보다 작거나 머리
-    /// 밖으로 나가는 옵션은 `malformed`다(RFC 9293 3.2 MUST-7의 대비로, 연결을 끊지 않는다). MSS 0은 IPv4 536·IPv6 1220으로
+    /// 옵션은 EOL에서 멈추고 NOP는 건너뛴다. MSS(kind 2, 길이 4), Window Scale(kind 3, 길이 3), SACK-Permitted(kind 4,
+    /// 길이 2)는 SYN이 켜진 세그먼트에서만, SACK(kind 5, 길이 `2 + 8n`, n ≥ 1)은 SYN이 꺼진 세그먼트에서만 담는다
+    /// (RFC 2018 2: SACK-Permitted는 SYN에만 보낸다). 모르는 옵션과, 길이가 규격과 다른 이 넷은 길이로 건너뛴다. 길이가
+    /// 2보다 작거나 머리 밖으로 나가는 옵션은 `malformed`다. 블록이 옵션 공간(40바이트)을 넘는 SACK(n ≥ 5)도 머리 밖으로
+    /// 나가므로 여기에 든다(RFC 9293 3.2 MUST-7의 대비로, 연결을 끊지 않는다). MSS 0은 IPv4 536·IPv6 1220으로
     /// 읽는다: RFC에 정해진 값이 없어(RFC 9293 3.7.1의 536·1220은 옵션이 **없을** 때의 값이다) 계약 동작 W2가 그 값을 쓰기로
     /// 정했다. shift 14 초과는 14로 읽는다(RFC 7323 2.3). 같은 옵션이 여럿이면 뒤의 것이 남는다.
     ///
@@ -55,12 +57,17 @@ extension TCPSegment {
         let flags = Flags(rawValue: segment.byte(at: 13) & 0x1F)
         var maximumSegmentSize: UInt16?
         var windowScale: UInt8?
+        var sackPermitted = false
+        var sackBlocks: [SACKBlock] = []
         let options = try Options(
             parsing: segment[(segment.startIndex + 20)..<(segment.startIndex + headerLength)])
         if flags.contains(.syn) {
             let defaultMSS: UInt16 = ip.isIPv4 ? 536 : 1220
             maximumSegmentSize = options.maximumSegmentSize.map { $0 == 0 ? defaultMSS : $0 }
             windowScale = options.windowScale.map { min($0, 14) }
+            sackPermitted = options.sackPermitted
+        } else {
+            sackBlocks = options.sackBlocks
         }
 
         self.init(
@@ -72,6 +79,8 @@ extension TCPSegment {
             window: segment.uint16(at: 14),
             maximumSegmentSize: maximumSegmentSize,
             windowScale: windowScale,
+            sackPermitted: sackPermitted,
+            sackBlocks: sackBlocks,
             payload: Array(segment[(segment.startIndex + headerLength)...])
         )
     }
@@ -125,6 +134,8 @@ extension TCPSegment {
     private struct Options {
         var maximumSegmentSize: UInt16?
         var windowScale: UInt8?
+        var sackPermitted = false
+        var sackBlocks: [SACKBlock] = []
 
         /// 옵션 영역을 한 번 훑는다. 매 걸음이 한 바이트 이상 나아가므로 영역 길이를 넘어 돌지 않는다.
         init(parsing region: ArraySlice<UInt8>) throws(ParseError) {
@@ -144,6 +155,15 @@ extension TCPSegment {
                         maximumSegmentSize = UInt16(region[index + 2]) << 8 | UInt16(region[index + 3])
                     } else if kind == 3, length == 3 {
                         windowScale = region[index + 2]
+                    } else if kind == 4, length == 2 {
+                        sackPermitted = true
+                    } else if kind == 5, length > 2, (length - 2) % 8 == 0 {
+                        // 블록은 왼쪽 끝·오른쪽 끝 32비트 둘이다. 길이가 영역 안임을 위에서 확인했다.
+                        sackBlocks = stride(from: index + 2, to: index + length, by: 8).map { offset in
+                            SACKBlock(
+                                leftEdge: SequenceNumber(region.uint32(atIndex: offset)),
+                                rightEdge: SequenceNumber(region.uint32(atIndex: offset + 4)))
+                        }
                     }
                     index += length
                 }
@@ -164,6 +184,11 @@ extension ArraySlice<UInt8> {
 
     fileprivate func uint32(at offset: Int) -> UInt32 {
         UInt32(uint16(at: offset)) << 16 | UInt32(uint16(at: offset + 2))
+    }
+
+    /// 슬라이스의 인덱스 `index`에서 시작하는 빅엔디언 32비트. 길이를 확인한 뒤에만 부른다.
+    fileprivate func uint32(atIndex index: Int) -> UInt32 {
+        uint32(at: index - startIndex)
     }
 }
 

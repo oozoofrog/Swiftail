@@ -2,7 +2,7 @@ import SwiftailBase
 
 /// 연결 맺기: 능동 열기, 수동 열기, SYN-SENT의 세그먼트 처리(RFC 9293 3.5, 3.10.7.3), MSS와 창 확장의 협상.
 extension TCPConnection {
-    /// 능동 열기. SYN(MSS, Window Scale)을 보내고 SYN-SENT가 된다(계약 동작 T3).
+    /// 능동 열기. SYN(MSS, SACK-Permitted, Window Scale)을 보내고 SYN-SENT가 된다(계약 동작 T3).
     ///
     /// - Parameters:
     ///   - local: 이 쪽 주소와 포트. 스택이 목적지와 같은 계열의 자기 주소와 빈 포트를 고른다(계약 동작 S8).
@@ -60,6 +60,8 @@ extension TCPConnection {
 
     /// 이 쪽의 SYN(SYN-SENT) 또는 SYN-ACK(SYN-RECEIVED). 처음 보낼 때와 다시 보낼 때 같다.
     /// 창은 확장하지 않고(RFC 7323 2.2), MSS는 늘 싣고(SHLD-5), Window Scale은 `offersWindowScale`일 때만 싣는다(계약 동작 F2).
+    /// SACK-Permitted는 SYN에는 늘, SYN-ACK에는 상대의 SYN에 있었을 때만 싣는다(RFC 2018 2. 수동 쪽의 조건은 RFC가 정하지
+    /// 않지만 gVisor `connect.go`의 SYN-ACK와 같다).
     func synchronizeSegment() -> TCPSegment {
         let acknowledges = state == .synReceived
         return TCPSegment(
@@ -67,7 +69,8 @@ extension TCPConnection {
             acknowledgmentNumber: acknowledges ? receiveNext : SequenceNumber(0),
             flags: acknowledges ? [.syn, .ack] : [.syn], window: UInt16(Self.synchronizeWindow),
             maximumSegmentSize: UInt16(receiveMaximumSegmentSize),
-            windowScale: offersWindowScale ? UInt8(Self.ownWindowShift) : nil)
+            windowScale: offersWindowScale ? UInt8(Self.ownWindowShift) : nil,
+            sackPermitted: !acknowledges || peerPermitsSACK)
     }
 
     // MARK: SYN-SENT (RFC 9293 3.10.7.3)
@@ -116,13 +119,16 @@ extension TCPConnection {
         return size >= minimumPeerSegmentSize ? size : nil
     }
 
-    /// 상대 SYN(또는 SYN-ACK)의 MSS·Window Scale·창을 받아들인다.
+    /// 상대 SYN(또는 SYN-ACK)의 MSS·Window Scale·SACK-Permitted·창을 받아들인다.
     ///
-    /// - MSS: `min(상대 MSS, 자기 MTU의 MSS)`(계약 동작 T5. 데이터 세그먼트에는 옵션이 없으므로 옵션 길이는 0).
+    /// - MSS: `min(상대 MSS, 자기 MTU의 MSS)`(계약 동작 T5). 데이터 세그먼트에 SACK 옵션이 실리면 그만큼 데이터를 줄인다
+    ///   (`segmentPayloadLimit`).
+    /// - SACK: 상대 SYN에 SACK-Permitted가 있으면 이 쪽이 SACK 블록을 보낼 수 있다(RFC 2018 4). 방향마다 따로다.
     /// - 창 확장: 양쪽 SYN에 다 있을 때만 켠다. 보내는 창은 상대의 shift(14까지)로, 광고하는 창은 자기 shift로(RFC 7323 2.3).
     /// - 창: SYN의 창 필드는 확장하지 않는다(RFC 7323 2.2). SND.WL1은 SYN의 번호다.
     mutating func adoptPeerSynchronize(_ syn: TCPSegment, peerSegmentSize: Int) {
         sendMaximumSegmentSize = min(peerSegmentSize, receiveMaximumSegmentSize)
+        peerPermitsSACK = syn.sackPermitted
         if offersWindowScale, let shift = syn.windowScale {
             sendWindowShift = min(Int(shift), Self.maximumWindowShift)
             receiveWindowShift = Self.ownWindowShift

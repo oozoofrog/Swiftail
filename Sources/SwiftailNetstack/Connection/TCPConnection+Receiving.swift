@@ -191,6 +191,7 @@ extension TCPConnection {
             zeroWindowProbeCount = 0
         }
 
+        // shortcut: 받은 SACK 블록(`segment.sackBlocks`)은 쓰지 않는다. 잃은 구간을 골라 다시 보내는 일(RFC 6675)은 M6-10b다.
         if sendUnacknowledged.precedes(ack) {
             acknowledge(upTo: ack, at: now, into: &outputs)
         } else if ack == sendUnacknowledged, isDuplicateAcknowledgment(segment, peerWindow: peerWindow) {

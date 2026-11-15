@@ -2,7 +2,7 @@
 ///
 /// 보낼 수 있는 양은 `min(cwnd, SND.WND) − FlightSize`다(계약 동작 R5). 새 데이터는 보내는 쪽 SWS 회피(RFC 9293 3.8.6.2.1)를
 /// 거치고, `SND.NXT` 앞의 구간(RTO 뒤의 go-back-N)은 재전송이라 상대의 창을 보지 않고 cwnd만 본다
-/// (RFC 7323 2.4 4: 보낼 때 창 안이었던 세그먼트의 재전송). 재전송은 늘 `SND.UNA`부터다(계약 동작 R7, SACK 없음).
+/// (RFC 7323 2.4 4: 보낼 때 창 안이었던 세그먼트의 재전송). 재전송은 늘 `SND.UNA`부터다(계약 동작 R7. 받은 SACK 블록은 아직 쓰지 않는다, M6-10b).
 extension TCPConnection {
     /// 지금 보낼 수 있는 데이터와 FIN을 보내고, 보내기에 딸린 타이머(재전송, 0 창 탐침, SWS override)를 맞춘다.
     ///
@@ -21,9 +21,11 @@ extension TCPConnection {
         }
         var override = overridingSillyWindowAvoidance
         var blockedBySillyWindow = false
+        // 받는 버퍼는 보내는 동안 바뀌지 않으므로, 이 호출이 내는 세그먼트는 모두 같은 SACK 옵션을 싣는다.
+        let payloadLimit = segmentPayloadLimit
         while true {
             let isRetransmission = transmitNext.precedes(sendNext)
-            var length = min(sendMaximumSegmentSize, unsentDataCount)
+            var length = min(payloadLimit, unsentDataCount)
             if isRetransmission {
                 length = min(length, Int(sendNext.distance(from: transmitNext)))
             }
@@ -33,7 +35,7 @@ extension TCPConnection {
                 let pending = unsentDataCount
                 let usable = min(pending, windowRoom)
                 guard usable > 0 else { break }
-                guard usable >= sendMaximumSegmentSize || pending <= windowRoom
+                guard usable >= payloadLimit || pending <= windowRoom
                     || usable * 2 >= maximumSendWindow || override
                 else {
                     blockedBySillyWindow = true
@@ -114,7 +116,7 @@ extension TCPConnection {
     mutating func retransmitFirstUnacknowledgedSegment(at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         let start = sendUnacknowledged
         let available = max(0, Int(sendBuffer.endSequence.distance(from: start)))
-        let length = min(sendMaximumSegmentSize, available, Int(sendNext.distance(from: start)))
+        let length = min(segmentPayloadLimit, available, Int(sendNext.distance(from: start)))
         let fin = finSent && start.advanced(by: UInt32(length)) == finSequence
         guard length > 0 || fin else { return }
         let end = start.advanced(by: UInt32(length + (fin ? 1 : 0)))
@@ -144,7 +146,9 @@ extension TCPConnection {
             sequence: start, flags: flags, payload: sendBuffer.bytes(from: offset, upTo: length))
     }
 
-    /// ACK가 켜진 세그먼트. RCV.NXT와 지금의 창을 싣고, 미뤄 둔 ACK를 지운다(이 세그먼트가 그 ACK다).
+    /// ACK가 켜진 세그먼트. RCV.NXT와 지금의 창, SACK 블록(`sackBlocksToSend`)을 싣고, 미뤄 둔 ACK를 지운다(이 세그먼트가
+    /// 그 ACK다). 순수 ACK, 데이터에 실린 ACK, 0 창 탐침, keep-alive가 모두 여기를 지나므로 빈 곳이 있는 동안 나가는 모든 ACK에
+    /// SACK이 실린다(RFC 2018 4).
     mutating func acknowledgingSegment(
         sequence: SequenceNumber, flags: TCPSegment.Flags, payload: [UInt8] = []
     ) -> TCPSegment {
@@ -153,7 +157,25 @@ extension TCPConnection {
         unacknowledgedByteCount = 0
         return TCPSegment(
             source: localEndpoint, destination: remoteEndpoint, sequenceNumber: sequence,
-            acknowledgmentNumber: receiveNext, flags: flags, window: window, payload: payload)
+            acknowledgmentNumber: receiveNext, flags: flags, window: window, sackBlocks: sackBlocksToSend,
+            payload: payload)
+    }
+
+    /// 지금 ACK에 실을 SACK 블록: 받는 버퍼의 순서가 어긋난 구간을 최근 순서로 4개까지(RFC 2018 4, `ReceiveBuffer.sackBlocks`).
+    /// 상대가 SACK-Permitted를 보내지 않았으면 늘 비어 있다(RFC 2018 4 MUST NOT).
+    ///
+    /// shortcut: D-SACK(RFC 2883, 이미 받은 데이터를 다시 받았다고 알리는 첫 블록)은 내지 않는다. 상대의 헛된 재전송을 알아내는
+    /// 데만 쓰이고 회복을 빠르게 하지는 않는다. 필요해지는 시점: 상대의 재정렬 감지(RACK 등)가 문제가 될 때.
+    var sackBlocksToSend: [TCPSegment.SACKBlock] {
+        peerPermitsSACK ? receiveBuffer.sackBlocks(limit: TCPSegment.maximumSACKBlockCount) : []
+    }
+
+    /// 지금 보내는 데이터 세그먼트의 데이터 상한: Eff.snd.MSS에서 그 세그먼트에 실릴 SACK 옵션의 길이를 뺀 값(RFC 9293 3.7.1,
+    /// 계약 동작 T5). 광고하는 MSS가 MTU 1280을 꽉 채우므로 옵션이 붙으면 데이터를 줄여야 IP 패킷이 1280을 넘지 않는다.
+    var segmentPayloadLimit: Int {
+        guard peerPermitsSACK else { return sendMaximumSegmentSize }
+        let blockCount = min(receiveBuffer.outOfOrderRangeCount, TCPSegment.maximumSACKBlockCount)
+        return sendMaximumSegmentSize - TCPSegment.sackOptionLength(blockCount: blockCount)
     }
 
     /// `<SEQ=sequence><CTL=RST>`.

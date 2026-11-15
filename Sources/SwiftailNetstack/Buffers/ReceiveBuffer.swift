@@ -22,6 +22,8 @@ package struct ReceiveBuffer: Sendable {
     private struct Extent: Sendable {
         var start: Int
         var end: Int
+        /// 이 구간에 마지막으로 세그먼트가 든 `insert`의 차례. SACK 블록을 최근 순서로 고르는 데 쓴다(`sackBlocks(limit:)`).
+        var lastInsertion: UInt64
     }
 
     /// 한 번의 `insert`가 한 일. 연결은 `advancedCount`·`filledGap`으로 ACK를 언제 낼지 정한다(계약 동작 F5).
@@ -49,6 +51,8 @@ package struct ReceiveBuffer: Sendable {
 
     private var ring: ByteRing
     private var extents: [Extent] = []
+    /// 창 안에 바이트를 둔 `insert`의 수. 구간의 `lastInsertion`이 이 값을 받는다.
+    private var insertionCount: UInt64 = 0
 
     /// `RCV.NXT`(FIN을 빼고 센 데이터의 끝). 이 번호 앞까지는 빈 곳 없이 받았다.
     package private(set) var nextSequence: SequenceNumber
@@ -119,10 +123,12 @@ package struct ReceiveBuffer: Sendable {
             storedCount += write(payload, from: cursor, to: upper, payloadBase: lower)
         }
 
-        // 겹친 구간을 하나로 합친다.
+        // 겹친 구간을 하나로 합친다. 합친 구간이 이 세그먼트가 든 구간이라 가장 최근 것이 된다.
+        insertionCount &+= 1
         let merged = Extent(
             start: first < last ? min(lower, extents[first].start) : lower,
-            end: first < last ? max(upper, extents[last - 1].end) : upper
+            end: first < last ? max(upper, extents[last - 1].end) : upper,
+            lastInsertion: insertionCount
         )
         let hadOutOfOrderData = !extents.isEmpty
         extents.replaceSubrange(first..<last, with: [merged])
@@ -141,6 +147,24 @@ package struct ReceiveBuffer: Sendable {
         }
         return Insertion(
             advancedCount: advancedCount, storedCount: storedCount, filledGap: advancedCount > 0 && hadOutOfOrderData)
+    }
+
+    /// 순서가 어긋난 구간을 SACK 블록으로, 최근에 세그먼트가 든 것부터 `limit`개까지 낸다(RFC 2018 4).
+    ///
+    /// - 첫 블록은 마지막 `insert`가 바이트를 둔 구간이다. 그 세그먼트가 `RCV.NXT`를 나아가게 했으면(구간이 읽을 수 있는
+    ///   바이트가 되어 사라졌으면) 그 다음으로 최근인 구간이다. RFC 2018 4의 첫째 규칙("이 ACK를 일으킨 세그먼트가 든 블록,
+    ///   그 세그먼트가 Acknowledgment Number를 나아가게 했으면 예외")이다. 연결은 순서가 어긋난 세그먼트마다 곧바로 ACK하므로
+    ///   (계약 동작 F5) 이 ACK를 일으킨 세그먼트가 곧 마지막 `insert`다.
+    /// - 나머지는 세그먼트가 든 차례의 역순이다. 구간마다 세그먼트가 들 때 그 세그먼트의 ACK에서 첫 블록으로 알렸으므로,
+    ///   이 순서가 셋째 규칙의 "가장 최근에 (첫 블록으로) 알린 순서"다. 구간은 서로 겹치지 않으므로 앞의 블록의 부분 집합인
+    ///   블록이 없고(셋째 규칙), 어느 블록도 이미 읽을 수 있게 된 바이트를 가리키지 않는다.
+    /// - 구간이 없으면 빈 배열이다. 빈 곳이 다 메워진 뒤의 ACK에는 SACK을 싣지 않는다.
+    package func sackBlocks(limit: Int) -> [TCPSegment.SACKBlock] {
+        extents.sorted { $0.lastInsertion > $1.lastInsertion }.prefix(max(0, limit)).map { extent in
+            TCPSegment.SACKBlock(
+                leftEdge: nextSequence.advanced(by: UInt32(extent.start)),
+                rightEdge: nextSequence.advanced(by: UInt32(extent.end)))
+        }
     }
 
     /// 읽을 수 있는 바이트를 앞에서부터 `maximumLength`바이트까지 꺼낸다. 꺼낸 만큼 창이 열린다.

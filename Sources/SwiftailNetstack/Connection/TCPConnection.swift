@@ -175,6 +175,9 @@ package struct TCPConnection: Sendable {
     var receiveWindowShift = 0
     /// 이 쪽 SYN에 Window Scale을 실었는가. 능동 열기는 늘, 수동 열기는 상대의 SYN에 있을 때만(계약 동작 F2).
     let offersWindowScale: Bool
+    /// 상대의 SYN(SYN-ACK)에 SACK-Permitted가 있었다. 이때만 ACK에 SACK 블록을 싣는다(RFC 2018 4 MUST NOT, 계약 동작 F5 아래).
+    /// 이 쪽 SYN의 SACK-Permitted는 능동 열기면 늘, 수동 열기면 이 값일 때만 싣는다(계약 동작 T3·T4).
+    var peerPermitsSACK = false
     /// 받는 버퍼. 상대의 데이터만 담는다(FIN은 `finReceived`).
     var receiveBuffer: ReceiveBuffer
     /// 지금까지 광고한 창의 가장 먼 오른쪽 끝. 왼쪽으로 옮기지 않고(SHLD-14), 이것을 넘는 바이트는 받지 않는다

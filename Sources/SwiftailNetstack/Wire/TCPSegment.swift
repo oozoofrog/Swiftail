@@ -9,7 +9,8 @@ import SwiftailBase
 /// 담는 것은 상태 기계가 쓰는 필드뿐이다. urgent pointer와 CWR·ECE는 받을 때 버리고 보낼 때 0으로 둔다.
 /// 시퀀스·확인 번호는 `SequenceNumber`로만 다룬다.
 ///
-/// 규격: RFC 9293 3.1(머리, 체크섬), 3.2(옵션), RFC 7323 2.2(Window Scale), `docs/protocol-notes/tcp-netstack.md` 3절,
+/// 규격: RFC 9293 3.1(머리, 체크섬), 3.2(옵션), RFC 7323 2.2(Window Scale), RFC 2018 2·3(SACK-Permitted, SACK),
+/// `docs/protocol-notes/tcp-netstack.md` 3절,
 /// `docs/contracts/SwiftailNetstack.md` 동작 W.
 package struct TCPSegment: Sendable, Equatable {
     /// 제어 비트. 상태 기계가 쓰는 다섯 개만 둔다.
@@ -60,11 +61,34 @@ package struct TCPSegment: Sendable, Equatable {
     package var maximumSegmentSize: UInt16?
     /// Window Scale 옵션의 shift. SYN이 켜진 세그먼트에만 있다. 해석할 때 14를 넘는 값은 14가 된다(RFC 7323 2.3). 광고하지 않으면 `nil`.
     package var windowScale: UInt8?
+    /// SACK-Permitted 옵션(RFC 2018 2). SYN이 켜진 세그먼트에서만 뜻이 있다(SYN이 아닌 세그먼트의 것은 해석할 때 버린다).
+    package var sackPermitted: Bool
+    /// SACK 옵션의 블록(RFC 2018 3), 옵션에 실린 순서 그대로. SYN이 꺼진 세그먼트에만 있다. 해석은 형식만 검사하고
+    /// 번호의 뜻(왼쪽 끝이 오른쪽 끝보다 앞인지, 창 안인지)은 따지지 않는다. 만들 때 4개를 넘으면 머리에 들어가지 않는다.
+    package var sackBlocks: [SACKBlock]
     /// 데이터.
     package var payload: [UInt8]
 
+    /// SACK 블록 하나: 받는 쪽이 빈 곳 너머에 받아 둔 이어진 바이트 `[leftEdge, rightEdge)`(RFC 2018 3).
+    package struct SACKBlock: Sendable, Equatable {
+        /// 블록의 첫 번호.
+        package var leftEdge: SequenceNumber
+        /// 블록의 마지막 바이트 다음 번호.
+        package var rightEdge: SequenceNumber
+
+        /// 두 끝으로 만든다. 값을 검사하지 않는다.
+        package init(leftEdge: SequenceNumber, rightEdge: SequenceNumber) {
+            self.leftEdge = leftEdge
+            self.rightEdge = rightEdge
+        }
+    }
+
+    /// SACK 옵션 하나에 실을 수 있는 블록의 최대 수. 옵션 공간 40바이트에 `2 + 8n`이 들어가는 가장 큰 n이다(RFC 2018 3).
+    package static let maximumSACKBlockCount = 4
+
     /// 필드로 세그먼트를 만든다. 값을 검사하지 않는다(상태 기계와 시험이 만드는 값이다. 받은 바이트는 `init(parsingIPPacket:)`
-    /// 으로만 들인다). `maximumSegmentSize`·`windowScale`은 SYN이 켜진 세그먼트에서만 `ipPacket(hopLimit:)`이 싣는다.
+    /// 으로만 들인다). `maximumSegmentSize`·`windowScale`·`sackPermitted`는 SYN이 켜진 세그먼트에서만, `sackBlocks`는 SYN이
+    /// 꺼진 세그먼트에서만 `ipPacket(hopLimit:)`이 싣는다.
     package init(
         source: IPEndpoint,
         destination: IPEndpoint,
@@ -74,6 +98,8 @@ package struct TCPSegment: Sendable, Equatable {
         window: UInt16 = 0,
         maximumSegmentSize: UInt16? = nil,
         windowScale: UInt8? = nil,
+        sackPermitted: Bool = false,
+        sackBlocks: [SACKBlock] = [],
         payload: [UInt8] = []
     ) {
         self.source = source
@@ -84,6 +110,8 @@ package struct TCPSegment: Sendable, Equatable {
         self.window = window
         self.maximumSegmentSize = maximumSegmentSize
         self.windowScale = windowScale
+        self.sackPermitted = sackPermitted
+        self.sackBlocks = sackBlocks
         self.payload = payload
     }
 
