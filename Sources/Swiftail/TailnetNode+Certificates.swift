@@ -15,6 +15,11 @@ package struct CertificateFacts: Sendable, Equatable {
     /// 출처와 같다(`ipn/ipnlocal/local.go` `updateStatus`: `MagicDNSEnabled = nm.DNS.Proxied`).
     package var isMagicDNSEnabled: Bool
 
+    /// 값을 그대로 담는다. 관리자의 시험과, 노드가 멈춘 뒤의 사실을 만드는 데 쓴다.
+    package init(isRunning: Bool, fqdn: String?, certDomains: [String], isMagicDNSEnabled: Bool) {
+        (self.isRunning, self.fqdn, self.certDomains, self.isMagicDNSEnabled) = (isRunning, fqdn, certDomains, isMagicDNSEnabled)
+    }
+
     /// 노드의 상태와 마지막 netmap에서 읽는다.
     init(state: NodeState, netmap: Netmap?) {
         let status = NodeStatus(state: state, netmap: netmap, networkSettings: nil)

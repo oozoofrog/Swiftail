@@ -372,6 +372,8 @@ else { nwConnection.cancel(); return }      // 다리가 이은 연결이 아니
 
 구현에서 정해진 것(M7-4): 주문 절차는 값 타입 `ACMEOrderFlow`이고 출력은 `send`·`wait(until:)`·`publishTXT`·`finished`다. 인증서 키는 시도마다 입력으로 받고 CSR은 첫 finalize 때 만들어 그 시도 내내 쓴다(C5의 새 주문은 CSR 전이므로 같은 키). 계정 만들기는 약관 URL이 없어도 `termsOfServiceAgreed`를 보내고, `valid`가 아닌 계정은 `unexpectedResponse`다. finalize가 `orderNotReady`로 거절된 뒤의 `ready`·`pending`도 H17의 되풀이 한 번에 센다. 요청 하나의 기한 초과는 `timedOut`, 닿지 못함은 `network`다. `CertificateFailure`가 `Error`가 아니므로 TXT 올리기 클로저는 실패를 던지지 않고 돌려준다.
 
+구현에서 정해진 것(M7-6): 발급 중에 사실이 바뀌어도(이름 변경, 노드 멈춤) 그 시도는 끊지 않고 끝까지 둔다. 바뀐 사실은 다음 판정이 보고, 그 시도의 실패가 세운 조건 기다림은 풀린다. 저장된 인증서는 이름마다 한 번 읽는다. `set-dns`의 `ControlError`는 `http(status:)` → `controlRejected`, `invalidConfiguration` → `domainNotAllowed`, 그 밖 → `network`(고정 문구)다. `run()`이 돌아오면 `certificates`도 끝나고, 노드의 사실 흐름이 끝나면 `nodeNotRunning`으로 보고 취소를 기다린다. 시험 접점은 `internal` init(사실의 흐름, `setDNS`, 상태 디렉터리, 전송, 앵커, 시계, 잠자기, 인증서 키 만들기)이다.
+
 ### S. 저장
 
 1. **자리와 이름**: `<상태 디렉터리>/certs/` 아래 `<이름>.crt`(사슬, `CERTIFICATE` PEM 블록을 leaf부터), `<이름>.key`(개인 키 PEM), `acme-account.key.pem`(계정 키 PEM)이다. 자리와 이름은 Go와 같다(노트 3.7, DNS 노트 4.9 1. 총괄 확인 필요 H7). **권한**: `certs/`를 새로 만들 때는 0700이다. 이미 있는 디렉터리의 권한은 고치지 않는다(Go의 `MkdirAll`도 고치지 않는다. 생성 때의 권한은 이미 있는 항목의 검사를 대신하지 않는다. 노트 3.7·4.8). 다만 이미 있는 `certs/`를 그룹이나 기타가 쓸 수 있으면 쓰지 않고 실패한다(`run()`이 `CertificateError.storage`로 끝난다). 그런 디렉터리에서는 읽지도 않는다: 다른 사용자가 키나 계정 키를 바꿔 넣었을 수 있다(총괄 확인 필요 H20).
@@ -406,6 +408,8 @@ else { nwConnection.cancel(); return }      // 다리가 이은 연결이 아니
 6. 인증서의 시각은 벽시계(`Date`)로 본다. 시계가 크게 틀린 기기에서는 검증이 실패하고 `invalidCertificate`가 된다. Go도 시계 차이를 보정하지 않는다(노트 4.4 6). 판정은 시각을 입력으로 받고, 긴 기다림(`Retry-After`, 재시도) 뒤에는 지금 시각을 새로 읽는다(노트 4.4 6).
 
 구현에서 정해진 것(M7-5): 두 배씩 늘리는 간격의 지수는 같은 줄의 실패가 이어진 횟수이고, 줄이 바뀌면 그 줄의 처음 간격부터다. 지터는 두지 않는다(식이 정해지지 않았고 한 노드가 혼자 보내는 요청이다). `Retry-After`의 시각은 실패 기록과 따로 들고 뒤의 조건 실패나 성공으로 지우지 않는다. 조건의 변화는 조건 기다림만 끝내고 물러남은 그대로 둔다(`retryNow()`는 둘 다 끝낸다).
+
+구현에서 정해진 것(M7-6): C1·C2의 조건 실패는 `RenewalSchedule`에 적지 않고 관리자가 사실로 판정한다(물러남과 연속 실패 횟수를 지우지 않게). `status.lastFailure`는 조건 실패가 있으면 그것, 없으면 마지막 시도의 실패다. `retryNow()`는 조건을 기다리는 중에도 `Retry-After` 전이면 아무 일도 하지 않는다.
 
 ### X. 신뢰할 수 없는 입력
 
@@ -466,6 +470,8 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 3. 오류의 연관 문자열에는 키·경로·기술자 번호를 넣지 않는다(M5의 규칙).
 4. 이 범위에는 비밀 값을 견주는 곳이 없다. 공개 키의 비교(동작 S3 ④, X3 ③)와 포트 번호의 조회뿐이다. 비밀 비교가 생기면 `SwiftailCrypto`의 상수 시간 비교를 쓴다.
 5. **인증서는 공개된다**: Let's Encrypt가 발급한 인증서는 공개 Certificate Transparency 로그에 실리고 거기에 기기 이름과 tailnet 이름이 들어간다(Let's Encrypt의 속도 제한 문서가 발급된 인증서를 CT 로그 검색으로 찾으라고 안내한다). Go 호스트도 지금 같다. 사용자 확인 필요 U3에 적는다.
+
+구현에서 정해진 것(M7-6): `CertificateManager`도 `CustomStringConvertible`·`CustomReflectable`이고 이름·키·계정 URL을 드러내지 않는다(2절 선언에 없는 공개 준수). 로그 범주는 `certificates`다.
 
 ### M. 한도
 

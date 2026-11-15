@@ -1,5 +1,5 @@
-// 계약 `docs/contracts/SwiftailHost.md` 2절의 선언 그대로다. ACME 주문 절차(M7-4)가 값을 만들고,
-// 공개 API의 나머지(`CertificateManager`, M7-6)가 이 파일을 넘겨받는다.
+// 계약 `docs/contracts/SwiftailHost.md` 2절의 선언 그대로다. ACME 주문 절차(M7-4)와 `CertificateManager`(M7-6)가
+// 값을 만들고, `CertificateStatus.lastFailure`로 앱에 낸다.
 
 import Foundation
 
