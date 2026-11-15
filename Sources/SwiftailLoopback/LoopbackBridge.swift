@@ -47,14 +47,18 @@ public final class LoopbackBridge: Sendable {
 
     /// 한 방향이 한 번에 쥐는 바이트(계약 한도 표: 방향당 64KiB).
     private static let chunkSize = 65_536
-    /// 루프백 연결을 맺는 기한(계약 한도 표).
+    /// 루프백 연결을 한 번 맺는 기한(계약 한도 표).
     private static let connectTimeout = Duration.seconds(5)
+    /// 루프백으로 거는 횟수. 뽑힌 출발 포트의 열쇠에 허가가 남아 있으면 다른 포트로 다시 건다(계약 한도 표).
+    private static let connectAttempts = 3
 
     private let node: TailnetNode
     let connectionLimit: Int
     let admission = LoopbackAdmissionTable()
     /// 루프백 연결을 닫기 직전에 그 연결의 열쇠와 표의 모양을 받는다. 시험만 쓴다.
     private let willEndLoopback: (@Sendable (LoopbackAdmissionTable.Key, LoopbackAdmissionTable.Snapshot) -> Void)?
+    /// 루프백으로 건 연결의 열쇠를 표에 적기 직전에 그 열쇠와 표를 받는다. 시험만 쓴다(뽑힌 출발 포트에 허가가 남은 경우를 만든다).
+    private let willExpect: (@Sendable (LoopbackAdmissionTable.Key, LoopbackAdmissionTable) -> Void)?
 
     /// `node`가 받은 연결을 잇는 다리. 신원은 `node.whoIs(_:)`로 찾는다. 잇는 연결은 256개까지다(노드의 연결 상한과 같다).
     public convenience init(node: TailnetNode) {
@@ -65,11 +69,13 @@ public final class LoopbackBridge: Sendable {
     /// 없다), 루프백 연결을 닫는 순간의 표를 본다.
     init(
         node: TailnetNode, connectionLimit: Int,
-        willEndLoopback: (@Sendable (LoopbackAdmissionTable.Key, LoopbackAdmissionTable.Snapshot) -> Void)? = nil
+        willEndLoopback: (@Sendable (LoopbackAdmissionTable.Key, LoopbackAdmissionTable.Snapshot) -> Void)? = nil,
+        willExpect: (@Sendable (LoopbackAdmissionTable.Key, LoopbackAdmissionTable) -> Void)? = nil
     ) {
         self.node = node
         self.connectionLimit = connectionLimit
         self.willEndLoopback = willEndLoopback
+        self.willExpect = willExpect
     }
 
     /// 서버의 루프백 리스너에 넣을 프로토콜. 다리가 보낸 토큰을 확인한 연결만 위로 올린다.
@@ -85,8 +91,8 @@ public final class LoopbackBridge: Sendable {
     /// 연결 하나를 `127.0.0.1:<port>`로 잇고, 두 방향이 다 끝날 때까지 바이트를 나른다. 끝나면 두 연결을 닫고 돌아온다.
     ///
     /// 차례(동작 B1): 상한을 보고, 상대의 신원을 확인하고, 루프백으로 건다(5초). 그 연결의 `(출발 포트, 리스너 포트)`와
-    /// 새 토큰을 표에 적은 **뒤에** 토큰을 보내고, 그 뒤에 복사를 시작한다. 끝나면 소비되지 않은 토큰을 거둔 **뒤에**
-    /// 루프백 연결을 닫는다.
+    /// 새 토큰을 표에 적은 **뒤에** 토큰을 보내고, 그 뒤에 복사를 시작한다. 그 열쇠에 앞선 연결의 허가가 남아 표가 받지
+    /// 않으면 다른 출발 포트로 다시 건다(3번까지). 끝나면 소비되지 않은 토큰을 거둔 **뒤에** 루프백 연결을 닫는다.
     ///
     /// 나르기(동작 B3·B4): 방향마다 덩어리 하나(64KiB 이하)만 쥐고, 받는 쪽이 받아 갈 때까지 다음을 읽지 않는다. 한쪽이
     /// 쓰기를 닫으면(FIN) 다른 쪽의 쓰기를 닫고 반대 방향은 계속 나른다.
@@ -109,31 +115,15 @@ public final class LoopbackBridge: Sendable {
             throw .unknownPeer
         }
 
+        let token = LoopbackAdmissionTable.makeToken()
         let socket: NetworkSocket
+        let key: LoopbackAdmissionTable.Key
         do {
-            socket = try await withTimeout(Self.connectTimeout) { try await NetworkSocket.connectLoopback(port: port) }
+            (socket, key) = try await openLoopback(
+                port: port, token: token, origin: Origin(remoteEndpoint: connection.remoteEndpoint, peer: peer))
         } catch {
             await connection.abort()
-            if Task.isCancelled { throw .cancelled }
-            switch error {
-            case SocketError.connectFailed(let message): throw .loopbackUnavailable(message)
-            case is TimeoutError: throw .loopbackUnavailable("5초 안에 연결하지 못했다")
-            default: throw .loopbackUnavailable("연결하지 못했다")
-            }
-        }
-
-        let origin = Origin(remoteEndpoint: connection.remoteEndpoint, peer: peer)
-        let token = LoopbackAdmissionTable.makeToken()
-        guard let sourcePort = socket.localPort else {
-            socket.abort()
-            await connection.abort()
-            throw .loopbackUnavailable("출발 포트를 읽지 못했다")
-        }
-        let key = LoopbackAdmissionTable.Key(sourcePort: sourcePort, listenerPort: port)
-        guard admission.expect(token, for: key, origin: origin) else {
-            socket.abort()
-            await connection.abort()
-            throw .loopbackUnavailable("토큰을 표에 적지 못했다")
+            throw error
         }
         guard await socket.writeAccepted(token) else {
             endLoopback(socket, key, .reset)
@@ -163,6 +153,42 @@ public final class LoopbackBridge: Sendable {
         return admission.take(LoopbackAdmissionTable.Key(sourcePort: remotePort.rawValue, listenerPort: localPort.rawValue))
     }
 
+    // MARK: 루프백 연결
+
+    /// `127.0.0.1:<port>`로 걸고, 그 연결의 열쇠에 `token`을 적는다. 아직 한 바이트도 보내지 않았다.
+    ///
+    /// 뽑힌 출발 포트의 열쇠에 허가가 남아 있으면 표가 받지 않는다(서버가 가져가지 않은 채 끝난 연결의 것이다. TLS
+    /// 핸드셰이크 전에 끝난 연결이 그렇게 남는다). 그때는 그 소켓을 쥔 채 다시 건다. 쥐고 있어야 커널이 같은 포트를 다시
+    /// 주지 않는다. 쥔 소켓은 돌아갈 때 RST로 끊는다(토큰을 보내지 않았으므로 서버에게는 준비되지 않고 끝난 연결이다).
+    private func openLoopback(
+        port: UInt16, token: [UInt8], origin: Origin
+    ) async throws(LoopbackBridgeError) -> (NetworkSocket, LoopbackAdmissionTable.Key) {
+        var refused: [NetworkSocket] = []
+        defer { for socket in refused { socket.abort() } }
+        for _ in 0..<Self.connectAttempts {
+            let socket: NetworkSocket
+            do {
+                socket = try await withTimeout(Self.connectTimeout) { try await NetworkSocket.connectLoopback(port: port) }
+            } catch {
+                if Task.isCancelled { throw .cancelled }
+                switch error {
+                case SocketError.connectFailed(let message): throw .loopbackUnavailable(message)
+                case is TimeoutError: throw .loopbackUnavailable("5초 안에 연결하지 못했다")
+                default: throw .loopbackUnavailable("연결하지 못했다")
+                }
+            }
+            guard let sourcePort = socket.localPort else {
+                socket.abort()
+                throw .loopbackUnavailable("출발 포트를 읽지 못했다")
+            }
+            let key = LoopbackAdmissionTable.Key(sourcePort: sourcePort, listenerPort: port)
+            willExpect?(key, admission)
+            if admission.expect(token, for: key, origin: origin) { return (socket, key) }
+            refused.append(socket)
+        }
+        throw .loopbackUnavailable("토큰을 표에 적지 못했다")
+    }
+
     // MARK: 나르기
 
     /// 두 방향을 나른다. 두 방향이 다 정상으로 끝나면 true.
@@ -186,9 +212,9 @@ public final class LoopbackBridge: Sendable {
 
     /// 토큰을 적은 뒤 루프백 연결을 끝내는 유일한 길. 소비되지 않은 토큰을 거둔 뒤에 닫는다.
     ///
-    /// 허가(서버가 아직 가져가지 않은 상대)는 지우지 않는다. 그것은 이 연결이 실제로 나른 바이트의 상대이고, 서버가 그
-    /// 연결에 대해 아직 물을 수 있다. 지우면 같은 4-튜플을 다시 쓰는 다리의 새 연결이 그 자리에 들어가, 늦게 온 조회가 다른
-    /// 상대를 얻을 수 있다.
+    /// 허가(서버가 아직 가져가지 않은 상대)는 지우지 않고 끝났다고만 적는다(`withdraw`). 그것은 이 연결이 실제로 나른
+    /// 바이트의 상대이고, 서버가 그 연결에 대해 아직 물을 수 있다. 지우면 같은 4-튜플을 다시 쓰는 다리의 새 연결이 그 자리에
+    /// 들어가, 늦게 온 조회가 다른 상대를 얻을 수 있다.
     private func endLoopback(_ socket: NetworkSocket, _ key: LoopbackAdmissionTable.Key, _ ending: LoopbackEnding) {
         admission.withdraw(key)
         willEndLoopback?(key, admission.snapshot)

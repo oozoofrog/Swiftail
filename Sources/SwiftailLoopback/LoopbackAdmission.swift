@@ -27,7 +27,8 @@ final class LoopbackAdmissionTable: Sendable {
     static let tokenLength = 32
     /// 기다리는 토큰의 상한. 다리가 잇는 연결의 상한(256)과 같다.
     static let expectedLimit = 256
-    /// 서버가 아직 가져가지 않은 허가의 상한. 넘으면 가장 오래된 것을 버린다(그 연결의 조회는 nil이 된다).
+    /// 서버가 아직 가져가지 않은 허가의 상한. 넘으면 다리 쪽이 끝난 연결의 허가 가운데 가장 오래된 것을 버린다(그 연결의
+    /// 조회는 nil이 된다). 다리가 잇는 연결은 256개까지이므로 살아 있는 연결의 허가는 밀려나지 않는다.
     static let admittedLimit = 256
 
     private struct Expected {
@@ -36,9 +37,15 @@ final class LoopbackAdmissionTable: Sendable {
         var origin: LoopbackBridge.Origin
     }
 
+    private struct Admitted {
+        var origin: LoopbackBridge.Origin
+        /// 다리가 그 루프백 연결을 끝냈다. 서버가 가져가지 않으면 남는 허가다(TLS 핸드셰이크 전에 끝난 연결이 그렇다).
+        var hasBridgeEnded = false
+    }
+
     private struct State {
         var expected: [Expected] = []
-        var admitted: [Key: LoopbackBridge.Origin] = [:]
+        var admitted: [Key: Admitted] = [:]
         /// `admitted`의 열쇠를 적은 차례(오래된 것부터). 상한을 넘을 때 버릴 것을 고른다.
         var admittedOrder: [Key] = []
     }
@@ -54,7 +61,8 @@ final class LoopbackAdmissionTable: Sendable {
     /// 다리: `key`의 연결에서 올 `token`을 기다린다.
     ///
     /// 그 열쇠가 이미 기다리는 중이거나, 허가된 채 서버가 아직 가져가지 않았으면 적지 않고 false다. 그 허가는 앞서 같은
-    /// 4-튜플을 썼던 연결의 것이고, 서버가 그 연결에 대해 아직 물을 수 있기 때문이다. 상한에 닿아도 false다.
+    /// 4-튜플을 썼던 연결의 것이고, 서버가 그 연결에 대해 아직 물을 수 있기 때문이다(다리는 다른 출발 포트로 다시 건다).
+    /// 상한에 닿아도 false다.
     func expect(_ token: [UInt8], for key: Key, origin: LoopbackBridge.Origin) -> Bool {
         state.withLock { state in
             guard state.expected.count < Self.expectedLimit,
@@ -66,9 +74,14 @@ final class LoopbackAdmissionTable: Sendable {
         }
     }
 
-    /// 다리: 끝난 연결의 토큰을 거둔다. framer가 이미 소비했으면 아무것도 하지 않는다.
+    /// 다리: 끝난 연결의 토큰을 거둔다. framer가 이미 소비했으면 그 허가에 다리 쪽이 끝났다고 적는다.
+    ///
+    /// 허가를 지우지는 않는다. 서버가 그 연결에 대해 아직 물을 수 있고, 지우면 같은 열쇠의 새 허가가 그 조회에 답할 수 있다.
     func withdraw(_ key: Key) {
-        state.withLock { $0.expected.removeAll { $0.key == key } }
+        state.withLock { state in
+            state.expected.removeAll { $0.key == key }
+            state.admitted[key]?.hasBridgeEnded = true
+        }
     }
 
     /// framer: `token`을 찾아 소비하고, 그것이 `key`의 연결을 위한 것이면 허가를 적고 true다.
@@ -85,9 +98,10 @@ final class LoopbackAdmissionTable: Sendable {
             let expected = state.expected.remove(at: match)
             guard expected.key == key, state.admitted[key] == nil else { return false }
             if state.admittedOrder.count >= Self.admittedLimit {
-                state.admitted[state.admittedOrder.removeFirst()] = nil
+                let ended = state.admittedOrder.firstIndex { state.admitted[$0]?.hasBridgeEnded == true }
+                state.admitted[state.admittedOrder.remove(at: ended ?? 0)] = nil
             }
-            state.admitted[key] = expected.origin
+            state.admitted[key] = Admitted(origin: expected.origin)
             state.admittedOrder.append(key)
             return true
         }
@@ -96,9 +110,9 @@ final class LoopbackAdmissionTable: Sendable {
     /// 서버: 허가된 연결의 상대를 한 번 내준다. 내준 뒤에는 지운다.
     func take(_ key: Key) -> LoopbackBridge.Origin? {
         state.withLock { state in
-            guard let origin = state.admitted.removeValue(forKey: key) else { return nil }
+            guard let admitted = state.admitted.removeValue(forKey: key) else { return nil }
             state.admittedOrder.removeAll { $0 == key }
-            return origin
+            return admitted.origin
         }
     }
 
@@ -139,17 +153,14 @@ final class LoopbackAdmissionFramer: NWProtocolFramerImplementation {
         guard !admitted else { return 0 }
         let length = LoopbackAdmissionTable.tokenLength
         var token: [UInt8]?
-        var ended = false
-        _ = framer.parseInput(minimumIncompleteLength: length, maximumLength: length) { buffer, isComplete in
-            ended = isComplete
+        _ = framer.parseInput(minimumIncompleteLength: length, maximumLength: length) { buffer, _ in
             guard let buffer, buffer.count >= length else { return 0 }
             token = Array(buffer.prefix(length))
             return length
         }
-        guard let token else {
-            if ended { framer.markFailed(error: .posix(.ECONNRESET)) }
-            return length
-        }
+        // 토큰을 다 받기 전에는 상대가 끝내도(FIN) 알 수 없다: 준비 전의 framer는 끝을 알리는 호출을 받지 않는다(실험으로
+        // 확인). 그런 연결은 `wakeup`의 기한에 끝난다.
+        guard let token else { return length }
         guard let table, let key = Self.key(of: framer), table.admit(token, for: key) else {
             framer.markFailed(error: .posix(.EACCES))
             return 0
