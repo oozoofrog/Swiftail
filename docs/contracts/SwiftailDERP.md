@@ -156,7 +156,7 @@ public actor DERPClient {
 
 제외(`shortcut:` 주석으로 남긴다):
 
-- fast-start, `sha256-raw:` 인증서 고정, `CertName`이 `HostName`과 다른 경우: 운영 DERP와 맺기 전(M4 마무리 관문)에 넣는다. `DERPServer`를 만들 때 엔진이 이런 노드를 건너뛴다.
+- fast-start. (`sha256-raw:` 인증서 고정과 `CertName`이 `HostName`과 다른 경우는 M8 ③에서 넣었다. 아래 "M8 ③" 절.)
 - IPv4 늦추기: Go는 IPv6를 선호하는 망에서 IPv4를 200ms 늦게 건다(`preferIPv6`). Swiftail에는 주소 체계 선호 판단이 없으므로 모든 대상을 곧바로 건다.
 - 체계를 정한 이름 풀기: Go는 빈 칸을 그 체계로만 푼다(`tcp4`·`tcp6`). Swiftail은 `hostName`을 체계 구분 없이 걸므로, 한 칸만 비고 다른 칸이 `"none"`이어도 막힌 체계로 걸 수 있다.
 - 실패의 세분: `connectionFailed`는 연결 거부·경로 없음·이름 풀기·TLS 실패를 가르지 않는다(`SocketError.connectFailed`가 Network 프레임워크 오류를 문자열로만 넘긴다).
@@ -184,7 +184,7 @@ public actor DERPClient {
 
 ## M8 ③: 인증서 이름과 인증서 고정
 
-운영 DERPMap에는 `CertName`이 `HostName`과 다른 노드와 `sha256-raw:`로 인증서를 고정한 노드(자체 서명 derper)가 있을 수 있다. 지금은 엔진이 그런 노드를 건너뛴다(`DERPServer.init?(_:)`). 이 단위에서 건너뛰지 않고 Go와 같은 규칙으로 검증한다. 근거: 노트 `derp-stun.md` 4.1 5, Go `derp/derphttp/derphttp_client.go`의 `tlsClient`, `net/tlsdial/tlsdial.go`의 `SetConfigExpectedCert`·`SetConfigExpectedCertHash`, `derp/derpconst`.
+운영 DERPMap에는 `CertName`이 `HostName`과 다른 노드와 `sha256-raw:`로 인증서를 고정한 노드(자체 서명 derper)가 있을 수 있다. 이 단위 전에는 엔진이 그런 노드를 건너뛰었다(`DERPServer.init?(_:)`). 이 단위에서 건너뛰지 않고 Go와 같은 규칙으로 검증한다. 근거: 노트 `derp-stun.md` 4.1 5, Go `derp/derphttp/derphttp_client.go`의 `tlsClient`, `net/tlsdial/tlsdial.go`의 `SetConfigExpectedCert`·`SetConfigExpectedCertHash`, `derp/derpconst`.
 
 fast-start는 이 단위의 범위가 아니다.
 
@@ -218,3 +218,14 @@ fast-start는 이 단위의 범위가 아니다.
 - 단위: 맞는 고정, 다른 해시, meta 인증서가 섞인 목록, meta가 아닌 것이 둘, 하나도 없음, 이름 불일치, 기한 지남·아직 아님, 대문자 고정 값, `.named`의 이름 일치·불일치(시험 앵커). `DERPServer.init?(_:)`의 세 갈래와 `insecureForTests`와의 차례.
 - 상호 운용: `Tools/interop`의 tailnet 도구가 DERP 노드를 `InsecureForTests` 대신 `CertName: sha256-raw:<그 서버 인증서의 해시>`로 알리는 모드. Swiftail 노드가 그 DERP로 Go 피어와 통신한다(Go derper는 meta 인증서를 함께 낸다). 틀린 해시를 알리면 DERP 연결이 실패한다.
 - 고정 검사를 일부러 망가뜨려(해시 비교를 건너뜀, meta가 아닌 인증서 수를 세지 않음) 시험이 잡는지 확인한다.
+
+## M8 ③ 구현하며 정해진 것
+
+- **IP 리터럴 `hostName`의 이름 검사(계약과 다름, Go를 따름)**: 동작 V 2 ②는 "IP 리터럴이면 IP SAN을 본다"고 했으나, Go는 보지 않는다. `SetConfigExpectedCertHash`는 `tls.ConnectionState.ServerName`이 비면 이름 검사를 건너뛰고(`net/tlsdial/tlsdial.go:340`, "it's empty when dialing a derper by IP with no hostname"), 클라이언트의 `ServerName`은 `hostnameInSNI`가 IP 리터럴을 빈 문자열로 바꾼 값이다(Go 1.27.3 `crypto/tls/handshake_client.go:78`, `:280`, `:1305-1320`, `conn.go:1629`). 그래서 `hostName`이 IP 리터럴(괄호, `%`범위 포함)이면 이름을 보지 않고, 이름이면 끝의 점을 뗀 이름으로 본다(`ServerCertificate.sniHostName`).
+- **판정의 자리**: `SwiftailIO`의 `ServerCertificate.checkPinned`·`checkNamed`(`package`). DER 목록·이름·시각(`.named`는 앵커도)을 받아 typed error(`ServerCertificate.Failure`)를 던진다. `NetworkSocket.TLS`에 `.named(serverName:certificateName:)`·`.pinned(serverName:sha256Hex:)`를 더했고, 검증 블록이 `sec_protocol_metadata_access_peer_certificate_chain`으로 서버가 낸 인증서를 모아 판정에 넘긴다. 검증 블록의 큐는 연결마다 따로다(판정이 `SecTrustEvaluateWithError`로 큐를 막는다).
+- **②③은 `SecTrust`로 본다**: 고정한 인증서 하나만 앵커로 두고(`SecTrustSetAnchorCertificatesOnly`), SSL 서버 정책(이름은 위 규칙, IP 리터럴이면 이름 없음), 검증 시각 지금, 네트워크 가져오기 끔. 그래서 Go가 보지 않는 Apple의 TLS 서버 인증서 조건(서버 인증 EKU, 825일 이하의 유효 기간 등)도 걸린다. derper의 IP 수동 인증서(`cmd/derper/cert.go`의 `createSelfSignedIPCert`: P-256, 서버 인증 EKU, IP SAN, 1년)는 통과한다(단위 시험의 고정 인증서와 상호 운용 시험). 이 조건을 어기는 자체 서명 인증서는 Go 클라이언트가 받아도 Swiftail은 받지 않는다.
+- **`.named`**: 받은 첫 인증서를 leaf로, 나머지를 사슬 후보로 두고 SSL 서버 정책(`certName`)과 시스템 신뢰 저장소로 평가한다. meta 인증서가 후보에 섞여도 된다. 네트워크 가져오기는 시스템 기본값 그대로다.
+- **해시 비교**: DER 전체의 SHA-256을 소문자 16진으로 바꿔 글자 그대로 견준다. 공개된 인증서의 해시라 상수 시간 비교가 아니다. meta 인증서 판정은 `SecCertificateCopyCommonName`(주체 CN)이 `derpkey`로 시작하는지다. 읽히지 않는 인증서가 하나라도 있으면 실패다(Go는 그런 인증서면 핸드셰이크가 먼저 실패한다).
+- **SHA-256의 의존**: `SwiftailIO`가 CryptoKit(시스템 프레임워크)과 Security를 쓴다. `Package.swift`는 바꾸지 않았다.
+- **확인한 플랫폼 동작**: ① `SecTrust`가 derper 모양의 IP 자체 서명 인증서를 그 인증서만 앵커로 받는다. ② `sec_protocol_options_set_tls_server_name`에 IP 리터럴(`127.0.0.1`)을 주면 Network 프레임워크도 SNI를 보내지 않는다(도구가 본 ClientHello의 SNI가 빈 문자열. Go와 같다). ③ 검증 블록의 `sec_protocol_metadata_access_peer_certificate_chain`은 서버가 낸 인증서 전부를 낸 차례대로 준다(도구가 낸 [leaf, meta]의 해시를 그 차례로 받았다). 플랫폼이 사슬을 다시 짠 결과가 아니므로 "정확히 하나"를 서버가 낸 목록에서 센다.
+- **상호 운용 도구**: `tailnet`의 `setDERPCertificate`(`mode`: `pinned`·`wrongPin`, 첫 제어 요청 전)가 DERP 서버 인증서를 derper의 IP 수동 인증서 모드와 같은 것으로 바꾸고 `derpserver.ModifyTLSConfigToAddMetaCert`로 meta 인증서를 붙인다. DERPMap 노드는 `InsecureForTests: false`, `CertName: sha256-raw:<해시>`가 된다. `wrongPin`은 서버가 함께 내는 meta 인증서의 해시를 알린다. `networkStatus`가 TLS ClientHello 수(`derpTLSHandshakes`)와 본 SNI(`derpServerNames`)를 더해 돌려준다. 단위 시험의 고정 인증서는 같은 도구의 `tailnet certificate-fixtures`가 만든다.

@@ -111,6 +111,8 @@ extension DERPClient {
     private static func tls(for server: DERPServer) -> NetworkSocket.TLS {
         switch server.verification {
         case .system: .system(serverName: server.hostName)
+        case .named(let certificateName): .named(serverName: server.hostName, certificateName: certificateName)
+        case .pinned(let sha256Hex): .pinned(serverName: server.hostName, sha256Hex: sha256Hex)
         case .noneForTests: .insecureForTests(serverName: server.hostName)
         }
     }

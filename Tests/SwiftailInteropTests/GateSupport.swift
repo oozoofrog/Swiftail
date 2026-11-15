@@ -229,7 +229,9 @@ func running(_ node: TailnetNode, containing marker: IPAddress? = nil) async thr
 }
 
 /// 매 시험의 도구·노드·상태를 격리하고 성공·실패·취소에서 모두 회수한다.
-func withGate(witness: Bool = false, direct: Bool = true, device: TunnelDevice = .memory(),
+///
+/// - Parameter derpCertificate: 주면 첫 제어 요청 전에 `setDERPCertificate`의 `mode`로 보낸다(`pinned`, `wrongPin`).
+func withGate(witness: Bool = false, direct: Bool = true, device: TunnelDevice = .memory(), derpCertificate: String? = nil,
               _ body: (Gate) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-m3-\(UUID().uuidString)")
     let tool = GoTailnet(temporaryDirectory: directory)
@@ -243,6 +245,9 @@ func withGate(witness: Bool = false, direct: Bool = true, device: TunnelDevice =
     do {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let ready = try await tool.start()
+        if let derpCertificate {
+            _ = try await tool.command(.init(cmd: "setDERPCertificate", mode: derpCertificate), expecting: "derpCertificate")
+        }
         let peer = try GatePeer(await tool.command(.init(cmd: "addPeer", name: "go-peer-a"), expecting: "peer"))
         let other: GatePeer?
         if witness { other = try GatePeer(await tool.command(.init(cmd: "addPeer", name: "go-peer-b"), expecting: "peer")) }

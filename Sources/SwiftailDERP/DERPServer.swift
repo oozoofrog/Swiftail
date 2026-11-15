@@ -27,12 +27,20 @@ public struct DERPServer: Sendable, Equatable {
     public enum Verification: Sendable, Equatable {
         /// 시스템 신뢰 저장소로 `hostName`을 검증한다.
         case system
+        /// 시스템 신뢰 저장소로 사슬을 검증하되 인증서의 이름은 이 값으로 본다. SNI와 HTTP `Host`는 그대로
+        /// `hostName`이다. DERPMap의 `CertName`이 `HostName`과 다른 노드에 쓴다.
+        case named(String)
+        /// 서버가 낸 인증서 가운데 meta 인증서(주체 CN이 `derpkey`로 시작)를 뺀 것이 정확히 하나이고, 그 DER 전체의
+        /// SHA-256을 소문자 16진으로 쓴 것이 이 값과 글자 그대로 같아야 한다. 그 인증서는 지금 유효 기간 안이고,
+        /// `hostName`이 IP 리터럴이 아니면 그 이름에 유효해야 한다. 사슬은 검증하지 않는다. DERPMap의 `CertName`이
+        /// `sha256-raw:<hex>`인 노드(자체 서명 derper)에 쓴다.
+        case pinned(sha256Hex: String)
         /// 검증하지 않는다. DERPMap이 `InsecureForTests`인 노드에만 쓴다.
         case noneForTests
     }
 
-    // shortcut: fast-start, `sha256-raw:` 인증서 고정, `CertName`이 `HostName`과 다른 경우는 다루지 않는다. 운영
-    // DERP와 맺기 전(M4 마무리 관문)에 넣는다. 그때까지 엔진이 이런 노드로는 `DERPServer`를 만들지 않고 건너뛴다.
+    // shortcut: fast-start(meta 인증서의 서버 키로 업그레이드 응답을 기다리지 않는 것)는 하지 않는다. 필요해지는 시점:
+    // DERP 연결 시간의 왕복 하나가 문제가 될 때.
     public init(hostName: String, targets: [Target] = [.hostName], port: UInt16 = 443, verification: Verification = .system) {
         self.hostName = hostName
         self.targets = targets
