@@ -36,6 +36,7 @@ M6의 목표는 **OS의 TCP 스택 없이 프로세스 안에서 tailnet 주소�
 | keep-alive(고정 값, 늘 켬) | Go 호스트가 죽은 상대의 연결을 이것으로 거둔다(총괄 확인 필요 N5) |
 | RFC 5961의 RST·SYN·ACK 검사와 challenge ACK 속도 제한 | 동작 X |
 | 순서가 어긋난 세그먼트 보관(받는 창 안, 구간 수 상한) | 손실 뒤 창 전체를 다시 받지 않는다 |
+| 받는 쪽 SACK: SACK-Permitted 협상, 받는 버퍼의 구간을 SACK 블록으로 내기(M6-10a) | 상대(gVisor, 커널)가 한 창의 여러 손실을 RTO 없이 다시 보낸다. 관문의 손실 기록으로 열었다(N3). 받은 블록으로 다시 보내는 쪽(RFC 6675)은 제외 표 |
 | TIME-WAIT | MUST-13 |
 
 빼는 것은 아래 "제외" 표에 근거와 필요해지는 시점을 적는다. 빠진 기능은 닫힌 쪽이다: 협상하지 않는 옵션은 보내지 않고, 받은 것은 무시한다.
@@ -204,13 +205,14 @@ tsnet과의 대응:
 ### W. 세그먼트 코덱 (`TCPSegment`)
 
 1. **해석**: 입력은 IP 패킷 바이트다. IPv4(옵션 포함)와 IPv6(확장 헤더 없음)의 머리에서 주소와 길이를 읽고, 프로토콜이 6이 아니면 `notTCP`, TCP 머리가 20바이트보다 짧거나 data offset이 5 미만이거나 세그먼트 밖을 가리키면 `malformed`, 체크섬이 틀리면 `badChecksum`이다. 엔진이 이미 IP 머리를 검사했지만(`IPPacket`), 스택은 자기 경계에서 다시 본다(스택만 따로 시험할 수 있고, 패킷 캡처를 그대로 넣을 수 있다).
-2. **옵션**(TCP 노트 3.2): EOL에서 멈추고 NOP는 건너뛴다. MSS(kind 2, 길이 4)와 Window Scale(kind 3, 길이 3)만 읽고, SYN이 아닌 세그먼트의 둘은 무시한다. 모르는 옵션은 길이로 건너뛴다. 길이가 2보다 작거나 머리 밖으로 나가면 세그먼트를 `malformed`로 버린다(MUST-7의 대비. 연결을 끊지 않는다). MSS 0은 536(IPv4)·1220(IPv6)으로, shift가 14를 넘으면 14로 읽는다(RFC 7323 2.3).
-3. **만들기**: 머리 20바이트 + 옵션(SYN에만 MSS, 협상 중이면 Window Scale, NOP로 4바이트 경계) + 데이터. 체크섬을 채운다. IP 머리는 IPv4면 IHL 5, DF 켬, 식별자 0, TTL 64. IPv6면 hop limit 64, flow label 0. 64는 Go·gVisor의 기본값이다(터널 계약 동작 L2).
+2. **옵션**(TCP 노트 3.2): EOL에서 멈추고 NOP는 건너뛴다. MSS(kind 2, 길이 4), Window Scale(kind 3, 길이 3), SACK-Permitted(kind 4, 길이 2), SACK(kind 5, 길이 `2 + 8n`, n ≥ 1)만 읽는다. 앞의 셋은 SYN에서만, SACK은 SYN이 아닌 세그먼트에서만 담고 나머지 경우는 무시한다(RFC 2018 2: SACK-Permitted는 SYN에만 보낸다). 모르는 옵션은 길이로 건너뛴다. 길이가 2보다 작거나 머리 밖으로 나가면 세그먼트를 `malformed`로 버린다(MUST-7의 대비. 연결을 끊지 않는다). MSS 0은 536(IPv4)·1220(IPv6)으로, shift가 14를 넘으면 14로 읽는다(RFC 7323 2.3). SACK 블록은 왼쪽 끝·오른쪽 끝 32비트 둘을 옵션의 순서대로 값으로 내놓고, 번호의 뜻(왼쪽이 오른쪽보다 앞인지, 보낸 범위 안인지)은 따지지 않는다. 블록이 옵션 공간 40바이트를 넘는 SACK(n ≥ 5, 길이 42 이상)은 머리 밖으로 나가므로 `malformed`다. **연결은 받은 SACK 블록을 아직 쓰지 않는다**(보내는 쪽 회복은 M6-10b).
+3. **만들기**: 머리 20바이트 + 옵션 + 데이터. SYN에는 MSS, NOP 둘과 SACK-Permitted(실을 때), NOP와 Window Scale(협상 중이면)을 이 순서로 싣는다(gVisor `makeSynOptions`가 따르는 Linux의 순서). SYN이 아닌 세그먼트에는 SACK 블록이 있을 때만 NOP 둘과 SACK을 싣는다(gVisor `makeOptions`와 같다). 어느 조합이든 4바이트 경계에 맞는다. SACK 블록이 4개를 넘으면 머리에 들어가지 않아 만들지 않는다(`nil`). 체크섬을 채운다. IP 머리는 IPv4면 IHL 5, DF 켬, 식별자 0, TTL 64. IPv6면 hop limit 64, flow label 0. 64는 Go·gVisor의 기본값이다(터널 계약 동작 L2).
 4. urgent pointer와 CWR·ECE는 보낼 때 0, 받을 때 무시한다.
 구현에서 정해진 것(M6-1, 2026-11-15):
 
 - 검사 순서는 IP 머리의 구조 → 프로토콜(`notTCP`) → 조각 → IPv4 머리 체크섬 → TCP 머리 → TCP 체크섬 → 옵션이다. IPv4 머리 체크섬도 본다(틀리면 `badChecksum`). IPv4 조각(MF나 오프셋)은 `malformed`, IPv6 확장 헤더·조각 헤더(next header가 6이 아님)는 `notTCP`다.
 - 길이가 규격과 다른 MSS(4가 아님)·Window Scale(3이 아님)은 값을 읽지 않고 길이로 건너뛴다. 같은 옵션이 여럿이면 뒤의 것이 남는다(gVisor와 같다). SYN이 아닌 세그먼트도 옵션의 길이는 검사한다.
+- 구현에서 정해진 것(M6-10a, 2026-11-15): 길이가 2가 아닌 SACK-Permitted와, 길이가 `2 + 8n`(n ≥ 1)이 아닌 SACK(블록 없는 길이 2 포함)도 같은 규칙으로 값을 읽지 않고 길이로 건너뛴다(gVisor는 그 자리에서 해석을 멈춘다. 뒤에 다른 옵션이 없으면 결과가 같다). 필드는 `sackPermitted`(SYN에만)와 `sackBlocks`(`TCPSegment.SACKBlock`의 `leftEdge`·`rightEdge`, SYN이 아닌 세그먼트에만)다. Go 기준값 대조에 SACK 사례 13개를 더했다(gVisor 인코더로 만든 SYN·ACK 5개는 Swift가 만드는 바이트와도 같다. 머리 밖으로 나가는 SACK 2개는 gVisor가 해석을 멈추고 계약은 `malformed`로 버리는 표시된 차이다).
 - 선언: `TCPSegment`의 필드는 `source`·`destination`(`IPEndpoint`), `sequenceNumber`·`acknowledgmentNumber`(`SequenceNumber`), `flags`(`fin`·`syn`·`rst`·`psh`·`ack`), `window`(머리의 16비트 그대로), `maximumSegmentSize`·`windowScale`(SYN에만), `payload`, 그리고 `sequenceLength`(SEG.LEN)다. 체크섬은 `SwiftailBase`의 `InternetChecksum`(`add`, `addPseudoHeader`, `value`)이다.
 
 5. 시퀀스 번호는 2^32 순환 타입(`SequenceNumber`)으로만 다룬다. 비교와 차이는 부호 있는 32비트 차이로 한다. `UInt32`를 직접 견주는 코드가 없어야 한다.
@@ -219,9 +221,9 @@ tsnet과의 대응:
 
 1. 상태는 SYN-SENT, SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN-WAIT-2, CLOSE-WAIT, CLOSING, LAST-ACK, TIME-WAIT, CLOSED다(RFC 9293 3.3.2). LISTEN은 스택이 맡는다(동작 S).
 2. **세그먼트 처리 순서**는 RFC 9293 3.10.7.4(TCP 노트 4.2) 그대로다: 시퀀스 검사 → RST → SYN → ACK → 데이터 → FIN. 순서를 바꾸지 않는다. SYN-SENT는 이 순서가 아니라 RFC 9293 3.10.7.3의 절차를 따로 따른다(ACK 검사 → RST → SYN). gVisor의 처리 순서는 RFC와 다르므로(받은 데이터를 먼저, ACK를 나중에) 순서의 근거로 쓰지 않는다. FIN은 그 앞의 데이터가 빈 곳 없이 도착한 뒤에만 소비한다.
-3. **능동 열기**: SYN(MSS, Window Scale)을 보내고 SYN-SENT. SYN-ACK를 받으면 ACK를 보내고 ESTABLISHED, `.established`. RST(ACK가 맞는 것)를 받으면 `.closed(.refused)`. ACK 없는 SYN(동시 열기)은 버린다(제외 표).
-4. **수동 열기**: 스택이 SYN을 넘겨 연결을 만든다. SYN-ACK를 보내고 SYN-RECEIVED. 맞는 ACK를 받으면 ESTABLISHED, `.established`. 틀린 ACK에는 `<SEQ=SEG.ACK><CTL=RST>`. RST는 동작 X3의 규칙으로 본다: `SEG.SEQ = RCV.NXT`일 때만 조용히 사라지고, 창 안의 다른 값이면 challenge ACK다(`.closed`를 내되 앱에는 알려지지 않는다. 아직 accept되지 않았다).
-5. **MSS**: 광고하는 값은 1280 − IP 머리 − 20이다(IPv4 1240, IPv6 1220. TCP 노트 7절). 보내는 세그먼트의 데이터는 `min(상대가 광고한 MSS, 광고하는 값과 같은 식)`에서 그 세그먼트의 TCP 옵션 길이를 뺀 것 이하다(RFC 9293 3.7.1. 데이터 세그먼트에는 옵션을 싣지 않으므로 지금은 0이다). 상대의 SYN에 MSS 옵션이 없으면 IPv4 536, IPv6 1220으로 본다(같은 절). MSS를 지킨다고 경로에서 단편화되지 않는 것은 아니다. tailnet 경로는 WireGuard가 1280을 보장한다.
+3. **능동 열기**: SYN(MSS, SACK-Permitted, Window Scale)을 보내고 SYN-SENT. 다시 보내는 SYN도 같은 옵션이다. SYN-ACK를 받으면 ACK를 보내고 ESTABLISHED, `.established`. RST(ACK가 맞는 것)를 받으면 `.closed(.refused)`. ACK 없는 SYN(동시 열기)은 버린다(제외 표).
+4. **수동 열기**: 스택이 SYN을 넘겨 연결을 만든다. SYN-ACK를 보내고 SYN-RECEIVED. SYN-ACK에는 상대의 SYN에 SACK-Permitted가 있었을 때만 SACK-Permitted를 싣는다(RFC 2018은 수동 쪽의 조건을 정하지 않는다. gVisor `connect.go`의 SYN-ACK와 같다). 다시 보내는 SYN-ACK도 같다. **SACK 블록은 방향마다, 상대의 SYN(SYN-ACK)에 SACK-Permitted가 있었을 때만 보낸다**(RFC 2018 4 MUST NOT). 옵션 공간: SYN의 옵션은 MSS 4 + NOP 둘과 SACK-Permitted 4 + NOP와 Window Scale 4 = 12바이트로 40바이트 안이다. 맞는 ACK를 받으면 ESTABLISHED, `.established`. 틀린 ACK에는 `<SEQ=SEG.ACK><CTL=RST>`. RST는 동작 X3의 규칙으로 본다: `SEG.SEQ = RCV.NXT`일 때만 조용히 사라지고, 창 안의 다른 값이면 challenge ACK다(`.closed`를 내되 앱에는 알려지지 않는다. 아직 accept되지 않았다).
+5. **MSS**: 광고하는 값은 1280 − IP 머리 − 20이다(IPv4 1240, IPv6 1220. TCP 노트 7절). 보내는 세그먼트의 데이터는 `min(상대가 광고한 MSS, 광고하는 값과 같은 식)`에서 그 세그먼트의 TCP 옵션 길이를 뺀 것 이하다(RFC 9293 3.7.1). 데이터 세그먼트의 옵션은 SACK뿐이고 길이는 `4 + 8n`(블록 n개, 4개면 36바이트)이다. 광고하는 MSS가 MTU 1280을 꽉 채우므로 미리 둔 여유가 없다: SACK이 실리면 그만큼 데이터를 줄인다(IPv4 블록 4개면 1204바이트. M6-10a). 상대의 SYN에 MSS 옵션이 없으면 IPv4 536, IPv6 1220으로 본다(같은 절). MSS를 지킨다고 경로에서 단편화되지 않는 것은 아니다. tailnet 경로는 WireGuard가 1280을 보장한다.
 6. **닫기**(TCP 노트 4.4):
    - `finishWriting`: 보내는 버퍼가 비면 FIN을 보낸다. ESTABLISHED → FIN-WAIT-1, CLOSE-WAIT → LAST-ACK.
    - `close`: `finishWriting`에 더해 읽기를 끝낸다. 받는 버퍼에 읽지 않은 데이터가 있으면 곧바로 RST를 보내고 끝난다. 닫은 뒤에 데이터가 오면 RST를 보내고 끝난다(SHLD-3).
@@ -267,6 +269,7 @@ tsnet과의 대응:
 4. **순서가 어긋난 데이터**는 받는 창 안의 것만 받는 버퍼의 제자리에 둔다. 구간(빈 곳으로 갈린 덩어리)은 32개까지다. 넘으면 그 세그먼트를 버린다(상대가 다시 보낸다). 겹치는 바이트는 먼저 받은 것을 둔다. 창의 왼쪽이나 오른쪽으로 걸친 세그먼트는 창 안의 부분만 받는다.
    - 구현에서 정해진 것(M6-2, `ReceiveBuffer`): 구간은 `RCV.NXT`에서의 거리로 둔다. 새 구간이 필요한 세그먼트만 32개 상한을 받고, 기존 구간을 늘리거나 잇거나 `RCV.NXT`에 닿는 세그먼트는 32개에서도 받는다. 33번째 구간이 필요한 세그먼트는 창 안의 부분도 받지 않는다. 저장소는 연결당 원형 하나이고 쓰는 만큼만(4KiB부터 두 배씩) 자란다. `shortcut:` 한 번 자란 저장소는 줄이지 않는다. `ReceiveBuffer.windowEnd`는 앱이 읽을 때만 나아가고, 연결은 거기서 SWS 회피와 shift 내림을 거친 오른쪽 끝을 따로 기억한다. 버퍼는 물리 한계까지만 자르므로, 광고한 오른쪽 끝을 넘는 바이트는 **연결이 `insert` 전에 잘라 버린다**.
 5. **ACK 보내기**: 순서가 어긋난 세그먼트, 빈 곳을 메우는 세그먼트, FIN, 창 밖 세그먼트에는 곧바로 ACK한다. 순서대로 온 데이터는 확인하지 않은 양이 2×MSS 이상이면 곧바로, 아니면 40ms 안에 ACK한다(RFC의 한도는 500ms 미만). 나가는 데이터 세그먼트가 있으면 거기에 실어 보낸다. 노드가 한 번에 처리하는 패킷 묶음 안에서도 곧바로 보낼 ACK는 **세그먼트마다 하나씩** 낸다(RFC 5681 4.2의 immediate ACK. 묶음 안의 어긋난 세그먼트들이 중복 ACK 하나로 합쳐지면 상대의 fast retransmit이 늦는다). 묶음에서 합쳐지는 것은 순서대로 온 데이터의 ACK뿐이고, 그것도 2×MSS마다 하나다(MUST-58·59. 동작 N4).
+   - **SACK 블록**(M6-10a, RFC 2018 4·7. 상대가 SACK-Permitted를 보냈을 때만, 동작 T4): 받는 버퍼에 빈 곳 너머의 구간이 있는 동안 나가는 **모든 ACK**(순수 ACK, 데이터에 실린 ACK, 0 창 탐침, keep-alive, challenge ACK)에 SACK 옵션을 싣는다. 블록은 받는 버퍼의 순서가 어긋난 구간(동작 F4, 32개까지)에서 만들고 옵션 공간이 허락하는 4개까지다(타임스탬프를 쓰지 않는다). **첫 블록은 이 ACK를 일으킨 세그먼트가 든 구간**이다. 그 세그먼트가 RCV.NXT를 나아가게 했으면 이 규칙은 걸리지 않는다. 나머지는 최근에 알린 순서다: 순서가 어긋난 세그먼트에는 늘 곧바로 ACK하므로 구간마다 "마지막으로 세그먼트가 든 차례"를 적어 두고 그 역순으로 고르면 그것이 "가장 최근에 첫 블록으로 알린 순서"다. 구간은 서로 겹치지 않으므로 앞 블록의 부분 집합인 블록이 없다. 이미 받아 둔 구간 안의 바이트가 다시 와도 그 구간이 첫 블록이 된다. 빈 곳이 다 메워지면 싣지 않는다. 받은 데이터를 버리지 않으므로(reneging 없음) 블록은 늘 받는 버퍼에 있는 바이트다. RST에는 싣지 않는다. 스택의 TIME-WAIT 기록이 내는 ACK에는 받는 버퍼가 없어 싣지 않는다. `shortcut:` D-SACK(RFC 2883)은 내지 않는다. 이 쪽이 상대에게 보내는 데이터 세그먼트는 SACK 옵션만큼 데이터를 줄인다(동작 T5).
    - 받는 버퍼에 빈 곳이 있는 동안에도 새 데이터를 보낸다. SACK이 없을 때 gVisor는 데이터가 실린 세그먼트를 받으면 중복 ACK 수를 0으로 되돌리고, 데이터가 실린 partial ACK로는 다음 빈 곳을 다시 보내지 않는다(`snd.go`의 `checkDuplicateAck`·`isDupAck`, `reno_recovery.go`의 `DoRecovery`). 그래서 양방향으로 동시에 보내는 전송에서는 손실마다 상대의 RTO를 기다리게 된다. 빈 곳이 있는 동안 새 데이터를 보류하는 규칙을 넣어 보았으나 뺐다: 앱이 쓰기를 끝낸 뒤에야 읽는데 광고한 창이 0이면(상대는 빈 곳을 다시 보내지 못하고 탐침만 한다) 양쪽이 서로를 기다린 채 멈춘다. 손실 1%의 처리량은 보류가 있을 때 5.2~7.3MB/s, 없을 때 3.6~5.0MB/s로 조금 높았지만(두세 번씩 잰 값이고 실행마다 크게 흔들린다) 멈춤과 바꿀 만한 차이가 아니다. 이 손실 회복의 약점은 SACK(M6-10)으로 푼다(2026-11-15).
 6. **보내는 버퍼**는 연결마다 256KiB다(아직 확인받지 못한 것과 아직 보내지 않은 것의 합). `write`는 자리가 있는 만큼만 받아들인다.
    - 구현에서 정해진 것(M6-2, `SendBuffer`): SYN·FIN은 버퍼 밖의 번호라 연결이 센다. `startSequence`는 데이터 쪽 `SND.UNA`이고, 범위 밖 ACK는 버퍼를 바꾸지 않는다. `shortcut:` 꺼낼 때마다 새 배열에 복사한다(`Span`은 지원 하한 macOS 15·iOS 18에 없다).
@@ -493,7 +496,7 @@ RemoteDebug 세션이 F1~F13에 답했다(그쪽 `2814b2c`의 Go 코드에서 �
 
 | 제외 | 근거 | 필요해지는 시점 |
 | --- | --- | --- |
-| SACK(보내기·받기) | N3 | 관문에서 손실 1%의 처리량이 기준 아래일 때 |
+| 보내는 쪽 SACK(받은 블록으로 잃은 구간 고르기, RFC 6675), D-SACK(RFC 2883) | 받는 쪽(협상과 블록 내기, 동작 F5 아래)은 M6-10a로 들어갔다. 받은 블록은 코덱이 값으로 내놓지만 연결이 쓰지 않는다 | 보내는 쪽: M6-10b(10a 뒤의 측정과 실기기 기록을 보고 연다). D-SACK: 상대의 재정렬 감지가 문제가 될 때 |
 | 타임스탬프, PAWS | D3 | 재전송이 잦은 경로에서 RTO가 맞지 않을 때, 한 연결이 4GiB를 여러 번 넘겨 옛 세그먼트와 헷갈릴 수 있을 때 |
 | CUBIC, RACK, limited transmit(RFC 3042) | D1 | 대역·지연이 큰 경로에서 NewReno의 처리량이 문제일 때 |
 | Nagle | D5 | 작은 쓰기를 많이 하는 앱이 생길 때 |

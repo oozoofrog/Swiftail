@@ -1,6 +1,6 @@
 // Go(gVisor) 기준 자료와 TCP 세그먼트 코덱의 독립 대조 시험.
 //
-// 자료(`Fixtures/tcp-segments.json`)는 `Tools/interop/cmd/tcpfixtures`가 gVisor의 `header` 패키지로 만든 IP 패킷 49개와
+// 자료(`Fixtures/tcp-segments.json`)는 `Tools/interop/cmd/tcpfixtures`가 gVisor의 `header` 패키지로 만든 IP 패킷 62개와
 // 각 사례의 해석 결과다. 사례마다 `go`(gVisor가 실제로 돌려준 값)와 `swiftail`(계약이 정한 기대값)이 있고, 둘이 다르면
 // `swiftailDiffers`에 까닭이 있다. 이 시험은 코덱을 쓴 세션과 다른 세션이 썼고, 코덱의 소스를 읽어 기대값을 맞추지 않았다.
 //
@@ -14,6 +14,9 @@
 //   없으면 IPv4 536·IPv6 1220으로 본다)을 적용한 값이 자료와 같은지 확인한다.
 // - 표시된 차이(`swiftailDiffers`)는 `go`와 `swiftail`이 다른 필드를 계산해, 표에 적은 필드와 같은지 보고, 코덱의 결과가
 //   그 필드에서 `swiftail`과 같고 `go`와는 다름을 확인한다.
+// - `sackPermitted`는 SYN에서만 bool이고 아니면 null, `sackBlocks`는 SYN이 아닐 때만 `[왼쪽 끝, 오른쪽 끝]`의 목록이고
+//   SYN이면 null이다. 코덱은 SYN이면 `sackBlocks`를, SYN이 아니면 `sackPermitted`를 비워 둔다(M6-10a에서 더했다. 이 부분은
+//   코덱을 쓴 세션이 함께 고쳤다).
 
 import Foundation
 import Testing
@@ -41,6 +44,8 @@ private struct FixtureResult: Decodable, Equatable {
         var optionsHex: String
         var mss: UInt16?
         var windowScale: Int?
+        var sackPermitted: Bool?
+        var sackBlocks: [[UInt32]]?
         var dataLength: Int
     }
 
@@ -153,6 +158,11 @@ private func differences(of segment: TCPSegment, from expected: FixtureResult.De
     check("mss", expected: expected.mss, actual: actualMSS)
     check("windowScale", expected: expected.windowScale.map { $0 < 0 ? nil : UInt8($0) } ?? nil,
           actual: segment.windowScale)
+    let isSynchronize = segment.flags.contains(.syn)
+    check("sackPermitted", expected: expected.sackPermitted, actual: isSynchronize ? segment.sackPermitted : nil)
+    check("sackBlocks", expected: expected.sackBlocks,
+          actual: isSynchronize ? nil : segment.sackBlocks.map { [$0.leftEdge.rawValue, $0.rightEdge.rawValue] })
+    if isSynchronize { check("SYN의 sackBlocks", expected: 0, actual: segment.sackBlocks.count) }
     return found
 }
 
@@ -182,7 +192,7 @@ private func differingFields(_ go: FixtureResult, _ swiftail: FixtureResult) -> 
 
 @Suite("Go(gVisor) 기준 자료와 TCP 세그먼트 코덱의 대조")
 struct GoSegmentComparisonTests {
-    /// `swiftailDiffers`가 있는 9개와 차이가 나는 필드. 자료 도구(`tcpfixtures`)가 적은 이유와 README의 설명에서 옮겼다.
+    /// `swiftailDiffers`가 있는 11개와 차이가 나는 필드. 자료 도구(`tcpfixtures`)가 적은 이유와 README의 설명에서 옮겼다.
     private static let markedDifferences: [String: Set<String>] = [
         "ipv4-mss-zero": ["windowScale"],  // Go는 MSS 0에서 옵션 해석을 멈춰 뒤의 WS를 읽지 않는다
         "ipv6-mss-zero": ["mss", "windowScale"],  // 위와 같고, 기본 MSS도 536과 1220으로 다르다
@@ -193,6 +203,8 @@ struct GoSegmentComparisonTests {
         "unknown-length-outside": ["error"],
         "missing-option-length": ["error"],
         "mss-outside": ["error"],
+        "sack-outside": ["error"],  // Go는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다
+        "sack-five-blocks": ["error"],
     ]
 
     /// MSS 옵션이 없는 SYN. 자료의 `mss`는 유효 MSS(기본값 포함)이고 코덱의 필드는 "광고하지 않으면 nil"이다.
@@ -205,17 +217,19 @@ struct GoSegmentComparisonTests {
         "ipv4-syn-mss-ws", "ipv4-synack", "ipv4-odd-payload", "ipv4-checksum-carries", "ipv4-fin-ack", "ipv4-rst",
         "ipv6-syn-mss-ws", "ipv6-synack", "ipv6-odd-payload", "ipv6-checksum-carries", "ipv6-fin-ack", "ipv6-rst",
         "shift-14",
+        "ipv4-syn-sack-permitted", "ipv6-syn-sack-permitted", "ipv4-ack-sack-one-block", "ipv6-ack-sack-four-blocks",
+        "ipv4-ack-sack-payload",
     ]
 
-    @Test("자료의 머리와 사례 수, 표시 수가 README와 같다")
+    @Test("자료의 머리와 사례 수, 표시 수가 도구의 시험(main_test.go)과 같다")
     func fixtureCoverage() throws {
         let fixture = try loadTCPSegmentFixture()
         #expect(fixture.reference.hasPrefix("gvisor.dev/gvisor "), "기대=gVisor 기준 실제=\(fixture.reference)")
-        #expect(fixture.caseCount == 49, "기대=caseCount 49 실제=\(fixture.caseCount)")
-        #expect(fixture.cases.count == 49, "기대=사례 49개 실제=\(fixture.cases.count)")
+        #expect(fixture.caseCount == 62, "기대=caseCount 62 실제=\(fixture.caseCount)")
+        #expect(fixture.cases.count == 62, "기대=사례 62개 실제=\(fixture.cases.count)")
         #expect(Set(fixture.cases.map(\.name)).count == fixture.cases.count, "기대=사례 이름이 서로 다름 실제=중복 있음")
         let marked = fixture.cases.filter { $0.swiftailDiffers != nil }
-        #expect(marked.count == 9, "기대=표시된 차이 9개 실제=\(marked.count)")
+        #expect(marked.count == 11, "기대=표시된 차이 11개 실제=\(marked.count)")
         #expect(Set(marked.map(\.name)) == Set(Self.markedDifferences.keys),
                 "기대=표시된 사례 \(Self.markedDifferences.keys.sorted()) 실제=\(marked.map(\.name))")
         for item in fixture.cases {
@@ -270,7 +284,7 @@ struct GoSegmentComparisonTests {
         }
     }
 
-    @Test("표시된 차이는 9개이고, 코덱이 go와 다른 사례는 바로 그 9개다")
+    @Test("표시된 차이는 11개이고, 코덱이 go와 다른 사례는 바로 그 11개다")
     func markedDifferenceCount() throws {
         let fixture = try loadTCPSegmentFixture()
         var marked = 0
@@ -286,7 +300,7 @@ struct GoSegmentComparisonTests {
             }
             if differs { codecDiffersFromGo.append(item.name) }
         }
-        #expect(marked == 9, "기대=표시된 차이 9개 실제=\(marked)")
+        #expect(marked == 11, "기대=표시된 차이 11개 실제=\(marked)")
         let expected = Set(Self.markedDifferences.keys)
         #expect(Set(codecDiffersFromGo) == expected, "기대=코덱이 go와 다른 사례 \(expected.sorted()) 실제=\(codecDiffersFromGo.sorted())")
     }

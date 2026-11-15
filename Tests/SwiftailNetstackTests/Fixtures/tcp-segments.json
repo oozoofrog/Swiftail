@@ -1,6 +1,6 @@
 {
   "reference": "gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72",
-  "caseCount": 49,
+  "caseCount": 62,
   "cases": [
     {
       "name": "ipv4-syn-mss-ws",
@@ -24,6 +24,8 @@
           "optionsHex": "020404c401030303",
           "mss": 1220,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -46,6 +48,8 @@
           "optionsHex": "020404c401030303",
           "mss": 1220,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -72,6 +76,8 @@
           "optionsHex": "020404d801030300",
           "mss": 1240,
           "windowScale": 0,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -94,6 +100,8 @@
           "optionsHex": "020404d801030300",
           "mss": 1240,
           "windowScale": 0,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -120,6 +128,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 5
         }
       },
@@ -142,6 +152,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 5
         }
       }
@@ -168,6 +180,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 9
         }
       },
@@ -190,6 +204,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 9
         }
       }
@@ -216,6 +232,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       },
@@ -238,6 +256,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       }
@@ -264,6 +284,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       },
@@ -286,6 +308,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       }
@@ -312,6 +336,8 @@
           "optionsHex": "020404b00103030f",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       },
@@ -334,6 +360,8 @@
           "optionsHex": "020404b00103030f",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       }
@@ -360,6 +388,8 @@
           "optionsHex": "",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -382,6 +412,8 @@
           "optionsHex": "",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -408,6 +440,8 @@
           "optionsHex": "0204000001030303",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -430,6 +464,8 @@
           "optionsHex": "0204000001030303",
           "mss": 536,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -457,6 +493,8 @@
           "optionsHex": "020404c40103030f",
           "mss": 1220,
           "windowScale": 14,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -479,6 +517,8 @@
           "optionsHex": "020404c40103030f",
           "mss": 1220,
           "windowScale": 14,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -505,6 +545,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 3
         }
       },
@@ -527,6 +569,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 3
         }
       }
@@ -553,6 +597,8 @@
           "optionsHex": "020404c401030303",
           "mss": 1220,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -575,6 +621,8 @@
           "optionsHex": "020404c401030303",
           "mss": 1220,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -601,6 +649,8 @@
           "optionsHex": "020404d801030300",
           "mss": 1240,
           "windowScale": 0,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -623,6 +673,8 @@
           "optionsHex": "020404d801030300",
           "mss": 1240,
           "windowScale": 0,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -649,6 +701,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 5
         }
       },
@@ -671,6 +725,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 5
         }
       }
@@ -697,6 +753,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 9
         }
       },
@@ -719,6 +777,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 9
         }
       }
@@ -745,6 +805,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       },
@@ -767,6 +829,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       }
@@ -793,6 +857,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       },
@@ -815,6 +881,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       }
@@ -841,6 +909,8 @@
           "optionsHex": "020404b00103030f",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       },
@@ -863,6 +933,8 @@
           "optionsHex": "020404b00103030f",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 0
         }
       }
@@ -889,6 +961,8 @@
           "optionsHex": "",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -911,6 +985,8 @@
           "optionsHex": "",
           "mss": 1220,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -938,6 +1014,8 @@
           "optionsHex": "0204000001030303",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -960,6 +1038,8 @@
           "optionsHex": "0204000001030303",
           "mss": 1220,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -987,6 +1067,8 @@
           "optionsHex": "020404c40103030f",
           "mss": 1220,
           "windowScale": 14,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1009,6 +1091,8 @@
           "optionsHex": "020404c40103030f",
           "mss": 1220,
           "windowScale": 14,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1035,6 +1119,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 3
         }
       },
@@ -1057,6 +1143,8 @@
           "optionsHex": "",
           "mss": null,
           "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
           "dataLength": 3
         }
       }
@@ -1083,6 +1171,8 @@
           "optionsHex": "020404d801030303",
           "mss": 1240,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1105,6 +1195,8 @@
           "optionsHex": "020404d801030303",
           "mss": 1240,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1131,6 +1223,8 @@
           "optionsHex": "01020404d801030302010101",
           "mss": 1240,
           "windowScale": 2,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1153,6 +1247,8 @@
           "optionsHex": "01020404d801030302010101",
           "mss": 1240,
           "windowScale": 2,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1179,6 +1275,8 @@
           "optionsHex": "020404d8000300ff",
           "mss": 1240,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1201,6 +1299,8 @@
           "optionsHex": "020404d8000300ff",
           "mss": 1240,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1227,6 +1327,8 @@
           "optionsHex": "fe04aabb020404d8",
           "mss": 1240,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1249,6 +1351,8 @@
           "optionsHex": "fe04aabb020404d8",
           "mss": 1240,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1275,6 +1379,8 @@
           "optionsHex": "0402080a0000000100000000020404d803030301",
           "mss": 1240,
           "windowScale": 3,
+          "sackPermitted": true,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1297,6 +1403,8 @@
           "optionsHex": "0402080a0000000100000000020404d803030301",
           "mss": 1240,
           "windowScale": 3,
+          "sackPermitted": true,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1323,6 +1431,8 @@
           "optionsHex": "020404d80103030e",
           "mss": 1240,
           "windowScale": 14,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1345,6 +1455,8 @@
           "optionsHex": "020404d80103030e",
           "mss": 1240,
           "windowScale": 14,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1371,6 +1483,8 @@
           "optionsHex": "020404d8010303030000000000000000000000000000000000000000000000000000000000000000",
           "mss": 1240,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1393,6 +1507,8 @@
           "optionsHex": "020404d8010303030000000000000000000000000000000000000000000000000000000000000000",
           "mss": 1240,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1419,6 +1535,8 @@
           "optionsHex": "0204000101030303",
           "mss": 48,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1441,6 +1559,8 @@
           "optionsHex": "0204000101030303",
           "mss": 1,
           "windowScale": 3,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1468,6 +1588,8 @@
           "optionsHex": "fe000101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1490,6 +1612,8 @@
           "optionsHex": "fe000101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1517,6 +1641,8 @@
           "optionsHex": "fe010101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1539,6 +1665,8 @@
           "optionsHex": "fe010101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1566,6 +1694,8 @@
           "optionsHex": "fe050101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1588,6 +1718,8 @@
           "optionsHex": "fe050101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1615,6 +1747,8 @@
           "optionsHex": "010101fe",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1637,6 +1771,8 @@
           "optionsHex": "010101fe",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1664,6 +1800,8 @@
           "optionsHex": "01010204",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1686,6 +1824,8 @@
           "optionsHex": "01010204",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1713,6 +1853,8 @@
           "optionsHex": "02030101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1735,6 +1877,8 @@
           "optionsHex": "02030101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
@@ -1761,6 +1905,8 @@
           "optionsHex": "03020101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       },
@@ -1783,9 +1929,769 @@
           "optionsHex": "03020101",
           "mss": 536,
           "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
           "dataLength": 0
         }
       }
+    },
+    {
+      "name": "ipv4-syn-sack-permitted",
+      "packet": "4500003400004000400672416440000164400002a411238cfffffff0102030408002ffff9f7f0000020404d80101040201030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "020404d80101040201030303",
+          "mss": 1240,
+          "windowScale": 3,
+          "sackPermitted": true,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "020404d80101040201030303",
+          "mss": 1240,
+          "windowScale": 3,
+          "sackPermitted": true,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-syn-sack-permitted",
+      "packet": "6000000000200640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff0102030408012ffff06950000020404c40101040201030303",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 18,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "020404c40101040201030303",
+          "mss": 1220,
+          "windowScale": 3,
+          "sackPermitted": true,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 18,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "020404c40101040201030303",
+          "mss": 1220,
+          "windowScale": 3,
+          "sackPermitted": true,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-ack-sack-one-block",
+      "packet": "4500003400004000400672416440000164400002a411238cfffffff0102030408010ffff7c5f00000101050a0000157c00001770",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "0101050a0000157c00001770",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              5500,
+              6000
+            ]
+          ],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "0101050a0000157c00001770",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              5500,
+              6000
+            ]
+          ],
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv6-ack-sack-four-blocks",
+      "packet": "6000000000380640fd7a115ca1e000000000000000000001fd7a115ca1e000000000000000000002a411238cfffffff010203040e010ffff063f00000101052200001f4000002134fffffff000000010000017700000196400001b5800001d4c",
+      "go": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 56,
+          "optionsHex": "0101052200001f4000002134fffffff000000010000017700000196400001b5800001d4c",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              8000,
+              8500
+            ],
+            [
+              4294967280,
+              16
+            ],
+            [
+              6000,
+              6500
+            ],
+            [
+              7000,
+              7500
+            ]
+          ],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": null,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 6,
+          "source": "fd7a:115c:a1e0::1",
+          "destination": "fd7a:115c:a1e0::2",
+          "ipHeaderLength": 40,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 56,
+          "optionsHex": "0101052200001f4000002134fffffff000000010000017700000196400001b5800001d4c",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              8000,
+              8500
+            ],
+            [
+              4294967280,
+              16
+            ],
+            [
+              6000,
+              6500
+            ],
+            [
+              7000,
+              7500
+            ]
+          ],
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "ipv4-ack-sack-payload",
+      "packet": "4500004100004000400672346440000164400002a411238cfffffff010203040a018ffff0af80000010105120000177000001d4c00001f40000021340102030405",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 24,
+          "window": 65535,
+          "tcpHeaderLength": 40,
+          "optionsHex": "010105120000177000001d4c00001f4000002134",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              6000,
+              7500
+            ],
+            [
+              8000,
+              8500
+            ]
+          ],
+          "dataLength": 5
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 24,
+          "window": 65535,
+          "tcpHeaderLength": 40,
+          "optionsHex": "010105120000177000001d4c00001f4000002134",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              6000,
+              7500
+            ],
+            [
+              8000,
+              8500
+            ]
+          ],
+          "dataLength": 5
+        }
+      }
+    },
+    {
+      "name": "sack-duplicate",
+      "packet": "45000048000040004006722d6440000164400002a411238cfffffff010203040d010ffff530f00000101050a00000001000000020101051200000003000000040000000500000006",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 52,
+          "optionsHex": "0101050a00000001000000020101051200000003000000040000000500000006",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              3,
+              4
+            ],
+            [
+              5,
+              6
+            ]
+          ],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 52,
+          "optionsHex": "0101050a00000001000000020101051200000003000000040000000500000006",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [
+            [
+              3,
+              4
+            ],
+            [
+              5,
+              6
+            ]
+          ],
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "sack-on-syn",
+      "packet": "45000038000040004006723d6440000164400002a411238cfffffff0102030409002ffff92760000020404d80101050a0000000100000002",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 36,
+          "optionsHex": "020404d80101050a0000000100000002",
+          "mss": 1240,
+          "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 36,
+          "optionsHex": "020404d80101050a0000000100000002",
+          "mss": 1240,
+          "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "sack-permitted-on-ack",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406010ffffca5b000001010402",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "01010402",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "01010402",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "sack-permitted-length-three",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407002ffffb4880000020404d804030001",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d804030001",
+          "mss": 1240,
+          "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 2,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "020404d804030001",
+          "mss": 1240,
+          "windowScale": -1,
+          "sackPermitted": false,
+          "sackBlocks": null,
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "sack-length-two",
+      "packet": "4500002c00004000400672496440000164400002a411238cfffffff0102030406010ffffc95b000001010502",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "01010502",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 24,
+          "optionsHex": "01010502",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "sack-length-not-multiple",
+      "packet": "4500003400004000400672416440000164400002a411238cfffffff0102030408010ffffa94a0000050900000001000000010101",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "050900000001000000010101",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 32,
+          "optionsHex": "050900000001000000010101",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      }
+    },
+    {
+      "name": "sack-outside",
+      "packet": "4500003000004000400672456440000164400002a411238cfffffff0102030407010ffffb94e00000101050a00000001",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0101050a00000001",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 28,
+          "optionsHex": "0101050a00000001",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor ParseTCPOptions는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다. 계약은 malformed로 버린다."
+    },
+    {
+      "name": "sack-five-blocks",
+      "packet": "4500005000004000400672256440000164400002a411238cfffffff010203040f010ffff3a100000052a0000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "go": {
+        "error": "",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 60,
+          "optionsHex": "052a0000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      },
+      "swiftail": {
+        "error": "malformed",
+        "ipChecksumValid": true,
+        "checksumValid": true,
+        "decoded": {
+          "ipVersion": 4,
+          "source": "100.64.0.1",
+          "destination": "100.64.0.2",
+          "ipHeaderLength": 20,
+          "sourcePort": 42001,
+          "destinationPort": 9100,
+          "sequenceNumber": 4294967280,
+          "ackNumber": 270544960,
+          "flags": 16,
+          "window": 65535,
+          "tcpHeaderLength": 60,
+          "optionsHex": "052a0000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "mss": null,
+          "windowScale": null,
+          "sackPermitted": null,
+          "sackBlocks": [],
+          "dataLength": 0
+        }
+      },
+      "swiftailDiffers": "W2: gVisor ParseTCPOptions는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다. 계약은 malformed로 버린다."
     },
     {
       "name": "tcp-truncated-0",

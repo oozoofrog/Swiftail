@@ -50,12 +50,13 @@ M6(`docs/contracts/SwiftailNetstack.md`)의 Swift TCP를 구현하는 데 필요
 | 1 | 1 | No-Operation | 정렬용. 낱말 경계에 맞지 않아도 읽어야 한다(MUST-64) | RFC 9293 3.2 |
 | 2 | 4 | Maximum Segment Size | 16비트 MSS. SYN에만 | RFC 9293 3.2, 3.7.1 |
 | 3 | 3 | Window Scale | shift.cnt 1바이트. SYN에만 | RFC 7323 2.2 |
-| 4 | 2 | SACK-Permitted | SYN에만 | RFC 2018 2 |
-| 5 | 2+8×블록 수 | SACK | 블록마다 왼쪽·오른쪽 끝 32비트 둘. 오른쪽 끝은 마지막 바이트 다음 번호 | RFC 2018 3 |
+| 4 | 2 | SACK-Permitted | SYN에만. SYN이 아닌 세그먼트에 보내면 안 된다(MUST NOT) | RFC 2018 2 |
+| 5 | 2+8×블록 수 | SACK | 블록마다 왼쪽·오른쪽 끝 32비트 둘(네트워크 바이트 순서). 왼쪽 끝은 블록의 첫 번호, 오른쪽 끝은 마지막 바이트 다음 번호. 옵션 공간 40바이트에 블록 4개까지, 타임스탬프(10 + 채움 2)와 함께면 3개까지 | RFC 2018 3 |
 | 8 | 10 | Timestamps | TSval·TSecr 32비트 둘 | RFC 7323 3.2 |
 
 - 모르는 옵션은 길이 필드로 건너뛴다(MUST-6). EOL·NOP 밖의 옵션은 모두 길이 필드가 있다(MUST-68). 길이가 0이거나 머리 밖으로 나가는 옵션에 대비해야 한다(MUST-7. 원문이 제시하는 한 절차는 연결 reset과 오류 원인 기록이며, reset 자체가 MUST인 것은 아니다).
 - 어떤 세그먼트에도 옵션이 올 수 있다(MUST-5).
+- SACK 블록 내기(RFC 2018 4, RFC Editor 원문 2026-11-15 대조): 상대 SYN에서 SACK-Permitted를 받았을 때만 SACK을 낼 수 있고(MAY), 받지 않았으면 내면 안 된다(MUST NOT). 낸다면 허락된 모든 경우에 낸다(SHOULD). 큐의 가장 높은 번호를 확인하지 않는 모든 ACK, 곧 받는 쪽이 이어지지 않은 데이터를 쥔 동안의 ACK에 싣는다(SHOULD). 새 데이터가 든 유효한 세그먼트마다 ACK를 보내고 그 "중복" ACK마다 SACK을 싣는다(SHOULD). 첫 블록은 이 ACK를 일으킨 세그먼트가 든 이어진 블록이어야 한다(MUST). 그 세그먼트가 Acknowledgment Number를 나아가게 했으면 예외다. 가능한 한 많은 서로 다른 블록을 싣는다(SHOULD). 나머지는 가장 최근에 알린 블록(이전 SACK의 첫 블록 기준) 가운데 이미 넣은 블록의 부분 집합이 아닌 것을 되풀이해 채운다(SHOULD). 첫 블록 뒤의 순서는 자유다. 7절 Case 1~3이 이 규칙의 예다(Case 3: 6000–6500, 7000–7500, 8000–8500을 쥔 뒤 6500이 오면 블록은 6000–7500, 8000–8500. 5500이 오면 ACK 7500과 8000–8500). 받는 쪽이 SACK으로 알린 데이터를 나중에 버리는 것(reneging)은 허용되지만 권하지 않고, 그때는 8절의 규칙이 더 붙는다. Swiftail은 버리지 않는다(계약 동작 F5 아래).
 
 ## 4. 절차와 상태 기계
 
@@ -163,7 +164,7 @@ gVisor의 구현 순서는 RFC 목록과 같지 않다: RST → SYN → ACK가 �
 | MSS 옵션 보내기·받기 | 양쪽 기능 구현은 필수(MUST-14). 매 SYN 광고는 기본값과 다르면 SHOULD(SHLD-5). 못 받으면 IPv4 536, IPv6 1220(MUST-15) | 옵션 생략만으로 연결이 안 되는 것은 아니다. 규격상 상대의 기본 전송 한도는 IPv4 536·IPv6 1220 | 광고한다(`connect.go:584-590`). 단, 수신 옵션이 없을 때 이 버전 파서는 IP 계열과 관계없이 536을 기본으로 쓴다(`gvisor/header/tcp.go:439-450`, `connect.go:748-755`) |
 | 체크섬 | 필수 | 상대가 버린다(3.1) | 검사한다 |
 | 창 확장 | 선택(RFC 7323). 한쪽이 안 보내면 꺼진다 | 창이 65,535바이트로 묶인다 | 보낸다(`connect.go:585`) |
-| SACK | 선택(RFC 2018 2·4). 각 방향에서 상대 SYN의 SACK-Permitted를 받아야 SACK 블록을 보낼 수 있다 | 한 창에 손실이 여럿이면 회복이 느리다 | 켜져 있다(`protocol.go:610`). 상대가 허용할 때만 쓴다 |
+| SACK | 선택(RFC 2018 2·4). 각 방향에서 상대 SYN의 SACK-Permitted를 받아야 SACK 블록을 보낼 수 있다(4절 MUST NOT) | 한 창에 손실이 여럿이면 회복이 느리다 | 켜져 있다(`protocol.go:610`). 상대가 허용할 때만 쓴다. SYN 옵션 순서는 MSS, NOP 둘과 SACK-Permitted, NOP와 WS(`connect.go`의 `makeSynOptions`), 블록은 NOP 둘 뒤에 싣고 ESTABLISHED에서 순서가 어긋난 세그먼트를 쥔 동안의 ACK에만 싣는다(같은 파일 `makeOptions`·`sendRaw`). 블록 목록은 새 세그먼트의 블록을 맨 앞에 두고 겹치는 블록을 합친다(`sack.go`의 `UpdateSACKBlocks`) |
 | 타임스탬프 | 선택(RFC 7323 3.2). 양쪽 SYN에 있어야 켜진다. 켜지면 RST가 아닌 모든 세그먼트에 실어야 한다 | 재전송 중에 RTT를 재지 못한다. PAWS가 없다 | SYN에 싣는다(`connect.go:586`) |
 | RFC 5961 | RST·SYN 완화는 SHOULD, ACK 범위 검사는 MAY(3.2·4.2·5.2) | 구 RFC 793 동작이면 창 안 RST·SYN으로 연결이 끊길 수 있다 | 동기화 상태의 RST·SYN 규칙을 따른다(`connect.go:1227-1239`, `:1333-1360`). SYN-RECEIVED와 TIME-WAIT의 차이는 4.2 |
 | 지연 ACK | SHOULD(RFC 9293 3.8.6.3) | ACK 수가 늘 수 있지만 수신 묶음·piggyback에 따라 다르다 | 시간으로 미루지 않고 수신 묶음 끝에서 필요하면 ACK한다(`connect.go:1272-1306`). 순서가 어긋나면 즉시 ACK(`rcv.go:482-515`). `SetQuickAck(true)`만으로 추정한 결론이 아니다 |
@@ -264,7 +265,7 @@ challenge ACK는 속도를 제한하는 것이 SHOULD다. 예로 든 값은 5초
 계약 `docs/contracts/SwiftailNetstack.md`의 "지원 범위"가 정한다. 이 노트의 근거로 넣을 수 있는 것과 뺄 수 있는 것:
 
 - 규격상 필수인 부분: 체크섬(RFC 9293 3.1 MUST-2·3), MSS 옵션 송수신 기능(3.7.1 MUST-14), 상태별 세그먼트 처리(3.10.7), RFC 6298의 재전송 타이머(3.8.1 MUST-18), 0 창 탐침(3.8.6.1 MUST-36), slow start·congestion avoidance·RTO 물러나기(3.8.2 MUST-19). 모두가 단순히 "없으면 handshake 실패"인 것은 아니다. 특히 MSS 옵션 광고 생략은 기본 MSS로 연결할 수 있다(4.8).
-- 기본 TCP 상호 운용에 선택적인 옵션: 창 확장·SACK·타임스탬프(RFC 9293 3.2.1). 창 확장이 없으면 창 필드 한도는 65,535다(RFC 7323 2절). 협상하지 않은 TS는 무시하고, 상대가 SACK-Permitted를 보내지 않았으면 SACK 블록을 보내면 안 된다(RFC 7323 3.2, RFC 2018 4). 따라서 이 옵션을 보내지 않는다는 사실만으로 상대가 연결을 거절해야 하는 규칙은 없다.
+- 기본 TCP 상호 운용에 선택적인 옵션: 창 확장·SACK·타임스탬프(RFC 9293 3.2.1). 창 확장이 없으면 창 필드 한도는 65,535다(RFC 7323 2절). 협상하지 않은 TS는 무시하고, 상대가 SACK-Permitted를 보내지 않았으면 SACK 블록을 보내면 안 된다(RFC 7323 3.2, RFC 2018 4의 MUST NOT). SACK-Permitted를 받은 뒤에도 SACK을 내는 것은 MAY다(RFC 2018 4 첫 문단). 따라서 이 옵션을 보내지 않는다는 사실만으로 상대가 연결을 거절해야 하는 규칙은 없다.
 - 지연 ACK·Nagle·ECN은 SHOULD(각각 RFC 9293 3.8.6.3·3.7.4·3.8.2), keep-alive는 MAY(3.8.4)다. urgent와 동시 열기는 규격상 MUST(3.8.5 MUST-30, 3.5 MUST-10)이며 **선택 기능으로 분류하면 안 된다**. 계약에서 쓰지 않기로 한 범위 선택과 RFC 준수는 별개다. 이들의 배제는 위 첫 사용처 경로와 계약의 제외 표에 대한 구현 선택이며, 모든 TCP 응용과 상호 운용한다는 보장이 아니다.
 
 ## 10. 상호 운용 시험에서 확인할 것

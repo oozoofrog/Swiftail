@@ -69,13 +69,33 @@ func TestFixturesMatchGo(t *testing.T) {
 			if *c.Go.Decoded.MSS != 1240 || *c.Go.Decoded.WindowScale != 2 {
 				t.Fatal("어긋난 옵션을 읽지 못했습니다")
 			}
+		case "ipv4-syn-sack-permitted", "ipv6-syn-sack-permitted", "sack-timestamp-options":
+			if !*c.Go.Decoded.SACKPermitted || c.Go.Decoded.SACKBlocks != nil {
+				t.Fatal("SYN의 SACK-Permitted를 읽지 못했습니다", c.Name)
+			}
+		case "sack-permitted-length-three":
+			if *c.Go.Decoded.SACKPermitted || *c.Go.Decoded.MSS != 1240 {
+				t.Fatal("길이가 틀린 SACK-Permitted를 받아들였습니다")
+			}
+		case "ipv6-ack-sack-four-blocks":
+			if len(c.Go.Decoded.SACKBlocks) != 4 || c.Go.Decoded.SACKBlocks[1] != [2]uint32{0xfffffff0, 0x10} {
+				t.Fatal("SACK 블록 4개를 읽지 못했습니다")
+			}
+		case "sack-duplicate":
+			if len(c.Go.Decoded.SACKBlocks) != 2 || c.Go.Decoded.SACKBlocks[0] != [2]uint32{3, 4} {
+				t.Fatal("뒤의 SACK 옵션이 남아야 합니다")
+			}
+		case "sack-outside", "sack-five-blocks":
+			if c.Go.Error != "" || len(c.Go.Decoded.SACKBlocks) != 0 || c.Swiftail.Error != "malformed" {
+				t.Fatal("머리 밖 SACK의 차이를 보존해야 합니다", c.Name)
+			}
 		case "eol-ignores-tail":
 			if c.Go.Error != "" || *c.Go.Decoded.WindowScale != -1 {
 				t.Fatal("EOL 뒤를 읽었습니다")
 			}
 		}
 	}
-	if len(doc.Cases) != 49 || doc.CaseCount != 49 || differences != 9 {
+	if len(doc.Cases) != 62 || doc.CaseCount != 62 || differences != 11 {
 		t.Fatalf("사례/차이 수: %d/%d", len(doc.Cases), differences)
 	}
 }
