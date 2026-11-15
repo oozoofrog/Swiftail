@@ -254,6 +254,10 @@ struct DatagramSocketTests {
             var payload = [UInt8](repeating: 0xab, count: size)
             payload[0] = UInt8(number >> 8)
             payload[1] = UInt8(number & 0xff)
+            // 받는 쪽의 읽기가 커널 버퍼를 비울 틈을 준다. 한꺼번에 보내면 부하가 걸렸을 때 커널이 끝의 것들을 버려
+            // "마지막 것이 남는다"가 흔들렸다. 마지막 하나는 앞의 것이 모두 흐름에 들어간 뒤에 보낸다.
+            if number % 16 == 15 { try await Task.sleep(for: .milliseconds(1)) }
+            if number == total - 1 { try await Task.sleep(for: .milliseconds(200)) }
             while true {
                 do {
                     try sender.send(payload, to: Self.destination(receiver))
