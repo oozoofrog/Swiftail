@@ -699,6 +699,13 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 | U3 | 실제 tailnet 관문에 내줄 것 | 관문 (나)의 "사용자에게 받을 것". HTTPS를 켠 tailnet에서 발급하면 기기 이름과 tailnet 이름이 공개 CT 로그에 실린다(동작 K5) |
 | U4 | 비공식 클라이언트가 제어 서버의 `set-dns`와 Let's Encrypt를 쓰는 것 | plan 8절 위험 10의 연장이다. 공개 배포 전에 확인한다 |
 
+**사용자의 답(2026-11-15)**:
+
+- U1: **새 노드로 다시 등록**한다. Go 상태 이관(동작 G, M7-11, 관문 (가) 11·(나) 8)은 만들지 않는다. `tailscaled.state` 형식의 기록(노트)은 남긴다.
+- U2: **BSD-3-Clause로 공개**한다. GitHub 저장소 생성과 push는 하기 전에 한 번 더 확인받는다. 그 전에 할 것: `LICENSE`, 시험 도구의 MPL-2.0 모듈 고지, 커밋 이력 전체에서 비밀·실제 이름·개인 경로 점검, `_context/`를 공개본에서 뺄지.
+- U3: **스테이징으로 확인한 뒤 운영 인증서를 2장까지** 발급한다(첫 발급 1 + 갱신 확인 1). CT 로그에 기기 이름과 tailnet 이름이 실리는 것을 알고 정했다. 받을 것: MagicDNS와 HTTPS를 켠 tailnet(첫 사용처가 쓰는 tailnet), 임시가 아닌 인증 키.
+- U4는 공개 전에 확인한다(그대로).
+
 ## 6. 첫 사용처가 직접 쓰는 것의 조각
 
 계약의 일부가 아니라 H5의 근거로 적은 길이다. 쓰는 함수는 SDK 선언에서 확인됐지만(노트 4.6: `SecKeyCreateWithData`의 입력 `04 ‖ X ‖ Y ‖ K` 97바이트, `SecIdentityCreate`는 키가 맞지 않으면 NULL) **이 조각은 관문 (가)의 시험용 서버(`Tests/SwiftailInteropTests/Support/MinimalHTTPServer.swift`)가 샌드박스 밖에서 돌려 확인했다**(Go 피어가 시험 루트로 TLS를 검증해 통과, ALPN `http/1.1`. 2026-11-15). 키체인에 아무것도 쓰이지 않는지는 들여다보지 않았다. 작성 세션이 적은 TLS·ALPN 협상과 "키체인에 쓰지 않음"의 실험은 확인되지 않았다(노트 8장, 9장 V188·V189). 구현의 근거로 쓰지 않는다: 샌드박스 판에서 돌리는 확인은 첫 사용처 세션이 한다(첫 사용처 검토 결과 5).
