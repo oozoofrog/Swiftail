@@ -710,3 +710,25 @@ Go는 WireGuard 세션 키가 생길 때마다 자기 disco 공개 키를 터널
 - **키를 계속 바꾸는 광고의 비용**: 인증된 피어는 광고마다 X25519 한 번을 일으킬 수 있다. Go도 같다(`discoInfoForKnownPeerLocked`). 표는 피어마다 키 둘(netmap 키와 TSMP 키)을 넘지 않는다(`rotatingAdvertisementsAreBounded`). 광고는 WireGuard transport 하나이므로 보내는 쪽도 그만큼의 일을 한다.
 
 확인하지 못한 것: 실제 tailnet(실제 제어 서버와 그 netmap 전파 시간)에서의 동작, IPv6만 되는 망. 같은 disco 키를 여러 피어가 쥐는 실제 경우(노드 공유, 계정 전환)도 실제 tailnet에서 보지 못했다. 상호 운용 시험은 루프백의 Go 피어로만 돌렸다.
+
+## 실기기 재측정 (2026-11-16, 첫 사용처 세션)
+
+TSMP disco 키 광고가 든 `b27b482`로 양쪽을 빌드해 같은 Wi-Fi에서 다시 쟀다(iPhone 14 Pro iOS 27.2의 Swiftail 터널, Mac의 Swiftail 호스트. 운영 tailnet, lock 켜짐). 기록은 iPhone 확장의 것이다. Mac 쪽 `Swiftail`/`node` 로그는 info 수준이라 디스크에 남지 않아 이번에는 얻지 못했다.
+
+| 상대 | 터널 `running` | 첫 접촉(`relayed`) | `direct` | 버린 disco |
+| --- | --- | --- | --- | --- |
+| Go 호스트 | +0초 | +9초 | 같은 초(`relayed → direct → none → relayed → direct`가 0.0초 간격) | 0 |
+| Swiftail 호스트 | +0초 | +9초 | 약 2초 뒤(`relayed(20)` → 0.7초 `none` → `relayed(20)` → 1.5초 `direct`) | 0 |
+
+- 앞선 값(`fed1eff` 무렵, 25~44초)과 견줄 값은 **약 2초**다. 계정 없는 환경의 약 10.5초(netmap 갱신을 막은 채)보다 빠른 것은 실제 제어 서버가 netmap도 함께 주기 때문으로 본다.
+- **광고가 그 까닭이었는지는 이 기록으로 가려지지 않는다.** 새 disco 키를 광고로 배우는 쪽은 먼저 떠 있던 Mac인데 그쪽 로그가 없다. iPhone 기록에는 `TSMP disco 키 광고 받음`이 없었다(받은 키가 netmap의 키와 같으면 아무 줄도 남기지 않는다). 조건도 달랐다: 이번의 Mac 노드는 터널을 켜기 약 40초 전에 다시 등록했다. 다음 측정에서 Mac 쪽 `피어 경로:`와 `TSMP disco 키 광고 받음` 줄로 확인한다.
+- 중계 지역이 처음에는 20, 뒤에는 7로 찍혔다. 방금 등록한 Mac 노드의 홈 DERP가 STUN 회차 전의 대체 홈에서 바뀐 것으로 본다(확인하지 않음).
+
+### direct가 선 뒤 약 100초에 `relayed`
+
+두 측정 모두 iPhone 쪽에서, 마지막 경로 사건 뒤 96.5초와 105.3초에 `relayed(7)`이 한 번 찍혔다. 버린 disco는 0이다.
+
+- Go 호스트 측정에서는 100MiB 전송의 끝 무렵이었고 5.8초 뒤 `direct`로 돌아왔다. 돌아오는 데 걸린 시간은 같은 후보에 5초 안에는 다시 Ping하지 않는 규칙(`pingInterval`, Go와 같다)과 맞는다.
+- Swiftail 호스트 측정에서는 전송이 끝난 뒤였고 6.6초 뒤 유휴의 `none`이 이어졌다.
+- `relayed`는 마지막 Pong 뒤 6.5초 동안 Pong이 없었거나(`trustDuration`), UDP 소켓을 다시 묶어 경로를 버렸을 때(`noteConnectivityChange`)만 나온다. 상대가 달라도 같은 모양이므로 iPhone 쪽 까닭으로 본다. 어느 쪽인지는 그 시각의 확장 기록(`네트워크 경로:`, 재결속 줄)을 받아 가린다. 재결속이면 `SwiftailTunnel.md`에 남겨 둔 "같은 인터페이스의 경로 갱신에 전체 재결속"이 전송 중 경로를 끊는 것이다.
+- 전송은 끊기지 않았다(DERP로 이어 갔다). 까닭을 찾을 때까지 열어 둔다.
