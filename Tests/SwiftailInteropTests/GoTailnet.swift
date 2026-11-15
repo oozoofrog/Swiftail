@@ -48,6 +48,27 @@ actor GoTailnet {
         let stunRequests: Int?
         let transferID: Int?
         let transfers: [Transfer]?
+        // M7 호스트 관문 명령(README "M7 호스트 관문 명령").
+        let name: String?
+        let directoryURL: String?
+        let rootPEM: String?
+        let requests: [SetDNSRequest]?
+        let stableID: String?
+        let nodeName: String?
+        let computedName: String?
+        let loginName: String?
+        let status: Int?
+        let headers: [String: [String]]?
+        let bodyLength: UInt64?
+        let bodySHA256: String?
+        let elapsedMs: Int64?
+        let stopped: Bool?
+    }
+
+    struct SetDNSRequest: Decodable, Sendable {
+        let name: String
+        let type: String
+        let value: String
     }
 
     struct Command: Encodable, Sendable {
@@ -66,6 +87,17 @@ actor GoTailnet {
         var send: UInt64? = nil
         var seed: UInt64? = nil
         var timeoutSec: Int? = nil
+        var nonceReject: Int? = nil
+        var authzReuse: Int? = nil
+        var domains: [String]? = nil
+        var count: Int? = nil
+        var status: Int? = nil
+        var wrongTXT: Bool? = nil
+        var url: String? = nil
+        var method: String? = nil
+        var range: String? = nil
+        var rootPEM: String? = nil
+        var stop: Bool? = nil
     }
 
     private let process = Process()
@@ -84,6 +116,10 @@ actor GoTailnet {
     private var started = false
     private var stopped = false
     private var commandTail: Task<Void, Never>?
+    /// 응답을 기다리지 않고 보낸 명령(`peerHTTP`)의 id. 그 응답은 다른 명령의 응답보다 늦게 올 수 있다.
+    private var background: Set<Int> = []
+    /// 다른 명령을 기다리다 먼저 받은 `background` 명령의 응답.
+    private var early: [Int: Event] = [:]
 
     init(temporaryDirectory: URL) {
         var environment = ProcessInfo.processInfo.environment
@@ -159,7 +195,18 @@ actor GoTailnet {
     }
 
     private func event(_ kind: String, id: Int? = nil, timeout: Duration = .seconds(35)) async throws -> Event {
-        let result = try await nextEvent(events, waitingFor: "tailnet \(kind) (명령 id \(id ?? 0))", timeout: timeout)
+        let waiting = "tailnet \(kind) (명령 id \(id ?? 0))"
+        var result: Event
+        if let id, let buffered = early.removeValue(forKey: id) {
+            result = buffered
+        } else {
+            result = try await nextEvent(events, waitingFor: waiting, timeout: timeout)
+            while let other = result.id, other != id, background.contains(other) {
+                early[other] = result
+                result = try await nextEvent(events, waitingFor: waiting, timeout: timeout)
+            }
+        }
+        if let id { background.remove(id) }
         if let failure { throw failure }
         guard result.event != "error" else { throw GateFailure("tailnet \(kind): \(redacted(result.message ?? "내용 없음"))") }
         guard result.event == kind, result.id == id else {
@@ -185,6 +232,28 @@ actor GoTailnet {
         value.id = nextID
         try write(value)
         return try await event(kind, id: value.id)
+    }
+
+    /// 응답을 기다리지 않고 보낸다. 도구가 뒤에서 처리하는 `peerHTTP`에만 쓴다(README: 다른 명령 응답이 먼저 올 수 있다).
+    /// 응답은 `response(to:expecting:timeout:)`로 받는다. 그사이 다른 명령을 보내도 된다.
+    func send(_ value: Command) throws -> Int {
+        var value = value
+        nextID += 1
+        value.id = nextID
+        background.insert(value.id)
+        try write(value)
+        return value.id
+    }
+
+    /// `send(_:)`로 보낸 명령의 응답. 다른 명령과 같은 차례를 지켜 사건 흐름을 한 곳에서만 읽는다.
+    func response(to id: Int, expecting kind: String, timeout: Duration) async throws -> Event {
+        let previous = commandTail
+        let operation = Task {
+            await previous?.value
+            return try await event(kind, id: id, timeout: timeout)
+        }
+        commandTail = Task { _ = await operation.result }
+        return try await operation.value
     }
 
     /// 관문의 단계 경계를 표준 출력에 남긴다. 시험이 도중에 끝나도 어느 단계였는지 로그에 남는다.
