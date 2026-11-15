@@ -625,3 +625,25 @@ Go 피어 하나(`addPeer`)와 Swift 노드 하나로 시작한다. 시각 기�
 
 - 가설이 맞으면 고칠 곳: TSMP disco 키 광고를 보내고 쓰기. `SwiftailWireGuard`(세션 키가 생길 때 터널 안으로 한 번: 시작한 쪽은 응답을 받을 때, 응답한 쪽은 새 키의 첫 transport를 받을 때, 노트 4.10 1), `SwiftailEngine`(TSMP `'a'` 33바이트를 만들고, 받은 것을 소비하면서 키를 위로 알림), `SwiftailMagicsock`(netmap 키와 TSMP 키 가운데 하나를 활성으로 두는 Go의 두 키 모형, `endpoint.go:382-436`, `:1552-1688`), 노트 4.10 3의 결론과 결정 표 "TSMP 광고" 줄. 다른 길은 선언하는 CapabilityVersion을 144 아래로 내리는 것(`SwiftailControl`)인데 다른 서버 동작이 함께 바뀌므로 따로 검토해야 한다.
 - 실제 제어 서버가 새 disco 키를 퍼뜨리는 데 걸리는 시간은 실기기 로그로만 확인된다.
+
+## TSMP disco 키 광고 (2026-11-16)
+
+Go는 WireGuard 세션 키가 생길 때마다 자기 disco 공개 키를 터널 안의 TSMP 메시지로 알리고, 받은 쪽은 그 키를 netmap을 기다리지 않고 쓴다(노트 `disco-magicsock.md` 3.8·4.10, capability 버전 144 "Client sends `TSMPDiscoKeyAdvertisement` around WireGuard handshakes"). Swiftail은 148을 선언하면서 이것을 보내지도 쓰지도 않았다(노트 4.10 3의 "보내지 않아도 된다"는 결론. 틀렸다). 그 결과로 보이는 것: 방금 켠 노드의 새 disco 키를 오래 떠 있던 상대가 netmap으로만 배우고, 그때까지 disco가 서로 열리지 않아 직접 경로가 서지 않는다(위 "직접 경로 지연의 조사": 실기기에서 25~44초. 이 까닭이 맞는지는 실기기 로그로 아직 가리지 못했다). 까닭이 맞든 아니든 선언한 버전의 동작이므로 넣는다.
+
+근거 소스: `wgengine/magicsock/magicsock.go`의 `PriorityMessageForPeer`·`HandleDiscoKeyAdvertisement`·`selfIPMatchingFamily`, `endpoint.go`의 `updateTSMPDiscoKey`·`changedActiveDiscoLocked`와 disco 키를 쥐는 자료(`keyFromTSMP`, netmap 키와의 관계), `net/packet/tsmp.go`의 `TSMPDiscoKeyAdvertisement`, `net/tstun/wrap.go`와 `wgengine/userspace.go`의 받는 길, Tailscale 포크 wireguard-go의 priority message(`device/send.go`, `device/receive.go`, `MaxPriorityMessageContentSize`). 세부는 구현이 소스로 확인해 "구현하며 정해진 것"에 적는다.
+
+### 동작 T
+
+1. **보내기**: 피어와의 WireGuard 세션 키가 새로 생길 때마다 그 피어에게 터널 안으로 광고 하나를 보낸다. 때는 Go와 같다: 핸드셰이크를 시작한 쪽은 응답을 받아 세션이 섰을 때, 응답한 쪽은 새 키로 된 첫 transport를 받았을 때. 대기 중인 데이터보다 먼저 나가는지도 Go와 같게 한다.
+2. **내용**: 노트 3.8의 형식. 출발지는 피어 주소와 같은 계열의 자기 tailnet 주소(Go `selfIPMatchingFamily`), 목적지는 그 피어의 주소, 키는 자기 disco 공개 키. 맞는 계열의 자기 주소가 없거나 disco 키가 없으면 보내지 않는다.
+3. **받기**: 엔진이 광고를 소비하고(앱·netstack으로 올리지 않는다. 지금도 그렇다) 그 피어의 node 키와 광고된 disco 키를 `Magicsock`에 알린다. 광고는 WireGuard가 인증하고 출발지 검사를 통과한 패킷에서만 받는다. 키가 0이면 버린다.
+4. **활성 키**: 피어마다 netmap으로 배운 키와 TSMP로 배운 키를 Go와 같은 규칙으로 쥐고 그 가운데 하나를 활성 키로 쓴다(netmap이 나중에 다른 키를 줄 때, 같은 키를 줄 때, TSMP가 netmap보다 낡은 키를 줄 때의 판정을 소스로 확인한다). 활성 키가 바뀌면 그 피어의 직접 경로 신뢰와 진행 중인 Ping을 지우고(노트 4.4 3) 곧 다시 찾는다.
+5. **한 피어는 자기 키만 바꾼다**: 광고는 그것을 보낸 피어(WireGuard 세션의 node 키)의 disco 키만 바꾼다. 다른 피어가 쓰는 disco 키를 광고했을 때의 처리(같은 disco 키를 두 피어가 쓰는 경우)는 Go와 같게 하고 시험으로 고정한다.
+6. **비밀과 로그**: disco 키는 공개 키지만 로그에는 종류와 개수만 남긴다.
+
+### 시험과 관문
+
+- 단위: 광고의 바이트가 Go `TSMPDiscoKeyAdvertisement.Marshal`의 출력과 같다(Go 기준값 도구로 벡터를 뽑는다). 보내는 때(시작한 쪽·응답한 쪽), 받았을 때의 활성 키 판정표, 0 키, 계열이 맞는 주소 없음, 인증되지 않은 길로 온 광고는 쓰지 않음, 같은 disco 키를 두 피어가 쓰는 경우.
+- 상태 기계: 위 조사의 회귀 시험 "호스트가 터널의 옛 disco 키를 쥔 동안"에서 **netmap을 바꾸지 않고도** WireGuard 핸드셰이크 뒤 1초 안에 양쪽이 direct가 된다.
+- 상호 운용(`tailnet` 도구, 실제 Go 피어): ① Swift 노드를 다시 띄워 disco 키를 바꾸고, Go 피어에게 가는 netmap 갱신을 막은 채로(도구의 맵 억제) 직접 경로가 선다(Go가 Swiftail의 광고를 받아 쓴다). ② 반대로 Go 피어의 disco 키가 바뀌고 Swift 노드에게 가는 netmap 갱신을 막은 채로 직접 경로가 선다(Swiftail이 Go의 광고를 받아 쓴다). 도구로 만들 수 없는 쪽은 까닭을 적는다.
+- Swift ↔ Swift: 같은 프로세스의 두 노드로 한쪽을 다시 띄웠을 때 netmap 갱신 없이 직접 경로가 서는 시간을 잰다.
