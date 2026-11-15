@@ -711,6 +711,18 @@ Go 함수와 Swiftail의 대응(출처 줄은 노트의 것이고, `tkaSyncLocke
 | F2 | 잠긴 노드는 `.running`이고 `tailnetLock.signingRequest`가 있다. Mac 호스트와 터널 앱이 `tailnetLockChanged`를 듣고 "서명 기기에서 `tailscale lock sign <nodeKey> <lockKey>`를 돌리라"는 안내를 띄울 수 있는가. `.unverified`(피어 없음)에도 문구가 필요하다 | 띄운다 | L4. 상태 하나로 받고 싶으면 (나)를 다시 본다 |
 | F3 | Mac 호스트를 새 노드로 등록할 때(`SwiftailHost.md` U1) 어느 길을 쓰는가: 서명된 인증 키(`--TL`)인가, 로그인한 뒤 서명 기기에서 서명하는 것인가 | 둘 다 된다 | 관문 (나)의 차례. 서명된 인증 키는 1회용이면 다시 등록할 때마다 새로 만들어야 한다 |
 
+### 첫 사용처 검토 결과 (2026-11-15)
+
+첫 사용처 세션(RemoteDebug)이 L4·L5와 "지금 lock 처리가 있는 곳"을 읽고 답했다.
+
+- **F1**: 지운다(L5 (가)). 그쪽에서 그 case를 적은 곳은 `Apps/iOSTunnel/SwiftailTunnelEngine.swift`의 두 군데(`kind(of:)`, `message(for:)`)이고, TL-8의 커밋으로 올릴 때 그쪽이 두 갈래를 지운다.
+- **F2**: (가)로 받는다. `NodeState`의 새 case는 필요 없다. 그쪽 어댑터는 `node.events`의 사건마다 `node.status`를 읽어 앱에 넘기므로, 새 안내 화면("서명 기기에서 서명 필요", "lock 상태를 확인하지 못해 연결을 열지 않음")은 그쪽이 만든다(Go 코어에는 없던 화면이다). 그 대신 계약이 지켜야 하는 것 넷(TL-7·TL-8의 요구이고 시험 21·22와 관문 (가) 2·3이 본다):
+  1. **첫 `.running`과 lock 정보 사이에 틈이 없다.** 잠긴 노드가 `.running`이 되는 시점에 `NodeStatus.tailnetLock`이 이미 채워져 있다: 같은 netmap에서 나오는 사건은 `tailnetLockChanged`가 `stateChanged(.running)`보다 먼저이고, 어느 사건을 받은 시점에 읽은 `status`도 그 netmap의 lock 모습을 담고 있다. "연결됨"이 잠깐 보였다 안내로 바뀌지 않는다.
+  2. **`status` 하나로 네 경우를 가른다**: lock 꺼짐(`mode == .disabled`) / 켜짐·내 노드 서명됨(`.enforcing`, `signingRequest == nil`) / 켜짐·서명 기다림(`.enforcing`, `signingRequest != nil`) / `.unverified`.
+  3. **두 값은 `tailscale lock sign`에 그대로 붙여 넣는 문자열**이다(`nodekey:…`, `tlpub:…`. 2절의 선언대로 `String`). 둘 다 공개 키이므로 화면과 클립보드에 내도 된다. Swiftail은 로그에 남기지 않는다(동작 K5). 첫 사용처도 기기 로그에 올리지 않는다.
+  4. **서명이 끝나면 다시 시작 없이 풀린다.** 서명 기기가 서명한 뒤의 netmap에서 `tailnetLockChanged`가 오고 `signingRequest`가 nil이 된다. 그 뒤 피어가 올라오는 것은 기존 사건으로 안다.
+- **F3**: 사용자 결정이라 그쪽이 사용자에게 물었다(답 대기). 참고: 지금 Mac 호스트의 흐름은 브라우저 로그인이고 인증 키 입력 화면이 없다. 그래서 "로그인 뒤 서명 기기에서 서명"이 지금 화면과 가깝고 그 길에는 F2의 서명 안내 화면이 필요하다. 서명된 인증 키(`--TL`)의 길은 Mac에 인증 키 입력을 새로 만들어야 한다. Swiftail은 둘 다 지원한다(관문 (나) 1·2).
+
 ## 6. 첫 사용처가 고칠 것
 
 계약의 일부가 아니라 F1~F3의 근거로 적는다. 저장소를 바꾸는 일은 별도 승인 뒤에 한다(plan 7절 M7).
