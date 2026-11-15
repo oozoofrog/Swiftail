@@ -19,13 +19,13 @@ import (
 	"sync"
 	"time"
 
+	"swiftail/interop/internal/testcontrol"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/envknob"
 	"tailscale.com/logtail"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
-	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 )
 
@@ -62,6 +62,13 @@ type command struct {
 	Range              string              `json:"range"`
 	RootPEM            string              `json:"rootPEM"`
 	Stop               bool                `json:"stop"`
+	// Tailnet Lock 명령(lock.go).
+	LockKey     string   `json:"lockKey"`
+	Signers     []string `json:"signers"`
+	AddKeys     []string `json:"addKeys"`
+	RemoveKeys  []string `json:"removeKeys"`
+	WrongSecret bool     `json:"wrongSecret"`
+	OmitTKAInfo bool     `json:"omitTKAInfo"`
 }
 type peer struct {
 	server    *tsnet.Server
@@ -85,6 +92,7 @@ type network struct {
 	stunRequests       int
 	transfers          []*transfer
 	host               hostTools
+	lock               lockTools
 }
 
 func newNetwork() (*network, error) {
@@ -179,6 +187,9 @@ func (n *network) execute(c command) (map[string]any, error) {
 	switch c.Cmd {
 	case "setCertDomains", "setDNSConfig", "setDNSLog", "setDNSFault", "acmeStart", "peerWhoIs", "peerHTTP", "goState":
 		return n.executeHost(c)
+	case "setLockCapability", "setLockBootstrapFault", "lockRequestResign", "lockRegistrations", "lockRequests",
+		"lockStatus", "lockInit", "lockSign", "lockWrapAuthKey", "lockModify", "lockDisable":
+		return n.executeLock(c)
 	case "addPeer":
 		if !validName.MatchString(c.Name) {
 			return nil, errors.New("name이 잘못되었습니다")
@@ -190,7 +201,11 @@ func (n *network) execute(c command) (map[string]any, error) {
 		if e != nil {
 			return nil, e
 		}
-		s := &tsnet.Server{Dir: dir, Hostname: c.Name, ControlURL: n.control.ExplicitBaseURL, AuthKey: n.authKey, UserLogf: func(string, ...any) {}}
+		authKey := n.authKey
+		if c.AuthKey != nil { // lockWrapAuthKey로 감싼 인증 키로 등록할 때
+			authKey = *c.AuthKey
+		}
+		s := &tsnet.Server{Dir: dir, Hostname: c.Name, ControlURL: n.control.ExplicitBaseURL, AuthKey: authKey, UserLogf: func(string, ...any) {}}
 		ok := false
 		defer func() {
 			if !ok {
