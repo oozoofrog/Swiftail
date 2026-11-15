@@ -697,7 +697,7 @@ Go 함수와 Swiftail의 대응(출처 줄은 노트의 것이고, `tkaSyncLocke
 
 - U1: **(나) 피어를 올리지 않는다.** 검증된 상태가 생길 때까지 `mode`는 `.unverified`이고 피어가 없다. 동작 N6의 재시도가 선다(L17).
 - U2: **(가) Go와 같이.** 관문 (나)에서 lock이 켜진 실제 tailnet의 노드가 `tailnet-lock` capability를 받는지 기록하고, 늘 받는다면 닫힌 쪽으로 바꿀지 다시 묻는다.
-- U3: 관문 (나) 때 요청한다. 첫 사용처의 Mac 호스트가 속한 tailnet은 lock이 켜져 있다(plan 7절 M8).
+- U3: 관문 (나) 때 요청한다. 첫 사용처의 Mac 호스트가 속한 tailnet은 lock이 켜져 있다(plan 7절 M8)(바로잡음, RemoteDebug 세션의 진단 로그: Mac이 그때까지 있던 tailnet은 줄곧 lock이 꺼져 있었고, 사용자가 2026-11-15 13:26 UTC쯤 Mac을 새 계정의 새 tailnet으로 옮겨 lock을 켜고 서명했다. 이 문장은 그때부터 참이다. iPhone 앱의 노드는 아직 예전 tailnet에 있다). 관문 (나)는 이 새 tailnet에서 본다(서명 기기 둘).
 - 그에 앞선 결정: Ed25519 검증은 순수 Swift로 직접 구현한다(노트 6.1의 (나). `SwiftailCrypto`의 `Ed25519Verification`).
 
 **총괄 확정(2026-11-15)**: L1~L17은 모두 권고대로 간다. 덧붙이는 것:
