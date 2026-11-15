@@ -68,7 +68,7 @@ tailnet lock(노드 키 서명 검증)은 1차 범위에서 제외한다. 이 �
 ### (c) 최소 OS와 의존성
 
 - iOS 18, macOS 15 이상. `Synchronization`(Mutex, Atomic)을 쓰기 위해서다. 첫 사용처의 배포 대상은 26.0이다.
-- 코어 타깃은 외부 Swift 패키지에 의존하지 않는다. CryptoKit, Network, Foundation만 쓴다.
+- 코어 타깃은 외부 Swift 패키지에 의존하지 않는다. CryptoKit, Network, Foundation만 쓴다. M7의 선택 제품(`SwiftailCertificates`)은 여기에 Security(받은 인증서 사슬의 검증)와 Foundation의 `URLSession`(ACME 서버와의 HTTPS)을 더 쓴다(`docs/contracts/SwiftailHost.md` H8).
   - 암호: CryptoKit에 없는 것만 `SwiftailCrypto`에 직접 구현한다(BLAKE2s, XSalsa20-Poly1305, HChaCha20).
   - HTTP/2: 제어 연결 하나, 스트림 몇 개만 쓰므로 최소 클라이언트를 직접 구현한다. 운영 서버와의 상호 운용에서 문제가 반복되면 swift-nio-http2로 바꾼다.
   - TLS(제어 443, DERP): Network 프레임워크.
@@ -197,7 +197,7 @@ extension TailnetNode {
 | M4 ✅ (실제 tailnet 마무리 관문은 남음) | 직접 연결 | Go 피어와 루프백·LAN에서 직접 경로가 잡힌다(Go 쪽 상태에서 직접 주소 확인). 직접 경로를 막으면 DERP로 내려가고 풀면 다시 올라온다. 마무리: 실제 tailnet에서 NAT 뒤의 기기와 직접 경로 |
 | M5 (관문 (가) 메모리 장치 통과, (나) 실기기 남음) | iOS 패킷 터널 | MagicDNS는 UDP 질의만 답한다(아래 8절 위험 12). 메모리 TUN으로 RemoteDebug `docs/tunnel.md`의 시험 계약에 대응하는 항목(설정 산출, UDP·TCP·MagicDNS, 다시 시작, 엔진 정지) 통과. 실기기: 시험용 터널 앱으로 Mac의 tailnet HTTPS에 접속, FQDN 해석, Wi-Fi ↔ 셀룰러 전환 뒤 복구, 유휴·전송 중 `phys_footprint` 기록 |
 | M6 (관문 (가) Go 피어 통과, (나) 커널 스택 실기기 남음) | 프로세스 내 리스너(Swift TCP) | 상태 기계 단위 시험(손실·재정렬·중복·지연 주입)과, Go 피어(gVisor)·macOS 커널 스택을 상대로 한 100MB 양방향 전송의 해시 일치. 손실 1%·5% 조건에서 전송이 멈추지 않고 처리량을 기록한다 |
-| M7 | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
+| M7 (계약 초안 `docs/contracts/SwiftailHost.md`, 첫 사용처 검토 중) | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. 관문은 (가) 계정 없이(시험 제어 서버 + 시험용 ACME 서버), (나) 실제 tailnet·Let's Encrypt·실기기로 나눈다. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
 
 메모리 목표(M5): 유휴 상주 20MiB 이하를 목표로 두고 실기기 측정으로 확정한다. Go 코어의 권장 한도 설정은 28MiB였다.
 
@@ -215,6 +215,8 @@ extension TailnetNode {
 | 8 | tailnet lock을 켠 tailnet에서 서명 검증 없이 피어를 받아들이면 그 보호가 사라진다 | M2에서 결정: 지원 전까지는 lock이 켜진 tailnet을 감지해 접속을 거부하는 쪽을 기본으로 검토한다 |
 | 9 | Swift 패킷 경로의 처리량과 패킷당 할당 | M1에서 버퍼 재사용 구조를 정하고 M5에서 실기기 처리량을 잰다 |
 | 10 | 비공식 클라이언트로 Tailscale 운영 서버에 접속하는 것과 이름 사용이 약관·상표에 맞는지 확인하지 못했다 | 공개 배포 전에 사용자가 확인한다. 그 전까지 저장소는 로컬에만 둔다 |
+| 14 | ts.net 인증서 발급은 운영 제어 서버의 `set-dns`와 Let's Encrypt가 있어야 끝까지 확인된다. `set-dns`의 조건과 응답 시점은 클라이언트 소스에 없고, Let's Encrypt는 같은 이름에 7일 5장으로 되풀이를 묶는다. 발급된 인증서의 기기 이름과 tailnet 이름은 공개 CT 로그에 실린다 | 로컬 관문은 시험용 ACME 서버로 하고, 실제 발급은 스테이징을 먼저, 운영은 두 번 이내로 한다. 사용자에게 먼저 알린다 |
+| 15 | 루프백 TLS 다리에서 tailnet의 인증된 연결이 `127.0.0.1`의 익명 연결이 된다 | 신원을 연결을 잇는 시점에 고정하고 출발 포트 표로만 넘긴다. 표에 없는 루프백 연결은 서버가 끊는다(`SwiftailHost.md` 동작 B) |
 | 11 | 한 사람이 업스트림 변경을 따라가야 한다 | 범위를 좁게 유지하고(3절 제외 목록) 상호 운용 시험을 자동화한다 |
 | 12 | 터널 모드의 MagicDNS는 TCP 스택 없이 UDP 질의에만 답한다. TCP 53과 MTU를 넘는 응답은 처리하지 못한다 | tailnet 이름의 A·AAAA·PTR 응답은 작다. 넘치면 잘림 표시로 답하고, TCP 53은 M6 뒤에 붙인다 |
 | 13 | Go 피어는 상대의 CapabilityVersion이 121 이상이면 피어 릴레이를 쓸 수 있다고 본다. 148을 선언하면서 구현하지 않으면 상대가 릴레이 경로를 시도할 수 있다 | 모르는 disco 메시지는 무시한다. M4 관문에서 릴레이가 켜진 Go 피어와 DERP·직접 경로가 정상인지 확인한다. 낮은 버전 선언은 서버 동작이 달라질 수 있어 M2에서 따로 판단한다 |
@@ -228,7 +230,7 @@ extension TailnetNode {
 | 실기기 시험용 터널 앱의 서명(팀, Network Extension 권한) | M5 전 | |
 | tailnet lock이 켜진 tailnet의 처리 | M2 | 접속 거부(Go 피어도 서명 없는 노드를 netmap에서 뺀다) |
 | 선언할 CapabilityVersion | M2 | 148(기준 소스와 같게) |
-| Go 상태 파일(`tailscaled.state`)에서 노드 신원을 이관할지 | M7 | 이관 지원 |
+| Go 상태 파일(`tailscaled.state`)에서 노드 신원을 이관할지 | M7 | 사용자 결정 대기(`SwiftailHost.md` U1). 설계(읽기 전용, 한 번, 신원만)는 계약에 있고 구현은 결정 뒤에 연다 |
 | 라이선스, 공개 여부 | 공개 전 | |
 
 ## 10. 협업 방식

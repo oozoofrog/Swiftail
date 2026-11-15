@@ -496,6 +496,14 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 | H14 | DER 쓰기·PEM·base64url의 자리 | (가) `SwiftailCertificates` 안(`internal`) / (나) `SwiftailBase`(`package`) | (가). 쓰는 곳이 CSR 하나다. 첫 사용처가 직접 연결 리스너의 자체 서명 인증서를 Swift로 만들 때 이 부품을 바라면(F9) 다시 본다 |
 | H15 | 관문 (가)의 e2e 범위 | (가) 시험 타깃 안의 최소 HTTP/1.1 서버로 "페어링 → 설치 세션 → IPA 전송"의 뼈대 / (나) 첫 사용처의 호스트 코드를 끌어온다 | (가). 첫 사용처 저장소는 읽기만 한다. 실제 호스트의 e2e는 그쪽 저장소에서, 별도 승인 뒤에 한다 |
 
+총괄 확정(2026-11-15, 초안 단계. 첫 사용처의 답으로 바뀔 수 있다): **H1~H15는 모두 권고대로 간다.** 덧붙이는 것:
+
+- H4: (가)에서 서버가 TLS 핸드셰이크 전에 물으면 정당한 연결이 끊길 뿐(닫힌 쪽) 신원이 잘못 붙지는 않는다. 표에 적기 전에는 한 바이트도 보내지 않기 때문이다(동작 B6 ①). 그래서 POSIX 소켓을 새로 쓰지 않는다. F1·F4의 답이 서버의 묻는 시점을 못 지킨다고 하면 (나)로 바꾼다.
+- H8: plan 4절(c)에 Security와 `URLSession`을 적었다. 두 프레임워크는 `SwiftailCertificates`만 쓴다.
+- H10: 시험 도구의 MPL-2.0 의존은 `Tools/`의 Go 도구 예외 안이다. 공개할 때의 고지는 U2에서 함께 정한다.
+- H12: U1의 답이 올 때까지 M7-11(Go 상태 가져오기)을 열지 않는다.
+- 노트 `whois-certs-state.md`는 구현 전에 다른 세션이 Go 소스와 RFC 원문에 대조해 검증한다.
+
 ### 첫 사용처 확인 필요
 
 커밋 `2814b2c`의 Go 코드와 문서(`core/internal/node/`, `core/internal/host/`, `core/internal/direct/`, `core/e2e/`, `docs/protocol.md`, `docs/protocol-addenda.md`)를 읽고 세운 가정과 질문이다.
