@@ -167,6 +167,91 @@ func exchangeWithTwoNodes(controlURL: URL, root: URL) async throws {
 
 Go 쪽 손실·지연 주입 명령은 없다. M6 관문 8·9는 계약의 Swift `setInProcessLoss(rate:seed:)`를 쓴다. `addKernelPeer`는 **아직 없음**이다.
 
+## M7 호스트 관문 명령
+
+기존 명령과 JSON 형식은 유지한다. M7 DNS 동작은 `acmeStart`, `setCertDomains`, `setDNSConfig` 가운데 하나를 실행할 때 켜진다. 기본 `DNSConfig`는 `Proxied:true`, `CertDomains:["<hostname>.tail0001.test"]`다. 먼저 기존 `setMagicDNS`를 썼으면 그 `Proxied`를 유지한다. 기존 `setMagicDNS`의 등록 전 전용 규약도 유지한다. 등록 뒤 MagicDNS를 바꾸려면 새 `setDNSConfig`를 쓴다.
+
+pebble `github.com/letsencrypt/pebble/v2 v2.10.3`과 challtestsrv `github.com/letsencrypt/challtestsrv v1.4.2`를 고정한다. **둘 다 MPL-2.0이며 시험 도구에만 링크된다.** Swift 라이브러리에는 링크되지 않는다. 두 모듈의 `LICENSE`가 MPL-2.0 원문이다. ACME HTTPS·DNS TCP/UDP는 `127.0.0.1`에서만 듣는다. pebble은 challtestsrv만 DNS 리졸버로 쓰며 실제 DNS나 Let's Encrypt로 보내지 않는다. HTTP-01·TLS-ALPN-01 리스너는 열지 않는다. `peerHTTP`도 등록된 tailnet 주소로만 연결하고 리다이렉트를 따라가지 않는다.
+
+새 명령도 모든 응답에 원래 `id`를 돌려주며, 입력·요청 실패는 `{"id":1,"event":"error","message":"…"}`다. **`peerHTTP`만 요청을 뒤에서 실행하고 완료 때 응답 한 줄을 쓴다.** 따라서 다른 명령 응답이 먼저 올 수 있다. `id`로 대응시키고, 전송 도중 `removePeer`나 `peerClose(stop:true)`를 보낼 수 있다. `quit`·EOF는 진행 중 HTTP를 취소하고 회수하며, `quit` 응답은 마지막이다. 다른 명령은 기존대로 순서대로 처리한다.
+
+| 명령 | 입력(`id`, `cmd` 외) | 성공 응답(`id` 외) |
+| --- | --- | --- |
+| `acmeStart` | 선택 `nonceReject`(0…100, 기본 0), `authzReuse`(0…100, 기본 0), `validationDelaySec`(0…60, 기본 0) | `{"event":"acmeStart","directoryURL":"https://127.0.0.1:<port>/dir","rootPEM":"-----BEGIN CERTIFICATE-----\n…","dnsAddress":"127.0.0.1:<port>","nonceReject":0,"authzReuse":0,"validationDelaySec":0}` |
+| `setCertDomains` | 필수 `domains` 문자열 배열, 선택 `nodeKey` | `{"event":"certDomains","nodeKey":"","domains":[]}`. `nodeKey`를 주면 응답에도 그 공개 키가 있다 |
+| `setDNSConfig` | 필수 `enabled` bool | `{"event":"dnsConfig","enabled":false}` |
+| `setDNSLog` | 없음 | `{"event":"setDNSLog","requests":[{"name":"_acme-challenge.rd-mac-1a2b3c4d.tail0001.test","type":"TXT","value":"<TXT 값>","nodeKeySummary":"<공개 키 요약>","time":"2026-01-02T03:04:05.123456789Z"}]}` |
+| `setDNSFault` | 필수 `count`(0…10000), 아래 결함 하나 | `{"event":"setDNSFault","count":1}` |
+| `peerWhoIs` | `name`(조회하는 Go 피어), `to`(IP 또는 IP:port, IPv6 포트는 대괄호) | `{"event":"peerWhoIs","name":"go-peer-a","stableID":"<StableID>","nodeName":"rd-mac-1a2b3c4d.tail0001.test","computedName":"rd-mac-1a2b3c4d","loginName":"<시험 사용자 로그인>"}` |
+| `peerHTTP` | `name`, `url`, 선택 `method`(기본 GET), `headers`(값은 문자열 배열), `send`·`seed`(한 쌍), `range`, `rootPEM`, `to`, `timeoutSec` | `{"event":"peerHTTP","name":"go-peer-a","status":206,"headers":{"Content-Range":["bytes 0-52428799/104857600"]},"bodyLength":52428800,"bodySHA256":"<소문자 SHA-256 hex>","elapsedMs":1234}` |
+| `goState` | `name` | `{"event":"goState","name":"go-peer-a","directory":"<상태 디렉터리>","stopped":false}` |
+| `peerClose`의 추가 모드 | `name`, `stop:true`, `port` 생략 | `{"event":"peerClose","name":"go-peer-a","stopped":true}` |
+
+`acmeStart`는 프로세스의 네트워크당 한 번만 시작한다. 루트·계정·발급 자료는 이 실행의 시험 자료이며 다시 시작하면 달라진다. `rootPEM`은 **인증서 PEM만** 담고 개인 키는 내보내지 않는다. Swift 시험은 이를 디렉터리 HTTPS와 발급 사슬 검증의 명시적 시험 앵커로 쓴다. `nonceReject`는 유효 nonce의 무작위 거절 백분율이며 100이면 발급이 끝나지 않는다. `authzReuse:100`이면 같은 계정·도메인의 valid authorization을 재사용한다. `validationDelaySec:0`은 pebble의 무작위 검증 대기를 끄고, 양수는 pebble이 고르는 무작위 대기의 상한 초다. 검증 자체는 항상 수행한다. API를 제공하지 않는 pebble 검증 작업자의 대기 goroutine은 프로세스 수명까지 남고, 도구가 연 HTTP·DNS 리스너는 종료 때 닫는다.
+
+`setCertDomains`는 자동 FQDN에 추가하는 것이 아니라 **그 목록 전체를 교체**한다. `[]`는 자동 FQDN까지 지워 HTTPS를 끈다. `nodeKey`가 없으면 현재와 미래 노드 모두에 적용하고 기존 노드별 덮어쓰기도 지운다. 있으면 등록된 해당 노드만 바꾼다. 도메인은 끝 점 없는 소문자 ASCII DNS 이름이고 각 레이블은 1…63자, `_acme-challenge.`를 붙인 이름은 최대 253자다. `setDNSConfig`는 모든 노드의 `DNSConfig.Proxied`만 바꾼다. 바뀐 설정과 기존 피어·엔드포인트 변경은 50ms 간격으로 비교하여 다음 맵에 싣는다. 원시 맵 주입 뒤 재접속도 첫 맵을 받도록 내용이 같아도 1초마다 전체 맵을 다시 보낸다. 응답은 맵 수신 완료를 보장하지 않으므로 Swift의 사실 스트림이나 Go status가 바뀔 때까지 기다린다. 기존 `injectMapResponse`로 수동 맵을 주입한 노드는 이 갱신 대상에서 계속 제외된다(기존 자동 맵 억제 규약).
+
+`set-dns`는 기존 testcontrol의 Noise 처리기를 사용한다. 도구는 `MaybeRejectRequest`에서 원래 요청을 기록하고 설정된 cert 도메인을 검사한다. 사용자 지정 도메인도 받기 위해 내부 요청의 이름을 testcontrol이 아는 자동 FQDN으로 바꾸고, 원래 요청을 내부 값에 담는다. testcontrol의 TXT·빈 필드·node 키·**machine 소유** 검사를 통과한 뒤 `OnSetDNS`에서 원래 요청을 복원해 challtestsrv에 TXT를 올린다. 같은 이름의 이전 TXT는 교체한다. `setDNSLog`에는 결함·도메인 거절을 포함해 JSON으로 해석된 요청의 **원래** 이름·종류·값만 받은 순서대로 남으며, node 공개 키는 `ShortString` 요약만 낸다. 잘못된 JSON은 기록하지 않는다. 시각은 실제 UTC RFC3339Nano다. 목록은 누적이고 빈 목록은 `[]`다. 레코드 삭제·운영 DNS 전파는 시험하지 않는다.
+
+`setDNSFault`는 다음 `count`개의 해석 가능한 `set-dns` 요청에 다음 중 **하나**를 적용한다. 새 명령은 남은 결함 설정을 교체하고, `count:0`에 결함 필드를 생략하면 지운다.
+
+- `status`: 200…599의 최종 HTTP 상태로 답한다(예: 403 거절, 201 같은 비정상 성공 상태).
+- `delayMs`: 1…3600000ms 대기한 뒤 정상 처리한다. 요청 취소·도구 종료는 대기를 끝낸다.
+- `body`: `large`(8192자 padding을 가진 객체), `null`, `array`(`[]`), `scalar`(`"test"`), `empty`(공백 본문). 200으로 답하고 TXT는 올리지 않는다. testcontrol 훅이 `http.Error`로 응답하므로 `Content-Type:text/plain`과 끝 줄바꿈을 사용한다. Swift의 객체·4KiB 검사는 본문을 기준으로 검증한다. Go는 `null`과 큰 객체를 받는다.
+- `wrongTXT:true`: 정상 응답하지만 DNS에 `swiftail-invalid-txt`를 올린다. 로그의 값은 원래 요청 값이다.
+
+`peerWhoIs.nodeName`은 Go `Node.Name`의 끝 점을 뗀 값이다. 응답의 `name`은 조회를 수행한 Go 피어 이름이다. `computedName`은 Go가 실제 계산한 값이고 로그인 이름은 Go `UserProfile.LoginName`이다. 조회 실패는 `error` 사건이다.
+
+`peerHTTP.headers`는 `{"Authorization":["Bearer <시험 토큰>"],"Content-Type":["application/octet-stream"]}` 모양이다. `send`는 0…4294967296, `seed`는 UInt64 전체 범위이며 M6의 LCG64 바이트열을 그대로 스트리밍한다. 둘을 생략하면 본문이 없다. `range`는 `Range` 머리를 설정하며 같은 이름의 `headers`보다 우선한다. 응답 헤더 값도 항상 배열이고 본문은 저장하거나 출력하지 않는다. SHA-256과 길이는 실제로 읽은 응답 바이트(Go HTTP의 transfer decoding 뒤, content encoding은 그대로)를 기준으로 한다. `elapsedMs`는 연결·TLS·응답 본문 전체를 포함한다. `timeoutSec`는 M6와 같은 기본 15초·범위 1…3600이다. 큰 요청과 응답에도 32KiB 단위 버퍼를 쓰며 본문 전체를 메모리에 모으지 않는다.
+
+HTTPS의 `rootPEM`을 생략하면 `acmeStart`가 만든 루트만 쓴다. 명시하면 그 PEM 앵커만 쓴다. 시스템 루트나 검증 끄기는 사용하지 않는다. TLS 서버 이름은 URL의 호스트이며, `to`로 주소를 덮어써도 이름 검증은 그대로다. URL의 호스트가 등록 노드의 FQDN이나 IP이면 그 tailnet 주소로 연결한다. 임의 cert 도메인은 `to:"100.64.0.1"`처럼 등록 노드 주소를 명시한다. 이 연결은 OS DNS를 질의하지 않는다. IPv6도 지원한다. 각 요청은 독립 연결이며 TLS 실패·기한·잘린 응답은 본문·URL을 노출하지 않는 `error` 사건이다. 4xx·5xx HTTP 응답 자체는 성공 사건으로 status·해시를 반환한다.
+
+관문에서 쓰는 순서(도메인·주소는 예시이며 실제 값은 해당 실행의 `nodes`·맵에서 받는다):
+
+```json
+{"id":1,"cmd":"acmeStart","nonceReject":25,"authzReuse":100}
+{"id":2,"cmd":"addPeer","name":"go-peer-a"}
+{"id":3,"cmd":"addPeer","name":"go-peer-b"}
+{"id":4,"cmd":"peerWhoIs","name":"go-peer-a","to":"100.64.0.2"}
+{"id":5,"cmd":"setDNSLog"}
+{"id":6,"cmd":"peerHTTP","name":"go-peer-a","url":"https://rd-mac-1a2b3c4d.tail0001.test/pair","method":"POST","send":32,"seed":1}
+{"id":7,"cmd":"peerHTTP","name":"go-peer-a","url":"https://rd-mac-1a2b3c4d.tail0001.test/ipa","range":"bytes=0-52428799","timeoutSec":60}
+{"id":8,"cmd":"peerHTTP","name":"go-peer-a","url":"https://rd-mac-1a2b3c4d.tail0001.test/ipa","range":"bytes=52428800-104857599","timeoutSec":60}
+{"id":9,"cmd":"setCertDomains","domains":[]}
+{"id":10,"cmd":"setCertDomains","domains":["rd-mac-1a2b3c4d.tail0001.test"]}
+{"id":11,"cmd":"setDNSConfig","enabled":false}
+{"id":12,"cmd":"setDNSConfig","enabled":true}
+{"id":13,"cmd":"setDNSFault","count":1,"status":403}
+{"id":14,"cmd":"setDNSFault","count":1,"wrongTXT":true}
+{"id":15,"cmd":"goState","name":"go-peer-a"}
+{"id":16,"cmd":"peerClose","name":"go-peer-a","stop":true}
+{"id":17,"cmd":"goState","name":"go-peer-a"}
+```
+
+1 뒤 Swift 노드를 `ready.controlURL`에 붙이고, 반환한 directory·루트를 시험용 발급기에 준다. 발급 뒤 5의 TXT 값을 대조한다. 다시 시작·갱신·재사용은 Swift 시험의 노드·시계·저장소로 유도한다. 6~8 사이에는 앞 요청의 완료를 기다려 서버가 준 세션·토큰을 후속 머리에 넣는다. 전송 중 제거를 보려면 `peerHTTP` 완료 전에 `removePeer`를 보낸다. 기존 `removePeer`는 testcontrol의 노드 목록을 지우지 않으므로, **netmap의 피어 제거**까지 보려면 Swift 노드에 `injectMapResponse`의 `PeersRemoved`를 별도로 주입한다(필요한 NodeID는 시험 맵에서 얻는다). 도구가 Swift의 origin 표·TLS 리스너·파일 권한·갱신 시계를 대신 검사하지 않는다.
+
+상태 가져오기는 **15로 경로를 얻고 → 16의 응답을 기다리고 → 17의 `stopped:true`를 확인한 뒤** `tailscaled.state`·`certs/`를 읽거나 복사한다. 기존 `peerClose(name,port)`는 리스너만 닫으므로 이 용도로 쓰면 안 된다. 멈춘 노드의 디렉터리는 `removePeer`·`quit`·EOF에서 삭제된다. 읽기를 마치기 전에는 이들을 보내지 않는다. Go 인증서 캐시는 자동으로 만들어 주지 않으며 필요하면 시험이 준비한다.
+
+빌드·실행·Go 회귀 시험의 임시 파일도 전용 eyebuild 아래에 둔다. `go mod download` 이외 네트워크는 루프백과 로컬 tailnet 시험뿐이다.
+
+```sh
+check_dir="$(eyebuild dir m7-tailnet-tool)"
+mkdir -p "$check_dir/tmp"
+export TMPDIR="$check_dir/tmp"
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw
+(cd Tools/interop && go mod download)
+export GOPROXY=off GOSUMDB=off
+(cd Tools/interop && go test -count=1 ./...)
+# 실행이 필요하면 같은 환경에서:
+# tailnet_tool="$(sh Scripts/build-interop-tools.sh tailnet)"
+# "$tailnet_tool"
+eyebuild rm m7-tailnet-tool
+```
+
+`TestHostTools`는 명령 검증·실제 Noise `SetDNS`·응답 결함·잘못된 TXT의 발급 실패·독립 Go ACME 클라이언트의 DNS-01 발급과 사슬/이름 검증·authorization 재사용·HTTPS Range와 100MiB 업로드·HTTP·상태 보존과 같은 Go 신원의 재접속을 확인한다. `TestPeerHTTPConcurrentRemove`는 JSON 실행 중 HTTP를 기다리면서 실제 Go 피어를 제거할 수 있음을 확인한다. Swift 관문·실기기·운영 서버는 이 Go 시험의 확인 범위 밖이다.
+
 # h2server
 
 `sh Scripts/build-interop-tools.sh h2server`으로 빌드한다. `127.0.0.1`의 임의 포트에서 TLS·HTTP/1 업그레이드 없는 prior knowledge HTTP/2를 받는다. 준비 출력은 `{"event":"ready","port":12345}` 한 줄이다. `golang.org/x/net/http2` v0.60.0의 `Server.ServeConn`을 기본 설정으로 사용한다. Go 1.27.3에서는 이것이 표준 라이브러리 HTTP/2 서버에 위임된다. `ConfigureServer`는 `http.Server.Shutdown`의 정상 GOAWAY 경로를 연결하기 위해 사용한다(testcontrol의 ServeConn과 같은 프레임 구현).

@@ -30,29 +30,45 @@ import (
 )
 
 type command struct {
-	ID          json.RawMessage `json:"id"`
-	Cmd         string          `json:"cmd"`
-	Name        string          `json:"name"`
-	To          string          `json:"to"`
-	Type        string          `json:"type"`
-	Port        int             `json:"port"`
-	Proto       string          `json:"proto"`
-	Payload     string          `json:"payload"`
-	NodeKey     string          `json:"nodeKey"`
-	Response    json.RawMessage `json:"response"`
-	RequireAuth *bool           `json:"requireAuth"`
-	AuthKey     *string         `json:"authKey"`
-	AuthURL     string          `json:"authURL"`
-	Enabled     *bool           `json:"enabled"`
-	Send        *uint64         `json:"send"`
-	Seed        *uint64         `json:"seed"`
-	TimeoutSec  *int            `json:"timeoutSec"`
+	ID                 json.RawMessage     `json:"id"`
+	Cmd                string              `json:"cmd"`
+	Name               string              `json:"name"`
+	To                 string              `json:"to"`
+	Type               string              `json:"type"`
+	Port               int                 `json:"port"`
+	Proto              string              `json:"proto"`
+	Payload            string              `json:"payload"`
+	NodeKey            string              `json:"nodeKey"`
+	Response           json.RawMessage     `json:"response"`
+	RequireAuth        *bool               `json:"requireAuth"`
+	AuthKey            *string             `json:"authKey"`
+	AuthURL            string              `json:"authURL"`
+	Enabled            *bool               `json:"enabled"`
+	Send               *uint64             `json:"send"`
+	Seed               *uint64             `json:"seed"`
+	TimeoutSec         *int                `json:"timeoutSec"`
+	Domains            *[]string           `json:"domains"`
+	Count              *int                `json:"count"`
+	Status             int                 `json:"status"`
+	DelayMs            int                 `json:"delayMs"`
+	Body               string              `json:"body"`
+	WrongTXT           bool                `json:"wrongTXT"`
+	NonceReject        *int                `json:"nonceReject"`
+	AuthzReuse         *int                `json:"authzReuse"`
+	ValidationDelaySec int                 `json:"validationDelaySec"`
+	URL                string              `json:"url"`
+	Method             string              `json:"method"`
+	Headers            map[string][]string `json:"headers"`
+	Range              string              `json:"range"`
+	RootPEM            string              `json:"rootPEM"`
+	Stop               bool                `json:"stop"`
 }
 type peer struct {
 	server    *tsnet.Server
 	dir       string
 	capture   *peerCapture
 	transfers *peerTransfers
+	stopped   bool
 }
 type network struct {
 	control            *testcontrol.Server
@@ -68,6 +84,7 @@ type network struct {
 	derpConnections    int
 	stunRequests       int
 	transfers          []*transfer
+	host               hostTools
 }
 
 func newNetwork() (*network, error) {
@@ -113,6 +130,7 @@ func newNetwork() (*network, error) {
 	port := n.derpHTTP.Listener.Addr().(*net.TCPAddr).Port
 	// testcontrol의 기본 등록 로그가 공개 nodeKey를 기록하므로 끈다.
 	n.control = &testcontrol.Server{Logf: func(string, ...any) {}, MagicDNSDomain: "tail0001.test", AllOnline: true, DERPMap: &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{1: {RegionID: 1, RegionCode: "test", RegionName: "test", Nodes: []*tailcfg.DERPNode{{Name: "1a", RegionID: 1, HostName: "127.0.0.1", IPv4: "127.0.0.1", IPv6: "none", DERPPort: port, STUNPort: n.stun.LocalAddr().(*net.UDPAddr).Port, InsecureForTests: true}}}}}}
+	n.initHostTools()
 	n.http = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.started = true
@@ -127,12 +145,15 @@ func newNetwork() (*network, error) {
 	return n, nil
 }
 func (n *network) close() {
+	n.closeHostTools()
 	for _, p := range n.peers {
 		p.transfers.close()
 		if p.capture != nil {
 			p.capture.close()
 		}
-		p.server.Close()
+		if !p.stopped {
+			p.server.Close()
+		}
 		os.RemoveAll(p.dir)
 	}
 	n.http.Close()
@@ -156,6 +177,8 @@ var validName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 func (n *network) execute(c command) (map[string]any, error) {
 	result := map[string]any{}
 	switch c.Cmd {
+	case "setCertDomains", "setDNSConfig", "setDNSLog", "setDNSFault", "acmeStart", "peerWhoIs", "peerHTTP", "goState":
+		return n.executeHost(c)
 	case "addPeer":
 		if !validName.MatchString(c.Name) {
 			return nil, errors.New("name이 잘못되었습니다")
@@ -223,7 +246,10 @@ func (n *network) execute(c command) (map[string]any, error) {
 		if p.capture != nil {
 			p.capture.close()
 		}
-		e := p.server.Close()
+		var e error
+		if !p.stopped {
+			e = p.server.Close()
+		}
 		os.RemoveAll(p.dir)
 		if e != nil {
 			return nil, e
@@ -253,6 +279,10 @@ func (n *network) execute(c command) (map[string]any, error) {
 			return nil, errors.New("DNS 설정은 첫 제어 요청 전에만 바꿀 수 있습니다")
 		}
 		n.control.DNSConfig = &tailcfg.DNSConfig{Proxied: *c.Enabled}
+		if n.host.configured {
+			enabled := *c.Enabled
+			n.host.enabled = &enabled
+		}
 		n.mu.Unlock()
 		result = map[string]any{"event": "magicDNS", "enabled": *c.Enabled}
 	case "startCapture", "captureStatus":
@@ -324,6 +354,12 @@ func (n *network) execute(c command) (map[string]any, error) {
 			result = map[string]any{"event": "peerPing", "name": c.Name, "result": ping}
 		}
 	case "peerServe", "peerDial", "peerClose", "transfers":
+		if c.Cmd == "peerClose" && c.Stop {
+			return n.stopPeer(c)
+		}
+		if p := n.peers[c.Name]; c.Cmd != "transfers" && p != nil && p.stopped {
+			return nil, errors.New("멈춘 피어입니다")
+		}
 		return n.executeTransfer(c)
 	case "peerSend":
 		p := n.peers[c.Name]
@@ -378,7 +414,13 @@ func (n *network) execute(c command) (map[string]any, error) {
 		if e := json.Unmarshal(c.Response, &m); e != nil {
 			return nil, errors.New("response가 잘못되었습니다")
 		}
-		if !n.control.AddRawMapResponse(k, &m) {
+		n.mu.Lock()
+		injected := n.control.AddRawMapResponse(k, &m)
+		if injected {
+			n.host.manualMaps[k] = true
+		}
+		n.mu.Unlock()
+		if !injected {
 			return nil, errors.New("연결된 맵 스트림이 없습니다")
 		}
 		result = map[string]any{"event": "injected"}
@@ -417,16 +459,41 @@ func (n *network) execute(c command) (map[string]any, error) {
 	}
 	return result, nil
 }
-func run(in io.Reader, out io.Writer) error {
+func run(in io.Reader, out io.Writer) (runErr error) {
 	os.Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
 	os.Setenv("TS_DISABLE_PORTMAPPER", "true")
 	n, e := newNetwork()
 	if e != nil {
 		return e
 	}
-	defer n.close()
 	enc := json.NewEncoder(out)
-	if e = enc.Encode(n.ready()); e != nil {
+	var outputMu sync.Mutex
+	var httpWG sync.WaitGroup
+	var writeErr error
+	encode := func(value any) error {
+		outputMu.Lock()
+		defer outputMu.Unlock()
+		err := enc.Encode(value)
+		if err != nil && writeErr == nil {
+			writeErr = err
+		}
+		return err
+	}
+	closed := false
+	shutdown := func() {
+		if !closed {
+			n.close()
+			closed = true
+		}
+		httpWG.Wait()
+	}
+	defer func() {
+		shutdown()
+		if runErr == nil {
+			runErr = writeErr
+		}
+	}()
+	if e = encode(n.ready()); e != nil {
 		return e
 	}
 	scanner := bufio.NewScanner(in)
@@ -439,6 +506,19 @@ func run(in io.Reader, out io.Writer) error {
 			result = map[string]any{"event": "error", "message": "JSON이 잘못되었습니다"}
 		} else if len(c.ID) == 0 || string(c.ID) == "null" {
 			result = map[string]any{"event": "error", "message": "id가 필요합니다"}
+		} else if c.Cmd == "peerHTTP" && n.peers[c.Name] != nil && !n.peers[c.Name].stopped {
+			p := n.peers[c.Name]
+			httpWG.Add(1)
+			go func() {
+				defer httpWG.Done()
+				response, err := n.peerHTTP(c, p)
+				if err != nil {
+					response = map[string]any{"event": "error", "message": err.Error()}
+				}
+				response["id"] = c.ID
+				encode(response)
+			}()
+			continue
 		} else {
 			result, e = n.execute(c)
 			if e != nil {
@@ -448,7 +528,10 @@ func run(in io.Reader, out io.Writer) error {
 		if len(c.ID) > 0 {
 			result["id"] = c.ID
 		}
-		if e = enc.Encode(result); e != nil {
+		if c.Cmd == "quit" && result["event"] == "quit" {
+			shutdown()
+		}
+		if e = encode(result); e != nil {
 			return e
 		}
 		if c.Cmd == "quit" && result["event"] == "quit" {
