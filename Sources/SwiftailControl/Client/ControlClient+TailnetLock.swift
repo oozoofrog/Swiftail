@@ -89,7 +89,9 @@ extension ControlClient {
 
     /// 맵 응답 하나를 적용한 결과를 받는다. 할 일이 없으면 netmap을 곧바로 걸러 내고, 있으면 쥔 채 절차를 깨운다(동작 N3).
     ///
-    /// 새 netmap과 서버가 알린 상태의 변화가 계기다. 실패한 절차는 다음 계기에 다시 시도된다(동작 N5).
+    /// 새 netmap과 서버가 알린 상태의 변화가 계기다. 할 일이 남아 있으면(실패한 절차) 내용이 같은 맵 응답도 계기다:
+    /// Go는 맵 응답마다 절차를 돈다(`ipn/ipnlocal/tailnet-lock.go`의 `tkaSyncIfNeeded`). 서버가 끄기 비밀만 바꾸고
+    /// 같은 내용의 맵을 다시 보내면 그 맵에서 다시 시도해야 한다(관문 (가) 7에서 드러났다). KeepAlive는 계기가 아니다.
     func receivedLock(_ update: MapSession.Update) throws {
         if let netmap = update.netmap {
             lockSession.netmap = netmap
@@ -97,7 +99,7 @@ extension ControlClient {
         }
         let serverChanged = update.serverLock != lockSession.server
         lockSession.server = update.serverLock
-        guard update.netmap != nil || serverChanged else { return }
+        guard update.netmap != nil || serverChanged || (update.isMapResponse && lockPlan != .nothing) else { return }
         if lockPlan != .nothing {
             lockSession.isWorkRequested = true
             lockSession.wakeup?.yield()

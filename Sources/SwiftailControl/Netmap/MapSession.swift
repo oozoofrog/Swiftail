@@ -24,6 +24,9 @@ public struct MapSession: Sendable {
         /// 서버가 알린 tailnet lock 상태의 지금 값. netmap이 바뀌지 않은 응답에도 싣는다: 머리만 바뀐 응답은 netmap을
         /// 바꾸지 않지만 동기화의 계기다(계약 `docs/contracts/SwiftailTailnetLock.md` 동작 N1).
         package var serverLock = ServerLockState()
+        /// KeepAlive가 아닌 맵 응답이었다(netmap이 바뀌지 않았어도). 실패한 tailnet lock 절차를 다시 시도할 계기다:
+        /// Go는 맵 응답마다 절차를 돈다(동작 N5).
+        package var isMapResponse = false
     }
 
     /// 세션이 쥐는 피어의 최대 수. 목표 규모(피어 10,000명)의 두 배다.
@@ -120,7 +123,8 @@ public struct MapSession: Sendable {
         netmap = current
         let ignoringControlTime = { (map: Netmap?) in var copy = map; copy?.controlTime = nil; return copy }
         let changed = ignoringControlTime(current) != ignoringControlTime(previous)
-        return Update(netmap: changed ? current : nil, pingRequest: response.pingRequest, serverLock: serverLock)
+        return Update(
+            netmap: changed ? current : nil, pingRequest: response.pingRequest, serverLock: serverLock, isMapResponse: true)
     }
 
     /// 서버가 알린 lock 상태. 이 세션에서 `TKAInfo`를 받기 전에는 꺼진 것이고, `TKAInfo`가 없는 응답은 바꾸지 않는다

@@ -548,6 +548,36 @@ struct ControlClientLockTests {
         }
     }
 
+    /// 관문 (가) 7에서 드러난 것: 서버가 끄기 비밀만 바꾸고 내용이 같은 맵을 다시 보내면, 바뀐 것이 없는 netmap이라며 절차를
+    /// 다시 돌지 않았다. Go는 맵 응답마다 절차를 돈다.
+    @Test("끄기: 할 일이 남아 있으면 내용이 같은 맵 응답에서도 절차를 다시 돈다(KeepAlive에서는 돌지 않는다)")
+    func unchangedMapRetriesPendingProcedure() async throws {
+        let world = try LockWorld()
+        try await withEnforcingClient(world) { run, _ in
+            let disabledMap = LockTesting.mapJSON(lock: LockTesting.tkaDisabled, #""Domain":"same.example""#)
+            run.server.updateLock {
+                $0.authority = nil
+                $0.disablementSecret = [UInt8](repeating: 0x5a, count: 32)
+            }
+            run.server.push(disabledMap)
+            let kept = try await run.latest("틀린 비밀 뒤의 netmap") { $0.domain == "same.example" }
+            #expect(kept.tailnetLock.mode == .enforcing)
+            let attempts = run.server.requests(to: Server.bootstrapPath).count
+
+            // KeepAlive는 계기가 아니다.
+            run.server.push(#"{"KeepAlive":true}"#)
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(run.server.requests(to: Server.bootstrapPath).count == attempts)
+
+            // 비밀만 맞는 것으로 바뀌고 맵은 그대로다.
+            run.server.updateLock { $0.disablementSecret = LockTesting.disablementSecret }
+            run.server.push(disabledMap)
+            let open = try await run.latest("같은 맵에서 다시 시도해 끈 뒤의 netmap") { $0.tailnetLock.mode == .disabled }
+            #expect(open.peers.map(\.id) == [2, 3, 4])
+            #expect(run.server.requests(to: Server.bootstrapPath).count == attempts + 1)
+        }
+    }
+
     @Test("TKAInfo가 도중에 빠진 응답은 변화 없음이고, 다시 이은 스트림의 첫 응답에 없으면 끄기 절차로 간다")
     func missingTKAInfo() async throws {
         let world = try LockWorld()
