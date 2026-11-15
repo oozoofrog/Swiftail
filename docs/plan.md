@@ -119,6 +119,8 @@ M4에서 정한 것: `SwiftailEngine`은 `SwiftailMagicsock`에 의존하지 않
 | `SwiftailEngine` | M3~M5 | netmap → WireGuard 피어·필터·경로·DNS, 패킷 필터, MagicDNS 응답기, 상태 저장, TUN(utun fd, 메모리) | |
 | `Swiftail` | M3~ | 공개 API(`TailnetNode`) | |
 | `SwiftailNetstack` | M6 | Swift로 쓴 TCP의 값 타입 상태 기계(세그먼트 코덱, 연결, 스택). `package` 접근이고 제품으로 내보내지 않는다. 듣기·걸기의 공개 API는 `Swiftail`에 둔다(`listen(port:)`·`connect(to:port:)`). **`Swiftail`이 이 타깃에 의존한다**(아래 그림과 6절 초안의 `dial`·의존 방향은 `docs/contracts/SwiftailNetstack.md`가 고쳤다) | TLS·HTTP. TLS는 M7에서 루프백 다리로 한다 |
+| `SwiftailCertificates` | M7 | ts.net 인증서의 발급·저장·갱신(ACME DNS-01, 제어 서버의 `set-dns`). 선택 제품이고 `Swiftail`에 의존한다. 서버 노릇을 하는 앱만 링크한다(`docs/contracts/SwiftailHost.md`) | TLS 종단, HTTP 서버, X.509 해석(Security에 맡긴다) |
+| `SwiftailLoopback` | M7 | tailnet 연결을 `127.0.0.1`의 OS TCP 리스너에 잇는 다리와, 그 리스너가 상대의 신원을 찾는 표. 선택 제품이다 | 리스너, TLS |
 
 ### 노트에서 확인해 설계에 반영한 것
 
