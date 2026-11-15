@@ -742,3 +742,68 @@ CSR의 구문·자기 서명과 P-256 키를 검사한다. 이름·SAN·태그�
 # Argon2i 기준값 생성 (`argon2fixtures`)
 
 `sh Scripts/build-interop-tools.sh argon2fixtures`로 빌드하고, 인자 없이 실행하면 `golang.org/x/crypto` `argon2.Key` 출력 75개를 JSON으로 표준 출력에 쓴다(`argon2fixtures > Tests/SwiftailCryptoTests/Vectors/argon2i-go.json`). 마지막 항목은 TKA 끄기 비밀의 인자 그대로이며 `tka.DisablementKDF`와 다르면 실패한다. 입력은 시험 전용 고정 패턴이다. Swift 시험은 `SWIFTAIL_ARGON2FIXTURES=<경로>`가 있으면 새로 뽑아 견준다.
+
+# TKA 기준 자료 생성 (`tkafixtures`)
+
+Tailnet Lock 계약(`docs/contracts/SwiftailTailnetLock.md`) 7절 "Go 기준값 대조"의 도구다. `tailscale.com` v1.104.6의 `tka` 패키지가 낸 판정을 JSON으로 쓴다. Swift 소스는 읽거나 실행하지 않는다. 네트워크·현재 시각·외부 난수를 쓰지 않는다. 키는 모두 `SHA-256("swiftail-fixtures/tka/<역할>/<번호>")`를 Ed25519 씨앗이나 node 키(X25519 개인 키) 입력으로 쓴다(역할: `lock`·`nl`·`credential`·`fork`·`node`·`disablement`). **자료에 든 개인 키는 공개된 시험 전용 값이다.** Go의 Ed25519 서명은 결정적이라 다시 뽑아도 같은 바이트가 나온다.
+
+```sh
+check_dir="$(eyebuild dir tl5-fixtures)"
+mkdir -p "$check_dir/tmp"
+export TMPDIR="$check_dir/tmp" GOTMPDIR="$check_dir/tmp"
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
+fixture_tool="$(sh Scripts/build-interop-tools.sh tkafixtures)"
+# 현재 폴더는 Tools/interop여야 한다(피어 집합의 overlay 빌드가 그 go.mod를 쓴다).
+(cd Tools/interop && "$fixture_tool" ../../Tests/SwiftailTKATests/Fixtures)
+# 인자가 없으면 같은 JSON을 표준 출력에 쓴다.
+(cd Tools/interop && "$fixture_tool" > "$check_dir/recreated.json")
+cmp "$check_dir/recreated.json" Tests/SwiftailTKATests/Fixtures/tka-fixtures.json
+(cd Tools/interop && go vet ./cmd/tkafixtures && go test -count=1 ./cmd/tkafixtures)
+eyebuild rm tl5-fixtures
+```
+
+`GOCACHE`가 비어 있으면 실행하지 않는다(홈의 Go 캐시를 만들지 않게). `go test`는 연속 생성의 일치, 저장 자료와의 바이트 일치, `caseCount`가 0이 아니고 배열 길이의 합과 같음, 파일이 2MB 이하임, `genesis.go`에 옮긴 Go 시험 값이 원본 시험 파일에 그대로 있음, `verify-nks`가 자료와 같은 판정을 내고 잘못된 입력을 거절함을 본다.
+
+판정은 모두 `tka`의 공개 API가 낸다: `AUM.Unserialize`·`StaticValidate`·`Serialize`·`Hash`·`SigHash`, `NodeKeySignature.Unserialize`·`Serialize`·`SigHash`, `Bootstrap`·`Inform`·`Head`·`Keys`·`StateIDs`, `SyncOffer`·`MissingAUMs`·`FromSyncOffer`, `NodeKeyAuthorizedWithDetails`, `ValidDisablement`·`DisablementKDF`, `DecodeWrappedAuthkey`·`SignByCredential`·`ResignNKS`, `MakeRetroactiveRevocation`, `AUMHash.String`·`UnmarshalText`, `key.NLPublic`·`NLPrivate`·`NodePublic`의 텍스트. 예외는 둘이다.
+
+- 상태의 끄기 값은 공개 접근자가 없다. `ChonkMem.AUM`으로 머리부터 거꾸로 가 처음 만나는 체크포인트의 `State.DisablementValues`를 읽는다(Go의 상태 적용은 체크포인트에서만 이 값을 바꾼다, `tka/state.go:162-254`).
+- 피어 거르기(`rotationTracker` 포함)는 `ipn/ipnlocal`의 내보내지 않은 함수다. `mapfixtures`와 같이 `tailscale.com`을 `eyebuild dir interop-tools` 아래 임시 사본으로 복사하고, `-overlay`로 `ipn/ipnlocal/swiftail_fixtures.go`(`bridge.go.txt`) 한 파일을 얹어 실제 `tkaFilterNetmapLocked`를 부르는 작은 프로그램(`worker.go.txt`)을 빌드해 실행한다. 거르기 로직을 옮겨 적지 않는다. 모듈 캐시는 고치지 않고 임시 사본은 끝나면 지운다.
+- Key·State 단독의 정준 바이트(`encodings`)는 `tka`가 따로 `Serialize`하지 않으므로 `tka`와 같은 인코더 설정 `cbor.CTAP2EncOptions()`로 만든다.
+
+일부러 틀리게 만든 입력은 CBOR 바이트를 직접 조립한다(`cbor.go`의 `rawAUMCases`·`rawNKSCases`, `chains.go`의 서명된 AUM 변형). 위수 2인 점을 R에 더한 서명과 비정준 항등원 공개 키의 서명은 `filippo.io/edwards25519`로 계산한다(`keys.go`).
+
+출력은 JSON 객체 하나이고 배열 원소 하나를 한 줄에 쓴다. 바이트는 모두 소문자 16진이고 nil은 `null`이다(빈 바이트열은 `""`). 64비트 StateID는 10진 문자열이다. 최상위 키:
+
+| 키 | 내용 |
+| --- | --- |
+| `reference` | `go`·`tailscale` 버전. tailscale이 v1.104.6이 아니거나 replace되어 있으면 거절한다 |
+| `caseCount` | 아래 시나리오 배열 길이의 합(`sync`는 안쪽 `cases`의 수). `keys`·`authorities`는 세지 않는다 |
+| `keys` | 시험 키: `role`, `index`, `seed`(SHA-256 입력 문자열), `private`(씨앗 32바이트), `public`, `text`(`tlpub:`·`nodekey:`) |
+| `authorities` | 판정에 쓰는 신뢰 상태: `name`, `aums`(첫 것이 부트스트랩, 나머지는 한 묶음의 `Inform`), `head`, `state` |
+| `text` | `kind`(`aumHash.encode`·`aumHash.decode`·`nlPublic.*`·`nlPrivate.*`·`nodePublic.*`), `input`, `ok`, `output`, `error` |
+| `encodings` | Key·State 값(`value`)과 정준 CBOR(`encoded`) |
+| `cbor` | `type`(`aum`·`nks`), `input`, `decoded`, `staticValid`(AUM만, NKS는 null), `accepted`(AUM은 디코딩과 정적 검사 통과, NKS는 디코딩), `error`, 디코딩했으면 `reencoded`·`canonical`(재인코딩이 입력과 같음)·`hash`(AUM)·`sigHash` |
+| `chains` | `bootstrap`, `bootstrapOK`, `bootstrapError`, `initial`(상태), `steps`(`name`, `aums`: 한 번의 `Inform`에 넣은 바이트, `ok`, `error`, `after`: 단계 뒤의 상태) |
+| `sync` | 묶음마다 `pool`(AUM 바이트)과 `cases`. 사례의 `local`·`remote`는 `aums`(pool 번호, 첫 것으로 부트스트랩), `offer`(16진과 `FromSyncOffer` 텍스트), `missing`(상대 제안에 대한 `MissingAUMs`: `ok`, `error`, `count`, `digest` = 해시들을 이은 것의 SHA-256, 100개 이하면 `hashes`), 상대의 목록을 들인 `informOK`, `headAfter` |
+| `signatures` | `authority`, `nodeKey`(32바이트), `nks`, `sigHash`(디코딩되면), `authorized`, `error`, `rotation`(`prevNodeKeys` 새것부터, `initialKind`, `initialWrappingPubkey`) |
+| `peerSets` | `authority`, `peers`(`nodeKey`, `signature`, `unsignedPeerAPIOnly`), `kept`(`tkaFilterNetmapLocked`가 남긴 node 키, 순서 유지) |
+| `disablement` | `authority`, `secret`, `kdf`(`DisablementKDF`), `valid`(`ValidDisablement`) |
+| `authKeys` | `input`, `DecodeWrappedAuthkey`의 `authKey`·`isWrapped`·`returnedInput`(원문 전체를 돌려줬는지)·`credential`(재인코딩)·`privateKeyLength`, 감싼 것이면 `SignByCredential`(node/8)의 `sign`(`ok`·`error`·`panic`)·`signError`·`nks`, 신뢰 상태가 있으면 `verdict` |
+| `resign` | `nlKey`(키의 seed 문자열), `oldNKS`, `nodeKey`, `ResignNKS`의 `ok`·`error`·`result`·`sigHash`·`sameAsOld`·`depth`, 결과의 `verdict` |
+
+`cbor` 사례 이름의 앞머리는 노트·계약이 예상한 디코딩 판정이다: `accept/`는 디코딩되는 것, `reject/`는 디코딩에서 거절되는 것(자료에서 그대로 맞는지 확인했다), `probe/`는 노트·계약이 Go 판정을 실행으로 확인하지 않았던 입력, `value/`는 `tka.AUM` 값을 `Serialize`한 정적 검사의 경계다. 판정 자체는 이름이 아니라 `decoded`·`accepted`로 견준다. 계약 동작 E6·D8대로 정적 검사를 통과하지 못한 AUM은 Swift가 판정만 견준다.
+
+시나리오(계약 7절의 1~8):
+
+- `cbor`: 노트 8.1의 받아들임·거절 표 전부, 모르는 필드 값의 모든 주요 타입·단순값(한 바이트 0~19·99·255, 두 바이트 0·23·24·31·32), 음수·정수 키의 끝값(−2^63, −2^63−1, −2^64, 2^63−1, 2^63, 2^64−1), 텍스트 키, 비최단 정수·길이·맵 머리, 알려진 필드마다 null·undefined, `Signatures`의 null 원소, 비최단으로 쓴 같은 키의 중복, 구조·`Meta`·Key·State·Signature 맵의 중복, 길이 미정·태그·예약된 추가 정보 28~30·31·`break`, 맨 바깥이 맵이 아닌 것(null·undefined 포함), 바이트열 자리의 정수 배열, 중첩 16/17단(배열·맵), 배열 4096/4097, 맵 1024/1025(값 안과 맨 바깥), 정적 검사의 종류별 필수·금지 필드와 경계(`Votes` 0·1·4096·4097, `Meta` 512·513바이트, 서명 KeyID 31·32·33·서명 63·64·65바이트, 끄기 값 0·1·32·33개·31·33바이트·중복, 키 0·1·512·513개·중복, `PrevAUMHash` 0·1·33바이트), NKS의 디코딩 변형.
+- `chains`: 직선 사슬(AddKey → UpdateKey(`Votes`, `Meta`) → RemoveKey → NoOp → Checkpoint → AddKey → 묶음 셋), 부트스트랩(나중 체크포인트, Go 시험의 genesis, 체크포인트 아님, 서명 없음, 믿지 않는 키, `LastAUMHash` 있음, 틀린 서명), 거절(빈 묶음, 서명 없음, 모르는 키 섞임, 틀린 서명, 부모 없음, 부모 모름, 31·33바이트 `PrevAUMHash`, 중복 AddKey, StateID가 다른 체크포인트, 없는 키의 Remove/Update, `Votes` 0·4097로 갱신, 서명된 정적 위반, 틀린 AUM이 든 묶음(앞·뒤), 이미 쥔 AUM, 순서가 뒤바뀐 묶음, 마지막 키 제거, 지운 키의 서명), 받아들여지는 이상한 것(종류 0·9·255, 필드를 더 실은 NoOp, `Public`이 null·빈 값·31·33바이트인 AddKey와 그 뒤의 Remove/Update/체크포인트, 모르는 필드와 비최단 정수, 정렬 안 된 키, 바이트열을 정수 배열로 쓴 `PrevAUMHash`·서명, `Meta` 값의 null, 각각의 다음 AUM), ZIP-215(위수 2 성분의 R, 비정준 항등원 공개 키), 갈래(가중치, 서명 둘 대 하나, 같은 키 두 번, RemoveKey 우선, 해시, 진 갈래의 자손, 소급 철회 체크포인트, 여러 단과 갈래를 만드는 묶음). 갈래 사례는 앞 규칙의 답이 해시 비교와 다르도록 해시의 대소를 골랐다.
+- `sync`: `basic`(같은 머리, 뒤처짐, 앞섬, 갈라짐, 상대만 아는 체크포인트, 상대가 genesis뿐, 교차 없음), `checkpoint-51`(51번째 체크포인트의 조상 목록, 머리 교차), `long`(체크포인트 깊이 999·1000으로 조상 목록 1000회 한도, 앞으로 감기 1999·2000회로 2000회 한도).
+- `signatures`: direct(회전 키 유무, 다른 node 키, 믿지 않는 키, 지운 키, `Nested`가 붙음, 31바이트 신뢰 키, 틀린 서명, ZIP-215 전용 서명, 비정준 항등원 키, KeyID·Pubkey 없음, 종류 0·4, 뒤 바이트, 모르는 필드), credential 혼자, rotation 1~16겹, 중간 `WrappingPubkey`, 회전 키 없음·31바이트, `np`가 아닌 안쪽 Pubkey, 바깥의 ZIP-215 전용 서명, `Nested` 없음, 다른 서명 키, credential → rotation(다른 node 키, 믿지 않는 credential, 다른 서명 키, `np` Pubkey, 쓰레기 Pubkey, 그 위의 rotation).
+- `peerSets`: 서명 없음·틀린 서명·`UnsignedPeerAPIOnly`, 회전으로 낡은 키, 같은 회전 키 묶음의 가장 긴 내력, 같은 길이면 모두 빠짐, 낡은 키는 묶음에서 빠짐, credential 사슬은 묶지 않음, 다른 회전 키, 지운 서명 키.
+- `disablement`: 0xa5 × 32(KDF `c3fea8a0…4e2f`), 끄기 값 셋 가운데 맞는 것, 틀린 것, 빈 비밀, 31바이트, 체크포인트로 값이 바뀐 앞뒤.
+- `authKeys`: Go 시험 문자열(`tka/sig_test.go:479`), 정상, 감싸지 않음, `-` 없음, 채움 붙은 base64, URL 알파벳, `-`가 더 있음, CBOR이 아님, credential이 아닌 A, 32·63·65바이트 B(Go panic), 뒤 32바이트가 다른 B, `WrappingPubkey`가 다른 A, 믿지 않는 credential, 빈 두 부분.
+- `resign`: 같은 node 키(그대로), 회전 키가 NL 키인 direct, 다른 NL 키, 회전 키 없는 direct, credential 사슬, Pubkey 14~17개 사슬(16개부터 줄임, 17개는 디코딩 거절), 디코딩되지 않는 옛 서명.
+
+`tkafixtures verify-nks`는 표준 입력으로 JSON 객체 하나 `{"aums":["<16진>",…],"nodeKey":"<32바이트 16진>","nks":"<16진>"}`를 받는다. `aums`의 첫 것으로 부트스트랩하고 나머지를 `Inform`한 상태에서 `NodeKeyAuthorizedWithDetails`로 판정해 `{"ok":true,"authorized":…,"error":…,"rotation":…}` 한 줄을 쓰고 0으로 끝난다(판정이 거절이어도 0이다). 입력이 4MiB를 넘거나, JSON 객체 하나가 아니거나, 모르는 필드·대문자 16진이 있거나, 부트스트랩·`Inform`이 실패하면 `{"ok":false,"error":"…"}`를 쓰고 1로 끝난다. Swift가 만든 서명(`SignByCredential`·재서명. CryptoKit 서명은 결정적이지 않다)을 이것으로 확인한다.
