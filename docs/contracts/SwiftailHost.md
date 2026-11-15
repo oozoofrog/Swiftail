@@ -584,7 +584,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 | IPN 버스의 `ErrMessage` → `Error` 상태 | `node.go:409-458` | `run()`이 던지는 `NodeError`와 `NodeEvent.stateChanged` |
 | `StartLoginInteractive`, 30초 간격 | `node.go:752-778` | M5 계약대로(`.needsLogin(URL)`, `startInteractiveLogin()`) |
 | 페어링한 기기별 경로(`peerPaths`, 키는 `StableID`) | `node.go:141-163`, `:658-670` | `path(toPeerNamed:)`. 이름은 `Origin.peer.name`에서 얻는다(F10) |
-| `NetworkLockStatus` 진단 로그 | `node.go:494-504` | 없다. lock이 켜진 tailnet은 `NodeError.control(.tailnetLockEnabled)`로 끝난다 |
+| `NetworkLockStatus` 진단 로그 | `node.go:494-504` | `node.status.tailnetLock`과 `NodeEvent.tailnetLockChanged`(M8, `SwiftailTailnetLock.md`). M8 전에는 lock이 켜진 tailnet에서 `NodeError.control(.tailnetLockEnabled)`로 끝났다 |
 | `logtail.Disable()`, `goMemLimitMiB`, RSS | `node.go:35-38`, `:277` | 해당 없음(로그 업로드가 없다. 메모리 한도 설정이 없다). RSS는 첫 사용처 |
 | `srv.Dial` | `node.go:952` | `node.connect(to:port:)`. 시험과 진단만 쓴다 |
 

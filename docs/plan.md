@@ -46,7 +46,7 @@ RemoteDebug의 Go 코어가 쓰는 Tailscale 기능과 Swiftail에서 대응하�
 
 서브넷 라우터, 출구 노드(제공·사용), Tailscale SSH, Taildrop, Taildrive, Funnel·Serve, 피어 릴레이, 포트 매핑(UPnP·NAT-PMP·PCP), 앱 커넥터, 로그 업로드, 자동 업데이트, 기기 상태(posture) 보고, Linux·Windows.
 
-tailnet lock(노드 키 서명 검증)은 1차 범위(M0~M7)에서 제외했다. 그동안은 lock이 켜진 tailnet을 감지해 `tailnetLockEnabled`로 끝낸다(8절 위험 8). **M8에서 넣는다**(사용자 결정, 2026-11-15: "RemoteDebug의 Go 코어가 되는 것은 Swiftail도 된다". RemoteDebug의 Go 코어는 tailnet lock을 빼지 않고 빌드한다. 그 저장소 `scripts/build-core.sh`의 제외 태그에 `ts_omit_tailnetlock`이 없다). Swiftail이 서명 기기 노릇을 하는 것(다른 노드의 키에 서명, lock 켜기·끄기, 서명 권한 관리)은 넣지 않는다.
+tailnet lock(노드 키 서명 검증)은 1차 범위(M0~M7)에서 제외했다. M8 전에는 lock이 켜진 tailnet을 감지해 `tailnetLockEnabled`로 끝냈다(8절 위험 8. 그 오류는 M8에서 없어졌다). **M8에서 넣는다**(사용자 결정, 2026-11-15: "RemoteDebug의 Go 코어가 되는 것은 Swiftail도 된다". RemoteDebug의 Go 코어는 tailnet lock을 빼지 않고 빌드한다. 그 저장소 `scripts/build-core.sh`의 제외 태그에 `ts_omit_tailnetlock`이 없다). Swiftail이 서명 기기 노릇을 하는 것(다른 노드의 키에 서명, lock 켜기·끄기, 서명 권한 관리)은 넣지 않는다.
 
 ## 4. 결정
 

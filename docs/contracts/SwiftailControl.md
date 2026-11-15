@@ -130,7 +130,7 @@ public struct Netmap: Sendable, Equatable {
     public var packetFilter: [FilterRule]
     public var userProfiles: [Int64: UserProfile]  // 사용자 ID → 프로필
     public var domain: String
-    public var tailnetLockEnabled: Bool            // TKAInfo로 판단. M2는 감지만 한다
+    public var tailnetLock: TailnetLockStatus      // M8부터. `ControlClient`가 낸 netmap은 이미 걸러져 있다(`SwiftailTailnetLock.md`). M2~M7에는 `tailnetLockEnabled: Bool`(감지만)이었다
     public var controlTime: Date?
 }
 
@@ -191,7 +191,7 @@ public enum ControlError: Error, Sendable {
     case authKeyRejected(String)            // 인증 키를 실은 등록의 RegisterResponse.Error
     case registrationRejected(String)       // 인증 키 없는 등록의 RegisterResponse.Error
     case nodeKeyExpired                     // 새 키로 다시 등록해도 만료
-    case tailnetLockEnabled                 // tailnet lock이 켜진 tailnet. 지원하지 않는다
+    // M2~M7에는 `tailnetLockEnabled`(lock이 켜진 tailnet을 거절)가 있었다. M8에서 없앴다(`SwiftailTailnetLock.md` 결정 L5)
 }
 
 public actor ControlClient {
@@ -260,7 +260,7 @@ public actor ControlClient {
    - 등록이 진행 중일 때 요청한 `startInteractiveLogin()`은 그 등록이 끝난 뒤에도 남아 새 등록을 일으킨다. 로그인을 기다리는 Followup 긴 폴링은 그 자리에서 그만두고 새 후보 키로 다시 시작해 새 URL을 알린다.
 3. **상태 올리기**: `Stream=false, OmitPeers=true`인 맵 요청으로 Hostinfo·NetInfo·DiscoKey·Endpoints를 올린다. 응답 본문은 끝까지 읽고 버린다. 응답을 120초 안에 다 받지 못하면 연결 오류다(Go의 감시와 같다). 스트림이 열린 뒤의 변경도 이 형태로만 보낸다(다른 형태는 서버가 기존 스트림을 끊는다).
 4. **맵 스트림**: `Stream=true, KeepAlive=true, Compress=""`. 바이트를 `MapResponseFramer` → `MapSession`에 넣고 netmap이 바뀌면 `netmap` 사건을 낸다. 120초 동안 아무것도 오지 않으면 끊고 다시 잇는다. 다시 이을 때는 새 `MapSession`으로 시작한다.
-   - `TKAInfo`로 tailnet lock이 켜진 것을 알면 `tailnetLockEnabled`로 끝낸다.
+   - (M2~M7) `TKAInfo`로 tailnet lock이 켜진 것을 알면 `tailnetLockEnabled`로 끝냈다. M8부터는 서명 권한 상태를 동기화하고 피어를 거른다(`SwiftailTailnetLock.md` 동작 N).
    - self 노드의 키가 만료되면 등록부터 다시 한다. 새 맵이 오지 않아도 만료 시각이 지나면 그렇게 한다. 새 키로 다시 등록했는데도 만료면 `nodeKeyExpired`로 `run()`을 끝낸다.
    - `PingRequest`(Types가 빈 것)는 그 URL에 HEAD로 답한다. 나머지 종류는 무시한다.
 5. **물러나기**: `min(n² × 10ms, 30s) × [0.5, 1.5)`. 전체 netmap을 받으면 초기화한다(self 키가 만료된 netmap은 초기화하지 않는다). 429와 `Retry-After`가 붙은 503은 그 시간만큼 기다린다(최대 5분).

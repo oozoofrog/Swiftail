@@ -521,7 +521,7 @@ Swiftail은 로그 API도 로그 사건도 없다. 첫 사용처는 코어 로�
 | 검색 도메인 | D3 | 짧은 이름 해석이 요구될 때 |
 | 서비스 IP의 TCP 53(DNS over TCP) | D4. 로컬 응답에 TC가 서지 않는다(DNS 노트 4.2.4) | M6 TCP 스택 뒤 |
 | 4via6 이름, `dns-subdomain-resolve` 서브도메인 | DNS 노트 6.1 | 그 기능을 쓰는 tailnet을 만날 때 |
-| tailnet lock 지원 | plan 3절. 켜진 tailnet은 M2부터 접속을 거절한다(`ControlError.tailnetLockEnabled`) | lock을 쓰는 사용처가 생길 때 |
+| tailnet lock 지원 | M8에서 넣었다(`SwiftailTailnetLock.md`). M5 때는 켜진 tailnet의 접속을 거절했다(`ControlError.tailnetLockEnabled`, 지금은 없다) | — |
 | IPv6 UDP 소켓·IPv6 엔드포인트 | magicsock 계약 제외 표. DERP(TLS, 호스트 이름)는 IPv6 전용 망에서도 된다 | 실기기에서 IPv6 전용 셀룰러 망을 만나 직접 경로가 필요할 때 |
 | 망이 내려감의 처리, UDP 송신 오류의 자동 재결속, DERP 연결의 선별 유지 | 동작 N 3.2·5·6 | 동작 N에 적음 |
 | 다른 프로세스 사이의 상태 디렉터리 중복 막기 | 동작 P 3. App Group 컨테이너의 파일 잠금은 앱 일시 정지와 얽힐 수 있어 들이지 않는다 | 두 프로세스가 같은 디렉터리를 쓰는 사용처가 생길 때 |
