@@ -252,6 +252,73 @@ eyebuild rm m7-tailnet-tool
 
 `TestHostTools`는 명령 검증·실제 Noise `SetDNS`·응답 결함·잘못된 TXT의 발급 실패·독립 Go ACME 클라이언트의 DNS-01 발급과 사슬/이름 검증·authorization 재사용·HTTPS Range와 100MiB 업로드·HTTP·상태 보존과 같은 Go 신원의 재접속을 확인한다. `TestPeerHTTPConcurrentRemove`는 JSON 실행 중 HTTP를 기다리면서 실제 Go 피어를 제거할 수 있음을 확인한다. Swift 관문·실기기·운영 서버는 이 Go 시험의 확인 범위 밖이다.
 
+## Tailnet Lock 관문 명령
+
+계정 없이 lock이 켜진 tailnet을 흉내 낸다(`docs/contracts/SwiftailTailnetLock.md` 7절 "관문 (가)", 결정 L15). Go 피어(tsnet)가 서명 기기 노릇을 하고, 서버 쪽은 testcontrol 사본이 맡는다. 기존 명령과 JSON 형식은 그대로다.
+
+### testcontrol 사본
+
+`tailnet`은 upstream 패키지 대신 `internal/testcontrol/`을 쓴다. `tailscale.com` v1.104.6(`go.mod`가 빌드하는 판. v1.104.7과 이 디렉터리는 같다)의 `tstest/integration/testcontrol/`에서 `doc.go`·`testcontrol.go`·`testcontrol_test.go`·`capability_default_test.go`를 옮겨 적었고, 파일마다 원본의 BSD-3-Clause 머리말과 출처 줄을 두었다. 모듈의 `LICENSE`를 같은 디렉터리에 두었다. `h2server` 등 다른 도구는 원본 패키지를 그대로 쓴다.
+
+옮기지 않은 것: `reco-experiment.go`·`capability_reco_test.go`·`reco.md`(`experiment.reco` 빌드 태그의 대체 구현). 그래서 `testcontrol.go`·`capability_default_test.go`의 `//go:build !experiment.reco`를 지웠다. `testcontrol_test.go`는 import 경로만 사본으로 바꿨다. 옮겨 적은 직후, 보탬을 넣기 전에 `go test ./internal/testcontrol ./cmd/tailnet`이 통과하는 것을 기준선으로 확인했다.
+
+원본과 다른 점(코드에는 "원본에 없는 보탬" 또는 "원본과 다름" 주석이 있다. 보탬의 본체는 `internal/testcontrol/tka.go`):
+
+| 자리 | 다른 점 | 근거 |
+| --- | --- | --- |
+| `/machine/tka/sync/send` | 처리기를 더했다. 받은 AUM을 `tkatest.HandleTKASyncSend`로 검증해 들이고(`Inform`) 서버 머리를 답한다. 머리가 바뀌면 모든 노드에 새 맵을 보낸다. lock이 없으면 400. 원본은 처리기가 없어 프로세스가 panic한다 | `tstest/tkatest/tkatest.go`의 `HandleTKASyncSend`, `ipn/ipnlocal/tailnet-lock_test.go`의 `TestTKASync` |
+| `/machine/tka/disable` | 처리기를 더했다. `Version`이 `CurrentCapabilityVersion`이고 비밀이 서버 상태의 `ValidDisablement`를 통과하면 서버의 lock 상태를 지우고 비밀을 기억한다. 틀리면 400. 머리 일치는 보지 않는다 | 요청 모양은 `ipn/ipnlocal/tailnet-lock.go`의 `tkaDoDisablement`, `TestTKADisable`. 서버가 무엇을 검사하는지는 **추측** |
+| `/machine/tka/bootstrap` | 끈 뒤에는 `DisablementSecret`(기억한 비밀, 또는 `wrongSecret`이면 `0x42`×32)을 준다. `setLockBootstrapFault`가 켜지면 `GenesisAUM`의 마지막 바이트를 잘라 준다. 잘못된 요청(다른 `Version` 등)에 panic하지 않고 400만 쓴다 | `TestTKADisablementFlow`의 가짜 서버 |
+| `/machine/tka/sync/offer` | lock이 없으면 400(원본은 nil 저장소를 열다 panic). 교차 없음 같은 실패에 panic하지 않는다. 틀린 끄기 비밀을 받은 Go 노드는 서버가 lock을 끈 뒤에도 동기화를 잇기 때문이다 | `ipn/ipnlocal/tailnet-lock.go:399-418` |
+| `/machine/tka/sign` | 검증 실패와 등록되지 않은 node 키에 panic하지 않는다(후자는 이미 200을 쓴 뒤라 서명만 버린다) | — |
+| `init/begin`·`init/finish` | begin은 끈 상태를 지운다. finish 뒤 모든 노드에 새 맵을 보낸다(원본은 다음 맵 요청까지 기다린다) | — |
+| 맵 응답 | `setLockCapability`가 켜지면 자기 노드 `CapMap`에 `https://tailscale.com/cap/tailnet-lock`(`[]`)을 싣는다. 끈 뒤에는 `TKAInfo{Disabled: true}`를 싣고, `omitTKAInfo`면 싣지 않는다 | 원본은 `DefaultNodeCapabilities`로 등록 때의 `Capabilities`에만 실을 수 있고, 맵 응답의 `CapMap`은 `SetNodeCapMap`의 값으로 덮인다. 운영 서버가 끈 뒤 무엇을 보내는지는 **추측** |
+| 등록 | 요청의 `NodeKeySignature`를 서버 상태의 `NodeKeyAuthorized`로 검증해 통과하면 노드의 `KeySignature`로 둔다. 실패해도 등록은 하고 서명만 붙이지 않는다. `lockRequestResign`으로 고른 node 키가 다음에 `OldNodeKey` 없이 등록하면 응답 `NodeKeySignature`에 지금 서명을 실어 재서명을 요청한다. 재서명한 키 교체가 받아들여지면 옛 키의 항목을 곧바로 지운다(원본은 인증 URL을 마친 뒤에만 지워, 인증 없는 교체에서는 같은 노드 ID의 항목이 둘 남는다) | 클라이언트 쪽은 `control/controlclient/direct.go:534-545`·`:704-747`. 서명 실패의 처리, 재서명을 요청하는 때, 옛 키의 처리는 **추측** |
+| 기록 | `/machine/tka/` 요청(경로, `NodeKey`, `Head`)과 등록 요청(서명 판정, 해독한 본문)을 쌓는다 | — |
+
+`tkatest`의 offer·send 처리기는 받은 요청과 응답(공개 node 키, AUM 바이트)을 Go `log`로 표준 오류에 쓴다. 원본 패키지라 끄지 않았다. 비밀은 들어 있지 않다. 사본은 upstream 버전을 올릴 때 다시 맞춘다.
+
+### 명령
+
+모든 응답에 원래 `id`가 있고, 실패는 `error` 사건이다. `name`은 명령을 수행하는 Go 피어다. 키 텍스트는 node 키가 `nodekey:<hex>`, lock 키가 `tlpub:<hex>`(입력은 `nlpub:`도 받는다), 머리가 AUM 해시의 base32(52자)다.
+
+| 명령 | 입력(`id`, `cmd` 외) | 성공 응답(`id` 외) |
+| --- | --- | --- |
+| `setLockCapability` | `enabled` bool | `{"event":"lockCapability","enabled":true}`. 언제 바꿔도 되고 모든 노드에 새 맵을 보낸다 |
+| `lockInit` | `name`, 선택 `signers`(신뢰 키로 넣을 Go 피어 이름들, 기본 `[name]`) | `lockStatus`와 같은 필드의 `{"event":"lockInit",…}`. 끄기 비밀 하나를 만들어 도구 안에만 쥔다. 그때 등록된 모든 노드가 `name`의 서명을 받는다(회전 키 없음). `signers`가 서버 머리에 닿을 때까지 기다린 뒤 답한다 |
+| `lockStatus` | `name` | `{"event":"lockStatus","name":"go-peer-a","enabled":true,"head":"<base32>","nodeKey":"nodekey:…","lockKey":"tlpub:…","nodeKeySigned":true,"trustedKeys":["tlpub:…"],"visiblePeers":["nodekey:…"],"filteredPeers":["nodekey:…"],"controlHead":"<서버 머리, 없으면 \"\">","controlDisabled":false}`. Go `TailnetLockStatus`를 그대로 옮긴다. `nodeKeySigned:false`가 자기 잠김이다. lock이 꺼진 피어는 `visiblePeers`·`filteredPeers`가 비므로 보이는 피어는 `peerStatus`로 본다 |
+| `lockSign` | `name`, `nodeKey`, 선택 `lockKey`(회전 키) | `{"event":"lockSign","name":"go-peer-a","nodeKey":"nodekey:…"}`. Swift 노드의 `signingRequest` 두 값을 그대로 넣는다. `lockKey`를 주어야 그 노드가 뒤에 스스로 재서명할 수 있다 |
+| `lockWrapAuthKey` | `name`, 선택 `authKey`(기본: `setAuth`의 키) | `{"event":"lockWrapAuthKey","name":"go-peer-a","authKey":"<인증 키>--TL<credential>-<개인 키>"}`. `tailscale lock sign <인증 키>`처럼 credential 전용 lock 키를 새로 만들어 감싸고 그 키를 신뢰 키로 더한다(사슬이 한 칸 자란다). 응답의 키는 **개인 키를 담은 시험 전용 값**이므로 로그에 남기지 않는다. `addPeer`의 `authKey`로 Go 피어를 등록할 수도 있다 |
+| `lockModify` | `name`, `addKeys`·`removeKeys`(`tlpub:` 배열, 하나 이상) | `lockStatus`와 같은 필드의 `{"event":"lockModify",…}`. 투표 1의 키로 더하고 뺀다. `name`이 서버 머리에 닿을 때까지 기다린 뒤 답한다(다음 명령이 낡은 머리 위에 갈래를 만들지 않게) |
+| `lockDisable` | `name`, 선택 `wrongSecret`·`omitTKAInfo` bool | `{"event":"lockDisable","name":"go-peer-a","wrongSecret":false,"omitTKAInfo":false,"alreadyDisabled":false}`. 서버가 줄 비밀과 맵의 모양을 먼저 정하고 `name`이 `lockInit`의 비밀로 끈다. `wrongSecret`이면 bootstrap이 틀린 비밀을 줘서 노드가 lock을 유지한다. 서버가 이미 꺼졌으면(`alreadyDisabled:true`) 피어 RPC 없이 그 두 설정만 바꾸고 새 맵을 보낸다. 그래서 `wrongSecret` 뒤 다시 부르면 노드들이 맞는 비밀을 받는다 |
+| `setLockBootstrapFault` | `enabled` bool | `{"event":"lockBootstrapFault","enabled":true}`. 켜진 동안 bootstrap의 `GenesisAUM`이 깨진다. 바꿀 때 새 맵을 보낸다(Go는 netmap을 받을 때만 다시 시도한다) |
+| `lockRequestResign` | `nodeKey`(서명이 있는 등록된 노드) | `{"event":"lockRequestResign","nodeKey":"nodekey:…"}`. 그 노드의 다음 등록 응답 하나에 재서명 요청을 싣는다 |
+| `lockRegistrations` | 없음 | `{"event":"lockRegistrations","registrations":[{"nodeKey":"nodekey:…","oldNodeKey":"","nlKey":"tlpub:…","signature":"accepted","signatureError":"","resignRequested":false,"wrappedKeyTrace":false}]}`. 받은 순서다. `nlKey`는 0이면 `""`. `signature`는 `none`·`noLock`·`accepted`·`rejected`(Go `NodeKeyAuthorized`의 판정). `wrappedKeyTrace`는 요청 JSON의 문자열 값에 `--TL`이나 이 도구가 감싼 개인 키·시드(base64 세 형식, 16진)가 있는지다. credential은 서명의 `Nested`에 늘 실리는 공개 값이라 보지 않는다 |
+| `lockRequests` | 없음 | `{"event":"lockRequests","requests":[{"path":"/machine/tka/bootstrap","nodeKey":"nodekey:…","head":""}]}`. 받은 `/machine/tka/` 요청 전부다. 다시 시작 뒤 bootstrap이 없었는지, lock 없는 tailnet에서 TKA 요청이 없었는지를 이것으로 본다 |
+
+`addPeer`는 선택 `authKey`를 받는다(없으면 기존대로 `setAuth`의 키).
+
+끈 뒤의 `TKAInfo`: 기본은 `{"Disabled":true}`라 연결된 노드가 곧바로 끄기 절차로 간다. `omitTKAInfo`면 `TKAInfo`가 없는데, Go와 계약 동작 O1은 맵 세션 도중에 빠진 `TKAInfo`를 "변화 없음"으로 보므로 맵 스트림을 다시 이은 노드만 끄기 절차로 간다. 이미 `Disabled:true`를 받은 세션은 계속 그 값을 쥔다.
+
+재서명: `lockSign`에 `lockKey`를 넣어 서명한 노드에 `lockRequestResign`을 건 뒤 그 노드가 다시 등록하면(Go는 다시 시작할 때 등록한다), 노드가 새 node 키를 만들어 `OldNodeKey`와 재서명한 `NodeKeySignature`로 다시 등록한다. 받아들여지면 서버가 옛 키의 항목을 지우므로, 다른 피어의 netmap에서 옛 키가 사라지는 것은 Go 클라이언트의 낡은 키 거르기(`rotationTracker`)가 아니라 서버가 지운 결과다.
+
+Go 피어끼리의 흐름(관문 (가)의 Go 쪽 기준):
+
+```json
+{"id":1,"cmd":"setLockCapability","enabled":true}
+{"id":2,"cmd":"addPeer","name":"go-peer-a"}
+{"id":3,"cmd":"lockInit","name":"go-peer-a"}
+{"id":4,"cmd":"addPeer","name":"go-peer-c"}
+{"id":5,"cmd":"lockStatus","name":"go-peer-a"}
+{"id":6,"cmd":"lockSign","name":"go-peer-a","nodeKey":"nodekey:<c>","lockKey":"tlpub:<c>"}
+{"id":7,"cmd":"lockWrapAuthKey","name":"go-peer-a"}
+{"id":8,"cmd":"lockModify","name":"go-peer-a","addKeys":["tlpub:<b>"]}
+{"id":9,"cmd":"lockDisable","name":"go-peer-a","wrongSecret":true}
+{"id":10,"cmd":"lockDisable","name":"go-peer-a"}
+```
+
+`TestTailnetLock`(`cmd/tailnet/lock_test.go`)이 Go 피어만으로 이 흐름을 돈다: lock 켜기와 켤 때 있던 피어의 서명, 서명 없는 피어가 다른 피어의 netmap에서 빠지고 스스로 잠김, 서명 뒤 나타남, 서명된 인증 키로 등록한 피어가 처음부터 보이고 그 등록의 서명이 `accepted`이며 흔적이 없음, 늦게 온 피어가 bootstrap 뒤 `sync/offer`·`sync/send`로 머리를 따라잡음, 키를 더해 다른 서명 기기가 서명한 피어가 그 키를 뺀 뒤 함께 빠짐, 재서명 요청 뒤 새 키로 바뀜, 깨진 bootstrap 뒤 lock을 켜지 못했다가 되돌리면 켬, 틀린 끄기 비밀이면 lock 유지, 맞는 비밀이면 모두 끄고 서명 없는 피어가 다시 보임, 끈 뒤의 맵 응답 모양. Swift 노드는 이 시험의 범위 밖이다(`Tests/SwiftailInteropTests/TailnetLockTests.swift`).
+
 # h2server
 
 `sh Scripts/build-interop-tools.sh h2server`으로 빌드한다. `127.0.0.1`의 임의 포트에서 TLS·HTTP/1 업그레이드 없는 prior knowledge HTTP/2를 받는다. 준비 출력은 `{"event":"ready","port":12345}` 한 줄이다. `golang.org/x/net/http2` v0.60.0의 `Server.ServeConn`을 기본 설정으로 사용한다. Go 1.27.3에서는 이것이 표준 라이브러리 HTTP/2 서버에 위임된다. `ConfigureServer`는 `http.Server.Shutdown`의 정상 GOAWAY 경로를 연결하기 위해 사용한다(testcontrol의 ServeConn과 같은 프레임 구현).
