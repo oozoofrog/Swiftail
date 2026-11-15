@@ -102,8 +102,10 @@ package enum CBORValue: Sendable, Equatable {
     case text([UInt8])
     case array([CBORValue])
     case map([CBORPair])
+    /// null(0xf6)과 undefined(0xf7). 다시 쓸 때는 0xf6이다. Go 디코더는 undefined를 null과 똑같이 다뤄 알려진 필드에서
+    /// 그 필드의 0 값으로 읽는다(`fxamacker/cbor` `decode.go`의 `nextCBORNil`. TL-1이 확인해 초안의 선언을 고쳤다).
     case null
-    /// major 7의 나머지(false·true·undefined·단순값·실수). 값을 쥐지 않는다. 알려진 필드에는 올 수 없다.
+    /// major 7의 나머지(false·true·단순값·실수). 값을 쥐지 않는다. 알려진 필드에는 올 수 없다.
     case simpleOrFloat
 }
 package struct CBORPair: Sendable, Equatable {
@@ -710,6 +712,10 @@ Go 함수와 Swiftail의 대응(출처 줄은 노트의 것이고, `tkaSyncLocke
 | F1 | `ControlError.tailnetLockEnabled`가 없어진다. iPhone 터널 앱의 `Apps/iOSTunnel/SwiftailTunnelEngine.swift:180`이 그 case에 문구를 붙이고 있다. 지워도 되는가 | 된다(그 줄만 지우면 된다) | L5. 남겨야 하면 쓰지 않는 case로 둔다 |
 | F2 | 잠긴 노드는 `.running`이고 `tailnetLock.signingRequest`가 있다. Mac 호스트와 터널 앱이 `tailnetLockChanged`를 듣고 "서명 기기에서 `tailscale lock sign <nodeKey> <lockKey>`를 돌리라"는 안내를 띄울 수 있는가. `.unverified`(피어 없음)에도 문구가 필요하다 | 띄운다 | L4. 상태 하나로 받고 싶으면 (나)를 다시 본다 |
 | F3 | Mac 호스트를 새 노드로 등록할 때(`SwiftailHost.md` U1) 어느 길을 쓰는가: 서명된 인증 키(`--TL`)인가, 로그인한 뒤 서명 기기에서 서명하는 것인가 | 둘 다 된다 | 관문 (나)의 차례. 서명된 인증 키는 1회용이면 다시 등록할 때마다 새로 만들어야 한다 |
+
+### 구현하며 정해진 것
+
+- **TL-1(CBOR, 2026-11-15)**: `CBORValue.null`이 undefined(0xf7)도 담는다(위 선언). `CBOR.decode`는 중복 키를 거절하지 않는다: 모르는 필드의 값 안쪽 중복은 Go도 받아들이므로, 구조 맵과 `Meta`의 중복(동작 D4)은 자료 형식(TL-2)이 거절한다. 맵은 받은 순서와 중복을 그대로 쥔다. 쓰기는 쌍의 순서를 부르는 쪽에 맡긴다(동작 E3의 `Meta` 순서는 TL-2). AUM 512KiB·NKS 8KiB 한도(동작 D9·M)는 구조마다 달라 TL-2가 `CBOR.decode`를 부르기 전에 본다. 거절의 까닭이 Go와 갈래가 다른 곳 둘(2^63 이상의 길이·원소 수. 둘 다 거절)은 판정에 영향이 없다. 실행으로 확정하지 않은 디코더 입력(예약된 추가 정보 28~30, major 0·1·6의 31, 짝 없는 `ff`, 두 바이트로 쓴 32 미만 단순값, undefined 키)은 TL-5의 도구가 확정한다.
 
 ### 첫 사용처 검토 결과 (2026-11-15)
 
