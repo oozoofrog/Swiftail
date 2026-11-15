@@ -334,6 +334,8 @@ else { nwConnection.cancel(); return }      // 다리가 이은 연결이 아니
 6. **일관성**: `whoIs`는 노드 actor 안에서 지금의 netmap을 읽는다. 주소의 주인이 바뀐 연결을 끊는 일(`SwiftailNetstack.md` 동작 X10)과 같은 actor의 같은 netmap 적용에서 일어나므로, 살아 있는 연결의 원격 주소에 대한 답은 그 연결을 맺은 피어의 것이다. 이미 끊긴 연결의 주소를 뒤늦게 물으면 새 주인이 나올 수 있다(동작 B2가 이 틈을 막는다).
 7. 로그에 주소 전체와 로그인 이름을 남기지 않는다.
 
+구현에서 정해진 것(M7-1): 주소 표를 따로 만들지 않고 질의마다 `lastNetmap`을 훑는다(M6의 MagicDNS 이름 찾기와 같다. `shortcut:`으로 남겼다). 같은 주소를 가진 노드가 여럿이면 Go의 표처럼 나중 것(자기 노드 다음에 피어를 node ID 순으로)이 이기고, 이긴 노드가 `StableID`나 프로필이 없으면 다른 노드로 넘어가지 않고 nil이다. `whoIs`는 `TailnetNode` actor의 메서드라 밖에서는 `await`로 부른다. `PeerIdentity`의 init은 `Swiftail` 안에만 있다(값은 `whoIs`가 낸다).
+
 ### D. 제어 서버의 `set-dns`
 
 1. `ControlClient.setDNS(name:value:)`는 맵 스트림과 **같은 Noise 클라이언트**(`ControlClient`)로 `POST /machine/set-dns`를 보낸다. 본문과 머리(`Content-Type`, node 키의 부하 분산 머리)는 노트 3.2다. `Version`은 선언한 CapabilityVersion(148), `NodeKey`는 지금의 node 공개 키다. 같은 Noise 클라이언트라는 것과 같은 HTTP/2 물리 연결이라는 것은 다르다: Go는 같은 Noise client를 쓰지만 같은 연결 하나를 보장하지 않는다(노트 3.2, `control/ts2021/client.go:254-290`). Swiftail의 `ControlClient`는 `run()` 동안 연결 하나를 쥐므로 그 연결 위의 새 스트림으로 보내지만, 이것은 Swiftail의 구현 선택이고 서버가 요구한다는 근거는 없다. 다른 동작이 "같은 연결"에 기대지 않는다.
