@@ -57,7 +57,7 @@ public actor CertificateManager {
     private var attemptFailure: CertificateFailure?
     private var nextAttempt: Date?
 
-    /// - Throws: 디렉터리 URL이 `https`가 아니면 `invalidConfiguration`.
+    /// - Throws: 디렉터리 URL이 `https`가 아니거나 `trustAnchors`가 빈 목록이면 `invalidConfiguration`.
     public init(node: TailnetNode, configuration: CertificateConfiguration = CertificateConfiguration()) throws(CertificateError) {
         try self.init(
             facts: node.certificateFacts,
@@ -72,7 +72,8 @@ public actor CertificateManager {
     /// 넘기고, 시험은 가짜 전송과 넘기는 시계로 돈다. 공개 옵션이 아니다.
     ///
     /// - Parameters:
-    ///   - anchors: 받은 사슬과 저장된 사슬을 검증할 루트. 운영은 `.system`, 시험·스테이징은 그 서버의 루트(동작 X3).
+    ///   - anchors: 받은 사슬과 저장된 사슬을 검증할 루트(동작 X3). nil이면 `configuration.trustAnchors`를 따른다
+    ///     (그것도 nil이면 `.system`).
     ///   - now: 벽시계(동작 R6).
     ///   - sleep: 기다림. 재시도·갱신 시각과 주문 절차의 기다림에 쓴다.
     ///   - makeCertificateKey: 시도마다 새 인증서 키를 만든다(동작 C7, RFC 8555 11.1).
@@ -82,7 +83,7 @@ public actor CertificateManager {
         stateDirectory: URL,
         transport: any ACMETransport,
         configuration: CertificateConfiguration,
-        anchors: CertificateTrustAnchors = .system,
+        anchors: CertificateTrustAnchors? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         sleep: @escaping Sleep = sleepUntil,
         makeCertificateKey: @escaping @Sendable () -> P256.Signing.PrivateKey = { P256.Signing.PrivateKey() }
@@ -91,12 +92,15 @@ public actor CertificateManager {
         guard ACMEInputRules.isAcceptableURL(directoryURL) else {
             throw .invalidConfiguration("ACME 디렉터리 URL은 2,048바이트 이하의 https URL이어야 한다")
         }
+        if let configured = configuration.trustAnchors, configured.isEmpty {
+            throw .invalidConfiguration("신뢰 앵커 목록이 비었다")
+        }
         self.facts = facts
         self.setDNS = setDNS
         store = CertificateStore(stateDirectory: stateDirectory)
         self.transport = transport
         self.directoryURL = directoryURL
-        self.anchors = anchors
+        self.anchors = anchors ?? configuration.trustAnchors.map { .only($0) } ?? .system
         self.now = now
         self.sleep = sleep
         self.makeCertificateKey = makeCertificateKey

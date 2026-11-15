@@ -245,7 +245,17 @@ struct ManagerHarness {
     /// 관리자가 만든 인증서 키(차례대로).
     private let keys = KeyLog()
 
-    init() throws {
+    /// 시험 루트를 어디로 주는가.
+    enum AnchorSource {
+        /// 내부 초기화의 `anchors` 인자(대부분의 시험).
+        case parameter
+        /// 공개 설정의 `trustAnchors`(앱이 스테이징을 쓸 때의 길).
+        case configuration
+        /// 주지 않는다. 시스템 신뢰 저장소로 검증하므로 시험 루트의 사슬은 통과하지 못한다.
+        case none
+    }
+
+    init(anchors source: AnchorSource = .parameter) throws {
         pki = try TestPKI()
         scratch = try ManagerScratch()
         transport = ScriptedTransport(clock: clock)
@@ -254,13 +264,15 @@ struct ManagerHarness {
         let clock = clock
         let dns = dns
         let keys = keys
+        var roots: [[UInt8]]?
+        if source == .configuration, case let .only(certificates) = pki.anchors { roots = certificates }
         manager = try CertificateManager(
             facts: facts,
             setDNS: { name, value throws(ControlError) in try await dns.setDNS(name: name, value: value) },
             stateDirectory: scratch.url,
             transport: transport,
-            configuration: CertificateConfiguration(directoryURL: try #require(URL(string: Fake.directoryURL))),
-            anchors: pki.anchors,
+            configuration: CertificateConfiguration(directoryURL: try #require(URL(string: Fake.directoryURL)), trustAnchors: roots),
+            anchors: source == .parameter ? pki.anchors : nil,
             now: { clock.now() },
             sleep: { until throws(CancellationError) in try await clock.sleep(until: until) },
             makeCertificateKey: { keys.make() }

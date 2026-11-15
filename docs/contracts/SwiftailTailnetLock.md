@@ -895,6 +895,10 @@ testcontrol이 하는 것과 못 하는 것(노트 7.3): lock 켜기(`init/begin
 - 2를 위한 서명 없는 인증 키 하나와, 서명 기기에서 `tailscale lock sign <node 키> <lock 키>`를 한 번 돌려 주는 것.
 - lock을 끄는 것은 실제 tailnet에서 하지 않는다(관문 (가) 7로만 본다).
 
+#### lock이 켜진 tailnet의 결과 (2026-11-15)
+
+Mac(명령줄 시험)에서 2와 4의 앞 절반을 봤다. 기록은 `SwiftailHost.md` "관문 1·2의 결과": 서명 없는 인증 키로 등록하면 `enforcing`·잠김으로 `.running`이 되고 `signingRequest`가 나온다. 서명 기기에서 그 두 값으로 `tailscale lock sign`을 돌리면 **다시 시작 없이 풀린다.** 다시 띄우면 저장된 상태로 첫 netmap부터 잠기지 않은 `enforcing`이다. 3 가운데 본 것: 이 노드는 `tailnet-lock` capability를 받는다, 잠긴 노드의 `set-dns`를 서버가 받는다. 남은 것: 1(서명된 인증 키. 첫 사용처는 이 길을 쓰지 않는다, F3), 3의 나머지(부트스트랩이 주는 것, `MissingAUMs`의 수, sync/send의 응답), 4의 뒤 절반(키를 더했을 때 머리가 따라오는지), 5(iPhone 터널. 첫 사용처 세션이 돌린다).
+
 #### 앞 단계의 결과: lock이 꺼진 tailnet (2026-11-15)
 
 lock이 켜진 tailnet에 가기 전에, lock과 상관없이 모든 노드가 지나는 두 경로를 운영 서버에서 봤다(lock이 꺼진 tailnet, 임시 노드, 총괄이 직접 실행). 시험은 `Tests/SwiftailControlInteropTests/RealTailnetGateTests.swift`.

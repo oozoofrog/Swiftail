@@ -117,7 +117,11 @@ public struct CertificateConfiguration: Sendable {
     public static let letsEncryptDirectoryURL: URL
     /// ACME 디렉터리의 URL. `https`여야 한다. 시험과 스테이징에서 바꾼다.
     public var directoryURL: URL
-    public init(directoryURL: URL = CertificateConfiguration.letsEncryptDirectoryURL)
+    /// 받은 사슬과 저장된 사슬을 검증할 때 믿을 루트(DER). nil이면 시스템 신뢰 저장소. 주면 그 루트만 믿는다.
+    /// 스테이징과 시험 서버에 쓴다(동작 X3). 빈 목록은 `invalidConfiguration`. (2026-11-15 더함: 그 전에는 공개 API로
+    /// 스테이징을 쓸 길이 없었다. 관문 (나) 1·2의 시험을 쓰다가 드러났다.)
+    public var trustAnchors: [[UInt8]]?
+    public init(directoryURL: URL = CertificateConfiguration.letsEncryptDirectoryURL, trustAnchors: [[UInt8]]? = nil)
 }
 
 /// 노드 자신의 ts.net 이름에 대한 인증서를 받아 두고, 만료 전에 갱신한다. tsnet `CertPair`·`GetCertificate`.
@@ -828,6 +832,31 @@ SWIFTAIL_REAL_AUTHKEY_FILE=<키 파일> SWIFTAIL_REAL_HOST_STATE_DIR=<상태 폴
 두 번째 실행에서 볼 것: 같은 상태 폴더로 다시 돌리면 저장된 신원으로 붙고(`needsLogin`이 없다), 저장된 lock 상태로 처음부터 서명된 채 `.enforcing`이며, "저장된 인증서로 시작 true, 저장된 것을 새 발급 없이 씀 true(ACME 요청 0개, `set-dns` 0번)"다.
 
 계정 없는 결과(2026-11-15): lock 없는 tailnet에서 발급 약 1초, ACME 요청 11개, `set-dns` 1번, 수명 90일(pebble), 두 번째 실행은 요청 0개로 저장된 인증서를 썼고 tailnet TLS가 pebble 루트로 검증됐다. lock 켜진 tailnet에서는 **잠긴 동안 인증서가 나왔다**. 단, testcontrol 사본의 `set-dns` 처리기는 lock을 보지 않으므로 운영 서버의 동작은 이 관문이 처음 기록한다.
+
+
+#### 관문 1·2의 결과 (2026-11-15, 총괄이 직접 실행)
+
+운영 제어 서버, **Tailnet Lock이 켜진 tailnet**(HTTPS 켬), Let's Encrypt 스테이징, 임시가 아닌 노드(서명 없는 1회용 인증 키), 호스트 이름 `rd-mac-1a2b3c4d`, macOS.
+
+| 항목 | 첫 실행 | 두 번째 실행(같은 상태 폴더) |
+| --- | --- | --- |
+| `.running`까지 | 4.6초 | 4.2초(인증 키는 이미 쓰인 것. 저장된 신원으로 다시 붙음) |
+| tailnet lock | `enforcing`, 잠김, 거른 피어 0, `issue` 없음 | `enforcing`, 잠기지 않음(저장된 상태로 첫 netmap부터) |
+| 서명 | 서명 기기에서 `tailscale lock sign`을 돌린 뒤 **다시 시작 없이 풀림**(등록 884초 뒤. 사람이 서명한 시각에 달린 값이다) | 해당 없음 |
+| 1: `certDomains`에 자기 FQDN | 있음(도메인 1개) | 있음 |
+| 2: 발급 | **잠긴 동안에 끝남.** 관리자 시작부터 40.8초, ACME 요청 12개, `set-dns` 1번(제어 서버 왕복 32.3초), 수명 64일, 사슬 4장, 스테이징 루트로 검증됨 | 새 발급 없음(ACME 요청 0, `set-dns` 0). 저장된 것을 검증해 씀 |
+| 받은 인증서로 tailnet TLS | 자기 tailnet 주소 443 → 다리 → TLS 리스너: 핸드셰이크와 검증 성공, HTTP 200, 다리가 알린 상대가 자기 노드 | 같음 |
+
+알게 된 것:
+
+- **운영 제어 서버의 `set-dns`는 노드가 lock으로 잠겨 있어도 받는다.** 그래서 Mac 호스트는 서명을 기다리는 동안 인증서를 미리 받아 둘 수 있다.
+- `set-dns` 한 번의 왕복이 32초였다(서버가 TXT가 퍼지기를 기다렸다가 답하는 것으로 보인다. 한 번의 값). 발급 전체 시간의 대부분이다. 앱은 첫 발급에 1분쯤을 잡아야 한다.
+- 스테이징 인증서의 수명은 64일, 사슬은 leaf 포함 4장이었다(운영의 값은 3에서 본다).
+- lock이 켜진 tailnet에서 Swiftail 노드는 `tailnet-lock` capability를 받는다(`mode`가 `enforcing`. `SwiftailTailnetLock.md` U2의 재검토 조건: 받지 못하는 경우는 보지 못했다).
+
+이 실행이 `SwiftailTailnetLock.md` 관문 (나)의 2(서명 기기가 뒤에 서명)와 4의 앞 절반(다시 띄우면 저장된 상태로 이어 감)도 채운다. 보지 않은 것: 서명된 인증 키(`--TL`)로 등록(그 관문의 1), 서명 기기에서 키를 더했을 때 머리가 따라오는지(4의 뒤 절반), 부트스트랩과 동기화가 받은 AUM의 수(요약에 싣지 않았다).
+
+상태 폴더(신원, lock 상태, 스테이징 인증서)는 첫 사용처가 관문 3~6에 이어 쓴다. 운영 디렉터리로 바꾸기 전에 `certs/`를 비운다.
 
 ### RemoteDebug e2e 재현의 범위
 

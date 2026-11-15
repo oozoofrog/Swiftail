@@ -243,6 +243,41 @@ struct ManagerFailureTests {
         }
     }
 
+    @Test("설정의 trustAnchors: 주면 그 루트로 검증해 발급이 끝나고, 주지 않으면 시스템이 믿지 않는 사슬은 저장하지 않는다")
+    func configuredTrustAnchors() async throws {
+        let trusted = try ManagerHarness(anchors: .configuration)
+        defer { trusted.scratch.remove() }
+        trusted.transport.append(trusted.issuance())
+        let trustedRun = trusted.start()
+        try await eventually { await trusted.status().notAfter != nil }
+        #expect(await trusted.status().lastFailure == nil)
+        trustedRun.cancel()
+        _ = await trustedRun.value
+
+        let system = try ManagerHarness(anchors: .none)
+        defer { system.scratch.remove() }
+        system.transport.append(system.issuance())
+        let systemRun = system.start()
+        try await eventually { await system.status().lastFailure == .invalidCertificate }
+        #expect(await system.status().notAfter == nil)
+        #expect(throws: (any Error).self) { try system.scratch.contents(H.name + ".crt") }
+        systemRun.cancel()
+        _ = await systemRun.value
+    }
+
+    @Test("빈 trustAnchors는 받지 않는다")
+    func emptyTrustAnchors() throws {
+        let scratch = try ManagerScratch()
+        defer { scratch.remove() }
+        let (facts, _) = AsyncStream.makeStream(of: CertificateFacts.self)
+        #expect(throws: CertificateError.self) {
+            try CertificateManager(
+                facts: facts, setDNS: { _, _ in }, stateDirectory: scratch.url, transport: ScriptedTransport(clock: TestClock(TestPKI.now)),
+                configuration: CertificateConfiguration(directoryURL: try #require(URL(string: Fake.directoryURL)), trustAnchors: [])
+            )
+        }
+    }
+
     @Test("description·dump·String(reflecting:)에 키 바이트와 계정 URL이 없다")
     func secrets() async throws {
         let h = try ManagerHarness()
