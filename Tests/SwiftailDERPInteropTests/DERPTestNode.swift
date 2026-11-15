@@ -71,7 +71,7 @@ struct DERPWatcher {
             switch event {
             case .connected: connectedCount += 1
             case .disconnected: disconnectedCount += 1
-            case .packet, .peerGone: break
+            case .attemptFailed, .packet, .peerGone: break
             }
             if let value = match(event) { return value }
         }

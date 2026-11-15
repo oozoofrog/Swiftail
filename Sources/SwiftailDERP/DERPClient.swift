@@ -45,11 +45,42 @@ public actor DERPClient {
     public enum Event: Sendable {
         case connected
         case disconnected
+        /// 연결을 열지 못했다(`connected`에 이르지 못한 시도 하나). 물러났다가 다시 시도한다.
+        ///
+        /// `consecutiveFailures`는 마지막으로 연결을 연 뒤(또는 처음부터) 연달아 열지 못한 시도 수이고 1부터 센다. 취소로
+        /// 멈춘 시도는 내지 않는다.
+        case attemptFailed(AttemptFailure, consecutiveFailures: Int)
         case packet([UInt8], from: NodePublicKey)
         case peerGone(NodePublicKey)
     }
 
-    /// 읽지 않은 `packet`·`peerGone` 사건 수의 한도. 넘으면 오래된 것부터 버린다.
+    /// 연결을 열지 못한 이유의 종류. 주소·키·이름 같은 값은 담지 않으므로 그대로 로그에 남겨도 된다.
+    public enum AttemptFailure: Sendable, Equatable {
+        /// 연결을 걸기 시작해 `ready`까지의 기한(`readyTimeout`, 10초)을 넘겼다.
+        case timedOut
+        /// TCP나 TLS 연결을 맺지 못했다. 연결 거부, 경로 없음, 이름 풀기 실패, 인증서 거부가 모두 여기다(소켓 계층이
+        /// 그 차이를 넘겨주지 않는다).
+        case connectionFailed
+        /// 연결은 맺었으나 업그레이드·핸드셰이크 중에 서버가 거절했거나, 규격과 다른 바이트를 보냈거나, 끊었다.
+        case handshakeFailed
+        /// 걸 대상이 없다(서버 목록이나 마지막 서버의 `targets`가 비었다).
+        case noServers
+
+        init(_ error: any Error) {
+            switch error {
+            case is TimeoutError:
+                self = .timedOut
+            case let socketError as SocketError:
+                if case .connectFailed = socketError { self = .connectionFailed } else { self = .handshakeFailed }
+            case let disconnection as Disconnection where disconnection == .noServers:
+                self = .noServers
+            default:
+                self = .handshakeFailed
+            }
+        }
+    }
+
+    /// 읽지 않은 `attemptFailed`·`packet`·`peerGone` 사건 수의 한도. 넘으면 오래된 것부터 버린다.
     static let eventBufferLimit = 256
     /// 읽지 않은 `packet` 사건의 바이트 합(패킷 본문)의 한도(1MiB). 넘으면 오래된 패킷부터 버린다.
     ///
@@ -109,6 +140,8 @@ public actor DERPClient {
     private var lastReceive = ContinuousClock.now
     /// 연속 실패 수. 프레임을 받은 연결이 끊기면 1로 돌아간다.
     private var consecutiveFailures = 0
+    /// 연달아 열지 못한 시도 수. 연결을 열면 0으로 돌아간다. `attemptFailed`에 담는다.
+    private var consecutiveAttemptFailures = 0
 
     /// - Parameters:
     ///   - servers: 한 지역의 서버들. 앞에서부터 차례로 시도한다.
@@ -139,7 +172,7 @@ public actor DERPClient {
 
     /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
     ///
-    /// 소비가 느리면 `packet`·`peerGone`은 가장 새 것 256개까지만, 패킷 바이트 합은 1MiB까지만 쥐고 오래된 것부터
+    /// 소비가 느리면 `attemptFailed`·`packet`·`peerGone`은 가장 새 것 256개까지만, 패킷 바이트 합은 1MiB까지만 쥐고 오래된 것부터
     /// 버린다. 패킷은 데이터그램이므로 버려도 된다. `connected`·`disconnected`는 버리지 않고, 읽지 않은 것 가운데 가장 새 것 하나만 남긴다
     /// (`EventQueue`).
     public nonisolated var events: AsyncStream<Event> { eventStream }
@@ -190,9 +223,14 @@ public actor DERPClient {
                 )
             }
         } catch {
+            if !Task.isCancelled {
+                consecutiveAttemptFailures += 1
+                eventQueue.push(.attemptFailed(AttemptFailure(error), consecutiveFailures: consecutiveAttemptFailures))
+            }
             return false
         }
 
+        consecutiveAttemptFailures = 0
         connection = opened.connection
         lastReceive = .now
         let (signals, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))

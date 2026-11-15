@@ -33,10 +33,17 @@ M2의 `ControlClient`와 M3의 `DERPClient`가 같은 것을 둘씩 갖지 않�
 public struct DERPServer: Sendable, Equatable {
     /// TLS 서버 이름이자 HTTP `Host`.
     public var hostName: String
-    /// 연결할 주소. nil이면 `hostName`을 DNS로 찾는다.
-    public var address: IPAddress?
+    /// 연결을 걸 곳들. `DERPClient`가 모두 함께 걸어 먼저 붙는 연결을 쓰고 나머지는 닫는다. 비어 있으면 붙을 수 없다.
+    public var targets: [Target]
     public var port: UInt16
     public var verification: Verification
+
+    public enum Target: Sendable, Equatable {
+        /// `hostName`을 DNS로 찾아 건다. 찾은 주소 가운데 어느 쪽으로 걸지는 Network 프레임워크가 고른다.
+        case hostName
+        /// 이 IP 주소로 건다.
+        case address(IPAddress)
+    }
 
     public enum Verification: Sendable, Equatable {
         /// 시스템 신뢰 저장소로 `hostName`을 검증한다.
@@ -44,7 +51,7 @@ public struct DERPServer: Sendable, Equatable {
         /// 검증하지 않는다. DERPMap이 `InsecureForTests`인 노드에만 쓴다.
         case noneForTests
     }
-    public init(hostName: String, address: IPAddress? = nil, port: UInt16 = 443, verification: Verification = .system)
+    public init(hostName: String, targets: [Target] = [.hostName], port: UInt16 = 443, verification: Verification = .system)
 }
 
 public enum DERPError: Error, Sendable, Equatable {
@@ -93,8 +100,18 @@ public actor DERPClient {
     public enum Event: Sendable {
         case connected
         case disconnected
+        /// 연결을 열지 못한 시도 하나. `consecutiveFailures`는 마지막으로 연결을 연 뒤 연달아 열지 못한 수(1부터).
+        case attemptFailed(AttemptFailure, consecutiveFailures: Int)
         case packet([UInt8], from: NodePublicKey)
         case peerGone(NodePublicKey)
+    }
+
+    /// 연결을 열지 못한 이유의 종류. 주소·키·이름을 담지 않는다.
+    public enum AttemptFailure: Sendable, Equatable {
+        case timedOut          // 연결을 걸기 시작해 ready까지 10초를 넘김
+        case connectionFailed  // TCP·TLS 연결을 맺지 못함(거부, 경로 없음, 이름 풀기, 인증서를 가르지 못한다)
+        case handshakeFailed   // 업그레이드·핸드셰이크 중 거절, 규격 위반, 끊김
+        case noServers         // 걸 대상이 없음
     }
 
     /// - Parameters:
@@ -127,8 +144,11 @@ public actor DERPClient {
 
 `DERPClient`(노트 4.1, 4.4~4.6):
 
-1. **연결**: `interface`가 있으면 그 인터페이스로만 내보낸다(M5, `SwiftailTunnel` 계약 동작 N. 루프백 서버는 묶지 않는다). 서버 목록을 앞에서부터 TCP로 시도해(서버당 1.5초) 처음 붙는 곳에 TLS를 맺는다(`shortcut:` 소켓 감싸개가 TCP와 TLS를 한 번에 맺으므로, 마지막이 아닌 서버는 평문 TCP로 닿는지만 먼저 본 뒤 TLS로 다시 맺는다). TLS 실패는 다음 서버로 넘어가지 않고 이번 시도의 실패다. 연결부터 `ready`까지 10초를 넘기면 실패다.
-2. **읽기**: 연결이 살아 있는 동안 소켓 읽기를 멈추지 않는다(서버의 쓰기 기한이 2초다). 120초 동안 아무것도 오지 않으면 끊는다. `events`의 소비가 느리면 `packet`·`peerGone`은 가장 새 것 256개까지, 그리고 패킷 바이트의 합 1MiB까지만 쥐고 오래된 것부터 버린다(패킷은 데이터그램이므로 버려도 된다. 바이트 한도는 M5의 확장 메모리 때문이다. 개수만으로는 Go 서버의 패킷 한도 64KiB로 16MiB, 프레임 본문 한도 1MiB를 채워 보내는 서버면 256MiB까지 쌓인다). `connected`·`disconnected`는 버리지 않고, 읽지 않은 것 가운데 가장 새 것 하나만 남긴다.
+1. **연결**: `interface`가 있으면 그 인터페이스로만 내보낸다(M5, `SwiftailTunnel` 계약 동작 N. 루프백 서버는 묶지 않는다). 서버 목록을 앞에서부터 TCP로 시도해(서버당 1.5초) 처음 붙는 곳에 TLS를 맺는다(`shortcut:` 소켓 감싸개가 TCP와 TLS를 한 번에 맺으므로, 마지막이 아닌 서버는 평문 TCP로 닿는지만 먼저 본 뒤 먼저 붙은 대상에 TLS로 다시 맺는다. 마지막 서버는 대상마다 TCP와 TLS를 함께 맺어 먼저 끝나는 쪽을 쓴다). TLS 실패는 다음 서버로 넘어가지 않고 이번 시도의 실패다. 연결부터 `ready`까지 10초를 넘기면 실패다.
+   - **대상 동시 걸기**(Go `dialNode`): 서버 하나의 `targets`를 모두 함께 걸어 먼저 붙는 연결을 쓴다. 진 쪽은 닫고(취소가 닿기 전에 붙은 것도 닫는다), 모두 실패하면 가장 먼저 온 실패가 그 서버의 실패다. 연결마다 TaskGroup의 자식이므로 취소되면 열던 연결이 모두 닫힌다. 루프백 대상(`127.0.0.0/8`, `::1`)은 인터페이스에 묶지 않는다.
+   - **걸 대상**(엔진의 `DERPNode` 변환, Go `shouldDialProto`): `IPv4`·`IPv6` 칸마다, 비었으면 `hostName`, 그 칸의 체계의 IP 리터럴이면 그 주소, 그 밖의 값(관례상 `"none"`, 다른 체계의 주소, 쓰레기)이면 그 체계로는 걸지 않는다. 두 칸 모두 `hostName`이면 대상은 `hostName` 하나다(Network 프레임워크가 이름을 풀어 두 체계를 스스로 시도한다). 대상이 없으면 그 노드는 쓰지 않는다. 순서는 IPv4 칸, IPv6 칸이다.
+   - **실패 알림**: 연결을 열지 못한 시도마다(취소는 빼고) `attemptFailed`를 낸다. 노드는 연달아 실패한 첫 번째와 그 뒤 10번째마다 지역 번호와 실패 종류만 로그에 남긴다.
+2. **읽기**: 연결이 살아 있는 동안 소켓 읽기를 멈추지 않는다(서버의 쓰기 기한이 2초다). 120초 동안 아무것도 오지 않으면 끊는다. `events`의 소비가 느리면 `attemptFailed`·`packet`·`peerGone`은 가장 새 것 256개까지, 그리고 패킷 바이트의 합 1MiB까지만 쥐고 오래된 것부터 버린다(패킷은 데이터그램이므로 버려도 된다. 바이트 한도는 M5의 확장 메모리 때문이다. 개수만으로는 Go 서버의 패킷 한도 64KiB로 16MiB, 프레임 본문 한도 1MiB를 채워 보내는 서버면 256MiB까지 쌓인다). `connected`·`disconnected`는 버리지 않고, 읽지 않은 것 가운데 가장 새 것 하나만 남긴다.
 3. **쓰기**: 연결 상태와 무관하게 보낼 패킷을 32개까지 쥐고, 가득 차면 가장 오래된 것을 버린다(Go의 지역별 쓰기 큐와 같다). 그때까지 쌓인 Pong과 큐의 앞쪽 패킷들을 한 덩어리(프레임을 이어 붙인 바이트 하나)로 쓰고, 소켓이 받아 가기 전에는 다음 덩어리를 꺼내지 않는다. 그래서 소켓이 앞 덩어리를 받아 가는 동안 쌓인 패킷들이 다음 덩어리 하나로 나간다. 한 덩어리의 패킷은 큐 한도대로 32개 이하이고, SendPacket 프레임의 합이 64KiB를 넘기 전까지만 넣는다(첫 패킷은 크기와 무관하게 넣으므로 덩어리는 패킷 프레임 최대 65,573바이트와 Pong 64KiB 이하다). 프레임은 상태 기계에 들어간 순서대로 나간다. 덩어리 하나가 5초 안에 소켓으로 넘어가지 않으면 연결 오류로 보고 끊은 뒤 다시 잇는다(Go는 일반 송신에 기한이 없다. 메모리를 묶기 위한 Swiftail의 선택이다). 연결이 끊길 때 소켓에 넘기던 덩어리(패킷 32개 이하)는 잃고, 큐에 남은 패킷은 다음 연결이 보낸다(끊긴 뒤에는 큐에서 더 꺼내지 않는다). 이 기한은 쓰기마다 Task나 타이머를 만들지 않고, 연결의 TaskGroup 자식인 감시 하나가 진행 중인 쓰기의 시작 시각을 보아 지킨다(쓰기마다 `withTimeout`을 걸면 취소된 기한 Task와 타이머가 5초까지 남아 쓰기 속도에 비례해 메모리가 쌓였다). 쓰기가 막힌 동안 Pong이 64KiB를 넘게 쌓이면 `tooManyPendingReplies`로 끊긴다. 읽기는 쓰기가 막혀도 멈추지 않는다.
    - `connected`는 ClientInfo를 보낸 시점이다. 서버가 이 클라이언트를 등록하기 전에 보낸 패킷은 서버가 버릴 수 있다. 위 계층(WireGuard)의 재시도가 이를 메운다.
 4. **재연결**: 오류가 나면 소켓을 닫고 `disconnected`를 낸 뒤 `min(n² × 10ms, 5초) × [0.5, 1.5)`만큼 기다렸다가 처음부터 다시 잇는다. 핸드셰이크 뒤의 프레임(보통 ServerInfo)을 하나라도 처리에 성공하면 n을 0으로 되돌린다(ServerKey만 주고 끊는 서버에 물러나기 없이 다시 붙지 않게 한다). 이전 소켓을 닫은 뒤에만 새로 잇는다(같은 키의 연결이 둘이면 서버가 한쪽에만 패킷을 넘긴다).
@@ -137,7 +157,9 @@ public actor DERPClient {
 제외(`shortcut:` 주석으로 남긴다):
 
 - fast-start, `sha256-raw:` 인증서 고정, `CertName`이 `HostName`과 다른 경우: 운영 DERP와 맺기 전(M4 마무리 관문)에 넣는다. `DERPServer`를 만들 때 엔진이 이런 노드를 건너뛴다.
-- IPv4·IPv6 동시 시도: 주소 하나만 시도한다.
+- IPv4 늦추기: Go는 IPv6를 선호하는 망에서 IPv4를 200ms 늦게 건다(`preferIPv6`). Swiftail에는 주소 체계 선호 판단이 없으므로 모든 대상을 곧바로 건다.
+- 체계를 정한 이름 풀기: Go는 빈 칸을 그 체계로만 푼다(`tcp4`·`tcp6`). Swiftail은 `hostName`을 체계 구분 없이 걸므로, 한 칸만 비고 다른 칸이 `"none"`이어도 막힌 체계로 걸 수 있다.
+- 실패의 세분: `connectionFailed`는 연결 거부·경로 없음·이름 풀기·TLS 실패를 가르지 않는다(`SocketError.connectFailed`가 Network 프레임워크 오류를 문자열로만 넘긴다).
 - 서버가 알려 주는 속도 제한(토큰 버킷): 이 버전의 서버는 값을 보내지 않는다.
 - 여러 지역, 역방향 경로, 홈이 아닌 연결의 정리: M4(`SwiftailMagicsock`).
 - WebSocket, HTTP 프록시, mesh 프레임.

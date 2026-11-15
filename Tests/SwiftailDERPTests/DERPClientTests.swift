@@ -14,7 +14,7 @@ struct DERPClientTests {
     private static let packet = [UInt8](repeating: 0x5A, count: DERPConnection.maximumPacketSize)
 
     private static func client(port: UInt16, writeTimeout: Duration, interface: NWInterface? = nil) throws -> DERPClient {
-        let server = DERPServer(hostName: "127.0.0.1", address: IPAddress("127.0.0.1"), port: port, verification: .noneForTests)
+        let server = DERPServer(hostName: "127.0.0.1", targets: [.address(try #require(IPAddress("127.0.0.1")))], port: port, verification: .noneForTests)
         return DERPClient(
             servers: [server], privateKey: try DERPFixtures.privateKey(seed: DERPFixtures.clientSeed), isPreferred: true,
             interface: interface, writeTimeout: writeTimeout, plaintextForTests: true
@@ -390,13 +390,14 @@ struct DERPClientTests {
 }
 
 /// 사건을 받아 이름으로 적어 두고, 기대한 순서가 나타날 때까지 기다린다.
-private final class EventLog: Sendable {
+final class EventLog: Sendable {
     private let names = Mutex<[String]>([])
 
     static func name(_ event: DERPClient.Event) -> String {
         switch event {
         case .connected: "connected"
         case .disconnected: "disconnected"
+        case let .attemptFailed(failure, consecutiveFailures): "attemptFailed \(failure) \(consecutiveFailures)"
         case let .packet(bytes, from: _): "packet \(bytes.first ?? 0)"
         case .peerGone: "peerGone"
         }
@@ -408,23 +409,39 @@ private final class EventLog: Sendable {
         }
     }
 
-    /// 연결 상태 사건만 보아 `expected`가 앞에서부터 차례로 나타날 때까지 기다린다.
+    /// 적어 둔 사건 이름 전부.
+    var all: [String] { names.withLock { $0 } }
+
+    /// 연결 상태 사건만 보아 `expected`가 앞에서부터 차례로 나타날 때까지 기다린다. `attemptFailed`는 보지 않는다.
     func wait(for expected: [String], within duration: Duration) async throws {
         let deadline = ContinuousClock.now + duration
         while ContinuousClock.now < deadline {
-            let states = names.withLock { $0.filter { !$0.hasPrefix("packet") } }
-            if states.starts(with: expected) { return }
+            if linkStates.starts(with: expected) { return }
             try await Task.sleep(for: .milliseconds(20))
         }
-        let states = names.withLock { $0.filter { !$0.hasPrefix("packet") } }
-        Issue.record("\(duration) 안에 \(expected)가 나오지 않았다: \(states)")
+        Issue.record("\(duration) 안에 \(expected)가 나오지 않았다: \(linkStates)")
         throw CancellationError()
+    }
+
+    /// `name`인 사건이 나타날 때까지 기다린다.
+    func wait(forEvent name: String, within duration: Duration) async throws {
+        let deadline = ContinuousClock.now + duration
+        while ContinuousClock.now < deadline {
+            if all.contains(name) { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("\(duration) 안에 \(name)가 나오지 않았다: \(all)")
+        throw CancellationError()
+    }
+
+    private var linkStates: [String] {
+        names.withLock { $0.filter { !$0.hasPrefix("packet") && !$0.hasPrefix("attemptFailed") } }
     }
 }
 
 /// 루프백의 가짜 DERP 서버(평문). 받아들인 연결마다 101 응답, ServerKey, ServerInfo를 보낸 뒤 `behavior`대로 한다.
-/// `reading`이 아니면 클라이언트가 보낸 바이트는 읽지 않는다.
-private final class FakeDERPServer: Sendable {
+/// `reading`·`unresponsive`가 아니면 클라이언트가 보낸 바이트는 읽지 않는다.
+final class FakeDERPServer: Sendable {
     enum Behavior: Sendable {
         /// 핸드셰이크 뒤 아무것도 하지 않는다.
         case silent
@@ -437,6 +454,8 @@ private final class FakeDERPServer: Sendable {
         /// 핸드셰이크 뒤 1초를 기다렸다가 Ping을 끝없이 보낸다. 100개(1,300바이트)씩 5ms 간격으로 보내, 한 번 읽은 조각에서
         /// 나오는 Pong은 한도(64KiB)에 한참 못 미친다. 한도를 넘는다면 쓰지 못한 Pong이 쌓였기 때문이다.
         case pingFlood
+        /// 아무것도 보내지 않고 클라이언트가 보낸 바이트를 끝까지 읽는다. 클라이언트는 핸드셰이크에서 멈춘다.
+        case unresponsive
     }
 
     private let listener: NWListener
@@ -446,16 +465,25 @@ private final class FakeDERPServer: Sendable {
         let connections = Mutex<[NWConnection]>([])
         let floods = Mutex<[Task<Void, Never>]>([])
         let received = Mutex<[UInt8]>([])
+        /// 읽다가 닫힌 것을 본 연결 수(클라이언트가 닫았거나 `dropConnections`).
+        let closedCount = Mutex(0)
     }
 
     var acceptedCount: Int { accepted.connections.withLock { $0.count } }
+    /// 받아들인 연결 가운데 아직 닫히지 않은 것의 수. 읽는 동작(`reading`·`unresponsive`)에서만 맞다.
+    var openCount: Int { acceptedCount - accepted.closedCount.withLock { $0 } }
 
-    init(_ behavior: Behavior) throws {
+    /// - Parameters:
+    ///   - host: 들을 루프백 주소(`127.0.0.1`이나 `::1`).
+    ///   - port: 들을 포트. `.any`면 시스템이 고른다.
+    init(_ behavior: Behavior, host: NWEndpoint.Host = "127.0.0.1", port: NWEndpoint.Port = .any) throws {
         let handshake = DERPFixtures.Server.upgradeResponse + (try DERPFixtures.Server.serverKeyFrame()) + (try DERPFixtures.Server.serverInfoFrame())
         let sender = try DERPFixtures.nodeKey(9)
         let pings = (0..<100).flatMap { _ in DERPFixtures.Server.frame(0x12, [1, 2, 3, 4, 5, 6, 7, 8]) }
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: host, port: port)
+        // 없으면 `127.0.0.1`이 쓰는 포트에 `::1`로 듣지 못한다(EADDRINUSE). 켜도 체계마다 자기 듣는 쪽에만 닿는다.
+        parameters.allowLocalEndpointReuse = true
         listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [accepted] connection in
             connection.start(queue: .global())
@@ -486,6 +514,8 @@ private final class FakeDERPServer: Sendable {
                     }
                 }
                 accepted.floods.withLock { $0.append(flood) }
+            case .unresponsive:
+                Self.read(from: connection, keep: false, into: accepted)
             }
         }
     }
@@ -501,7 +531,10 @@ private final class FakeDERPServer: Sendable {
     private static func read(from connection: NWConnection, keep: Bool, into accepted: Accepted) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, isComplete, error in
             if keep, let data { accepted.received.withLock { $0 += data } }
-            guard error == nil, !isComplete else { return }
+            guard error == nil, !isComplete else {
+                accepted.closedCount.withLock { $0 += 1 }
+                return
+            }
             read(from: connection, keep: keep, into: accepted)
         }
     }

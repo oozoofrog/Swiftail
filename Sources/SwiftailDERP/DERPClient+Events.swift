@@ -5,7 +5,7 @@ extension DERPClient {
     ///
     /// 소비가 느릴 때 버리는 것은 종류에 따라 다르다.
     ///
-    /// - `packet`·`peerGone`: 가장 새 것 `eventBufferLimit`개까지만 쥐고 오래된 것부터 버린다. 패킷은 데이터그램이다.
+    /// - `attemptFailed`·`packet`·`peerGone`: 가장 새 것 `eventBufferLimit`개까지만 쥐고 오래된 것부터 버린다. 패킷은 데이터그램이다.
     ///   패킷 본문의 바이트 합도 `eventBufferByteLimit`까지만 쥐고, 넘치면 오래된 패킷부터 버린다(`peerGone`은 바이트가
     ///   없으므로 바이트 한도 때문에는 버리지 않는다).
     /// - `connected`·`disconnected`: 버리지 않는다. 다만 읽지 않은 연결 상태 사건은 가장 새 것 하나만 남긴다. 지난
@@ -99,7 +99,7 @@ extension DERPClient.Event {
     fileprivate var isLinkState: Bool {
         switch self {
         case .connected, .disconnected: true
-        case .packet, .peerGone: false
+        case .attemptFailed, .packet, .peerGone: false
         }
     }
 }
