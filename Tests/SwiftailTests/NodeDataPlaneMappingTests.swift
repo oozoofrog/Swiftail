@@ -114,4 +114,16 @@ struct NodeDataPlaneMappingTests {
         #expect(merged.name(of: try Self.nodeKey(0x03)) == "gone.tail0001.ts.net")
         #expect(new.name(of: try Self.nodeKey(0x03)) == nil)
     }
+
+    @Test("경로 사건 로그의 진단은 앞 사건 뒤 시간(0.1초 단위)과 버린 disco만 종류별로 세고, 다른 까닭은 세지 않는다")
+    func pathEventTally() {
+        let start = ContinuousClock.now
+        #expect(PathEventTally().summary(at: start) == "첫 사건, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0")
+        var tally = PathEventTally(since: start)
+        for drop in [Magicsock.Drop.unknownDiscoKey, .unknownDiscoKey, .malformedDisco, .misroutedDisco, .noRouteToPeer, .unexpectedSTUN] {
+            tally.count(drop)
+        }
+        #expect(tally.summary(at: start + .milliseconds(25_370))
+            == "앞 사건 뒤 25.3초, 버린 disco: 모르는 키 2, 열리지 않음 1, 경로 규칙 1")
+    }
 }
