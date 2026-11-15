@@ -20,8 +20,10 @@ import SwiftailTKA
 ///
 /// 압축하지 않으므로 변화마다 파일 전체를 다시 쓴다.
 /// shortcut: 필요해지는 시점은 사슬이 길어 쓰기가 눈에 띌 때다.
-/// shortcut: 한 상태 디렉터리로 다른 tailnet에 다시 로그인하면 옛 tailnet의 상태가 남아 새 tailnet의 피어가 모두 걸러진다.
-/// 필요해지는 시점: 상태 디렉터리 하나로 tailnet을 바꾸는 사용처. 그 전에는 앱이 상태 디렉터리를 새로 쓴다.
+/// shortcut: 한 상태 디렉터리로 다른 tailnet에 다시 로그인하면 옛 tailnet의 상태가 남아 새 tailnet의 피어가 모두 걸러진다
+/// (`TailnetLockStatus.issue`가 `.storedStateDiverged`). 스스로 풀지 않고, 사용자가 고르면 앱이
+/// `ControlClient.removeTailnetLockState(inDirectory:)`로 이 파일만 지운다. 필요해지는 시점: 상태 디렉터리 하나로 tailnet을
+/// 자동으로 바꾸는 사용처.
 ///
 /// 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 T, 결정 L6·L14.
 struct TailnetLockStore: Sendable {
@@ -125,7 +127,8 @@ struct TailnetLockStore: Sendable {
         }
     }
 
-    /// 파일을 지운다. 없으면 아무 일도 하지 않는다. 끄기 비밀이 맞았을 때만 부른다(동작 T5).
+    /// 파일을 지운다. 없으면 아무 일도 하지 않는다. 끄기 비밀이 맞았을 때(동작 T5)와 사용자가 고른 지우기
+    /// (`ControlClient.removeTailnetLockState(inDirectory:)`)에서만 부른다.
     func remove() throws(ControlError) {
         do {
             try FileManager.default.removeItem(at: fileURL)
@@ -147,5 +150,23 @@ struct TailnetLockStore: Sendable {
         var file = file
         try file.setResourceValues(values)
         #endif
+    }
+}
+
+extension ControlClient {
+    /// 상태 디렉터리에서 tailnet lock 상태 파일만 지운다(계약 5절 TL-11b 항목 4). 파일이 없으면 아무 일도 하지 않는다.
+    ///
+    /// `TailnetLockStatus.issue`가 `.unreadableStoredState`나 `.storedStateDiverged`일 때 푸는 길이다. 둘 다 스스로 풀리지 않는다.
+    /// 상태 디렉터리를 통째로 지우면 NL 키도 잃어 서명 기기에서 다시 서명받아야 하므로, 이 파일만 지운다.
+    ///
+    /// 지우면 다음 시작에 서명 권한 상태를 서버가 주는 체크포인트로 처음부터 새로 믿는다(TOFU). 지금까지 검증해 온 상태가
+    /// 서버를 견제하던 것이 사라지므로, 앱이 알아서 부르지 말고 **사용자가 고른 행동**이어야 한다.
+    /// 노드가 돌고 있지 않을 때(이 디렉터리를 쓰는 `ControlClient.run()`이 끝난 뒤) 부른다: 돌고 있는 클라이언트는 메모리의
+    /// 상태로 계속 거르고 바뀔 때 파일을 다시 쓴다.
+    ///
+    /// - Parameter directory: `NodeIdentityStore(directory:)`에 준 상태 디렉터리.
+    /// - Throws: `ControlError.storage` — 파일을 지우지 못했다.
+    public static func removeTailnetLockState(inDirectory directory: URL) throws(ControlError) {
+        try TailnetLockStore(directory: directory).remove()
     }
 }

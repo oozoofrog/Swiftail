@@ -465,6 +465,19 @@ struct GoComparisonTests {
 
     /// 줄마다: Go가 만들면 Swift도 만들고, 옛 것을 그대로 썼는지·깊이·안쪽 node 키들이 같으며, 줄이지 않은 것은 `SigHash`까지 같다.
     /// Swift가 만든 서명은 Go가 자기 결과로 낸 판정과 같은 판정이다. Go가 실패하면 Swift도 던진다.
+    ///
+    /// 의도된 차이(계약 5절 "독립 검토에서 고치는 것: 제어의 절차 (TL-11b)" 항목 1): Swiftail은 이미 자기 NL 키로 서명한 사슬만
+    /// 다시 서명한다. Go는 옛 서명을 검사하지 않고 만든다. 그 줄에서 Swift는 `invalidSignature`(rotation 겹이 NL 키로 검증되지
+    /// 않음)나 `untrustedSigner`(맨 안쪽 `WrappingPubkey`가 NL 키가 아님)를 던지고, Go가 만든 것은 Go의 판정에서도 인가되지 않는다
+    /// (다른 노드가 보는 판정은 같다: 둘 다 잠긴다).
+    static let resignIntended: [String: TKAError] = [
+        // 옛 direct의 회전 키는 nl/0이고 재서명하는 노드의 NL 키는 nl/1이다.
+        "direct-wrapping-is-other-key": .untrustedSigner,
+        "direct-no-wrapping": .untrustedSigner,
+        // rotation은 감싼 키(서명된 인증 키)가 서명했다.
+        "credential-chain": .invalidSignature,
+    ]
+
     @Test("resign: 재서명")
     func resign() throws {
         let fixture = try GoFixture.load()
@@ -491,6 +504,10 @@ struct GoComparisonTests {
         guard item.ok else {
             if case .success = made { return .mismatch("Go는 실패한다(\(item.error ?? "")), Swift는 만든다") }
             return .same
+        }
+        if let refusal = resignIntended[item.name] {
+            guard case .failure(refusal) = made, item.verdict?.authorized == false else { return .mismatch("Swift \(made)") }
+            return .intended("TL-11b 1")
         }
         guard case .success(let bytes) = made else { return .mismatch("Swift \(made)") }
         let result = try NodeKeySignature(decoding: bytes)

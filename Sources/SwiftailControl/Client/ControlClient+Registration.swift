@@ -150,8 +150,9 @@ extension ControlClient {
 
     /// 등록 요청에 실을 node 키 서명(동작 R5). Go `doLogin`의 순서 그대로다.
     ///
-    /// 1. 옛 node 키가 있고 서버가 방금 옛 서명을 줬으면 그것을 NL 키로 이어 서명한다(`ResignNKS`). 실패하면 로그만 남기고
-    ///    서명 없이 등록한다.
+    /// 1. 옛 node 키가 있고 서버가 방금 옛 서명을 줬으면 그것을 NL 키로 이어 서명한다(`ResignNKS`). 옛 서명이 이 노드가 이미
+    ///    NL 키로 서명한 사슬이 아니면 재서명 함수가 던진다(계약 5절 TL-11b 항목 1: 서버가 고른 node 키에 서명하지 않는다).
+    ///    던지면 종류만 로그에 남기고 서명 없이 등록한다. 노드는 잠기고 다음 netmap의 `signingRequest`가 그것을 드러낸다.
     /// 2. 아니고 서명된 인증 키를 실어 보내는 요청이면 감싼 키로 새 node 키에 서명한다(`SignByCredential`). 실패하면 이 등록을
     ///    오류로 끝낸다(Go와 같이 물러났다가 다시 시도한다).
     /// 3. 그 밖에는 서명이 없다(JSON `null`). 서명은 서명 기기가 뒤에 올린다.
@@ -159,18 +160,13 @@ extension ControlClient {
         for nodeKey: NodePublicKey, oldNodeKey: NodePublicKey, resigning previous: [UInt8]?, sendsAuthKey: Bool
     ) throws(ControlError) -> [UInt8] {
         if !oldNodeKey.isZero, let previous {
-            let signature: [UInt8]
             do {
-                signature = try NodeKeySignature.resigned(previous, for: nodeKey, with: identity.lockKey)
+                return try NodeKeySignature.resigned(previous, for: nodeKey, with: identity.lockKey)
             } catch {
+                // `TKAError`는 종류만 담는다(키·바이트가 없다).
                 tailnetLockLog.error("재서명하지 못해 서명 없이 등록한다(\(String(describing: error), privacy: .public))")
                 return []
             }
-            if !Self.rotates(previous, by: identity.lockPublicKey) {
-                // Go와 같이 그대로 보낸다(결정 L9). 노드는 서명 기기가 다시 서명할 때까지 잠기고, 다음 netmap이 그것을 드러낸다.
-                tailnetLockLog.notice("재서명: 옛 서명의 회전 키가 이 노드의 NL 키가 아니어서 새 서명은 검증되지 않는다")
-            }
-            return signature
         }
         guard sendsAuthKey, let wrappedAuthKey else { return [] }
         do {
@@ -178,18 +174,6 @@ extension ControlClient {
         } catch {
             throw .connection("서명된 인증 키로 node 키에 서명하지 못했다")
         }
-    }
-
-    /// 옛 서명을 감쌀 rotation을 검증할 키(Go `wrappingPublic`: 가장 바깥의 비지 않은 `WrappingPubkey`)가 `lockKey`인가.
-    /// 아니면 재서명은 검증되지 않는다. 로그에만 쓴다. Go는 rotation이 아닌 서명의 `Nested`를 따라가지 않지만, 그런 서명은
-    /// 검증을 통과하지 못하므로 판정에 영향이 없다.
-    private static func rotates(_ previous: [UInt8], by lockKey: NLPublicKey) -> Bool {
-        var current = try? NodeKeySignature(decoding: previous)
-        while let signature = current {
-            if !signature.wrappingPublicKey.isEmpty { return signature.wrappingPublicKey == lockKey.rawValue }
-            current = signature.nested
-        }
-        return false
     }
 
     /// 로그인을 기다리는 긴 폴링을 돌리되, 그동안 `startInteractiveLogin()`이 불리면 그만두고

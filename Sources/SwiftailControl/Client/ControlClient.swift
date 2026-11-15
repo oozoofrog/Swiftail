@@ -155,8 +155,12 @@ public actor ControlClient {
     var lockAuthority: Authority?
     /// 저장된 서명 권한 상태를 열지 못했다. 앱이 그 파일을 지우고 다시 시작할 때까지 피어를 올리지 않는다.
     var isLockStoreUnreadable = false
-    /// 거절한 끄기 비밀의 BLAKE2s-256과 그때의 머리. 같은 비밀로 KDF(16MiB)를 다시 돌리지 않는다. 메모리에만 쥔다.
-    var rejectedDisablement: (head: AUMHash, secretDigest: [UInt8])?
+    /// 거절한 끄기 비밀들의 BLAKE2s-256(오래된 것부터 `maximumRejectedDisablementCount`개까지)과 그때의 머리. 같은 비밀로
+    /// KDF(16MiB)를 다시 돌리지 않는다. 머리가 바뀌면 새로 쥔다. 메모리에만 쥔다.
+    var rejectedDisablements: (head: AUMHash, secretDigests: [[UInt8]])?
+    /// 저장된 상태가 서버가 알린 사슬과 이어지지 않았다(동기화에서 교차를 찾지 못했다). 다음 동기화가 교차를 찾거나 lock이
+    /// 꺼지면 풀린다. 연결이 끊겨도 쥔다.
+    var isLockStateDiverged = false
     /// 끄기 비밀의 KDF를 돈 횟수. 같은 비밀을 다시 계산하지 않는지 시험이 본다.
     var disablementDerivationCount = 0
     /// 지금 맵 세션의 tailnet lock 처리 상태.

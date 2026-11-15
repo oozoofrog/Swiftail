@@ -41,6 +41,37 @@ struct TailnetLockPlanTests {
         }
     }
 
+    /// 계약 동작 N2의 표를 서버가 실은 `TKAInfo`에서부터 다시 본다. 읽히지 않는 머리는 "켜짐, 머리 모름"이라 로컬 상태가 없으면
+    /// 부트스트랩(그동안과 실패하면 `.unverified`), 있으면 동기화(그동안 예전 상태로 거른다)로 간다. 어느 칸도 "거르지 않고
+    /// 통과"가 되지 않는다: 할 일이 `.nothing`인 칸은 로컬 상태가 없고 capability가 없거나(Go와 같다) 서버가 꺼졌다고 한 것,
+    /// 또는 로컬 머리와 서버 머리가 같은 것뿐이다(5절 TL-11b 항목 3).
+    @Test("TKAInfo에서 할 일까지: 읽히지 않는 머리는 켜짐·머리 모름이다")
+    func tableFromTKAInfo() throws {
+        let local = try #require(Self.hash(1)), other = try #require(Self.hash(2))
+        // (서버가 실은 TKAInfo, [로컬 없음·capability 없음, 로컬 없음·capability 있음, 로컬 있음])
+        let rows: [(json: String?, plans: [TailnetLockPlan])] = [
+            (nil, [.nothing, .nothing, .verifyDisablement]),
+            (#"{"Disabled":true}"#, [.nothing, .nothing, .verifyDisablement]),
+            (#"{"Disabled":true,"Head":"not-a-hash"}"#, [.nothing, .nothing, .verifyDisablement]),
+            ("{}", [.nothing, .bootstrap, .synchronize]),
+            (#"{"Head":"not-a-hash"}"#, [.nothing, .bootstrap, .synchronize]),
+            // Go는 줄바꿈을 지우고 읽고 Swiftail은 거절하는 텍스트(동작 D10).
+            (#"{"Head":"\#(local.text.prefix(50))\r\n"}"#, [.nothing, .bootstrap, .synchronize]),
+            (#"{"Head":"\#(local.text)"}"#, [.nothing, .bootstrap, .nothing]),
+            (#"{"Head":"\#(other.text)"}"#, [.nothing, .bootstrap, .synchronize]),
+        ]
+        for row in rows {
+            let info = try row.json.map { try JSONDecoder().decode(TKAInfo.self, from: Data($0.utf8)) }
+            let server = ServerLockState(info)
+            let actual = [
+                TailnetLockPlan(localHead: nil, hasCapability: false, server: server),
+                TailnetLockPlan(localHead: nil, hasCapability: true, server: server),
+                TailnetLockPlan(localHead: local, hasCapability: true, server: server),
+            ]
+            #expect(actual == row.plans, "\(row.json ?? "TKAInfo 없음")")
+        }
+    }
+
     @Test("머리는 텍스트가 아니라 32바이트로 견준다")
     func headComparison() throws {
         let local = try #require(Self.hash(2))
@@ -224,8 +255,36 @@ struct TKARequestJSONTests {
         let empty = try offer(#"{"Head":"H","Ancestors":null,"MissingAUMs":null}"#)
         #expect(empty.ancestors.isEmpty && empty.missingAUMs.isEmpty)
         #expect(throws: (any Error).self) { try offer(#"{"Head":"H","MissingAUMs":["*"]}"#) }
+        #expect(throws: (any Error).self) { try offer(#"{"Head":"H","MissingAUMs":"AQ=="}"#) }
 
         #expect(try JSONDecoder().decode(TKASyncSendResponse.self, from: Data(#"{"Head":"H"}"#.utf8)).head == "H")
+    }
+
+    /// 5절 TL-11b 항목 5: 개수는 항목을 base64로 디코딩하기 전에 본다. 4,097개째에서 첫 항목이 base64가 아니어도 그 오류가
+    /// 아니라 개수 한도로 떨어진다.
+    @Test("sync/offer 응답의 MissingAUMs: 4,096개까지 받고 4,097개는 디코딩 전에 거절한다")
+    func missingAUMCountLimit() throws {
+        let limit = TKASyncOfferResponse.maximumMissingAUMCount
+        #expect(limit == 4_096)
+        let body = { (items: [String]) in
+            Data(#"{"Head":"H","MissingAUMs":[\#(items.map { #""\#($0)""# }.joined(separator: ","))]}"#.utf8)
+        }
+        let accepted = try JSONDecoder().decode(TKASyncOfferResponse.self, from: body(Array(repeating: "AQ==", count: limit)))
+        #expect(accepted.missingAUMs.count == limit && accepted.missingAUMs.allSatisfy { $0 == [1] })
+
+        for first in ["AQ==", "*"] {
+            let items = [first] + Array(repeating: "AQ==", count: limit)
+            do {
+                _ = try JSONDecoder().decode(TKASyncOfferResponse.self, from: body(items))
+                Issue.record("4,097개를 받았다")
+            } catch DecodingError.dataCorrupted(let context) {
+                #expect(context.debugDescription.contains("개수 한도"), "\(first): \(context.debugDescription)")
+            }
+        }
+        // 한도 안에서 base64가 아닌 항목은 그대로 실패한다.
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(TKASyncOfferResponse.self, from: body(["*"] + Array(repeating: "AQ==", count: limit - 1)))
+        }
     }
 
     @Test("MapRequest.TKAHead: 머리가 있으면 싣고, 없으면 키가 빠진다")
