@@ -66,9 +66,12 @@ let package = Package(
         ),
         .target(name: "Swiftail", dependencies: ["SwiftailBase", "SwiftailEngine", "SwiftailControl", "SwiftailDERP", "SwiftailIO", "SwiftailMagicsock", "SwiftailNetstack"]),
         .testTarget(name: "SwiftailTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailDERP", "SwiftailMagicsock"]),
-        .testTarget(name: "SwiftailInteropTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailMagicsock"]),
+        .testTarget(
+            name: "SwiftailInteropTests",
+            dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailMagicsock", "SwiftailCertificates", "SwiftailLoopback"]
+        ),
         // ts.net 인증서의 발급·저장·갱신(ACME DNS-01). CryptoKit, Security, Foundation의 URLSession을 쓴다.
-        .target(name: "SwiftailCertificates", dependencies: ["Swiftail", "SwiftailBase"]),
+        .target(name: "SwiftailCertificates", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl"]),
         .testTarget(
             name: "SwiftailCertificatesTests",
             dependencies: ["SwiftailCertificates", "Swiftail", "SwiftailBase"],
