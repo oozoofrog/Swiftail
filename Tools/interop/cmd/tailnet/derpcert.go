@@ -4,13 +4,16 @@
 package main
 
 import (
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -201,7 +204,63 @@ func certificateFixtures(out io.Writer) error {
 	fixtures["ipLeafSHA256"] = certSHA256(ipLeaf.Certificate[0])
 	fixtures["dnsLeafSHA256"] = certSHA256(dnsLeaf.Certificate[0])
 	fixtures["metaSHA256"] = certSHA256(meta)
+	review, err := reviewFixtures(notBefore, notAfter)
+	if err != nil {
+		return err
+	}
+	for name, der := range review {
+		fixtures[name] = base64.StdEncoding.EncodeToString(der)
+		fixtures[name+"SHA256"] = certSHA256(der)
+	}
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(fixtures)
+}
+
+// reviewFixtures는 `Tests/SwiftailIOTests/ServerCertificateReviewTests.swift`의 인증서를 만든다: Go 클라이언트
+// (`tlsdial.SetConfigExpectedCertHash`)와 Swiftail의 판정이 갈리는 모양들이다. 모두 `derp1a.example.test`의 자체 서명
+// 인증서이고, 적은 것만 `selfSignedTemplate`과 다르다.
+func reviewFixtures(notBefore, notAfter time.Time) (map[string][]byte, error) {
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	// 주체 CN을 VisibleString(태그 26)으로 쓴 `derpkey00`. Go의 x509는 이 문자열 형을 CN으로 읽지 않아 CommonName이 비고
+	// (meta 인증서가 아니다), Security 프레임워크는 `derpkey00`으로 읽는다.
+	visibleCN, err := asn1.Marshal(pkix.RDNSequence{{{
+		Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: asn1.RawValue{Tag: 26, Bytes: []byte("derpkey00")},
+	}}})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]byte{}
+	for name, shape := range map[string]struct {
+		mutate func(*x509.Certificate)
+		key    crypto.Signer // nil이면 P-256
+	}{
+		"longValidityLeaf":  {mutate: func(t *x509.Certificate) { t.NotAfter = notBefore.AddDate(10, 0, 0) }},
+		"noEKULeaf":         {mutate: func(t *x509.Certificate) { t.ExtKeyUsage = nil }},
+		"ed25519Leaf":       {mutate: func(t *x509.Certificate) { t.KeyUsage = x509.KeyUsageDigitalSignature }, key: edKey},
+		"visibleStringMeta": {mutate: func(t *x509.Certificate) { t.RawSubject = visibleCN }},
+	} {
+		template, key, err := selfSignedTemplate("derp1a.example.test", notBefore, notAfter)
+		if err != nil {
+			return nil, err
+		}
+		template.DNSNames = []string{"derp1a.example.test"}
+		shape.mutate(template)
+		signer := crypto.Signer(key)
+		if shape.key != nil {
+			signer = shape.key
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := x509.ParseCertificate(der); err != nil {
+			return nil, err
+		}
+		out[name] = der
+	}
+	return out, nil
 }
