@@ -39,8 +39,13 @@ extension TailnetNode {
             Self.log.info("제어: 등록됨")
             announce(stateMachine.registered())
         case let .netmap(netmap):
+            if isControlDisconnected {
+                isControlDisconnected = false
+                Self.log.info("제어: 다시 이어짐")
+            }
             apply(netmap)
         case .disconnected:
+            isControlDisconnected = true
             Self.log.info("제어: 연결 끊김, 다시 잇는 중")
         }
     }

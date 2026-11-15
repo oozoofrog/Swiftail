@@ -142,6 +142,8 @@ public actor TailnetNode {
     var derpLinks: [Int64: DERPLink] = [:]
     /// 서버와 연결되어 있는 지역.
     var connectedDERPRegions: Set<Int64> = []
+    /// 제어 연결이 끊긴 뒤 아직 netmap을 다시 받지 못했다. 다시 이어진 것을 로그에 한 번 남기는 데만 쓴다.
+    var isControlDisconnected = false
     /// 제어 서버에 올릴 이 노드의 상태(disco 키, 엔드포인트, 홈 지역).
     var localStatus = ControlClient.LocalStatus()
     /// 시험용: 이 원격 포트로 보낼 UDP와 이 포트에서 온 UDP를 소켓 경계에서 버린다.
