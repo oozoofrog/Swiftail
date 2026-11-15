@@ -266,12 +266,24 @@ func certificateDER(fromPEM pem: String) throws -> [UInt8] {
 
 /// 사슬이 `anchor`로 `domain`의 TLS 서버 인증서로 검증되는가(SSL 서버 정책, 지금 시각).
 func chainVerifies(_ chain: [[UInt8]], domain: String, anchor: [UInt8]) throws -> Bool {
+    try chainVerifies(chain, domain: domain, anchors: [anchor])
+}
+
+/// 사슬이 `anchors`(이것들만)로 `domain`의 TLS 서버 인증서로 검증되는가.
+func chainVerifies(_ chain: [[UInt8]], domain: String, anchors: [[UInt8]]) throws -> Bool {
     let certificates = try chain.map { try requireValue(SecCertificateCreateWithData(nil, Data($0) as CFData), "인증서 해석 실패") }
-    let root = try requireValue(SecCertificateCreateWithData(nil, Data(anchor) as CFData), "루트 해석 실패")
     var trust: SecTrust?
     guard SecTrustCreateWithCertificates(certificates as CFArray, SecPolicyCreateSSL(true, domain as CFString), &trust) == errSecSuccess,
           let trust else { return false }
-    guard SecTrustSetAnchorCertificates(trust, [root] as CFArray) == errSecSuccess,
+    return trustEvaluates(trust, domain: domain, anchors: anchors)
+}
+
+/// `trust`를 `domain`의 SSL 서버 정책과 `anchors`만으로 지금 시각에 검증한다. 빠진 중간 인증서를 네트워크에서 받지 않는다.
+func trustEvaluates(_ trust: SecTrust, domain: String, anchors: [[UInt8]]) -> Bool {
+    let roots = anchors.compactMap { SecCertificateCreateWithData(nil, Data($0) as CFData) }
+    guard roots.count == anchors.count, !roots.isEmpty,
+          SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, domain as CFString)) == errSecSuccess,
+          SecTrustSetAnchorCertificates(trust, roots as CFArray) == errSecSuccess,
           SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess,
           SecTrustSetNetworkFetchAllowed(trust, false) == errSecSuccess else { return false }
     return SecTrustEvaluateWithError(trust, nil)
