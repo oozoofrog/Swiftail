@@ -24,6 +24,7 @@ import (
 	"swiftail/interop/internal/testcontrol"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
@@ -179,6 +180,22 @@ func (n *network) close() {
 func (n *network) ready() map[string]any {
 	return map[string]any{"event": "ready", "controlURL": n.control.ExplicitBaseURL, "magicDNSSuffix": n.control.MagicDNSDomain, "derp": map[string]any{"regionID": 1, "host": "127.0.0.1", "port": n.derpHTTP.Listener.Addr().(*net.TCPAddr).Port, "stunPort": n.stun.LocalAddr().(*net.UDPAddr).Port}}
 }
+
+// utcTime은 시각을 UTC RFC 3339로 적는다. 0이면 "".
+func utcTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// peerKeyExpiry는 피어의 node 키 만료 시각을 UTC RFC 3339로 적는다. 없으면 "".
+func peerKeyExpiry(p *ipnstate.PeerStatus) string {
+	if p.KeyExpiry == nil {
+		return ""
+	}
+	return utcTime(*p.KeyExpiry)
+}
 func addresses(ns *tailcfg.Node) []string {
 	a := make([]string, 0, len(ns.Addresses))
 	for _, p := range ns.Addresses {
@@ -284,7 +301,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 			if v.Online != nil {
 				online = *v.Online
 			}
-			nodes = append(nodes, map[string]any{"nodeKey": v.Key.String(), "name": v.Name, "addresses": addresses(v), "online": online, "endpoints": append([]netip.AddrPort{}, v.Endpoints...)})
+			nodes = append(nodes, map[string]any{"nodeKey": v.Key.String(), "name": v.Name, "addresses": addresses(v), "online": online, "endpoints": append([]netip.AddrPort{}, v.Endpoints...), "keyExpiry": utcTime(v.KeyExpiry)})
 		}
 		result = map[string]any{"event": "nodes", "nodes": nodes}
 	case "networkStatus":
@@ -342,6 +359,25 @@ func (n *network) execute(c command) (map[string]any, error) {
 				return nil, err
 			}
 		}
+	case "peerLogout":
+		p := n.peers[c.Name]
+		if p == nil || p.stopped {
+			return nil, errors.New("실행 중인 피어가 없습니다")
+		}
+		lc, e := p.server.LocalClient()
+		if e != nil {
+			return nil, e
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if e := lc.Logout(ctx); e != nil {
+			return nil, fmt.Errorf("로그아웃 실패: %w", e)
+		}
+		st, e := lc.StatusWithoutPeers(ctx)
+		if e != nil {
+			return nil, e
+		}
+		result = map[string]any{"event": "peerLogout", "name": c.Name, "backendState": st.BackendState}
 	case "peerStatus", "peerPing":
 		p := n.peers[c.Name]
 		if p == nil {
@@ -360,7 +396,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 			}
 			peers := []any{}
 			for _, v := range st.Peer {
-				peers = append(peers, map[string]any{"nodeKey": v.PublicKey.String(), "addresses": v.TailscaleIPs, "online": v.Online, "curAddr": v.CurAddr, "relay": v.Relay, "active": v.Active, "lastWrite": v.LastWrite})
+				peers = append(peers, map[string]any{"nodeKey": v.PublicKey.String(), "addresses": v.TailscaleIPs, "online": v.Online, "curAddr": v.CurAddr, "relay": v.Relay, "active": v.Active, "lastWrite": v.LastWrite, "expired": v.Expired, "keyExpiry": peerKeyExpiry(v)})
 			}
 			selfAddrs := []string{}
 			if st.Self != nil {

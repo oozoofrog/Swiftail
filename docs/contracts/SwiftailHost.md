@@ -970,3 +970,39 @@ extension TailnetNode {
 - 단위: 요청의 모양(`Expiry`의 선 위 표기, node 키가 바뀌지 않음, 인증 없음), 신원이 없을 때 보내지 않음, `Error` 응답, 기한.
 - 상호 운용(testcontrol): 등록한 노드가 `logOut()`한 뒤 서버 쪽 그 노드의 키가 만료로 보인다. 같은 상태 폴더로 다시 `run()`하면 무슨 일이 일어나는지 기록한다(Go는 새 로그인을 요구받는다).
 - 운영 서버에서 확인할 것(관문 (나)에 더한다): 로그아웃한 노드가 관리 콘솔에서 어떻게 보이는지, 같은 이름으로 다시 로그인한 새 노드의 이름에 번호가 붙는지. Swiftail의 몫은 Go와 같은 요청을 보내는 데까지다.
+
+### 구현하며 정해진 것 (2026-11-15)
+
+근거는 tailscale.com v1.104.7 `control/controlclient/direct.go`(`TryLogout` 505-516행, `doLogin` 634-903행), `control/controlclient/auto.go`(`Logout` 856-882행), `ipn/ipnlocal/local.go`(`Logout` 7253-7305행), `tailcfg/tailcfg.go`(`RegisterRequest.Expiry` 1332-1336행)다. 구현은 `Sources/SwiftailControl/Client/ControlClient+Logout.swift`(`ControlClient.logOut()`, `package`)와 `Sources/Swiftail/TailnetNode+Logout.swift`.
+
+**Go 로그아웃 요청의 필드와 Swiftail의 것.**
+
+| 필드 | Go(`doLogin`, `opt.Logout`) | Swiftail |
+| --- | --- | --- |
+| `NodeKey` | persist의 지금 node 키(`tryingNewKey = persist.PrivateNodeKey`). 없으면 `no nodekey to log out` 오류 | 신원 파일의 node 키. 없으면 보내지 않고 성공(동작 O2. Go `LocalBackend.Logout`의 `hasNodeKeyLocked`와 같은 결과) |
+| `OldNodeKey` | persist의 `OldPrivateNodeKey`(키를 바꾼 적이 있으면 그 옛 키, 아니면 0) | 늘 0. Swiftail은 옛 node 키를 저장하지 않는다 |
+| `NLKey` | persist의 NL 공개 키(없으면 새로 만든다) | 신원 파일의 NL 공개 키(`NodeIdentityStore.load()`. 옛 파일이면 저장하지 않은 새 키) |
+| `Expiry` | `time.Unix(123, 0)`. Go의 `time.Unix`는 로컬 시간대라 JSON은 `1970-01-01T09:02:03+09:00`처럼 프로세스의 시간대를 따른다 | `1970-01-01T00:02:03Z`(UTC). 같은 시각이다 |
+| `Auth` | 제어 클라이언트가 인증 키를 쥐면 싣는다(감싼 키면 `NodeKeySignature`도). tsnet의 `lc.Logout`은 testcontrol에서 `Auth` 없이 왔다 | 싣지 않는다(동작 O3) |
+| `Followup` | `""` | `""` |
+| `Hostinfo` | 지금 Hostinfo(NetInfo 포함) | `Hostinfo.swiftail(…, netInfo: nil)` |
+| `Ephemeral` | 거짓(`Flags`가 0) | 빠짐(거짓) |
+| `NodeKeySignature` | 위의 감싼 키 경우만 | `null` |
+| `Version`, `Timestamp` | `CurrentCapabilityVersion`, 지금 시각(서명용) | 148, 없음(등록과 같다) |
+
+testcontrol이 받은 두 요청(`lockRegistrations`)을 견주는 시험이 있다: `expiryUnix` 123, `auth` 거짓, `oldNodeKey` 없음, `nlKey` 있음, 서명 없음이 둘 다 같다.
+
+**응답과 기한.** Go `doLogin`은 HTTP 200이 아니면(429·`Retry-After` 503 포함) 오류, 본문 해석 실패도 오류, `Error`가 있으면 오류다. 그 밖(`NodeKeySignature`·`NodeKeyExpired`·`AuthURL`)은 `mustRegen`·`newURL`로 돌아오지만 `TryLogout`이 버리고 오류만 돌려준다. `TryLogout`은 결과와 상관없이 메모리의 persist를 비운다. `LocalBackend.Logout`은 `cc.Logout`이 성공해야 프로필을 지운다. 기한: Go에는 로그아웃만의 기한이 없다. `Auto.Logout`·`LocalBackend.Logout`은 받은 context를 그대로 쓰고, CLI는 `context.Background()`, LocalAPI는 요청의 context다. 그래서 동작 O5의 10초(`ControlClient.Timeouts.logout`)를 둔다. 서버 키 받기·연결·응답을 합한 기한이다.
+
+Swiftail의 오류: 200이 아니면 `control(.http(status:))`(429·503도 기다리지 않는다), 해석 실패·연결 실패·기한·취소는 `control(.connection)`, `Error`는 `control(.registrationRejected)`(메시지는 등록과 같이 인증 키를 가리고 200자로 자른다), 신원 파일을 읽지 못하면 `control(.storage)`. 다시 시도하지 않는다.
+
+**시작 검사.** `logOut()`은 `run()`과 같은 `StateDirectoryClaims`로 상태 디렉터리를 차지했다가 끝나면 푼다. 같은 디렉터리의 `run()`이 도는 중이면 `stateDirectoryInUse`이고, 반대로 `logOut()`이 도는 동안 시작한 `run()`도 `stateDirectoryInUse`로 끝난다. `setDefaultInterface`로 알린 인터페이스가 있으면 그 인터페이스로 연결한다. 로그는 "로그아웃: 서버에 node 키 만료를 알림"과 "로그아웃 실패"뿐이고 키·주소를 남기지 않는다.
+
+**testcontrol에서 본 것**(`Tests/SwiftailInteropTests/LogoutTests.swift`, `Tools/interop/cmd/tailnet/logout_test.go`). upstream testcontrol은 `Expiry`를 읽지 않으므로 사본에 보탰다(`Tools/interop/README.md` "로그아웃 관문 명령"): 과거의 `Expiry`면 그 노드의 `KeyExpiry`를 그 값으로 두고 모든 노드에 새 맵을 보낸다. 운영 서버의 처리는 추측이다.
+
+- 로그아웃 뒤 서버의 그 노드는 목록에 남고 `KeyExpiry`가 `1970-01-01T00:02:03Z`다. 응답은 `NodeKeyExpired: true`(사본의 원본 검사 결과)이고 둘 다 성공으로 본다.
+- 다른 피어(Go)의 netmap에는 그 노드가 남고 `KeyExpiry`만 바뀐다. Go는 이 바뀜을 델타(`PeerChange.KeyExpiry`)로 받고, 피어의 `Expired` 표시는 전체 netmap을 받을 때만 계산하므로(`ipn/ipnlocal/local.go:1895` `flagExpiredPeers`) 곧바로는 `Expired: false`, `Online: true`로 보인다. Swift 노드가 다른 피어라면 `EnginePeer`가 `keyExpiry`가 지난 피어를 곧바로 WireGuard에서 뺀다(시험하지 않았다).
+- Go 피어(tsnet)의 로그아웃: 끝난 뒤 `BackendState`는 `NeedsLogin`이고 Go는 프로필을 지운다. 같은 상태 디렉터리로 다시 띄우면 인증 키로 새 node 키를 등록해 서버에 새 노드가 생긴다(옛 노드는 만료된 채 남아 3개. testcontrol은 이름에 번호를 붙이지 않는다).
+- Swift 노드를 로컬 파일을 그대로 둔 채 같은 상태 디렉터리로 다시 `run()`하면(앱의 순서를 따르지 않은 경우): 저장된 로그아웃한 키로 등록 → `NodeKeyExpired` → 새 키로 바꿔(`OldNodeKey` = 로그아웃한 키) 등록 → testcontrol이 옛 노드를 복제해 새 키에 주는데 `KeyExpiry`(1970)까지 복사된다 → `.running`이 한 번 나온 뒤 self 노드의 만료를 보고 또 새 키로 등록 → 다시 만료 → `run()`이 `control(.nodeKeyExpired)`로 끝난다. 사건은 `stateChanged(.running)` 하나다. 이 결과는 복제가 만료 시각을 옮기는 testcontrol의 성질에 묶여 있다. 운영 서버라면 만료된 노드의 새 키 등록에 로그인을 요구할 것으로 보지만(Go가 "새 로그인을 요구받는다") 확인하지 않았다. 앱은 `logOut()` 뒤 상태 디렉터리를 비우므로 이 경로를 타지 않는다.
+
+**계약과 다르게 한 것.** 없다. 동작 O4의 "그 밖의 응답은 성공"에서 HTTP 200이 아닌 응답은 Go와 같이 실패(`http(status:)`)로 둔다.

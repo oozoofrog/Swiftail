@@ -37,8 +37,8 @@ GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-s
 
 - `addPeer`의 `name`은 소문자 DNS 레이블이다. 임시 tsnet 노드를 시작하고 TCP·UDP 포트 7에서 에코한다. `peer` 사건에 공개 nodeKey, addresses, fqdn이 있다.
 - `removePeer`는 노드와 임시 상태를 닫고 `removed`를 돌려준다. testcontrol에는 노드 삭제 API가 없어 `nodes`와 다른 피어의 맵에서 자동으로 없어지지 않는다.
-- `nodes`는 testcontrol의 등록 목록이다. 각 노드의 `endpoints`는 제어 서버가 맵 상태 갱신에서 받아 보관한 IP:port 문자열 배열이며 없으면 `[]`다. `AllNodes()`가 돌려주는 복제본의 `Endpoints`를 그대로 쓴다(`tailscale.com` v1.104.6 `tstest/integration/testcontrol/testcontrol.go:853-862`, `:1452-1486`). `online`은 testcontrol에 개별 연결 추적이 없으므로 실제 접속 상태로 해석하면 안 된다.
-- `peerStatus`는 `name` 노드가 보는 `peers`의 nodeKey, addresses, online, curAddr, relay, `active`, `lastWrite`와 자기 엔드포인트 `selfAddrs`를 돌려준다. `selfAddrs`는 `Status.Self.Addrs`의 IP:port 문자열 배열이며 없으면 `[]`다. `active`는 bool, `lastWrite`는 Go `time.Time`의 RFC3339Nano 문자열(송신 전에는 `0001-01-01T00:00:00Z`)이다. magicsock은 외부 송신 활동(데이터·CLI Ping) 뒤 45초 안이면 active로 보고, 그 마지막 활동 시각을 lastWrite로 기록한다. heartbeat 송신만으로는 이 시각을 연장하지 않는다(`wgengine/magicsock/endpoint.go:2232-2253`, `magicsock.go:4026-4028`, `:4083`). `curAddr`는 신뢰된 직접 경로로만 보낼 때의 주소이며 DERP를 함께 쓰면 빈 문자열이다. `relay`는 피어의 홈 DERP 지역 코드이므로 현재 DERP 사용 여부를 뜻하지 않는다.
+- `nodes`는 testcontrol의 등록 목록이다. 각 노드의 `endpoints`는 제어 서버가 맵 상태 갱신에서 받아 보관한 IP:port 문자열 배열이며 없으면 `[]`다. `AllNodes()`가 돌려주는 복제본의 `Endpoints`를 그대로 쓴다(`tailscale.com` v1.104.6 `tstest/integration/testcontrol/testcontrol.go:853-862`, `:1452-1486`). `online`은 testcontrol에 개별 연결 추적이 없으므로 실제 접속 상태로 해석하면 안 된다. `keyExpiry`는 서버가 쥔 그 노드의 node 키 만료 시각(UTC RFC 3339)이고 없으면 `""`다. 로그아웃하면 `1970-01-01T00:02:03Z`가 된다("로그아웃 관문 명령").
+- `peerStatus`는 `name` 노드가 보는 `peers`의 nodeKey, addresses, online, curAddr, relay, `active`, `lastWrite`와 자기 엔드포인트 `selfAddrs`를 돌려준다. `selfAddrs`는 `Status.Self.Addrs`의 IP:port 문자열 배열이며 없으면 `[]`다. `active`는 bool, `lastWrite`는 Go `time.Time`의 RFC3339Nano 문자열(송신 전에는 `0001-01-01T00:00:00Z`)이다. magicsock은 외부 송신 활동(데이터·CLI Ping) 뒤 45초 안이면 active로 보고, 그 마지막 활동 시각을 lastWrite로 기록한다. heartbeat 송신만으로는 이 시각을 연장하지 않는다(`wgengine/magicsock/endpoint.go:2232-2253`, `magicsock.go:4026-4028`, `:4083`). `curAddr`는 신뢰된 직접 경로로만 보낼 때의 주소이며 DERP를 함께 쓰면 빈 문자열이다. `relay`는 피어의 홈 DERP 지역 코드이므로 현재 DERP 사용 여부를 뜻하지 않는다. `keyExpiry`는 그 피어의 node 키 만료 시각(UTC RFC 3339, 없으면 `""`), `expired`는 Go가 그 피어를 만료로 표시했는지다. Go는 `KeyExpiry`의 바뀜을 델타로 받고 `expired`는 전체 netmap을 받을 때만 계산하므로(`ipn/ipnlocal/local.go:1895`의 `flagExpiredPeers`), 만료 직후에는 `keyExpiry`만 바뀌고 `expired`는 `false`일 수 있다.
 - `peerPing`은 `name`, 대상 IP `to`, `type` (`disco`, `TSMP`, `ICMP`)을 받는다. `result`는 LocalClient PingResult이며 `Err`가 비어 있어야 성공이다.
 - `peerSend`는 `{"id":1,"cmd":"peerSend","name":"go-peer-a","to":"100.64.0.2","port":42001,"proto":"udp","payload":"010203"}`처럼 보낸다. `proto`는 `udp` 또는 `tcp`, `port`는 1…65535, `payload`는 65507바이트 이하의 hex다(빈 값 허용). 지정 피어의 tsnet으로 UDP 데이터그램 하나를 쓰거나, 2초 제한으로 TCP 연결을 시도한 뒤 연결되면 payload를 쓴다. 결과는 `{"id":1,"event":"peerSend","name":"go-peer-a","attempted":true,"sent":true,"error":""}`다. 전송 실패도 `peerSend` 사건으로 `sent:false`와 오류 문자열을 돌려주고, 잘못된 명령 입력은 기존 `error` 사건이다. `sent`는 payload 쓰기 완료를 뜻하며 상대의 수신을 보장하지 않는다. TCP 스택이 없는 Swift 대상은 보통 제한 시간으로 `sent:false`가 된다. SYN 송신 여부는 수신 패킷으로 확인해야 한다. TCP·UDP 소켓은 명령이 끝날 때 닫는다.
 - `injectMapResponse`는 대상 `nodeKey`와 `response` 객체를 받는다. 스트림이 연결된 경우에만 큐에 넣으며 실제 전송은 스트림 처리 시점이다. 첫 주입부터 해당 노드에 대한 자동 맵이 계속 억제된다. `MapResponse` 타입으로 다시 JSON 인코딩하므로 빈 배열 등의 원래 JSON 표현은 보존되지 않는다.
@@ -262,7 +262,7 @@ eyebuild rm m7-tailnet-tool
 
 옮기지 않은 것: `reco-experiment.go`·`capability_reco_test.go`·`reco.md`(`experiment.reco` 빌드 태그의 대체 구현). 그래서 `testcontrol.go`·`capability_default_test.go`의 `//go:build !experiment.reco`를 지웠다. `testcontrol_test.go`는 import 경로만 사본으로 바꿨다. 옮겨 적은 직후, 보탬을 넣기 전에 `go test ./internal/testcontrol ./cmd/tailnet`이 통과하는 것을 기준선으로 확인했다.
 
-원본과 다른 점(코드에는 "원본에 없는 보탬" 또는 "원본과 다름" 주석이 있다. 보탬의 본체는 `internal/testcontrol/tka.go`):
+원본과 다른 점(코드에는 "원본에 없는 보탬" 또는 "원본과 다름" 주석이 있다. 보탬의 본체는 `internal/testcontrol/tka.go`. 로그아웃(`Expiry`)의 보탬은 `logout.go`이고 "로그아웃 관문 명령"의 표에 적었다):
 
 | 자리 | 다른 점 | 근거 |
 | --- | --- | --- |
@@ -293,7 +293,7 @@ eyebuild rm m7-tailnet-tool
 | `lockDisable` | `name`, 선택 `wrongSecret`·`omitTKAInfo` bool | `{"event":"lockDisable","name":"go-peer-a","wrongSecret":false,"omitTKAInfo":false,"alreadyDisabled":false}`. 서버가 줄 비밀과 맵의 모양을 먼저 정하고 `name`이 `lockInit`의 비밀로 끈다. `wrongSecret`이면 bootstrap이 틀린 비밀을 줘서 노드가 lock을 유지한다. 서버가 이미 꺼졌으면(`alreadyDisabled:true`) 피어 RPC 없이 그 두 설정만 바꾸고 새 맵을 보낸다. 그래서 `wrongSecret` 뒤 다시 부르면 노드들이 맞는 비밀을 받는다 |
 | `setLockBootstrapFault` | `enabled` bool | `{"event":"lockBootstrapFault","enabled":true}`. 켜진 동안 bootstrap의 `GenesisAUM`이 깨진다. 바꿀 때 새 맵을 보낸다(Go는 netmap을 받을 때만 다시 시도한다) |
 | `lockRequestResign` | `nodeKey`(서명이 있는 등록된 노드) | `{"event":"lockRequestResign","nodeKey":"nodekey:…"}`. 그 노드의 다음 등록 응답 하나에 재서명 요청을 싣는다 |
-| `lockRegistrations` | 없음 | `{"event":"lockRegistrations","registrations":[{"nodeKey":"nodekey:…","oldNodeKey":"","nlKey":"tlpub:…","signature":"accepted","signatureError":"","resignRequested":false,"wrappedKeyTrace":false}]}`. 받은 순서다. `nlKey`는 0이면 `""`. `signature`는 `none`·`noLock`·`accepted`·`rejected`(Go `NodeKeyAuthorized`의 판정). `wrappedKeyTrace`는 요청 JSON의 문자열 값에 `--TL`이나 이 도구가 감싼 개인 키·시드(base64 세 형식, 16진)가 있는지다. credential은 서명의 `Nested`에 늘 실리는 공개 값이라 보지 않는다 |
+| `lockRegistrations` | 없음 | `{"event":"lockRegistrations","registrations":[{"nodeKey":"nodekey:…","oldNodeKey":"","nlKey":"tlpub:…","auth":false,"expiry":"0001-01-01T00:00:00Z","expiryUnix":0,"signature":"accepted","signatureError":"","resignRequested":false,"wrappedKeyTrace":false}]}`. 받은 순서다. Tailnet Lock과 상관없는 등록(로그아웃 포함)도 모두 쌓인다. `auth`는 요청에 `Auth`가 실렸는지, `expiry`는 요청 JSON의 `Expiry` 문자열(선 위의 표기 그대로), `expiryUnix`는 그 Unix 초(0 시각이면 0)다. `nlKey`는 0이면 `""`. `signature`는 `none`·`noLock`·`accepted`·`rejected`(Go `NodeKeyAuthorized`의 판정). `wrappedKeyTrace`는 요청 JSON의 문자열 값에 `--TL`이나 이 도구가 감싼 개인 키·시드(base64 세 형식, 16진)가 있는지다. credential은 서명의 `Nested`에 늘 실리는 공개 값이라 보지 않는다 |
 | `lockRequests` | 없음 | `{"event":"lockRequests","requests":[{"path":"/machine/tka/bootstrap","nodeKey":"nodekey:…","head":""}]}`. 받은 `/machine/tka/` 요청 전부다. 다시 시작 뒤 bootstrap이 없었는지, lock 없는 tailnet에서 TKA 요청이 없었는지를 이것으로 본다 |
 
 `addPeer`는 선택 `authKey`를 받는다(없으면 기존대로 `setAuth`의 키).
@@ -318,6 +318,22 @@ Go 피어끼리의 흐름(관문 (가)의 Go 쪽 기준):
 ```
 
 `TestTailnetLock`(`cmd/tailnet/lock_test.go`)이 Go 피어만으로 이 흐름을 돈다: lock 켜기와 켤 때 있던 피어의 서명, 서명 없는 피어가 다른 피어의 netmap에서 빠지고 스스로 잠김, 서명 뒤 나타남, 서명된 인증 키로 등록한 피어가 처음부터 보이고 그 등록의 서명이 `accepted`이며 흔적이 없음, 늦게 온 피어가 bootstrap 뒤 `sync/offer`·`sync/send`로 머리를 따라잡음, 키를 더해 다른 서명 기기가 서명한 피어가 그 키를 뺀 뒤 함께 빠짐, 재서명 요청 뒤 새 키로 바뀜, 깨진 bootstrap 뒤 lock을 켜지 못했다가 되돌리면 켬, 틀린 끄기 비밀이면 lock 유지, 맞는 비밀이면 모두 끄고 서명 없는 피어가 다시 보임, 끈 뒤의 맵 응답 모양. Swift 노드는 이 시험의 범위 밖이다(`Tests/SwiftailInteropTests/TailnetLockTests.swift`).
+
+## 로그아웃 관문 명령
+
+`docs/contracts/SwiftailHost.md` "로그아웃"의 상호 운용 시험이 쓴다. testcontrol 사본에 보탠 것은 `internal/testcontrol/logout.go`다(아래 표).
+
+| 자리 | 다른 점 | 근거 |
+| --- | --- | --- |
+| 등록 | 요청의 `Expiry`가 0이 아니고 지금보다 앞이면 로그아웃으로 받아, 그 node 키의 노드 `KeyExpiry`를 요청의 값으로 두고 모든 노드에 새 맵을 보낸다. 응답의 `NodeKeyExpired`는 원본 검사가 그 `KeyExpiry`로 정하므로 참이다(요청에 `OldNodeKey`가 있으면 원본 검사를 건너뛰어 거짓). 노드는 지우지 않는다. 모르는 node 키면 원본 코드가 방금 만든 노드가 곧바로 만료된다. 미래의 `Expiry`(`SetExpirySooner`)는 다루지 않는다. 원본은 `Expiry`를 읽지 않는다 | `tailcfg/tailcfg.go`의 `RegisterRequest.Expiry` 주석, `control/controlclient/direct.go`의 `doLogin`(`loginOpt.Logout`). 응답 모양과 노드를 남기는 것은 **추측** |
+
+| 명령 | 입력(`id`, `cmd` 외) | 성공 응답(`id` 외) |
+| --- | --- | --- |
+| `peerLogout` | `name` | `{"event":"peerLogout","name":"go-peer-b","backendState":"NeedsLogin"}`. Go 피어가 LocalAPI `Logout`을 부른다(`tailscale logout`과 같은 길). 응답은 로그아웃이 끝난 뒤의 `BackendState`다 |
+
+Go 피어의 로그아웃 요청은 `Expiry`를 `time.Unix(123, 0)`로 싣는데 Go의 `time.Unix`는 로컬 시간대라, 선 위의 표기는 그 프로세스의 시간대를 따른다(예: `1970-01-01T09:02:03+09:00`). 같은 시각인지는 `expiryUnix`로 견준다.
+
+`TestPeerLogout`(`cmd/tailnet/logout_test.go`)이 Go 피어만으로 본다: 로그아웃 요청의 `Expiry`가 Unix 123초이고 node 키가 그대로인 것, 서버의 그 노드 `keyExpiry`, 다른 피어의 netmap에 그 노드가 남되 `keyExpiry`가 바뀐 것, 같은 상태 디렉터리로 다시 띄우면(Go는 로그아웃 때 프로필을 지웠다) 새 node 키로 새 노드가 되는 것. Swift 쪽은 `Tests/SwiftailInteropTests/LogoutTests.swift`다.
 
 ## DERP 인증서 고정 (M8 ③)
 

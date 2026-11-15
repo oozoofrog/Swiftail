@@ -1107,6 +1107,8 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	}
 	// 원본에 없는 보탬: 등록 요청의 NodeKeySignature와 재서명 요청(tka.go).
 	resignSignature := s.applyRegisterLockLocked(&req, msg)
+	// 원본에 없는 보탬: 과거의 Expiry는 지금 키의 만료(로그아웃)다(logout.go).
+	s.applyRegisterExpiryLocked(&req)
 	// Consider a node key expired if allExpired is set or if the nodeKey has
 	// an expiry time in the past. This allows tests to set per-node KeyExpiry
 	// via UpdateNode to simulate an admin-triggered or time-based expiry.

@@ -44,6 +44,8 @@ final class SetDNSFakeControlServer: Sendable {
         var setDNSReply = SetDNSReply.respond(status: 200, body: Array("{}".utf8))
         /// 등록 요청에 차례로 줄 본문. 비면 곧바로 받아 준다(`MachineAuthorized`).
         var registerReplies: [[UInt8]] = []
+        /// 참이면 등록 요청에 답하지 않는다(스트림을 열어 둔다). 로그아웃의 기한 시험이 쓴다.
+        var registerNeverAnswers = false
         var requests: [Request] = []
         /// 열려 있는 맵 스트림(연결 번호, 스트림 ID). 클라이언트가 RST_STREAM으로 닫으면 빠진다.
         var openMapStreams: Set<[UInt32]> = []
@@ -82,6 +84,7 @@ final class SetDNSFakeControlServer: Sendable {
     func setAcceptsConnections(_ accepts: Bool) { state.withLock { $0.acceptsConnections = accepts } }
     func setSetDNSReply(_ reply: SetDNSReply) { state.withLock { $0.setDNSReply = reply } }
     func enqueueRegisterReply(_ body: String) { state.withLock { $0.registerReplies.append(Array(body.utf8)) } }
+    func setRegisterNeverAnswers(_ never: Bool) { state.withLock { $0.registerNeverAnswers = never } }
 
     func start() async throws -> URL {
         let listener = listener
@@ -266,6 +269,7 @@ final class SetDNSFakeControlServer: Sendable {
             state.requests.append(request)
             switch request.path {
             case "/machine/register":
+                if state.registerNeverAnswers { return .never }
                 guard state.registerReplies.isEmpty else { return .respond(status: 200, body: state.registerReplies.removeFirst()) }
                 return .respond(status: 200, body: Array(#"{"MachineAuthorized":true}"#.utf8))
             case "/machine/map":

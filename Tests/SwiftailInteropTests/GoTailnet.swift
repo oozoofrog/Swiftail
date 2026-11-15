@@ -26,6 +26,10 @@ actor GoTailnet {
             let endpoints: [String]?
             let active: Bool?
             let lastWrite: String?
+            /// `nodes`(서버 쪽)와 `peerStatus`(Go 피어가 본 것)의 node 키 만료 시각. UTC RFC 3339, 없으면 "".
+            let keyExpiry: String?
+            /// `peerStatus`: Go가 그 피어를 만료로 표시했는지(전체 netmap에서만 계산된다).
+            let expired: Bool?
         }
         let event: String
         let id: Int?
@@ -80,6 +84,8 @@ actor GoTailnet {
         let authKey: String?
         let alreadyDisabled: Bool?
         let registrations: [LockRegistration]?
+        // 로그아웃 관문(README "로그아웃").
+        let backendState: String?
     }
 
     /// `setDNSLog`와 `lockRequests`가 같은 `requests` 필드를 쓴다. 앞의 것은 `name`·`type`·`value`,
@@ -102,6 +108,12 @@ actor GoTailnet {
         let signatureError: String
         let resignRequested: Bool
         let wrappedKeyTrace: Bool
+        /// 요청에 `Auth`가 실렸는지.
+        let auth: Bool
+        /// 요청의 `Expiry` 문자열(선 위의 표기 그대로).
+        let expiry: String
+        /// `Expiry`의 Unix 초. 0 시각이면 0.
+        let expiryUnix: Int64
     }
 
     struct Command: Encodable, Sendable {
