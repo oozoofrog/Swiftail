@@ -3,9 +3,12 @@ module swiftail/interop
 go 1.27.3
 
 require (
+	github.com/letsencrypt/challtestsrv v1.4.2
+	github.com/letsencrypt/pebble/v2 v2.10.3
+	github.com/miekg/dns v1.1.73
 	github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca
-	tailscale.com v1.104.6
 	golang.org/x/net v0.60.0
+	tailscale.com v1.104.6
 )
 
 require (
@@ -21,6 +24,7 @@ require (
 	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/gaissmai/bart v0.29.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.8 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3 // indirect
 	github.com/go4org/hashtriemap v0.0.0-20260925222741-44e5305f85d9 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
