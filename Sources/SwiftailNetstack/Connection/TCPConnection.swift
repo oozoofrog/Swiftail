@@ -212,6 +212,8 @@ package struct TCPConnection: Sendable {
     let synchronizeSentAt: ContinuousClock.Instant
     /// 마지막으로 데이터를 보낸 시각(RFC 5681 4.1의 유휴 판단).
     var lastDataSentAt: ContinuousClock.Instant?
+    /// 전송 통계. 연결이 끝날 때 스택이 `.closed`에 실어 낸다.
+    package internal(set) var statistics: Statistics
 
     // MARK: 타이머
 
@@ -267,6 +269,7 @@ package struct TCPConnection: Sendable {
         congestionControl = NewRenoCongestionControl(
             maximumSegmentSize: ownSize, initialSequenceNumber: initialSendSequence)
         synchronizeSentAt = now
+        statistics = Statistics(openedAt: now)
     }
 
     // MARK: 읽을 수 있는 값

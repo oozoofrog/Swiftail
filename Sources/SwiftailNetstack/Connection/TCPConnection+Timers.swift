@@ -73,7 +73,10 @@ extension TCPConnection {
                 retransmissionCount += 1
             }
             retransmissionEstimator.retransmissionTimerExpired()
+            statistics.retransmissionTimeouts += 1
+            let threshold = congestionControl.slowStartThreshold
             congestionControl.retransmissionTimerExpired(sendUnacknowledged: sendUnacknowledged, sendNext: sendNext)
+            if congestionControl.slowStartThreshold < threshold { statistics.slowStartThresholdReductions += 1 }
             roundTripSample = nil
             transmitNext = sendUnacknowledged
             timers[.retransmission] = now + retransmissionTimeout

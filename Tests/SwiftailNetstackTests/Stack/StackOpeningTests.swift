@@ -128,7 +128,7 @@ struct StackOpeningTests {
         let (id, outputs) = try pair.client.connect(to: IPEndpoint(address: WireHosts.v4b, port: 80), at: pair.now)
         pair.collect(outputs, from: .client)
         try pair.deliver()
-        #expect(pair.clientEvents == [.closed(id, .refused)])
+        #expect(pair.clientEvents.map(\.withoutStatistics) == [.closed(id, .refused, .unchecked)])
         #expect(pair.client.connections.isEmpty)
         #expect(pair.client.nextDeadline == nil)
     }

@@ -16,7 +16,8 @@ struct StackRemovalTests {
         let v4 = try pair.open(listener: listener)
         let v6 = try pair.open(listener: listener, ipv6: true)
         let outputs = pair.client.setLocalAddresses([WireHosts.v6a])
-        #expect(outputs == [.event(.closed(v4.client, .peerRemoved))])
+        #expect(outputs.count == 1)
+        #expect(outputs.events.map(\.withoutStatistics) == [.closed(v4.client, .peerRemoved, .unchecked)])
         #expect(pair.client.connection(v4.client) == nil)
         #expect(pair.client.connection(v6.client) != nil)
         #expect(pair.client.write([1], to: v4.client, at: pair.now) == (0, []))
@@ -83,7 +84,8 @@ struct StackRemovalTests {
         #expect(stack.connections.count == 5)
 
         let outputs = stack.removeConnections(toRemoteAddress: peer)
-        #expect(outputs == [.event(.closed(accepted[0], .peerRemoved))])
+        #expect(outputs.count == 1)
+        #expect(outputs.events.map(\.withoutStatistics) == [.closed(accepted[0], .peerRemoved, .unchecked)])
         #expect(stack.connections.count == 1)
         #expect(stack.listeners[listener]?.queue.isEmpty == true)
         #expect(stack.halfOpenCount == 1)
@@ -119,7 +121,7 @@ struct StackRemovalTests {
 
         pair.collect(closing, from: .server)
         try pair.deliver()
-        #expect(pair.clientEvents.contains(.closed(queuedClient, .reset)))
+        #expect(pair.clientEvents.map(\.withoutStatistics).contains(.closed(queuedClient, .reset, .unchecked)))
         expectStackInvariants(pair.server)
     }
 

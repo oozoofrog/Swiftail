@@ -59,9 +59,13 @@ extension TCPConnection {
             let end = segmentEnd.advanced(by: fin ? 1 : 0)
             outputs.append(.segment(dataSegment(from: start, length: length, fin: fin)))
             if isRetransmission {
+                statistics.retransmittedBytes += length
                 discardRoundTripSample(overlapping: start, end)
-            } else if roundTripSample == nil {
-                roundTripSample = RoundTripSample(start: start, end: end, sentAt: now)
+            } else {
+                statistics.sentBytes += length
+                if roundTripSample == nil {
+                    roundTripSample = RoundTripSample(start: start, end: end, sentAt: now)
+                }
             }
             if sendNext.precedes(end) { sendNext = end }
             transmitNext = end
@@ -121,6 +125,7 @@ extension TCPConnection {
         guard length > 0 || fin else { return }
         let end = start.advanced(by: UInt32(length + (fin ? 1 : 0)))
         outputs.append(.segment(dataSegment(from: start, length: length, fin: fin)))
+        statistics.retransmittedBytes += length
         discardRoundTripSample(overlapping: start, end)
         if transmitNext.precedes(end) { transmitNext = end }
     }

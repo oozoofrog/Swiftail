@@ -46,7 +46,9 @@ struct StackLookupTests {
         #expect(pair.serverEvents.last == .endOfStream(ids.server))
         pair.collect(pair.server.close(ids.server, at: pair.now), from: .server)
         try pair.deliver()
-        #expect(Array(pair.clientEvents.suffix(2)) == [.endOfStream(ids.client), .closed(ids.client, .finished)])
+        #expect(
+            pair.clientEvents.suffix(2).map(\.withoutStatistics)
+                == [.endOfStream(ids.client), .closed(ids.client, .finished, .unchecked)])
         #expect(pair.client.connections.isEmpty)
         #expect(pair.client.timeWaitRecords.count == 1)
         #expect(pair.server.connections.isEmpty)

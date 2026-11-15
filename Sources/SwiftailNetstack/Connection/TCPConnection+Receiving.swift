@@ -196,11 +196,19 @@ extension TCPConnection {
         }
 
         // shortcut: 받은 SACK 블록(`segment.sackBlocks`)은 쓰지 않는다. 잃은 구간을 골라 다시 보내는 일(RFC 6675)은 M6-10b다.
+        // 상대가 SACK을 내는지는 통계로 센다(M6-10b S1).
+        if !segment.sackBlocks.isEmpty { statistics.acknowledgmentsWithSACK += 1 }
         if sendUnacknowledged.precedes(ack) {
             acknowledge(upTo: ack, at: now, into: &outputs)
         } else if ack == sendUnacknowledged, isDuplicateAcknowledgment(segment, peerWindow: peerWindow) {
+            statistics.duplicateAcknowledgments += 1
+            let threshold = congestionControl.slowStartThreshold
             let instruction = congestionControl.receiveDuplicateACK(ackNumber: ack, sendNext: sendNext)
-            if instruction == .retransmitFirstUnacknowledgedSegment { isFastRetransmitPending = true }
+            if instruction == .retransmitFirstUnacknowledgedSegment {
+                isFastRetransmitPending = true
+                statistics.fastRetransmits += 1
+                if congestionControl.slowStartThreshold < threshold { statistics.slowStartThresholdReductions += 1 }
+            }
         }
         lastPeerWindow = peerWindow
 
@@ -246,7 +254,13 @@ extension TCPConnection {
         let instruction = congestionControl.acknowledgeNewData(
             bytes: acknowledgedCount, ackNumber: ack, sendNext: sendNext)
         timers[.retransmission] = hasOutstandingData ? now + retransmissionTimeout : nil
-        if instruction == .retransmitFirstUnacknowledgedSegment { isFastRetransmitPending = true }
+        if instruction == .retransmitFirstUnacknowledgedSegment {
+            isFastRetransmitPending = true
+            statistics.partialAcknowledgmentRetransmits += 1
+        } else if !congestionControl.isInFastRecovery {
+            statistics.maximumCongestionWindow = max(
+                statistics.maximumCongestionWindow, congestionControl.congestionWindow)
+        }
         if released > 0, isWriteBlocked {
             isWriteBlocked = false
             outputs.append(.event(.writable))

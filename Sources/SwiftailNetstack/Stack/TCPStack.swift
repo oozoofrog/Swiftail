@@ -55,7 +55,8 @@ package struct TCPStack: Sendable {
         /// 상대가 쓰기를 닫았다(FIN). 그 전에 받은 데이터는 모두 읽을 수 있다.
         case endOfStream(ConnectionID)
         /// 연결이 끝났다. 이 뒤로는 그 연결의 사건이 없다. `.finished`면 읽지 않은 데이터를 아직 읽을 수 있다.
-        case closed(ConnectionID, CloseReason)
+        /// 끝날 때까지의 전송 통계를 싣는다(TIME-WAIT에 들며 알린 연결은 든 때까지의 값).
+        case closed(ConnectionID, CloseReason, TCPConnection.Statistics)
     }
 
     /// 연결이 끝난 까닭. `TCPConnection.CloseReason`에 스택이 내는 `peerRemoved`를 더했다.

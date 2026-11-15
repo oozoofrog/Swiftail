@@ -155,7 +155,7 @@ struct StackLimitTests {
             flags: [.syn])
         #expect(stack.receive(syn.packet, at: .now) == [.dropped(.limitReached(.connections))])
 
-        #expect(stack.abort(ids[0], at: .now).events == [.closed(ids[0], .aborted)])
+        #expect(stack.abort(ids[0], at: .now).events.map(\.withoutStatistics) == [.closed(ids[0], .aborted, .unchecked)])
         #expect(stack.connections.count == 255)
         _ = try stack.connect(to: remote, at: .now)
         expectStackInvariants(stack)
