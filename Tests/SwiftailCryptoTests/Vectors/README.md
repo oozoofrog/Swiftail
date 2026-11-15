@@ -33,3 +33,5 @@ curl -fsSL https://raw.githubusercontent.com/BLAKE2/BLAKE2/master/testvectors/bl
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BLAKE2/BLAKE2/master/testvectors/blake2-kat.json | python3 -c 'import json,sys; x=json.load(sys.stdin); y=[dict(kind="blake2b",key=v["key"],input=v["in"],output=v["out"]) for v in x if v["hash"]=="blake2b" and v["key"] in ("", bytes(range(64)).hex())]; assert len(y)==512; json.dump(y,sys.stdout,indent=2); print()' > Tests/SwiftailCryptoTests/Vectors/blake2b-kat.json
 ```
+
+`crypto-review-go.json`: 독립 검토에서 뽑은 Go 1.27.3·`filippo.io/edwards25519` v1.2.0·`ed25519consensus` v0.2.0·`golang.org/x/crypto` v0.58.0(`argon2`·`blake2b`)의 출력(스칼라 환원·필드 연산·점 해독·두 검증 규칙·BLAKE2b·Argon2i, 종류는 `CryptoReviewTests.swift` 머리). 저장소 밖의 임시 Go 프로그램이 씨앗 `SHA-256("swiftail-crypto-review/2")`의 ChaCha8로 만든 입력에서 고른 것이라 이 저장소의 명령으로는 다시 만들지 않는다. 라이선스: BSD-3-Clause.
