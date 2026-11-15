@@ -613,7 +613,11 @@ RemoteDebug 세션이 F1~F13에 답했다(그쪽 `2814b2c`의 Go 코드에서 �
 - 확인 항목 14개를 포함한 전체 시험이 통과했다(검토 반영 전의 병합 상태에서 16묶음 전부, 반영 뒤에는 관문 묶음과 고친 타깃의 단위 시험).
 - Go 피어끼리의 약 1.8초에 가까워졌다.
 - **손실 1%의 처리량은 오히려 떨어졌다.** 0%의 0.04~0.06배다. 까닭은 동작 F5에 적은 gVisor의 중복 ACK 세기다: SACK이 없으면 데이터가 실린 세그먼트가 중복 ACK 수를 0으로 되돌려, 양방향으로 동시에 보내는 이 시험에서는 fast retransmit 대신 상대의 RTO(200ms)를 기다린다. Swift 쪽이 빨라져 데이터가 실린 세그먼트가 더 촘촘히 나가면서 이 영향이 커졌다. 한 방향 전송의 손실 처리량은 재지 않았다.
-- **N3 다시 판정: 손실 1%가 0%의 1/10 아래이므로 SACK(M6-10)을 연다.** 받는 쪽이 SACK 블록을 내는 것(상대의 회복을 돕는다)부터 한다.
+- **한 방향 전송**(20MiB, 관문 시험 `oneWayLoss`. 큰 전송이 한 방향인 실제 쓰임에 가깝다): Swift→Go는 손실 0% 82MB/s·1% 6.3MB/s, Go→Swift는 0% 80MB/s·1% 2.0MB/s다. 0%의 값은 20MiB가 약 0.25초에 끝나 연결 맺기·닫기의 시간에 묶인 값이라 실제 비율은 더 낮다. 손실 1%에서 최장 수신 간격이 약 0.5초인 것으로 보아 손실의 일부가 fast retransmit으로 회복되지 못하고 RTO(200ms 이상)를 기다린다. 루프백은 왕복 시간이 거의 0이라 RTO 한 번의 값이 실제 망보다 훨씬 크게 드러난다는 점은 감안한다.
+- **N3 다시 판정: 양방향·한 방향 모두 손실 1%가 0%의 1/10 아래이므로 SACK(M6-10)을 연다.** 둘로 나눈다.
+  - M6-10a 받는 쪽: SACK-Permitted를 협상하고 받는 버퍼의 구간을 SACK 블록으로 낸다(RFC 2018). 상대(gVisor, 커널)가 한 창의 여러 손실을 한 번에 다시 보내게 한다. 가장 느린 Go→Swift 방향을 겨눈다. 작다.
+  - M6-10b 보내는 쪽: 받은 SACK 블록으로 잃은 구간을 골라 다시 보낸다(RFC 6675). 상태 기계에서 가장 큰 덩어리라, 10a 뒤의 측정과 실기기 기록(첫 사용처 검토 결과 5)을 보고 구현을 연다. 그 전에 RFC 6675를 TCP 노트에 대조해 둔다.
+  - 양방향 동시 전송의 약점은 SACK으로 다 풀리지 않는다: gVisor는 SACK을 협상해도 데이터가 실린 ACK를 중복 ACK로 세지 않는다(`snd.go`의 `isDupAck`가 `seg.logicalLen() == 0`을 요구한다. 총괄이 소스에서 확인).
 - 고치기 전의 값들은 세 시간 넘게 CPU 하나를 쓰던 다른 시험 프로세스가 도는 상태에서 쟀다(나중에 끝냈다). 고친 뒤의 값에는 그 영향이 없다.
 
 ### (나) macOS·iOS 커널 스택
@@ -649,6 +653,6 @@ RemoteDebug 세션이 F1~F13에 답했다(그쪽 `2814b2c`의 Go 코드에서 �
 | M6-7 | Go 기준값 도구와 자료, 대조 시험 | `Tools/interop/cmd/tcpfixtures/`, `Tests/SwiftailNetstackTests/Fixtures/tcp-segments.json`, `Tests/SwiftailNetstackTests/Wire/GoSegmentComparisonTests.swift`, `Tools/interop/README.md`의 새 절 | 도구는 **병렬**. 대조 시험은 M6-1 뒤 다른 세션이 |
 | M6-8 | 노드 통합(동작 N·A·K, X10): `TunnelDevice.inProcess`, 스택 잇기와 대기열, 공개 API, 이름 해석, 기다리는 호출, 버려진 핸들, 손실 훅 | `Sources/Swiftail/**`, `Tests/SwiftailTests/Netstack*`(시험 13~16) | M6-5 뒤 |
 | M6-9 | 관문: (9a) `tailnet` 도구의 `peerServe`·`peerDial`·`transfers`·`peerClose`·`addKernelPeer`와 README, (9b) `NetstackTests.swift`와, 시험 제어 서버에 Swiftail 노드 둘을 붙여 `listen`·`connect`를 돌리는 방법의 문서(첫 사용처 검토 결과 6) | `Tools/interop/cmd/tailnet/*`, `Tools/interop/README.md`의 `tailnet` 절, `Tests/SwiftailInteropTests/NetstackTests.swift` | 9a는 **병렬**(M6-7과 README의 절이 다르다). 9b는 M6-8 뒤 |
-| M6-10 | (조건부) SACK | `Sources/SwiftailNetstack/Recovery/SACK*`와 M6-4의 파일 | 관문 (가) 8의 기록이 N3의 기준 아래일 때만 |
+| M6-10 | SACK. 10a 받는 쪽(협상, SACK 블록 내기), 10b 보내는 쪽(RFC 6675 회복. 10a 뒤의 측정을 보고 연다) | `Sources/SwiftailNetstack/Recovery/SACK*`와 M6-1·M6-2·M6-4의 파일 | 관문 (가) 8의 기록이 N3의 기준 아래라 열었다(2026-11-15) |
 
 순서: M6-0 → (M6-1, 2, 3, 6의 하네스, 7의 도구, 9a) 병렬 → M6-4 → M6-5 → M6-6의 시험 → M6-8 → M6-9b → 다른 세션의 검토 → 총괄이 관문 (가)를 다시 돌림 → 관문 (나) → (필요하면) M6-10.

@@ -213,6 +213,31 @@ struct NetstackTests {
         }
     }
 
+    /// 양방향 동시 전송에서는 ACK가 데이터에 실려 gVisor가 중복 ACK로 세지 않는다(netstack 계약 동작 F5). 큰 전송이 한 방향인
+    /// 실제 쓰임에 가까운 값을 따로 남긴다.
+    @Test("항목 8 보충: 한 방향 20MiB의 손실 0%·1% 처리량 기록")
+    func oneWayLoss() async throws {
+        let size: UInt64 = 20_971_520
+        for (name, sendCount, receiveCount) in [("Swift→Go", size, UInt64(3)), ("Go→Swift", UInt64(3), size)] {
+            var rates: [Double: Double] = [:]
+            for loss in [0.0, 0.01] {
+                try await withGate(direct: false, device: .inProcess) { gate in
+                    _ = try await netstackPrepare(gate)
+                    await gate.node.setInProcessLoss(rate: loss, seed: 0x4d_36)
+                    let connection = try await gate.node.connect(to: gate.peer.address().description, port: 9_100)
+                    try await connection.write(NetstackStream.header(count: receiveCount, seed: 7))
+                    let measurement = try await netstackExchange(gate, connection: connection,
+                        stage: "8 한 방향 \(name) 손실 \(Int(loss * 100))%",
+                        sendCount: sendCount, receiveCount: receiveCount, sendSeed: 2, receiveSeed: 7, timeoutSeconds: 1_800)
+                    rates[loss] = measurement.bytesPerSecond
+                }
+            }
+            if let baseline = rates[0], let onePercent = rates[0.01] {
+                await lossNote("M6 한 방향 \(name): 0%=\(baseline), 1%=\(onePercent)바이트/초, 1%/0%=\(onePercent / baseline)")
+            }
+        }
+    }
+
     @Test("리스너 닫기: 대기 흐름 종료·받아 간 연결 유지·미수락 연결 RST")
     func listenerClose() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
