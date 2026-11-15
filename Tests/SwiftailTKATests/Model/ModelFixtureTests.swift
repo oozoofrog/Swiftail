@@ -82,7 +82,7 @@ struct ModelFixtureTests {
     @Test("AUMHash 텍스트: Go의 쓰기와 읽기")
     func aumHashText() throws {
         let cases = try ModelFixtureFile.load().text.filter { $0.kind.hasPrefix("aumHash.") }
-        #expect(cases.count == 15)
+        #expect(cases.count == 24)
         for item in cases {
             if item.kind == "aumHash.encode" {
                 #expect(AUMHash(ModelTesting.bytes(item.input))?.text == item.output, "\(item.name)")
@@ -124,7 +124,7 @@ struct ModelFixtureTests {
     @Test("CBOR 입력마다 Go와 같은 판정, 받아들인 것은 같은 바이트와 해시")
     func cborCases() throws {
         let cases = try ModelFixtureFile.load().cbor
-        #expect(cases.count == 255)
+        #expect(cases.count == 279)
         var decodeDifferences: [String] = []
         var bytesDifferences: [String] = []
         for item in cases {

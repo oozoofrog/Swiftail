@@ -194,17 +194,28 @@ func syncGroups() []syncGroup {
 
 	// long: 0 G(lock/0), 1 C(G 다음의 체크포인트), 2~2000 NoOp. 조상 목록의 1,000회 한도와 앞으로 감기의
 	// 2,000회 한도(maxSyncHeadIntersectionIter, maxSyncIter)의 경계.
-	one := []tka.Key{L[0].tkaKey(1)}
-	pool = [][]byte{genesisAUM(one, V[:1], 1, 2, L[0])}
-	pool = append(pool, childAUM(aumHash(pool[0]), tka.AUM{MessageKind: tka.AUMCheckpoint, State: &tka.State{DisablementValues: V[:1], Keys: one, StateID1: 1, StateID2: 2}}, L[0]))
-	for i := 2; i <= 2000; i++ {
-		pool = append(pool, noop(aumHash(pool[i-1]), L[0]))
-	}
+	pool = longPool()
 	groups = append(groups, syncGroup{"long", hexPool(pool), []syncCase{
 		runSync("checkpoint-depth-999", pool, indices(0, 1000), []int{0}),
 		runSync("checkpoint-depth-1000", pool, indices(0, 1001), []int{0}),
 		runSync("fast-forward-1999", pool, indices(0, 1999), []int{0}),
 		runSync("fast-forward-2000", pool, indices(0, 2000), []int{0}),
+		// TL-5 대조 시험이 더한 것(계약 5절 TL-3): 상대의 머리가 로컬 머리에서 999개 뒤면 머리 교차, 1,000개 뒤면
+		// 머리 교차의 1,000회를 넘어 상대 조상(C)의 꼬리 교차로 넘어간다(tka/sync.go:158-213).
+		runSync("head-intersection-distance-999", pool, indices(0, 1999), indices(0, 1000)),
+		runSync("head-intersection-distance-1000", pool, indices(0, 1999), indices(0, 999)),
 	}})
 	return groups
+}
+
+// longPool은 sync의 long 묶음이자 limits의 앞부분이다: 0 G(lock/0), 1 C(체크포인트), 2~2000 NoOp(각각 앞의 자식).
+func longPool() [][]byte {
+	L, V := lockKeys, disablementValues
+	one := []tka.Key{L[0].tkaKey(1)}
+	pool := [][]byte{genesisAUM(one, V[:1], 1, 2, L[0])}
+	pool = append(pool, childAUM(aumHash(pool[0]), tka.AUM{MessageKind: tka.AUMCheckpoint, State: &tka.State{DisablementValues: V[:1], Keys: one, StateID1: 1, StateID2: 2}}, L[0]))
+	for i := 2; i <= 2000; i++ {
+		pool = append(pool, noop(aumHash(pool[i-1]), L[0]))
+	}
+	return pool
 }

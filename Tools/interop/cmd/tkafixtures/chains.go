@@ -364,6 +364,22 @@ func chainCases() ([]chainCase, []byte) {
 	z.step("non-canonical-identity-key-identity-r-zero-s", signedWith(z.head(), nonCanonicalIdentity, func([]byte) []byte { return append(append([]byte{}, nonCanonicalIdentity...), make([]byte, 32)...) }))
 	out = append(out, z.c)
 
+	// 6. 한 묶음 안의 같은 AUM(계약 5절 TL-3. TL-5 대조 시험이 더했다). Go InformIdempotent는 같은 묶음의 두 번째를
+	// 저장소에 아직 없어서 다시 검증·적용한다(tka/tka.go:605-640). genesis: lock/0(1표).
+	dup := newChain("batch-duplicates", genesisAUM([]tka.Key{L[0].tkaKey(1)}, V[:1], 1, 2, L[0]))
+	da := noop(dup.head(), L[0])
+	db := noop(aumHash(da), L[0])
+	dc := noop(aumHash(db), L[0])
+	dup.step("same-aum-twice", da, da)
+	dup.step("duplicate-around-child", db, dc, db)
+	dup.step("held-twice", dc, dc)
+	one := uint(1)
+	fork := childAUM(aumHash(da), tka.AUM{MessageKind: tka.AUMNoOp, Votes: &one}, L[0])
+	dup.step("fork-twice", fork, fork)
+	dup.step("unsigned-twice", noop(dup.head()), noop(dup.head()))
+	dup.step("child-then-duplicate-parent", noop(aumHash(fork), L[0]), fork)
+	out = append(out, dup.c)
+
 	out = append(out, forkCases()...)
 	return out, laterCheckpoint
 }

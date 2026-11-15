@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"tailscale.com/health"
 	"tailscale.com/tailcfg"
@@ -25,6 +26,7 @@ type swiftailFixturePeer struct {
 type swiftailFixturePeerSet struct {
 	AUMs  []string              `json:"aums"`
 	Peers []swiftailFixturePeer `json:"peers"`
+	Runs  int                   `json:"runs"`
 }
 
 func swiftailFixtureAUM(h string) (tka.AUM, error) {
@@ -36,7 +38,8 @@ func swiftailFixtureAUM(h string) (tka.AUM, error) {
 	return a, a.Unserialize(b)
 }
 
-// SwiftailFixturePeerSets는 피어 집합마다 tkaFilterNetmapLocked가 남긴 피어의 node 키(16진)를 돌려준다.
+// SwiftailFixturePeerSets는 피어 집합마다 tkaFilterNetmapLocked를 Runs번 돌려, 남긴 피어의 node 키(16진) 목록 가운데
+// 서로 다른 것을 정렬해 돌려준다(rotationTracker가 맵을 돌아 답이 갈릴 수 있다).
 func SwiftailFixturePeerSets(input []byte) ([]byte, error) {
 	var sets []swiftailFixturePeerSet
 	if err := json.Unmarshal(input, &sets); err != nil {
@@ -44,48 +47,72 @@ func SwiftailFixturePeerSets(input []byte) ([]byte, error) {
 	}
 	bus := eventbus.New()
 	defer bus.Close()
-	out := make([][]string, len(sets))
+	out := make([][][]string, len(sets))
 	for i, set := range sets {
-		storage := tka.ChonkMem()
-		genesis, err := swiftailFixtureAUM(set.AUMs[0])
-		if err != nil {
-			return nil, err
-		}
-		authority, err := tka.Bootstrap(storage, genesis)
-		if err != nil {
-			return nil, err
-		}
-		if len(set.AUMs) > 1 {
-			updates := make([]tka.AUM, len(set.AUMs)-1)
-			for j, h := range set.AUMs[1:] {
-				if updates[j], err = swiftailFixtureAUM(h); err != nil {
-					return nil, err
-				}
-			}
-			if err := authority.Inform(storage, updates); err != nil {
-				return nil, err
-			}
-		}
-		nm := &netmap.NetworkMap{}
-		for j, p := range set.Peers {
-			var nk key.NodePublic
-			if err := nk.UnmarshalText([]byte("nodekey:" + p.NodeKey)); err != nil {
-				return nil, err
-			}
-			sig, err := hex.DecodeString(p.Signature)
+		seen := map[string][]string{}
+		for range max(set.Runs, 1) {
+			kept, err := swiftailFixtureFilter(bus, set)
 			if err != nil {
 				return nil, err
 			}
-			n := &tailcfg.Node{ID: tailcfg.NodeID(j + 1), StableID: tailcfg.StableNodeID(fmt.Sprintf("n%d", j+1)), Key: nk, KeySignature: sig, UnsignedPeerAPIOnly: p.UnsignedPeerAPIOnly}
-			nm.Peers = append(nm.Peers, n.View())
+			line, err := json.Marshal(kept)
+			if err != nil {
+				return nil, err
+			}
+			seen[string(line)] = kept
 		}
-		b := &LocalBackend{logf: logger.Discard, health: health.NewTracker(bus), tka: &tkaState{authority: authority, storage: storage}}
-		b.tkaFilterNetmapLocked(nm)
-		out[i] = []string{}
-		for _, p := range nm.Peers {
-			raw := p.Key().Raw32()
-			out[i] = append(out[i], hex.EncodeToString(raw[:]))
+		lines := make([]string, 0, len(seen))
+		for line := range seen {
+			lines = append(lines, line)
+		}
+		sort.Strings(lines)
+		for _, line := range lines {
+			out[i] = append(out[i], seen[line])
 		}
 	}
 	return json.Marshal(out)
+}
+
+func swiftailFixtureFilter(bus *eventbus.Bus, set swiftailFixturePeerSet) ([]string, error) {
+	storage := tka.ChonkMem()
+	genesis, err := swiftailFixtureAUM(set.AUMs[0])
+	if err != nil {
+		return nil, err
+	}
+	authority, err := tka.Bootstrap(storage, genesis)
+	if err != nil {
+		return nil, err
+	}
+	if len(set.AUMs) > 1 {
+		updates := make([]tka.AUM, len(set.AUMs)-1)
+		for j, h := range set.AUMs[1:] {
+			if updates[j], err = swiftailFixtureAUM(h); err != nil {
+				return nil, err
+			}
+		}
+		if err := authority.Inform(storage, updates); err != nil {
+			return nil, err
+		}
+	}
+	nm := &netmap.NetworkMap{}
+	for j, p := range set.Peers {
+		var nk key.NodePublic
+		if err := nk.UnmarshalText([]byte("nodekey:" + p.NodeKey)); err != nil {
+			return nil, err
+		}
+		sig, err := hex.DecodeString(p.Signature)
+		if err != nil {
+			return nil, err
+		}
+		n := &tailcfg.Node{ID: tailcfg.NodeID(j + 1), StableID: tailcfg.StableNodeID(fmt.Sprintf("n%d", j+1)), Key: nk, KeySignature: sig, UnsignedPeerAPIOnly: p.UnsignedPeerAPIOnly}
+		nm.Peers = append(nm.Peers, n.View())
+	}
+	b := &LocalBackend{logf: logger.Discard, health: health.NewTracker(bus), tka: &tkaState{authority: authority, storage: storage}}
+	b.tkaFilterNetmapLocked(nm)
+	kept := []string{}
+	for _, p := range nm.Peers {
+		raw := p.Key().Raw32()
+		kept = append(kept, hex.EncodeToString(raw[:]))
+	}
+	return kept, nil
 }

@@ -40,13 +40,21 @@ func TestFixtures(t *testing.T) {
 		t.Fatalf("caseCount가 0이거나 읽히지 않습니다: %v", err)
 	}
 	sum := 0
-	for _, name := range []string{"keys", "authorities", "text", "encodings", "cbor", "chains", "sync", "signatures", "peerSets", "disablement", "authKeys", "resign"} {
+	for _, name := range []string{"keys", "authorities", "text", "encodings", "cbor", "chains", "sync", "signatures", "peerSets", "disablement", "authKeys", "resign", "unorderedPeerSets", "limits", "padded", "openedStates"} {
 		var items []json.RawMessage
 		if err := json.Unmarshal(f[name], &items); err != nil || len(items) == 0 {
 			t.Fatalf("%s 배열이 비었거나 없습니다", name)
 		}
 		switch name {
 		case "keys", "authorities":
+		case "limits":
+			var groups []limitGroup
+			if err := json.Unmarshal(f[name], &groups); err != nil {
+				t.Fatal(err)
+			}
+			for _, g := range groups {
+				sum += len(g.Cases)
+			}
 		case "sync":
 			var groups []syncGroup
 			if err := json.Unmarshal(f[name], &groups); err != nil {

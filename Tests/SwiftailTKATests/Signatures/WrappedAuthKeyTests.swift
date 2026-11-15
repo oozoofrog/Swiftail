@@ -15,6 +15,8 @@ struct WrappedAuthKeyTests {
     static let intendedRejections: [String: String] = [
         "missing-dash": "L12", "padded-base64": "L12", "url-alphabet-key": "L12", "extra-dash": "L12",
         "credential-not-cbor": "L12", "empty-parts": "L12",
+        "credential-trailing-bits": "L12", "key-trailing-bits": "L12", "credential-lf": "L12", "key-crlf": "L12",
+        "key-trailing-lf": "L12",
         "key-63-bytes": "L13", "key-65-bytes": "L13", "key-32-bytes": "L13", "key-public-half-mismatch": "L13",
         "credential-direct-kind": "R3", "credential-wrapping-other-key": "R3",
     ]
@@ -22,7 +24,7 @@ struct WrappedAuthKeyTests {
     @Test("authKeys 16개: Go가 받는 것은 같은 부분과 같은 판정, 나머지는 의도된 차이로 거절")
     func goAuthKeys() throws {
         let fixtures = try SignatureFixtureFile.load()
-        #expect(fixtures.authKeys.count == 16)
+        #expect(fixtures.authKeys.count == 21)
         var compared = 0
         for item in fixtures.authKeys {
             let parsed = Result { () throws(TKAError) in try WrappedAuthKey(parsing: item.input) }

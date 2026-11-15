@@ -10,7 +10,7 @@ struct AuthorizationTests {
     @Test("signatures 51개: 판정과 내력(PrevNodeKeys 순서, 처음 서명의 종류·WrappingPubkey)이 Go와 같다")
     func goVerdicts() throws {
         let fixtures = try SignatureFixtureFile.load()
-        #expect(fixtures.signatures.count == 51)
+        #expect(fixtures.signatures.count == 53)
         for item in fixtures.signatures {
             let state = try fixtures.state(named: item.authority)
             let verdict = SignatureTesting.verdict(state, try SignatureTesting.nodeKey(item.nodeKey), ModelTesting.bytes(item.nks))

@@ -18,7 +18,7 @@ CBOR 항목 수준의 판정 벡터 63개. 출처는 노트 `docs/protocol-notes
 
 ## `tka-fixtures.json` (`tkafixtures`)
 
-출처: `Tools/interop/cmd/tkafixtures`가 `tailscale.com` v1.104.6의 `tka` 공개 API(피어 집합만 `ipn/ipnlocal`의 `tkaFilterNetmapLocked`를 overlay로)로 낸 Go 판정. Go 1.27.3. 키는 `SHA-256("swiftail-fixtures/tka/<역할>/<번호>")`에서 나온 공개된 시험 전용 값이고, `bootstrap/go-test-genesis`와 `authKeys`의 `go-test-string`은 Go 시험 파일(`tka/aum_test.go:181`, `tka/sig_test.go:479`)의 값이다. JSON의 모양과 시나리오 목록은 `Tools/interop/README.md`의 "TKA 기준 자료 생성" 절에 있다.
+출처: `Tools/interop/cmd/tkafixtures`가 `tailscale.com` v1.104.6의 `tka` 공개 API(피어 집합만 `ipn/ipnlocal`의 `tkaFilterNetmapLocked`를 overlay로)로 낸 Go 판정. Go 1.27.3. 키는 `SHA-256("swiftail-fixtures/tka/<역할>/<번호>")`에서 나온 공개된 시험 전용 값이고, `bootstrap/go-test-genesis`와 `authKeys`의 `go-test-string`은 Go 시험 파일(`tka/aum_test.go:181`, `tka/sig_test.go:479`)의 값이다. JSON의 모양과 시나리오 목록은 `Tools/interop/README.md`의 "TKA 기준 자료 생성" 절에 있다. 판정 486개(`caseCount`) 가운데 60개(`unorderedPeerSets`·`limits`·`padded`·`openedStates`와 다른 배열에 더한 줄)는 TL-5 대조 시험이 계약 5절의 미확정 입력을 확정하려고 더했다. 모든 줄은 `GoComparisonTests.swift`가 견준다.
 
 다시 뽑기(저장소 루트에서, 환경 변수는 그 절과 같다):
 
@@ -26,4 +26,6 @@ CBOR 항목 수준의 판정 벡터 63개. 출처는 노트 `docs/protocol-notes
 fixture_tool="$(sh Scripts/build-interop-tools.sh tkafixtures)"
 (cd Tools/interop && "$fixture_tool" ../../Tests/SwiftailTKATests/Fixtures)
 (cd Tools/interop && go test -count=1 ./cmd/tkafixtures)
+# 새로 뽑아 저장본과 견주는 Swift 시험(위 Go 환경 변수를 그대로 둔다)
+SWIFTAIL_TKAFIXTURES="$fixture_tool" eyebuild swift tl5 -- test --filter GoComparisonTests
 ```

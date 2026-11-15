@@ -53,6 +53,17 @@ func textCases(hashes [][]byte) []textCase {
 	for _, last := range []string{"A", "B", "P", "Q", "7"} {
 		decode("aum-hash-zero-last-"+last, zero+last)
 	}
+	// TL-5 대조 시험이 더한 것(계약 5절 TL-2): base32.Decode는 \r·\n을 지우고 읽지만 길이 검사(DecodedLen)는 지우기 전의
+	// 글자 수로 한다(tka/aum.go:33-41). 그래서 52자 안에 줄바꿈이 둘이면 50자를 읽어 31바이트만 채운다.
+	decode("aum-hash-50-chars-crlf", s[:50]+"\r\n")
+	decode("aum-hash-50-chars-lf-lf", s[:50]+"\n\n")
+	decode("aum-hash-50-chars-cr-cr", s[:50]+"\r\r")
+	decode("aum-hash-crlf-inside", s[:20]+"\r\n"+s[20:50])
+	decode("aum-hash-leading-lf-lf", "\n\n"+s[:50])
+	decode("aum-hash-48-chars-4-lf", s[:48]+"\n\n\n\n")
+	decode("aum-hash-51-chars-lf", s[:51]+"\n")
+	decode("aum-hash-52-chars-lf", s+"\n")
+	decode("aum-hash-52-chars-lf-inside", s[:26]+"\n"+s[26:])
 
 	pub := key.NLPublicFromEd25519Unsafe(lockKeys[0].pub())
 	text, _ := pub.MarshalText()

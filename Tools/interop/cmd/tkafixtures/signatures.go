@@ -204,6 +204,13 @@ func signatureCases(all []namedAuthority) []signatureCase {
 	add("rotation-outer-zip215-only-signature", base, N[1], ser(outer))
 	add("rotation-missing-nested", base, N[1], ser(signNKS(tka.NodeKeySignature{SigKind: tka.SigRotation, Pubkey: N[1].binary()}, NL[0].priv)))
 	add("rotation-outer-wrong-signer", base, N[1], ser(rotationNKS(NL[2], N[1], direct, nil)))
+	// TL-5 대조 시험이 더한 것(계약 5절 TL-4): rotation 안쪽 direct의 빈 Pubkey, 가운데 rotation의 빈 Pubkey.
+	emptyInner := signNKS(tka.NodeKeySignature{SigKind: tka.SigDirect, KeyID: L[0].pub(), WrappingPubkey: NL[0].pub()}, L[0].priv)
+	add("rotation-inner-direct-empty-pubkey", base, N[1], ser(rotationNKS(NL[0], N[1], emptyInner, nil)))
+	emptyMiddle := rotationNKS(NL[0], N[1], direct, nil)
+	emptyMiddle.Pubkey = nil
+	emptyMiddle = signNKS(emptyMiddle, NL[0].priv)
+	add("rotation-middle-rotation-empty-pubkey", base, N[2], ser(rotationNKS(NL[0], N[2], emptyMiddle, nil)))
 
 	// credential → rotation: credential(lock/0, 회전 키 credential/0)을 credential/0이 node/3에 대해 감싼다.
 	cred := credentialNKS(L[0], credentials[0].pub())
@@ -304,6 +311,21 @@ func resignCases(all []namedAuthority) []resignCase {
 	return out
 }
 
+// withTrailingBits는 패딩 없는 base64의 마지막 글자에서 남는 비트의 가장 아래 것을 켠다(값은 그대로 읽힌다).
+func withTrailingBits(s string) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	if len(s)%4 == 0 {
+		panic("남는 비트가 없는 길이입니다")
+	}
+	v := strings.IndexByte(alphabet, s[len(s)-1])
+	if v < 0 || v&1 != 0 {
+		panic("마지막 글자의 남는 비트가 이미 켜져 있습니다")
+	}
+	return s[:len(s)-1] + string(alphabet[v|1])
+}
+
+func insertAt(s string, i int, insert string) string { return s[:i] + insert + s[i:] }
+
 type disablementCase struct {
 	Name      string `json:"name"`
 	Authority string `json:"authority"`
@@ -376,6 +398,12 @@ func authKeyCases(all []namedAuthority) []authKeyCase {
 		{"credential-wrapping-other-key", wrap(raw(ser(credentialNKS(L[0], credentials[1].pub()))), raw(priv)), "nks-base"},
 		{"credential-untrusted", wrap(raw(ser(credentialNKS(untrusted, credentials[0].pub()))), raw(priv)), "nks-base"},
 		{"empty-parts", plain + "--TL-", ""},
+		// TL-5 대조 시험이 더한 것(계약 5절 TL-4): RawStdEncoding은 남는 비트를 보지 않고 \r·\n을 건너뛴다.
+		{"credential-trailing-bits", wrap(withTrailingBits(raw(cred)), raw(priv)), "nks-base"},
+		{"key-trailing-bits", wrap(raw(cred), withTrailingBits(raw(priv))), "nks-base"},
+		{"credential-lf", wrap(insertAt(raw(cred), 40, "\n"), raw(priv)), "nks-base"},
+		{"key-crlf", wrap(raw(cred), insertAt(raw(priv), 40, "\r\n")), "nks-base"},
+		{"key-trailing-lf", wrap(raw(cred), raw(priv)+"\n"), "nks-base"},
 	}
 	var out []authKeyCase
 	n := nodeKeys[8]

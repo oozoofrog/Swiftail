@@ -35,7 +35,24 @@ type peerSetCase struct {
 	Authority string      `json:"authority"`
 	Peers     []peerInput `json:"peers"`
 	Kept      []string    `json:"kept"`
+	// Runs는 tkaFilterNetmapLocked를 같은 입력으로 돌린 횟수다. 모든 실행의 답이 같아야 이 배열에 든다.
+	Runs int `json:"runs"`
 }
+
+// unorderedPeerSetCase는 Go의 답이 맵 순회 순서에 따라 갈리는 입력이다(rotationTracker.obsoleteKeys가
+// byWrappingKey 맵을 돈다). Outcomes는 Runs번 돌려 나온 서로 다른 답(남은 node 키 목록)을 정렬한 것이다.
+type unorderedPeerSetCase struct {
+	Name      string      `json:"name"`
+	Authority string      `json:"authority"`
+	Peers     []peerInput `json:"peers"`
+	Runs      int         `json:"runs"`
+	Outcomes  [][]string  `json:"outcomes"`
+}
+
+const (
+	peerSetRuns          = 64
+	unorderedPeerSetRuns = 256
+)
 
 func peerSetInputs() []peerSetCase {
 	L, NL, N := lockKeys, nlKeys, nodeKeys
@@ -71,38 +88,71 @@ func peerSetInputs() []peerSetCase {
 		{Name: "credential-chains-not-grouped", Authority: base, Peers: []peerInput{peer(N[6], byCred(N[6])), peer(N[7], byCred(N[7]))}},
 		{Name: "different-wrapping-keys", Authority: base, Peers: []peerInput{peer(N[3], ser(r3)), peer(N[8], ser(rotationNKS(NL[1], N[8], other, nil)))}},
 		{Name: "removed-signing-key", Authority: "nks-removed", Peers: []peerInput{peer(N[0], ser(direct)), peer(N[10], ser(directNKS(L[1], N[10], nil)))}},
+		// TL-5 대조 시험이 더한 것(계약 5절 TL-4, 동작 P1): 낡은 키 검사는 UnsignedPeerAPIOnly 피어도 받는다. 그런 피어의
+		// 서명은 보지 않으므로 그 rotation은 다른 피어를 낡은 키로 만들지 않는다.
+		{Name: "api-only-obsoleted-by-rotation", Authority: base, Peers: []peerInput{apiOnly(peer(N[0], nil)), peer(N[1], ser(r1))}},
+		{Name: "api-only-rotation-not-tracked", Authority: base, Peers: []peerInput{peer(N[0], ser(direct)), apiOnly(peer(N[1], ser(r1)))}},
 	}
 }
 
-func peerSetCases(all []namedAuthority) ([]peerSetCase, error) {
-	cases := peerSetInputs()
+// unorderedPeerSetInputs는 같은 node 키가 서로 다른 회전 키의 묶음에 함께 드는 입력이다(계약 5절 TL-4).
+// 묶음 nl/0: node/3(이전 키 1개), node/4(2개). 묶음 nl/1: node/3(2개), node/7(1개). nl/0을 먼저 보면 node/3이
+// 낡은 키가 되고 nl/1에는 node/7만 남아 살아남는다. nl/1을 먼저 보면 node/7이 낡은 키가 된다.
+func unorderedPeerSetInputs() []unorderedPeerSetCase {
+	L, NL, N := lockKeys, nlKeys, nodeKeys
+	peer := func(n nodeKey, sig tka.NodeKeySignature) peerInput {
+		return peerInput{NodeKey: hexOf(n.raw()), Signature: hexOf(ser(sig))}
+	}
+	a1 := rotationNKS(NL[0], N[3], directNKS(L[0], N[0], NL[0].pub()), nil)
+	a2 := rotationNKS(NL[0], N[4], rotationNKS(NL[0], N[2], directNKS(L[0], N[1], NL[0].pub()), nil), nil)
+	b1 := rotationNKS(NL[1], N[3], rotationNKS(NL[1], N[6], directNKS(L[0], N[5], NL[1].pub()), nil), nil)
+	b2 := rotationNKS(NL[1], N[7], directNKS(L[0], N[8], NL[1].pub()), nil)
+	return []unorderedPeerSetCase{
+		{Name: "same-node-key-in-two-wrapping-groups", Authority: "nks-base", Peers: []peerInput{peer(N[3], a1), peer(N[4], a2), peer(N[3], b1), peer(N[7], b2)}},
+	}
+}
+
+// peerSetCases는 두 배열을 한 번의 bridge 실행으로 만든다. 피어 집합마다 Runs번 돌린 서로 다른 답을 받는다.
+func peerSetCases(all []namedAuthority) ([]peerSetCase, []unorderedPeerSetCase, error) {
+	cases, unordered := peerSetInputs(), unorderedPeerSetInputs()
 	type setInput struct {
 		AUMs  []string    `json:"aums"`
 		Peers []peerInput `json:"peers"`
+		Runs  int         `json:"runs"`
 	}
-	input := make([]setInput, len(cases))
-	for i, c := range cases {
-		input[i] = setInput{viewAuthority(namedAuthority{c.Authority, findAuthority(all, c.Authority)}).AUMs, c.Peers}
+	var input []setInput
+	view := func(name string) []string { return viewAuthority(namedAuthority{name, findAuthority(all, name)}).AUMs }
+	for _, c := range cases {
+		input = append(input, setInput{view(c.Authority), c.Peers, peerSetRuns})
+	}
+	for _, c := range unordered {
+		input = append(input, setInput{view(c.Authority), c.Peers, unorderedPeerSetRuns})
 	}
 	payload, err := json.Marshal(input)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	output, err := runBridge(payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var kept [][]string
-	if err := json.Unmarshal(output, &kept); err != nil {
-		return nil, err
+	var outcomes [][][]string
+	if err := json.Unmarshal(output, &outcomes); err != nil {
+		return nil, nil, err
 	}
-	if len(kept) != len(cases) {
-		return nil, errors.New("피어 집합 결과의 수가 다릅니다")
+	if len(outcomes) != len(input) {
+		return nil, nil, errors.New("피어 집합 결과의 수가 다릅니다")
 	}
 	for i := range cases {
-		cases[i].Kept = kept[i]
+		if len(outcomes[i]) != 1 {
+			return nil, nil, fmt.Errorf("피어 집합 %s의 Go 답이 실행마다 다릅니다: %v", cases[i].Name, outcomes[i])
+		}
+		cases[i].Kept, cases[i].Runs = outcomes[i][0], peerSetRuns
 	}
-	return cases, nil
+	for i := range unordered {
+		unordered[i].Outcomes, unordered[i].Runs = outcomes[len(cases)+i], unorderedPeerSetRuns
+	}
+	return cases, unordered, nil
 }
 
 // runBridge는 tailscale.com 사본 + overlay로 worker를 빌드해 실행한다. 현재 폴더가 Tools/interop(그

@@ -108,9 +108,14 @@ func evaluate() ([]byte, error) {
 	for _, g := range syncs {
 		syncCount += len(g.Cases)
 	}
-	peers, err := peerSetCases(all)
+	peers, unordered, err := peerSetCases(all)
 	if err != nil {
 		return nil, err
+	}
+	limits := limitGroups()
+	limitCount := 0
+	for _, g := range limits {
+		limitCount += len(g.Cases)
 	}
 	var auths []authorityCase
 	for _, n := range all {
@@ -120,6 +125,7 @@ func evaluate() ([]byte, error) {
 	texts := textCases([][]byte{aumHash(laterCheckpoint), make([]byte, 32), bytes.Repeat([]byte{0xff}, 32)})
 	sigs, resigns := signatureCases(all), resignCases(all)
 	dis, authKeys := disablementCases(all), authKeyCases(all)
+	padded, opened := paddedCases(all), openedCases()
 	sections := []section{
 		{"keys", keyCases(), 0},
 		{"authorities", auths, 0},
@@ -133,6 +139,10 @@ func evaluate() ([]byte, error) {
 		{"disablement", dis, len(dis)},
 		{"authKeys", authKeys, len(authKeys)},
 		{"resign", resigns, len(resigns)},
+		{"unorderedPeerSets", unordered, len(unordered)},
+		{"limits", limits, limitCount},
+		{"padded", padded, len(padded)},
+		{"openedStates", opened, len(opened)},
 	}
 	return encode(ref, sections)
 }
