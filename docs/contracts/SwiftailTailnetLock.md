@@ -516,7 +516,7 @@ AUM과 NKS에 같은 규칙을 쓴다(3.1의 `Unmarshal` 경로).
 
 구조: 판정(`TailnetLockPlan`, `Authority`)은 값 타입이고, RPC와 파일은 `ControlClient`가 맡는다. **거르지 않은 netmap은 `ControlClient` 밖으로 나가지 않는다**(결정 L2).
 
-1. **서버가 알린 상태**(4.7, 4.10 1): `MapSession`이 계산한다. `isEnabled` = 이 맵 세션에서 받은 마지막 `TKAInfo`가 있고 `Disabled`가 아님. `Head`가 비지 않았는데 `AUMHash(text:)`로 읽히지 않으면 `isEnabled`는 거짓이다. `TKAInfo`가 없는 응답은 "변화 없음"이고, 세션의 처음에는 없는 상태다(맵 스트림마다 새 `MapSession`). capability는 자기 노드의 `capMap`에 `https://tailscale.com/cap/tailnet-lock`이 있는지다.
+1. **서버가 알린 상태**(4.7, 4.10 1): `MapSession`이 계산한다. `isEnabled` = 이 맵 세션에서 받은 마지막 `TKAInfo`가 있고 `Disabled`가 아님. `Head`가 비지 않았는데 `AUMHash(text:)`로 읽히지 않으면 `isEnabled`는 거짓이다. `TKAInfo`가 없는 응답은 "변화 없음"이고, 세션의 처음에는 없는 상태다(맵 스트림마다 새 `MapSession`). capability는 자기 노드의 `Capabilities` 목록과 `CapMap`의 키를 **합친 집합**에 `https://tailscale.com/cap/tailnet-lock`이 있는지다(Go가 둘을 합친다: `tailscale.com/control/controlclient/map.go:371-381`. 초안은 `capMap`만 적었었고 TL-9가 짚었다).
 2. **할 일**(4.7, 4.12. `TailnetLockPlan`):
 
    | 로컬 상태 | capability | 서버 | 할 일 |
@@ -720,6 +720,8 @@ Go 함수와 Swiftail의 대응(출처 줄은 노트의 것이고, `tkaSyncLocke
 - **TL-5 도구(`tkafixtures`, 2026-11-15)**: Go `tka`의 판정 426개를 `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json`에 넣었다(go1.27.3, `tailscale.com` v1.104.6). 실행해 보니 초안과 다르게 Go가 받아들이는 디코더 입력이 있어 동작 D1·D2·D4·D5·D7과 E6을 고쳤다(맨 바깥 null, 바이트열 자리의 정수 배열, `Meta`의 null, null 공개 키와 빈 공개 키의 KeyID). 그 밖의 확정: 음수 키는 −2^63까지 받고 그 아래는 거절, 중첩 16단·맨 바깥 맵 1,024쌍까지, `AUMHash` 텍스트의 끝 글자는 남는 비트를 검사하지 않는다(`A`·`B`·`P`는 같은 해시). 의도된 차이로 남는 것: Go는 `nlpriv:`의 뒤 32바이트를 검사하지 않고 Swiftail은 검사한다(동작 R1). 감싼 키가 63바이트일 때 Go는 panic한다(노트가 적은 메시지와 문구만 다르다). 도구가 뽑지 못한 것: 부모 없는 자리의 RemoveKey(공개 API로 닿지 않는다).
 
 - **TL-2(자료 형식, 2026-11-15)**: `tka-fixtures.json`의 `cbor` 255개 모두에서 최종 판정이 Go와 같고, Go가 받아들인 것은 다시 쓴 바이트·해시·SigHash가 같다. 2절의 선언에서 달라진 것: ① `AUM.keyID`는 `[UInt8]?`다. Go의 AddKey·Checkpoint 정적 검사가 `KeyID != nil`을 보므로 빈 바이트열(`0440`)은 거절되고 null·생략은 통과한다(`tka/aum.go:189`, `:207`). 인코딩은 셋이 같다. ② `CBORValue`에 `case simple(UInt8)`을 더했다(단순값 0~19·32~255). Go는 정수 필드에 단순값을 그 수로 넣는다(`fxamacker/cbor` `decode.go`의 `parseToValue`). ③ `AuthorityState.applying(_:)`은 TL-3이 `Authority/`에 둔다. 디코딩 단계가 Go와 다른 것은 동작 D8의 둘뿐이고(최종 판정은 같다), 정적 검사에서 떨어지는 AUM 다섯은 다시 쓴 바이트가 다르다(동작 E6: Go의 nil을 빈 값으로 쓴다. 받아들여지는 체크포인트는 끄기 값이 비지 않으므로 해시에 닿지 않는다. `tka/state.go:262`). **Go 원본을 읽어 정했지만 실행으로 확정하지 않은 것**(TL-5의 대조 시험 세션이 도구에 더해 확정한다): 정수 필드의 단순값(`MessageKind`가 `e3`·`f863` 등), 정수 배열 원소의 단순값·null, 단순값이나 undefined로 쓴 `Meta`의 키, 그리고 `AUMHash` 텍스트 안의 `\r`·`\n`(Go의 `base32.Decode`는 지우고 읽고 Swiftail은 거절한다. Go와 맞출지 대조 뒤에 정한다).
+
+- **TL-9(관문 도구, 2026-11-15)**: testcontrol(v1.104.6)을 `Tools/interop/internal/testcontrol`로 옮겨 적고 `tka.go`에 보탰다: `sync/send`, `disable`과 끈 뒤의 bootstrap(끄기 비밀), 등록 요청의 서명 검증과 붙이기, 재서명 요청, lock capability를 자기 노드의 `CapMap`에 싣기, 깨진 bootstrap. `tailnet` 도구의 명령: `setLockCapability`, `lockInit`, `lockStatus`, `lockSign`, `lockWrapAuthKey`, `lockModify`, `lockDisable`, `lockRegistrations`와 계약에 없던 `setLockBootstrapFault`, `lockRequestResign`, `lockRequests`(README의 `tailnet` 절). Go 피어끼리의 흐름(`TestTailnetLock`)과 기존 Swift 관문 43개가 통과한다. 운영 서버의 동작을 모르고 지은 곳(disable의 검사, 끈 뒤 맵 응답의 모양, 서명 검증에 실패한 등록의 처리, 재서명을 요청하는 시점과 옛 키의 처리)은 코드에 "추측"으로 표시했다. 관문 (가)에 걸리는 것: ① 항목 9의 "옛 키는 낡은 키로 빠진다"는 이 서버에서는 "서버가 옛 키 항목을 지운다"로 보인다. 낡은 키 판정 자체는 `tkafixtures`의 `peerSets`와 `verify-nks`로 본다. ② 항목 7(꺼짐)은 Swift 시험이 맵 스트림을 다시 잇게 해야 하고, `injectMapResponse`로 한 번 주입한 노드는 그 뒤 자동 맵을 받지 않는다(도중 주입은 마지막에 하거나 다른 노드로). ③ AUM 갈래가 생기면 원본이 `TKAInfo`를 싣지 않아 새 세션은 lock이 꺼진 것처럼 본다(손대지 않았다. 갈래는 단위 시험과 Go 대조로 본다).
 
 ### 첫 사용처 검토 결과 (2026-11-15)
 
