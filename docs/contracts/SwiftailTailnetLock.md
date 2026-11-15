@@ -719,6 +719,8 @@ Go 함수와 Swiftail의 대응(출처 줄은 노트의 것이고, `tkaSyncLocke
 
 - **TL-5 도구(`tkafixtures`, 2026-11-15)**: Go `tka`의 판정 426개를 `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json`에 넣었다(go1.27.3, `tailscale.com` v1.104.6). 실행해 보니 초안과 다르게 Go가 받아들이는 디코더 입력이 있어 동작 D1·D2·D4·D5·D7과 E6을 고쳤다(맨 바깥 null, 바이트열 자리의 정수 배열, `Meta`의 null, null 공개 키와 빈 공개 키의 KeyID). 그 밖의 확정: 음수 키는 −2^63까지 받고 그 아래는 거절, 중첩 16단·맨 바깥 맵 1,024쌍까지, `AUMHash` 텍스트의 끝 글자는 남는 비트를 검사하지 않는다(`A`·`B`·`P`는 같은 해시). 의도된 차이로 남는 것: Go는 `nlpriv:`의 뒤 32바이트를 검사하지 않고 Swiftail은 검사한다(동작 R1). 감싼 키가 63바이트일 때 Go는 panic한다(노트가 적은 메시지와 문구만 다르다). 도구가 뽑지 못한 것: 부모 없는 자리의 RemoveKey(공개 API로 닿지 않는다).
 
+- **TL-2(자료 형식, 2026-11-15)**: `tka-fixtures.json`의 `cbor` 255개 모두에서 최종 판정이 Go와 같고, Go가 받아들인 것은 다시 쓴 바이트·해시·SigHash가 같다. 2절의 선언에서 달라진 것: ① `AUM.keyID`는 `[UInt8]?`다. Go의 AddKey·Checkpoint 정적 검사가 `KeyID != nil`을 보므로 빈 바이트열(`0440`)은 거절되고 null·생략은 통과한다(`tka/aum.go:189`, `:207`). 인코딩은 셋이 같다. ② `CBORValue`에 `case simple(UInt8)`을 더했다(단순값 0~19·32~255). Go는 정수 필드에 단순값을 그 수로 넣는다(`fxamacker/cbor` `decode.go`의 `parseToValue`). ③ `AuthorityState.applying(_:)`은 TL-3이 `Authority/`에 둔다. 디코딩 단계가 Go와 다른 것은 동작 D8의 둘뿐이고(최종 판정은 같다), 정적 검사에서 떨어지는 AUM 다섯은 다시 쓴 바이트가 다르다(동작 E6: Go의 nil을 빈 값으로 쓴다. 받아들여지는 체크포인트는 끄기 값이 비지 않으므로 해시에 닿지 않는다. `tka/state.go:262`). **Go 원본을 읽어 정했지만 실행으로 확정하지 않은 것**(TL-5의 대조 시험 세션이 도구에 더해 확정한다): 정수 필드의 단순값(`MessageKind`가 `e3`·`f863` 등), 정수 배열 원소의 단순값·null, 단순값이나 undefined로 쓴 `Meta`의 키, 그리고 `AUMHash` 텍스트 안의 `\r`·`\n`(Go의 `base32.Decode`는 지우고 읽고 Swiftail은 거절한다. Go와 맞출지 대조 뒤에 정한다).
+
 ### 첫 사용처 검토 결과 (2026-11-15)
 
 첫 사용처 세션(RemoteDebug)이 L4·L5와 "지금 lock 처리가 있는 곳"을 읽고 답했다.
