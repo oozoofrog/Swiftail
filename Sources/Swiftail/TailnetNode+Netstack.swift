@@ -134,7 +134,7 @@ extension TailnetNode {
                 guard inProcessLoss?.dropsNext() != true else { continue }
                 process(engine?.send(bytes, at: now) ?? [], at: now)
             case let .event(event):
-                dispatch(event)
+                dispatch(event, at: now)
             case let .dropped(.limitReached(limit)):
                 countLimitDrop(limit)
             case .dropped:
@@ -144,7 +144,7 @@ extension TailnetNode {
     }
 
     /// 스택의 사건으로 기다리던 호출을 깨운다(동작 N5).
-    private func dispatch(_ event: TCPStack.Event) {
+    private func dispatch(_ event: TCPStack.Event, at now: ContinuousClock.Instant) {
         switch event {
         case let .established(id):
             netstack?.connections[id]?.isEstablished = true
@@ -157,12 +157,13 @@ extension TailnetNode {
             wakeReader(id)
         case let .writable(id):
             wakeWriter(id)
-        case let .closed(id, reason):
+        case let .closed(id, reason, statistics):
             guard netstack?.connections[id] != nil else { return }
             netstack?.connections[id]?.closeReason = reason
             wakeReader(id)
             wakeWriter(id)
-            Self.log.info("연결이 끝남: \(reason.logName, privacy: .public)")
+            Self.log.info(
+                "연결이 끝남: \(reason.logName, privacy: .public), \(statistics.logSummary(closedAt: now), privacy: .public)")
         }
     }
 
@@ -364,6 +365,17 @@ extension TCPStack.CloseReason {
         case .aborted: "aborted"
         case .peerRemoved: "peerRemoved"
         }
+    }
+}
+
+extension TCPConnection.Statistics {
+    /// 로그에 남길 한 줄(숫자와 참·거짓만. 계약 "연결 종료 통계 로그"가 각 값의 뜻을 적는다).
+    func logSummary(closedAt now: ContinuousClock.Instant) -> String {
+        let lifetime = Int((now - openedAt) / .milliseconds(1))
+        return "수명 \(lifetime)ms, 보냄 \(sentBytes)B, 다시 보냄 \(retransmittedBytes)B, RTO \(retransmissionTimeouts), "
+            + "빠른 재전송 \(fastRetransmits), partial ACK 재전송 \(partialAcknowledgmentRetransmits), "
+            + "중복 ACK \(duplicateAcknowledgments), SACK 실린 ACK \(acknowledgmentsWithSACK), SACK 협상 \(sackPermitted), "
+            + "cwnd 최대 \(maximumCongestionWindow)B, ssthresh 줄임 \(slowStartThresholdReductions)"
     }
 }
 

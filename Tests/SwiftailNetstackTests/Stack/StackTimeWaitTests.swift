@@ -90,7 +90,9 @@ struct StackTimeWaitTests {
         _ = pair.write([4, 5, 6], to: ids.server, from: .server)
         pair.collect(pair.server.close(ids.server, at: pair.now), from: .server)
         try pair.deliver()
-        #expect(pair.clientEvents.suffix(3) == [.readable(ids.client), .endOfStream(ids.client), .closed(ids.client, .finished)])
+        #expect(
+            pair.clientEvents.suffix(3).map(\.withoutStatistics)
+                == [.readable(ids.client), .endOfStream(ids.client), .closed(ids.client, .finished, .unchecked)])
         #expect(pair.client.timeWaitRecords.count == 1)
         #expect(pair.client.connectionsByTuple.isEmpty)
         #expect(pair.client.nextDeadline == pair.client.timeWaitRecords.first?.value.deadline)

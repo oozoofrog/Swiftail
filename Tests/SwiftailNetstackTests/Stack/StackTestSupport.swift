@@ -55,6 +55,20 @@ extension Array where Element == TCPStack.Output {
     }
 }
 
+extension TCPStack.Event {
+    /// `.closed`의 통계를 `TCPConnection.Statistics.unchecked`로 바꾼 사건. 사건의 순서·ID·까닭만 견주는 시험이 쓴다
+    /// (통계는 `ConnectionStatisticsTests`가 본다).
+    var withoutStatistics: Self {
+        guard case .closed(let id, let reason, _) = self else { return self }
+        return .closed(id, reason, .unchecked)
+    }
+}
+
+extension TCPConnection.Statistics {
+    /// 견주지 않는 통계의 자리값.
+    static let unchecked = Self(openedAt: .now)
+}
+
 extension TCPSegment {
     /// 시험이 스택에 넣을 패킷 바이트.
     var packet: [UInt8] {

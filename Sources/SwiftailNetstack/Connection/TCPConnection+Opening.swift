@@ -129,6 +129,7 @@ extension TCPConnection {
     mutating func adoptPeerSynchronize(_ syn: TCPSegment, peerSegmentSize: Int) {
         sendMaximumSegmentSize = min(peerSegmentSize, receiveMaximumSegmentSize)
         peerPermitsSACK = syn.sackPermitted
+        statistics.sackPermitted = syn.sackPermitted
         if offersWindowScale, let shift = syn.windowScale {
             sendWindowShift = min(Int(shift), Self.maximumWindowShift)
             receiveWindowShift = Self.ownWindowShift
@@ -152,6 +153,7 @@ extension TCPConnection {
         retransmissionCount = 0
         congestionControl = NewRenoCongestionControl(
             maximumSegmentSize: sendMaximumSegmentSize, initialSequenceNumber: initialSendSequence)
+        statistics.maximumCongestionWindow = congestionControl.congestionWindow
         timers[.retransmission] = nil
         timers[.keepalive] = now + Self.keepaliveIdle
         outputs.append(.event(.established))

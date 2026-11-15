@@ -52,7 +52,7 @@ extension TCPStack {
         case .endOfStream: outputs.append(.event(.endOfStream(id)))
         case .closed(let reason):
             connections.values[index].hasReportedClose = true
-            outputs.append(.event(.closed(id, CloseReason(reason))))
+            outputs.append(.event(.closed(id, CloseReason(reason), connections.values[index].connection.statistics)))
         }
     }
 
@@ -83,7 +83,7 @@ extension TCPStack {
         case .timeWait:
             if role == .application, !connections.values[index].hasReportedClose {
                 connections.values[index].hasReportedClose = true
-                outputs.append(.event(.closed(id, .finished)))
+                outputs.append(.event(.closed(id, .finished, connections.values[index].connection.statistics)))
             }
             let connection = connections.values[index].connection
             if connection.timers[.acknowledgment] == nil, timeWaitRecords.count < Self.maximumTimeWaitRecords {
@@ -118,7 +118,7 @@ extension TCPStack {
     mutating func discard(_ id: ConnectionID, reason: CloseReason, into outputs: inout [Output]) {
         guard let entry = connections[id] else { return }
         if entry.role == .application, !entry.hasReportedClose {
-            outputs.append(.event(.closed(id, reason)))
+            outputs.append(.event(.closed(id, reason, entry.connection.statistics)))
         }
         removeConnection(id)
     }
