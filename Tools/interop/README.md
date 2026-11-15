@@ -546,7 +546,7 @@ fixture_tool="$(sh Scripts/build-interop-tools.sh tcpfixtures)"
 "$fixture_tool" Tests/SwiftailNetstackTests/Fixtures
 ```
 
-인자는 필수 폴더이며 `tcp-segments.json`을 쓴다. 자료 머리는 `reference`, `caseCount: 49`, `cases`다. 사례는 `name`, `packet`(IP 머리를 포함한 소문자 hex), `go`, `swiftail`, 선택 `swiftailDiffers`다. `go`는 실제 Go 반환값, `swiftail`은 W2·T5·X9에서 의도적으로 정한 차이만 적용한 기대값이다. 차이가 없으면 두 객체가 같다.
+인자는 필수 폴더이며 `tcp-segments.json`을 쓴다. 자료 머리는 `reference`, `caseCount: 62`, `cases`다. 사례는 `name`, `packet`(IP 머리를 포함한 소문자 hex), `go`, `swiftail`, 선택 `swiftailDiffers`다. `go`는 실제 Go 반환값, `swiftail`은 W2·T5·X9에서 의도적으로 정한 차이만 적용한 기대값이다. 차이가 없으면 두 객체가 같다.
 
 각 결과의 키:
 
@@ -557,9 +557,9 @@ fixture_tool="$(sh Scripts/build-interop-tools.sh tcpfixtures)"
 | `checksumValid` | TCP 체크섬. data offset 등 구조를 읽을 수 없으면 null |
 | `decoded` | TCP 구조를 읽었으면 해석 객체. 체크섬 오류에서도 진단용으로 남기며 `error`가 있으면 수용할 패킷이 아님. 머리를 읽을 수 없으면 null |
 
-`decoded`에는 `ipVersion`, `source`, `destination`, `ipHeaderLength`, `sourcePort`, `destinationPort`, `sequenceNumber`, `ackNumber`, `flags`(8비트 원값), `window`(와이어의 16비트 원값), `tcpHeaderLength`, `optionsHex`, `mss`, `windowScale`, `dataLength`가 있다. `mss`는 SYN의 **유효 MSS**로 옵션 생략 시 기본값도 포함한다(Swift 코덱의 `maximumSegmentSize`는 옵션이 없으면 nil이고, 기본값은 연결 상태 기계가 계약 T5로 채운다. 대조 시험은 nil을 기본값으로 읽어 견준다). `windowScale`은 SYN에서 옵션 없으면 -1이며, SYN이 아니면 MSS·WS 모두 null이다. data offset 길이는 바이트 단위다. `swiftail.error`가 `malformed`인 사례의 `decoded`는 Go가 읽은 진단 값이며 성공한 Swift 해석을 뜻하지 않는다.
+`decoded`에는 `ipVersion`, `source`, `destination`, `ipHeaderLength`, `sourcePort`, `destinationPort`, `sequenceNumber`, `ackNumber`, `flags`(8비트 원값), `window`(와이어의 16비트 원값), `tcpHeaderLength`, `optionsHex`, `mss`, `windowScale`, `sackPermitted`(SYN에서만), `sackBlocks`(SYN이 아닌 세그먼트에서만. 블록마다 [왼쪽 끝, 오른쪽 끝]), `dataLength`가 있다. `mss`는 SYN의 **유효 MSS**로 옵션 생략 시 기본값도 포함한다(Swift 코덱의 `maximumSegmentSize`는 옵션이 없으면 nil이고, 기본값은 연결 상태 기계가 계약 T5로 채운다. 대조 시험은 nil을 기본값으로 읽어 견준다). `windowScale`은 SYN에서 옵션 없으면 -1이며, SYN이 아니면 MSS·WS 모두 null이다. data offset 길이는 바이트 단위다. `swiftail.error`가 `malformed`인 사례의 `decoded`는 Go가 읽은 진단 값이며 성공한 Swift 해석을 뜻하지 않는다.
 
-49개 사례:
+62개 사례:
 
 - 각 IPv4·IPv6에 SYN(MSS·WS), SYN-ACK, 홀수 길이 데이터, 반복 올림 체크섬, FIN-ACK, RST, SYN 아닌 MSS·WS, 옵션 생략, MSS 0, shift 15, 틀린 체크섬(22개).
 - IPv4 옵션, NOP로 어긋난 정렬, EOL 뒤 잘못된 바이트 무시, 모르는 옵션, SACK·timestamp와 MSS·WS 조합, shift 14, 최대 60바이트 TCP 머리, 작은 MSS 1(8개).
@@ -567,8 +567,9 @@ fixture_tool="$(sh Scripts/build-interop-tools.sh tcpfixtures)"
 - TCP 0·1·19바이트, IP 0·1·19·39바이트 잘림(7개).
 - data offset 4·6·15(세그먼트 밖), 16을 넣으면 4비트가 0으로 순환하는 사례(4개). 와이어에는 16을 담을 수 없다.
 - 프로토콜이 TCP가 아닌 IPv4(1개).
+- SACK(13개, M6-10a): SYN의 SACK-Permitted(IPv4·IPv6), ACK의 블록 하나·넷(번호 순환 포함)·데이터와 함께, 같은 옵션 둘, SYN에 실린 SACK 블록, SYN이 아닌 세그먼트의 SACK-Permitted, 길이가 틀린 SACK-Permitted(3)·SACK(2, 9), 머리 밖으로 나가는 SACK, 블록 5개.
 
-`swiftailDiffers`는 **11개**다: IPv6 기본 MSS(Go 536, 계약 1220) 1개, MSS 0에서 Go가 옵션 해석을 중단하여 뒤 WS를 무시하는 사례 2개(IPv6 MSS도 536), 작은 MSS(Go 48, 계약 코덱 1) 1개, 옵션 오류에서 Go가 앞부분만 반환하지만 계약은 `malformed`로 버리는 7개다. 작은 MSS는 코덱에서 올리지 않고 연결 상태 기계가 X9에 따라 64 미만을 거절한다. shift 15는 양쪽 모두 14로 읽으므로 차이 표시가 없다. 일반 `ParseTCPOptions`에 MSS·WS가 없다는 사실을 SYN 옵션의 동작 차이로 표시하지 않는다.
+`swiftailDiffers`는 **11개**다: IPv6 기본 MSS(Go 536, 계약 1220) 1개, MSS 0에서 Go가 옵션 해석을 중단하여 뒤 WS를 무시하는 사례 2개(IPv6 MSS도 536), 작은 MSS(Go 48, 계약 코덱 1) 1개, 옵션 오류에서 Go가 앞부분만 반환하지만 계약은 `malformed`로 버리는 7개(머리 밖으로 나가는 SACK과 블록 5개의 둘 포함)다. 작은 MSS는 코덱에서 올리지 않고 연결 상태 기계가 X9에 따라 64 미만을 거절한다. shift 15는 양쪽 모두 14로 읽으므로 차이 표시가 없다. 일반 `ParseTCPOptions`에 MSS·WS가 없다는 사실을 SYN 옵션의 동작 차이로 표시하지 않는다.
 
 다음 검증은 저장 자료와 재생성 결과의 바이트 일치·연속 실행의 재현성, gVisor 접근자 경계의 결정적인 임의 바이트 1만 입력, 새 명령의 경계 입력·JSON `id`·빈 목록·제어 머리 오류, 실제 tsnet 피어 둘의 양방향 100MiB와 IPv6 동시 전송·빈 전송·3바이트 대 1MiB의 비대칭 반닫힘·연결 거절·취소를 확인한다. 임의 입력 시험은 Go 도구의 안전성 검사이며 Swift 코덱의 별도 1만 입력 시험을 대신하지 않는다.
 

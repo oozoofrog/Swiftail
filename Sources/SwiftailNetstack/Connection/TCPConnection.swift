@@ -199,6 +199,10 @@ package struct TCPConnection: Sendable {
     var congestionControl: NewRenoCongestionControl
     /// 같은 세그먼트(또는 SYN)를 다시 보낸 횟수. `SND.UNA`가 나아가면 0이 된다.
     var retransmissionCount = 0
+    /// 지금 처리하는 세그먼트의 ACK가 fast retransmit을 시켰다(중복 ACK 셋, partial ACK). 그 세그먼트의 데이터까지 받는 버퍼에
+    /// 넣은 뒤에 다시 보낸다. 다시 보내는 세그먼트가 싣는 SACK의 첫 블록이 방금 받은 데이터의 구간이어야 하기 때문이다
+    /// (RFC 2018 4).
+    var isFastRetransmitPending = false
     /// 마지막 재전송 타이머 만료 뒤에 받아들일 수 있는 ACK를 받았다. 창이 0으로 줄었을 때 그 만료를 한도에 셀지 정한다
     /// (계약 동작 F8 아래).
     var acknowledgedSinceRetransmissionTimeout = false

@@ -212,7 +212,7 @@ tsnet과의 대응:
 
 - 검사 순서는 IP 머리의 구조 → 프로토콜(`notTCP`) → 조각 → IPv4 머리 체크섬 → TCP 머리 → TCP 체크섬 → 옵션이다. IPv4 머리 체크섬도 본다(틀리면 `badChecksum`). IPv4 조각(MF나 오프셋)은 `malformed`, IPv6 확장 헤더·조각 헤더(next header가 6이 아님)는 `notTCP`다.
 - 길이가 규격과 다른 MSS(4가 아님)·Window Scale(3이 아님)은 값을 읽지 않고 길이로 건너뛴다. 같은 옵션이 여럿이면 뒤의 것이 남는다(gVisor와 같다). SYN이 아닌 세그먼트도 옵션의 길이는 검사한다.
-- 구현에서 정해진 것(M6-10a, 2026-11-15): 길이가 2가 아닌 SACK-Permitted와, 길이가 `2 + 8n`(n ≥ 1)이 아닌 SACK(블록 없는 길이 2 포함)도 같은 규칙으로 값을 읽지 않고 길이로 건너뛴다(gVisor는 그 자리에서 해석을 멈춘다. 뒤에 다른 옵션이 없으면 결과가 같다). 필드는 `sackPermitted`(SYN에만)와 `sackBlocks`(`TCPSegment.SACKBlock`의 `leftEdge`·`rightEdge`, SYN이 아닌 세그먼트에만)다. Go 기준값 대조에 SACK 사례 13개를 더했다(gVisor 인코더로 만든 SYN·ACK 5개는 Swift가 만드는 바이트와도 같다. 머리 밖으로 나가는 SACK 2개는 gVisor가 해석을 멈추고 계약은 `malformed`로 버리는 표시된 차이다).
+- 구현에서 정해진 것(M6-10a, 2026-11-15): 길이가 2가 아닌 SACK-Permitted와, 길이가 `2 + 8n`(n ≥ 1)이 아닌 SACK(블록 없는 길이 2 포함)도 같은 규칙으로 값을 읽지 않고 길이로 건너뛴다. gVisor는 길이가 `2 + 8n`이 아닌 SACK에서 해석을 멈추고(뒤에 다른 옵션이 없으면 결과가 같다), 길이 2인 SACK은 블록 0개로 읽어 **앞서 읽은 블록을 비우고** 다음 옵션으로 넘어간다(`header/tcp.go`). 그래서 "정상 SACK 뒤에 길이 2인 SACK"에서는 Swift가 앞의 블록을 남기고 gVisor는 비운다. 기준 자료에는 이 조합이 없다(대조 도구가 블록의 차이를 표시하지 못한다). 받은 블록을 쓰기 시작하는 M6-10b에서 다시 본다. 필드는 `sackPermitted`(SYN에만)와 `sackBlocks`(`TCPSegment.SACKBlock`의 `leftEdge`·`rightEdge`, SYN이 아닌 세그먼트에만)다. Go 기준값 대조에 SACK 사례 13개를 더했다(gVisor 인코더로 만든 SYN·ACK 5개는 Swift가 만드는 바이트와도 같다. 머리 밖으로 나가는 SACK 2개는 gVisor가 해석을 멈추고 계약은 `malformed`로 버리는 표시된 차이다).
 - 선언: `TCPSegment`의 필드는 `source`·`destination`(`IPEndpoint`), `sequenceNumber`·`acknowledgmentNumber`(`SequenceNumber`), `flags`(`fin`·`syn`·`rst`·`psh`·`ack`), `window`(머리의 16비트 그대로), `maximumSegmentSize`·`windowScale`(SYN에만), `payload`, 그리고 `sequenceLength`(SEG.LEN)다. 체크섬은 `SwiftailBase`의 `InternetChecksum`(`add`, `addPseudoHeader`, `value`)이다.
 
 5. 시퀀스 번호는 2^32 순환 타입(`SequenceNumber`)으로만 다룬다. 비교와 차이는 부호 있는 32비트 차이로 한다. `UInt32`를 직접 견주는 코드가 없어야 한다.
@@ -258,7 +258,7 @@ tsnet과의 대응:
 5. **보낼 수 있는 양**: `min(cwnd, SND.WND) − (SND.NXT − SND.UNA)`.
 6. **혼잡 제어**(TCP 노트 4.7): 초기 창 `min(10*MSS, max(2*MSS, 14600))`(RFC 6928, gVisor도 10 세그먼트). slow start와 congestion avoidance는 RFC 5681 식 2·3(식 3의 정수 나눗셈이 0이면 1바이트를 올린다), 손실 때 ssthresh는 식 4. 다만 **같은 세그먼트의 재전송 타이머가 되풀이해 만료될 때는 ssthresh를 다시 줄이지 않는다**(RFC 5681 3.1. 처음 만료 때만 식 4). RTO 만료면 cwnd를 1 세그먼트로 하고 slow start. 중복 ACK 3개면 RFC 5681 3.2의 단계 2~6에 RFC 6582 3.2의 `recover`와 partial ACK 처리를 더한다. 중복 ACK의 정의는 RFC 5681 2절이다.
    - 구현에서 정해진 것(M6-3, 2026-11-15. `RTOEstimator`, `NewRenoCongestionControl`): Karn(재전송된 세그먼트의 표본을 버림)은 보내는 버퍼를 쥔 연결이 지키고, 추정기는 재전송되지 않은 세그먼트의 표본만 받는다. `recover`는 RFC 6582의 "보낸 가장 높은 번호"를 한 칸 뒤(그때의 SND.NXT)로 적어 두고 `ACK > recover`로 견준다(같은 식이지만, 초기값 ISS에서도 첫 창의 손실이 fast retransmit에 걸린다. 문자 그대로의 `ACK − 1 > recover`는 SYN만 확인된 상태에서 거짓이 된다). 새 ACK가 `recover`를 넘으면 ACK − 1로 끌어올린다(손실 없이 2³¹바이트를 넘게 보낸 뒤 비교가 뒤집혀 fast retransmit이 막히는 것을 막는다. RFC에 없는 보완이다). full ACK의 cwnd는 `min(ssthresh, max(FlightSize, SMSS) + SMSS)`다. `cwnd == ssthresh`는 congestion avoidance로 본다. cwnd의 상한은 2³⁰이다. 같은 세그먼트의 반복 RTO 만료는 `SND.UNA`로 가린다. `shortcut:` fast recovery 중 부풀리기를 날아가는 세그먼트 수로 묶는 것(RFC 5681 3.2 단계 4의 MAY)은 없다.
-7. 재전송은 늘 SND.UNA부터의 한 세그먼트다(SACK이 없다). RTO 만료 뒤에는 slow start가 창을 다시 열며 순서대로 다시 보낸다(go-back-N).
+7. 재전송은 늘 SND.UNA부터의 한 세그먼트다(받은 SACK 블록을 쓰지 않는다. 보내는 쪽 SACK 회복은 M6-10b). RTO 만료 뒤에는 slow start가 창을 다시 열며 순서대로 다시 보낸다(go-back-N).
 8. 유휴가 RTO보다 길었으면 보내기 전에 cwnd를 `min(초기 창, cwnd)`로 줄인다(RFC 5681 4.1).
 
 ### F. 흐름 제어와 버퍼

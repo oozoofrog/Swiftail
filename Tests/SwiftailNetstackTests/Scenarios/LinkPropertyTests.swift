@@ -160,9 +160,10 @@ struct LinkPropertyTests {
         let payloads = [scenarioBytes(size, salt: 11), scenarioBytes(size, salt: 29)]
         var accepted = [0, 0]
         var received = [0, 0]
-        // R1의 RTO 상한은 120초다. 손실 20%에서 상한에 닿은 재전송과 그 ACK가 연달아 사라지면 480초 넘게 진행이 없을 수 있다
-        // (F3의 창 갱신 규칙이 바뀐 뒤 seed=1에서 494초를 관찰했다. 2026-11-15). 멈춤 판정은 RTO 상한의 8배로 둔다.
-        try link.run(for: .seconds(14_400), stallLimit: .seconds(960), application: { link in
+        // R1의 RTO 상한은 120초다. 손실 20%에서 상한에 닿은 재전송과 그 ACK가 연달아 사라지면 오래 진행이 없다(seed=1,
+        // 지연 1ms에서 재전송 다섯과 ACK 둘이 연달아 사라져 960.003초를 관찰했다. 2026-11-15). 같은 세그먼트를 15번 다시
+        // 보내면 연결이 `timedOut`으로 끝나므로(R4) 그보다 길게 진행이 없으면 멈춘 것이다. 판정은 RTO 상한의 16배로 둔다.
+        try link.run(for: .seconds(14_400), stallLimit: .seconds(1_920), application: { link in
             for side in LinkSimulator.Side.allCases {
                 let index = side.rawValue
                 if accepted[index] < size, try link.connection(side).writableByteCount > 0 {

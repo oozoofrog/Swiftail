@@ -17,6 +17,10 @@ extension TCPConnection {
             receiveInSynSent(segment, at: now, into: &outputs)
         default:
             receiveSynchronized(segment, at: now, into: &outputs)
+            if isFastRetransmitPending {
+                isFastRetransmitPending = false
+                if state != .closed { retransmitFirstUnacknowledgedSegment(at: now, into: &outputs) }
+            }
             // 처리한 뒤의 상태로 잰다(이 세그먼트로 FIN-WAIT-2·CLOSE-WAIT가 된 연결도 keep-alive를 갖는다).
             refreshKeepalive(at: now)
         }
@@ -196,9 +200,7 @@ extension TCPConnection {
             acknowledge(upTo: ack, at: now, into: &outputs)
         } else if ack == sendUnacknowledged, isDuplicateAcknowledgment(segment, peerWindow: peerWindow) {
             let instruction = congestionControl.receiveDuplicateACK(ackNumber: ack, sendNext: sendNext)
-            if instruction == .retransmitFirstUnacknowledgedSegment {
-                retransmitFirstUnacknowledgedSegment(at: now, into: &outputs)
-            }
+            if instruction == .retransmitFirstUnacknowledgedSegment { isFastRetransmitPending = true }
         }
         lastPeerWindow = peerWindow
 
@@ -244,9 +246,7 @@ extension TCPConnection {
         let instruction = congestionControl.acknowledgeNewData(
             bytes: acknowledgedCount, ackNumber: ack, sendNext: sendNext)
         timers[.retransmission] = hasOutstandingData ? now + retransmissionTimeout : nil
-        if instruction == .retransmitFirstUnacknowledgedSegment {
-            retransmitFirstUnacknowledgedSegment(at: now, into: &outputs)
-        }
+        if instruction == .retransmitFirstUnacknowledgedSegment { isFastRetransmitPending = true }
         if released > 0, isWriteBlocked {
             isWriteBlocked = false
             outputs.append(.event(.writable))

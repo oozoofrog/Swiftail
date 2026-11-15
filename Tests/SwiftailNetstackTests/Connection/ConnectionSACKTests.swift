@@ -236,6 +236,37 @@ struct ConnectionSACKTests {
         }
     }
 
+    /// 고치기 전에는 ACK를 처리하는 자리에서 곧바로 다시 보내, 같은 세그먼트에 실려 온 데이터가 받는 버퍼에 들어가기 전의 블록을
+    /// 실었다.
+    @Test("partial ACK에 데이터가 함께 오면, 그 ACK가 일으킨 재전송의 첫 블록은 방금 받은 데이터의 구간이다")
+    func retransmissionCarriesBlockOfTriggeringSegment() throws {
+        var peer = try passivePeer(permitsSACK: true)
+        _ = peer.connection.write(patternBytes(count: 8 * 1_240)[...], at: peer.now)
+        let unacknowledged = peer.connection.sendUnacknowledged
+
+        // 받는 쪽에 빈 곳 너머의 구간 하나([6000, 6500))를 만든다. 이 쪽 데이터는 확인하지 않는다.
+        let ahead = peer.segment(
+            sequence: SequenceNumber(6_000), acknowledgment: unacknowledged, flags: [.ack],
+            payload: patternBytes(count: Self.segmentSize))
+        _ = peer.connection.receive(ahead, at: peer.now)
+        // 중복 ACK 셋으로 fast recovery에 들어간다.
+        for _ in 0..<3 {
+            _ = peer.connection.receive(peer.segment(acknowledgment: unacknowledged, flags: [.ack]), at: peer.now)
+        }
+
+        // 첫 세그먼트만 확인하는 partial ACK가 새 구간 [7000, 7500)의 데이터를 싣고 온다.
+        let partial = peer.segment(
+            sequence: SequenceNumber(7_000), acknowledgment: unacknowledged.advanced(by: 1_240), flags: [.ack],
+            payload: patternBytes(count: Self.segmentSize))
+        let outputs = peer.connection.receive(partial, at: peer.now)
+        let retransmission = try #require(outputs.segments.first { !$0.payload.isEmpty })
+        #expect(retransmission.sequenceNumber == unacknowledged.advanced(by: 1_240))
+        #expect(retransmission.sackBlocks == blocks([(7_000, 7_500), (6_000, 6_500)]))
+        // 블록 둘(옵션 20바이트)만큼 데이터를 줄여 1280바이트를 넘지 않는다.
+        #expect(retransmission.payload.count == 1_240 - 20)
+        #expect(try #require(retransmission.ipPacket()).count <= 1_280)
+    }
+
     @Test("Swift 연결 둘 사이에서 세그먼트를 잃어도 SACK이 실린 세그먼트가 1280바이트를 넘지 않고 데이터가 다 간다")
     func pairWithLossStaysWithinMTU() throws {
         var pair = try ConnectionPair.established()
