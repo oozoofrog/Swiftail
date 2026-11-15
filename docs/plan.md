@@ -197,7 +197,7 @@ extension TailnetNode {
 | M2 ✅ (실제 tailnet 마무리 관문은 남음) | 제어 프로토콜 | testcontrol에 등록하고 netmap을 받는다. Go tsnet 피어의 입장·퇴장이 반영된다. testcontrol은 기본으로 전체 맵만 보내므로 증분(피어 추가·제거·패치)은 시험 도구가 응답을 주입해 확인한다. 다시 시작하면 같은 노드 키·같은 tailnet IP. 마무리: 실제 tailnet에 임시 노드로 등록되어 관리 콘솔에 보이고, 비압축 맵 응답을 받을 수 있는지 확인한다 |
 | M3 ✅ | DERP만으로 통신 | UDP 직접 경로 없이 로컬 DERP 서버만으로 Go tsnet 피어의 UDP 에코와 왕복. TCP SYN에 SYN-ACK가 돌아온다. ACL이 막은 포트의 패킷은 버려진다 |
 | M4 ✅ (실제 tailnet 마무리 관문은 남음) | 직접 연결 | Go 피어와 루프백·LAN에서 직접 경로가 잡힌다(Go 쪽 상태에서 직접 주소 확인). 직접 경로를 막으면 DERP로 내려가고 풀면 다시 올라온다. 마무리: 실제 tailnet에서 NAT 뒤의 기기와 직접 경로 |
-| M5 (관문 (가) 메모리 장치 통과, (나) 실기기 남음) | iOS 패킷 터널 | MagicDNS는 UDP 질의만 답한다(아래 8절 위험 12). 메모리 TUN으로 RemoteDebug `docs/tunnel.md`의 시험 계약에 대응하는 항목(설정 산출, UDP·TCP·MagicDNS, 다시 시작, 엔진 정지) 통과. 실기기: 시험용 터널 앱으로 Mac의 tailnet HTTPS에 접속, FQDN 해석, Wi-Fi ↔ 셀룰러 전환 뒤 복구, 유휴·전송 중 `phys_footprint` 기록 |
+| M5 (관문 (가) 메모리 장치 통과, (나) 실기기: 시작·유휴 메모리 통과(8.7MiB, Go 13.0MiB), 전송·전환·잠금 전 시작은 남음) | iOS 패킷 터널 | MagicDNS는 UDP 질의만 답한다(아래 8절 위험 12). 메모리 TUN으로 RemoteDebug `docs/tunnel.md`의 시험 계약에 대응하는 항목(설정 산출, UDP·TCP·MagicDNS, 다시 시작, 엔진 정지) 통과. 실기기: 시험용 터널 앱으로 Mac의 tailnet HTTPS에 접속, FQDN 해석, Wi-Fi ↔ 셀룰러 전환 뒤 복구, 유휴·전송 중 `phys_footprint` 기록 |
 | M6 (관문 (가) Go 피어 통과, (나) 커널 스택 실기기 남음) | 프로세스 내 리스너(Swift TCP) | 상태 기계 단위 시험(손실·재정렬·중복·지연 주입)과, Go 피어(gVisor)·macOS 커널 스택을 상대로 한 100MB 양방향 전송의 해시 일치. 손실 1%·5% 조건에서 전송이 멈추지 않고 처리량을 기록한다 |
 | M7 (계약 초안 `docs/contracts/SwiftailHost.md`, 첫 사용처 검토 중) | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. 관문은 (가) 계정 없이(시험 제어 서버 + 시험용 ACME 서버), (나) 실제 tailnet·Let's Encrypt·실기기로 나눈다. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
 
