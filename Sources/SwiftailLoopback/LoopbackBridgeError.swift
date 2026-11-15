@@ -7,7 +7,7 @@ public enum LoopbackBridgeError: Error, Sendable, Equatable {
     case unknownPeer
     /// 다리가 잇고 있는 연결이 상한(256)에 닿았다.
     case limitReached
-    /// 루프백 포트에 걸지 못했다(듣는 쪽이 없다, 시간 초과).
+    /// 루프백 포트에 걸지 못했다(듣는 쪽이 없다, 시간 초과, 토큰을 표에 적거나 보내지 못했다).
     case loopbackUnavailable(String)
     /// 부른 Task가 취소되었다.
     case cancelled

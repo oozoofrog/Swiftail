@@ -78,7 +78,7 @@ let package = Package(
             resources: [.copy("Fixtures")]
         ),
         // tailnet 연결을 127.0.0.1의 OS TCP 리스너에 잇는 다리.
-        .target(name: "SwiftailLoopback", dependencies: ["Swiftail", "SwiftailBase", "SwiftailIO"]),
+        .target(name: "SwiftailLoopback", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(name: "SwiftailLoopbackTests", dependencies: ["SwiftailLoopback", "Swiftail", "SwiftailBase", "SwiftailIO", "SwiftailControl", "SwiftailEngine"]),
     ],
     swiftLanguageModes: [.v6]

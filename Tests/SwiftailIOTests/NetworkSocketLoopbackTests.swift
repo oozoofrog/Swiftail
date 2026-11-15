@@ -61,6 +61,22 @@ struct NetworkSocketLoopbackTests {
         #expect(try await socket.receive() == nil)
     }
 
+    /// 시험 도우미(`PeerConnection.read`)의 시험. 고치기 전에는 마지막 바이트와 함께 온 끝을 놓쳐 다음 받기가 `ENODATA`로
+    /// 실패했고, 부하에서 다리 시험이 흔들렸다.
+    @Test("시험 서버: 끝(FIN)이 마지막 바이트와 함께 와도 readToEnd는 깨끗한 EOF로 끝난다")
+    func peerSeesEndArrivingWithLastBytes() async throws {
+        let server = try await PlainLoopbackServer.start()
+        defer { server.close() }
+        let socket = try await NetworkSocket.connectLoopback(port: server.port)
+        defer { socket.close() }
+        let peer = try await server.next()
+        #expect(await socket.writeAccepted([1, 2, 3]))
+        socket.finishWriting()
+        // 바이트와 FIN이 다 도착한 뒤에 받는다.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await peer.readToEnd() == .end([1, 2, 3]))
+    }
+
     @Test("abort는 상대에게 오류(RST)로 보이고, close는 깨끗한 EOF로 보인다")
     func abortResetsAndCloseFinishes() async throws {
         let server = try await PlainLoopbackServer.start()
@@ -199,56 +215,74 @@ struct PeerConnection: Sendable {
         case failed(received: Int, error: String)
     }
 
+    /// 상대의 끝(FIN)이 마지막 바이트와 함께 왔다. `NWConnection`은 끝을 한 번만 알리고 그 뒤의 받기를 `ENODATA`로
+    /// 끝내므로, 그 바이트를 돌려준 뒤의 `read()`는 이것을 보고 `.end`를 돌려준다.
+    private final class EndSeen: Sendable {
+        let value = Mutex(false)
+    }
+
     let connection: NWConnection
     /// 상대(다리 쪽 소켓)의 출발 포트.
     let remotePort: UInt16
+    private let endSeen = EndSeen()
 
+    /// 연결을 시작하고 준비될 때까지 기다린다. 기다리던 Task가 취소되면 연결을 닫는다(기다림이 오류로 풀린다).
     static func start(_ connection: NWConnection) async throws -> PeerConnection {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            let once = Mutex<CheckedContinuation<Void, any Error>?>(continuation)
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready: once.withLock { $0.take() }?.resume()
-                case .failed(let error): once.withLock { $0.take() }?.resume(throwing: error)
-                case .cancelled: once.withLock { $0.take() }?.resume(throwing: CancellationError())
-                default: break
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                let once = Mutex<CheckedContinuation<Void, any Error>?>(continuation)
+                connection.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready: once.withLock { $0.take() }?.resume()
+                    case .failed(let error): once.withLock { $0.take() }?.resume(throwing: error)
+                    case .cancelled: once.withLock { $0.take() }?.resume(throwing: CancellationError())
+                    default: break
+                    }
                 }
+                connection.start(queue: DispatchQueue(label: "test.peer"))
             }
-            connection.start(queue: DispatchQueue(label: "test.peer"))
+        } onCancel: {
+            connection.cancel()
         }
         guard case .hostPort(_, let port) = connection.endpoint else { throw CancellationError() }
         return PeerConnection(connection: connection, remotePort: port.rawValue)
     }
 
-    /// 한 번 받는다. 끝이면 `.end([])`.
+    /// 한 번 받는다. 끝이면 `.end([])`. 기다리던 Task가 취소되면 연결을 닫는다(받기가 오류로 풀린다).
     func read() async -> Received {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Received, Never>) in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, isComplete, error in
-                if let data, !data.isEmpty {
-                    continuation.resume(returning: .bytes([UInt8](data)))
-                } else if let error {
-                    continuation.resume(returning: .failed(received: 0, error: "\(error)"))
-                } else if isComplete {
-                    continuation.resume(returning: .end([]))
-                } else {
-                    continuation.resume(returning: .bytes([]))
+        if endSeen.value.withLock({ $0 }) { return .end([]) }
+        let endSeen = endSeen
+        let connection = connection
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Received, Never>) in
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, isComplete, error in
+                    if let data, !data.isEmpty {
+                        if isComplete { endSeen.value.withLock { $0 = true } }
+                        continuation.resume(returning: .bytes([UInt8](data)))
+                    } else if let error {
+                        continuation.resume(returning: .failed(received: 0, error: "\(error)"))
+                    } else if isComplete {
+                        continuation.resume(returning: .end([]))
+                    } else {
+                        continuation.resume(returning: .bytes([]))
+                    }
                 }
             }
+        } onCancel: {
+            connection.cancel()
         }
     }
 
     /// `duration` 안에 한 번 받는다. 그 안에 아무것도 오지 않으면 nil. 걸어 둔 받기는 남는다(다음 바이트를 가져간다).
     func read(within duration: Duration) async -> Received? {
         let (stream, sink) = AsyncStream.makeStream(of: Received?.self)
-        let receiving = Task { sink.yield(await read()) }
+        // 받기를 맡은 Task는 취소하지 않는다(취소하면 연결이 닫힌다).
+        Task { sink.yield(await read()) }
         let timer = Task {
             try? await Task.sleep(for: duration)
             sink.yield(nil)
         }
-        defer {
-            receiving.cancel()
-            timer.cancel()
-        }
+        defer { timer.cancel() }
         for await result in stream { return result }
         return nil
     }
@@ -267,12 +301,17 @@ struct PeerConnection: Sendable {
 
     /// 보내고 네트워크 스택이 받아 갈 때까지 기다린다. `final`이면 쓰기 방향을 닫는다(FIN).
     func send(_ bytes: [UInt8], final: Bool) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            connection.send(
-                content: Data(bytes), contentContext: final ? .finalMessage : .defaultMessage, isComplete: true,
-                completion: .contentProcessed { error in
-                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-                })
+        let connection = connection
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                connection.send(
+                    content: Data(bytes), contentContext: final ? .finalMessage : .defaultMessage, isComplete: true,
+                    completion: .contentProcessed { error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                    })
+            }
+        } onCancel: {
+            connection.cancel()
         }
     }
 }

@@ -9,7 +9,7 @@ import Testing
 
 /// 루프백 다리(계약 `docs/contracts/SwiftailHost.md` 동작 B, 단위 시험 13).
 ///
-/// tailnet 쪽은 노드 하나의 자기 연결이고, 루프백 쪽은 시험 안의 평문 `NWListener`다.
+/// tailnet 쪽은 노드 하나의 자기 연결이고, 루프백 쪽은 다리의 프로토콜을 넣은 시험 안의 평문 `NWListener`다.
 @Suite("루프백 다리: 나르기와 끊김", .timeLimit(.minutes(2)))
 struct LoopbackBridgeTests {
     private typealias Support = BridgeTestSupport
@@ -19,9 +19,10 @@ struct LoopbackBridgeTests {
         _ body: (TailnetNode, LoopbackBridge, PlainLoopbackServer, _ stop: @escaping @Sendable () async -> Void) async throws -> Void
     ) async throws {
         try await Support.withRunningNode(try netmap ?? Support.netmap()) { node, stop in
-            let server = try await PlainLoopbackServer.start()
+            let bridge = LoopbackBridge(node: node)
+            let server = try await PlainLoopbackServer.start(admittingFor: bridge)
             defer { server.close() }
-            try await body(node, LoopbackBridge(node: node), server, stop)
+            try await body(node, bridge, server, stop)
         }
     }
 
@@ -50,7 +51,6 @@ struct LoopbackBridgeTests {
             }
             #expect(Support.digest(received) == Support.digest(upstream))
             #expect(await link.finished() == nil)
-            #expect(bridge.origin(forLoopbackSourcePort: link.peer.remotePort) == nil)
         }
     }
 
@@ -109,6 +109,8 @@ struct LoopbackBridgeTests {
             let ended = await link.peer.readToEnd()
             guard case .end(let received) = ended else {
                 Issue.record("루프백 서버의 읽기가 깨끗한 EOF로 끝나지 않았다: \(ended), 포트 \(link.peer.remotePort), 멈춘 양 \(accepted)")
+                writer.cancel()
+                await link.client.abort()
                 return
             }
             #expect(received.count == total)
@@ -160,22 +162,20 @@ struct LoopbackBridgeTests {
             await link.client.abort()
             Self.expectReset(await link.peer.readToEnd())
             #expect(await link.finished() == nil)
-            #expect(bridge.origin(forLoopbackSourcePort: link.peer.remotePort) == nil)
         }
     }
 
-    @Test("주소의 주인이 바뀌어 연결이 peerRemoved로 끝나면 다리가 루프백을 RST로 끊고 표에서 지운다")
+    @Test("주소의 주인이 바뀌어 연결이 peerRemoved로 끝나면 다리가 루프백을 RST로 끊는다")
     func peerRemovedResetsLoopback() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
             try await link.client.write([1])
             #expect(await link.peer.read() == .bytes([1]))
-            #expect(bridge.origin(forLoopbackSourcePort: link.peer.remotePort) != nil)
+            #expect(bridge.origin(of: link.peer.connection) != nil)
 
             await node.apply(try Support.netmap(selfAddresses: ["100.64.0.9/32"]))
             Self.expectReset(await link.peer.readToEnd())
             #expect(await link.finished() == nil)
-            #expect(bridge.origin(forLoopbackSourcePort: link.peer.remotePort) == nil)
             #expect(await Support.error { try await link.client.read() } == .peerRemoved)
         }
     }
@@ -189,7 +189,6 @@ struct LoopbackBridgeTests {
             await stop()
             Self.expectReset(await link.peer.readToEnd())
             #expect(await link.finished() == nil)
-            #expect(bridge.origin(forLoopbackSourcePort: link.peer.remotePort) == nil)
         }
     }
 
@@ -245,7 +244,6 @@ struct LoopbackBridgeTests {
             #expect(await link.peer.read() == .bytes([1]))
             link.forwarding.cancel()
             #expect(await link.finished() == .cancelled)
-            #expect(bridge.origin(forLoopbackSourcePort: link.peer.remotePort) == nil)
             Self.expectReset(await link.peer.readToEnd())
             #expect(await Support.error { try await link.client.read() } == .reset)
         }
@@ -285,9 +283,9 @@ struct LoopbackBridgeTests {
     func limitReached() async throws {
         #expect(LoopbackBridge(node: try TailnetNode(configuration: Self.unusedConfiguration())).connectionLimit == 256)
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
-            let server = try await PlainLoopbackServer.start()
-            defer { server.close() }
             let bridge = LoopbackBridge(node: node, connectionLimit: 2)
+            let server = try await PlainLoopbackServer.start(admittingFor: bridge)
+            defer { server.close() }
             let first = try await Support.bridge(node, bridge, to: server, port: 9_000)
             let second = try await Support.bridge(node, bridge, to: server, port: 9_001)
 
