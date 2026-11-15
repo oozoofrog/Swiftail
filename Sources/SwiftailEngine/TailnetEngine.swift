@@ -29,6 +29,9 @@ public struct TailnetEngine: Sendable {
         /// 방금 `receive`한 데이터그램의 출처로 그 길 그대로 되돌릴 WireGuard cookie reply. 보낸 피어를 아직 모르므로
         /// 피어 경로 선택을 거치지 않는다. `receive`의 출력에만 나온다.
         case cookieReply([UInt8])
+        /// 피어가 터널 안으로 자기 disco 키를 알렸다(TSMP disco 키 광고, 0이 아닌 키만). WireGuard가 인증하고 출발지
+        /// 검사를 통과한 패킷에서만 나온다. 부르는 쪽이 `Magicsock`에 넘긴다. `receive`의 출력에만 나온다.
+        case discoKeyAdvertised(DiscoPublicKey, from: NodePublicKey)
     }
 
     /// 받은 데이터그램이 온 곳. 부르는 쪽이 경로(UDP 주소, DERP 보낸 쪽)에서 만든 불투명한 값이다. 엔진은 WireGuard
@@ -59,6 +62,8 @@ public struct TailnetEngine: Sendable {
 
     /// node 개인 키와 WireGuard 세션을 쥔다. `customMirror`가 감춘다.
     var device: WireGuardDevice
+    /// 이 노드의 disco 공개 키. WireGuard 세션이 설 때마다 피어에게 광고한다. 0이면 광고하지 않는다.
+    let discoKey: DiscoPublicKey
     var filter = PacketFilter.allowNone
     /// 데이터면에 올린 피어. 키 → 피어.
     var peers: [NodePublicKey: EnginePeer] = [:]
@@ -78,10 +83,18 @@ public struct TailnetEngine: Sendable {
 
     /// - Parameters:
     ///   - nodeKey: 이 노드의 node 개인 키. WireGuard 정적 키다.
+    ///   - discoKey: 이 노드의 disco 공개 키(`Magicsock.discoPublicKey`). 피어와 WireGuard 세션이 설 때마다 TSMP로
+    ///     알린다(`SwiftailMagicsock` 계약 동작 T1·T2). 0이면 알리지 않는다(Go도 disco 키가 없으면 보내지 않는다).
     ///   - now: 지금의 단조 시각.
     ///   - wallClock: `now` 시점의 벽시계 시각.
-    public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, now: ContinuousClock.Instant, wallClock: Date) {
+    public init(
+        nodeKey: Curve25519.KeyAgreement.PrivateKey,
+        discoKey: DiscoPublicKey = .zero,
+        now: ContinuousClock.Instant,
+        wallClock: Date
+    ) {
         device = WireGuardDevice(privateKey: nodeKey, now: now, wallClock: wallClock)
+        self.discoKey = discoKey
         clockAnchor = now
         wallClockAnchor = wallClock
     }
@@ -144,11 +157,15 @@ public struct TailnetEngine: Sendable {
     }
 
     /// netmap에서 wallNow 시점의 피어를 계산해 WireGuard와 송신 색인을 맞춘다.
+    ///
+    /// 피어마다 세션이 설 때 보낼 TSMP disco 키 광고도 정한다: 출발지는 피어의 첫 주소와 계열이 같은 자기 주소,
+    /// 목적지는 그 첫 주소다(Go `PriorityMessageForPeer`). 만들 수 없으면 보내지 않는다.
     private mutating func configurePeers(in netmap: Netmap, wallNow: Date) {
         var current: [NodePublicKey: EnginePeer] = [:]
         var addressIndex: [IPAddress: NodePublicKey] = [:]
         // 키와 접두의 주인은 `eligibleNodes`가 하나로 정해 준다. 송신 색인도 같은 규칙(node ID가 작은 쪽)이다.
-        for (node, peer) in EnginePeer.eligibleNodes(in: netmap, at: wallNow) {
+        let eligible = EnginePeer.eligibleNodes(in: netmap, at: wallNow)
+        for (node, peer) in eligible {
             current[peer.key] = peer
             for prefix in node.addresses where EnginePeer.isSingleAddress(prefix) && addressIndex[prefix.address] == nil {
                 addressIndex[prefix.address] = peer.key
@@ -158,8 +175,13 @@ public struct TailnetEngine: Sendable {
         for key in peers.keys where current[key] == nil {
             device.removePeer(PublicKey(key))
         }
-        for peer in current.values {
+        for (node, peer) in eligible {
             device.addPeer(PublicKey(peer.key), allowedIPs: peer.allowedIPs)
+            let advertisement = node.addresses.first.flatMap {
+                TSMPDiscoKeyAdvertisement(selfAddresses: netmap.selfNode.addresses, destination: $0.address, key: discoKey)
+            }
+            // 방금 올린 피어이고 광고는 53·73바이트이므로 실패하지 않는다.
+            try? device.setPriorityMessage(advertisement?.bytes, for: PublicKey(peer.key))
         }
         peers = current
         peerByAddress = addressIndex

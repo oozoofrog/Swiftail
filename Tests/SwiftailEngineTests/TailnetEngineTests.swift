@@ -27,10 +27,13 @@ private struct EnginePair {
         }
     }
 
-    /// 한 번 오간 결과: 각 쪽이 위로 올린 패킷과 버린 것.
+    /// 한 번 오간 결과: 각 쪽이 위로 올린 패킷, 버린 것, 받은 TSMP disco 키 광고(받은 순서).
     struct Delivery {
         var packets: [Side: [[UInt8]]] = [:]
         var drops: [Side: [TailnetEngine.Drop]] = [:]
+        var advertisements: [Side: [DiscoPublicKey]] = [:]
+        /// 받은 쪽마다 위로 낸 것의 순서: 광고는 `"advert"`, 패킷은 `"packet"`.
+        var arrivals: [Side: [String]] = [:]
     }
 
     static let homeDERP: Int64 = 1
@@ -42,10 +45,11 @@ private struct EnginePair {
     var aliceKey = Curve25519.KeyAgreement.PrivateKey()
     var bobKey = Curve25519.KeyAgreement.PrivateKey()
 
-    /// alice는 `aliceRules`, bob은 규칙 없음(먼저 보낸 UDP의 응답만 받는다).
-    init() throws {
-        alice = TailnetEngine(nodeKey: aliceKey, now: clockStart, wallClock: wallClockStart)
-        bob = TailnetEngine(nodeKey: bobKey, now: clockStart, wallClock: wallClockStart)
+    /// alice는 `aliceRules`, bob은 규칙 없음(먼저 보낸 UDP의 응답만 받는다). disco 키가 0이 아니면 그 쪽은 세션이 설
+    /// 때마다 TSMP disco 키 광고를 보낸다.
+    init(aliceDisco: DiscoPublicKey = .zero, bobDisco: DiscoPublicKey = .zero) throws {
+        alice = TailnetEngine(nodeKey: aliceKey, discoKey: aliceDisco, now: clockStart, wallClock: wallClockStart)
+        bob = TailnetEngine(nodeKey: bobKey, discoKey: bobDisco, now: clockStart, wallClock: wallClockStart)
         _ = alice.apply(try netmap(for: .alice), at: clockStart, wallClock: wallClockStart)
         _ = bob.apply(try netmap(for: .bob), at: clockStart, wallClock: wallClockStart)
     }
@@ -95,6 +99,11 @@ private struct EnginePair {
                 queue += replies.map { (from: sender.other, output: $0) }
             case let .ipPacket(bytes):
                 delivery.packets[sender, default: []].append(bytes)
+                delivery.arrivals[sender, default: []].append("packet")
+            case let .discoKeyAdvertised(key, from: peer):
+                #expect(peer == publicKey(sender.other))
+                delivery.advertisements[sender, default: []].append(key)
+                delivery.arrivals[sender, default: []].append("advert")
             case let .dropped(drop):
                 delivery.drops[sender, default: []].append(drop)
             }
@@ -392,5 +401,105 @@ struct TailnetEngineTests {
             _ = pair.alice.receive(bytes, from: EnginePair.Side.bob.source, at: now)
             _ = pair.alice.send(bytes, at: now)
         }
+    }
+}
+
+// MARK: - TSMP disco 키 광고 (magicsock 계약 동작 T1~T3)
+
+/// 시험용 disco 키(공개 값).
+private let aliceDisco = DiscoPublicKey(rawValue: [UInt8](repeating: 0xA1, count: 32))!
+private let bobDisco = DiscoPublicKey(rawValue: [UInt8](repeating: 0xB0, count: 32))!
+
+extension TailnetEngineTests {
+    @Test("세션이 서면 양쪽이 상대의 disco 키 광고를 받는다. 시작한 쪽의 광고가 대기열의 패킷보다 먼저 온다")
+    func advertisementsAtSessionStart() throws {
+        var pair = try EnginePair(aliceDisco: aliceDisco, bobDisco: bobDisco)
+        let request = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
+        let delivery = pair.send(request, from: .bob)
+        #expect(delivery.advertisements[.alice] == [bobDisco])
+        #expect(delivery.advertisements[.bob] == [aliceDisco])
+        #expect(delivery.arrivals[.alice] == ["advert", "packet"])
+        #expect(delivery.packets[.alice] == [request])
+        #expect(delivery.drops.isEmpty)
+
+        // 같은 세션에서는 다시 보내지 않는다.
+        let again = pair.send(request, from: .bob, at: clockStart + .seconds(1))
+        #expect(again.advertisements.isEmpty)
+        // rekey(시작한 쪽 keypair 120초)로 새 세션이 서면 다시 보낸다.
+        let rekeyed = pair.send(request, from: .bob, at: clockStart + .seconds(121))
+        #expect(rekeyed.advertisements[.alice] == [bobDisco])
+        #expect(rekeyed.advertisements[.bob] == [aliceDisco])
+    }
+
+    @Test("광고의 출발지는 피어의 첫 주소와 계열이 같은 자기 주소이고 바이트는 TSMP 'a' 형식이다")
+    func advertisementBytes() throws {
+        var pair = try EnginePair(aliceDisco: aliceDisco)
+        let message = try #require(pair.alice.device.peers[PublicKey(pair.publicKey(.bob))]?.priorityMessage)
+        let expected = TSMPDiscoKeyAdvertisement(
+            selfAddresses: [IPPrefix("100.64.0.1/32")!, IPPrefix("fd7a:115c:a1e0::1/128")!],
+            destination: IPAddress("100.64.0.2")!,
+            key: aliceDisco
+        )
+        #expect(message == expected?.bytes)
+        #expect(message.count == 53)
+        // 0 disco 키(bob)는 광고하지 않는다.
+        #expect(pair.bob.device.peers[PublicKey(pair.publicKey(.alice))]?.priorityMessage == nil)
+        // IPv6 주소만 가진 피어에게는 IPv6 광고(73바이트).
+        let v6Only = makeNodeJSON(
+            id: 3, key: NodePublicKey(Curve25519.KeyAgreement.PrivateKey().publicKey), addresses: ["fd7a:115c:a1e0::3/128"],
+            extra: #","DiscoKey":"\#(discoKeyText)","HomeDERP":1"#
+        )
+        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: [v6Only]), at: clockStart, wallClock: wallClockStart)
+        let v6Message = try #require(pair.alice.device.peers.values.first?.priorityMessage)
+        #expect(v6Message.count == 73)
+        #expect(v6Message[0] >> 4 == 6)
+    }
+
+    @Test("계열이 맞는 자기 주소가 없거나 키가 0이면 광고를 만들지 않는다")
+    func noAdvertisementWithoutMatchingAddress() {
+        let v4Peer = IPAddress("100.64.0.2")!
+        #expect(TSMPDiscoKeyAdvertisement(selfAddresses: [IPPrefix("fd7a:115c:a1e0::1/128")!], destination: v4Peer, key: aliceDisco) == nil)
+        // 한 주소짜리 접두만 출발지가 된다.
+        #expect(TSMPDiscoKeyAdvertisement(selfAddresses: [IPPrefix("100.64.0.0/10")!], destination: v4Peer, key: aliceDisco) == nil)
+        #expect(TSMPDiscoKeyAdvertisement(selfAddresses: [IPPrefix("100.64.0.1/32")!], destination: v4Peer, key: .zero) == nil)
+        // 첫 번째로 맞는 주소를 쓴다.
+        let chosen = TSMPDiscoKeyAdvertisement(
+            selfAddresses: [IPPrefix("fd7a:115c:a1e0::1/128")!, IPPrefix("100.64.0.9/32")!, IPPrefix("100.64.0.1/32")!],
+            destination: v4Peer, key: aliceDisco
+        )
+        #expect(chosen?.source == IPAddress("100.64.0.9"))
+    }
+
+    @Test("인증되지 않은 길로 온 광고는 쓰지 않는다: AllowedIPs 밖 출발지, WireGuard 밖, 0 키, 위에서 내려온 것")
+    func unauthenticatedAdvertisementsAreIgnored() throws {
+        var pair = try EnginePair()
+        _ = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
+        let alice = PublicKey(pair.publicKey(.alice))
+
+        // bob이 남의 주소를 출발지로 쓴 광고: WireGuard 출발지 검사가 먼저 버린다.
+        let spoofed = try #require(TSMPDiscoKeyAdvertisement(
+            selfAddresses: [IPPrefix("100.64.0.99/32")!], destination: IPAddress("100.64.0.1")!, key: bobDisco))
+        var delivery = pair.deliver(pair.bob.route(try pair.bob.device.send(spoofed.bytes, to: alice, at: clockStart)), from: .bob)
+        #expect(delivery.advertisements.isEmpty)
+        #expect(delivery.drops[.alice] == [.wireGuard(.disallowedSource)])
+
+        // WireGuard로 감싸지 않은 맨 패킷은 장치가 형식 오류로 버린다.
+        let genuine = try #require(TSMPDiscoKeyAdvertisement(
+            selfAddresses: [IPPrefix("100.64.0.2/32")!], destination: IPAddress("100.64.0.1")!, key: bobDisco))
+        #expect(pair.alice.receive(genuine.bytes, from: EnginePair.Side.bob.source, at: clockStart) == [.dropped(.wireGuard(.malformed))])
+
+        // 0 키 광고는 소비만 한다.
+        var zero = genuine.bytes
+        zero.replaceSubrange(21..., with: [UInt8](repeating: 0, count: 32))
+        delivery = pair.deliver(pair.bob.route(try pair.bob.device.send(zero, to: alice, at: clockStart)), from: .bob)
+        #expect(delivery.advertisements.isEmpty)
+        #expect(delivery.drops[.alice] == [.consumedControlPacket])
+
+        // 장치(앱·netstack)에서 내려온 광고는 WireGuard로 보내지 않고 버린다(계약 동작 L4).
+        #expect(pair.bob.send(genuine.bytes, at: clockStart) == [.dropped(.consumedControlPacket)])
+
+        // 같은 바이트를 bob의 세션으로 보내면 쓴다(위 경우들이 이것 때문에 버려진 것이 아님을 보인다).
+        delivery = pair.deliver(pair.bob.route(try pair.bob.device.send(genuine.bytes, to: alice, at: clockStart)), from: .bob)
+        #expect(delivery.advertisements[.alice] == [bobDisco])
     }
 }

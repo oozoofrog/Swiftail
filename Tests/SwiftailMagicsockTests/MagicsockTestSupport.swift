@@ -170,6 +170,12 @@ struct TestNetwork {
         apply(step(node) { $0.setRegions(regions, at: now, using: &$1) }, from: node)
     }
 
+    /// `from`의 TSMP disco 키 광고가 지금 `to`에 닿은 것으로 넣는다(WireGuard 세션이 선 순간. 이 망에는 WireGuard가 없다).
+    mutating func advertiseDiscoKey(from: Int, to: Int) {
+        let key = nodes[from].sock.discoPublicKey, sender = nodes[from].identity.nodeKey
+        apply(nodes[to].sock.receiveDiscoKeyAdvertisement(key, from: sender, at: now), from: to)
+    }
+
     /// 지금 `from`에서 `to`로 시험 데이터그램 하나를 보낸다.
     mutating func send(from: Int, to: Int) {
         sequence += 1

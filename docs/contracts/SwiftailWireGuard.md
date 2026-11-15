@@ -97,6 +97,9 @@ public struct WireGuardDevice: Sendable {
     public mutating func addPeer(_ peer: PublicKey, allowedIPs: [IPPrefix])
     /// 피어와 그 키 재료를 지운다.
     public mutating func removePeer(_ peer: PublicKey)
+    /// 2026-11-16에 더했다. 이 피어와의 세션 키가 설 때마다 터널 안으로 먼저 보낼 평문 IP 패킷(Tailscale 포크의 priority
+    /// message). nil이면 지운다. 빈 패킷은 `malformed`, 512바이트 초과는 `packetTooLarge`, 모르는 피어는 `unknownPeer`.
+    public mutating func setPriorityMessage(_ message: [UInt8]?, for peer: PublicKey) throws(WireGuardError)
 
     /// IP 패킷 하나를 피어에게 보낸다. 세션이 없으면 대기열에 넣고 핸드셰이크를 시작한다.
     public mutating func send(_ ipPacket: [UInt8], to peer: PublicKey, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output]
@@ -136,6 +139,7 @@ public struct WireGuardDevice: Sendable {
 - 세션이 서기 전의 송신 대기열: 피어당 최대 64개, 넘치면 가장 오래된 것을 버린다
 - cookie reply의 수신 처리와 그 뒤 initiation의 mac2(상대가 부하 상태일 때 회복하는 데 필요하다)
 - cookie reply 보내기(부하 판정, mac2 검사, 출처별 속도 제한). 2026-11-15에 더했다. 아래 "cookie reply 보내기"
+- priority message(2026-11-16, Tailscale 포크 wireguard-go `SendPriorityMessage`): 시작한 쪽은 response를 받아 세션이 섰을 때 keepalive·대기열보다 먼저, 응답한 쪽은 새 세션으로 온 첫 transport로 next를 확인했을 때 대기열보다 먼저 current로 한 번 보낸다. 보낼 세션이 없으면 핸드셰이크를 시작하지 않고 그만두고, 데이터 송신으로 센다(새 핸드셰이크 타이머). rekey로 세션이 새로 서면 다시 보낸다. 시험 `Tests/SwiftailWireGuardTests/PriorityMessageTests.swift`
 
 제외(코드에 `shortcut:` 주석으로 한계를 남긴다):
 

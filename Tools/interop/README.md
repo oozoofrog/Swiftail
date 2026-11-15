@@ -42,6 +42,7 @@ GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-s
 - `peerPing`은 `name`, 대상 IP `to`, `type` (`disco`, `TSMP`, `ICMP`)을 받는다. `result`는 LocalClient PingResult이며 `Err`가 비어 있어야 성공이다.
 - `peerSend`는 `{"id":1,"cmd":"peerSend","name":"go-peer-a","to":"100.64.0.2","port":42001,"proto":"udp","payload":"010203"}`처럼 보낸다. `proto`는 `udp` 또는 `tcp`, `port`는 1…65535, `payload`는 65507바이트 이하의 hex다(빈 값 허용). 지정 피어의 tsnet으로 UDP 데이터그램 하나를 쓰거나, 2초 제한으로 TCP 연결을 시도한 뒤 연결되면 payload를 쓴다. 결과는 `{"id":1,"event":"peerSend","name":"go-peer-a","attempted":true,"sent":true,"error":""}`다. 전송 실패도 `peerSend` 사건으로 `sent:false`와 오류 문자열을 돌려주고, 잘못된 명령 입력은 기존 `error` 사건이다. `sent`는 payload 쓰기 완료를 뜻하며 상대의 수신을 보장하지 않는다. TCP 스택이 없는 Swift 대상은 보통 제한 시간으로 `sent:false`가 된다. SYN 송신 여부는 수신 패킷으로 확인해야 한다. TCP·UDP 소켓은 명령이 끝날 때 닫는다.
 - `injectMapResponse`는 대상 `nodeKey`와 `response` 객체를 받는다. 스트림이 연결된 경우에만 큐에 넣으며 실제 전송은 스트림 처리 시점이다. 첫 주입부터 해당 노드에 대한 자동 맵이 계속 억제된다. `MapResponse` 타입으로 다시 JSON 인코딩하므로 빈 배열 등의 원래 JSON 표현은 보존되지 않는다.
+- `restartPeer`는 `name` 피어의 tsnet을 닫고 같은 상태 폴더로 다시 띄운다. node 키·주소는 그대로이고 disco 키와 UDP 포트는 새것이다(magicsock이 시작할 때 disco 키를 만든다). 결과는 `addPeer`와 같은 `peer` 사건이다. 포트 7 에코는 다시 연다. `startCapture`·`peerServe`로 연 것은 옮기지 않는다. TSMP disco 키 광고 관문(`DiscoAdvertisementTests`)에서 Go 피어의 disco 키를 바꾸는 데 쓴다.
 - `setAuth`는 첫 제어 요청 전에 `requireAuth`와 `authKey`를 설정한다. 키는 testcontrol이 단일 문자열로 비교하며 만료·재사용·태그 정책은 없다. 대화형 인증은 반환받은 로그인 URL을 `authURL`로 넘겨 성공 완료한다. 실패 완료와 기기 승인 조작은 지원하지 않는다. 키를 요구하면 addPeer에도 같은 키를 사용한다. 대화형 인증을 요구하는 동안 addPeer는 완료까지 대기하므로 Swift 노드의 등록 시험에 사용한다.
 - `setNeverDirectUDP`는 `{"id":1,"cmd":"setNeverDirectUDP","enabled":true}`처럼 bool을 받아 `{"id":1,"event":"neverDirectUDP","enabled":true}`를 돌려준다. `false`로 되돌릴 수 있고 같은 값을 반복해도 된다. `enabled` 누락·null·다른 타입은 `error` 사건이다. `envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "true"/"false")`로 등록된 노브 캐시까지 바꾸므로, 이미 실행 중인 피어와 나중에 더할 피어를 포함해 도구 프로세스의 모든 Go 피어에 적용된다. `id` 반환·오류 규약은 다른 명령과 같다.
 
@@ -582,6 +583,19 @@ export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
 - `disco.parse`: 경계 평문(0·1바이트, Ping 11·12·13·43·44·45바이트와 0 NodeKey, Pong 29·30·31바이트, CallMeMaybe 17·18·19·35·36바이트와 version 1, 종류 0x00·0x04–0x09·0x0a·0xff)을 `disco.Parse`에 넣은 결과. 해석되면 `result`, 아니면 Go의 오류 문장이 `error`다. `kind: "relay"`는 Go가 해석하지만 Swiftail은 해석하지 않는 종류(0x04–0x09)다.
 - `stun.requests`: `stun.Request(txID)`의 바이트.
 - `stun.parse`: `stun.Response`로 만든 IPv4·IPv6 응답과 손으로 바꾼 응답(0x8020, MAPPED-ADDRESS만, 속성 앞 SOFTWARE, 선언 길이 뒤의 바이트, 거절 사례)을 `stun.ParseResponse`에 넣은 결과와, 같은 패킷이 `looksLikeSTUN`(`stun.Is`와 바이트 1이 `0x01`)인지.
+
+# tsmpvectors
+
+`SwiftailEngine` 단위 시험의 TSMP disco 키 광고 벡터를 `tailscale.com` v1.104.6의 `packet.TSMPDiscoKeyAdvertisement.Marshal`과 `Parsed.AsTSMPDiscoAdvertisement`로 만들어 `Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json`에 쓴다(v1.104.7과 코드가 같다). 키는 `SHA-256("swiftail-vectors/tsmp/<번호>")`(1, 2)를 X25519 개인 키 입력으로 쓰는 시험용 공개 값이고 주소는 시험용 tailnet 주소다. 시각·난수·운영 값이 없어 같은 입력이면 출력이 바이트 단위로 같다. 만든 바이트는 다시 해석해 같은 주소·키가 나오는지 확인한 뒤에 쓴다. 빌드 정보에서 기준 버전과 replace 부재를 확인한다.
+
+```sh
+export GOCACHE="$(eyebuild dir interop-tools)/gocache"
+export GOMODCACHE="$(eyebuild dir ref-src)/gomod"
+export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
+(cd Tools/interop && go vet ./cmd/tsmpvectors && go run ./cmd/tsmpvectors ../../Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json)
+```
+
+담는 것: `advertisements`(IPv4 둘·IPv6 하나의 `src`·`dst`·`key`와 `Marshal` 바이트 `packet`), `parse`(IPv4 TSMP 본문 33·34·32바이트, 종류 `'p'`, 0 키를 해석한 결과. 광고가 아니면 `key`가 없다).
 
 # MagicDNS 기준 자료 생성 (`dnsfixtures`)
 

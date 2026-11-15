@@ -47,6 +47,21 @@ extension WireGuardDevice {
         return outputs
     }
 
+    /// 세션이 막 섰을 때 priority message를 current keypair로 보낸다(`setPriorityMessage(_:for:)`).
+    ///
+    /// 대기열을 거치지 않고, 보낼 수 있는 세션이 없으면 핸드셰이크를 시작하지 않고 그만둔다(wireguard-go
+    /// `SendPriorityMessage`). 빈 패킷이 아니므로 데이터 송신으로 센다(wireguard-go `RoutineSequentialSender`).
+    func sendPriorityMessage(_ peer: inout Peer, at now: ContinuousClock.Instant) -> [Output] {
+        guard let message = peer.priorityMessage, var keypair = peer.keypairs.current, keypair.canSend(at: now) else {
+            return []
+        }
+        let datagram = keypair.seal(message)
+        peer.keypairs.current = keypair
+        peer.timers.anyAuthenticatedPacketSent()
+        peer.timers.dataSent(at: now)
+        return [.datagram(datagram, to: peer.publicKey)]
+    }
+
     /// 대기열이 비어 있으면 빈 패킷 하나를 넣고 대기열을 내보낸다. 비어 있지 않으면 그 패킷들이
     /// keepalive를 대신한다.
     func sendKeepalive(_ peer: inout Peer, at now: ContinuousClock.Instant) -> [Output] {

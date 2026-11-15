@@ -4,7 +4,7 @@ import SwiftailWireGuard
 /// 패킷의 송수신: 위에서 내려온 IP 패킷을 피어에게, 받은 WireGuard 데이터그램을 필터를 거쳐 위로.
 ///
 /// 받는 쪽의 층 순서는 Go와 같다. WireGuard의 인증·재전송 방지 → 그 인증된 피어의 AllowedIPs로 출발지 검사 →
-/// TSMP 소비 → 수신 필터. 보낸 피어는 WireGuard 세션이 정하고, 데이터그램의 출처(주소나 DERP 보낸 쪽)는 피어를
+/// TSMP 소비(disco 키 광고는 위로 알림) → 수신 필터. 보낸 피어는 WireGuard 세션이 정하고, 데이터그램의 출처(주소나 DERP 보낸 쪽)는 피어를
 /// 정하는 데 쓰지 않는다. 출처는 WireGuard의 부하 방어(cookie, 출처별 속도 제한)에만 넘긴다.
 ///
 /// `docs/protocol-notes/netmap-engine.md` 4.2·4.6·6.1, `docs/contracts/SwiftailEngine.md` 동작 4·5와 M-E1·M-E2,
@@ -58,8 +58,8 @@ extension TailnetEngine {
             switch output {
             case let .datagram(bytes, to: wireGuardKey):
                 return .datagram(bytes, to: NodePublicKey(wireGuardKey))
-            case let .ipPacket(bytes, from: _):
-                return deliverInbound(bytes)
+            case let .ipPacket(bytes, from: wireGuardKey):
+                return deliverInbound(bytes, from: NodePublicKey(wireGuardKey))
             case let .rejectedIPPacket(error, from: _):
                 return .dropped(.wireGuard(error))
             case let .cookieReply(bytes):
@@ -68,16 +68,23 @@ extension TailnetEngine {
         }
     }
 
-    /// 복호화와 AllowedIPs 출발지 검사를 통과한 패킷을 해석하고 필터에 건다.
-    private mutating func deliverInbound(_ bytes: [UInt8]) -> Output {
+    /// 복호화와 AllowedIPs 출발지 검사를 통과한 패킷을 해석하고 필터에 건다. `peer`는 그 패킷을 보낸 WireGuard 피어다.
+    ///
+    /// TSMP는 위로 올리지 않는다. 그 가운데 0이 아닌 disco 키 광고는 보낸 피어와 함께 `.discoKeyAdvertised`로 낸다(Go
+    /// `net/tstun/wrap.go`가 광고를 버리면서 알리는 것과 같다. Go는 출발 주소로 피어를 찾고, 여기서는 출발지 검사를 이미
+    /// 통과했으므로 그 주소의 주인인 WireGuard 피어를 바로 쓴다).
+    private mutating func deliverInbound(_ bytes: [UInt8], from peer: NodePublicKey) -> Output {
         let packet: IPPacket
         do {
             packet = try IPPacket(parsing: bytes)
         } catch {
             return .dropped(Drop(error))
         }
-        // shortcut: TSMP의 ping에 pong을 보내지 않고, 거절·disco 광고도 보내지 않는다. 받은 것은 소비만 한다.
+        // shortcut: TSMP의 ping에 pong을 보내지 않고 거절도 보내지 않는다. disco 광고 밖의 TSMP는 소비만 한다.
         if packet.transportProtocol == .tsmp {
+            if let advertisement = TSMPDiscoKeyAdvertisement(parsing: packet), !advertisement.key.isZero {
+                return .discoKeyAdvertised(advertisement.key, from: peer)
+            }
             return .dropped(.consumedControlPacket)
         }
         switch filter.checkInbound(packet) {
