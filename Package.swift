@@ -33,7 +33,14 @@ let package = Package(
         .target(name: "SwiftailHTTP2"),
         .testTarget(name: "SwiftailHTTP2Tests", dependencies: ["SwiftailHTTP2"], resources: [.copy("Fixtures")]),
         .testTarget(name: "SwiftailHTTP2InteropTests", dependencies: ["SwiftailHTTP2"]),
-        .target(name: "SwiftailControl", dependencies: ["SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2", "SwiftailIO"]),
+        // 제품으로 내보내지 않는다. Tailnet Lock(TKA)의 자료 형식과 검증이다. 소켓·파일·시계가 없다.
+        .target(name: "SwiftailTKA", dependencies: ["SwiftailBase", "SwiftailCrypto"]),
+        .testTarget(
+            name: "SwiftailTKATests",
+            dependencies: ["SwiftailTKA", "SwiftailBase", "SwiftailCrypto"],
+            resources: [.copy("Fixtures")]
+        ),
+        .target(name: "SwiftailControl", dependencies: ["SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2", "SwiftailIO", "SwiftailTKA"]),
         .testTarget(name: "SwiftailControlInteropTests", dependencies: ["SwiftailControl", "SwiftailBase"]),
         .testTarget(
             name: "SwiftailControlTests",
