@@ -40,7 +40,7 @@ extension Netmap {
     }
 
     /// Go `MagicDNSSuffixOfNodeName`: 양 끝의 점을 떼고 첫 레이블 뒤의 나머지. 점이 없으면 이름 그대로.
-    private static func magicDNSSuffix(ofNodeName name: String) -> String {
+    static func magicDNSSuffix(ofNodeName name: String) -> String {
         let trimmed = name.trimmingDots
         guard let dot = trimmed.firstIndex(of: ".") else { return trimmed }
         return String(trimmed[trimmed.index(after: dot)...])
@@ -55,7 +55,7 @@ extension Netmap {
     }
 }
 
-private extension String {
+extension String {
     /// 양 끝의 점을 모두 뗀 것(Go `strings.Trim(s, ".")`).
     var trimmingDots: String {
         String(drop(while: { $0 == "." }).reversed().drop(while: { $0 == "." }).reversed())
