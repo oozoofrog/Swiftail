@@ -276,8 +276,9 @@ public struct TailnetEngine: Sendable {
     /// 새로 더함(2026-11-15). 받은 데이터그램이 온 곳. 노드가 경로에서 만든 불투명한 값이고 엔진은 장치에 넘기기만 한다.
     public typealias Source = WireGuardDevice.Source
 
-    /// `discoKey`는 2026-11-16에 더했다. 세션이 설 때 피어에게 광고할 자기 disco 공개 키다. 기본값 0은 광고하지 않는다.
-    public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, discoKey: DiscoPublicKey = .zero, now: ContinuousClock.Instant, wallClock: Date)
+    /// `discoKey`는 2026-11-16에 더했다. 세션이 설 때 피어에게 광고할 자기 disco 공개 키다. 필수 인자다(기본값을 두면
+    /// 빠뜨렸을 때 광고가 조용히 꺼진다). 0 키를 넘기면 광고하지 않는다.
+    public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, discoKey: DiscoPublicKey, now: ContinuousClock.Instant, wallClock: Date)
     /// `homeDERP` 인자를 지운다. 엔진은 지역을 모른다.
     public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]   // 그대로
