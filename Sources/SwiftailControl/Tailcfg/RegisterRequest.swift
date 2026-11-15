@@ -16,7 +16,7 @@ public struct RegisterRequest: Encodable, Sendable {
     public var nodeKey: NodePublicKey
     /// 키 교체일 때 이전 노드 키. 처음 등록이면 0 키.
     public var oldNodeKey: NodePublicKey
-    /// tailnet lock 서명 키. 쓰지 않으면 0 키.
+    /// 이 노드의 NL 공개 키(tailnet lock). `ControlClient`는 늘 0이 아닌 키를 싣는다. 생략하면 0 키.
     public var nlKey: NLPublicKey
     /// 인증 키 로그인일 때의 인증 수단. 없으면 JSON에서 빠진다.
     public var auth: RegisterResponseAuth?
@@ -28,7 +28,7 @@ public struct RegisterRequest: Encodable, Sendable {
     public var hostinfo: Hostinfo?
     /// 오래 비활성이면 서버가 지우는 노드를 요청한다.
     public var ephemeral: Bool
-    /// 새 노드 키에 대한 tailnet lock 서명. 비어 있으면 `null`.
+    /// 새 노드 키에 대한 tailnet lock 서명(NKS의 정준 CBOR). 비어 있으면 `null`.
     public var nodeKeySignature: [UInt8]
 
     public init(

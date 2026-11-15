@@ -3,6 +3,7 @@ import Foundation
 import Network
 import SwiftailBase
 import SwiftailIO
+import SwiftailTKA
 
 /// 제어 서버 클라이언트. 등록하고, 이 노드의 상태를 올리고, 맵 스트림으로 netmap을 받아 유지한다.
 ///
@@ -114,6 +115,8 @@ public actor ControlClient {
 
     /// 지금의 신원. `run()`이 읽거나 만든다.
     var identity = NodeIdentity()
+    /// 설정의 인증 키가 서명된 인증 키(`--TL`)면 그 해석. `run()`이 첫 연결 전에 한 번 해석한다.
+    var wrappedAuthKey: WrappedAuthKey?
     var localStatus = LocalStatus()
     /// 지금 연결에서 마지막으로 올린 상태. 같은 상태를 다시 올리지 않는다.
     var uploadedStatus: LocalStatus?
@@ -234,13 +237,7 @@ public actor ControlClient {
 
         let endpoint = try ControlEndpoint(serverURL: configuration.serverURL)
         guard !configuration.hostname.isEmpty else { throw .invalidConfiguration("호스트 이름이 비었다") }
-        if let stored = try identityStore.load() {
-            identity = stored
-        } else {
-            identity = NodeIdentity()
-            // machine 키는 등록 전에도 저장한다. 다시 시작해도 같은 기기로 보여야 한다.
-            try identityStore.save(identity)
-        }
+        try prepareRegistration()
         needsRegistration = true
 
         while !Task.isCancelled {
