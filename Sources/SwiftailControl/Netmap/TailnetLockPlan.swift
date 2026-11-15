@@ -6,10 +6,13 @@ import SwiftailTKA
 /// | --- | --- | --- | --- |
 /// | 없음 | 없음 | 무엇이든 | 없음(Go와 같이 거르지 않는다) |
 /// | 없음 | 있음 | 꺼짐 | 없음 |
-/// | 없음 | 있음 | 켜짐 | `bootstrap` |
+/// | 없음 | 있음 | 켜짐(머리를 모르는 것 포함) | `bootstrap` |
 /// | 있음 | 무관 | 켜짐, 머리 같음 | 없음 |
-/// | 있음 | 무관 | 켜짐, 머리 다름 | `synchronize` |
+/// | 있음 | 무관 | 켜짐, 머리 다름이나 모름 | `synchronize` |
 /// | 있음 | 무관 | 꺼짐 | `verifyDisablement` |
+///
+/// "켜짐, 머리 모름"은 `TKAInfo`가 `Disabled` 없이 왔는데 `Head`가 없거나 읽히지 않는 것이다(`ServerLockState`, 5절 TL-11b
+/// 항목 3).
 ///
 /// 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 N2, `docs/protocol-notes/tailnet-lock.md` 4.7·4.12
 /// (출처: tailscale.com `ipn/ipnlocal/tailnet-lock.go` `tkaSyncIfNeeded`, BSD-3-Clause).
@@ -30,7 +33,7 @@ enum TailnetLockPlan: Equatable {
         switch (localHead, server.isEnabled) {
         case (nil, true): self = hasCapability ? .bootstrap : .nothing
         case (nil, false): self = .nothing
-        // 머리는 텍스트가 아니라 32바이트로 견준다(텍스트는 끝 글자가 달라도 같은 해시일 수 있다).
+        // 머리는 텍스트가 아니라 32바이트로 견준다(텍스트는 끝 글자가 달라도 같은 해시일 수 있다). 모르는 머리(nil)는 다르다.
         case (let head?, true): self = head == server.head ? .nothing : .synchronize
         case (_?, false): self = .verifyDisablement
         }

@@ -109,12 +109,20 @@ extension ControlClient {
     /// 쥔 netmap을 지금의 lock 상태로 걸러 사건으로 낸다. netmap이 새로 온 것이 아니면 lock 모습이 달라졌을 때만 낸다.
     private func emitNetmap() throws {
         guard let raw = lockSession.netmap else { return }
-        let netmap: Netmap
+        var netmap: Netmap
         if let lockAuthority {
             netmap = raw.filtered(by: lockAuthority, lockKey: identity.lockPublicKey)
-        } else if isLockStoreUnreadable || lockPlan == .bootstrap {
-            // 서버는 켜졌다고 하는데 검증한 상태가 없다(부트스트랩 실패), 또는 저장된 상태를 열지 못했다.
+            // 서버가 그 뒤 이 노드의 머리를 알리면 이어진 것이다(동기화를 기다리지 않는다).
+            if isLockStateDiverged, lockAuthority.head != lockSession.server.head {
+                netmap.tailnetLock.issue = .storedStateDiverged
+            }
+        } else if isLockStoreUnreadable {
             netmap = raw.withholdingPeers()
+            netmap.tailnetLock.issue = .unreadableStoredState
+        } else if lockPlan == .bootstrap {
+            // 서버는 켜졌다고 하는데 검증한 상태가 아직 없다(부트스트랩 전이거나 실패했다).
+            netmap = raw.withholdingPeers()
+            netmap.tailnetLock.issue = .acquiringState
         } else {
             netmap = raw
         }
@@ -233,10 +241,22 @@ extension ControlClient {
             return hash
         }
         let serverOffer = SyncOffer(head: hashes[0], ancestors: Array(hashes.dropFirst()))
-        guard serverOffer.head != offer.head else { return }
+        guard serverOffer.head != offer.head else {
+            isLockStateDiverged = false
+            return
+        }
 
         // 서버가 모르는 로컬 AUM을 먼저 계산한다. 이 계산이 실패하면 들이지도 보내지도 않는다(동작 Y4).
-        let unknownToServer = try authority.missingAUMs(for: serverOffer)
+        // 공통 조상이 없다는 것(`noIntersection`)만 "이어지지 않음"으로 본다(5절 TL-11b 항목 4). 서버가 답한 사슬에 대한 로컬
+        // 계산의 결과라 RPC 실패와 섞이지 않는다. 반복 한도(`iterationLimit`)는 사슬이 길다는 것일 뿐이라 넣지 않는다.
+        let unknownToServer: [AUM]
+        do {
+            unknownToServer = try authority.missingAUMs(for: serverOffer)
+            isLockStateDiverged = false
+        } catch {
+            if error == .noIntersection { isLockStateDiverged = true }
+            throw error
+        }
         if !response.missingAUMs.isEmpty {
             let updates = try response.missingAUMs.map { bytes throws(TKAError) in try AUM(decoding: bytes) }
             let countBefore = authority.aums.count
@@ -265,6 +285,7 @@ extension ControlClient {
             return false
         }
         lockAuthority = nil
+        isLockStateDiverged = false
         do {
             try lockStore.remove()
         } catch {
@@ -274,21 +295,27 @@ extension ControlClient {
         return true
     }
 
-    /// 끄기 비밀을 검증한다. 같은 상태에서 이미 거절한 비밀은 다시 계산하지 않는다(동작 O6).
+    /// 머리 하나에 대해 기억하는 거절한 끄기 비밀의 수(계약 5절 TL-11b 항목 2). 넘치면 오래된 것부터 잊는다.
+    static let maximumRejectedDisablementCount = 8
+
+    /// 끄기 비밀을 검증한다. 같은 상태에서 이미 거절한 비밀은 다시 계산하지 않는다(동작 O6, TL-11b 항목 2).
     ///
-    /// 검증은 Argon2i로 16MiB를 쓴다. 서버가 `Disabled`를 되풀이해 보내도 netmap마다 돌지 않게, 거절한 비밀의 BLAKE2s-256과
-    /// 그때의 머리를 메모리에만 쥔다(끄기 값은 머리가 가리키는 상태의 것이므로 머리가 같으면 판정도 같다).
+    /// 검증은 Argon2i로 16MiB를 쓴다. 서버가 `Disabled`를 되풀이해 보내도 netmap마다 돌지 않게, 거절한 비밀들의 BLAKE2s-256과
+    /// 그때의 머리를 메모리에만 쥔다(끄기 값은 머리가 가리키는 상태의 것이므로 머리가 같으면 판정도 같다). 하나가 아니라
+    /// 집합인 것은 서버가 틀린 비밀 여럿을 번갈아 보내도 비밀마다 한 번만 돌게 하려는 것이다.
     /// 계산은 이 actor 위에서 멈춤 없이 돈다: 그동안 맵 프레임의 해독이 겹치지 않아 메모리 최고치가 포개지지 않는다.
     private func isValidDisablement(_ secret: [UInt8], for authority: Authority) -> Bool {
         let digest = BLAKE2s.hash(secret)
-        if let rejectedDisablement, rejectedDisablement.head == authority.head,
-           constantTimeEqual(rejectedDisablement.secretDigest, digest) {
-            return false
-        }
+        var rejected = rejectedDisablements?.head == authority.head ? rejectedDisablements?.secretDigests ?? [] : []
+        if rejected.contains(where: { constantTimeEqual($0, digest) }) { return false }
         disablementDerivationCount += 1
-        let isValid = authority.isValidDisablement(secret: secret)
-        rejectedDisablement = isValid ? nil : (authority.head, digest)
-        return isValid
+        guard !authority.isValidDisablement(secret: secret) else {
+            rejectedDisablements = nil
+            return true
+        }
+        rejected.append(digest)
+        rejectedDisablements = (authority.head, Array(rejected.suffix(Self.maximumRejectedDisablementCount)))
+        return false
     }
 
     /// 상태를 파일에 적는다. 실패해도 판정은 바뀌지 않는다: 메모리의 상태로 계속 거르고 다음 변화 때 다시 쓴다(동작 T2).

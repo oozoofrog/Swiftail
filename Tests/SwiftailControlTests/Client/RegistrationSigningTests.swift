@@ -282,6 +282,36 @@ struct RegistrationSigningTests {
         }
     }
 
+    /// 계약 5절 TL-11b 항목 1: 이 노드가 NL 키로 서명한 사슬이 아니면 재서명하지 않는다. 서명된 인증 키로 등록한 노드의
+    /// 서명은 감싼 키가 서명한 rotation이라 여기에 든다(Go는 받는 쪽에서 검증되지 않는 서명을 만든다).
+    @Test("서명된 인증 키로 등록한 노드에 재서명 요청이 오면 서명 없이 새 키로 등록한다(TL-11b 항목 1)")
+    func resignRequestForCredentialChain() async throws {
+        let lock = Lock()
+        let identity = NodeIdentity(machineKey: .init(), nodeKey: .init())
+        let oldKey = try #require(identity.nodePublicKey)
+        var credential = NodeKeySignature(
+            kind: NodeKeySignature.Kind.credential, keyID: Array(lock.trustedKey.publicKey.rawRepresentation),
+            wrappingPublicKey: Array(lock.wrappingKey.publicKey.rawRepresentation)
+        )
+        try credential.sign(with: lock.trustedKey)
+        var registered = NodeKeySignature(kind: NodeKeySignature.Kind.rotation, publicKey: oldKey.binaryForm, nested: credential)
+        try registered.sign(with: lock.wrappingKey)
+        #expect(try lock.state.authorize(oldKey, keySignature: registered.serialized()) != nil)
+        try await withClient(prepare: { server, store, _ in
+            try store.save(identity)
+            server.enqueueRegisterReply(#"{"NodeKeySignature":"\#(Data(registered.serialized()).base64EncodedString())"}"#)
+        }) { server, store in
+            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            let requests = try registerRequests(server).map(object)
+            #expect(requests.count == 2)
+            let second = try #require(requests.last)
+            #expect(try nodeKey(second) != oldKey)
+            #expect(try nodeKey(second, "OldNodeKey") == oldKey)
+            #expect(second["NodeKeySignature"] is NSNull)
+            #expect(try #require(try store.load()).nodePublicKey == (try nodeKey(second)))
+        }
+    }
+
     @Test("재서명 요청이 거듭 오면 그 등록을 그만두고 다시 이어 저장된 키로 등록한다")
     func repeatedResignRequest() async throws {
         let lock = Lock()

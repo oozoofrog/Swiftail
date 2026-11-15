@@ -1,8 +1,8 @@
 // 독립 검토(TL-11b)의 재현 시험. 제어 서버를 믿지 않는 위협 모델로 `ControlClient`의 tailnet lock 절차를 본다.
 //
-// - "결함"이라고 적은 시험은 지금 실패한다. 그것이 발견이다.
-// - "지금 동작"이라고 적은 시험은 통과한다. 계약이 그렇게 정했지만 검토가 계약의 문제로 본 것을 기록한다.
-// - 나머지는 검토가 확인한 닫힌 쪽의 성질이다(통과).
+// 검토가 찾은 결함과 계약의 문제는 계약 `docs/contracts/SwiftailTailnetLock.md` 5절 "독립 검토에서 고치는 것: 제어의 절차
+// (TL-11b)"의 항목 1~5로 고쳤다. 시험 이름의 "고침 n"이 그 항목이다. "남는 것"은 그 절이 고치지 않기로 한 동작이다.
+// 나머지는 검토가 확인한 닫힌 쪽의 성질이다.
 //
 // 키는 모두 시험이 그 자리에서 만든다.
 
@@ -30,15 +30,14 @@ struct LockReviewTests {
 
     // MARK: 재서명 요청
 
-    /// 결함(높음): 서버의 재서명 요청이 NL 키의 서명 오라클이 된다.
+    /// 고침 1: 서버의 재서명 요청이 NL 키의 서명 오라클이 되지 않는다.
     ///
-    /// 서버는 `RegisterResponse.NodeKeySignature`에 무엇이든 넣을 수 있다. 노드는 그것을 검증하지 않고 `ResignNKS`에 넣고,
-    /// 사슬이 node 키를 15개 넘게 담으면 "줄이기"가 **서버가 고른 `Pubkey`들**에 NL 키로 rotation 서명을 새로 만든다
-    /// (`Sources/SwiftailTKA/Signatures/Resigning.swift`의 `trimmingRotationChain`, Go `tka/sig.go:393-437`).
-    /// 서버가 이 노드의 진짜 direct 서명(서명 기기가 `tailscale lock sign <nodeKey> <lockKey>`로 만든 것) 위에 가짜 rotation
-    /// 15겹을 얹어 보내면, 돌아온 등록 요청 안에 **공격자의 node 키를 인가하는 사슬**이 들어 있다. 그 사슬은 서명 기기의
-    /// 신뢰 키에서 시작하고 이 노드의 NL 키로 이어져, lock을 지키는 모든 노드(Go 포함)의 검증을 통과한다.
-    @Test("결함: 서버가 고른 node 키에 NL 키로 서명해 주지 않는다(재서명 요청의 사슬 줄이기)")
+    /// 서버는 `RegisterResponse.NodeKeySignature`에 무엇이든 넣을 수 있다. 검사가 없으면 사슬이 node 키를 15개 넘게 담을 때
+    /// "줄이기"가 **서버가 고른 `Pubkey`들**에 NL 키로 rotation 서명을 새로 만든다(Go `tka/sig.go:393-437`). 서버가 이 노드의
+    /// 진짜 direct 서명(서명 기기가 `tailscale lock sign <nodeKey> <lockKey>`로 만든 것) 위에 가짜 rotation 15겹을 얹어 보내면,
+    /// 돌아온 등록 요청 안에 공격자의 node 키를 인가하는 사슬이 들어 있었다. 지금은 재서명 함수가 겹마다 NL 키의 서명을
+    /// 검사해 던지고, 노드는 서명 없이 등록한다.
+    @Test("고침 1: 서버가 고른 node 키에 NL 키로 서명해 주지 않는다(재서명 요청의 사슬 줄이기)")
     func resignRequestIsNotASigningOracle() async throws {
         let lock = RegistrationSigningTests.Lock()
         let identity = NodeIdentity(machineKey: .init(), nodeKey: .init())
@@ -73,36 +72,31 @@ struct LockReviewTests {
         defer { running.cancel() }
         try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
 
-        // 노드가 재서명 요청에 답해 보낸 두 번째 등록 요청.
+        // 노드가 재서명 요청에 답해 보낸 두 번째 등록 요청: 새 node 키로, 서명 없이 간다(노드는 잠기고 서명 요청이 뜬다).
         let requests = server.requests.filter { $0.path == "/machine/register" }
         #expect(requests.count == 2)
         let body = Data(try #require(requests.last).body)
         let second = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        guard let text = second["NodeKeySignature"] as? String, let bytes = Data(base64Encoded: text) else {
-            // 서명 없이 등록했다면 오라클이 아니다(권하는 고침의 한 모양).
-            return
+        #expect(second["NodeKeySignature"] is NSNull, "서버가 보낸 사슬 위에 NL 키로 서명해 돌려보냈다")
+        #expect(second["NodeKey"] as? String != ownKey.description)
+        #expect(second["OldNodeKey"] as? String == ownKey.description)
+        // 어느 요청에도 공격자의 node 키에 대한 NL 키의 서명이 없다: 서버로 간 모든 등록 요청의 서명을 펼쳐 본다.
+        for request in requests {
+            let object = try #require(try JSONSerialization.jsonObject(with: Data(request.body)) as? [String: Any])
+            guard let text = object["NodeKeySignature"] as? String, let bytes = Data(base64Encoded: text) else { continue }
+            var current: NodeKeySignature? = try NodeKeySignature(decoding: [UInt8](bytes))
+            while let signature = current {
+                #expect(signature.publicKey != attackerKey.binaryForm)
+                current = signature.nested
+            }
         }
-        // 그 서명에서 한 겹을 벗기면 공격자의 키에 대한 사슬이 나온다. 서버는 이것을 공격자 노드의 `KeySignature`로 쓴다.
-        let sent = try NodeKeySignature(decoding: [UInt8](bytes))
-        let leaked = try #require(sent.nested)
-        #expect(leaked.publicKey != attackerKey.binaryForm, "서버가 고른 node 키가 NL 키로 서명되어 서버로 돌아갔다")
-        #expect(throws: TKAError.unauthorized, "공격자의 node 키가 이 tailnet의 서명 권한 상태로 인가된다") {
-            try lock.state.authorize(attackerKey, keySignature: leaked.serialized())
-        }
-        // lock을 지키는 다른 노드가 받는 netmap: 서버가 이 노드(옛 키, 진짜 서명)와 공격자 노드(새어 나간 사슬)를 함께 싣는다.
-        // 공격자 노드는 남고, 진짜 노드는 그 사슬의 "이전 키"라서 회전으로 낡은 키로 빠진다(자리를 빼앗긴다).
-        let admitted = lock.state.admitted([
-            PeerCredential(nodeKey: ownKey, keySignature: direct, unsignedPeerAPIOnly: false),
-            PeerCredential(nodeKey: attackerKey, keySignature: leaked.serialized(), unsignedPeerAPIOnly: false),
-        ])
-        #expect(admitted == [true, false], "진짜 노드가 빠지고 공격자 노드가 남는다")
     }
 
     // MARK: 끄기 비밀
 
-    /// 결함(낮음): 거절한 끄기 비밀의 기억이 하나뿐이라, 서버가 비밀 둘을 번갈아 주면 매번 Argon2i(16MiB)를 다시 돈다.
-    /// 계약 동작 O6은 "같은 비밀을 다시 받으면 KDF를 다시 돌리지 않는다"이다. KDF는 actor를 막는다.
-    @Test("결함: 서버가 틀린 끄기 비밀 둘을 번갈아 보내도 KDF는 비밀마다 한 번만 돈다(동작 O6)")
+    /// 고침 2: 거절한 끄기 비밀을 머리마다 집합(8개)으로 기억한다. 하나뿐이면 서버가 비밀 둘을 번갈아 줄 때 매번
+    /// Argon2i(16MiB)를 다시 돈다(동작 O6). KDF는 actor를 막는다.
+    @Test("고침 2: 서버가 틀린 끄기 비밀 둘을 번갈아 보내도 KDF는 비밀마다 한 번만 돈다(동작 O6)")
     func alternatingDisablementSecrets() async throws {
         let world = try LockWorld()
         try await withEnforcingClient(world) { run in
@@ -119,6 +113,40 @@ struct LockReviewTests {
             }
             let derivations = await run.client.disablementDerivationCount
             #expect(derivations == 2, "이미 거절한 비밀로 KDF를 다시 돌렸다")
+        }
+    }
+
+    /// 고침 2의 한도: 8개까지 기억하고, 9번째를 거절하면 가장 오래된 것을 잊는다. 머리가 바뀌면 새로 쥔다.
+    @Test("고침 2: 거절 기억은 머리마다 8개이고 넘치면 가장 오래된 것부터 잊는다")
+    func rejectedDisablementCapacity() async throws {
+        let world = try LockWorld()
+        try await withEnforcingClient(world) { run in
+            var round = 0
+            func disable(_ secret: [UInt8]) async throws {
+                round += 1
+                let domain = "round\(round).example"
+                run.server.updateLock {
+                    $0.authority = nil
+                    $0.disablementSecret = secret
+                }
+                run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled, #""Domain":"\#(domain)""#))
+                let netmap = try await run.latest("\(round)번째 netmap") { $0.domain == domain }
+                #expect(netmap.tailnetLock.mode == .enforcing)
+            }
+            let secrets = (1...9).map { [UInt8](repeating: UInt8($0), count: 32) }
+            for secret in secrets.prefix(8) { try await disable(secret) }
+            #expect(await run.client.disablementDerivationCount == 8)
+            // 여덟 개 모두 기억한다.
+            for secret in secrets.prefix(8).reversed() { try await disable(secret) }
+            #expect(await run.client.disablementDerivationCount == 8)
+            #expect(ControlClient.maximumRejectedDisablementCount == 8)
+            // 아홉 번째를 거절하면 첫 번째를 잊는다.
+            try await disable(secrets[8])
+            #expect(await run.client.disablementDerivationCount == 9)
+            try await disable(secrets[1])
+            #expect(await run.client.disablementDerivationCount == 9)
+            try await disable(secrets[0])
+            #expect(await run.client.disablementDerivationCount == 10, "가장 오래된 비밀을 잊지 않았다")
         }
     }
 
@@ -175,31 +203,76 @@ struct LockReviewTests {
         }
     }
 
-    // MARK: 로컬 상태가 없을 때 (계약 문제)
+    // MARK: 로컬 상태가 없을 때
 
-    /// 지금 동작(계약 문제, 낮음): 로컬 상태가 없는 노드에 서버가 `TKAInfo`(꺼졌다는 표시 없음)를 읽히지 않는 `Head`와 함께
-    /// 실으면, 계약 동작 N1은 그것을 "꺼짐"으로 읽는다. capability가 있어도 부트스트랩하지 않고 모든 피어를 `.disabled`로 낸다.
-    /// lock을 알리는 응답을 해석하지 못한 것이 "lock 없음"이 되는 열린 쪽이다. Go가 읽는 머리 텍스트 가운데 Swiftail이
-    /// 거절하는 것(동작 D10의 줄바꿈)에서는 Go 노드가 부트스트랩해 거르는 동안 Swiftail 노드는 거르지 않는다.
-    @Test("지금 동작: 로컬 상태 없이 읽히지 않는 Head를 받으면 lock 없음(.disabled)으로 모든 피어를 낸다(동작 N1)")
-    func unreadableHeadWithoutLocalStateIsOpen() async throws {
+    /// Go는 받고(줄바꿈을 지우고 읽는다) Swiftail은 거절하는 머리 텍스트: 50자 + CRLF(동작 D10).
+    private static func goReadableHead(_ world: LockWorld) -> String {
+        String(world.head.text.prefix(50)) + "\\r\\n"
+    }
+
+    /// 고침 3: 로컬 상태가 없는 노드에 서버가 `TKAInfo`(꺼졌다는 표시 없음)를 읽히지 않는 `Head`와 함께 실으면 "켜짐, 머리
+    /// 모름"이다. capability가 있으면 부트스트랩하고 그 상태로 거른다. 예전에는 "lock 없음"으로 읽어 모든 피어를 냈고,
+    /// 동작 D10의 줄바꿈에서는 Go 노드가 거르는 동안 Swiftail 노드는 거르지 않았다.
+    @Test("고침 3: 로컬 상태 없이 읽히지 않는 Head를 받으면 부트스트랩해 거른다", arguments: ["not-a-hash", "goReadable"])
+    func unreadableHeadWithoutLocalStateBootstraps(_ head: String) async throws {
         let world = try LockWorld()
-        // Go는 받고(줄바꿈을 지우고 읽는다) Swiftail은 거절하는 머리 텍스트: 50자 + CRLF.
-        let goReadable = String(world.head.text.prefix(50)) + "\\r\\n"
+        let text = head == "goReadable" ? Self.goReadableHead(world) : head
         try await withLockClient(world, prepare: { server, _ in
             server.updateLock { $0.authority = world.authority }
-            server.setMapResponse(try world.map(lock: #""TKAInfo":{"Head":"\#(goReadable)"}"#))
+            server.setMapResponse(try world.map(lock: #""TKAInfo":{"Head":"\#(text)"}"#))
         }) { run in
             let netmap = try await run.latest("첫 netmap") { _ in true }
-            #expect(netmap.tailnetLock == TailnetLockStatus())
-            #expect(netmap.peers.map(\.id) == [2, 3, 4], "서명 없는 피어(ID 3)가 그대로 나간다")
-            #expect(run.server.tkaPaths.isEmpty, "부트스트랩을 시도하지 않는다")
+            #expect(netmap.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
+            #expect(netmap.peers.map(\.id) == [2, 4], "서명 없는 피어(ID 3)가 나갔다")
+            #expect(run.server.tkaPaths.first == Server.bootstrapPath)
+            #expect(run.netmaps.allSatisfy { !$0.peers.contains { $0.id == 3 } })
         }
     }
 
-    /// 지금 동작(참고): `.unverified`(사용자 결정 U1)는 서버가 정직할 때의 보호다. 로컬 상태가 없는 동안에는 서버가
+    /// 고침 3·4: 읽히지 않는 머리로 부트스트랩이 실패하면 `.unverified`이고 까닭은 "얻는 중"이다. capability가 없으면 Go와
+    /// 같이 거르지 않는다(N2 표의 첫 줄).
+    @Test("고침 3·4: 읽히지 않는 Head에서 부트스트랩이 실패하면 .unverified(얻는 중), capability가 없으면 거르지 않는다")
+    func unreadableHeadBootstrapFailure() async throws {
+        let world = try LockWorld()
+        let lock = #""TKAInfo":{"Head":"\#(Self.goReadableHead(world))"}"#
+        try await withLockClient(world, prepare: { server, _ in
+            server.updateLock {
+                $0.authority = world.authority
+                $0.faults[Server.bootstrapPath] = .respond(status: 500, body: [])
+            }
+            server.setMapResponse(try world.map(lock: lock))
+        }) { run in
+            let closed = try await run.latest("첫 netmap") { _ in true }
+            #expect(closed.tailnetLock == TailnetLockStatus(mode: .unverified, filteredPeerCount: 3, issue: .acquiringState))
+            #expect(closed.peers.isEmpty)
+        }
+        try await withLockClient(world, prepare: { server, _ in
+            server.updateLock { $0.authority = world.authority }
+            server.setMapResponse(try world.map(hasCapability: false, lock: lock))
+        }) { run in
+            let open = try await run.latest("첫 netmap") { _ in true }
+            #expect(open.tailnetLock == TailnetLockStatus())
+            #expect(run.server.tkaPaths.isEmpty)
+        }
+    }
+
+    /// 고침 3: 로컬 상태가 있으면 읽히지 않는 머리는 동기화의 계기다(머리가 다르다고 본다). 동기화가 실패해도 예전 상태로 거른다.
+    @Test("고침 3: 로컬 상태가 있으면 읽히지 않는 Head에 동기화로 간다")
+    func unreadableHeadWithLocalStateSynchronizes() async throws {
+        let world = try LockWorld()
+        try await withEnforcingClient(world) { run in
+            let offers = run.server.requests(to: Server.syncOfferPath).count
+            run.server.push(LockTesting.mapJSON(lock: #""TKAInfo":{"Head":"not-a-hash"}"#, #""Domain":"unreadable.example""#))
+            let netmap = try await run.latest("netmap") { $0.domain == "unreadable.example" }
+            #expect(netmap.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
+            #expect(run.server.requests(to: Server.syncOfferPath).count == offers + 1)
+            #expect(run.server.requests(to: Server.bootstrapPath).count == 1, "끄기 절차로 갔다")
+        }
+    }
+
+    /// 남는 것(5절 TL-11b): `.unverified`(사용자 결정 U1)는 서버가 정직할 때의 보호다. 로컬 상태가 없는 동안에는 서버가
     /// "꺼졌다"고 고쳐 말하는 것만으로 풀린다. 끄기 비밀도 RPC도 필요 없다. 첫 신뢰가 TOFU인 것의 귀결이고 Go도 같다.
-    @Test("지금 동작: 부트스트랩이 실패한 .unverified는 서버가 Disabled를 알리면 비밀 없이 풀린다")
+    @Test("남는 것: 부트스트랩이 실패한 .unverified는 서버가 Disabled를 알리면 비밀 없이 풀린다")
     func unverifiedIsReleasedByTheServersWord() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
@@ -216,6 +289,79 @@ struct LockReviewTests {
             let open = try await run.latest("Disabled 뒤의 netmap") { $0.tailnetLock.mode == .disabled }
             #expect(open.peers.map(\.id) == [2, 3, 4])
             #expect(await run.client.disablementDerivationCount == 0)
+        }
+    }
+
+    // MARK: 까닭과 푸는 길(고침 4)
+
+    /// "이어지지 않음"은 동기화에서 공통 조상을 찾지 못한 것(`noIntersection`)이다. 일시적인 RPC 실패로는 내지 않는다.
+    /// 서버가 그 뒤 이 노드의 머리를 알리면 풀린다.
+    @Test("고침 4: 이어지지 않음은 교차가 없을 때만이고, RPC 실패로는 내지 않으며, 서버가 같은 머리를 알리면 풀린다")
+    func divergedIssue() async throws {
+        let world = try LockWorld()
+        let other = try LockWorld()
+        // 저장된 상태가 이 서버의 사슬과 같을 때: sync/offer가 실패해도 까닭은 없다.
+        try await withLockClient(world, prepare: { server, directory in
+            try TailnetLockStore(directory: directory).save(world.authority)
+            server.updateLock {
+                $0.authority = world.authority
+                $0.faults[Server.syncOfferPath] = .respond(status: 500, body: [])
+            }
+            server.setMapResponse(try world.map(lock: LockTesting.tkaInfo(head: other.head)))
+        }) { run in
+            let netmap = try await run.latest("첫 netmap") { _ in true }
+            #expect(netmap.tailnetLock.mode == .enforcing && netmap.tailnetLock.issue == nil)
+            #expect(run.server.tkaPaths == [Server.syncOfferPath])
+        }
+        // 다른 tailnet의 상태: 이어지지 않음. 서버가 이 노드의 머리를 알리면(동기화 없이) 풀린다.
+        try await withLockClient(world, prepare: { server, directory in
+            try TailnetLockStore(directory: directory).save(other.authority)
+            server.updateLock { $0.authority = world.authority }
+            server.setMapResponse(try world.map())
+        }) { run in
+            let diverged = try await run.latest("첫 netmap") { _ in true }
+            #expect(diverged.tailnetLock.mode == .enforcing && diverged.tailnetLock.issue == .storedStateDiverged)
+            run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaInfo(head: other.head), #""Domain":"same.example""#))
+            let joined = try await run.latest("같은 머리의 netmap") { $0.domain == "same.example" }
+            #expect(joined.tailnetLock.mode == .enforcing && joined.tailnetLock.issue == nil)
+        }
+    }
+
+    /// 푸는 길: 노드를 멈추고 lock 상태 파일만 지우면 다음 클라이언트가 부트스트랩부터 한다(TOFU). 신원(NL 키)은 그대로다.
+    @Test("고침 4: lock 상태 파일만 지우면 새 클라이언트가 부트스트랩부터 하고 NL 키는 그대로다", arguments: ["foreign", "garbage"])
+    func removingLockStateStartsOver(_ kind: String) async throws {
+        let world = try LockWorld()
+        let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-lock-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let expected: TailnetLockStatus.Issue = kind == "foreign" ? .storedStateDiverged : .unreadableStoredState
+        try await withLockClient(world, directory: directory, prepare: { server, directory in
+            let store = TailnetLockStore(directory: directory)
+            if kind == "foreign" {
+                try store.save(try LockWorld().authority)
+            } else {
+                try Data("깨진 파일".utf8).write(to: store.fileURL)
+            }
+            server.updateLock { $0.authority = world.authority }
+            server.setMapResponse(try world.map())
+        }) { run in
+            let stuck = try await run.latest("첫 netmap") { _ in true }
+            #expect(stuck.tailnetLock.issue == expected)
+        }
+
+        try ControlClient.removeTailnetLockState(inDirectory: directory)
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: TailnetLockStore.fileName).path))
+        #expect(try NodeIdentityStore(directory: directory).load()?.lockPublicKey == world.identity.lockPublicKey)
+        // 없는 파일을 지워도 된다.
+        try ControlClient.removeTailnetLockState(inDirectory: directory)
+
+        try await withLockClient(world, directory: directory, prepare: { server, _ in
+            server.updateLock { $0.authority = world.authority }
+            server.setMapResponse(try world.map())
+        }) { run in
+            let netmap = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
+            #expect(netmap.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
+            #expect(run.server.tkaPaths.first == Server.bootstrapPath)
+            #expect(try TailnetLockStore(directory: directory).load()?.head == world.head)
         }
     }
 }

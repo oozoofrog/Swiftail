@@ -72,15 +72,30 @@ struct TKASyncOfferResponse: Decodable, Sendable {
         case missingAUMs = "MissingAUMs"
     }
 
+    /// `MissingAUMs`의 개수 한도. 한 번에 들이는 AUM의 한도(4,096개, 계약 동작 M·결정 L16)와 같다.
+    ///
+    /// 들이기도 같은 한도를 보지만, 그 전에 항목을 하나씩 base64와 AUM으로 디코딩하므로 여기서 먼저 센다(5절 TL-11b 항목 5).
+    /// 8MiB 본문은 몇 바이트짜리 항목을 백만 개 넘게 담을 수 있다.
+    static let maximumMissingAUMCount = 4_096
+
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         head = try container.decodeIfPresent(String.self, forKey: .head) ?? ""
         ancestors = try container.decodeIfPresent([String].self, forKey: .ancestors) ?? []
-        missingAUMs = try (container.decodeIfPresent([String].self, forKey: .missingAUMs) ?? []).map { text in
-            guard let data = Data(base64Encoded: text) else {
+        missingAUMs = []
+        guard container.contains(.missingAUMs), try !container.decodeNil(forKey: .missingAUMs) else { return }
+        var items = try container.nestedUnkeyedContainer(forKey: .missingAUMs)
+        guard let count = items.count, count <= Self.maximumMissingAUMCount else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .missingAUMs, in: container, debugDescription: "MissingAUMs가 개수 한도를 넘는다"
+            )
+        }
+        missingAUMs.reserveCapacity(count)
+        while !items.isAtEnd {
+            guard let data = Data(base64Encoded: try items.decode(String.self)) else {
                 throw DecodingError.dataCorruptedError(forKey: .missingAUMs, in: container, debugDescription: "base64가 아니다")
             }
-            return [UInt8](data)
+            missingAUMs.append([UInt8](data))
         }
     }
 }

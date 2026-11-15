@@ -205,7 +205,7 @@ struct ControlClientLockTests {
         }) { run in
             let closed = try await run.latest("첫 netmap") { _ in true }
             #expect(closed.peers.isEmpty)
-            #expect(closed.tailnetLock == TailnetLockStatus(mode: .unverified, filteredPeerCount: 3))
+            #expect(closed.tailnetLock == TailnetLockStatus(mode: .unverified, filteredPeerCount: 3, issue: .acquiringState))
             #expect(closed.selfNode.key == world.selfKey)
             #expect(run.netmaps.count == 1)
             #expect(await run.client.lockAuthority == nil)
@@ -275,12 +275,12 @@ struct ControlClientLockTests {
         }) { run in
             let closed = try await run.latest("첫 netmap") { _ in true }
             #expect(closed.peers.isEmpty)
-            #expect(closed.tailnetLock == TailnetLockStatus(mode: .unverified, filteredPeerCount: 3))
+            #expect(closed.tailnetLock == TailnetLockStatus(mode: .unverified, filteredPeerCount: 3, issue: .unreadableStoredState))
 
             // 서버가 lock이 꺼졌다고 알려도 끄기 값을 모르므로 확인할 수 없다.
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled, #""Domain":"tail0001.ts.net""#))
             let still = try await run.latest("증분") { $0.domain == "tail0001.ts.net" }
-            #expect(still.peers.isEmpty && still.tailnetLock.mode == .unverified)
+            #expect(still.peers.isEmpty && still.tailnetLock.mode == .unverified && still.tailnetLock.issue == .unreadableStoredState)
             #expect(run.server.tkaPaths.isEmpty, "열지 못한 저장소를 두고 RPC를 보냈다")
             #expect(Set(run.uploadedHeads) == [""])
             #expect(try Data(contentsOf: run.storeURL) == contents)
@@ -467,6 +467,8 @@ struct ControlClientLockTests {
             #expect(netmap.tailnetLock.head == other.head.text)
             #expect(netmap.tailnetLock.filteredPeerCount == 2)
             #expect(netmap.tailnetLock.isLockedOut)
+            // 서명해도 풀리지 않는다는 것을 앱이 안다(5절 TL-11b 항목 4).
+            #expect(netmap.tailnetLock.issue == .storedStateDiverged)
             #expect(run.server.tkaPaths == [Server.syncOfferPath])
             #expect(try TailnetLockStore(directory: run.directory).load()?.head == other.head)
         }

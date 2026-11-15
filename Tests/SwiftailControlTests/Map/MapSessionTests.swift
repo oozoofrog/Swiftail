@@ -403,12 +403,14 @@ struct MapSessionTests {
         #expect(both.lock == ServerLockState(isEnabled: false, head: first.hash))
     }
 
-    @Test("serverLock: 읽히지 않는 Head는 꺼짐, 빈 Head는 켜짐이고 머리 없음")
+    @Test("serverLock: 읽히지 않는 Head와 빈 Head는 켜짐이고 머리 모름(계약 5절 TL-11b 항목 3). Disabled면 꺼짐")
     func serverLockHeadParsing() throws {
         for unreadable in ["AAAA", try head(0x11).text.lowercased(), try head(0x11).text + "A"] {
             var session = MapSession()
             let lock = try serverLock(#"{"Node":\#(selfNodeJSON),"TKAInfo":{"Head":"\#(unreadable)"}}"#, in: &session).lock
-            #expect(lock == ServerLockState(), "\(unreadable)")
+            #expect(lock == ServerLockState(isEnabled: true), "\(unreadable)")
+            let disabled = try serverLock(#"{"TKAInfo":{"Head":"\#(unreadable)","Disabled":true}}"#, in: &session).lock
+            #expect(disabled == ServerLockState(), "\(unreadable)")
         }
         var session = MapSession()
         #expect(try serverLock(#"{"Node":\#(selfNodeJSON),"TKAInfo":{}}"#, in: &session).lock == ServerLockState(isEnabled: true))
