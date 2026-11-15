@@ -91,8 +91,13 @@ private struct Reader {
         case 6:
             throw .tag
         default:
-            // major 7: 22 null, 23 undefined. 나머지(false·true·단순값·실수)는 값을 쥐지 않는다.
-            return head.info == 22 || head.info == 23 ? .null : .simpleOrFloat
+            // major 7: 0~19와 24는 단순값(24는 32 이상만 남는다. `readHead`), 22 null, 23 undefined.
+            // 나머지(20 false, 21 true, 25~27 실수)는 값을 쥐지 않는다.
+            switch head.info {
+            case 22, 23: return .null
+            case 0...19, 24: return .simple(UInt8(truncatingIfNeeded: head.argument))
+            default: return .simpleOrFloat
+            }
         }
     }
 
