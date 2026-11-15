@@ -337,6 +337,30 @@ func rawAUMCases() [][2]string {
 		{"reject/map-1025-in-value", valueMap(1025)},
 		{"probe/top-map-1024", topMap(1024)},
 		{"probe/top-map-1025", topMap(1025)},
+		// TL-5 대조 시험이 더한 것(계약 5절 TL-2의 "실행으로 확정하지 않은 것"): 정수 필드의 단순값, 정수 배열 원소의
+		// 단순값·null·그 밖의 값, 단순값·undefined·false로 쓴 Meta의 키, 구조 맵의 단순값 키, null 키와 빈 키의 중복.
+		{"probe/kind-simple-3", cmap("01e3", prevNull)},
+		{"probe/kind-simple-19", cmap("01f3", prevNull)},
+		{"probe/kind-simple-99", cmap("01f863", prevNull)},
+		{"probe/kind-simple-255", cmap("01f8ff", prevNull)},
+		{"probe/kind-false", cmap("01f4", prevNull)},
+		{"probe/updatekey-votes-simple-32", cmap("0104", prevNull, "044101", "06f820")},
+		{"probe/addkey-kind-simple-1", key("01e1", "0201", "03"+bstr(pub))},
+		{"probe/addkey-votes-simple-1", key("0101", "02e1", "03"+bstr(pub))},
+		{"probe/checkpoint-stateid-simple-7", checkpoint(validState("04e7"))},
+		{"probe/prev-uint-array-simple-and-null", cmap(kindNoOp, "028401e5f618ff")},
+		{"probe/prev-uint-array-undefined-element", cmap(kindNoOp, "0281f7")},
+		{"probe/prev-uint-array-true-element", cmap(kindNoOp, "0281f5")},
+		{"probe/prev-uint-array-float-element", cmap(kindNoOp, "0281f93c00")},
+		{"probe/prev-uint-array-array-element", cmap(kindNoOp, "028180")},
+		{"probe/addkey-public-uint-array-simple-and-null", key("0101", "0201", "038401e5f618ff")},
+		{"probe/updatekey-meta-key-simple", updateKey(cmap("e0" + tstr("1")))},
+		{"probe/updatekey-meta-key-undefined", updateKey(cmap("f7" + tstr("1")))},
+		{"probe/updatekey-meta-key-false", updateKey(cmap("f4" + tstr("1")))},
+		{"probe/updatekey-meta-value-simple", updateKey(cmap(tstr("a") + "e0"))},
+		{"probe/updatekey-meta-null-key-and-empty-key", updateKey(cmap("f6"+tstr("1"), tstr("")+tstr("2")))},
+		{"probe/simple-key-0", cmap(kindNoOp, prevNull, "e000")},
+		{"probe/simple-key-99", cmap(kindNoOp, prevNull, "f86300")},
 	}
 }
 
@@ -488,6 +512,9 @@ func rawNKSCases() [][2]string {
 		{"reject/nks-tag", "c0" + baseHex},
 		{"probe/nks-top-level-null", "f6"},
 		{"probe/nks-pubkey-uint-array", hexOf(addPairs(cb, 1, "02"+uintArray(nodeKeys[0].binary())))},
+		// TL-5 대조 시험이 더한 것: SigKind의 단순값.
+		{"probe/nks-sigkind-simple-1", withFirst("01e1")},
+		{"probe/nks-sigkind-simple-200", withFirst("01f8c8")},
 	}
 }
 

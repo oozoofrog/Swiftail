@@ -859,6 +859,12 @@ eyebuild rm tl5-fixtures
 | `disablement` | `authority`, `secret`, `kdf`(`DisablementKDF`), `valid`(`ValidDisablement`) |
 | `authKeys` | `input`, `DecodeWrappedAuthkey`의 `authKey`·`isWrapped`·`returnedInput`(원문 전체를 돌려줬는지)·`credential`(재인코딩)·`privateKeyLength`, 감싼 것이면 `SignByCredential`(node/8)의 `sign`(`ok`·`error`·`panic`)·`signError`·`nks`, 신뢰 상태가 있으면 `verdict` |
 | `resign` | `nlKey`(키의 seed 문자열), `oldNKS`, `nodeKey`, `ResignNKS`의 `ok`·`error`·`result`·`sigHash`·`sameAsOld`·`depth`, 결과의 `verdict` |
+| `unorderedPeerSets` | Go의 답이 맵 순회 순서로 갈리는 피어 집합: `authority`, `peers`, `runs`(같은 입력으로 돌린 횟수, 256), `outcomes`(나온 서로 다른 `kept`를 정렬한 것). `peerSets`의 사례는 `runs`(64)번 모두 같은 답이어야 생성이 성공한다 |
+| `limits` | 뿌리에서 2,000개가 넘는 사슬: 묶음마다 `pool`(같은 AUM을 쓰는 `sync` 묶음 이름), `extra`(그 pool 뒤에 잇는 AUM), `cases`(`baseCount`: 번호 0부터 그만큼으로 부트스트랩+한 묶음, `baseHead`, `steps`: `aums` 번호, `ok`, `error`, `head`) |
+| `padded` | Swiftail 바이트 한도(NKS 8KiB, AUM 512KiB)를 넘긴 입력. 바이트 대신 만드는 법을 싣는다: 입력 = (`base`의 맵 머리 + 1) ‖ `base[1:]` ‖ uint(`padKey`) ‖ bstr(0 × `padLength`), 길이 `length`. `kind`(`authorize`·`resign`·`inform`·`authKey`)마다 Go의 `ok`·`error`·`head`·`sigHash`·`verdict`. `authKey`의 입력 문자열은 `controlValue` ‖ `--TL` ‖ RawStd(입력) ‖ `-` ‖ RawStd(`privateKey`) |
+| `openedStates` | Bootstrap으로는 만들 수 없는 상태(Key25519가 아닌 키)를 `CommitVerifiedAUMs`·`SetLastActiveAncestor`·`tka.Open`으로 연 뒤의 `NodeKeyAuthorizedWithDetails`: `checkpoint`, `openOK`, `nodeKey`, `nks`, 판정 |
+
+`caseCount`에는 `unorderedPeerSets`·`padded`·`openedStates`의 줄과 `limits`의 `cases`도 든다.
 
 `cbor` 사례 이름의 앞머리는 노트·계약이 예상한 디코딩 판정이다: `accept/`는 디코딩되는 것, `reject/`는 디코딩에서 거절되는 것(자료에서 그대로 맞는지 확인했다), `probe/`는 노트·계약이 Go 판정을 실행으로 확인하지 않았던 입력, `value/`는 `tka.AUM` 값을 `Serialize`한 정적 검사의 경계다. 판정 자체는 이름이 아니라 `decoded`·`accepted`로 견준다. 계약 동작 E6·D8대로 정적 검사를 통과하지 못한 AUM은 Swift가 판정만 견준다.
 
@@ -872,5 +878,18 @@ eyebuild rm tl5-fixtures
 - `disablement`: 0xa5 × 32(KDF `c3fea8a0…4e2f`), 끄기 값 셋 가운데 맞는 것, 틀린 것, 빈 비밀, 31바이트, 체크포인트로 값이 바뀐 앞뒤.
 - `authKeys`: Go 시험 문자열(`tka/sig_test.go:479`), 정상, 감싸지 않음, `-` 없음, 채움 붙은 base64, URL 알파벳, `-`가 더 있음, CBOR이 아님, credential이 아닌 A, 32·63·65바이트 B(Go panic), 뒤 32바이트가 다른 B, `WrappingPubkey`가 다른 A, 믿지 않는 credential, 빈 두 부분.
 - `resign`: 같은 node 키(그대로), 회전 키가 NL 키인 direct, 다른 NL 키, 회전 키 없는 direct, credential 사슬, Pubkey 14~17개 사슬(16개부터 줄임, 17개는 디코딩 거절), 디코딩되지 않는 옛 서명.
+
+TL-5 대조 시험이 더한 것(계약 5절 "구현하며 정해진 것"에서 실행으로 확정하지 않았다고 적은 입력과, Swiftail 한도의 경계):
+
+- `cbor`: 정수 필드의 단순값(`MessageKind` `e3`·`f3`·`f863`·`f8ff`, `Votes` `f820`, Key의 `Kind`·`Votes` `e1`, `StateID` `e7`, NKS `SigKind` `e1`·`f8c8`), `MessageKind` false, 바이트열 자리 정수 배열의 단순값·null(`8401e5f618ff`)·undefined·true·실수·배열 원소, `Meta` 키의 단순값·undefined·false와 값의 단순값, `Meta`의 null 키와 빈 키의 중복, 구조 맵의 단순값 키.
+- `text`: `AUMHash` 텍스트 안의 `\r`·`\n`(50·51·48자 + 줄바꿈, 가운데·앞, 52자 + 줄바꿈).
+- `chains`: `batch-duplicates`(한 묶음 안의 같은 AUM: 두 번, 자식을 사이에 둔 두 번, 이미 쥔 것 두 번, 갈래 두 번, 서명 없는 것 두 번, 자식 뒤의 부모).
+- `sync`: `long`의 `head-intersection-distance-999`·`-1000`(머리 교차 1,000회를 넘어 꼬리 교차로 넘어가는 경계).
+- `signatures`: rotation 안쪽 direct의 빈 `Pubkey`, 가운데 rotation의 빈 `Pubkey`.
+- `peerSets`: `UnsignedPeerAPIOnly` 피어가 회전으로 낡은 키가 됨, 그런 피어의 rotation은 다른 피어를 낡은 키로 만들지 않음. `unorderedPeerSets`: 같은 node 키가 서로 다른 회전 키의 묶음에 함께 듦.
+- `authKeys`: credential·감싼 키 base64의 0이 아닌 남는 비트, 줄바꿈(`\n`, `\r\n`, 끝의 `\n`).
+- `limits`: 뿌리에서 2,000개가 넘는 직선 사슬(빠른 길), 뿌리에서 1,999·2,000번째 갈래, 이미 쥔 AUM이 섞인 묶음과 그 뒤(실패한 묶음이 Go 저장소에 남는다), 체크포인트부터 부모까지 2,000·2,001개.
+- `padded`: NKS 8,192·8,193바이트의 판정, 재서명의 옛 서명 8,193바이트, AUM 524,288·524,289바이트의 들이기, credential 8,193바이트의 감싼 인증 키.
+- `openedStates`: Key25519가 아닌 키가 서명 키 앞·뒤에 있는 상태.
 
 `tkafixtures verify-nks`는 표준 입력으로 JSON 객체 하나 `{"aums":["<16진>",…],"nodeKey":"<32바이트 16진>","nks":"<16진>"}`를 받는다. `aums`의 첫 것으로 부트스트랩하고 나머지를 `Inform`한 상태에서 `NodeKeyAuthorizedWithDetails`로 판정해 `{"ok":true,"authorized":…,"error":…,"rotation":…}` 한 줄을 쓰고 0으로 끝난다(판정이 거절이어도 0이다). 입력이 4MiB를 넘거나, JSON 객체 하나가 아니거나, 모르는 필드·대문자 16진이 있거나, 부트스트랩·`Inform`이 실패하면 `{"ok":false,"error":"…"}`를 쓰고 1로 끝난다. Swift가 만든 서명(`SignByCredential`·재서명. CryptoKit 서명은 결정적이지 않다)을 이것으로 확인한다.

@@ -98,7 +98,7 @@ struct AuthorityFixtureTests {
     /// 사슬 19개의 모든 단계에서 부트스트랩 판정, 들이기 판정, 머리, 상태가 Go와 같다.
     @Test func chains() throws {
         let file = try AuthorityFixtureFile.load()
-        #expect(file.chains.count == 19)
+        #expect(file.chains.count == 20)
         var stepCount = 0
         for chain in file.chains {
             let bootstrapped = Result { () throws(TKAError) in
@@ -125,7 +125,7 @@ struct AuthorityFixtureTests {
                 }
             }
         }
-        #expect(stepCount == 82)
+        #expect(stepCount == 88)
     }
 
     /// 동기화 사례(`그룹/사례`)와 끄기 비밀 사례의 이름. 사례마다 따로 돌려 병렬로 검증한다(서명 검증이 수천 번이다).
@@ -136,7 +136,7 @@ struct AuthorityFixtureTests {
     static let disablementCaseNames: [String] = (try? AuthorityFixtureFile.load())?.disablement.map(\.name) ?? []
 
     @Test func caseCounts() {
-        #expect(Self.syncCaseNames.count == 14)
+        #expect(Self.syncCaseNames.count == 16)
         #expect(Self.disablementCaseNames.count == 9)
     }
 

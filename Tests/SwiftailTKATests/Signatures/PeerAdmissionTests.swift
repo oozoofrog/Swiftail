@@ -10,7 +10,7 @@ struct PeerAdmissionTests {
     @Test("peerSets 8개: 남는 피어와 그 순서가 Go와 같다")
     func goPeerSets() throws {
         let fixtures = try SignatureFixtureFile.load()
-        #expect(fixtures.peerSets.count == 8)
+        #expect(fixtures.peerSets.count == 10)
         for item in fixtures.peerSets {
             let peers = try item.peers.map { peer in
                 PeerCredential(
