@@ -27,7 +27,7 @@ Swiftail 구현에 필요한 수준으로 각 프로토콜을 정리한 문서�
 | [dns-state-node.md](dns-state-node.md) | M5~M7 | Claude Sonnet 5.5 | Claude Opus 5.5, 2026-11-15, 수정 16건 + M5 절차 보충 |
 | [tcp-netstack.md](tcp-netstack.md) | M6 | Claude Fable 5.2 | GPT-6.1 Sol, 2026-11-15, RFC 12개·Tailscale v1.104.6·gVisor a6f909f08a72 대조, 사실 정정·미확인 경로 보충 |
 | [whois-certs-state.md](whois-certs-state.md) | M7 | Claude Fable 5.2 | 검증됨(2026-11-15, GPT-6.1 Sol): Tailscale v1.104.6·RFC Editor 원문 20개·Let's Encrypt 공식 문서·PSL·Go 1.27.3·Apple SDK 대조, 주장 248개 판정(맞음 208·틀림 18·확인 불가 22) |
-| [tailnet-lock.md](tailnet-lock.md) | M8 | Claude Opus 5.5 | 아직 |
+| [tailnet-lock.md](tailnet-lock.md) | M8 | Claude Opus 5.5 | 검증됨(2026-11-15, Claude Opus 5.5 다른 세션): Tailscale v1.104.7(실행 v1.104.6)·fxamacker/cbor v2.9.3·ed25519consensus v0.2.0·x/crypto v0.58.0·Go 1.27.3 대조, 판정 맞음 256·틀림 11·확인 불가 4, 수정 11건 + 빠진 경로 보충 12건 |
 
 ## 노트 형식
 
