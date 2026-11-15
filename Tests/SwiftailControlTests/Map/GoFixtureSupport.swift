@@ -119,7 +119,8 @@ func compareGoJSON(_ expected: GoFixtureJSON?, _ actual: GoFixtureJSON?, context
 }
 
 /// 공개 Netmap을 README의 투영으로 옮긴다. 상태를 보충하거나 증분 규칙을 다시 적용하지 않는다.
-func projectGoNetmap(_ map: Netmap) -> GoFixtureJSON {
+/// Go의 `TKAEnabled`는 netmap이 아니라 세션이 따로 내는 서버의 lock 상태(`MapSession.Update.serverLock`)에 있다.
+func projectGoNetmap(_ map: Netmap, tkaEnabled: Bool) -> GoFixtureJSON {
     .object([
         "SelfNode": projectGoNode(map.selfNode),
         // Swift가 정렬했는지도 검사하므로 시험에서 다시 정렬하지 않는다.
@@ -134,7 +135,7 @@ func projectGoNetmap(_ map: Netmap) -> GoFixtureJSON {
             if !p.profilePicURL.isEmpty { fields["ProfilePicURL"] = .string(p.profilePicURL) }
             return (String(id), .object(fields))
         })),
-        "Domain": .string(map.domain), "TKAEnabled": .bool(map.tailnetLockEnabled)
+        "Domain": .string(map.domain), "TKAEnabled": .bool(tkaEnabled)
     ])
 }
 

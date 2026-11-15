@@ -11,8 +11,10 @@ import SwiftailTKA
 /// (`ControlHandshake`·`ControlSession`·`HTTP2ClientConnection`·`MapResponseFramer`·`MapSession`)가 하고, 이 actor는
 /// 바이트와 시각을 그것들에 넣고 결과를 사건(`events`)으로 내보낸다.
 ///
-/// 동시성은 구조적이다. `run()`이 연결 하나의 수명 동안 읽기 루프·맵 스트림·감시·상태 올리기를 한 TaskGroup의
-/// 자식으로 돌리므로, `run()`을 부른 Task를 취소하면 모두 멈추고 소켓이 닫힌다.
+/// 동시성은 구조적이다. `run()`이 연결 하나의 수명 동안 읽기 루프·맵 스트림·감시·상태 올리기·tailnet lock 절차를 한
+/// TaskGroup의 자식으로 돌리므로, `run()`을 부른 Task를 취소하면 모두 멈추고 소켓이 닫힌다.
+///
+/// 사건으로 내는 netmap은 tailnet lock으로 이미 걸러져 있다(`ControlClient+TailnetLock.swift`).
 ///
 /// ```swift
 /// let client = ControlClient(configuration: .init(serverURL: url, hostname: "rd-mac-1a2b3c4d"),
@@ -47,7 +49,8 @@ public actor ControlClient {
         case loginRequired(URL)
         /// 등록이 끝났다. 신원은 저장되었다.
         case registered(NodePublicKey)
-        /// netmap이 바뀌었다(맵 스트림의 첫 응답 포함).
+        /// netmap이 바뀌었다(맵 스트림의 첫 응답 포함). tailnet lock으로 걸러진 것이고 `tailnetLock`에 그 모습이 있다.
+        /// 피어는 그대로인데 lock의 모습만 바뀌어도(서명 권한 상태의 변화) 다시 낸다.
         case netmap(Netmap)
         /// 맵 스트림이 끊겼다. 물러났다가 다시 잇는다. 그동안 마지막 netmap은 유효하다.
         case disconnected
@@ -93,6 +96,10 @@ public actor ControlClient {
         var followup = Duration.seconds(600)
         /// `setDNS`: 연결을 기다리는 시간과 응답까지 합한 기한(계약 `docs/contracts/SwiftailHost.md` 동작 D2).
         var setDNS = Duration.seconds(60)
+        /// tailnet lock의 RPC 하나(Go와 같은 1분. 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 M).
+        var tkaRequest = Duration.seconds(60)
+        /// 검증한 상태 없이 닫혀 있을 때(`.unverified`) 부트스트랩을 다시 시도하는 간격의 범위(동작 N6).
+        var lockRetry = Duration.seconds(5)...Duration.seconds(300)
     }
 
     let configuration: Configuration
@@ -120,6 +127,8 @@ public actor ControlClient {
     var localStatus = LocalStatus()
     /// 지금 연결에서 마지막으로 올린 상태. 같은 상태를 다시 올리지 않는다.
     var uploadedStatus: LocalStatus?
+    /// 지금 연결에서 마지막으로 올린 `TKAHead`. 로컬 머리가 달라지면 상태를 한 번 더 올린다.
+    var uploadedTKAHead: String?
     var needsRegistration = true
     /// 다음 등록에서 새 node 키를 만든다(대화형 로그인, 만료).
     var rotateNodeKey = false
@@ -142,8 +151,16 @@ public actor ControlClient {
     var lastMapActivity = ContinuousClock.now
     /// 이미 답한 핑의 URL. 서버가 같은 핑을 다시 보내도 한 번만 답한다.
     var lastPingURL: String?
-    /// 서버가 마지막으로 보낸 tailnet lock 상태. `tailnetLockEnabled`로 끝난 까닭을 진단할 때 본다.
-    var lastTKAInfo: TKAInfo?
+    /// 검증한 서명 권한 상태. lock이 없으면 nil. `run()`이 저장소에서 열고, 연결이 끊겨 다시 이어도 그대로 쥔다.
+    var lockAuthority: Authority?
+    /// 저장된 서명 권한 상태를 열지 못했다. 앱이 그 파일을 지우고 다시 시작할 때까지 피어를 올리지 않는다.
+    var isLockStoreUnreadable = false
+    /// 거절한 끄기 비밀의 BLAKE2s-256과 그때의 머리. 같은 비밀로 KDF(16MiB)를 다시 돌리지 않는다. 메모리에만 쥔다.
+    var rejectedDisablement: (head: AUMHash, secretDigest: [UInt8])?
+    /// 끄기 비밀의 KDF를 돈 횟수. 같은 비밀을 다시 계산하지 않는지 시험이 본다.
+    var disablementDerivationCount = 0
+    /// 지금 맵 세션의 tailnet lock 처리 상태.
+    var lockSession = LockSession()
     /// 지금 연결의 신호 통로. 연결이 없으면 nil.
     var signals: AsyncStream<SessionSignal>.Continuation?
     /// 등록을 마친 지금 연결. 맵 스트림 밖의 요청(`setDNS`)이 이 연결 위의 새 스트림으로 나간다. 연결이 없으면 nil.
@@ -238,6 +255,7 @@ public actor ControlClient {
         let endpoint = try ControlEndpoint(serverURL: configuration.serverURL)
         guard !configuration.hostname.isEmpty else { throw .invalidConfiguration("호스트 이름이 비었다") }
         try prepareRegistration()
+        openLockStore()
         needsRegistration = true
 
         while !Task.isCancelled {
@@ -322,7 +340,7 @@ public actor ControlClient {
         }
     }
 
-    /// 연결 하나에서 할 일: 필요하면 등록, 상태 올리기, 그 뒤 맵 스트림·감시·신호 처리를 함께 돌린다.
+    /// 연결 하나에서 할 일: 필요하면 등록, 상태 올리기, 그 뒤 맵 스트림·감시·신호 처리·tailnet lock 절차를 함께 돌린다.
     /// 던지는 것으로만 끝난다.
     private func serve(_ connection: ControlConnection) async throws {
         let (signalStream, continuation) = AsyncStream.makeStream(of: SessionSignal.self)
@@ -330,6 +348,8 @@ public actor ControlClient {
         isStatusChangeQueued = false
         queuedPings = 0
         uploadedStatus = nil
+        uploadedTKAHead = nil
+        lockSession = LockSession()
         selfKeyExpiry = nil
         selfKeyExpiryChanged = nil
         defer {
@@ -350,6 +370,7 @@ public actor ControlClient {
             group.addTask { try await self.receiveMap(over: connection) }
             group.addTask { try await self.watchMapActivity() }
             group.addTask { try await self.handle(signalStream, over: connection) }
+            group.addTask { try await self.runLockProcedures(over: connection) }
             try await group.next()
             throw ControlError.connection("맵 처리가 끝났다")
         }

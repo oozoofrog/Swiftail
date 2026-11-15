@@ -69,12 +69,9 @@ struct RealTailnetGateTests {
         if let failure {
             Issue.record("run()이 오류로 끝났다: \(redacted(String(describing: failure)))")
         }
-        // tailnet lock 진단: 서버가 TKAInfo를 보냈는지와 그 모양만 본다(해시 값은 찍지 않는다).
-        if let info = await client.lastTKAInfo {
-            print("마무리 관문 진단: TKAInfo 받음, Head 비어 있음 \(info.head.isEmpty), Disabled \(info.disabled)")
-        } else {
-            print("마무리 관문 진단: TKAInfo 없음")
-        }
+        // tailnet lock 진단: 서버가 마지막 맵 세션에서 알린 상태만 본다(해시 값은 찍지 않는다).
+        let serverLock = await client.lockSession.server
+        print("마무리 관문 진단: 서버가 알린 lock 켜짐 \(serverLock.isEnabled), 머리 있음 \(serverLock.head != nil)")
         #expect(disconnectCount != -1, "인증 키가 받아들여지지 않아 대화형 로그인을 요구받았다")
         #expect(didRegister, "등록되지 않았다")
         let map = try #require(netmap, "netmap을 받지 못했다(비압축 맵 응답을 서버가 주지 않았을 수 있다)")
@@ -91,7 +88,7 @@ struct RealTailnetGateTests {
               등록 \(didRegister), netmap 사건 \(netmapCount)개, 끊김 \(disconnectCount)회, 유지 \(hold)
               자기 주소 \(map.selfNode.addresses.count)개, 피어 \(map.peers.count)명, DERP 지역 \(regionCount)개
               DNSConfig \(map.dnsConfig != nil), 필터 규칙 \(map.packetFilter.count)개, 사용자 프로필 \(map.userProfiles.count)개
-              tailnet lock \(map.tailnetLockEnabled), 서버 시각 있음 \(map.controlTime != nil), self 키 만료 있음 \(map.selfNode.keyExpiry != nil)
+              tailnet lock \(map.tailnetLock.mode), 거른 피어 \(map.tailnetLock.filteredPeerCount)명, 서버 시각 있음 \(map.controlTime != nil), self 키 만료 있음 \(map.selfNode.keyExpiry != nil)
             """)
     }
 }
