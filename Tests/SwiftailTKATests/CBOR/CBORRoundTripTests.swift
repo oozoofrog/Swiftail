@@ -91,7 +91,7 @@ struct CBORRoundTripTests {
                 }
             case .null:
                 return [0xf6]
-            case .negative, .simpleOrFloat:
+            case .negative, .simple, .simpleOrFloat:
                 Issue.record("생성기가 쓸 수 없는 값을 만들었다")
                 return []
             }

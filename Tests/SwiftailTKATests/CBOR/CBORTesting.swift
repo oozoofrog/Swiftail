@@ -51,7 +51,7 @@ enum CBORTesting {
             for entry in keyed {
                 guard write(entry.pair.key, into: &writer), write(entry.pair.value, into: &writer) else { return false }
             }
-        case .negative, .simpleOrFloat:
+        case .negative, .simple, .simpleOrFloat:
             return false
         }
         return true

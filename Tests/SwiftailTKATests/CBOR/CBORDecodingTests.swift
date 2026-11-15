@@ -45,11 +45,14 @@ struct CBORDecodingTests {
         )
     }
 
-    @Test("major 7: null과 undefined는 null, 나머지는 simpleOrFloat")
+    @Test("major 7: null과 undefined는 null, 단순값은 그 값, 나머지는 simpleOrFloat")
     func simpleValues() throws {
         #expect(try decode("f6") == .null)
         #expect(try decode("f7") == .null)
-        for hex in ["e0", "f3", "f4", "f5", "f820", "f8ff", "f90000", "f97e00", "fa7f800000", "fbfff0000000000000"] {
+        for (hex, value) in [("e0", 0), ("f3", 19), ("f820", 32), ("f8ff", 255)] as [(String, UInt8)] {
+            #expect(try decode(hex) == .simple(value), "\(hex)")
+        }
+        for hex in ["f4", "f5", "f90000", "f97e00", "fa7f800000", "fbfff0000000000000"] {
             #expect(try decode(hex) == .simpleOrFloat, "\(hex)")
         }
     }

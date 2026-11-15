@@ -17,7 +17,10 @@ package enum CBORValue: Sendable, Equatable {
     /// null(`f6`)과 undefined(`f7`). Go 디코더는 둘을 같게 다룬다: 알려진 필드에서는 그 필드의 0 값이 되고
     /// 모르는 필드에서는 버린다(`fxamacker/cbor` v2.9.3 `decode.go`의 `nextCBORNil`). 쓸 때는 null이다.
     case null
-    /// major 7의 나머지(false·true·단순값·실수). 값을 쥐지 않는다. 알려진 필드에는 올 수 없다.
+    /// 값이 정해지지 않은 단순값(0~19, 32~255). Go 디코더는 정수 필드에 이 값을 정수로 넣는다
+    /// (`fxamacker/cbor` v2.9.3 `decode.go`의 `parseToValue`에서 major 7의 나머지 갈래가 `fillPositiveInt`를 부른다).
+    case simple(UInt8)
+    /// major 7의 나머지(false·true·실수). 값을 쥐지 않는다. 알려진 필드에는 올 수 없다.
     case simpleOrFloat
 }
 
