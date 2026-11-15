@@ -193,6 +193,12 @@ extension TailnetNode {
             // `.running` 뒤 끊겨도 상태는 그대로다(동작 B). 클라이언트가 물러났다가 다시 잇는다.
             Self.log.info("DERP 지역 \(link.region, privacy: .public): 연결 끊김, 다시 잇는 중")
             connectedDERPRegions.remove(link.region)
+        case let .attemptFailed(failure, consecutiveFailures):
+            // 물러남의 상한이 5초라 망이 없는 동안 실패가 끝없이 이어진다. 연달아 실패한 첫 번째와 그 뒤 10번째마다만 적는다.
+            guard isCurrent, consecutiveFailures == 1 || consecutiveFailures.isMultiple(of: 10) else { return }
+            Self.log.info(
+                "DERP 지역 \(link.region, privacy: .public): 연결 실패(\(String(describing: failure), privacy: .public)), 연달아 \(consecutiveFailures, privacy: .public)번째"
+            )
         case .peerGone:
             // shortcut: 역방향 DERP 지역을 쓰지 않으므로 지울 것이 없다(magicsock 계약 D3).
             break

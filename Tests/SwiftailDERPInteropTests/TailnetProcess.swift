@@ -136,7 +136,7 @@ actor TailnetProcess {
             throw ToolFailure("ready를 보내기 전에 표준 출력이 닫혔다")
         }
         guard let derp = ready.derp, let port = UInt16(exactly: derp.port) else { throw ToolFailure("ready에 DERP 정보가 없다") }
-        return DERPServer(hostName: derp.host, address: IPAddress(derp.host), port: port, verification: .noneForTests)
+        return DERPServer(hostName: derp.host, targets: IPAddress(derp.host).map { [.address($0)] } ?? [.hostName], port: port, verification: .noneForTests)
     }
 
     private func stop() async {

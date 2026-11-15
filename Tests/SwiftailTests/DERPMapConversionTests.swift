@@ -98,35 +98,47 @@ struct DERPMapConversionTests {
     func testServerNode() throws {
         let server = try #require(try Self.server(Self.node(hostName: "127.0.0.1", insecureForTests: true)))
         #expect(server.hostName == "127.0.0.1")
-        #expect(server.address == IPAddress("127.0.0.1"))
+        #expect(server.targets == [.address(try #require(IPAddress("127.0.0.1")))])
         #expect(server.port == 8443)
         #expect(server.verification == .noneForTests)
     }
 
-    @Test("IPv4가 비었으면 DNS로 찾는다")
-    func emptyIPv4UsesDNS() throws {
-        let server = try #require(try Self.server(Self.node(ipv4: "")))
-        #expect(server.address == nil)
-        #expect(server.verification == .system)
+    /// Go `shouldDialProto`: 빈 칸은 `HostName`, 그 칸의 체계의 IP 리터럴은 그 주소, 그 밖의 값은 그 체계를 걸지 않는다.
+    /// 두 칸이 모두 걸지 않으면 그 노드는 쓰지 않는다(`dialNode`의 "both IPv4 and IPv6 are explicitly disabled").
+    @Test("걸 대상: IPv4·IPv6 칸의 {빈 값, 맞는 체계의 리터럴, none, 다른 체계의 리터럴, 쓰레기} 모든 조합이 Go 규칙과 같다")
+    func dialTargetsFollowGo() throws {
+        let v4 = try #require(IPAddress("192.0.2.1"))
+        let v6 = try #require(IPAddress("2001:db8::1"))
+        // 칸에 넣는 값과, 그 칸이 뜻하는 대상(nil이면 그 체계로 걸지 않는다).
+        let ipv4Cells: [(text: String, target: DERPServer.Target?)] = [
+            ("", .hostName), ("192.0.2.1", .address(v4)), ("none", nil), ("2001:db8::1", nil), ("derp", nil),
+        ]
+        let ipv6Cells: [(text: String, target: DERPServer.Target?)] = [
+            ("", .hostName), ("2001:db8::1", .address(v6)), ("none", nil), ("192.0.2.1", nil), ("derp", nil),
+        ]
+        for ipv4 in ipv4Cells {
+            for ipv6 in ipv6Cells {
+                let server = try Self.server(Self.node(ipv4: ipv4.text, ipv6: ipv6.text))
+                let expected: [DERPServer.Target]? = switch (ipv4.target, ipv6.target) {
+                case (nil, nil): nil
+                case (.hostName?, .hostName?): [.hostName]
+                case let (first, second): [first, second].compactMap { $0 }
+                }
+                #expect(server?.targets == expected, "IPv4 \"\(ipv4.text)\", IPv6 \"\(ipv6.text)\"")
+            }
+        }
     }
 
-    @Test("IPv4가 none이면 IPv6를 같은 규칙으로 본다")
-    func fallsBackToIPv6() throws {
-        let literal = try #require(try Self.server(Self.node(ipv4: "none", ipv6: "::1")))
-        #expect(literal.address == IPAddress("::1"))
-        let dns = try #require(try Self.server(Self.node(ipv4: "none", ipv6: "")))
-        #expect(dns.address == nil)
-    }
-
-    @Test("IPv4 칸의 IPv6 주소는 IPv4로 쓰지 않는다")
-    func wrongFamilyIsNotUsed() throws {
-        #expect(try Self.server(Self.node(ipv4: "::1")) == nil)
-        #expect(try Self.server(Self.node(ipv4: "none", ipv6: "127.0.0.1")) == nil)
-    }
-
-    @Test("IPv4와 IPv6를 둘 다 쓸 수 없으면 건너뛴다")
-    func neitherFamily() throws {
+    @Test("걸 대상의 대표 경우: 두 리터럴은 IPv4·IPv6 순서, 두 칸이 비면 이름 하나, 한 칸만 비면 이름과 다른 칸의 리터럴")
+    func dialTargetExamples() throws {
+        let v4 = try #require(IPAddress("192.0.2.1"))
+        let v6 = try #require(IPAddress("2001:db8::1"))
+        #expect(try Self.server(Self.node(ipv4: "192.0.2.1", ipv6: "2001:db8::1"))?.targets == [.address(v4), .address(v6)])
+        #expect(try Self.server(Self.node(ipv4: "", ipv6: ""))?.targets == [.hostName])
+        #expect(try Self.server(Self.node(ipv4: "", ipv6: "2001:db8::1"))?.targets == [.hostName, .address(v6)])
+        #expect(try Self.server(Self.node(ipv4: "none", ipv6: "2001:db8::1"))?.targets == [.address(v6)])
         #expect(try Self.server(Self.node(ipv4: "none", ipv6: "none")) == nil)
+        #expect(try Self.server(Self.node(ipv4: "")).map(\.verification) == .system)
     }
 
     @Test("derpPort가 0이면 443, 범위 밖이면 건너뛴다")
