@@ -334,6 +334,15 @@ struct DatagramSocketTests {
         #expect(try #require(numbers.first) >= total - (1 << 20) / 8000)
     }
 
+    @Test("UDP에 실을 수 없는 크기는 송신 큐에 넣지 않고, 뒤따르는 것은 그대로 보낸다")
+    func enqueueDropsOversizedDatagram() async throws {
+        let receiver = try DatagramSocket()
+        let sender = try DatagramSocket()
+        // 2MiB 하나는 바이트 한도(1MiB)보다 커서, 큐에 들어가면 한도를 넘은 채 남는다.
+        sender.enqueue([([UInt8](repeating: 0, count: 2 << 20), Self.destination(receiver)), ([7], Self.destination(receiver))])
+        #expect(await Self.next(from: receiver)?.bytes == [7])
+    }
+
     @Test("닫은 뒤의 enqueue는 아무것도 보내지 않는다")
     func enqueueAfterCloseSendsNothing() async throws {
         let receiver = try DatagramSocket()

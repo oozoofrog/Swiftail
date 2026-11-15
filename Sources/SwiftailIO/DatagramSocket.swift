@@ -126,10 +126,14 @@ package final class DatagramSocket: Sendable {
     ///
     /// 아직 보내지 못한 것이 256개나 바이트 합 1MiB를 넘으면 오래된 것부터 버린다. 닫은 소켓이면 버린다. 보내기 실패(IPv6
     /// 목적지, `EAGAIN`, `EHOSTUNREACH` 등)는 그 데이터그램을 버린다(DERP로 함께 나가거나 WireGuard·disco가 다시 보낸다).
+    /// UDP 데이터그램 하나에 실을 수 없는 크기(65,535바이트 초과)는 넣지 않는다. 그래서 하나가 바이트 한도를 넘는 일이 없다.
     package func enqueue(_ datagrams: [OutgoingDatagram]) {
         guard let outgoing = state.withLock({ $0?.outgoing }) else { return }
+        let envelopes = datagrams.compactMap { datagram in
+            datagram.bytes.count <= Self.maximumDatagramSize ? Envelope(bytes: datagram.bytes, endpoint: datagram.destination) : nil
+        }
         // 비어 있던 큐에 넣었을 때만 보내기를 건다. 비어 있지 않으면 이미 걸린 보내기가 아직 꺼내 가지 않았다.
-        guard outgoing.append(contentsOf: datagrams.map { Envelope(bytes: $0.bytes, endpoint: $0.destination) }) else { return }
+        guard outgoing.append(contentsOf: envelopes) else { return }
         queue.async {
             self.sendQueued()
         }

@@ -113,8 +113,8 @@ extension TailnetNode {
     }
 
     /// 데이터그램이 오면 그동안 소켓에 쌓인 것까지 묶음 하나로 처리한다. 묶음 전체가 처리 하나라서, 스택의 대기열과
-    /// `advance`, 타이머 다시 걸기가 묶음 끝에 한 번 일어난다(netstack 계약 동작 N4). 묶음은 소켓의 받은 큐의 한도(256개)를
-    /// 넘지 않으므로 actor를 오래 잡지 않는다.
+    /// `advance`, 타이머 다시 걸기가 묶음 끝에 한 번 일어난다(netstack 계약 동작 N4). 묶음은 방금 받은 하나와 소켓의 받은 큐의
+    /// 한도(256개)를 넘지 않으므로 actor를 오래 잡지 않는다.
     private func receiveUDP(from socket: DatagramSocket) async {
         for await datagram in socket.datagrams {
             let now = ContinuousClock.now

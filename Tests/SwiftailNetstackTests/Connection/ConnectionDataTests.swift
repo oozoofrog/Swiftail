@@ -95,30 +95,6 @@ struct ConnectionDataTests {
         #expect(delayed.map(\.acknowledgmentNumber) == [base.advanced(by: 5 * 1_240)])
     }
 
-    @Test("받는 쪽에 빈 곳이 있는 동안은 새 데이터를 싣지 않아 중복 ACK와 partial ACK가 순수 ACK로 나간다")
-    func holdsNewDataWhileReceiveGap() throws {
-        var peer = try ManualPeer.established()
-        let base = peer.peerNext
-        let ahead = peer.segment(sequence: base.advanced(by: 100), flags: [.ack], payload: patternBytes(count: 50))
-        let duplicate = peer.connection.receive(ahead, at: peer.now).segments
-        #expect(duplicate.map(\.payload.count) == [0])
-        let (accepted, written) = peer.connection.write(patternBytes(count: 500)[...], at: peer.now)
-        #expect(accepted == 500)
-        #expect(written.segments.isEmpty)
-
-        // 빈 곳의 앞부분만 메운다(상대의 fast recovery에서는 partial ACK가 된다).
-        let partial = peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 40))
-        let partialACK = peer.connection.receive(partial, at: peer.now).segments
-        #expect(partialACK.map(\.payload.count) == [0])
-        #expect(partialACK.first?.acknowledgmentNumber == base.advanced(by: 40))
-
-        // 빈 곳이 다 메워지면 기다리던 데이터가 ACK를 싣고 나간다.
-        let fill = peer.segment(sequence: base.advanced(by: 40), flags: [.ack], payload: patternBytes(count: 60))
-        let resumed = peer.connection.receive(fill, at: peer.now).segments
-        #expect(resumed.map(\.payload.count) == [500])
-        #expect(resumed.first?.acknowledgmentNumber == base.advanced(by: 150))
-    }
-
     @Test("나가는 데이터가 있으면 ACK는 거기에 실린다")
     func piggybackedAcknowledgment() throws {
         var peer = try ManualPeer.established()

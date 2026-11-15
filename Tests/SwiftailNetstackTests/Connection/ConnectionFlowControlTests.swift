@@ -154,25 +154,29 @@ struct ConnectionFlowControlTests {
         #expect(Int(segment.window) << 3 == ((256 * 1_024 - (129 * 1_024 - 2_000)) >> 3) << 3)
     }
 
-    @Test("빈 곳이 있는 동안은 읽어도 창의 오른쪽 끝을 옮기지 않아 중복 ACK의 창이 같다. 메워지면 옮긴다")
-    func windowEdgeHeldWhileReceiveGap() throws {
-        // 129KiB를 쥐어 남은 창을 절반 아래로 둔다(읽으면 곧바로 창 갱신을 보낼 상태).
-        var peer = try Self.peer(holding: 129 * 1_024)
+    /// 빈 곳이 있는 동안 창의 끝을 고정하던 때는 여기서 창이 0으로 남아, 앱이 다 읽어도 상대의 0 창 탐침이 끝나지 않았다.
+    @Test("빈 곳이 있어도 읽으면 창이 열린다: shift로 내려 0이 된 창에 갇히지 않는다")
+    func windowOpensWhileReceiveGap() throws {
+        // 버퍼(256KiB)를 2바이트만 남기고 채운 뒤 1바이트를 건너뛴 마지막 1바이트를 받는다. 남은 창 2바이트는 shift 3에서 0이다.
+        var peer = try Self.peer(holding: 255 * 1_024)
+        peer.send(flags: [.ack], payload: patternBytes(count: 1_022))
         let base = peer.peerNext
-        let ahead = peer.segment(sequence: base.advanced(by: 1_240), flags: [.ack], payload: patternBytes(count: 1_240))
-        let first = try #require(peer.connection.receive(ahead, at: peer.now).segments.first)
-        let (bytes, quiet) = peer.connection.read(upTo: 64 * 1_024, at: peer.now)
-        #expect(bytes.count == 64 * 1_024)
-        #expect(quiet.segments.isEmpty)
-        let again = peer.segment(sequence: base.advanced(by: 2_480), flags: [.ack], payload: patternBytes(count: 1_240))
-        let second = try #require(peer.connection.receive(again, at: peer.now).segments.first)
-        #expect(second.acknowledgmentNumber == base)
-        #expect(second.window == first.window)
-        // 빈 곳을 메우는 ACK는 읽어서 열린 창을 싣는다.
-        let fill = peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 1_240))
-        let filled = try #require(peer.connection.receive(fill, at: peer.now).segments.first)
-        #expect(filled.acknowledgmentNumber == base.advanced(by: 3 * 1_240))
-        #expect(Int(filled.window) << 3 > Int(first.window) << 3)
+        let ahead = peer.segment(sequence: base.advanced(by: 1), flags: [.ack], payload: [7])
+        let duplicate = try #require(peer.connection.receive(ahead, at: peer.now).segments.first)
+        #expect(duplicate.acknowledgmentNumber == base)
+        #expect(duplicate.window == 0)
+
+        let (bytes, outputs) = peer.connection.read(upTo: 256 * 1_024, at: peer.now)
+        #expect(bytes.count == 256 * 1_024 - 2)
+        let update = try #require(outputs.segments.first)
+        #expect(update.payload.isEmpty)
+        #expect(update.acknowledgmentNumber == base)
+        #expect(update.window > 0)
+
+        // 빈 곳이 메워지면 먼저 온 바이트까지 읽힌다.
+        let fill = peer.segment(sequence: base, flags: [.ack], payload: [6])
+        _ = peer.connection.receive(fill, at: peer.now)
+        #expect(peer.connection.read(upTo: 10, at: peer.now).0 == [6, 7])
     }
 
     @Test("창 갱신: 응용이 조금씩 읽어도 큰 전송이 멈추지 않는다")
