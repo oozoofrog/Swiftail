@@ -88,6 +88,11 @@ struct ModelFixtureTests {
                 #expect(AUMHash(ModelTesting.bytes(item.input))?.text == item.output, "\(item.name)")
             } else {
                 let hash = AUMHash(text: item.input)
+                // 줄바꿈이 섞인 텍스트는 Go가 잘린 해시로 받고 Swiftail은 거절한다(계약 동작 D10).
+                if item.input.contains(where: \.isNewline) {
+                    #expect(hash == nil, "\(item.name)")
+                    continue
+                }
                 #expect((hash != nil) == item.ok, "\(item.name)")
                 if item.ok { #expect(hash.map { ModelTesting.hex($0.bytes) } == item.output, "\(item.name)") }
             }

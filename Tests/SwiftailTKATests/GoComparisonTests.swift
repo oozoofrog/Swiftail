@@ -104,14 +104,16 @@ struct GoComparisonTests {
         }
     }
 
-    @Test(
-        "text: 줄바꿈이 섞인 AUMHash 텍스트(Go는 31·30바이트만 읽어 받는다)",
-        .bug(id: "TL5-AUMHASH-LINEBREAK", "계약 5절 TL-2가 미정으로 둔 판정. Swift는 거절한다")
-    )
+    /// Go는 길이를 줄바꿈을 지우기 전의 글자 수로 재고 지운 뒤에 읽어, 31·30바이트만 채운 **원래와 다른 해시**로 받는다
+    /// (`tka/aum.go:33-41`). Swiftail은 52자 알파벳만 받는다(계약 동작 D10).
+    @Test("text: 줄바꿈이 섞인 AUMHash 텍스트는 거절한다(Go는 잘린 해시로 받는다. 의도된 차이 D10)")
     func aumHashLineBreaks() throws {
         let fixture = try GoFixture.load()
         for item in fixture.text where Self.aumHashLineBreakRows.contains(item.name) {
-            ComparisonTally.record(Self.compareText(item), section: "text", row: item.name, total: fixture.text.count)
+            let comparison: Comparison = AUMHash(text: item.input) != nil
+                ? .mismatch("Swift가 줄바꿈이 섞인 텍스트를 받았다")
+                : item.ok ? .intended("D10") : .same
+            ComparisonTally.record(comparison, section: "text", row: item.name, total: fixture.text.count)
         }
     }
 
