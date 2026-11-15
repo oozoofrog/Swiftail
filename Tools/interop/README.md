@@ -734,3 +734,7 @@ CSR의 구문·자기 서명과 P-256 키를 검사한다. 이름·SAN·태그�
 `acmefixtures parse-key` 입력은 `{"pem":"-----BEGIN EC PRIVATE KEY-----\n…\n-----END EC PRIVATE KEY-----\n"}`다. SEC1 `EC PRIVATE KEY`는 `x509.ParseECPrivateKey`, PKCS#8 `PRIVATE KEY`는 `x509.ParsePKCS8PrivateKey`로 읽는다. 성공 출력은 `{"ok":true,"format":"EC PRIVATE KEY","publicKey":{"crv":"P-256","kty":"EC","x":"<32바이트 base64url>","y":"<32바이트 base64url>"}}`다. PKCS#8의 `format`은 `PRIVATE KEY`다. 단일 블록·PEM header 없음·앞뒤 쓰레기 없음·P-256만 허용한다. 개인 키 바이트는 결과에 넣지 않는다.
 
 노트 7장 1·2대로 JWK 정규형·지문·키 인가·TXT는 **바이트 비교**, CSR Info는 같은 키·SAN 속성·CN 태그·DER 규칙을 택했을 때 **바이트 비교**한다. Go 보호 머리의 실제 순서는 `alg,jwk,nonce,url`과 `alg,kid,nonce,url`이지만, JWS JSON 순서·공백은 **의미 비교**한다. 서명은 Go↔Swift의 상대 검증이며 서명 바이트 일치를 요구하지 않는다. Go 시험은 저장 자료 일치·연속 재생성, 모든 예의 검증, 변조 JWS·CSR 거절, 순서를 바꿔 다시 서명한 JWS 수용, UTF8String CSR의 유효성과 Info 차이, 경계 입력 거절을 확인한다.
+
+# Argon2i 기준값 생성 (`argon2fixtures`)
+
+`sh Scripts/build-interop-tools.sh argon2fixtures`로 빌드하고, 인자 없이 실행하면 `golang.org/x/crypto` `argon2.Key` 출력 75개를 JSON으로 표준 출력에 쓴다(`argon2fixtures > Tests/SwiftailCryptoTests/Vectors/argon2i-go.json`). 마지막 항목은 TKA 끄기 비밀의 인자 그대로이며 `tka.DisablementKDF`와 다르면 실패한다. 입력은 시험 전용 고정 패턴이다. Swift 시험은 `SWIFTAIL_ARGON2FIXTURES=<경로>`가 있으면 새로 뽑아 견준다.

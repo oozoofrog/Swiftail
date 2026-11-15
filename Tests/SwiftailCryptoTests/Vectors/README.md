@@ -15,3 +15,14 @@ curl -fsSL https://raw.githubusercontent.com/BLAKE2/BLAKE2/master/testvectors/bl
 ```
 
 지정된 `device/kdf_test.go`에는 별도의 HMAC 기대값이 없으며, HMAC은 교차 벡터로 검증한다.
+
+## BLAKE2b·Argon2i 벡터
+
+| 파일 | 출처 | 생성 명령 | 라이선스 |
+| --- | --- | --- | --- |
+| `blake2b-kat.json` | [BLAKE2 공식 testvectors/blake2-kat.json](https://github.com/BLAKE2/BLAKE2/blob/master/testvectors/blake2-kat.json), BLAKE2b 키 없음 256개와 키 64바이트 256개 | 아래 추출 명령 | CC0-1.0 또는 OpenSSL 또는 Apache-2.0 |
+| `argon2i-go.json` | `golang.org/x/crypto` v0.58.0 `argon2.Key`, `tailscale.com` v1.104.6 `tka.DisablementKDF`, 75개 | `"$(sh Scripts/build-interop-tools.sh argon2fixtures)" > Tests/SwiftailCryptoTests/Vectors/argon2i-go.json` | BSD-3-Clause |
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BLAKE2/BLAKE2/master/testvectors/blake2-kat.json | python3 -c 'import json,sys; x=json.load(sys.stdin); y=[dict(kind="blake2b",key=v["key"],input=v["in"],output=v["out"]) for v in x if v["hash"]=="blake2b" and v["key"] in ("", bytes(range(64)).hex())]; assert len(y)==512; json.dump(y,sys.stdout,indent=2); print()' > Tests/SwiftailCryptoTests/Vectors/blake2b-kat.json
+```

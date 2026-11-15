@@ -86,3 +86,35 @@ public func constantTimeEqual(_ a: [UInt8], _ b: [UInt8]) -> Bool
 2. Go `golang.org/x/crypto`로 만든 교차 벡터(여러 길이, 블록 경계 포함).
 3. 변조 시험: 태그·암호문·nonce·AAD의 한 비트를 바꾸면 `authenticationFailed`.
 4. 구현을 쓴 제공자와 다른 제공자의 코드 검토.
+
+## BLAKE2b와 Argon2i (M8)
+
+Tailnet Lock의 끄기 비밀 검증(`docs/protocol-notes/tailnet-lock.md` 4.5)이 쓴다. Go `tka.DisablementKDF`는 `argon2.Key(secret, "tailscale network-lock disablement salt", 4, 16·1024, 4, 32)`이고, 이것은 Argon2i(버전 0x13, 비밀 키·연관 자료 없음)다. Apple 프레임워크에 둘 다 없어 Swift로 쓴다.
+
+```swift
+/// BLAKE2b(RFC 7693). 출력 1~64바이트, 키 0~64바이트. 범위 밖은 BLAKE2s처럼 precondition으로 멈춘다.
+public struct BLAKE2b: Sendable {
+    public init(outputByteCount: Int = 64, key: [UInt8] = [])
+    public mutating func update(_ data: some DataProtocol)
+    public func finalize() -> [UInt8]
+    public static func hash(_ data: some DataProtocol, outputByteCount: Int = 64, key: [UInt8] = []) -> [UInt8]
+}
+
+/// Argon2i(RFC 9106, 버전 0x13). memoryKiB는 KiB 단위(Go argon2.Key의 memory와 같다).
+public enum Argon2i {
+    public static func derive(
+        password: [UInt8], salt: [UInt8], iterations: UInt32, memoryKiB: UInt32, parallelism: UInt8, outputByteCount: Int
+    ) throws(CryptoError) -> [UInt8]
+}
+```
+
+- 범위(RFC 9106 3.1): `parallelism ≥ 1`, `iterations ≥ 1`, `memoryKiB ≥ 8 × parallelism`, `outputByteCount` 4~2^32-1, 입력 길이 2^32-1 이하가 아니면 `CryptoError.invalidLength`. 비용 인자용 경우를 `CryptoError`에 더하지 않은 것은 다른 타깃의 전수 `switch`(`SwiftailMagicsock/DiscoSharedKey.swift`)가 깨지기 때문이다. 솔트 길이의 하한은 RFC 9106 3.1에 없어 두지 않는다. Go는 작은 메모리를 조용히 `8p`로 올리고 출력 길이를 검사하지 않지만 여기서는 거절한다.
+- 차선은 한 스레드에서 조각(slice)마다 차례로 채운다. 같은 조각의 차선끼리는 서로 참조하지 않으므로(RFC 9106 3.4) 병렬 계산과 결과가 같다.
+- 참조 블록은 주소 블록(3.4.1.2)에서만 고른다. 블록 내용에서 색인을 뽑지 않으므로 메모리 접근 순서가 비밀에 따라 달라지지 않는다.
+- 메모리 `memoryKiB` KiB를 한 번에 잡는다. 호출자는 TKA 인자(16 MiB)처럼 감당할 수 있는 값만 준다.
+
+관문:
+
+1. BLAKE2b: RFC 7693 부록 A("abc")와 부록 E(자체 시험의 hash of hashes), BLAKE2 공식 KAT(키 없음·키 64바이트 각 256개, `Vectors/blake2b-kat.json`), 출력 길이 1·32·64, 블록 경계 0·1·127·128·129·255·256바이트, 나누어 넣은 `update`의 일치.
+2. Argon2i: RFC 9106 5.2 벡터(비밀 키·연관 자료는 `@testable` 내부 함수로)와 H0, Go `argon2.Key` 기준값 75개(`Vectors/argon2i-go.json`, `Tools/interop/cmd/argon2fixtures`가 만든다. 패스 1~4, 메모리 8~16384 KiB와 4p의 배수가 아닌 값, 병렬도 1·2·4·8, 출력 4~1024바이트, 비밀·솔트 길이 0~200), TKA 인자의 `DisablementKDF(0xa5 × 32)`. `SWIFTAIL_ARGON2FIXTURES`에 도구 경로를 주면 새로 뽑아 견준다.
+3. 범위 밖 인자의 오류.
