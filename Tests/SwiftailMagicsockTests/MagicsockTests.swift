@@ -562,26 +562,23 @@ struct MagicsockRulesTests {
         #expect(sock.receiveUDP(oldPing, from: b.address, at: sockTime(11), using: &random) == [.dropped(.unknownDiscoKey)])
     }
 
-    @Test("같은 disco 키를 두 피어가 내세우면 앞의 피어만 disco를 하고 뒤의 피어는 DERP만 쓴다")
+    @Test("같은 disco 키를 두 netmap 피어가 내세우면 둘 다 그 키로 disco를 한다(Go `nodesOfDisco`, 동작 B1)")
     func sharedDiscoKey() throws {
         var cWithBKey = c.peer(endpoints: [c.address])
         cWithBKey.discoKey = b.discoPublicKey
         var sock = makeSock(peers: [b.peer(endpoints: [b.address]), cWithBKey])
         var random = PathTestRandom(state: 7)
         #expect(sock.discoPeers.count == 1)
-        #expect(sock.discoPeers[b.discoPublicKey]?.node == b.nodeKey)
-        #expect(sock.send(testDatagram(1), to: c.nodeKey, at: sockT0, using: &random)
-            == [.derp(testDatagram(1), to: c.nodeKey, region: 1), .pathChanged(c.nodeKey, .relayed(derpRegion: 1))])
+        #expect(sock.discoPeers[b.discoPublicKey]?.nodes == [b.nodeKey, c.nodeKey])
+        // c에게 보내면 c의 주소로 그 키로 봉한 Ping이 나간다.
+        #expect(try pingDestinations(sock.send(testDatagram(1), to: c.nodeKey, at: sockT0, using: &random), openedBy: b) == [c.address])
 
+        // CallMeMaybe는 DERP 보낸 쪽 피어가 그 키를 쥐었으면 그 피어만 받는다.
         let callMeMaybe = try b.seal(.callMeMaybe([try endpoint("203.0.113.10:41641")]), to: a.discoPublicKey)
-        #expect(sock.receiveDERP(callMeMaybe, from: c.nodeKey, region: 1, at: sockTime(1), using: &random) == [.dropped(.misroutedDisco)])
-        #expect(!sock.receiveDERP(callMeMaybe, from: b.nodeKey, region: 1, at: sockTime(1), using: &random).isEmpty)
-
-        // 순서가 주인을 정한다.
-        _ = sock.setPeers([cWithBKey, b.peer(endpoints: [b.address])], at: sockTime(2))
-        #expect(sock.discoPeers[b.discoPublicKey]?.node == c.nodeKey)
-        #expect(sock.send(testDatagram(2), to: b.nodeKey, at: sockTime(3), using: &random)
-            == [.derp(testDatagram(2), to: b.nodeKey, region: 1), .pathChanged(b.nodeKey, .relayed(derpRegion: 1))])
+        let before = candidates(sock, b)
+        #expect(!sock.receiveDERP(callMeMaybe, from: c.nodeKey, region: 1, at: sockTime(1), using: &random).contains(.dropped(.misroutedDisco)))
+        #expect(candidates(sock, c).contains(try endpoint("203.0.113.10:41641")))
+        #expect(candidates(sock, b) == before)
     }
 
     @Test("disco 키가 0인 피어는 DERP만 쓴다")

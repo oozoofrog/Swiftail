@@ -24,8 +24,8 @@ private struct ReviewPair {
     static let bSource = TailnetEngine.Source(address: [192, 0, 2, 2, 0x29, 0xA2], host: [192, 0, 2, 2])
 
     init(bobExtraAllowedIPs: [String] = []) throws {
-        a = TailnetEngine(nodeKey: aKey, now: clockStart, wallClock: wallClockStart)
-        b = TailnetEngine(nodeKey: bKey, now: clockStart, wallClock: wallClockStart)
+        a = TailnetEngine(nodeKey: aKey, discoKey: .zero, now: clockStart, wallClock: wallClockStart)
+        b = TailnetEngine(nodeKey: bKey, discoKey: .zero, now: clockStart, wallClock: wallClockStart)
         let aNode = Self.node(1, aKey, "100.64.0.1", "fd7a:115c:a1e0::1", extraAllowed: [])
         let bNode = Self.node(2, bKey, "100.64.0.2", "fd7a:115c:a1e0::2", extraAllowed: bobExtraAllowedIPs)
         _ = a.apply(try makeNetmap(selfNode: aNode, peers: [bNode], packetFilter: #"[{"SrcIPs":["*"],"DstPorts":[{"IP":"*","Ports":{"First":0,"Last":65535}}]}]"#),

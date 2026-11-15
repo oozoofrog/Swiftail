@@ -1,4 +1,5 @@
-// TSMP disco 키 광고의 바이트를 Go(`tailscale.com` v1.104.6 `packet.TSMPDiscoKeyAdvertisement`)의 출력과 대조한다.
+// TSMP disco 키 광고의 바이트와 받은 패킷의 해석을 Go(`tailscale.com` v1.104.6 `packet.TSMPDiscoKeyAdvertisement`,
+// `Parsed.Decode`)와 대조한다.
 // 자료는 `Tools/interop/cmd/tsmpvectors`가 만든 `Fixtures/tsmp-vectors.json`이다.
 
 import Foundation
@@ -46,11 +47,23 @@ struct TSMPVectorTests {
         #expect(advertisement.bytes.hex == vector.packet)
     }
 
-    @Test("받은 패킷의 해석이 Go AsTSMPDiscoAdvertisement와 같다", arguments: try TSMPVectors.load().parse)
+    /// Go와 판정이 다른 사례와 그 까닭. 벡터의 `key`는 Go의 판정 그대로다.
+    private static let knownDifferences: [String: String] = [
+        // `IPPacket`은 IPv6 확장 머리(조각 머리 포함)를 모두 버린다(엔진 계약). Go `decode6Fragment`는 첫 조각의 TSMP를
+        // 받는다. Go 피어는 73바이트 광고를 조각내지 않으므로 이 차이로 놓치는 광고는 없다.
+        "ipv6-first-fragment-more": "IPv6 첫 조각을 버린다",
+        "ipv6-first-fragment-last": "IPv6 조각 머리가 붙은 패킷을 버린다",
+    ]
+
+    @Test("받은 패킷의 해석이 Go AsTSMPDiscoAdvertisement와 같다(알려진 차이는 Swiftail이 버리는 쪽)", arguments: try TSMPVectors.load().parse)
     fileprivate func parse(_ vector: TSMPVectors.ParseCase) throws {
         let bytes = try #require([UInt8](hex: vector.packet))
-        let packet = try IPPacket(parsing: bytes)
-        let parsed = TSMPDiscoKeyAdvertisement(parsing: packet)
-        #expect(parsed?.key.rawValue.hex == vector.key)
+        let parsed = (try? IPPacket(parsing: bytes)).flatMap(TSMPDiscoKeyAdvertisement.init(parsing:))
+        if let difference = Self.knownDifferences[vector.name] {
+            #expect(vector.key != nil, "Go는 받는다")
+            #expect(parsed == nil, "\(difference)")
+        } else {
+            #expect(parsed?.key.rawValue.hex == vector.key)
+        }
     }
 }

@@ -357,21 +357,21 @@ package enum LocalInterfaceAddresses {
 
 ### B. disco 키와 공유 키
 
-1. **disco 키의 주인**: `setPeers`의 순서대로 disco 키 하나에 피어 하나만 둔다. 0인 disco 키의 피어는 disco를 하지 않는다(DERP만). 같은 disco 키를 내세운 뒤의 피어도 disco 없이 DERP만 쓴다. (Go는 같은 disco 키의 모든 피어에 Ping을 나눈다(노트 4.2 3·4). 키와 접두의 주인을 하나로 정한 엔진 규칙과 맞추고, 같은 disco 키가 둘인 정상적인 경우가 없어서다.)
+1. **disco 키 표**: disco 키 하나를 여러 피어가 쥘 수 있다(Go `peermap.go` `nodesOfDisco`. Go 주석은 노드 공유와 계정 전환을 그 경우로 든다). 피어는 netmap 키와 TSMP 키를 하나씩 쥘 수 있고 그 가운데 하나가 활성이다("TSMP disco 키 광고" T4). 0인 disco 키의 피어는 disco를 하지 않는다(DERP만). 받은 disco가 누구의 상태를 바꾸는지는 C와 T5의 판정표가 정한다. 피어가 광고나 disco로 바꿀 수 있는 것은 자기 자신의 키 상태뿐이다. (2026-11-16 독립 검토 뒤 바꿨다. 처음에는 `setPeers` 순서대로 키 하나에 피어 하나만 두고 뒤의 피어는 DERP만 쓰게 했다.)
 2. **공유 키 캐시**(노트 3.2 5): `setPeers`에서 새 disco 키마다 한 번 계산하고, 빠진 키는 지운다. **받은 패킷마다 X25519를 하지 않는다**(모르는 키로 CPU를 쓰게 하지 못한다). 계산이 `invalidKey`면 그 피어는 disco 없이 DERP만 쓴다.
 3. **피어의 disco 키가 바뀌면** `PeerPathState.resetForNewDiscoKey()`(노트 4.4 3).
 4. `setPeers`에서 빠진 피어는 상태를 지우고 `.pathChanged(key, nil)`을 낸다(이미 nil을 알린 피어면 다시 내지 않는다). 새 피어는 아직 보낸 것이 없어 유휴이므로(G3) 사건을 내지 않는다. disco 키가 바뀐 피어의 경로는 nil이 된다(Go `invalidateDiscoPathLocked`가 마지막 송신 시각을 지우는 것과 같다). `.pathChanged`의 nil은 "빠졌거나 유휴"다.
 
 ### C. disco 받기 (노트 4.2)
 
-1. 보낸 쪽 disco 키가 B1의 표에 없으면 `unknownDiscoKey`. 열기·해석 실패는 `malformedDisco`, `unknownType`은 `unsupportedDisco`. 어느 경우든 상태는 바뀌지 않는다.
+1. 보낸 쪽 disco 키가 B1의 표에 없으면(어느 피어도 netmap 키나 TSMP 키로 쥐지 않았으면) `unknownDiscoKey`. 열기·해석 실패는 `malformedDisco`, `unknownType`은 `unsupportedDisco`. 어느 경우든 상태는 바뀌지 않는다.
 2. **Ping**:
-   - UDP로 왔으면 그 피어의 `receivePing(txID, from: 출처)`. true면 `Pong{txID, src: 출처}`를 그 출처로 UDP로 보낸다.
+   - UDP로 왔으면 그 키를 쥔 **모든** 피어의 `receivePing(txID, from: 출처)`. 모두 true면(어느 피어에게도 재전송이 아니면) `Pong{txID, src: 출처}`를 그 출처로 UDP로 한 번 보낸다.
    - DERP로 왔으면 DERP 보낸 쪽 `peer`가 아는 피어여야 한다(아니면 `misroutedDisco`). 후보를 넣지 않고 `Pong{txID, src: 127.3.3.40:<region>}`을 같은 지역으로 그 `peer`에게 보낸다(노트 4.2 4.3·4.4).
-   - Ping의 `nodeKey`는 쓰지 않는다(B1이 disco 키로 피어를 정한다. 노트 4.2 4.1의 주소→node 표가 없으므로 필요 없다).
-3. **Pong**: 그 피어의 `receivePong(txID, from: UDP 출처 또는 nil)`. false면 무시한다(같은 disco 키의 다른 피어가 없으므로 넘길 곳이 없다).
-4. **CallMeMaybe**: DERP로 왔고, DERP 보낸 쪽 `peer`의 피어가 있고, 그 피어의 disco 키가 메시지의 보낸 쪽 키와 같을 때만 `receiveCallMeMaybe`. 아니면 `misroutedDisco`(노트 4.2 3).
-5. Pong이나 CallMeMaybe가 경로를 바꿨으면 `.pathChanged`.
+   - UDP로 온 Ping의 `nodeKey`가 그 키를 쥔 피어면 그 피어의 활성 키를 이 키로 바꾼다(Go `unambiguousNodeKeyOfPingLocked` → `checkAndUpdateDiscoKey`). 그 키를 쥐지 않은 피어의 `nodeKey`는 무시한다. 주소→node 표는 두지 않는다(A3).
+3. **Pong**: 그 키를 쥔 피어들에게 차례로 `receivePong(txID, from: UDP 출처 또는 nil)`을 묻고 true인 첫 피어에서 멈춘다(Go `forEachEndpointWithDiscoKey`). TxID는 Ping을 보낸 피어의 표에만 있으므로 그 피어만 바뀐다. 아무도 아니면 무시한다. Pong은 활성 키를 바꾸지 않는다.
+4. **CallMeMaybe**: DERP로 왔고, DERP 보낸 쪽 `peer`의 피어가 있고, 메시지의 보낸 쪽 키가 그 피어의 netmap 키나 TSMP 키일 때만 그 피어의 `receiveCallMeMaybe`. 비활성 키였으면 그 피어의 활성 키를 이 키로 바꾼다(Go `checkAndUpdateDiscoKey`). 같은 키를 쥔 다른 피어는 바뀌지 않는다. 아니면 `misroutedDisco`(노트 4.2 3).
+5. 그 키를 쥔 피어 가운데 경로가 바뀐 피어마다 `.pathChanged`(표의 순서대로).
 
 ### D. 경로 상태 기계 (`PeerPathState`, 노트 4.4~4.8)
 
@@ -442,7 +442,7 @@ package enum LocalInterfaceAddresses {
 | 올릴 엔드포인트 | local + STUN | 관문에서 Go의 loopback 엔드포인트가 STUN에서 나오므로 충분하다(노트 7.1) |
 | CapabilityVersion | 148 유지 | 낮추면 다른 서버 동작이 바뀔 수 있다(노트 4.12, plan 위험 13) |
 | relay·Geneve 메시지 | 버림 | 끊으면 Go 피어가 정상적으로 보낸 메시지로 경로가 깨진다(노트 4.12) |
-| TSMP 광고 | 보내지 않음. 받은 것은 엔진이 소비만 한다 | Go는 netmap의 `DiscoKey`로 연다(노트 4.10 3) |
+| TSMP 광고 | 세션 키마다 보내고, 받은 키를 Go와 같은 규칙으로 쓴다("TSMP disco 키 광고" 절, 2026-11-16) | Go가 CapabilityVersion 144부터 그렇게 하고 Swiftail은 148을 선언한다(노트 4.10 3) |
 | 직접 경로 차단 시험 수단 | 둘 다: Swift 쪽 소켓 경계의 거르개 + 도구의 Go 노브 | 아래 "M4 관문" 3·4 |
 | 경로 조회 API | Go `curAddr`과 같은 뜻(`PeerPath`) | Go 쪽 `peerStatus`와 같은 기준으로 관문을 판정할 수 있다 |
 
@@ -466,7 +466,6 @@ package enum LocalInterfaceAddresses {
 | IPv6 소켓·IPv6 엔드포인트·IPv6 후보 | 관문은 IPv4로 된다(노트 6.2) | IPv6만 되는 망(셀룰러 일부)을 M5 실기기에서 만날 때. 넣을 때는 두 소켓을 같은 포트에 묶는다 |
 | Rebind, 링크 변경 감지, 주소 변경 뒤 ReSTUN, 송신 오류(`EHOSTUNREACH`·`EPERM`·broken pipe) 처리 | 노트 4.11, 4.5 6. 관문 상황에서 소켓·주소가 바뀌지 않는다. 송신 오류는 무시한다(DERP가 함께 나간다) | M5(`setDefaultInterface`, Wi-Fi ↔ 셀룰러) |
 | `EndpointSTUN4LocalPort`, 클라우드 메타데이터, 5분 10초 광고 캐시, 고정 엔드포인트 | 노트 6.2 | 단단한 NAT에서 마무리 관문이 실패할 때 |
-| TSMP 광고 보내기, TSMP 키 활성 전환 | 노트 4.10 3 | 해당 없음 |
 | 주소→피어 표 | 노트 4.1. WireGuard가 피어를 알려 준다 | 해당 없음 |
 | 역방향 DERP 지역(홈이 0인 피어) | 동작 D3. 노트 6.2 | 실제 tailnet에서 그런 피어가 보일 때 |
 | Pong 기록 64개, UDP 수명 측정 | 비교에는 최신 지연만 쓴다(노트 6.2) | 해당 없음 |
@@ -668,12 +667,46 @@ Go는 WireGuard 세션 키가 생길 때마다 자기 disco 공개 키를 터널
    | netmap 키 C2 | netmap보다 낡은 광고 C | C. 광고가 늘 이긴다(Go는 순서를 따지지 않는다) | 예 |
    | TSMP 키 T 활성 | netmap 키 C로 봉한 UDP Ping(Ping의 node 키가 그 피어) 또는 DERP CallMeMaybe(DERP 보낸 쪽이 그 피어) | C | 예 |
    | 위처럼 C로 돌아간 뒤 | 같은 광고 T | C | 아니오(이전 TSMP 키와 같으면 "바뀌지 않음") |
-   | 두 키 | netmap 키가 사라짐(0이거나 다른 피어가 가져감) | T | 예 |
+   | 두 키 | netmap 키가 사라짐(0이거나 저차수) | T | 예 |
 
    계약 T4는 "활성 키가 바뀌면 지운다"였다. Go는 갱신 함수가 참을 돌려줄 때마다 지우므로(위 표의 "값이 같아도") Go를 따랐다. Pong은 활성을 바꾸지 않는다(Go와 같다). 받은 disco의 보낸 쪽 키는 두 키 모두로 찾고(Go `knownPeerDiscoKey`), 보내는 disco는 활성 키로 봉한다. 앞 TSMP 키는 새 광고가 오면 잊는다(netmap 키와 같으면 남는다).
-5. **같은 disco 키를 두 피어가 쓸 때**: Go는 disco 키 하나에 여러 피어를 둔다(`peermap.go` `nodesOfDisco`, `upsertEndpoint`). Swiftail은 동작 B1(키 하나에 피어 하나)을 TSMP 키에도 쓴다: 다른 피어가 netmap 키나 TSMP 키로 이미 가진 키를 광고하면 받지 않는다. 광고한 피어도 그 키를 가진 피어도 바뀌지 않는다(시험 `advertisingAnotherPeersKey`). `setPeers`는 netmap 키를 목록 순서대로 먼저 나누고 남은 피어의 TSMP 키를 그 뒤에 나누므로, 다른 피어가 netmap으로 그 키를 내세우면 TSMP 키를 잃는다(`netmapKeepsTSMPKey`). **Go와 다른 점**: Go는 광고한 피어도 그 키를 쓰게 한다. B1의 근거(같은 disco 키가 둘인 정상 경우가 없다)가 그대로 맞아 넓히지 않았다.
+5. **같은 disco 키를 두 피어가 쓸 때**(독립 검토 뒤 고침, 아래 "독립 검토 결과"): 처음 구현은 동작 B1(키 하나에 피어 하나)을 TSMP 키에도 써서, 피어 C가 피어 B의 새 키를 B보다 먼저 광고하면 B의 광고를 거절하고 B가 그 키로 봉한 Ping도 C에게만 넘겼다. 지금은 Go와 같은 모형이다: 키 하나를 여러 피어가 쥐고(`Magicsock.DiscoKeyHolders`), 받은 메시지의 주인은 메시지마다 Go의 규칙으로 가린다. netmap 키에도 같은 모형을 쓴다(B1). 바꾸는 범위가 표 하나였고 둘을 다르게 두면 규칙이 둘이 되어서다.
+
+   근거: `peermap.go` 전체(`nodesOfDisco`, `upsertEndpoint`, `cleanFromNodesOfDisco`, `deleteEndpoint`, `forEachEndpointWithDiscoKey`), `magicsock.go:2213-2538`(`handleDiscoMessage`), `:2547-2577`(`unambiguousNodeKeyOfPingLocked`), `:2581-2684`(`handlePingLocked`), `:3237-3345`(`upsertPeerLocked`), `:4579-4622`(`HandleDiscoKeyAdvertisement`), `endpoint.go:1645-1688`(`checkAndUpdateDiscoKey`), `:1929-2022`(`handlePongConnLocked`). 판정표(K는 보낸 쪽 disco 키, "쥔 피어"는 K를 netmap 키나 TSMP 키로 가진 피어). Go와 Swiftail이 같다.
+
+   | 들어온 것 | 보낼 수 있는 쪽 | 바뀌는 것 | 바뀌지 않는 것 | 시험 |
+   | --- | --- | --- | --- | --- |
+   | netmap | 제어 서버 | 각 피어의 netmap 키. 같은 키를 여러 피어가 내세우면 모두 쥔다 | 남은 피어의 TSMP 키(다른 피어가 같은 키를 netmap으로 내세워도) | `sharedDiscoKey`, `netmapKeepsTSMPKey`, `recoversOnNetmap` |
+   | TSMP 광고 K, 피어 P에게서 | P(WireGuard가 인증) | P의 TSMP 키 = K, 활성 = K, P의 경로 다시 찾기. 앞 TSMP 키는 P가 놓는다 | K를 이미 쥔 다른 피어의 키·경로·신뢰 | `advertisingAnotherPeersKey`, `ownerAdvertisementIsAcceptedAfterSquat` |
+   | UDP Ping(K로 봉함, 안의 node 키 N) | K의 개인 키를 가진 쪽 | 쥔 피어 모두의 후보에 출처. N이 쥔 피어면 N의 활성 키 = K. Pong은 한 번 | N이 K를 쥐지 않았으면 N의 키·후보. K를 쥐지 않은 피어 | `udpPingReachesAllHolders`, `pingNodeKeyMustHoldSenderKey`, `ownersPingReachesOwner` |
+   | DERP Ping(K, DERP 보낸 쪽 D) | K의 개인 키를 가진 쪽 | 없음. D에게 Pong만(D가 아는 피어일 때) | 어느 피어의 후보·키 | `derpPingTouchesNoCandidates` |
+   | Pong(K, TxID) | K의 개인 키를 가진 쪽 | 그 TxID의 Ping을 보낸 피어 하나의 경로 | 쥔 다른 피어 | `pongGoesToPingOwner`, `squatterPathPointsAtOwner` |
+   | CallMeMaybe(K, DERP 보낸 쪽 D) | D(DERP가 node 키로 인증)이면서 K의 개인 키를 가진 쪽 | D가 K를 쥐었으면 D의 후보와 D의 활성 키 = K | 쥔 다른 피어. D가 K를 쥐지 않았으면 버림 | `sharedDiscoKey`, `callMeMaybeFromInactiveKey` |
+
+   그래서 다른 피어의 키를 광고한 피어(C)가 바꿀 수 있는 것은 C 자신의 상태뿐이다. Go가 허용하는 것도 같게 두었다: C가 B의 키를 쥐면 B의 Ping이 C의 후보에도 B의 주소를 넣고, C에게 보내는 Ping은 그 키로 봉해져 B가 답하므로 C의 경로가 B의 주소로 직접이 된다(`squatterPathPointsAtOwner`). C에게 가는 WireGuard는 B가 버리므로 C는 자기 트래픽만 잃고, WireGuard가 종단을 지키므로 내용은 아무도 읽지 못한다. B의 경로·신뢰·활성 키는 그대로다.
+
+   **Go와 다른 점**: (가) Go는 피어의 앞 TSMP 키가 그 피어의 netmap 키와 같을 때 새 광고가 오면 그 키에서 피어를 빼고(`upsertEndpoint`가 `oldDiscoKey`를 지운다), netmap 키가 바뀔 때도 그 키가 TSMP 키와 같으면 뺀다. 그 뒤 그 키로 온 disco는 다른 피어가 쥐지 않았으면 버려진다. Swiftail은 피어가 아직 쥔 키를 표에 남긴다. (나) UDP Ping이 어느 쥔 피어에게 재전송이면 Go는 무작위 순서로 돌다 그 자리에서 멈춰 뒤의 피어에 후보를 넣지 않을 수 있다. Swiftail은 모두 넣고, Pong을 보내지 않는 것은 같다. (다) 공유 키를 계산할 수 없는 저차수 키는 쥐지 않는다(Go는 받는다. B2와 같다).
 6. **계산**: 공유 키(X25519)는 바뀐 광고 키에만, WireGuard가 인증한 피어에게서만 계산한다(Go `discoInfoForKnownPeerLocked`와 같다). 모르는 키를 내세운 UDP·DERP 쓰레기는 여전히 계산을 일으키지 못한다.
 7. **로그**: 노드는 광고를 받을 때 `TSMP disco 키 광고 받음`(debug)만 남긴다. 키·주소·이름은 남기지 않는다.
 8. **상태 기계 회귀 시험**(`MagicsockStartupTests.staleDiscoKeyWithAdvertisement`): 호스트가 터널의 옛 disco 키를 쥔 채로 핸드셰이크 시각(+30·+40 ms)에 광고를 넣으면 netmap 갱신 없이 첫 데이터 뒤 0.51초(다음 데이터 송신)에 양쪽이 직접이 된다. 광고가 없으면 같은 상황이 netmap까지 중계로 남는다(`staleDiscoKeyUntilNetmap`).
 9. **상호 운용 관문**(`Tests/SwiftailInteropTests/DiscoAdvertisementTests.swift`, `tailnet` 도구, 루프백): ① Swift 노드를 다시 띄우고 Go 피어의 자동 맵을 막은 채 10.3~10.5초, ② Go 피어를 다시 띄우고(새 도구 명령 `restartPeer`: 같은 상태 폴더, 같은 node 키, 새 disco 키·포트) Swift 노드의 맵을 막은 채 10.5~10.8초, Swift ↔ Swift(한쪽을 다시 띄움) 10.8초에 양쪽이 직접이 된다(각 3회). 시간의 대부분은 광고 전의 WireGuard 세션 수립이다: 오래 떠 있는 쪽은 다시 띄우기 전 주소를 마지막 Pong 뒤 6.5초 동안 믿어 핸드셰이크 응답을 그 죽은 주소로만 보내고, 다시 띄운 쪽은 5초마다 다시 시도한다(Go와 같은 규칙). 광고를 받은 뒤에는 노드 로그에서 0.1초 안에 양쪽이 직접이 됐다. 이 단위 전의 코드로 같은 시험을 돌리면 셋 다 20초 안에 직접이 되지 않고 중계로 남는다. 두 Swift 노드가 같은 순간마다 보내면 initiation이 서로 엇갈려(받은 initiation이 자기 것을 지우고, 다음 재시도도 같은 송신에 맞춰진다) 5초씩 늦어진다. WireGuard 규칙대로이므로 시험의 송신 간격을 다르게 두었다.
-10. **이 절 밖의 줄**: 결정 표의 "TSMP 광고" 줄과 제외 표의 "TSMP 광고 보내기, TSMP 키 활성 전환" 줄은 이 절로 바뀌었다. 동작 B1·C2(Ping의 `nodeKey`는 이제 활성 키 전환에 쓴다)·C3·C4(CallMeMaybe는 그 피어의 netmap 키나 TSMP 키)도 위 4·5로 넓어졌다. 이 줄들은 이 단위의 범위 밖이라 고치지 않았다.
+10. **이 절 밖의 줄**: 결정 표의 "TSMP 광고" 줄, 동작 B1·C1~C5는 독립 검토 뒤 지금 동작으로 고쳤다. 제외 표의 "TSMP 광고 보내기, TSMP 키 활성 전환" 줄은 지웠다.
+11. **엔진 `init`의 `discoKey`**: 기본값 없이 받는다. 빠뜨리면 광고가 조용히 꺼지므로 부르는 쪽이 늘 넘긴다(광고가 필요 없는 시험은 `.zero`).
+
+### 독립 검토 결과 (2026-11-16)
+
+다른 세션의 독립 검토가 이 절의 구현을 Go 소스와 견줬다. 재현 시험은 `Tests/SwiftailMagicsockTests/DiscoKeyAdvertisementReviewTests.swift`와 `Tests/SwiftailEngineTests/TSMPAdvertisementReviewTests.swift`다. 발견은 보통 1, 낮음 4다.
+
+| # | 정도 | 발견 | 처리 |
+| --- | --- | --- | --- |
+| 1 | 보통 | 다른 피어가 주인보다 먼저 광고한 disco 키가 주인의 광고와 그 키로 봉한 Ping까지 막는다(T5). 주인은 netmap이 그 키를 줄 때까지 직접 경로를 맺지 못한다 | 고침: 위 5의 Go 모형과 판정표. 재현 시험 둘의 `withKnownIssue`를 벗겼다(`ownerAdvertisementIsAcceptedAfterSquat`, `ownersPingReachesOwner`로 이름을 바꿨다). `recoversOnNetmap`은 뜻이 바뀌었다: netmap이 키를 주인에게 줘도 키를 광고한 다른 피어는 그 키를 계속 쓴다(Go와 같다. 그 피어는 자기 트래픽만 잃는다) |
+| 2 | 낮음 | 엔진 `init`의 `discoKey` 기본값 `.zero`: 빠뜨리면 광고가 조용히 꺼진다 | 고침: 필수 인자(위 11) |
+| 3 | 낮음 | 해석 벡터가 IPv4 본문만 덮고 IPv6·조각은 Swift 시험으로만 덮었다 | 고침: `tsmpvectors`에 IPv6 광고, IPv4 조각 셋(MF, offset 1, offset 10), IPv6 조각 머리 셋(첫 조각 M 1·0, 뒤 조각)을 더해 Go의 판정을 뽑았다. IPv6 첫 조각 둘은 Go가 받고 Swiftail은 버린다. `TSMPVectorTests`가 그 둘을 알려진 차이로 따로 확인한다. Go 피어는 73바이트 광고를 조각내지 않으므로 놓치는 광고는 없다 |
+| 4 | 낮음 | 이 절 밖의 계약 줄(결정 표, 제외 표, B1·C2·C4)이 실제 동작과 다르다 | 고침: 위 10 |
+| 5 | 낮음 | 늦게 온 낡은 광고가 새 키를 덮고, 키를 계속 바꾸는 광고가 X25519를 일으킨다 | 그대로 둠(아래) |
+
+그대로 둔 것과 까닭:
+- **늦게 온 낡은 광고**: 광고에는 순서 번호가 없어 늦게 온 옛 광고가 새 TSMP 키를 덮을 수 있다. Go도 순서를 따지지 않는다(위 4의 표 "netmap보다 낡은 광고"). 광고는 WireGuard keypair마다 한 번 오므로 다음 rekey(120초 안)의 광고가 바로잡고, 그 사이 비활성 키로 봉한 Ping·CallMeMaybe를 받으면 활성 키가 그쪽으로 돌아가며, netmap도 회복의 길이다.
+- **키를 계속 바꾸는 광고의 비용**: 인증된 피어는 광고마다 X25519 한 번을 일으킬 수 있다. Go도 같다(`discoInfoForKnownPeerLocked`). 표는 피어마다 키 둘(netmap 키와 TSMP 키)을 넘지 않는다(`rotatingAdvertisementsAreBounded`). 광고는 WireGuard transport 하나이므로 보내는 쪽도 그만큼의 일을 한다.
+
+확인하지 못한 것: 실제 tailnet(실제 제어 서버와 그 netmap 전파 시간)에서의 동작, IPv6만 되는 망. 같은 disco 키를 여러 피어가 쥐는 실제 경우(노드 공유, 계정 전환)도 실제 tailnet에서 보지 못했다. 상호 운용 시험은 루프백의 Go 피어로만 돌렸다.

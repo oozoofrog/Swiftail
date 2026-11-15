@@ -61,7 +61,7 @@ public struct Magicsock: Sendable {
 
     /// 피어 하나의 상태.
     struct PeerEntry: Sendable {
-        /// netmap 키와 TSMP 키. 둘 다 이 피어가 주인이고 공유 키가 있는 키만 담는다(동작 B1, T4).
+        /// netmap 키와 TSMP 키. 둘 다 `discoPeers`에 이 피어가 들어 있고 공유 키가 있는 키만 담는다(동작 B1, T4).
         var discoKeys = PeerDiscoKeys()
         var path: PeerPathState
         /// 마지막으로 `.pathChanged`로 알린 경로. nil은 아직 알리지 않았거나 유휴를 알렸다는 뜻이다.
@@ -72,10 +72,13 @@ public struct Magicsock: Sendable {
         var discoKey: DiscoPublicKey? { discoKeys.active }
     }
 
-    /// disco 키 하나의 주인과 공유 키. 공유 키는 `setPeers`에서 키마다 한 번만 계산한다(동작 B2).
-    struct DiscoPeer: Sendable {
-        let node: NodePublicKey
+    /// disco 키 하나를 쥔 피어들과 그 키와의 공유 키(동작 B1·B2, Go `peerMap.nodesOfDisco`).
+    ///
+    /// 공유 키는 키가 처음 표에 들어올 때 한 번만 계산한다. `nodes`는 netmap 키나 TSMP 키로 그 키를 쥔 피어이며
+    /// 비지 않는다(마지막 피어가 놓으면 항목을 지운다). 순서는 넣은 순서라 출력이 입력열마다 같다.
+    struct DiscoKeyHolders: Sendable {
         let sharedKey: DiscoSharedKey
+        var nodes: [NodePublicKey]
     }
 
     /// 이 노드의 disco 공개 키. 보내는 disco 메시지의 겉 형식에 실려 상대가 공유 키를 고른다.
@@ -89,8 +92,9 @@ public struct Magicsock: Sendable {
     var peers: [NodePublicKey: PeerEntry] = [:]
     /// `setPeers`가 받은 순서. 출력의 순서를 입력열마다 같게 한다.
     var peerOrder: [NodePublicKey] = []
-    /// disco 키 → 주인과 공유 키. 받은 disco의 보낸 쪽 키는 이 표에서만 찾는다(받을 때마다 X25519를 하지 않는다).
-    var discoPeers: [DiscoPublicKey: DiscoPeer] = [:]
+    /// disco 키 → 그 키를 쥔 피어들과 공유 키. 받은 disco의 보낸 쪽 키는 이 표에서만 찾는다(받을 때마다 X25519를
+    /// 하지 않는다).
+    var discoPeers: [DiscoPublicKey: DiscoKeyHolders] = [:]
     /// 자기 엔드포인트, STUN 회차, 홈 지역.
     var netcheck: Netcheck
     /// 엔드포인트가 낡아 회차가 끝난 뒤 CallMeMaybe를 보낼 피어. 피어당 한 칸이다(동작 F2).
@@ -156,9 +160,9 @@ public struct Magicsock: Sendable {
         to discoKey: DiscoPublicKey,
         using generator: inout some RandomNumberGenerator
     ) -> [UInt8]? {
-        guard let discoPeer = discoPeers[discoKey] else { return nil }
+        guard let holders = discoPeers[discoKey] else { return nil }
         let nonce = (0..<NaClSecretBox.nonceByteCount).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
-        return DiscoPacket.seal(message, sender: discoPublicKey, sharedKey: discoPeer.sharedKey, nonce: nonce)
+        return DiscoPacket.seal(message, sender: discoPublicKey, sharedKey: holders.sharedKey, nonce: nonce)
     }
 }
 

@@ -26,3 +26,4 @@ WireGuard 인증·AllowedIPs 검사는 이 필터 대조의 범위 밖이다.
 `tsmp-vectors.json`은 `tailscale.com` v1.104.6의 `packet.TSMPDiscoKeyAdvertisement.Marshal`과
 `Parsed.AsTSMPDiscoAdvertisement`로 만든다(v1.104.7과 코드가 같다). 재생성은
 [interop 도구 설명](../../../Tools/interop/README.md#tsmpvectors)을 따른다. `TSMPVectorTests`가 읽는다.
+해석 사례의 `key`는 Go의 판정이다. IPv6 첫 조각 두 사례는 Swiftail이 버리는 알려진 차이로 시험이 따로 확인한다.
