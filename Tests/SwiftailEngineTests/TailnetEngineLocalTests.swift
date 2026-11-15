@@ -35,7 +35,7 @@ private func localNetmap(
 
 /// netmap을 적용한 엔진.
 private func makeEngine(applying netmap: Netmap? = nil) throws -> TailnetEngine {
-    var engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), now: clockStart, wallClock: wallClockStart)
+    var engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: clockStart, wallClock: wallClockStart)
     _ = engine.apply(try netmap ?? localNetmap(), at: clockStart, wallClock: wallClockStart)
     return engine
 }
@@ -238,7 +238,7 @@ struct ServiceIPDNSTests {
 
     @Test("netmap이 아직 없으면 노드 이름은 SERVFAIL이고 서비스 IP의 고정 이름만 답한다")
     func beforeNetmap() throws {
-        var engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), now: clockStart, wallClock: wallClockStart)
+        var engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: clockStart, wallClock: wallClockStart)
         let name = try decodeDNS(try reply(engine.send(dnsQuery("node2.tail0001.ts.net.", type: 1, from: client4, to: service4), at: clockStart)))
         #expect(name.responseCode == 2)
         let fixed = try decodeDNS(try reply(engine.send(dnsQuery("magicdns.localhost-tailscale-daemon.", type: 1, from: client4, to: service4), at: clockStart)))
@@ -473,7 +473,7 @@ struct SelfAddressTests {
 
     @Test("netmap 전에는 자기 주소를 모른다. netmap이 주소를 바꾸면 따라간다")
     func followsNetmap() throws {
-        var engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), now: clockStart, wallClock: wallClockStart)
+        var engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: clockStart, wallClock: wallClockStart)
         let packet = TestPacket.udp(from: client4, 1, to: client4, 7)
         #expect(engine.send(packet, at: clockStart) == [.dropped(.noPeerForDestination)])
         _ = engine.apply(try localNetmap(), at: clockStart, wallClock: wallClockStart)

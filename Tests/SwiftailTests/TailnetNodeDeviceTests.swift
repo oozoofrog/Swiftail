@@ -191,6 +191,6 @@ struct TailnetNodeDeviceTests {
 private extension TailnetNode {
     /// 등록을 거치지 않고 엔진만 만든다. 서비스 IP 응답은 엔진만 있으면 나온다.
     func installEngineForTesting() {
-        engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), now: .now, wallClock: Date())
+        engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: .now, wallClock: Date())
     }
 }

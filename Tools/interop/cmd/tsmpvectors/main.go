@@ -3,7 +3,8 @@
 //
 // 담는 것: (출발 주소, 목적 주소, disco 키)마다 `packet.TSMPDiscoKeyAdvertisement.Marshal`의 바이트. 도구는 그
 // 바이트를 `packet.Parsed.Decode`와 `AsTSMPDiscoAdvertisement`로 다시 해석해 같은 주소와 키가 나오는지 확인한 뒤에
-// 쓴다. 해석 쪽 경계 사례(짧은 본문, 다른 종류 바이트)는 `AsTSMPDiscoAdvertisement`의 결과를 담는다.
+// 쓴다. 해석 쪽 경계 사례(짧은 본문, 다른 종류 바이트, IPv6, IPv4·IPv6 조각)는 `Parsed.Decode`와
+// `AsTSMPDiscoAdvertisement`의 결과를 담는다.
 //
 // 키는 SHA-256("swiftail-vectors/tsmp/<번호>")를 X25519 개인 키 입력으로 써서 만든 공개 키다(시험용 공개 값, 운영
 // 키가 아니다). 주소는 문서·시험용 tailnet 주소다. 시각·난수·운영 값은 쓰지 않으므로 출력은 결정적이다.
@@ -26,6 +27,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 )
 
@@ -94,10 +96,37 @@ func main() {
 		{"type-ping", append([]byte{'p'}, payload[1:]...)},
 		{"zero-key", append([]byte{'a'}, make([]byte, 32)...)},
 	}
+	var packets []parseInput
 	for _, c := range cases {
-		b := packet.Generate(packet.IP4Header{IPProto: 99, Src: base.Src, Dst: base.Dst}, c.payload)
-		pc := parseCase{Name: c.name, Packet: hex.EncodeToString(b)}
-		if got, ok := parse(b); ok {
+		packets = append(packets, parseInput{c.name, packet.Generate(packet.IP4Header{IPProto: 99, Src: base.Src, Dst: base.Dst}, c.payload)})
+	}
+
+	// IPv6 광고와 조각. 조각 머리(Next Header 44)는 다음 머리 99, offset(8바이트 단위)·M 비트, ID 1이다.
+	// IPv4 조각은 flags·offset 필드만 바꾸고 머리 체크섬을 다시 계산한다. offset 10은 Go `minFragBlks`다.
+	v6Src, v6Dst := netip.MustParseAddr("fd7a:115c:a1e0::2"), netip.MustParseAddr("fd7a:115c:a1e0::1")
+	v6 := func(proto uint8, body []byte) []byte {
+		return packet.Generate(packet.IP6Header{IPProto: ipproto.Proto(proto), Src: v6Src, Dst: v6Dst}, body)
+	}
+	fragment := func(offset uint16, more bool) []byte {
+		field := offset << 3
+		if more {
+			field |= 1
+		}
+		return append([]byte{99, 0, byte(field >> 8), byte(field), 0, 0, 0, 1}, payload...)
+	}
+	v4 := packet.Generate(packet.IP4Header{IPProto: 99, Src: base.Src, Dst: base.Dst}, payload)
+	packets = append(packets,
+		parseInput{"ipv6-payload-33", v6(99, payload)},
+		parseInput{"ipv4-fragment-more", withIPv4FlagsAndOffset(v4, 0x2000)},
+		parseInput{"ipv4-fragment-offset-1", withIPv4FlagsAndOffset(v4, 0x0001)},
+		parseInput{"ipv4-fragment-offset-10", withIPv4FlagsAndOffset(v4, 0x000A)},
+		parseInput{"ipv6-first-fragment-more", v6(44, fragment(0, true))},
+		parseInput{"ipv6-first-fragment-last", v6(44, fragment(0, false))},
+		parseInput{"ipv6-later-fragment", v6(44, fragment(10, false))},
+	)
+	for _, in := range packets {
+		pc := parseCase{Name: in.name, Packet: hex.EncodeToString(in.packet)}
+		if got, ok := parse(in.packet); ok {
 			pc.Key = hexKey(got.Key)
 		}
 		out.Parse = append(out.Parse, pc)
@@ -112,6 +141,28 @@ func main() {
 		return
 	}
 	check(os.WriteFile(os.Args[1], data, 0o644))
+}
+
+type parseInput struct {
+	name   string
+	packet []byte
+}
+
+// withIPv4FlagsAndOffset는 IPv4 패킷 b의 flags·fragment offset 필드를 v로 바꾸고 머리 체크섬을 다시 계산한 사본이다.
+func withIPv4FlagsAndOffset(b []byte, v uint16) []byte {
+	out := append([]byte{}, b...)
+	out[6], out[7] = byte(v>>8), byte(v)
+	out[10], out[11] = 0, 0
+	var sum uint32
+	for i := 0; i < 20; i += 2 {
+		sum += uint32(out[i])<<8 | uint32(out[i+1])
+	}
+	for sum > 0xFFFF {
+		sum = sum&0xFFFF + sum>>16
+	}
+	checksum := ^uint16(sum)
+	out[10], out[11] = byte(checksum>>8), byte(checksum)
+	return out
 }
 
 func parse(b []byte) (packet.TSMPDiscoKeyAdvertisement, bool) {

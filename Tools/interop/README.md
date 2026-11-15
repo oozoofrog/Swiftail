@@ -595,7 +595,7 @@ export GOFLAGS=-modcacherw GOPROXY=off GOSUMDB=off
 (cd Tools/interop && go vet ./cmd/tsmpvectors && go run ./cmd/tsmpvectors ../../Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json)
 ```
 
-담는 것: `advertisements`(IPv4 둘·IPv6 하나의 `src`·`dst`·`key`와 `Marshal` 바이트 `packet`), `parse`(IPv4 TSMP 본문 33·34·32바이트, 종류 `'p'`, 0 키를 해석한 결과. 광고가 아니면 `key`가 없다).
+담는 것: `advertisements`(IPv4 둘·IPv6 하나의 `src`·`dst`·`key`와 `Marshal` 바이트 `packet`), `parse`(IPv4 TSMP 본문 33·34·32바이트, 종류 `'p'`, 0 키, IPv6 광고, IPv4 조각(MF, offset 1, offset 10), IPv6 조각 머리가 붙은 첫 조각(M 1·0)과 뒤 조각을 `Parsed.Decode`와 `AsTSMPDiscoAdvertisement`로 해석한 결과. 광고가 아니면 `key`가 없다). `key`는 Go의 판정 그대로다. IPv6 첫 조각 둘은 Go가 받고 Swiftail은 버린다. `TSMPVectorTests`가 이 둘을 알려진 차이로 따로 확인한다.
 
 # MagicDNS 기준 자료 생성 (`dnsfixtures`)
 

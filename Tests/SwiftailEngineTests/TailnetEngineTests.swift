@@ -219,7 +219,7 @@ struct TailnetEngineTests {
 
         // bob이 새 node 키로 다시 시작한다.
         pair.bobKey = Curve25519.KeyAgreement.PrivateKey()
-        pair.bob = TailnetEngine(nodeKey: pair.bobKey, now: clockStart, wallClock: wallClockStart)
+        pair.bob = TailnetEngine(nodeKey: pair.bobKey, discoKey: .zero, now: clockStart, wallClock: wallClockStart)
         _ = pair.bob.apply(try pair.netmap(for: .bob), at: clockStart, wallClock: wallClockStart)
         _ = pair.alice.apply(try pair.netmap(for: .alice), at: clockStart, wallClock: wallClockStart)
 
@@ -271,7 +271,7 @@ struct TailnetEngineTests {
 
         // 홈 DERP가 0이어도 disco 키가 있으면 올린다(M-E3). 직접 경로로 닿을 수 있다.
         let noHome = makeNodeJSON(id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32"], extra: #","DiscoKey":"\#(discoKeyText)""#)
-        var fresh = TailnetEngine(nodeKey: pair.aliceKey, now: clockStart, wallClock: wallClockStart)
+        var fresh = TailnetEngine(nodeKey: pair.aliceKey, discoKey: .zero, now: clockStart, wallClock: wallClockStart)
         _ = fresh.apply(try pair.netmap(for: .alice, peers: [noHome]), at: clockStart, wallClock: wallClockStart)
         #expect(fresh.send(packet, at: clockStart).allSatisfy { if case .datagram = $0 { true } else { false } })
     }

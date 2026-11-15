@@ -1,6 +1,7 @@
 // 받은 UDP의 분류 순서와 disco 받기는 Go 구현을 따랐다.
 // 출처: tailscale.com v1.104.6 `wgengine/magicsock/magicsock.go` (`packetLooksLike`, `handleDiscoMessage`,
-// `handlePingLocked`, v1.104.7의 `unambiguousNodeKeyOfPingLocked`), `wgengine/magicsock/derp.go` (`processDERPReadResult`).
+// `handlePingLocked`, v1.104.7의 `unambiguousNodeKeyOfPingLocked`), `wgengine/magicsock/derp.go` (`processDERPReadResult`),
+// v1.104.7 `wgengine/magicsock/peermap.go` (`forEachEndpointWithDiscoKey`), `endpoint.go` (`handlePongConnLocked`).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
 import SwiftailBase
@@ -133,7 +134,13 @@ extension Magicsock {
 
     // MARK: disco 받기 (동작 C, 노트 4.2)
 
-    /// disco 패킷 하나를 열어 종류별로 처리한다. 처리한 피어의 경로가 바뀌었으면 `.pathChanged`도 낸다.
+    /// disco 패킷 하나를 열어 종류별로 처리한다. 그 키를 쥔 피어 가운데 경로가 바뀐 피어마다 `.pathChanged`도 낸다.
+    ///
+    /// 보낸 쪽 disco 키를 여러 피어가 쥘 수 있으므로 메시지마다 Go와 같은 규칙으로 주인을 가린다(계약 T5).
+    /// - Ping: UDP로 왔으면 그 키를 쥔 모든 피어가 출처를 후보로 얻는다. Ping 안의 node 키가 그 키를 쥔 피어면 그
+    ///   피어만 활성 키를 이 키로 바꾼다(Go `unambiguousNodeKeyOfPingLocked`). DERP로 왔으면 DERP 보낸 쪽에게 답만 한다.
+    /// - Pong: 그 Ping을 보낸 피어 하나(TxID가 맞는 피어)만 받는다.
+    /// - CallMeMaybe: DERP 보낸 쪽 피어가 그 키를 쥐었을 때 그 피어만 받는다.
     private mutating func receiveDisco(
         _ packet: [UInt8],
         via path: Source,
@@ -141,54 +148,62 @@ extension Magicsock {
         using generator: inout some RandomNumberGenerator
     ) -> [Output] {
         guard packet.count <= Self.maxDiscoPacketLength else { return [.dropped(.malformedDisco)] }
-        guard let sender = DiscoPacket.senderKey(of: packet), let discoPeer = discoPeers[sender] else {
+        guard let sender = DiscoPacket.senderKey(of: packet), let holders = discoPeers[sender] else {
             return [.dropped(.unknownDiscoKey)]
         }
         let message: DiscoMessage
         do {
-            message = try DiscoPacket.open(packet, sharedKey: discoPeer.sharedKey)
+            message = try DiscoPacket.open(packet, sharedKey: holders.sharedKey)
         } catch {
             if case .unknownType = error { return [.dropped(.unsupportedDisco)] }
             return [.dropped(.malformedDisco)]
         }
 
-        let owner = discoPeer.node
         var outputs: [Output]
         switch message {
         case .ping(let txID, let nodeKey):
-            // UDP로 온 Ping의 node 키가 주인이면 비활성 키도 활성으로 바꾼다(Go `unambiguousNodeKeyOfPingLocked`).
-            if case .udp = path, nodeKey == owner {
-                _ = noteDiscoKeySeen(sender, from: owner)
+            // Ping 안의 node 키는 봉한 쪽(이 키의 개인 키를 가진 쪽)이 적는다. 그 피어가 이 키를 쥐었을 때만 쓴다.
+            if case .udp = path, let nodeKey, holders.nodes.contains(nodeKey) {
+                _ = noteDiscoKeySeen(sender, from: nodeKey)
             }
-            outputs = receivePing(txID, from: sender, owner: owner, via: path, at: now, using: &generator)
+            outputs = receivePing(txID, from: sender, holders: holders.nodes, via: path, at: now, using: &generator)
         case .pong(let txID, _):
-            // false면 이 피어의 Ping이 아니다. 같은 disco 키의 다른 피어가 없으므로 넘길 곳 없이 무시한다(동작 C3).
-            _ = peers[owner]?.path.receivePong(txID, from: path.udpSource, at: now)
+            // TxID는 보낸 피어마다 무작위라 많아야 한 피어의 것이다. 아무 피어의 것도 아니면 무시한다(동작 C3).
+            for node in holders.nodes {
+                if peers[node]?.path.receivePong(txID, from: path.udpSource, at: now) == true { break }
+            }
             outputs = []
         case .callMeMaybe(let endpoints):
             outputs = receiveCallMeMaybe(endpoints, from: sender, via: path, at: now, using: &generator)
         }
-        reportPathChange(of: owner, at: now, into: &outputs)
+        for node in holders.nodes {
+            reportPathChange(of: node, at: now, into: &outputs)
+        }
         return outputs
     }
 
-    /// Ping에 온 길로 Pong을 보낸다(노트 4.2 4). 피어는 disco 키가 정한다(Ping의 `nodeKey`는 활성 키 전환에만 쓴다).
+    /// Ping에 온 길로 Pong을 보낸다(노트 4.2 4).
     ///
-    /// UDP로 왔으면 출처가 그 피어의 후보가 되고, 같은 후보의 같은 TxID(재전송)에는 답하지 않는다. DERP로 왔으면
-    /// 후보를 넣지 않고 DERP 보낸 쪽이 아는 피어일 때만 같은 지역으로 그 피어에게 답한다.
+    /// UDP로 왔으면 출처가 그 키를 쥔 모든 피어의 후보가 되고(Go `forEachEndpointWithDiscoKey`), 어느 피어에게든 같은
+    /// 후보의 같은 TxID(재전송)였으면 답하지 않는다. Go는 무작위 순서로 돌다가 중복에서 멈추므로 뒤의 피어에는 후보를
+    /// 넣지 않을 수 있다. 여기서는 모두 넣는다(다음 Ping에서 같아진다). DERP로 왔으면 후보를 넣지 않고 DERP 보낸 쪽이
+    /// 아는 피어일 때만 같은 지역으로 그 피어에게 답한다.
     private mutating func receivePing(
         _ txID: TransactionID,
         from sender: DiscoPublicKey,
-        owner: NodePublicKey,
+        holders: [NodePublicKey],
         via path: Source,
         at now: ContinuousClock.Instant,
         using generator: inout some RandomNumberGenerator
     ) -> [Output] {
         switch path {
         case .udp(let source):
-            guard peers[owner]?.path.receivePing(txID, from: source, at: now) == true,
-                  let pong = seal(.pong(txID, source: source), to: sender, using: &generator)
-            else { return [] }
+            var answer = true
+            for node in holders {
+                let isNew = peers[node]?.path.receivePing(txID, from: source, at: now) == true
+                answer = answer && isNew
+            }
+            guard answer, let pong = seal(.pong(txID, source: source), to: sender, using: &generator) else { return [] }
             return [.udp(pong, to: source)]
         case .derp(let derpSender, let region):
             guard peers[derpSender] != nil else { return [.dropped(.misroutedDisco)] }

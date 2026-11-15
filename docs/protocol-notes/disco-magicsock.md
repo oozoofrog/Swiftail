@@ -148,10 +148,10 @@ WireGuard 터널 안의 IP 패킷이다(바깥 UDP의 disco가 아니다). IP �
 3. 종류별 처리(`magicsock.go:2329-2444`):
    - **Ping** → 아래 4.
    - **Pong** → 그 disco 키를 가진 피어들에게 차례로 넘겨, TxID가 자기 것이라고 답한 첫 피어에서 멈춘다(4.6 4).
-   - **CallMeMaybe** → DERP로 왔고 DERP 보낸 쪽 node 키가 0이 아니어야 한다. 그 node 키의 피어가 있고, 메시지의 disco 키가 그 피어의 키와 같아야 한다. UDP로 온 CallMeMaybe는 버린다. 통과하면 4.8 5(`magicsock.go:2352-2443`).
+   - **CallMeMaybe** → DERP로 왔고 DERP 보낸 쪽 node 키가 0이 아니어야 한다. 그 node 키의 피어가 있고, 메시지의 disco 키가 그 피어의 netmap 키나 TSMP 키 가운데 하나여야 한다. 비활성 키였으면 그 피어의 활성 키를 그쪽으로 바꾼다(`tailscale.com/wgengine/magicsock/endpoint.go:1645-1688` `checkAndUpdateDiscoKey`, 4.10 2). UDP로 온 CallMeMaybe는 버린다. 통과하면 4.8 5(`magicsock.go:2352-2443`).
    - **CallMeMaybeVia, Allocate…, Bind…** → peer relay 경로. Swiftail은 버린다(4.12).
 4. **Ping 처리**(`tailscale.com/wgengine/magicsock/magicsock.go:2581-2684`):
-   1. UDP로 온 Ping이면 출발 주소를 어느 node의 것으로 확정할 수 있을 때 주소→node 표에 넣는다. 확정 순서: (가) DERP로 왔고 DERP 보낸 쪽 node 키의 피어가 이 disco 키를 가짐 → (나) Ping의 NodeKey의 피어가 이 disco 키를 가짐 → (다) 이 disco 키를 가진 node가 netmap에 정확히 하나(`magicsock.go:2547-2577`, `:2617-2621`). NodeKey만으로는 믿지 않는다(`disco/disco.go:138-142`).
+   1. UDP로 온 Ping이면 출발 주소를 어느 node의 것으로 확정할 수 있을 때 주소→node 표에 넣는다. 확정 순서: (가) Ping의 NodeKey의 피어가 이 disco 키를 가짐(netmap 키나 TSMP 키. 비활성 키였으면 그 피어의 활성 키를 이 키로 바꾼다, `checkAndUpdateDiscoKey`) → (나) 이 disco 키를 가진 node가 정확히 하나(`magicsock.go:2547-2577`, `:2617-2621`). 함수에는 DERP 보낸 쪽을 먼저 보는 갈래도 있으나 UDP로 온 Ping에만 부르므로 쓰이지 않는다. NodeKey만으로는 믿지 않는다(`disco/disco.go:138-142`).
    2. UDP로 온 Ping이면 이 disco 키를 가진 각 피어의 후보에 **출발 주소**를 넣는다(4.4 1의 Ping 출처). 그 후보가 직전에 받은 Ping과 TxID가 같으면 중복으로 보고 Pong을 보내지 않는다(`magicsock.go:2643-2657`, `tailscale.com/wgengine/magicsock/endpoint.go:1810-1845`).
    3. DERP로 온 Ping은 후보를 넣지 않는다. DERP 보낸 쪽 node 키가 모르는 피어면 버린다(`magicsock.go:2636-2639`, `:2665-2668`).
    4. `Pong{TxID: 받은 TxID, Src: 출발 주소}`를 **온 길로** 보낸다. UDP로 온 것은 그 출발 주소로, DERP로 온 것은 같은 DERP 지역으로 보낸 쪽 node 키에게 보낸다. DERP의 Src는 `127.3.3.40:<지역 ID>`가 된다(`magicsock.go:2678-2683`).

@@ -89,7 +89,7 @@ public struct TailnetEngine: Sendable {
     ///   - wallClock: `now` 시점의 벽시계 시각.
     public init(
         nodeKey: Curve25519.KeyAgreement.PrivateKey,
-        discoKey: DiscoPublicKey = .zero,
+        discoKey: DiscoPublicKey,
         now: ContinuousClock.Instant,
         wallClock: Date
     ) {

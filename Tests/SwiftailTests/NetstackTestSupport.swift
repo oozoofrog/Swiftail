@@ -114,7 +114,7 @@ enum NetstackTestSupport {
 extension TailnetNode {
     /// 등록을 거치지 않고 엔진을 만들고 netmap을 적용한 뒤 상태를 `.running`으로 만든다.
     func prepareForTesting(_ netmap: Netmap) {
-        engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), now: .now, wallClock: Date())
+        engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: .now, wallClock: Date())
         apply(netmap)
         announce(stateMachine.connected())
     }

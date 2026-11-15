@@ -16,7 +16,8 @@ import SwiftailBase
 /// netmap 키와 같을 때, TSMP 키가 활성인데 netmap 키가 바뀔 때). 참이면 부르는 쪽이 경로를 다시 찾게 한다(Go
 /// `changedActiveDiscoLocked`, `PeerPathState.resetForNewDiscoKey`).
 ///
-/// 0 키는 넣지 않는다. 0이나 다른 피어가 이미 가진 키는 부르는 쪽이 nil로 넘긴다(동작 B1).
+/// 0 키는 넣지 않는다. 0이거나 공유 키를 계산할 수 없는 netmap 키는 부르는 쪽이 nil로 넘긴다(동작 B1). 다른 피어가
+/// 같은 키를 쥐었는지는 이 값과 상관없다(키 하나를 여러 피어가 쥘 수 있다).
 struct PeerDiscoKeys: Sendable, Equatable {
     /// netmap으로 배운 키. Go `controlKey`.
     private(set) var netmap: DiscoPublicKey?
@@ -42,14 +43,12 @@ struct PeerDiscoKeys: Sendable, Equatable {
     }
 
     /// TSMP 광고가 준 키(Go `updateTSMPDiscoKey`). 이전 TSMP 키와 같으면 활성이 netmap 키여도 바꾸지 않는다(Go
-    /// `HandleDiscoKeyAdvertisement`가 그 경우를 "바뀌지 않음"으로 먼저 거른다).
-    ///
-    /// nil은 다른 피어가 그 키를 가져가 이 피어가 TSMP 키를 잃을 때만 쓴다(Go의 0 키 갱신과 같다).
-    mutating func updateTSMP(_ key: DiscoPublicKey?) -> Bool {
+    /// `HandleDiscoKeyAdvertisement`가 그 경우를 "바뀌지 않음"으로 먼저 거른다). TSMP 키는 지우지 않는다(Go도 광고의
+    /// 0 키는 받지 않는다). 피어가 빠질 때 이 값째 버린다.
+    mutating func updateTSMP(_ key: DiscoPublicKey) -> Bool {
         guard key != tsmp else { return false }
         tsmp = key
-        tsmpActive = key != nil
-        normalize()
+        tsmpActive = true
         return true
     }
 

@@ -16,7 +16,7 @@ struct NodeCookieReplyTests {
     /// 피어가 없는 엔진(bob)과, bob을 피어로 둔 WireGuard 장치(alice)가 만든 initiation 하나.
     private static func bobAndInitiation() throws -> (bob: TailnetEngine, alice: WireGuardDevice, initiation: [UInt8], aliceKey: NodePublicKey) {
         let bobKey = Curve25519.KeyAgreement.PrivateKey()
-        let bob = TailnetEngine(nodeKey: bobKey, now: start, wallClock: Date())
+        let bob = TailnetEngine(nodeKey: bobKey, discoKey: .zero, now: start, wallClock: Date())
         var alice = WireGuardDevice(privateKey: .init(), now: start, wallClock: Date())
         let bobPublic = try #require(PublicKey(rawValue: bobKey.publicKey.rawRepresentation))
         alice.addPeer(bobPublic, allowedIPs: [])
