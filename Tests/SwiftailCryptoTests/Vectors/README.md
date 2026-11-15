@@ -22,3 +22,14 @@ curl -fsSL https://raw.githubusercontent.com/BLAKE2/BLAKE2/master/testvectors/bl
 | --- | --- | --- | --- |
 | `rfc8032-ed25519.json` | [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.txt) 7.1 Ed25519 벡터 5개(TEST 1, 2, 3, 1024, SHA(abc)). 공개 키·메시지·서명만 옮겼다 | RFC 원문 텍스트에서 7.1절의 16진 줄을 기계적으로 모았다(길이를 원문의 "length N bytes"와 대조) | IETF Trust(코드 구성 요소, Revised BSD) |
 | `ed25519-verify.json` | Go 1.27.3 `crypto/ed25519`와 `github.com/hdevalence/ed25519consensus` v0.2.0의 판정. 입력은 고정 씨앗으로 만들고, 일부러 만든 서명은 `filippo.io/edwards25519` v1.2.0으로 계산한다. 앞의 196개는 `ed25519consensus/zip215_test.go`의 벡터다 | `"$(sh Scripts/build-interop-tools.sh ed25519fixtures)" Tests/SwiftailCryptoTests/Vectors` (`Tools/interop/README.md`의 `ed25519fixtures`) | Go·ed25519consensus·edwards25519: BSD-3-Clause |
+
+## BLAKE2b·Argon2i 벡터
+
+| 파일 | 출처 | 생성 명령 | 라이선스 |
+| --- | --- | --- | --- |
+| `blake2b-kat.json` | [BLAKE2 공식 testvectors/blake2-kat.json](https://github.com/BLAKE2/BLAKE2/blob/master/testvectors/blake2-kat.json), BLAKE2b 키 없음 256개와 키 64바이트 256개 | 아래 추출 명령 | CC0-1.0 또는 OpenSSL 또는 Apache-2.0 |
+| `argon2i-go.json` | `golang.org/x/crypto` v0.58.0 `argon2.Key`, `tailscale.com` v1.104.6 `tka.DisablementKDF`, 75개 | `"$(sh Scripts/build-interop-tools.sh argon2fixtures)" > Tests/SwiftailCryptoTests/Vectors/argon2i-go.json` | BSD-3-Clause |
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BLAKE2/BLAKE2/master/testvectors/blake2-kat.json | python3 -c 'import json,sys; x=json.load(sys.stdin); y=[dict(kind="blake2b",key=v["key"],input=v["in"],output=v["out"]) for v in x if v["hash"]=="blake2b" and v["key"] in ("", bytes(range(64)).hex())]; assert len(y)==512; json.dump(y,sys.stdout,indent=2); print()' > Tests/SwiftailCryptoTests/Vectors/blake2b-kat.json
+```

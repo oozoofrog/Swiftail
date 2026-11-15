@@ -738,3 +738,7 @@ CSR의 구문·자기 서명과 P-256 키를 검사한다. 이름·SAN·태그�
 # Ed25519 검증 기준 자료 생성 (`ed25519fixtures`)
 
 `sh Scripts/build-interop-tools.sh ed25519fixtures`로 빌드한다. 고정 씨앗으로 만든 입력마다 `ed25519consensus.Verify`(`zip215`)와 `crypto/ed25519.Verify`(`standard`, 공개 키 길이가 틀리면 Go가 panic하므로 거짓으로 적는다)의 판정을 쓴다. 인자로 폴더를 주면 `ed25519-verify.json`을 쓰고, 없으면 표준 출력에 쓴다. Swift 시험은 `SWIFTAIL_ED25519FIXTURES=<도구 경로>`이면 새로 뽑은 판정과도 견준다. `go test ./cmd/ed25519fixtures`는 연속 생성의 일치, 저장 자료(`Tests/SwiftailCryptoTests/Vectors/ed25519-verify.json`)와의 일치, 앞 196개가 `zip215_test.go`와 같음을 본다. 사례 종류: `zip215`, `valid`, `flipSignature`·`flipPublicKey`·`flipMessage`, `nonCanonicalS`, `highBits`, `smallOrderA`·`smallOrderZeroS`, `nonCanonicalA`·`nonCanonicalR`, `torsionR`·`torsionA`, `offCurve`, `length`.
+
+# Argon2i 기준값 생성 (`argon2fixtures`)
+
+`sh Scripts/build-interop-tools.sh argon2fixtures`로 빌드하고, 인자 없이 실행하면 `golang.org/x/crypto` `argon2.Key` 출력 75개를 JSON으로 표준 출력에 쓴다(`argon2fixtures > Tests/SwiftailCryptoTests/Vectors/argon2i-go.json`). 마지막 항목은 TKA 끄기 비밀의 인자 그대로이며 `tka.DisablementKDF`와 다르면 실패한다. 입력은 시험 전용 고정 패턴이다. Swift 시험은 `SWIFTAIL_ARGON2FIXTURES=<경로>`가 있으면 새로 뽑아 견준다.

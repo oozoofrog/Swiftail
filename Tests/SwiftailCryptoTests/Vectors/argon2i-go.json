@@ -1,0 +1,605 @@
+{
+  "reference": "golang.org/x/crypto v0.58.0 argon2.Key, tailscale.com v1.104.6 tka.DisablementKDF",
+  "vectors": [
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 8,
+      "parallelism": 1,
+      "output": "57f9ee3e8acccbe7942236c1ec17af780da833f7ca6f10afac25c3c6bae6e857"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 32,
+      "parallelism": 1,
+      "output": "dc2fc7dc727961be5fe0365c4ce05a0f352c488e252dfe3fa0ec674edf6bc8e5"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "f0fe14fe75f9b35fc389768b48e35cc5e6f3dbbf210240e1eb39a4b3fed12202"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 32,
+      "parallelism": 4,
+      "output": "71b11bad7ab2b92bfa38a5d6d01bfa4bde2472ca0ccf23b831318628b43b2354"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 64,
+      "parallelism": 1,
+      "output": "537d573cce4224ae5f85cc60d8846892476bb1455c1822bfb79aa42c9d79c91a"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 64,
+      "parallelism": 2,
+      "output": "695052452e059ef3f7043b7d5018a2be84459d48e7eaac9c54ab06ec107a207c"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 64,
+      "parallelism": 4,
+      "output": "a2cc1ccfca6a565e61945beb40231045b57cf458e5d3a6986cbce59f15a1ad93"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 64,
+      "parallelism": 8,
+      "output": "12e206ac6796ad9e9abaabc65db602a287caa6e3b1accd61bea00763b7cb22ab"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 1024,
+      "parallelism": 1,
+      "output": "0e8746b685a42ab533a50181a8fc2ce1f4b5191987d5cb7e012eebe8e4711e3f"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 1024,
+      "parallelism": 2,
+      "output": "bcd094ce4cb6264dc048f9898a0132726a6af9edd4030fd4325922f8b884b989"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 1024,
+      "parallelism": 4,
+      "output": "cf4938a8f164aba554bbd47faa01ebc566696692a42c271a08e8037f5817c1c9"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 1024,
+      "parallelism": 8,
+      "output": "f2b604e86cfb10a8e7fb6ad60ccce8e2c17bb386cda680a0b8c009d305a0ec36"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 8,
+      "parallelism": 1,
+      "output": "aca52a869fd9742c599e78e4902b6412d751d76de37987d0fa122d3fdea8471c"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 1,
+      "output": "0b9dc8100c6f72fc3a810b64e564efa240109e5755c9f1f04b877dfed51181b1"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "21ae6497763894e5275325aa23c8102f8b4c45af39bd73a57a3c993b0dd10809"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 4,
+      "output": "bd937c34e666ad6e6521554c468425cbcfc90c21a9b6b903d35bbeee8f4d7df2"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 64,
+      "parallelism": 1,
+      "output": "867d5b7c223facee3d6a030b19da04fc04945ef2b1b9c1355a5b5ecd747015d3"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 64,
+      "parallelism": 2,
+      "output": "8a7ec20c7f963269064eb8d1c33fd45b2f467f7614519579588168721d137165"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 64,
+      "parallelism": 4,
+      "output": "95564abdd3b199144118b03dbdf0cf2a84e6a323aae2cac9aea9e33b14780259"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 64,
+      "parallelism": 8,
+      "output": "da739d9e5ceb97200f73a02045bc3d54749dd5df7bc70a2fc86868727bdf53bc"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 1024,
+      "parallelism": 1,
+      "output": "3c336a51bd5c99e38cbe7c6d347024c77f61ce49eb7c2f567a01732a6846b224"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 1024,
+      "parallelism": 2,
+      "output": "dbb6f10f604bbacca427205644503bc0c632138c01bc440f83d2c1ad45aff6c2"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 1024,
+      "parallelism": 4,
+      "output": "a6b94644bc6bd32b6f41c103a2a08586c60de696626f64e0ff5ee0d26af38841"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 1024,
+      "parallelism": 8,
+      "output": "6823247f607abe72a409c1de303185f2892d08bc6cc7df0c3a248919c1025539"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 8,
+      "parallelism": 1,
+      "output": "04eebb35c3d1422c0c27d5e78d4730e0d9ce7786ce49e5a426cc6fe56944ec55"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 32,
+      "parallelism": 1,
+      "output": "9b961a4c22617c1578f7e67070e5d74cec79941bae9928341a6b733194199c37"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "a2ac769930d2790553a9d3abd20bac1612cdb5364da843da87c2b4f9a5fc38a7"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 32,
+      "parallelism": 4,
+      "output": "cf9a337c3ffd8c8129ca81f2a5ce6efb368ebdf3024ddb2d1769aa2c492ff37e"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 64,
+      "parallelism": 1,
+      "output": "994e200753cf6de7a5c2a8df700e4100b03a083301dfdc1c43c25bc7bcf86ee9"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 64,
+      "parallelism": 2,
+      "output": "14f87bff06f6ab2db0d78b86fa2c2ac495dc6c40f61c0be9f433bdfa77cef039"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 64,
+      "parallelism": 4,
+      "output": "c6933d7031c4b5d565a0ca6ffa6afa2857fe50fbbe2bc2b24e1547ae81ca81c3"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 64,
+      "parallelism": 8,
+      "output": "aeb5db819a904b1617739a5d21d15db1d60e352d00a180b15c9c5d2c1e44202a"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 1024,
+      "parallelism": 1,
+      "output": "cb25a375dd387f5bf89ab4d714999a85bb2547e44ac0addfa27f5829f7741b9c"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 1024,
+      "parallelism": 2,
+      "output": "d48085195333df3a8347c33e5ef5df15c75165a8c94b39967f4ea948d113d015"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 1024,
+      "parallelism": 4,
+      "output": "039abdcfecf80cd5498954846440a9a5080c739fd0111b28b06a3262423e8cbc"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 3,
+      "memoryKiB": 1024,
+      "parallelism": 8,
+      "output": "027fafa48a766a8a77a9a910235544b4dd9bc288453b1223b17c49f07e99b732"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 8,
+      "parallelism": 1,
+      "output": "58ca4e18927fd54331ad90d4271a6c66ecdae516d378f7ad251c8c90bd50186e"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 32,
+      "parallelism": 1,
+      "output": "bc7ba472655cb0f856aa5754225284ce0c98d829d7c8cf5784955d092f7e6041"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "f501b14294df39af34e8690dd6c7049e83f046ccfb7953ed5852f7bf562fcefa"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 32,
+      "parallelism": 4,
+      "output": "be422c2e54146fc7d611a08e102321ccb2c15bd2233deb9cb0c16ae541fc302e"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 64,
+      "parallelism": 1,
+      "output": "7eb825cdf2f0d87d3fd91ab19466123d8d4b729c24a5bf8b3185056f9e183a55"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 64,
+      "parallelism": 2,
+      "output": "b640e9a233614567d690f77c779a934a99fdc227f29d4830a37197f997943f53"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 64,
+      "parallelism": 4,
+      "output": "d5ba5fedc46c38c72a58fb2699615c666971828cf03cf9741ce758f5b96ce070"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 64,
+      "parallelism": 8,
+      "output": "74bedbaf91a1ab040bab8510ba9181987dcd085b0b704117ceccb0430160eed0"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 1024,
+      "parallelism": 1,
+      "output": "2e4ffede59d45f02540ddcac0009ef549da41fc9c7fcad86275897557cd3d522"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 1024,
+      "parallelism": 2,
+      "output": "3aa5d791e8f06219580af50056a386c27908e451e1542328fda9f2d7f10e9556"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 1024,
+      "parallelism": 4,
+      "output": "dfd40bb7be3456e1d78ec78d843960f271fd0a85d42a4ba93304653bd8ba8255"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 4,
+      "memoryKiB": 1024,
+      "parallelism": 8,
+      "output": "15fe14b00c8cdf20bbe58633b6caad9b4fac0eeb2ccdea0f8f23354056813aae"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "94cc0b04"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "7c27048a06cc3ea4bfe16f42de52a73a16ceb1c491519905d02a1223ad6724"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "76a2193a96ec085caaee872ad8538783248720a6dafe18a820186ac3ea3930228266564c52b9d15611701471507ac56efef05aff053ee558113b2509a0eb0c"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "9a11d0668a157d173ef52cb871c5580a8544e808216597cb85c34bce66af409f9ad2d1fc770c714c0354dcd85941daf82e792bba5c3a2ceb14b68a548bb25756"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "1908e4d0cbce744eac7c2b876fbf4cc5e6d01379ce6fe05c22ceb74acfd999f281bcc5d5f293a9207a31bbe2f7a786ccacb95dbe3738f6952c526ade6279b9cfbd"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "cc6fbd5362dc1530bd71d9f5ab7d5bffd487175b389a6a60f5f51be451d4cb91b9024ff2dd7c35e0887a32d7143b269a28731f5ea8adb67021ae62f4c4d8bb170e054dfa61f0c4bc006a68ff59d2eb21bc3cc7306425731f0146860187dc42bf"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "3d5ac48cc5bd6eddfaf3d4e24e68dc11c582e4c3ff72a763b5bbb88fe9271009c044382f44461fe83996c90b66e6307437b3c5bc550de83f2989576beeec86d4c0712f24236f03ed9e9e50d30274126d3d0bc351f66bbf87a7b3ed55186e13400b71669c"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "d5ef8dbe3e557527f00ef8f67492fb5c8397b2f8fba6371b7bd7553f542902f875b589f75ff0c48e966d28121ed93a0413d525224367213563b3f72413381e6c45c0264573bbe67e96d2c39b7b5435f8a9c9733740359babd8abf447df670427858ae85c6cafe8fc8f13be6cf75b15481c9d3b53a616263a551273fec74e8121"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "4f1aa502af01bb0bbaf699a33e10ad8a8631098343b1e1c7563c0c3214b87964fe2b5a0ce042138c04be74c4adfec6a68ce03b8636125a11ba56c38ad1a5e44177edb75461bee2a285a18ab908622b6da0d385d06e5ff875618dd663abeffffb558da99ae5acca79438601590a802c359e09fa1f44751923ba40fa7ee659de84b8"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 32,
+      "parallelism": 2,
+      "output": "fd0f10d88de8f5feffa1d6606859e1462121fea3d4ea9e3d6b9ef2821c59973bdde0ec4d5b43d104bbe694038598ddfd7c7f64aa24298e82e8daf5817aeeab86320b3a547fac115542629e0e237c005e4406e73e0d233f8cd3efce34c870ff8c98507b8d533bbb415299fa201bce7e9137e8cdbf6ed82ace6a46a1cdac801b3089f3f6d102e97d94d1b37ad0d7e864683a0f6a9a741ed7099d1b9121e49e835dfc5908a18a6b879bfd64dd957bd10ace1d3feb97d4b161638ff9ff74b2ddae0eeb7a01c9cb1bb3b0648fc3cb6877890360a089eee41d0627cc1c614d499469c7be85fad11f3551c5d4717ae39fec5379d3fbd6157b234750360910423d8a1676623018d625e1db8adcd830221f05c11db8b06be637aa789580ef6a5cb29bf9f11f912920a332809f5cd481aa269751ed1816b8ea72e8c81a0885aa65f4888a747bb169ea49ba80a0f92f7ce78a94248eb3d9062748c2b7dc0b4d871e6162c7f33730ad85a1ccf5612d16916688f18534af45d178e7a0599ef4cc926de12d59f1191871ad5f54b29f5e47d9323b57acb9d3721f83d77a24afa804204610a0d5bdf2c223ddb2e03a917140f13344dd5c72be8e4e407f7fd44ce16696b79a2b910dffc51795e4aa11af3d0a58d4d0a0e7c235673fba76a8758a77aea28e883235ce512c8db268f32aad1e89dd45c64b3e3e96fc77d8d550510688b548d5d2c401712f48e796b42420c7b3ce6b513d50d49f0a4112662c6537a61e3bc1428c93059d6e152200b28cca1ff39323c2fa75a289c2474716921f666e51f90138f1c8b769971e78f008d9a92d3e83be50c7ac02521fdf112e3865d8839773715c141c3090aaf1515980efd69b503e2ed243011ff9025aafdc7a447e7d473d65f3eeec760e6ff0fb7bf38d4284d182681e0a9529871df3a3dc44ae8c56c82a2a4c95815556bf339907b5c774639f37021bcaeba515734653f903295e348619f5e7d5151f8f978b961938a5105ddaec7dd5946ca1a43030fe9154cfe6996efbbc0a061ddfb1cccfd6038483a70d94e9a37d8f2831b6bd19f70238b16cc1b1d0d229da83a3d083ab80015bf0e2968ff158ae42139de9fcc0db4594c084dd6d6d427acd9f3b12f243a30e8c7e73b8c87b07596a194b105dbe2c26eabf3caed2e15a5ba4784d209afde00cdc593d579ce3aac0ce645ad3cf1104c627841da3c15e938a72af32c88b71786327c4b126aeb9816e17990b66a2a515e3e79fee5916b7202bc08a1923c290fef9bb968df86092b6107d52bb37e6c0deb4dc357de37a833f535bc2cf013e7378b581078ed3c2503974bedf248922de5bad3422c303b9064715d33c3a9fb486784127e10866e30fb9f88f970892ddc764b18b9996267a5c735ba1e3645ed6cf0dbe60add2578034f9fed7d237479ca1e06080fb7f4e851b9c5fb6dc864c"
+    },
+    {
+      "password": "",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "9d4aefc91776d6c7934ff5a8cb75da9b59dba04cd12b976b2d55656f051a64e7"
+    },
+    {
+      "password": "05",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "4d6bfbe2ff8ef85e07295dfc7cb85d8d7163ad1d7436d41ca8503048b2e7ca71"
+    },
+    {
+      "password": "05101b26313c47525d68737e89949faab5c0cbd6e1ecf7020d18232e39444f5a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "bffaf68dff73b654484e395a6d51e865d32be2cebef3b4729dffe127ac27995c"
+    },
+    {
+      "password": "05101b26313c47525d68737e89949faab5c0cbd6e1ecf7020d18232e39444f5a65707b86919ca7b2bdc8d3dee9f4ff0a15202b36414c57626d78838e99a4afbac5d0dbe6f1fc07121d28333e49545f6a75808b96a1acb7c2cdd8e3eef9040f1a25303b46515c67727d88939ea9b4bfcad5e0ebf6010c17222d38434e59646f",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "0b76a9e13ed119c48b1be8e33efa6e666462e6162df402a6f19f49d86c5e594d"
+    },
+    {
+      "password": "05101b26313c47525d68737e89949faab5c0cbd6e1ecf7020d18232e39444f5a65707b86919ca7b2bdc8d3dee9f4ff0a15202b36414c57626d78838e99a4afbac5d0dbe6f1fc07121d28333e49545f6a75808b96a1acb7c2cdd8e3eef9040f1a25303b46515c67727d88939ea9b4bfcad5e0ebf6010c17222d38434e59646f7a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "f901da19567ec476d3f978604e2a3c50e5f3ff7bad9ecfce7e8bdd97f912e655"
+    },
+    {
+      "password": "05101b26313c47525d68737e89949faab5c0cbd6e1ecf7020d18232e39444f5a65707b86919ca7b2bdc8d3dee9f4ff0a15202b36414c57626d78838e99a4afbac5d0dbe6f1fc07121d28333e49545f6a75808b96a1acb7c2cdd8e3eef9040f1a25303b46515c67727d88939ea9b4bfcad5e0ebf6010c17222d38434e59646f7a85",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "e8b6ea12fd8029964ffa67810eada35841bafe30c2390fd6419061ece1f44de4"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "8dbf302d87b4487fe7f18006bb7a8a9901b70608ca1e4a72320b75484583cd2a"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "09",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "f660e33f12c6c72837dd58ec33dc8bff6ff3b609a3335506ca0673713adeb764"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "091623303d4a5764",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "9e262d5bc92189ec88ff58fb1d74f54fb0ea4bfa67cb36d7d05e99b72b4ad07f"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf7",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "62a1b5ade9a8849adcfb03278f6aac1c6df3890ec31b8de69ddb73a77f2c0af3"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845525f6c798693a0adbac7d4e1eefb0815222f3c",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "ccb015c54b675c3891adbe03285ab32b2f0e786e5294a1c03e06f99682c73356"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845525f6c798693a0adbac7d4e1eefb0815222f3c495663707d8a97a4b1becbd8e5f2ff0c192633404d5a6774818e9ba8b5c2cfdce9f603101d2a3744515e6b7885929facb9c6d3e0edfa0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9aa7b4c1cedbe8f5020f1c293643505d6a7784919eabb8c5d2dfecf90613202d3a4754616e7b8895a2afbcc9d6e3f0fd0a1724",
+      "iterations": 1,
+      "memoryKiB": 16,
+      "parallelism": 2,
+      "output": "7259934abf221c12a72ba35cd0a1161b8a3799cba20321467caa521ce84d5202"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 2,
+      "memoryKiB": 33,
+      "parallelism": 4,
+      "output": "e24bdd7b992b9c89f3f9c583ffe9985938b3dd1074ecb5204c9dad0b452ea430"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 37,
+      "parallelism": 2,
+      "output": "80e96aaa14357ff1415382f3630adf8304cdfbf5d1511826253d170589f1c514"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 1023,
+      "parallelism": 8,
+      "output": "abbf03f5645926ba00dee5475dac00e1d5c072be620c9c89ae6b8203bdbd6565"
+    },
+    {
+      "password": "01080f161d242b323940474e555c636a",
+      "salt": "0205080b0e1114171a1d202326292c2f",
+      "iterations": 1,
+      "memoryKiB": 4096,
+      "parallelism": 1,
+      "output": "2cd748f400ede4a5c9d0d21e56983c3460aabd0940a9eee6011b3f694532ce96"
+    },
+    {
+      "password": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "salt": "7461696c7363616c65206e6574776f726b2d6c6f636b2064697361626c656d656e742073616c74",
+      "iterations": 4,
+      "memoryKiB": 16384,
+      "parallelism": 4,
+      "output": "c3fea8a0d70ede2555990ca60d70a8a03cbe627d2c9f3cb0e2ba7093d0884e2f"
+    }
+  ]
+}
