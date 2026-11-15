@@ -646,6 +646,8 @@ M3 `filterfixtures`·M2 `mapfixtures`와 같은 방식이다. 자료는 `Tools/i
 
 읽은 것: Swiftail은 DERP를 DERP 맵의 **IPv4 리터럴 하나로만** 건다(`DERPServer+DERPNode.swift`). IPv4를 지원하지 않는 경로에서 그 연결은 서지 않고(`NetworkSocket`은 `.waiting`을 실패로 본다), `DERPClient`는 붙기 전의 실패를 사건으로도 로그로도 내지 않아 줄이 없었다. Go는 노드마다 IPv4와 IPv6를 함께 걸어 먼저 붙는 쪽을 쓴다(`derp/derphttp/derphttp_client.go` `dialNode`). 고칠 것: ① DERP를 두 주소 체계로 함께 걸기(DERP만 붙어도 중계로 산다) ② 붙지 못한 시도를 로그에 남기기. 그 뒤에 볼 것: `pdp_ip0`에 묶은 `AF_INET` UDP가 CLAT로 실제 나가는지(직접 경로가 서는지), 서지 않으면 바깥쪽 UDP·STUN·엔드포인트의 IPv6. 제어 연결이 셀룰러에서 다시 붙었는지는 로그에 성공 줄이 없어 모른다(제어는 이름으로 걸므로 DNS64의 덕을 본다고 추정).
 
+시험 조건(첫 사용처 세션이 사용자에게 확인): 이 전환 시험에서 iPhone 앱과 Mac은 **서로 다른 tailnet**에 로그인돼 있었다(같은 사용자. Mac은 iPhone 노드에게 다른 tailnet의 피어로 보인다). Wi-Fi에서는 이 조건으로 직접 경로까지 붙었다. iPhone의 Go 노드와 Swiftail 노드가 같은 tailnet인지는 확인되지 않았다. 고친 뒤의 재확인은 같은 조건으로 한다.
+
 아직 보지 못한 것: 2(Mac의 tailnet HTTPS 요청)·6의 전송 중 메모리·100MiB 받기와 MagicDNS·경로 표시는 그 노드를 Mac에 페어링한 뒤(사용자 승인 대기), 5(Wi-Fi ↔ 셀룰러, 비행기 모드)와 7(첫 잠금 해제 전 시작)은 사용자가 기기를 손으로 조작해야 한다. 첫 사용처 확장의 정식 교체는 별도 승인 뒤다(plan 7절 M7, T7).
 
 ## 구현 단위
