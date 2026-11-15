@@ -2,7 +2,8 @@
 // 주소 블록을 만드는 시점은 Go 구현과 견주어 맞췄다.
 // 출처: golang.org/x/crypto v0.58.0 `argon2/argon2.go` (`processBlocks`, `indexAlpha`, `phi`),
 // `argon2/blake2b.go` (`blake2bHash`).
-// Copyright 2017 The Go Authors. BSD-3-Clause.
+// Copyright 2017 The Go Authors. BSD-3-Clause(전문은 `Edwards25519/FieldElement.swift` 머리. golang.org/x/crypto의 LICENSE와
+// 조항이 같다).
 
 /// Argon2i(RFC 9106, 버전 0x13). 비밀 키와 연관 자료는 받지 않는다(쓰는 곳이 없다).
 ///

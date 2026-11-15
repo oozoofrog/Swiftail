@@ -3,7 +3,7 @@
 // 출처: 검증 절차는 `github.com/hdevalence/ed25519consensus` v0.2.0 `ed25519.go`의 `Verify`와
 // Go 1.27.3 `crypto/internal/fips140/ed25519/ed25519.go`의 `verifyWithDom`을 따랐다.
 // Copyright 2016 The Go Authors, Copyright 2016 Henry de Valence. BSD-3-Clause(전문은
-// `Edwards25519/FieldElement.swift` 머리. ed25519consensus의 LICENSE도 같은 조항이다).
+// `Edwards25519/FieldElement.swift` 머리. ed25519consensus의 LICENSE는 3항의 이름(Google Inc.)과 저작권 줄만 다르다).
 
 import CryptoKit
 

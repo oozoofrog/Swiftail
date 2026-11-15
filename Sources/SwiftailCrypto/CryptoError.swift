@@ -1,6 +1,6 @@
 /// SwiftailCrypto가 던지는 오류.
 public enum CryptoError: Error, Sendable, Equatable {
-    /// 키·nonce·암호문 길이가 규격과 다르다.
+    /// 키·nonce·암호문 길이가 규격과 다르다. Argon2i의 비용 인자(병렬도·패스·메모리·출력 길이)가 범위 밖일 때도 이것이다.
     case invalidLength
     /// 인증 태그가 일치하지 않는다.
     case authenticationFailed
