@@ -138,6 +138,15 @@ private final class SessionDelegate: NSObject, URLSessionTaskDelegate, Sendable 
         nil
     }
 
+    /// `session.bytes(for:)`의 작업은 서버 신뢰 요구를 작업 수준으로만 묻는다(세션 수준 처리기는 불리지 않는다).
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        await urlSession(session, didReceive: challenge)
+    }
+
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge
