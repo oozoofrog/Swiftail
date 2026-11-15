@@ -939,3 +939,34 @@ extension NetworkSocket {
 - V147(지터와 10초 상한), V151(갱신 시각 캐시), V152(갱신마다 `replaces`): 이 계약에 그 주장이 없었다(Go의 HTTP 재시도와 ARI를 옮기지 않는다).
 
 그 밖에 머리말의 "노트는 아직 검증 전"과 "저장소 밖에서 돌린 작은 실험"을 고쳤고, 4절 대응표에 `magicDNSDisabled`, 8절의 `package` 선언 주석에 MagicDNS, 구현 단위 표와 예상 규모를 맞췄다.
+
+## 로그아웃 (첫 사용처 요청, 2026-11-15)
+
+Mac 앱에 tailnet 로그아웃이 생겼다(공유 중지 → 상태 폴더 비우기). 폴더만 지우면 제어 서버에는 옛 노드가 그대로 남는다. Go 코어의 로그아웃은 서버에 node 키를 만료시키라고 알린다. 그 요청을 넣는다. 사용자 결정 "Go 코어가 되는 것은 Swiftail도 된다"(plan 3절)의 범위다.
+
+근거: `control/controlclient/direct.go`의 `TryLogout`·`doLogin`(`loginOpt.Logout`), `ipn/ipnlocal`의 로그아웃 경로. 세부(요청의 각 필드, 응답의 처리, 기한)는 구현이 Go 소스로 확인해 "구현하며 정해진 것"에 적는다.
+
+### API
+
+```swift
+extension TailnetNode {
+    /// 제어 서버에 이 노드의 node 키를 만료시키라고 알린다(Go `tailscale logout`의 서버 쪽).
+    public func logOut() async throws(NodeError)
+}
+```
+
+### 동작 O
+
+1. `run()`이 돌지 않을 때만 부른다(시작 전이나 끝난 뒤). 같은 상태 디렉터리를 쓰는 `run()`이 도는 중이면 `stateDirectoryInUse`다.
+2. 저장된 신원에 node 키가 없으면(등록한 적이 없다) 아무것도 보내지 않고 돌아온다.
+3. 요청은 등록과 같은 길로 간다(Noise 위 `/machine/register`). 지금의 node 키를 그대로 쓰고 `Expiry`를 Go와 같은 먼 과거 값으로 둔다. 인증 키와 로그인 URL은 싣지 않는다. 새 node 키를 만들지 않는다.
+4. 응답: `Error`가 있으면 `control(.registrationRejected)`. 그 밖의 응답(`NodeKeyExpired` 포함)은 성공이다. `AuthURL`과 `NodeKeySignature`는 따르지 않는다(Go `TryLogout`이 버린다).
+5. 전체에 기한을 둔다(Go의 값을 확인해 따른다. 없으면 10초). 넘으면 `control(.connection)`. 다시 시도하지 않는다.
+6. **로컬 파일은 건드리지 않는다.** 신원·lock 상태·인증서를 지우는 것은 앱이다. 앱의 순서: `run()`을 취소하고 끝나기를 기다림 → `logOut()` → 상태 폴더 비우기. `logOut()`이 실패해도(망 없음) 앱은 폴더를 지울 수 있다. 그때는 옛 노드가 서버에 남는다.
+7. 비밀: 요청·응답·오류에 키를 로그로 남기지 않는다.
+
+### 시험과 관문
+
+- 단위: 요청의 모양(`Expiry`의 선 위 표기, node 키가 바뀌지 않음, 인증 없음), 신원이 없을 때 보내지 않음, `Error` 응답, 기한.
+- 상호 운용(testcontrol): 등록한 노드가 `logOut()`한 뒤 서버 쪽 그 노드의 키가 만료로 보인다. 같은 상태 폴더로 다시 `run()`하면 무슨 일이 일어나는지 기록한다(Go는 새 로그인을 요구받는다).
+- 운영 서버에서 확인할 것(관문 (나)에 더한다): 로그아웃한 노드가 관리 콘솔에서 어떻게 보이는지, 같은 이름으로 다시 로그인한 새 노드의 이름에 번호가 붙는지. Swiftail의 몫은 Go와 같은 요청을 보내는 데까지다.
