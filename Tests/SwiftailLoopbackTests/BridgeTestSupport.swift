@@ -91,8 +91,12 @@ enum BridgeTestSupport {
         var peer: PeerConnection
         var forwarding: Task<LoopbackBridgeError?, Never>
 
-        /// `forward`가 돌아올 때까지 기다린다. 던진 오류, 정상으로 돌아왔으면 nil.
-        func finished() async -> LoopbackBridgeError? { await forwarding.value }
+        /// `forward`가 돌아올 때까지 기다린다. 던진 오류, 정상으로 돌아왔으면 nil. 기다리던 Task가 취소되면(시험의 기한)
+        /// `forward`를 취소한다.
+        func finished() async -> LoopbackBridgeError? {
+            let forwarding = forwarding
+            return await withTaskCancellationHandler { await forwarding.value } onCancel: { forwarding.cancel() }
+        }
     }
 
     /// `port`에서 받은 tailnet 연결을 다리로 `server`에 잇는다.

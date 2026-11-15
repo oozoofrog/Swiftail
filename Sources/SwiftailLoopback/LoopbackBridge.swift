@@ -1,3 +1,4 @@
+import Network
 import Swiftail
 import SwiftailBase
 import SwiftailIO
@@ -6,14 +7,19 @@ import Synchronization
 /// tailnet에서 받은 TCP 연결을 이 기기의 루프백(`127.0.0.1`) TCP 리스너로 이어 준다.
 ///
 /// TLS와 HTTP를 OS의 스택(`NWListener`)으로 끝내려는 앱이 쓴다. 다리는 바이트를 해석하지 않는다. 루프백 연결의 저쪽에서는
-/// 상대가 `127.0.0.1`로 보이므로, 서버는 받은 연결의 **출발 포트**로 `origin(forLoopbackSourcePort:)`를 물어 tailnet의
-/// 상대를 안다. 표에 없는 포트는 다리가 이은 연결이 아니다(같은 기기의 다른 프로세스다). 서버는 그런 연결을 끊어야 한다.
+/// 상대가 `127.0.0.1`로 보이므로, 서버는 다리가 준 프로토콜을 리스너에 넣고 받은 연결로 `origin(of:)`을 물어 tailnet의
+/// 상대를 안다.
 ///
-/// 서버가 지킬 것(계약 `docs/contracts/SwiftailHost.md` 동작 B7):
+/// 다리는 루프백 연결마다 일회용 토큰을 TLS 바이트보다 먼저 보낸다. 리스너의 그 프로토콜이 토큰을 확인한 연결만 위(TLS)로
+/// 올리므로, 같은 기기의 다른 프로세스가 연 연결은 서버에게 `.ready`가 되지 않고 실패한다. 출발 포트를 다시 쓰거나
+/// 다른 리스너로 같은 출발 포트를 써도 마찬가지다(계약 `docs/contracts/SwiftailHost.md` 동작 B6).
+///
+/// 서버가 지킬 것(동작 B7):
 /// - 리스너를 `127.0.0.1`에만 묶고 포트는 시스템이 고르게 한다.
-/// - 받은 연결마다 **TLS 핸드셰이크가 끝난 뒤(`.ready`), 요청을 읽기 전에** `origin(forLoopbackSourcePort:)`를 묻고, nil이면
-///   그 연결을 끊는다. 평문 리스너라면 첫 바이트를 받은 뒤에 묻는다. 그보다 먼저 물으면 다리가 아직 적지 못한 정당한
-///   연결을 끊을 수 있다(리스너가 연결을 알리는 때와 다리가 표에 적는 때 사이에는 순서가 없다).
+/// - 리스너의 `NWParameters`에 `makeListenerProtocolOptions()`를 **`applicationProtocols`의 끝에** 더한다(TLS 아래,
+///   TCP 바로 위). 앞에 넣으면 TLS 위에 놓여 핸드셰이크가 깨진다.
+/// - 받은 연결마다 **`.ready`가 된 뒤, 요청을 읽기 전에** `origin(of:)`을 한 번 묻고, nil이면 그 연결을 끊는다. 답은 한 번만
+///   나온다(두 번째는 nil).
 /// - 신원은 요청마다 `whoIs`로 다시 찾지 않고 `Origin.peer`를 쓴다. 연결을 맺을 때 확인한 신원이다(동작 B2).
 ///
 /// 다리는 포트마다가 아니라 연결마다 동작한다. 서버가 리스너를 새 포트로 바꿔도 옛 포트로 잇던 연결은 그대로 간다.
@@ -26,12 +32,16 @@ public final class LoopbackBridge: Sendable {
         public var peer: PeerIdentity
     }
 
-    private struct State {
-        /// `forward`에 들어와 아직 돌아가지 않은 호출의 수. 상한과 견준다.
-        var forwarding = 0
-        /// 루프백 연결의 출발 포트 → tailnet 쪽 상대.
-        var origins: [UInt16: Origin] = [:]
+    /// 루프백 연결을 끝내는 방법.
+    private enum LoopbackEnding {
+        /// 정상 닫기(FIN).
+        case close
+        /// 오류로 끊기(RST).
+        case reset
     }
+
+    /// `forward`에 들어와 아직 돌아가지 않은 호출의 수. 상한과 견준다.
+    private let forwarding = Mutex(0)
 
     /// 한 방향이 한 번에 쥐는 바이트(계약 한도 표: 방향당 64KiB).
     private static let chunkSize = 65_536
@@ -40,23 +50,41 @@ public final class LoopbackBridge: Sendable {
 
     private let node: TailnetNode
     let connectionLimit: Int
-    private let state = Mutex(State())
+    let admission = LoopbackAdmissionTable()
+    /// 루프백 연결을 닫기 직전에 그 연결의 열쇠와 표의 모양을 받는다. 시험만 쓴다.
+    private let willEndLoopback: (@Sendable (LoopbackAdmissionTable.Key, LoopbackAdmissionTable.Snapshot) -> Void)?
 
     /// `node`가 받은 연결을 잇는 다리. 신원은 `node.whoIs(_:)`로 찾는다. 잇는 연결은 256개까지다(노드의 연결 상한과 같다).
     public convenience init(node: TailnetNode) {
         self.init(node: node, connectionLimit: 256)
     }
 
-    /// 상한을 바꾼 다리. 시험이 상한에 닿는 경우를 연결 몇 개로 만든다(노드 하나의 자기 연결로는 다리에 256개를 올릴 수 없다).
-    init(node: TailnetNode, connectionLimit: Int) {
+    /// 상한을 바꾼 다리. 시험이 상한에 닿는 경우를 연결 몇 개로 만들고(노드 하나의 자기 연결로는 다리에 256개를 올릴 수
+    /// 없다), 루프백 연결을 닫는 순간의 표를 본다.
+    init(
+        node: TailnetNode, connectionLimit: Int,
+        willEndLoopback: (@Sendable (LoopbackAdmissionTable.Key, LoopbackAdmissionTable.Snapshot) -> Void)? = nil
+    ) {
         self.node = node
         self.connectionLimit = connectionLimit
+        self.willEndLoopback = willEndLoopback
+    }
+
+    /// 서버의 루프백 리스너에 넣을 프로토콜. 다리가 보낸 토큰을 확인한 연결만 위로 올린다.
+    ///
+    /// `NWParameters.defaultProtocolStack.applicationProtocols`의 **끝에** 더한다(`append`). 그 자리가 TLS 아래, TCP 바로
+    /// 위다. 평문 리스너에서도 같다. 이 다리의 토큰만 받으므로 리스너 하나에는 다리 하나를 쓴다.
+    public func makeListenerProtocolOptions() -> NWProtocolFramer.Options {
+        let options = NWProtocolFramer.Options(definition: LoopbackAdmissionFramer.definition)
+        options[LoopbackAdmissionFramer.tableOption] = admission
+        return options
     }
 
     /// 연결 하나를 `127.0.0.1:<port>`로 잇고, 두 방향이 다 끝날 때까지 바이트를 나른다. 끝나면 두 연결을 닫고 돌아온다.
     ///
-    /// 차례(동작 B1): 상한을 보고, 상대의 신원을 확인하고, 루프백으로 걸고(5초), 그 연결의 출발 포트를 표에 적은 **뒤에**
-    /// 복사를 시작한다. 끝나면 표에서 **지운 뒤에** 루프백 연결을 닫는다(동작 B6).
+    /// 차례(동작 B1): 상한을 보고, 상대의 신원을 확인하고, 루프백으로 건다(5초). 그 연결의 `(출발 포트, 리스너 포트)`와
+    /// 새 토큰을 표에 적은 **뒤에** 토큰을 보내고, 그 뒤에 복사를 시작한다. 끝나면 소비되지 않은 토큰을 거둔 **뒤에**
+    /// 루프백 연결을 닫는다.
     ///
     /// 나르기(동작 B3·B4): 방향마다 덩어리 하나(64KiB 이하)만 쥐고, 받는 쪽이 받아 갈 때까지 다음을 읽지 않는다. 한쪽이
     /// 쓰기를 닫으면(FIN) 다른 쪽의 쓰기를 닫고 반대 방향은 계속 나른다.
@@ -65,8 +93,8 @@ public final class LoopbackBridge: Sendable {
     /// 취소되면 두 연결을 RST로 끊는다. 루프백의 서버에게도 정상 닫기(FIN)로 보이지 않으므로, 반쯤 받은 것을 끝까지 받은
     /// 것으로 읽지 않는다. 잇기 시작한 뒤의 끊김은 던지지 않는다(취소만 `cancelled`로 던진다).
     ///
-    /// - Throws: 상한이면 `limitReached`, 신원이 없으면 `unknownPeer`, 루프백에 걸지 못하면 `loopbackUnavailable`, 부른 Task가
-    ///   취소되면 `cancelled`. 던질 때는 `connection`을 RST로 끊은 뒤다.
+    /// - Throws: 상한이면 `limitReached`, 신원이 없으면 `unknownPeer`, 루프백에 걸지 못하거나 토큰을 적거나 보내지 못하면
+    ///   `loopbackUnavailable`, 부른 Task가 취소되면 `cancelled`. 던질 때는 `connection`을 RST로 끊은 뒤다.
     public func forward(_ connection: TailnetConnection, toLoopbackPort port: UInt16) async throws(LoopbackBridgeError) {
         guard reserveSlot() else {
             await connection.abort()
@@ -93,48 +121,78 @@ public final class LoopbackBridge: Sendable {
         }
 
         let origin = Origin(remoteEndpoint: connection.remoteEndpoint, peer: peer)
-        guard let sourcePort = socket.localPort, record(origin, at: sourcePort) else {
+        let token = LoopbackAdmissionTable.makeToken()
+        guard let sourcePort = socket.localPort else {
             socket.abort()
             await connection.abort()
-            throw .loopbackUnavailable("출발 포트를 표에 적지 못했다")
+            throw .loopbackUnavailable("출발 포트를 읽지 못했다")
+        }
+        let key = LoopbackAdmissionTable.Key(sourcePort: sourcePort, listenerPort: port)
+        guard admission.expect(token, for: key, origin: origin) else {
+            socket.abort()
+            await connection.abort()
+            throw .loopbackUnavailable("토큰을 표에 적지 못했다")
+        }
+        guard await socket.writeAccepted(token) else {
+            endLoopback(socket, key, .reset)
+            await connection.abort()
+            if Task.isCancelled { throw .cancelled }
+            throw .loopbackUnavailable("토큰을 보내지 못했다")
         }
 
-        if await relay(connection, socket, sourcePort: sourcePort) {
-            forget(sourcePort)
-            socket.close()
+        if await relay(connection, socket, key: key) {
+            endLoopback(socket, key, .close)
             await connection.close()
         } else if Task.isCancelled {
             throw .cancelled
         }
     }
 
-    /// 다리가 이은 루프백 연결의 출발 포트로 tailnet 쪽 상대를 찾는다. 기다리지 않는다.
+    /// 서버가 받은 루프백 연결의 tailnet 쪽 상대. 기다리지 않는다. 한 연결에 한 번만 답한다(두 번째는 nil).
     ///
-    /// 다리는 표에 적기 전에는 그 연결로 한 바이트도 보내지 않는다. 그러므로 서버가 그 연결에서 무엇이든 받은 뒤
-    /// (TLS 핸드셰이크가 끝난 뒤)에 물으면, 다리가 이은 연결은 반드시 표에 있다. 연결이 끝나면 닫기 전에 지운다.
-    public func origin(forLoopbackSourcePort port: UInt16) -> Origin? {
-        state.withLock { $0.origins[port] }
+    /// `connection`이 `.ready`이고, 리스너의 `makeListenerProtocolOptions()`가 그 연결에서 이 다리의 토큰을 확인했을 때만
+    /// 답한다. 토큰은 TLS 바이트보다 먼저 오고 확인되기 전에는 연결이 준비되지 않으므로, `.ready`가 된 뒤에 물으면 다리가 이은
+    /// 연결은 반드시 답을 얻는다. nil이면 다리가 이은 연결이 아니거나 이미 물었다. 서버는 그 연결을 끊는다.
+    public func origin(of connection: NWConnection) -> Origin? {
+        guard case .ready = connection.state,
+              case .hostPort(.ipv4(let remoteHost), let remotePort) = connection.endpoint, remoteHost == .loopback,
+              case .hostPort(_, let localPort)? = connection.currentPath?.localEndpoint
+        else { return nil }
+        return admission.take(LoopbackAdmissionTable.Key(sourcePort: remotePort.rawValue, listenerPort: localPort.rawValue))
     }
 
     // MARK: 나르기
 
     /// 두 방향을 나른다. 두 방향이 다 정상으로 끝나면 true.
     ///
-    /// 한 방향이 실패하면 곧바로 표에서 지우고 두 연결을 RST로 끊는다. 그래야 다른 방향의 기다림이 풀린다. 부른 Task가
-    /// 취소되면 두 방향의 기다림이 실패로 풀려 같은 길로 온다. 루프백 소켓은 취소로 닫히지 않으므로(`connectLoopback`)
-    /// 지우기가 늘 닫기보다 먼저다.
-    private func relay(_ connection: TailnetConnection, _ socket: NetworkSocket, sourcePort: UInt16) async -> Bool {
+    /// 한 방향이 실패하면 곧바로 두 연결을 RST로 끊는다. 그래야 다른 방향의 기다림이 풀린다. 부른 Task가 취소되면 두 방향의
+    /// 기다림이 실패로 풀려 같은 길로 온다. 루프백 소켓은 취소로 닫히지 않으므로(`connectLoopback`) 닫기는 늘
+    /// `endLoopback`을 지난다.
+    private func relay(_ connection: TailnetConnection, _ socket: NetworkSocket, key: LoopbackAdmissionTable.Key) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
             group.addTask { await Self.copyToLoopback(from: connection, to: socket) }
             group.addTask { await Self.copyToTailnet(from: socket, to: connection) }
             var finishedCleanly = true
             for await finished in group where !finished && finishedCleanly {
                 finishedCleanly = false
-                forget(sourcePort)
-                socket.abort()
+                endLoopback(socket, key, .reset)
                 await connection.abort()
             }
             return finishedCleanly
+        }
+    }
+
+    /// 토큰을 적은 뒤 루프백 연결을 끝내는 유일한 길. 소비되지 않은 토큰을 거둔 뒤에 닫는다.
+    ///
+    /// 허가(서버가 아직 가져가지 않은 상대)는 지우지 않는다. 그것은 이 연결이 실제로 나른 바이트의 상대이고, 서버가 그
+    /// 연결에 대해 아직 물을 수 있다. 지우면 같은 4-튜플을 다시 쓰는 다리의 새 연결이 그 자리에 들어가, 늦게 온 조회가 다른
+    /// 상대를 얻을 수 있다.
+    private func endLoopback(_ socket: NetworkSocket, _ key: LoopbackAdmissionTable.Key, _ ending: LoopbackEnding) {
+        admission.withdraw(key)
+        willEndLoopback?(key, admission.snapshot)
+        switch ending {
+        case .close: socket.close()
+        case .reset: socket.abort()
         }
     }
 
@@ -176,31 +234,17 @@ public final class LoopbackBridge: Sendable {
         }
     }
 
-    // MARK: 표
+    // MARK: 상한
 
     private func reserveSlot() -> Bool {
-        state.withLock { state in
-            guard state.forwarding < connectionLimit else { return false }
-            state.forwarding += 1
+        forwarding.withLock { forwarding in
+            guard forwarding < connectionLimit else { return false }
+            forwarding += 1
             return true
         }
     }
 
     private func releaseSlot() {
-        state.withLock { $0.forwarding -= 1 }
-    }
-
-    /// 표에 적는다. 그 포트가 이미 있으면 적지 않고 false다: 어느 연결의 상대인지 가를 수 없으므로 잇지 않는다.
-    /// 커널은 같은 리스너로 가는 연결의 출발 포트를 겹치게 주지 않지만, 다리는 서로 다른 리스너 포트로도 잇는다.
-    private func record(_ origin: Origin, at port: UInt16) -> Bool {
-        state.withLock { state in
-            guard state.origins[port] == nil else { return false }
-            state.origins[port] = origin
-            return true
-        }
-    }
-
-    private func forget(_ port: UInt16) {
-        state.withLock { _ = $0.origins.removeValue(forKey: port) }
+        forwarding.withLock { $0 -= 1 }
     }
 }
