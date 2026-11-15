@@ -21,8 +21,6 @@ public enum ControlError: Error, Sendable {
     case registrationRejected(String)
     /// 새 node 키로 다시 등록해도 만료라고 한다.
     case nodeKeyExpired
-    /// tailnet lock이 켜진 tailnet이다. 지원하지 않는다.
-    case tailnetLockEnabled
 }
 
 extension ControlError {
@@ -30,7 +28,7 @@ extension ControlError {
     var isRetryable: Bool {
         switch self {
         case .connection, .http: true
-        case .invalidConfiguration, .storage, .authKeyRejected, .registrationRejected, .nodeKeyExpired, .tailnetLockEnabled: false
+        case .invalidConfiguration, .storage, .authKeyRejected, .registrationRejected, .nodeKeyExpired: false
         }
     }
 }

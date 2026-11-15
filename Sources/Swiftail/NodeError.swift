@@ -6,8 +6,9 @@ import SwiftailControl
 /// 메시지에는 키·인증 키·파일 경로·기술자 번호를 넣지 않는다. 앱은 사용자 문구를 종류로 고르고, 연관 문자열은 진단에만 쓴다.
 public enum NodeError: Error, Sendable {
     /// 제어 클라이언트가 끝낸 실패: 인증 키를 실은 등록 거절(`authKeyRejected`), 인증 키 없는 등록 거절
-    /// (`registrationRejected`), 새 키로도 node 키 만료(`nodeKeyExpired`), tailnet lock(`tailnetLockEnabled`),
-    /// 신원 파일(`storage`).
+    /// (`registrationRejected`), 새 키로도 node 키 만료(`nodeKeyExpired`), 신원 파일(`storage`).
+    ///
+    /// tailnet lock은 실패가 아니다. 잠긴 노드도 `.running`까지 가고, 잠김은 `NodeStatus.tailnetLock`으로 안다.
     case control(ControlError)
     /// 설정이 잘못되었다: 상태 디렉터리, 제어 서버 URL, 호스트 이름, utun 기술자, MTU. `run()`을 두 번 부른 것도 여기다.
     case invalidConfiguration(String)

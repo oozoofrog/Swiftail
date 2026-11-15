@@ -17,6 +17,12 @@ public struct NodeStatus: Sendable, Equatable {
     public var peerCount: Int
     /// 마지막으로 `TailnetNode.networkSettings`에 낸 설정. 아직 내지 않았으면 nil.
     public var networkSettings: TunnelNetworkSettings?
+    /// tailnet lock의 모습(netmap `tailnetLock`). netmap 전에는 `.disabled`다.
+    ///
+    /// 잠긴 노드도 `state`는 `.running`까지 간다(Go와 같다). 그래서 통신이 안 되는 까닭은 이 값으로 안다: 꺼짐(`.disabled`),
+    /// 켜짐·이 노드 서명됨(`.enforcing`, `signingRequest`가 nil), 켜짐·서명을 기다림(`.enforcing`, `signingRequest`가 있음),
+    /// 확인하지 못해 피어를 올리지 않음(`.unverified`). `docs/contracts/SwiftailTailnetLock.md` 결정 L4.
+    public var tailnetLock: TailnetLockStatus
 
     /// 마지막 netmap에서 읽는다.
     init(state: NodeState, netmap: Netmap?, networkSettings: TunnelNetworkSettings?) {
@@ -31,5 +37,6 @@ public struct NodeStatus: Sendable, Equatable {
         certDomains = netmap?.dnsConfig?.certDomains ?? []
         peerCount = netmap?.peers.count ?? 0
         self.networkSettings = networkSettings
+        tailnetLock = netmap?.tailnetLock ?? TailnetLockStatus()
     }
 }

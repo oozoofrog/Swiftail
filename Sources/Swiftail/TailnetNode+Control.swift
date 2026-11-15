@@ -10,7 +10,7 @@ import SwiftailMagicsock
 /// - `loginRequired`: 상태 기계에 넣는다(`.needsLogin(url)`).
 /// - `registered`: 신원 파일에서 node 개인 키를 읽어 엔진과 `Magicsock`을 만든다. 키가 바뀌면 둘 다 새로 만들고 DERP 지역
 ///   연결을 모두 다시 연다(disco 키와 소켓은 그대로). 상태 기계의 로그인 URL을 지운다.
-/// - `netmap`: 엔진에 적용하고, 피어와 홈 후보 지역을 `Magicsock`에 넣고, DERPMap에서 사라진 지역의 연결을 닫고,
+/// - `netmap`: lock 모습이 바뀌었으면 먼저 알리고(`tailnetLockChanged`), 엔진에 적용하고, 피어와 홈 후보 지역을 `Magicsock`에 넣고, DERPMap에서 사라진 지역의 연결을 닫고,
 ///   (`.inProcess`면) 스택의 자기 주소와 피어 주소의 주인을 고치고, 터널 설정을 산출해 바뀌었으면 내고(동작 E), 상태
 ///   기계에 넣는다.
 /// - `disconnected`: 로그만 남긴다. `.running` 뒤 끊겨도 상태는 그대로다(동작 B).
@@ -84,7 +84,12 @@ extension TailnetNode {
     }
 
     func apply(_ netmap: Netmap) {
+        let previousLock = lastNetmap?.tailnetLock ?? TailnetLockStatus()
+        // `status`를 먼저 고치고 사건을 낸다. lock 사건은 이 netmap의 다른 사건보다 앞선다(F2 1).
         lastNetmap = netmap
+        if netmap.tailnetLock != previousLock {
+            eventContinuation.yield(.tailnetLockChanged(netmap.tailnetLock))
+        }
         configureDataPlane(netmap)
         updateNetstack(for: netmap)
         publishSettings(for: netmap)

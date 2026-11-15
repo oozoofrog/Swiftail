@@ -389,7 +389,7 @@ public actor CertificateManager {
         switch error {
         case .http(let status): .controlRejected(status: status)
         case .invalidConfiguration: .domainNotAllowed
-        case .connection, .storage, .authKeyRejected, .registrationRejected, .nodeKeyExpired, .tailnetLockEnabled:
+        case .connection, .storage, .authKeyRejected, .registrationRejected, .nodeKeyExpired:
             .network("제어 서버에 닿지 못했다")
         }
     }

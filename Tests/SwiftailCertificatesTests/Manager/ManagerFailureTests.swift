@@ -303,7 +303,7 @@ struct ManagerMappingTests {
     func controlErrors() {
         #expect(CertificateManager.failure(for: .http(status: 500)) == .controlRejected(status: 500))
         #expect(CertificateManager.failure(for: .invalidConfiguration("x")) == .domainNotAllowed)
-        for error in [ControlError.connection("x"), .storage("x"), .nodeKeyExpired, .tailnetLockEnabled] {
+        for error in [ControlError.connection("x"), .storage("x"), .nodeKeyExpired] {
             guard case .network(let message) = CertificateManager.failure(for: error) else {
                 Issue.record("network가 아니다")
                 continue
