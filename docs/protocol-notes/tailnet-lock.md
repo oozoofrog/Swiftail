@@ -8,7 +8,7 @@
 | 의존 모듈 | `github.com/fxamacker/cbor/v2` v2.9.3, `github.com/hdevalence/ed25519consensus` v0.2.0, `golang.org/x/crypto` v0.58.0(`tailscale.com/go.mod:51`, `:80`, `:139`). Go 표준 라이브러리는 Go 1.27.3의 `src/` |
 | 쓰는 마일스톤 | M8 ① Tailnet Lock(`docs/plan.md` 3절, 마일스톤 표 M8) |
 | 작성 모델 | Claude Opus 5.5 (`claude-opus-5-5`), 2026-11-15 |
-| 검증 | 아직 |
+| 검증 | 검증됨(2026-11-15, Claude Opus 5.5 `claude-opus-5-5`, 작성과 다른 세션). `tailscale.com` v1.104.7 소스(실행은 v1.104.6, 두 버전 차이 8개 파일 재확인), `fxamacker/cbor/v2` v2.9.3, `ed25519consensus` v0.2.0, `golang.org/x/crypto` v0.58.0, Go 1.27.3 `src/`와 대조. 사실 문장 판정: 맞음 256·틀림 11(내용 9, 출처 줄 번호 2)·확인 불가 4. 수정 11건과 빠진 경로 보충 12건. 실행 기록은 8.1의 "검증 세션" 표 |
 
 출처는 모듈 루트 기준 `경로:줄`이다. 모듈 접두는 `tailscale.com/`, `cbor/`(= `fxamacker/cbor/v2@v2.9.3/`), `ed25519consensus/`, `x/crypto/`(= `golang.org/x/crypto@v0.58.0/`), `go/src/`(Go 1.27.3)로 줄인다. Swiftail 저장소 파일은 `Sources/...`로 적는다. 실행해서 확인한 것은 8.1에 명령과 함께 적었다. 예시 값은 가짜이거나 Go 시험 파일에 있는 시험용 값이다.
 
@@ -44,7 +44,7 @@
 
 구조체 필드는 `cbor:"N,keyasint"` 태그로 **정수 키 맵**이 된다. `omitempty`가 없는 필드의 Go `nil`(슬라이스·포인터)은 CBOR null(`0xf6`)로, 길이 0인 non-nil 슬라이스는 빈 바이트열(`0x40`)·빈 배열(`0x80`)로 나간다. 둘은 해시가 다르다(`tailscale.com/tka/aum_test.go:26-44`, `tailscale.com/tka/key.go:56-57`, Go 실행 8.1: `PrevAUMHash=[]byte{}` → `a201030240`). `omitempty` 필드는 nil 포인터, 길이 0 슬라이스·맵, 0 정수일 때 빠진다. 포인터가 가리키는 0은 빠지지 않는다(Go 실행: `Votes=&0` → `0600`이 남고 빈 `Meta={}`는 빠진다, 8.1).
 
-**디코딩.** `cborDecOpts`(`tailscale.com/tka/tka.go:22-32`)로 디코딩한다. AUM·NKS·tailchonk 파일 모두 같다(`tailscale.com/tka/aum.go:268-271`, `tailscale.com/tka/sig.go:239-242`, `tailscale.com/tka/tailchonk.go:466-474`).
+**디코딩.** `cborDecOpts`(`tailscale.com/tka/tka.go:22-32`)로 디코딩한다. AUM·NKS·tailchonk 파일 모두 같은 옵션이다(`tailscale.com/tka/aum.go:268-271`, `tailscale.com/tka/sig.go:239-242`, `tailscale.com/tka/tailchonk.go:466-474`). 다만 AUM·NKS는 `Unmarshal`이라 먼저 전체의 잘 짜임을 검사하고 뒤에 남은 바이트를 거절하지만(`cbor/decode.go:1291-1302`), tailchonk 파일은 스트림 `Decoder.Decode`로 첫 항목만 읽는다(`tailscale.com/tka/tailchonk.go:472`). 아래 표는 `Unmarshal` 경로다.
 
 | 규칙 | Go의 동작 | 출처 |
 | --- | --- | --- |
@@ -56,7 +56,9 @@
 | 맵 쌍 | 최대 1024쌍 | `tailscale.com/tka/tka.go:31`, Go 실행 8.1 |
 | 뒤에 남은 바이트 | 거절(`extraneous data`) | Go 실행 8.1 |
 | 모르는 필드 | 조용히 버린다(`ExtraDecErrorNone`가 기본). 값은 실수·음수·true·undefined·잘못된 UTF-8 문자열이어도 잘 짜인(well-formed) 항목이면 건너뛴다 | `cbor/decode.go:437-446`, Go 실행 8.1 |
-| 정수 키가 아닌 키 | 예: 텍스트 키 `"1"`은 필드에 맞지 않아 모르는 필드로 버린다 | Go 실행 8.1 |
+| 텍스트 키 | 올바른 UTF-8이면 모르는 필드로 버린다. `keyasint` 필드는 정수 키로만 찾으므로 `"1"`, `"MessageKind"`, `"messagekind"`도 필드에 맞지 않는다 | `cbor/decode.go:2767-2804`, `cbor/decode_map_utils.go:36-63`, `cbor/cache.go:136-158`, Go 실행 8.1 |
+| **정수·텍스트가 아닌 키** | **거절.** 구조체 맵(AUM·Key·State·Signature·NKS)의 키가 bstr·실수·true/false/null/undefined·배열·맵이면 디코딩 오류다. 잘못된 UTF-8 텍스트 키, 2^63 이상인 양의 정수 키도 거절. 음의 정수 키(−2^63까지)와 2^63−1 이하 양의 정수 키는 모르는 필드로 버린다 | `cbor/decode.go:2760-2780`, `:2806-2834`, `:2862-2897`, Go 실행 8.1(검증 세션) |
+| `Meta` 맵 | 키·값 모두 텍스트여야 한다. bstr·정수 키, bstr 값은 거절 | Go 실행 8.1(검증 세션) |
 | 비최단 정수, 정렬 안 된 키 | **받아들인다**(정준 형식을 강제하지 않는다) | Go 실행 8.1 |
 | 알려진 필드의 타입 불일치 | 거절(음수·실수·텍스트를 `uint8`·`[]byte`에, 정수를 `Meta` 값에) | Go 실행 8.1 |
 | 범위 초과 | `MessageKind` 256은 `uint8` 넘침으로 거절 | Go 실행 8.1 |
@@ -72,7 +74,7 @@
 
 | CBOR 키 | 필드 | 타입 | 규칙 |
 | ---: | --- | --- | --- |
-| 1 | `Kind` | uint (`KeyKind`, uint8) | 0 `KeyInvalid`, 1 `Key25519`. 그 밖은 `StaticValidate`가 거절(`tailscale.com/tka/key.go:15-22`, `:128-132`) |
+| 1 | `Kind` | uint (`KeyKind`, uint8) | 0 `KeyInvalid`, 1 `Key25519`. `StaticValidate`는 1만 통과시키고 0을 포함한 그 밖은 거절한다(`tailscale.com/tka/key.go:15-22`, `:128-132`) |
 | 2 | `Votes` | uint | 1 이상 4096 이하(`tailscale.com/tka/key.go:107-113`) |
 | 3 | `Public` | bstr | Ed25519 공개 키 32바이트. 길이는 `StaticValidate`가 보지 않고 서명 검증 때 32가 아니면 실패한다(`tailscale.com/tka/verify.go:25-27`, `tailscale.com/tka/sig.go:297-299`) |
 | 12 | `Meta` | map(tstr→tstr), omitempty | 모든 키·값 길이 합이 512바이트 이하(`tailscale.com/tka/key.go:120-126`, `tailscale.com/tka/limits.go:18`) |
@@ -177,6 +179,8 @@ Ed25519 **검증 함수가 경우마다 다르다**: AUM 서명과 direct·crede
 
 Go의 `DecodeWrappedAuthkey`는 `-`가 없거나 base64·CBOR 디코딩이 실패하면 로그만 남기고 **원래 문자열 전체**(접미사 포함)를 인증 키로 돌려준다(`tailscale.com/tka/sig.go:472-494`). 그러면 개인 키가 든 접미사가 서버로 간다. Swiftail은 지금 `--TL` 앞부분만 늘 보낸다(`Sources/SwiftailControl/Client/AuthKey.swift:10-13`). 이것은 의도된 차이로 두는 것이 안전하다.
 
+`DecodeWrappedAuthkey`는 B의 길이도 A의 `SigKind`도 보지 않는다(`tailscale.com/tka/sig.go:484-497`). `SignByCredential`이 kind를 보고(`:443-445`) `ed25519.Sign`에 B를 그대로 넘기므로, B가 64바이트가 아니면 Go는 **panic**한다(`go/src/crypto/ed25519/ed25519.go:205-224`, `go/src/crypto/internal/fips140/ed25519/ed25519.go:110-114`, Go 실행 8.1: 63바이트 → `bad private key length: 63`). Go는 B의 뒤 32바이트를 시드에서 다시 계산하지 않고 공개 키로 그대로 해시에 넣는다(`go/src/crypto/internal/fips140/ed25519/ed25519.go:125-128`). Swiftail은 경계에서 B가 64바이트인지, 시드로 만든 공개 키가 B의 뒤 32바이트와 credential의 `WrappingPubkey`와 같은지 확인하고 아니면 등록 전에 오류로 끝내는 것이 맞다(Go의 시험 문자열은 셋이 같다, Go 실행 8.1).
+
 ### 3.9 제어 프로토콜의 TKA 필드(JSON)
 
 | 메시지 | 필드 | 형식과 뜻 | 출처 |
@@ -202,7 +206,7 @@ capability 버전 이력: 40 `Node.KeySignature`·`PeersChangedPatch.KeySignatur
 | `/machine/tka/sync/offer` | `TKASyncOfferRequest{Version, NodeKey, Head, Ancestors[]}` | `TKASyncOfferResponse{Head, Ancestors[], MissingAUMs[]}`. `MissingAUMs`는 AUM CBOR의 base64 배열 | **512 MiB** |
 | `/machine/tka/sync/send` | `TKASyncSendRequest{Version, NodeKey, Head, MissingAUMs[], Interactive}`. 보통 노드는 `Interactive=false` | `TKASyncSendResponse{Head}` | 1 MiB(기본) |
 
-출처: `tailscale.com/tailcfg/tka.go:104-194`, `tailscale.com/ipn/ipnlocal/tailnet-lock.go:54-59`, `:1445`, `tailscale.com/util/httpbody/httpbody.go:34`. `Version`은 `CurrentCapabilityVersion`이다(`tailscale.com/ipn/ipnlocal/tailnet-lock.go:1379`, `:1431`, `:1478`). `NodeKey`는 `nodekey:` 텍스트다.
+출처: `tailscale.com/tailcfg/tka.go:104-194`, `tailscale.com/ipn/ipnlocal/tailnet-lock.go:54-59`, `:1445`, `tailscale.com/util/httpbody/httpbody.go:34`. `Version`은 `CurrentCapabilityVersion`이다(`tailscale.com/ipn/ipnlocal/tailnet-lock.go:1379`, `:1431`, `:1478`). `NodeKey`는 `nodekey:` 텍스트다. 구조체에 JSON 태그가 없어 필드 이름이 그대로 키다. `TKASyncSendRequest.MissingAUMs`는 보낼 AUM이 없어도 길이 0인 non-nil 슬라이스로 만들어 `[]`로 나간다(null이 아니다)(`tailscale.com/ipn/ipnlocal/tailnet-lock.go:1481`, Go 실행 8.1). TKA RPC 경로에는 429·Retry-After 처리가 없다(그것은 등록·맵 경로만 한다, `tailscale.com/control/controlclient/direct.go:600-630`, `auto.go:653-660`).
 
 ### 3.11 Go의 로컬 저장(tailchonk)
 
@@ -243,7 +247,7 @@ Go의 `Persist`(노드 상태 JSON)에 `NetworkLockKey`(NL 개인 키)와 `Disal
 | AddKey | KeyID가 이미 있으면 거절. 끝에 덧붙인다. **최대 512개 검사는 여기에 없다**(`UpdateBuilder.AddKey`와 체크포인트 검사에만 있다, `tailscale.com/tka/builder.go:73-75`) |
 | UpdateKey | 키가 없으면 거절. `Votes`·`Meta`를 바꾸고 `Key.StaticValidate`를 다시 통과해야 한다 |
 | RemoveKey | 키가 없으면 거절. 지운다(순서 유지) |
-| 그 밖 | 상태 그대로(미래 종류) |
+| 그 밖 | 상태 그대로(미래 종류). 0 `AUMInvalid`도 여기로 와서 거절되지 않는다(Go 실행 8.1: 서명된 종류 0 AUM으로 머리가 옮겨감). genesis 자리에서만 거절된다(아래) |
 
 genesis(부모 없는 AUM)는 NoOp·AddKey·Checkpoint만 허용된다(`tailscale.com/tka/tka.go:276-292`).
 
@@ -255,7 +259,7 @@ genesis(부모 없는 AUM)는 NoOp·AddKey·Checkpoint만 허용된다(`tailscal
 - **열기**(`Open`): 모든 머리(자식 없는 AUM)에서 거꾸로 가장 오래된 조상을 찾는다. 조상이 하나면 그것, 여럿이면 이전 실행의 `LastActiveAncestor`를 지난 사슬의 조상, 그것도 없으면 오류("multiple distinct chains"). 그 조상의 상태에서 앞으로 감은 끝이 머리다(`tailscale.com/tka/tka.go:68-120`, `:333-419`, `:476-498`). 최대 반복 2000(`maxScanIterations`).
 - **체크포인트**: 그 시점의 상태 전체를 담은 AUM이다. 상태 계산의 시작점이 되어 그 이전 AUM이 없어도 된다(`tailscale.com/tka/tka.go:271-275`). 서명 기기는 머리에서 50개 안에 체크포인트가 없으면 새 체크포인트를 덧붙인다(`checkpointEvery = 50`, `tailscale.com/tka/builder.go:122-160`).
 - **부트스트랩**(`Bootstrap`): 저장소가 비어 있어야 한다. AUM이 Checkpoint이고 `State`가 있어야 하며, **그 체크포인트 자신의 상태**를 신뢰 상태로 삼아 `aumVerify(genesis=true)`를 한다. 즉 첫 신뢰는 제어 서버가 준 체크포인트에 대한 TOFU(처음 받은 것을 믿기)다. 통과하면 저장하고 `LastActiveAncestor`를 그 해시로 둔 뒤 `Open`(`tailscale.com/tka/tka.go:527-565`).
-- **AUM 들이기**(`Inform`): 목록을 오래된 것부터 처리한다. 이미 저장된 것은 건너뛴다. 각 AUM의 부모 상태는 앞서 처리한 것이거나 저장소에서 `computeStateAt`으로 구한다(부모를 모르면 오류). `aumVerify(genesis=false)`와 적용을 통과해야 한다. **하나라도 실패하면 아무것도 저장하지 않는다**. 모두 머리에서 이어지면 마지막 상태를 쓰고, 아니면 `computeActiveChain`을 다시 한다(`tailscale.com/tka/tka.go:575-676`).
+- **AUM 들이기**(`Inform`): 받은 목록을 **받은 순서대로** 처리한다. 정렬하지 않으며, 오래된 것부터 주는 것은 호출자(서버)의 몫이다(주석 `tailscale.com/tka/tka.go:582-583`). 빈 목록은 오류다. 이미 저장된 것은 건너뛴다. 부모가 없는(genesis 꼴) AUM은 오류다("missing parent"). 각 AUM의 부모 상태는 앞서 처리한 것이거나 저장소에서 `computeStateAt`으로 구한다(부모를 모르면 오류). `aumVerify(genesis=false)`와 적용을 통과해야 한다. **하나라도 실패하면 그 앞의 것까지 아무것도 저장하지 않는다**. 모두 머리에서 이어지면 마지막 상태를 쓰고, 아니면 `computeActiveChain`을 다시 한다(`tailscale.com/tka/tka.go:584-676`, Go 실행 8.1: 빈 목록·부모 없음·서명 없음·모르는 키 서명 섞임 → 모두 오류).
 
 ### 4.4 `NodeKeySignature` 검증(`NodeKeyAuthorizedWithDetails`)
 
@@ -269,9 +273,9 @@ genesis(부모 없는 AUM)는 NoOp·AddKey·Checkpoint만 허용된다(`tailscal
    - credential이 아니면 `Pubkey`가 `"np" ‖ nodeKey`와 바이트가 같아야 한다.
    - rotation: `Nested` 필수. 회전 키 = `Nested.WrappingPubkey`, 비었고 `Nested`가 rotation이면 더 안쪽 것(`tailscale.com/tka/sig.go:153-170`). 없거나 32바이트가 아니면 거절. 바깥 `Signature`를 표준 `ed25519.Verify`로 검증. 안쪽이 credential이 아니면 안쪽 `Pubkey`가 올바른 `np` 형식이어야 하고(값을 무엇과 견주지는 않는다), 안쪽을 그 키로 재귀 검증한다.
    - direct·credential: `Nested`가 있으면 거절. 신뢰 키가 Key25519이고 32바이트여야 하며 `ed25519consensus.Verify`.
-6. 통과하면 rotation일 때 `RotationDetails{PrevNodeKeys: 안쪽 rotation·direct의 Pubkey들(새 것부터), InitialSig: 맨 안쪽의 rotation 아닌 서명}`을 돌려준다(`tailscale.com/tka/sig.go:314-348`).
+6. 통과하면 rotation일 때 `RotationDetails{PrevNodeKeys: 안쪽 서명들 가운데 Pubkey가 비지 않은 것의 키(새 것부터. 맨 안쪽 direct의 키 포함), InitialSig: 맨 안쪽의 rotation 아닌 서명}`을 돌려준다. credential은 `Pubkey`를 검사받지 않지만 값이 들어 있으면 여기서 `np` 형식으로 해독하고, 해독이 실패하면 검증 전체가 오류가 된다(`tailscale.com/tka/sig.go:314-348`, `tailscale.com/tka/tka.go:707-710`). 바깥이 direct면 `RotationDetails`는 nil이다.
 
-깊이는 CBOR 중첩 16단이 한도다. Go 시험이 direct 위에 rotation 15겹(총 16단)이 검증됨을 보인다(`tailscale.com/tka/sig_test.go:129-196`). 노드는 자기 서명을 다시 감쌀 때 이전 node 키가 15개를 넘으면 원래 direct 서명부터 다시 감싸 사슬을 줄인다(`maybeTrimRotationSignatureChain`, `tailscale.com/tka/sig.go:394-437`).
+깊이는 CBOR 중첩 16단이 한도다. Go 시험이 direct 위에 rotation 15겹(총 16단)이 검증됨을 보인다(`tailscale.com/tka/sig_test.go:129-196`). 노드는 자기 서명을 다시 감쌀 때, 지금 서명의 `Pubkey`와 안쪽 키를 합한 수가 15개를 넘으면 맨 안쪽 rotation 아닌 서명 위에 가장 최근 키 14개만 NL 키로 다시 서명해 감싸고, 그 위에 새 rotation을 씌운다(그 사이의 키는 사슬에서 빠진다)(`maybeTrimRotationSignatureChain`, `tailscale.com/tka/sig.go:394-437`).
 
 ### 4.5 끄기 비밀 검증
 
@@ -282,7 +286,9 @@ genesis(부모 없는 AUM)는 NoOp·AddKey·Checkpoint만 허용된다(`tailscal
 1. **NL 키.** 로그인할 때 `Persist.NetworkLockKey`가 0이면 새 Ed25519 키를 만들어 노드 상태에 넣는다. 그 뒤로 바꾸지 않는다(`tailscale.com/control/controlclient/direct.go:721-725`). 공개 키를 `RegisterRequest.NLKey`에 늘 싣는다(`:763`). 이 키는 서명 기기가 이 노드를 서명할 때 회전 키(`WrappingPubkey`)로 쓰이고(lock이 잠긴 노드는 `tailscale lock sign <nodekey> <tlpub>`를 안내한다, `tailscale.com/cmd/tailscale/cli/tailnet-lock.go:245-257`), 노드가 node 키를 바꿀 때 4번의 재서명에 쓰인다. 잃으면 다음 node 키 교체 뒤 스스로 재서명하지 못한다.
 2. **서명된 인증 키**(`--TL`): `DecodeWrappedAuthkey`로 인증 키·credential NKS·64바이트 개인 키를 얻는다(3.8). 서버에는 `--TL` 앞부분만 `Auth.AuthKey`로 보낸다(`tailscale.com/control/controlclient/direct.go:643`, `:779-783`). `SignByCredential`: `NKS{SigKind: rotation, Pubkey: "np"‖새 node 키, Nested: credential}`을 만들고 그 `SigHash`에 감싼 개인 키로 서명해 `RegisterRequest.NodeKeySignature`에 싣는다(`tailscale.com/tka/sig.go:439-460`, `tailscale.com/control/controlclient/direct.go:739-747`, `:768`). credential이 아니면 등록을 오류로 끝낸다.
 3. **서명 없이 등록된 노드**: 등록 자체는 lock과 무관하게 진행된다(소스상 Go 클라이언트는 서명이 없어도 등록 요청을 보낸다). 서명은 서명 기기가 `/machine/tka/sign`으로 제출하면 제어 서버가 이후 맵의 `Node.KeySignature`로 나눠 준다(testcontrol의 동작: `tailscale.com/tstest/integration/testcontrol/testcontrol.go:1247-1262`). 그때까지 자기 노드는 "잠김"이다: Go는 자기 `SelfNode.KeySignature`가 현재 상태로 검증되지 않으면 건강 경고(`LockedOut`)만 낸다(`tailscale.com/ipn/ipnlocal/tailnet-lock.go:245-250`, `tailscale.com/health/healthmsg/healthmsg.go:13`). 다른 Go 피어들이 이 노드를 netmap에서 빼므로(4.9) 통신이 되지 않는다(`tailscale.com/tstest/integration/integration_test.go:2557-2569`).
-4. **서버의 재서명 요청**: `RegisterResponse.NodeKeySignature`가 있으면 Go는 새 node 키를 만들어(`Regen`) 등록을 다시 한다. 이때 옛 node 키가 있고 옛 서명이 있으면 `ResignNKS(NL 개인 키, 새 node 키, 옛 서명)`을 싣는다(`tailscale.com/control/controlclient/direct.go:534-545`, `:704-738`, `:857-858`). `ResignNKS`: 옛 서명의 `Pubkey`가 새 키와 같으면 옛 서명을 그대로 쓴다. 아니면 (필요하면 줄인) 옛 서명을 `Nested`로 하는 rotation NKS를 NL 키로 서명한다(`tailscale.com/tka/sig.go:350-392`). 이 rotation이 검증되려면 옛 서명 사슬의 회전 키가 이 노드의 NL 공개 키여야 한다(4.4의 5). 재서명이 실패하면 로그만 남기고 서명 없이 등록한다(`direct.go:736-738`).
+4. **서버의 재서명 요청**: `RegisterResponse.NodeKeySignature`가 있으면 Go는 새 node 키를 만들어(`Regen`) 등록을 다시 한다. 이때 옛 node 키가 있고 옛 서명이 있으면 `ResignNKS(NL 개인 키, 새 node 키, 옛 서명)`을 싣는다. 여기서 "옛 서명"은 로컬에 저장한 값이 아니라 **방금 받은 `RegisterResponse.NodeKeySignature`의 바이트**다(`doLoginOrRegen`이 그것을 `OldNodeKeySignature`로 넘긴다, `tailscale.com/control/controlclient/direct.go:534-545`, `:704-738`, `:857-858`). 두 번째 등록에서 이 조건이 거짓이고 `--TL` 인증 키가 있으면 `SignByCredential`로 간다(`:739-747`). `ResignNKS`: 옛 서명의 `Pubkey`가 새 키와 같으면 옛 서명을 그대로 쓴다. 아니면 (필요하면 줄인) 옛 서명을 `Nested`로 하는 rotation NKS를 NL 키로 서명한다(`tailscale.com/tka/sig.go:350-392`). 이 rotation이 검증되려면 옛 서명 사슬의 회전 키가 이 노드의 NL 공개 키여야 한다(4.4의 5). 재서명이 실패하면 로그만 남기고 서명 없이 등록한다(`direct.go:736-738`).
+
+   `ResignNKS`는 만든 서명을 스스로 검증하지 않는다. 그래서 회전 키가 NL 키가 아닌 사슬에서는 **오류 없이 검증되지 않는 서명**을 낸다(Go 실행 8.1): (ㄱ) `--TL` 인증 키로 등록한 노드의 서명(`rotation(credential)`)은 회전 키가 credential의 일회용 `WrappingPubkey`라(`tailscale.com/ipn/ipnlocal/tailnet-lock.go:1234-1258`) NL 키로 감싼 새 서명이 `invalid signature`가 된다. (ㄴ) `WrappingPubkey` 없이 서명된 direct는 `missing rotation key`가 된다. 이런 노드는 node 키를 바꾸면 Go에서도 다시 서명받기 전까지 다른 노드의 netmap에서 빠진다.
 
 ### 4.7 netmap을 받을 때의 상태 기계(`tkaSyncIfNeeded`)
 
@@ -305,12 +311,14 @@ netmap이 올 때마다(전체 netmap 경로) 다음을 한다(`tailscale.com/ip
 
 **`TKAEnabled`인데 부트스트랩이 실패하면 로컬 lock이 없으므로 피어를 거르지 않는다**(`tailnet-lock.go:189-197`). Go는 이 경우 모든 피어를 받아들인다.
 
+같은 fail-open이 **저장소를 열지 못할 때도** 일어나고 이쪽은 계속된다. netmap마다 `initTKALocked`가 프로필의 tailchonk 디렉터리가 있으면 `tka.Open`을 부르는데, 실패하면(파일 손상, 해시·이름 불일치, 사슬 계산 실패 등) 오류를 로그로만 남기고 `b.tka`는 nil로 둔다(`tailnet-lock.go:83-125`, `local.go:2021-2025`). 이어지는 `tkaSyncIfNeeded`는 부트스트랩을 시도하지만 같은 디렉터리에 AUM이 남아 있으므로 `Bootstrap`이 "tailchonk is not empty"로 실패한다(`tailnet-lock.go:559-576`, `tailscale.com/tka/tka.go:537-543`). 그래서 저장소가 고쳐질 때까지 netmap마다 같은 실패가 되풀이되고 피어는 걸러지지 않는다. 동기화(4.8)나 압축이 실패할 때는 로컬 lock이 남아 있으므로 예전 상태로 계속 거른다(`tailnet-lock.go:423-434`, `local.go:2053-2055`).
+
 ### 4.8 동기화(`tkaSyncLocked`)
 
 1. 로컬 `SyncOffer`를 만든다: `Head` = 로컬 머리. `Ancestors` = 머리에서 거꾸로 가며(최대 1000) 만나는 **체크포인트 AUM의 해시**들(새 것부터, 가장 오래된 조상은 빼고), 끝에 가장 오래된 조상(`oldestAncestor`)의 해시(`tailscale.com/tka/sync.go:65-111`).
 2. `/machine/tka/sync/offer`로 보낸다.
 3. 서버 `Head`·`Ancestors`를 디코딩. 서버 머리 = 로컬 머리이면 **여기서 끝낸다**(send를 보내지 않는다)(`tailnet-lock.go:456-464`).
-4. 서버 제안에 대해 `MissingAUMs`(서버가 모르는 로컬 AUM)를 **먼저** 계산한다(`tailnet-lock.go:466-472`). 교차 계산(`computeSyncIntersection`, `tailscale.com/tka/sync.go:129-212`): 머리가 같으면 최신. 서버 머리가 로컬에 있으면 로컬 머리에서 거꾸로(최대 1000) 가며 그것을 찾아 "머리 교차". 아니면 서버 `Ancestors`를 앞에서부터 보며, 그 AUM의 상태에서 앞으로 감아 로컬 머리에 닿는 첫 것을 "꼬리 교차"로 삼는다(최대 반복 2000). 없으면 `ErrNoIntersection`. 교차 AUM 다음부터 앞으로 감으며 만나는 AUM이 보낼 목록이다(`tailscale.com/tka/sync.go:214-261`).
+4. 서버 제안에 대해 `MissingAUMs`(서버가 모르는 로컬 AUM)를 **먼저** 계산한다(`tailnet-lock.go:466-472`). 교차 계산(`computeSyncIntersection`, `tailscale.com/tka/sync.go:129-212`): 머리가 같으면 최신. 서버 머리가 로컬에 있으면 로컬 머리에서 거꾸로(최대 1000) 가며 그것을 찾아 "머리 교차". 아니면 서버 `Ancestors`를 앞에서부터 보며, 그 AUM의 상태에서 앞으로 감아 로컬 머리에 닿는 첫 것을 "꼬리 교차"로 삼는다(최대 반복 2000). 없으면 `ErrNoIntersection`. 교차 AUM 다음부터 앞으로 감으며 만나는 AUM이 보낼 목록이다(`tailscale.com/tka/sync.go:214-261`). 꼬리 교차에서 서버 조상이 로컬에 없으면(`os.ErrNotExist`) 다음 조상으로 넘어가지만, 그 밖의 오류(부모 읽기 실패, 반복 한도 2000 초과 등)는 곧바로 오류다(`sync.go:188-202`). **이 계산이 실패하면 동기화 전체가 여기서 끝난다**: 5의 `Inform`도 6의 send도 하지 않는다(`tailnet-lock.go:469-472`).
 5. 응답의 `MissingAUMs`가 있으면 모두 디코딩(하나라도 실패하면 오류)하고 `Inform`(4.3)한다.
 6. 로컬 머리와 4의 목록을 `/machine/tka/sync/send`로 보낸다(`Interactive=false`).
 7. 응답 `Head`가 로컬 머리와 다르면 "TKA desync" 로그만 남긴다(`tailnet-lock.go:502-508`).
@@ -330,11 +338,11 @@ netmap이 올 때마다(전체 netmap 경로) 다음을 한다(`tailscale.com/ip
 
 `TS_UNSAFE_SKIP_NKS_VERIFICATION`이 켜지면 Go는 거르지 않는다(`tailscale.com/envknob/envknob.go:427`, `local.go:2053`). Swiftail에는 두지 않는다.
 
-같이 동작하는 안전장치: lock과 관계없이, `UnsignedPeerAPIOnly` 피어의 AllowedIPs가 패킷 필터의 출발지와 겹치고 목적지가 있는 규칙이 하나라도 있으면 Go는 패킷 필터 전체를 nil로 하고 건강 경고를 낸다(`local.go:3459-3464`, `:3562-3599`). 서명 없는 피어는 피어 capability를 가질 수 없다(`tailscale.com/ipn/ipnlocal/node_backend.go:415-440`, `tailscale.com/wgengine/magicsock/magicsock.go:3009-3013`).
+같이 동작하는 안전장치: lock과 관계없이, `UnsignedPeerAPIOnly` 피어의 AllowedIPs가 패킷 필터의 출발지와 겹치고 목적지가 있는 규칙이 하나라도 있으면 Go는 패킷 필터 전체를 nil로 하고 건강 경고를 낸다(`local.go:3459-3464`, `:3562-3599`). `UnsignedPeerAPIOnly` 피어가 가질 수 있는 피어 capability는 `PeerCapabilityIngress`(Funnel 진입) 하나뿐이고 나머지는 지운다(`tailscale.com/ipn/ipnlocal/node_backend.go:415-440`). magicsock은 그런 피어를 relay 할당·대상으로 쓰지 않는다(`tailscale.com/wgengine/magicsock/magicsock.go:3009-3013`).
 
 ### 4.10 lock이 꺼질 때
 
-1. 서버가 `TKAInfo.Disabled=true`(또는 `TKAInfo` 없음)로 알리면 `wantEnabled=false`가 된다(4.7).
+1. 서버가 `TKAInfo.Disabled=true`를 보내거나, 이번 맵 세션에서 `TKAInfo`를 한 번도 보내지 않았으면 `wantEnabled=false`가 된다(4.7). 세션 도중에 `TKAInfo`가 빠진 응답은 변화 없음이다: Go는 non-nil일 때만 `lastTKAInfo`를 바꾼다(`tailscale.com/control/controlclient/map.go:516-518`, `tailscale.com/tailcfg/tailcfg.go:2179-2187`). `lastTKAInfo`는 맵 세션의 필드이고 맵 요청을 새로 보낼 때마다 세션을 새로 만들므로 처음에는 nil이다(`map.go:99`, `map.go:112`, `direct.go:1228`).
 2. 로컬 lock이 있으면 `/machine/tka/bootstrap`(로컬 머리 실음)을 불러 `DisablementSecret`을 받는다.
 3. `ValidDisablement(secret)`(4.5)이 참이면 저장소를 `RemoveAll`하고 로컬 lock을 nil로 한다. 거짓이면 로그만 남기고 lock을 **유지**한다(서버가 틀린 비밀을 줘도 동기화는 계속)(`tailnet-lock.go:399-418`, `:513-526`, `tailscale.com/ipn/ipnlocal/tailnet-lock_test.go:213-299`).
 
@@ -384,24 +392,26 @@ Go는 동기화할 때마다 `Compact(head, {MinChain: 24, MinAge: 14일})`를 �
 | --- | --- | --- | --- | --- |
 | BLAKE2s-256(키 없음) | AUM 해시·SigHash, NKS SigHash | 없음 | 있다(`Sources/SwiftailCrypto/BLAKE2s.swift:3-4`, `:32`) | 없음 |
 | Ed25519 서명 | `ResignNKS`(NL 키), `SignByCredential`(감싼 키) | `Curve25519.Signing.PrivateKey.signature(for:)`(`CryptoKit.swiftinterface:35-37`). 개인 키는 32바이트 시드(`rawRepresentation`) | 없음 | NL 키 저장. Go 형식 64바이트 감싼 키는 앞 32바이트가 시드다(`ed25519.PrivateKey` 형식) |
-| Ed25519 검증(표준 규칙) | rotation NKS 바깥 서명 | `Curve25519.Signing.PublicKey.isValidSignature`(`CryptoKit.swiftinterface:31-33`) | 없음 | 규칙 일치 여부 확인(8.2) |
+| Ed25519 검증(표준 규칙) | rotation NKS 바깥 서명 | `Curve25519.Signing.PublicKey.isValidSignature`(`CryptoKit.swiftinterface:31-33`). 규칙이 Go 표준과 **다르다**: 비정준 A를 거절한다(실행 8.1) | 없음 | 아래 참고 |
 | Ed25519 검증(ZIP-215) | AUM 서명, direct·credential NKS | 없음(CryptoKit의 검증 규칙은 공개 문서로 확인하지 못했다) | 없음 | 아래 참고 |
-| Argon2i + BLAKE2b | 끄기 비밀 | 없음 | 없음(BLAKE2b도 없다) | BLAKE2b(RFC 7693)와 Argon2i(RFC 9106). Argon2는 BLAKE2b-512와 가변 길이 H'를 쓴다(`x/crypto/argon2/argon2.go:44`, `:130-170`) |
+| Argon2i + BLAKE2b | 끄기 비밀 | 없음 | 없음(BLAKE2b도 없다) | BLAKE2b(RFC 7693)와 Argon2i(RFC 9106). Argon2는 BLAKE2b-512(H0, `x/crypto/argon2/argon2.go:130-159`)와 가변 길이 H'(`x/crypto/argon2/blake2b.go:16-53`)를 쓴다 |
 | 상수 시간 비교 | 끄기 값 비교 | — | 있다(`Sources/SwiftailCrypto/CryptoError.swift:12`) | 없음 |
 
-**Ed25519 검증 규칙의 차이.** `ed25519consensus.Verify`(ZIP-215)는 서명 64바이트·`sig[63]&224 == 0`, 공개 키 A와 R의 **비정준 인코딩을 받아들이고**, S는 정준(`< L`)이어야 하며, **cofactor를 곱한** 식 `[8](R' − R) = 0`을 검사한다(`ed25519consensus/ed25519.go:19-66`). Go 표준 `ed25519.Verify`는 같은 길이·비트 검사와 정준 S를 요구하고, A는 비정준 인코딩을 받아들이며(`go/src/crypto/internal/fips140/edwards25519/edwards25519.go:142`), **cofactor 없이** 계산한 R의 인코딩이 `sig[:32]`와 바이트가 같아야 한다(`go/src/crypto/internal/fips140/ed25519/ed25519.go:290-327`). 정직하게 만든 서명(Go `ed25519.Sign`)은 두 규칙에서 모두 통과한다. 차이는 작은 위수 성분·비정준 R처럼 일부러 만든 서명에서만 나타난다. 선택지:
+**Ed25519 검증 규칙의 차이.** `ed25519consensus.Verify`(ZIP-215)는 서명 64바이트·`sig[63]&224 == 0`, 공개 키 A와 R의 **비정준 인코딩을 받아들이고**, S는 정준(`< L`)이어야 하며, **cofactor를 곱한** 식 `[8](R' − R) = 0`을 검사한다(`ed25519consensus/ed25519.go:19-66`). Go 표준 `ed25519.Verify`는 같은 길이·비트 검사와 정준 S를 요구하고, A는 비정준 인코딩을 받아들이며(`go/src/crypto/internal/fips140/edwards25519/edwards25519.go:137-145`), **cofactor 없이** 계산한 R의 인코딩이 `sig[:32]`와 바이트가 같아야 한다(`go/src/crypto/internal/fips140/ed25519/ed25519.go:290-327`). 그래서 비정준 R과 작은 위수 성분이 든 R은 거절한다. 정직하게 만든 서명(Go `ed25519.Sign`)은 두 규칙에서 모두 통과한다. 차이는 작은 위수 성분·비정준 A·R처럼 개인 키를 가진 쪽이 일부러 만든 서명에서만 나타난다.
 
-- (가) CryptoKit 하나로 모두 검증한다. 구현 0줄. 일부러 만든 서명에서 Go와 판정이 갈릴 수 있다. CryptoKit이 더 엄격하다면 Go가 받아들이는 AUM을 Swiftail이 거절해 동기화가 멈추고, Go가 받아들이는 피어를 뺀다(보호가 약해지는 방향은 아니다). CryptoKit이 받아들이는데 ZIP-215가 거절하는 서명이 있는지는 확인하지 못했다(추정: cofactor 없는 식이 성립하면 cofactor 식도 성립하므로 없을 것).
+실행으로 잰 차이(8.1): ZIP-215 벡터 196개(`ed25519consensus/zip215_test.go`)를 `ed25519consensus`는 196개, Go 표준은 12개, CryptoKit은 8개 받아들였다. CryptoKit이 받은 8개는 Go 표준이 받은 12개에 모두 들고, 나머지 4개(112·130·168·182번)는 공개 키가 비정준 인코딩(`y ≥ p`, 또는 x=0에 부호 비트)인 벡터다. R에 위수 2인 점을 더해 만든 서명은 `ed25519consensus`만 받았고 Go 표준과 CryptoKit은 거절했다. 같은 서명을 tka에 넣으면 그 서명의 AUM은 `Inform`을, direct NKS는 `NodeKeyAuthorized`를 통과했고, rotation 바깥 서명으로 쓰면 거절됐다. 선택지:
+
+- (가) CryptoKit 하나로 모두 검증한다. 구현 0줄. CryptoKit은 ZIP-215 경로에서도, 표준 규칙 경로(rotation 바깥)에서도 Go와 판정이 다르다. 잰 범위에서는 늘 CryptoKit이 더 엄격했다. 엄격한 쪽의 결과는 경로마다 다르다. NKS에서는 Go가 받아들이는 피어를 더 빼는 것으로 끝난다. **AUM에서는 보호가 약해질 수 있다**: 신뢰 키를 가진 쪽이 ZIP-215만 통과하는 서명으로 AUM 하나를 사슬에 넣으면, Go 노드는 받아들이고 Swiftail은 그 AUM이 든 묶음 전체를 거절한다(`Inform`은 하나라도 실패하면 아무것도 저장하지 않는다, 4.3). 그 뒤로 이 AUM 다음에 이어지는 AUM은 부모를 모르므로 모두 거절되어 Swiftail의 상태가 그 앞에서 멈춘다. 그 다음에 관리자가 그 키를 지우는 RemoveKey를 같은 사슬 끝에 덧붙이면 Go 노드는 키를 더 믿지 않지만 Swiftail은 계속 믿고, 그 키로 서명된 피어를 받아들인다. CryptoKit이 받아들이는데 ZIP-215가 거절하는 서명이 있는지는 확인하지 못했다(추정: cofactor 없는 식이 성립하면 cofactor 식도 성립하므로 없을 것. 잰 197개 입력에서는 없었다).
 - (나) 순수 Swift edwards25519(필드 산술, 점 해독, 이중 스칼라 곱)로 ZIP-215와 표준 규칙을 둘 다 구현한다. 크기 추정 800~1200줄과 시험 벡터(ZIP-215 벡터는 `ed25519consensus/zip215_test.go`).
 
-판정 동일을 목표로 하면 (나)가 맞지만 크기가 크다. 결정은 구현 전에 사용자에게 묻는다.
+판정 동일을 목표로 하면 (나)가 맞지만 크기가 크다. 위의 AUM 경로 때문에 (가)는 "보호가 약해지지 않는 차이"가 아니다. 적어도 AUM 서명은 ZIP-215로 검증해야 Go와 같은 상태에 머문다. 같은 edwards25519 코드에 표준 규칙(cofactor 없는 식과 R 바이트 비교)을 더하는 것은 작다. 결정은 구현 전에 사용자에게 묻는다.
 
-**Argon2i 시험 벡터**: RFC 9106 5.2(Argon2i, t=3, m=32 KiB, p=4, K·X 있음)와 그것을 옮긴 `x/crypto/argon2/argon2_test.go:70`, 그리고 이 노트의 Go 실행값(4.5, K·X 없음, TKA 인자 그대로). TKA 인자는 메모리 16 MiB를 한 번 채우므로 확인은 끄기 이벤트 때만 일어난다. 크기 추정: BLAKE2b 약 120줄, Argon2i 약 200~250줄(병렬도 4는 차선 4개를 순서대로 계산해도 결과가 같다. 병렬도는 H0의 입력일 뿐이다).
+**Argon2i 시험 벡터**: RFC 9106 5.2(Argon2i, t=3, m=32 KiB, p=4, K·X 있음)와 그것을 옮긴 `x/crypto/argon2/argon2_test.go:70`, 그리고 이 노트의 Go 실행값(4.5, K·X 없음, TKA 인자 그대로). TKA 인자는 메모리 16 MiB를 한 번 채우므로 확인은 끄기 이벤트 때만 일어난다. 크기 추정: BLAKE2b 약 120줄, Argon2i 약 200~250줄(병렬도 p=4는 H0의 입력이면서 메모리를 차선 4개로 나누고 참조 블록을 고르는 색인 계산에도 들어간다(`x/crypto/argon2/argon2.go:161-166`, `:183-186`, `:262-282`). 그래도 슬라이스마다 차선 4개를 순서대로 계산하면 병렬 계산과 결과가 같으므로 스레드는 필요 없다).
 
 ### 6.2 CBOR 부분집합
 
 - **인코딩**: major 0(uint, 1~8바이트 최단), 2(bstr), 3(tstr, `Meta`만), 4(배열), 5(맵, 정수 키는 1~23이라 한 바이트, `Meta` 문자열 키는 인코딩 바이트 사전순), 7의 null(`0xf6`)만. 정의 길이만. 필드별 nil/빈 값/omitempty 규칙(3.1~3.6)을 그대로 따라야 해시가 같다.
-- **디코딩**: 알려진 필드는 위 타입만 받는다. 모르는 필드는 잘 짜인 항목이면 무엇이든(major 1 음수, major 7의 실수 16·32·64비트와 단순값, 텍스트 내용 무검사) 건너뛰어야 Go와 같다. 태그·길이 미정·중복 키(구조체·`Meta` 수준)·뒤에 남은 바이트 거절, 중첩 16·배열 4096·맵 1024 한도. 비최단 정수와 정렬 안 된 키는 받아들인다. 해시·서명 검증은 받은 바이트가 아니라 **디코딩한 값을 정준 인코딩한 바이트**로 한다(3.1).
+- **디코딩**: 알려진 필드는 위 타입만 받는다. 구조체 맵의 키는 정수(−2^63~2^63−1)나 올바른 UTF-8 텍스트만 받고, 그 밖의 키는 거절해야 Go와 같다(3.1). 모르는 필드의 **값**은 잘 짜인 항목이면 무엇이든(major 1 음수, major 7의 실수 16·32·64비트와 단순값, 텍스트 내용 무검사) 건너뛰어야 Go와 같다. 단, 건너뛰는 값 안에서도 태그·길이 미정·중첩 한도는 적용된다(Go 실행 8.1: 모르는 값 안의 bignum 태그·길이 미정 bstr 거절). 태그·길이 미정·중복 키(구조체·`Meta` 수준)·뒤에 남은 바이트 거절, 중첩 16·배열 4096·맵 1024 한도. 비최단 정수와 정렬 안 된 키는 받아들인다. 해시·서명 검증은 받은 바이트가 아니라 **디코딩한 값을 정준 인코딩한 바이트**로 한다(3.1).
 - 값 범위: `MessageKind`·`SigKind`·`KeyKind`는 0~255(넘으면 거절), `Votes` 0~2^64−1을 읽고(`uint`, 64비트 플랫폼) 검사는 1~4096, `StateID` uint64 전 범위.
 - 크기 추정: 일반 CBOR 값 디코더(건너뛰기 포함)와 다섯 구조의 매핑, 정준 인코더를 합쳐 300~450줄.
 
@@ -411,12 +421,12 @@ Go는 동기화할 때마다 `Compact(head, {MinChain: 24, MinAge: 14일})`를 �
 | --- | --- | --- |
 | NL 키 생성·영구 저장, `RegisterRequest.NLKey` | 필수 | 서명 기기가 회전 키로 쓰고, node 키 교체 뒤 재서명에 쓴다(4.6). 지금 Swiftail은 0 키를 보낸다(`Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:38`, `Sources/SwiftailControl/Client/NodeIdentity.swift:13-15`에 NL 키가 없다) |
 | 서명된 인증 키 → `SignByCredential` | 필수 | 사전 승인 등록 경로(M8 ①) |
-| `RegisterResponse.NodeKeySignature` → `ResignNKS`(사슬 줄이기 포함) | 필수 | 지금은 `tailnetLockEnabled`로 끝낸다(`Sources/SwiftailControl/Client/ControlClient+Registration.swift:76-79`) |
+| `RegisterResponse.NodeKeySignature` → `ResignNKS`(사슬 줄이기 포함) | 필수 | 지금은 `tailnetLockEnabled`로 끝낸다(`Sources/SwiftailControl/Client/ControlClient+Registration.swift:76-79`). Go도 credential 사슬·회전 키 없는 direct에는 검증되지 않는 서명을 오류 없이 보낸다(4.6의 4). |
 | `MapRequest.TKAHead` | 필수 | 서버가 노드의 머리를 안다(4.7) |
 | 부트스트랩(TOFU 체크포인트 검증), 동기화 offer + `Inform` | 필수 | 서명 권한 상태의 받기·검증 |
 | 갈래 해소, 여러 사슬 중 조상 선택 | 필수 | 복구 AUM은 갈래를 만든다(`tailscale.com/tka/tka.go:798-860`). 없으면 Go와 다른 머리를 고른다 |
 | sync/send(머리 알림) | 필수 | Go는 머리가 다르면 늘 보낸다(4.8의 6) |
-| sync/send의 `MissingAUMs` 계산(교차 알고리즘) | 선택 | 보통 노드는 AUM을 만들지 않으므로 서버가 모르는 AUM은 서버 데이터 유실 때만 생긴다. 빈 목록으로 보내면 그 복구에 기여하지 못한다. Go 동등을 원하면 구현(약 150줄) |
+| sync/send의 `MissingAUMs` 계산(교차 알고리즘) | 선택 | 보통 노드는 AUM을 만들지 않으므로 서버가 모르는 AUM은 서버 데이터 유실 때만 생긴다. 빈 목록으로 보내면 그 복구에 기여하지 못한다. Go 동등을 원하면 구현(약 150줄). 생략하면 멈추는 조건도 달라진다: Go는 교차 계산이 실패하면(`ErrNoIntersection`, 반복 한도 초과 등) 서버의 AUM을 `Inform`하지 않고 동기화를 끝내지만(4.8의 4), 생략한 쪽은 `Inform`까지 간다. `Inform`도 부모를 모르는 AUM을 거절하므로 대부분 같은 결과지만 모든 경우가 같은지는 확인하지 못했다 |
 | NKS 검증 + 피어 거르기 + 낡은 키 추적 + 증분 거르기 | 필수(생략 불가) | 생략하면 lock 보호가 사라진다(`docs/plan.md` 8절 위험 8) |
 | 끄기 비밀 검증(Argon2i) | 필수(생략 불가) | 없으면 lock이 꺼진 뒤 새 피어를 모두 빼거나, `Disabled`만 믿으면 보호를 서버에 넘긴다 |
 | 자기 노드 잠김 상태 알림 | 필수(공개 API) | 사용자가 `tailscale lock sign <nodekey> <tlpub>`를 하려면 node 키와 tlpub를 알아야 한다(`tailscale.com/cmd/tailscale/cli/tailnet-lock.go:245-257`) |
@@ -425,8 +435,8 @@ Go는 동기화할 때마다 `Compact(head, {MinChain: 24, MinAge: 14일})`를 �
 | `DisallowedTKAStateIDs` | 생략 | `TailnetLockForceLocalDisable`가 쓰는 목록이다(`tailnet-lock.go:811-835`). Swiftail에 로컬 강제 끄기가 없으면 늘 비어 있다 |
 | `UnsignedPeerAPIOnly` 처리 | 기존 차이 유지 | Go는 netmap에 남기고 권한을 줄이지만 Swiftail 엔진은 그런 피어를 아예 올리지 않는다(`Sources/SwiftailEngine/EnginePeer.swift:94-103`) |
 | 서명 기기 기능 전부(2장) | 생략 | M8 범위 밖(`docs/plan.md` 3절) |
-| 부트스트랩 실패 시 모든 피어 수용(4.7 끝) | **Go와 다르게 하는 것을 검토** | Go는 `TKAEnabled`인데 로컬 lock이 없으면 거르지 않는다. Swiftail은 부트스트랩 전에는 피어를 올리지 않는(fail-closed) 쪽이 안전하다. 같은 판정을 원칙으로 하므로 사용자 결정이 필요 |
-| cap 없는 노드의 TKA 무시(4.12) | Go와 같게 | 운영 서버가 cap을 누구에게 주는지 모른다(8.2). Go와 같게 두면 같은 판정이다 |
+| 부트스트랩 실패·저장소 열기 실패 시 모든 피어 수용(4.7 끝) | **Go와 다르게 하는 것을 검토** | Go는 `TKAEnabled`인데 로컬 lock이 없으면 거르지 않는다. 저장소를 열지 못하면 이 상태가 저장소를 고칠 때까지 계속된다(4.7). Swiftail은 부트스트랩 전이나 저장소를 열지 못했을 때 피어를 올리지 않는(fail-closed) 쪽이 안전하다. 같은 판정을 원칙으로 하므로 사용자 결정이 필요 |
+| cap 없는 노드의 TKA 무시(4.12) | Go와 같게 | 운영 서버가 cap을 누구에게 주는지 모른다(8.2). `nodecap.TailnetLock`의 주석은 "이 노드가 tailnet lock을 켤(initialize) 수 있다"이다(`tailscale.com/tailcfg/nodecap/nodecap.go:74-75`). 이 뜻대로 서버가 일부 노드에만 준다면 cap 없는 노드는 lock이 켜진 tailnet에서도 거르지 않는다. Go 통합 시험은 모든 노드에 준다(`integration_test.go:2521-2523`). Go와 같게 두면 같은 판정이다 |
 
 **저장 형식 판단.** Go 상태 이관을 하지 않으므로 tailchonk 파일 형식을 따를 필요는 없다. 판정에 영향을 주는 것은 (1) 받아들인 AUM 전부(해시로 찾고, 부모로 자식을 찾을 수 있어야 한다), (2) `LastActiveAncestor`(여러 사슬일 때의 선택, 4.3), (3) 압축을 한다면 저장 시각이다. AUM은 정준 CBOR 바이트로 두면 다시 읽을 때 해시가 같다. 프로필(노드 신원)마다 따로 두고, lock이 꺼지면 통째로 지우며, NL 개인 키는 노드 신원 저장소(`NodeIdentityStore`)에 node 키와 함께 둔다. Go처럼 시작 때 저장소에서 상태를 다시 계산(`Open`)하면 상태 자체를 저장할 필요가 없다.
 
@@ -453,7 +463,7 @@ Go는 동기화할 때마다 `Compact(head, {MinChain: 24, MinAge: 14일})`를 �
 
 1. AUM 사슬(genesis 체크포인트, AddKey/RemoveKey/UpdateKey/NoOp, 체크포인트, 갈래, 복구 AUM)의 정준 바이트·해시·SigHash와 단계별 기대 상태·머리.
 2. 동기화 시나리오: 양쪽 저장소에서 `SyncOffer`(머리·조상), `MissingAUMs`, `Inform` 뒤 머리.
-3. NKS: direct, rotation n겹(1~15), credential→rotation, 사슬 줄이기 후 바이트, 그리고 각 (node 키, NKS, 상태)에 대한 `NodeKeyAuthorizedWithDetails`의 판정과 `PrevNodeKeys`. Swift가 만든 서명은 바이트 비교가 아니라 Go 판정으로 확인한다(CryptoKit 서명이 결정적인지 확인하지 못했다, 8.2).
+3. NKS: direct, rotation n겹(1~15), credential→rotation, 사슬 줄이기 후 바이트, 그리고 각 (node 키, NKS, 상태)에 대한 `NodeKeyAuthorizedWithDetails`의 판정과 `PrevNodeKeys`. Swift가 만든 서명은 바이트 비교가 아니라 Go 판정으로 확인한다(CryptoKit의 `signature(for:)`는 같은 키·메시지에도 매번 다른 서명을 냈다, 실행 8.1).
 4. 피어 집합 시나리오: `rotationTracker` 판정. `TestRotationTracker`(`tailnet-lock_test.go:1088`)의 입력 형태를 따른다.
 5. 디코더 거절 표: 8.1의 입력들과 그 판정·재인코딩 해시.
 6. `DisablementKDF` 값.
@@ -495,20 +505,37 @@ tsnet 피어는 `LocalClient`로 `TailnetLockInit`·`TailnetLockSign`·`TailnetL
 | 서명된 인증 키(`sig_test.go:479`) | 인증 키 부분이 `--TL` 앞과 같음, 개인 키 64바이트, credential NKS의 KeyID 32·WrappingPubkey 32·서명 64바이트, CBOR 맵 4쌍(키 1,3,4,6) |
 | `NodePublic.MarshalBinary` | 34바이트, 접두 `"np"` |
 | 인코딩 | `UpdateKey{KeyID:[1], Votes:&0, Meta:{}}` → `a4010402f60441010600`. `Meta{"bb","a","c"}` → 키 순서 `a`,`c`,`bb`. `NoOp{PrevAUMHash: []byte{}}` → `a201030240`. 빈 `Keys`·`DisablementValues`는 `80`, `StateID1=2^40`은 `041b0000010000000000`, `StateID2=0`은 빠짐 |
-| 디코딩: 받아들임 | 모르는 키(정수·실수·음수·true·undefined·잘못된 UTF-8·중첩 맵·텍스트 키), 모르는 값 안쪽의 중복 키, 비최단 정수(값·키), 정렬 안 된 키, `PrevAUMHash` 생략, 종류 9, `MessageKind` null(→0), 빈 `Meta` 맵, 체크포인트 상태의 2·33바이트 `LastAUMHash`(정적 검사에서 거절됨). 정준이 아닌 입력은 모두 `Hash ≠ BLAKE2s(원본)` |
+| 디코딩: 받아들임 | 모르는 정수 키(값이 정수·실수·음수·true·undefined·잘못된 UTF-8 텍스트·중첩 맵이어도), 모르는 음수 키, 모르는 텍스트 키, 모르는 값 안쪽의 중복 키, 비최단 정수(값·키), 정렬 안 된 키, `PrevAUMHash` 생략, 종류 9, `MessageKind` null(→0), 빈 `Meta` 맵, 체크포인트 상태의 2·33바이트 `LastAUMHash`(정적 검사에서 거절됨). 정준이 아닌 입력은 모두 `Hash ≠ BLAKE2s(원본)` |
 | 디코딩: 거절 | 구조체·`Meta`의 중복 키, 길이 미정 맵, 태그, 뒤에 남은 바이트, 빈 입력, 맨 바깥 배열, 종류 256·음수·실수, `PrevAUMHash` 텍스트, `Meta` 값 정수·잘못된 UTF-8, 잘린 바이트열, 중첩 17단, 배열 4097개, 맵 1025쌍 |
 | `AUMHash.UnmarshalText` | 소문자·패딩·51자 거절. 끝 글자 `A`/`B`/`P`는 같은 해시로 받아들임 |
 
 출력은 `$(eyebuild dir tka-note)/run1.txt`~`run4.txt`에 두었다가 `eyebuild rm tka-note`로 지웠다.
 
+**검증 세션의 실행**(2026-11-15). `$(eyebuild dir tka-verify)` 아래 임시 Go 모듈 셋과 Swift 실행 파일 하나. 환경은 위와 같다(Go 1.27.3, `tailscale.com v1.104.6`, `GOCACHE`도 같은 폴더). Swift는 `xcrun swiftc -O -module-cache-path <같은 폴더>/mc`로 빌드했다. 끝난 뒤 `eyebuild rm tka-verify`로 지웠다. 위 표의 값(genesis 해시·SigHash·Bootstrap, KDF 값, 서명된 인증 키, 인코딩 4종, `AUMHash` 텍스트, 중첩 16/17·배열 4096/4097·맵 1024/1025, 빈 입력·맨 바깥 배열·모르는 값 안의 중복 키)은 모두 같게 다시 나왔다.
+
+| 확인한 것 | 결과 |
+| --- | --- |
+| 맵 키 종류(AUM) | 거절: bstr 키, 실수 키(`f93c00`), `true`·`null` 키, 배열 키, 잘못된 UTF-8 텍스트 키(`61ff`), 2^64−1 정수 키. 받아들임: 음수 키(`20`), 2^63−1 정수 키, 텍스트 키 `"MessageKind"`·`"messagekind"`·`"1"`(모두 모르는 필드, 종류는 3 그대로). 모르는 정수·텍스트·음수 키의 중복은 거절 |
+| `Meta` 맵 | bstr 키·정수 키·bstr 값 거절, 중복 키 거절, 빈 맵은 받아들이고 다시 인코딩하면 빠짐 |
+| 그 밖의 디코딩 | `State.LastAUMHash`가 텍스트면 거절(`TextUnmarshaler`를 쓰지 않음), 2바이트 bstr이면 32바이트로 0을 채워 받아들임(정적 검사에서 거절). 모르는 값 안의 bignum 태그(`c24101`)·길이 미정 bstr 거절, 단순값 99·undefined·float64 값은 받아들임. `Signatures` 원소가 맵이 아니면 거절 |
+| `AUMHash.UnmarshalText` | 끝 글자 `A`·`B`·`P`는 같은 해시, `Q`는 다른 해시. 51·53자, 패딩 붙인 56자, 소문자 거절 |
+| 갈래 해소(`Inform`으로 같은 부모의 자식 둘) | 가중치가 같으면 해시가 작은 쪽, 서명 둘(키 둘)이 하나를 이김, 같은 키 서명 둘은 가중치 1, 가중치가 같으면 RemoveKey가 이김 |
+| 이상한 AUM(`Inform`) | 종류 0(`AUMInvalid`)·9는 받아들여지고 머리가 옮겨감. 부모 없음 → `missing parent`, 33바이트 `PrevAUMHash`(앞 32바이트가 머리) → 적용에서 `parent AUMHash mismatch`, 서명 없음 → `unsigned AUM`, 모르는 키 서명 섞임 → `key not found`, 빈 목록 → 오류 |
+| 서명된 인증 키 | 64바이트 키의 뒤 32바이트 = 시드로 만든 공개 키 = credential `WrappingPubkey`. 63바이트로 `SignByCredential` → panic `bad private key length: 63` |
+| `ResignNKS` | credential 사슬(`SignByCredential` 결과)을 NL 키로 다시 감싸면 `invalid signature`. `WrappingPubkey` 없는 direct → `missing rotation key`. `WrappingPubkey`가 NL 공개 키인 direct → 통과 |
+| Ed25519, R에 위수 2인 점을 더한 서명 | Go 표준 거절, `ed25519consensus` 받아들임, CryptoKit 거절. tka에서 이 서명의 AUM은 `Inform` 통과, direct NKS 통과, rotation 바깥 서명으로는 `invalid signature` |
+| ZIP-215 벡터 196개(메시지 `"Zcash"`) | `ed25519consensus` 196, Go 표준 12(0·16·19·28·43·73·75·76·112·130·168·182번), CryptoKit 8(0·16·19·28·43·73·75·76번). CryptoKit은 모든 공개 키를 `PublicKey(rawRepresentation:)`로 받아들였다 |
+| CryptoKit 서명 | 같은 키·메시지로 두 번 서명하면 다른 바이트(결정적이지 않음) |
+| JSON | `TKABootstrapRequest`의 빈 `Head`는 `"Head":""`로 나감. `TKASyncSendRequest`의 빈 `MissingAUMs`는 `[]`. 빈 `TKAInfo`는 `{}` |
+
 ### 8.2 확인하지 못한 것
 
 - **운영 제어 서버의 동작**(소스에 없다): `tailnet-lock` node cap을 어떤 노드에 주는지(lock이 켜진 tailnet의 모든 노드인지), bootstrap이 늘 genesis를 주는지 아니면 나중 체크포인트를 주는지(`Bootstrap` 주석은 둘 다 허용, `tailscale.com/tka/tka.go:532`), `RegisterResponse.NodeKeySignature`를 언제 보내는지, 서명된 인증 키로 등록한 노드의 서명을 어떻게 저장·배포하는지, 서명 안 된 노드의 등록을 받아들이는지·어떤 응답을 주는지, `NLKey`가 0인 등록을 받아들이는지(`control-map.md` 4.6에서도 미확인), 관리 콘솔에서 서명할 때 회전 키로 등록 요청의 `NLKey`를 쓰는지, `UnsignedPeerAPIOnly`를 언제 주는지, sync/send의 `Interactive=false` 요청을 어떻게 검사하는지, TKA RPC에 429·503·Retry-After를 쓰는지, 응답 크기의 실제 분포.
-- **CryptoKit Ed25519**: 검증 규칙(cofactor 사용 여부, 비정준 A·R 처리)과 서명이 결정적인지(RFC 8032처럼) 무작위인지. `swiftinterface`에는 선언만 있다(`CryptoKit.swiftinterface:31-37`). 6.1의 "CryptoKit이 더 엄격할 것"은 추정이다.
+- **CryptoKit Ed25519**: 검증 규칙 전체는 문서로 확인하지 못했다. `swiftinterface`에는 선언만 있다(`CryptoKit.swiftinterface:31-37`). 잰 것은 8.1(ZIP-215 벡터 196개와 위수 2 서명 하나, 모두 Go 표준보다 엄격하거나 같음)과 서명이 결정적이지 않다는 것뿐이다. CryptoKit이 받아들이는데 Go 표준이나 ZIP-215가 거절하는 입력이 없는지는 확인하지 못했다.
 - **인용 버전 차이**: 읽은 소스는 v1.104.7, 실행은 v1.104.6(Go 1.27.3이 v1.104.7을 빌드하지 못함). 인용 파일이 같음은 `diff -rq`로 확인했지만 v1.104.7 자체로 돌린 결과는 없다.
 - **Go 시험을 직접 돌리지 않았다**: `tka`·`ipnlocal`·통합 시험(`TestTailnetLock`)은 실행하지 않고 소스만 읽었다. 7.1의 해시 값은 시험 파일에 적힌 기대값이다.
 - `ipnlocal/tailnet-lock_test.go:164-165`의 주석은 "최신이어도 offer/send가 불린다"고 하지만 코드(`tailnet-lock.go:461-464`)는 머리가 같으면 send를 보내지 않는다. 코드를 따랐다.
-- `ed25519consensus`와 표준 검증이 갈리는 구체적 서명 예를 만들어 보지 않았다(`ed25519consensus/zip215_test.go`를 읽지 않음).
-- `Compact`의 세부(`markAncestorIntersectionAUMs`, `markDescendantAUMs`)는 대강만 읽었다(`tailscale.com/tka/tailchonk.go:846-1004`).
-- Go `encoding/json`이 `TKABootstrapRequest.Head`의 빈 문자열을 늘 싣는 것은 구조체에 omitempty가 없다는 데서 추론했다(`tailscale.com/tailcfg/tka.go:113-115`). 실제 바이트는 보지 않았다.
+- `Compact`의 세부(`markAncestorIntersectionAUMs`, `markDescendantAUMs`)는 대강만 읽었다(`tailscale.com/tka/tailchonk.go:871-1005`). 그래서 6.3의 "압축은 판정에 영향 없음"은 검증 세션도 확인하지 못했다(압축이 `LastActiveAncestor`를 바꾸므로 여러 사슬이 있을 때의 조상 선택에 닿을 수 있다, 4.3).
+- `computeActiveAncestor`는 조상마다 `chainsThroughActive`를 맵에 덮어쓰고, 머리 자신이 `LastActiveAncestor`인 사슬(길이 1)은 표시하지 않는다(`tailscale.com/tka/tka.go:95-118`, `:342-369`). 같은 조상을 가진 사슬끼리 표시가 다를 수 있는지, 그때 Go의 결과가 결정적인지(맵 순회·`sort.Slice`)는 확인하지 못했다. 정상 흐름(조상 하나)에서는 영향이 없다.
+- CBOR 디코더가 받아들이는 입력 전체를 열거하지는 않았다. 3.1·8.1의 표는 시험한 입력에 대한 것이다.
 - 부트스트랩 실패 뒤 Go가 피어를 거르지 않는 것(4.7)이 운영에서 실제로 일어나는지(서버가 `TKAEnabled`인데 bootstrap이 실패하는 경우)는 모른다.
