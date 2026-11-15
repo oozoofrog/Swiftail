@@ -802,6 +802,33 @@ sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, "
 - 운영 서버 발급을 해도 된다는 허락(같은 이름 7일에 5장 가운데 두 장까지 쓴다).
 - M5 터널 빌드가 깔린 iPhone과, 5·7을 맡을 첫 사용처 세션.
 
+#### 관문 시험의 쓰는 법 (1·2)
+
+시험은 `Tests/SwiftailInteropTests/RealTailnetHostGateTests.swift`의 `RealTailnetHostGateTests`다. 흐름(`Support/HostGateFlow.swift`의 `runHostGateFlow`)은 같은 파일의 `HostGateFlowTests`가 계정 없이(testcontrol 사본 + pebble) 먼저 돌린다.
+
+| 환경 변수 | 뜻 |
+| --- | --- |
+| `SWIFTAIL_REAL_AUTHKEY_FILE` | 인증 키가 든 파일(임시가 아닌 노드). 없으면 묶음을 건너뛴다 |
+| `SWIFTAIL_REAL_HOST_STATE_DIR` | 노드의 상태 폴더. 없으면 묶음을 건너뛴다. 처음이면 만들고(0700), **지우지 않는다**. `eyebuild dir`의 폴더는 3일 쓰지 않으면 지워지므로 두 번째 실행까지 남길 곳을 고른다 |
+| `SWIFTAIL_REAL_ACME_ROOTS` | 스테이징 루트 인증서 PEM 파일(시험 앵커). 파일의 `CERTIFICATE` 블록을 모두 앵커로 쓰므로 Let's Encrypt가 안내하는 스테이징 루트들을 한 파일에 이어 붙인다. 없으면 발급 단계를 건너뛰고 1만 본다 |
+| `SWIFTAIL_REAL_ACME_DIRECTORY` | ACME 디렉터리. 기본은 Let's Encrypt 스테이징(`https://acme-staging-v02.api.letsencrypt.org/directory`. 출처는 tailscale.com v1.104.7 `cmd/k8s-operator/sts.go:119`). 운영 디렉터리의 호스트면 시험이 거절한다 |
+| `SWIFTAIL_REAL_SIGN_WAIT_SECONDS` | 잠긴 노드의 서명을 기다리는 한도(기본 600). 묶음의 시간 제한은 이것 + 10분 |
+
+```sh
+SWIFTAIL_REAL_AUTHKEY_FILE=<키 파일> SWIFTAIL_REAL_HOST_STATE_DIR=<상태 폴더> SWIFTAIL_REAL_ACME_ROOTS=<스테이징 루트 PEM> \
+  eyebuild swift real-host-gate -- test --filter RealTailnetHostGateTests
+```
+
+흐름: 호스트 이름 `rd-mac-1a2b3c4d`의 `.inProcess` 노드가 `.running`이 된다(`needsLogin`이면 인증 키가 받아들여지지 않은 것이므로 실패로 끝내고 URL은 찍지 않는다) → lock 모습을 기록한다 → 1의 판정(`certDomains`에 자기 FQDN) → 관리자를 띄운다(잠겨 있어도 띄운다. 잠긴 동안 발급이 되는지를 기록한다) → 잠겼으면 서명을 기다린다 → 첫 인증서 → 받은 인증서로 tailnet 443 → `LoopbackBridge` → 시험 TLS 리스너를 띄우고 같은 프로세스에서 자기 tailnet 주소로 붙어(루프백의 평문 중계를 거친 `NWConnection`) 스테이징 루트만으로 검증하고 `POST /pair`가 200이며 다리가 알린 상대가 자기 노드인지 본다.
+
+서명 절차: 노드가 잠기면 표준 출력에 "서명이 필요하다. 명령은 상태 디렉터리의 sign-command.txt에 있다"만 찍는다. 그 파일(0600)에 `tailscale lock sign <nodeKey> <lockKey>` 한 줄이 있다(둘 다 공개 키). 서명 기기에서 그 줄을 그대로 실행하면 노드가 다시 시작하지 않고 풀린다. 한도 안에 풀리지 않으면 잠긴 채 다음 단계로 가고 요약에 "기한 안에 풀리지 않음"을 남긴다. 관리자는 잠긴 동안에도 돈다. 잠긴 동안 발급이 되는지 보려면 파일이 생긴 뒤 곧바로 서명하지 말고 몇 분 기다린다: 인증서보다 서명이 먼저 오면 "잠긴 동안 첫 인증서"는 판정하지 못해 `-`이고, 그때 관리자의 마지막 실패만 남는다(`controlRejected` 등이면 잠긴 노드의 `set-dns`를 서버가 거절한 것이다).
+
+출력은 요약 한 덩어리다: 상태 이름, `.running`까지의 시간, 피어 수, lock의 `mode`·잠김·거른 피어 수·`issue`, 서명으로 풀리기까지의 시간과 같은 `run()` 안에서 풀렸는지, cert 도메인 수와 자기 FQDN이 있는지, 관리자 시작부터 첫 인증서까지의 시간(발급 전체), ACME 요청 수, `set-dns` 횟수와 각 왕복 시간, 인증서 수명(일), 사슬 장수, 시험 앵커로 검증되는지, 잠긴 동안 첫 인증서가 나왔는지, tailnet TLS의 결과. FQDN·tailnet 이름·주소·키·로그인 이름·해시는 찍지 않는다. `set-dns` 시간은 관리자의 `set-dns` 접점을 감싸 잰 제어 서버 왕복이다(공개 API가 아니라 `@testable`의 내부 초기화 인자로 잰다). TXT가 공개 DNS에 퍼지기까지와 인증 기관의 확인 대기는 따로 재지 못하고 발급 전체 시간 안에 들어 있다.
+
+두 번째 실행에서 볼 것: 같은 상태 폴더로 다시 돌리면 저장된 신원으로 붙고(`needsLogin`이 없다), 저장된 lock 상태로 처음부터 서명된 채 `.enforcing`이며, "저장된 인증서로 시작 true, 저장된 것을 새 발급 없이 씀 true(ACME 요청 0개, `set-dns` 0번)"다.
+
+계정 없는 결과(2026-11-15): lock 없는 tailnet에서 발급 약 1초, ACME 요청 11개, `set-dns` 1번, 수명 90일(pebble), 두 번째 실행은 요청 0개로 저장된 인증서를 썼고 tailnet TLS가 pebble 루트로 검증됐다. lock 켜진 tailnet에서는 **잠긴 동안 인증서가 나왔다**. 단, testcontrol 사본의 `set-dns` 처리기는 lock을 보지 않으므로 운영 서버의 동작은 이 관문이 처음 기록한다.
+
 ### RemoteDebug e2e 재현의 범위
 
 첫 사용처의 e2e는 셋이다: Go 시험(`core/e2e`. Go 호스트와 Go tsnet 피어, 가짜 tailnet, `listenTLS=false`, 22개. 터널 시험 3개는 `core/e2e/tunnel`에 따로 있다), Swift 패키지 시험(`Packages/MacHost/Tests/MacHostE2ETests`. 실제 Go 코어와 `rdtestenv`), 스크립트(`scripts/e2e-*.sh`). 모두 그쪽 호스트 코드를 돌린다.
