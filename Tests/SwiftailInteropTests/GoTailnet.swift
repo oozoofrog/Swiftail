@@ -63,12 +63,40 @@ actor GoTailnet {
         let bodySHA256: String?
         let elapsedMs: Int64?
         let stopped: Bool?
+        // Tailnet Lock 관문 명령(README "Tailnet Lock 관문 명령"). `lockStatus`의 `nodeKey`·`name`·`enabled`는 위의 필드다.
+        let head: String?
+        let lockKey: String?
+        let nodeKeySigned: Bool?
+        let trustedKeys: [String]?
+        let visiblePeers: [String]?
+        let filteredPeers: [String]?
+        let controlHead: String?
+        let controlDisabled: Bool?
+        let authKey: String?
+        let alreadyDisabled: Bool?
+        let registrations: [LockRegistration]?
     }
 
+    /// `setDNSLog`와 `lockRequests`가 같은 `requests` 필드를 쓴다. 앞의 것은 `name`·`type`·`value`,
+    /// 뒤의 것은 `path`·`nodeKey`·`head`를 싣는다.
     struct SetDNSRequest: Decodable, Sendable {
-        let name: String
-        let type: String
-        let value: String
+        let name: String?
+        let type: String?
+        let value: String?
+        let path: String?
+        let nodeKey: String?
+        let head: String?
+    }
+
+    /// `lockRegistrations`의 한 줄. `nlKey`·`oldNodeKey`는 0이면 빈 문자열이다.
+    struct LockRegistration: Decodable, Sendable {
+        let nodeKey: String
+        let oldNodeKey: String
+        let nlKey: String
+        let signature: String
+        let signatureError: String
+        let resignRequested: Bool
+        let wrappedKeyTrace: Bool
     }
 
     struct Command: Encodable, Sendable {
@@ -98,6 +126,13 @@ actor GoTailnet {
         var range: String? = nil
         var rootPEM: String? = nil
         var stop: Bool? = nil
+        // Tailnet Lock 관문 명령.
+        var authKey: String? = nil
+        var lockKey: String? = nil
+        var addKeys: [String]? = nil
+        var removeKeys: [String]? = nil
+        var wrongSecret: Bool? = nil
+        var omitTKAInfo: Bool? = nil
     }
 
     private let process = Process()
