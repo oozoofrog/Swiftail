@@ -558,3 +558,70 @@ Go 피어 하나(`addPeer`)와 Swift 노드 하나로 시작한다. 시각 기�
 | 5 | 관문: 도구 명령과 Swift 관문 시험 | `Tools/interop/cmd/tailnet/*`, `Tools/interop/README.md`의 tailnet 절, `Tests/SwiftailInteropTests/DirectPathTests.swift` | 도구 부분은 0과 함께 시작. Swift 시험은 4 뒤 |
 
 순서: 0 → (1, 2, 3, 5의 도구) 병렬 → 4 → 5의 Swift 시험 → 다른 세션의 검토 → 총괄이 관문을 다시 돌림. 단위 4가 가장 크다(상태 기계 묶음과 actor 통합). 둘로 나눈다면 4a(`Magicsock`)와 4b(엔진·노드, 4a의 공개 시그니처만 보고 시작)로 나누고 4b는 4a 병합 뒤 빌드한다. 대조 시험(벡터 자료를 읽는 시험)은 구현자와 다른 세션이 쓴다.
+
+## 직접 경로 지연의 조사 (2026-11-16)
+
+### 관측
+
+첫 사용처의 실기기(2026-11-15). 같은 Wi-Fi에 Mac의 호스트(`.inProcess`, 오래 떠 있음)와 iPhone의 터널(`.utun`, 방금 켬)이 있고, iPhone이 Mac의 tailnet 443으로 TCP를 건다.
+
+- 첫 접촉 뒤 `relayed(7)` → `direct`까지 44초, 25초. 두 번 다 터널을 켠 지 10~30초 안의 첫 접촉이었고, 그동안 통신은 DERP로 됐다. Go 터널 + Go 호스트는 몇 초였다고 한다(값 없음).
+- 유휴 약 26초 뒤 `피어 경로: none`, 다음 요청 순간 1초 안에 `direct → relayed(7) → direct`.
+
+### 측정
+
+계약 관문 환경(`tailnet` 도구, 루프백 한 기계, testcontrol). 첫 데이터(1초마다 UDP, Go 쪽은 `peerSend`)부터 양쪽이 직접이 될 때까지. 조회 간격이 50 ms라 값에 그만큼의 오차가 있다. 두 번 잰 값이다.
+
+| 경우 | Swift(또는 A) | Go(또는 B) |
+| --- | --- | --- |
+| (가) Swift ↔ Go, 둘 다 70초 유휴 뒤 | 72 ms, 72 ms | 14 ms, 18 ms |
+| (나) 방금 띄운 Swift ↔ 떠 있던 Go | 81 ms, 69 ms | 22 ms, 15 ms |
+| (다) 방금 띄운 Swift ↔ Swift(`.memory` 둘, 서로 보냄) | 58 ms, 55 ms | 58 ms, 55 ms |
+| (라) 대조: Go ↔ Go | 99 ms, 90 ms | 26 ms, 26 ms |
+
+실기기의 수십 초는 재현되지 않는다. 상태 기계를 실기기 순서로 돌린 단위 시험(`MagicsockStartupTests`)에서도 120초 유휴인 호스트와 30초 전에 켠 터널이 첫 데이터 뒤 12 ms 안에 양쪽 직접이 된다. 터널 쪽 CallMeMaybe는 엔드포인트가 27초보다 낡아 미뤄지지만 곧바로 시작한 회차가 끝나는 15 ms에 나가고, 호스트 쪽도 25 ms에 나간다.
+
+### Go와의 대조 (v1.104.7)
+
+| 사건 | Go | Swiftail | 차이 |
+| --- | --- | --- | --- |
+| 첫 데이터 | 신뢰된 직접이 없으면 모든 후보에 Ping하고 Ping을 하나라도 보냈으면 CallMeMaybe(`endpoint.go:1107-1130`, `:1423-1462`) | `planSend` → `pingAllCandidates(sendCallMeMaybe: true)` | 없음 |
+| 엔드포인트가 낡음 | 회차가 끝나면 보내도록 걸고 `ReSTUN`. 진행 중인 갱신이 있으면 끝난 뒤 한 번 더 돈다(`magicsock.go:2693-2723`, `:3720-3750`, `:887-900`, `:979`) | 미뤄 둔 목록에 넣고 회차가 없으면 시작, 진행 중이면 그 회차 끝에 보낸다(`callMeMaybe(to:)`, `.endpointsRefreshed`) | Swiftail이 진행 중인 회차의 결과를 써서 같거나 이르다. 주기 회차를 기다리는 길은 없다(단위 시험) |
+| CallMeMaybe 받음 | 후보를 바꾸고 Ping 간격을 풀어 곧바로 모두에 Ping, CallMeMaybe는 되보내지 않음(`endpoint.go:2150-2215`) | `receiveCallMeMaybe` | 없음 |
+| Pong 받음 | 더 낫거나 신뢰가 지났으면 `bestAddr`, 그 주소면 신뢰 6.5초(`endpoint.go:1929-2017`) | `receivePong` | 없음 |
+| netmap 엔드포인트 바뀜 | Ping 받은 적 없는 후보는 netmap에서 빠지면 지움(`endpoint.go:1762-1800`, `:510-521`) | `replaceNetmapCandidates` | 없음 |
+| 모르는 출발지의 Ping | 아는 disco 키면 출발지를 후보로 넣고 Pong(`magicsock.go:2581-2690`) | `receivePing` | 없음 |
+| 모르는 disco 키 | 버림(`magicsock.go:2245-2252`). 단 "아는 키"에 TSMP로 배운 키가 들어간다 | 버림. netmap 키만 안다 | **있음**(아래) |
+| 피어의 disco 키 바뀜 | 신뢰·송신 기록·Ping 기록을 지움(`endpoint.go:1694-1697`, `:2286-2310`) | `resetForNewDiscoKey` | 없음 |
+
+가설 넷의 판정: CallMeMaybe가 다음 주기 회차에야 나간다 — 아니다(위 표, 단위 시험 1). 첫 데이터에서 전체 Ping이 시작되지 않는다 — 아니다. 상대가 CallMeMaybe를 받고 곧바로 Ping하지 않는다 — 아니다(`callMeMaybeExchange`). 모르는 출발지의 Ping 처리가 다르다 — 다르지 않다.
+
+### 까닭 (실기기에서 확인하지 못함)
+
+남은 차이는 **TSMP disco 키 광고**다(노트 3.8, 4.10). Go는 WireGuard 세션 키가 생길 때마다 자기 disco 키를 터널 안의 TSMP로 보내고(`magicsock.go:4631-4676`, CapabilityVersion 144, `tailcfg.go:195`), 받은 쪽은 그 키를 곧바로 활성 키로 쓴다(`net/tstun/wrap.go:1133-1146`, `wgengine/userspace.go:608-623`, `magicsock.go:4579-4622`). 그래서 방금 켠 Go 노드의 새 disco 키를 상대는 첫 핸드셰이크에서 안다. Swiftail은 보내지도 쓰지도 않는다(결정 표 "TSMP 광고"). 한쪽이라도 Swiftail이면 오래 떠 있던 쪽은 방금 켠 쪽의 새 disco 키를 netmap으로만 배우고, 그때까지 양쪽 disco가 모두 버려진다: 떠 있던 쪽은 모르는 키로, 켠 쪽은 옛 키로 봉한 것을 열지 못해서다. 데이터는 DERP로 흐르고, 새 키가 netmap으로 오면 1초 안에 양쪽 직접이 된다(단위 시험 2). 중계 시간은 곧 제어 서버가 새 키를 퍼뜨리는 시간이다. testcontrol은 곧바로 퍼뜨리므로 위 측정이 빠르다(Swiftail은 스트림 요청이 아니라 그 앞의 상태 올리기로 키를 올린다. testcontrol은 Version ≥ 68의 스트림 요청에 실린 DiscoKey를 무시한다, `testcontrol.go:1452-1458`).
+
+관측과 맞는 점: 두 번 다 방금 켠 터널과의 첫 접촉이었고, Go끼리는 몇 초였다. 맞는지 모르는 점: 터널을 켠 뒤 첫 접촉까지 10~30초가 이미 지났으므로, 이 가설이 맞으려면 실제 제어 서버가 새 disco 키를 35~74초 동안 퍼뜨리지 않아야 한다. Swiftail이 CapabilityVersion 148(≥ 144)을 선언하므로 서버가 TSMP 광고를 믿고 disco 키 변경을 서두르지 않을 수 있으나, 서버 코드가 공개되어 있지 않아 확인하지 못했다.
+
+### 유휴 뒤의 `none`과 흔들림
+
+`none`은 세 경우에만 나온다: 마지막 WireGuard 송신(keepalive 포함) 뒤 45초(동작 G3), netmap이 피어의 disco 키를 바꿈(`resetForNewDiscoKey`), 피어가 빠지거나 node 키가 바뀜. 둘째·셋째 뒤의 다음 송신은 신뢰가 없어 `relayed → direct`로 나온다. 관측된 `direct → relayed → direct`는 첫째와 맞는다: heartbeat가 45초까지 `bestAddr`에 Ping해 신뢰가 남은 채 유휴가 되고, 다음 송신은 그 신뢰로 `direct`, 신뢰(마지막 Pong + 6.5초)가 지나면 `relayed`, 그 송신이 전체 Ping을 하고 Pong이 오면 `direct`다. Go도 안에서는 똑같이 움직인다(`endpoint.go:635-656`, `:1117-1124`). Go는 경로 사건을 내지 않아 보이지 않을 뿐이다. 그래서 설계대로이며, 관측의 "26초"는 기준 시각이 마지막 WireGuard 송신이 아니었던 것으로 본다. 아래 로그의 "앞 사건 뒤"가 이를 가른다.
+
+### 고친 것
+
+동작은 바꾸지 않았다. 범위 안(`SwiftailMagicsock`, 노드의 데이터면)에서 Go와 다른 계기나 기다림을 찾지 못했다.
+
+- 회귀 시험 `MagicsockStartupTests`: (1) 유휴 호스트와 늦게 켠 터널에서 양쪽 CallMeMaybe가 첫 데이터 뒤 3초(회차 마감) 안에 나가고 양쪽이 1초 안에 직접이 된다. (2) 호스트가 터널의 옛 disco 키를 쥔 동안은 양쪽 disco가 버려지고(`unknownDiscoKey`, `malformedDisco`), netmap이 새 키를 준 순간 호스트 경로가 nil이 되며 1초 안에 양쪽 직접이 된다.
+- 진단 로그: `피어 경로:` 줄 끝에 직전 경로 사건(어느 피어든) 뒤의 시간과, 그사이 버린 disco를 종류별로 붙인다(`앞 사건 뒤 25.3초, 버린 disco: 모르는 키 10, 열리지 않음 5, 경로 규칙 0`). 키·주소·이름은 찍지 않는다(`PathEventTally`).
+
+### 실기기에서 가려내는 법
+
+양쪽 기기의 `Swiftail`/`node` 로그에서 첫 접촉 전후의 `피어 경로:` 줄을 모은다.
+
+- **disco 키 가설이 맞으면**: 호스트에 `relayed(7)` 다음 25~44초 뒤 `none (앞 사건 뒤 …초, 버린 disco: 모르는 키 N …)`(N > 0)이 찍히고 곧바로 `relayed(7)`, `direct`가 이어진다. 터널의 `direct` 줄에는 `열리지 않음` > 0이 붙는다.
+- **둘 다 0인데 오래 걸리면**: disco는 오갔으나 UDP가 닿지 않은 것이다(같은 Wi-Fi의 단말 격리, iOS 로컬 네트워크 권한, NAT 헤어핀). 그때는 포트 매핑(노트 6.2 `shortcut:`)과 LAN 엔드포인트가 올라갔는지를 본다.
+- **유휴 `none`**: "앞 사건 뒤"가 45초 이상이고 버린 disco가 0이면 유휴(설계대로)다.
+
+### 남은 것 (이 범위 밖)
+
+- 가설이 맞으면 고칠 곳: TSMP disco 키 광고를 보내고 쓰기. `SwiftailWireGuard`(세션 키가 생길 때 터널 안으로 한 번: 시작한 쪽은 응답을 받을 때, 응답한 쪽은 새 키의 첫 transport를 받을 때, 노트 4.10 1), `SwiftailEngine`(TSMP `'a'` 33바이트를 만들고, 받은 것을 소비하면서 키를 위로 알림), `SwiftailMagicsock`(netmap 키와 TSMP 키 가운데 하나를 활성으로 두는 Go의 두 키 모형, `endpoint.go:382-436`, `:1552-1688`), 노트 4.10 3의 결론과 결정 표 "TSMP 광고" 줄. 다른 길은 선언하는 CapabilityVersion을 144 아래로 내리는 것(`SwiftailControl`)인데 다른 서버 동작이 함께 바뀌므로 따로 검토해야 한다.
+- 실제 제어 서버가 새 disco 키를 퍼뜨리는 데 걸리는 시간은 실기기 로그로만 확인된다.

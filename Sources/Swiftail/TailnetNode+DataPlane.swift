@@ -73,12 +73,13 @@ extension TailnetNode {
             case let .homeRegionChanged(region):
                 homeRegionChanged(to: region)
             case let .pathChanged(peer, path):
-                Self.log.info("피어 경로: \(path.logName, privacy: .public)")
+                Self.log.info("피어 경로: \(path.logName, privacy: .public) (\(self.pathEventTally.summary(at: now), privacy: .public))")
+                pathEventTally = PathEventTally(since: now)
                 if let name = peerDirectory.name(of: peer) {
                     eventContinuation.yield(.peerPathChanged(fqdn: name, path: path))
                 }
-            case .dropped:
-                break
+            case let .dropped(reason):
+                pathEventTally.count(reason)
             }
         }
     }
@@ -222,6 +223,44 @@ extension Magicsock.Source {
         case let .udp(endpoint): .udp(bytes, to: endpoint)
         case let .derp(peer, region): .derp(bytes, to: peer, region: region)
         }
+    }
+}
+
+/// "피어 경로" 로그에 붙이는 진단: 직전 경로 사건(어느 피어든) 뒤의 시간과 그사이 버린 disco의 종류별 개수.
+///
+/// 중계에서 직접으로 넘어가기까지 오래 걸릴 때 까닭을 가른다. 모르는 키가 쌓였으면 상대의 새 disco 키를 아직 모른
+/// 것이고(netmap이 늦음), 열리지 않음이 쌓였으면 상대가 이 노드의 옛 키로 봉한 것이며, 둘 다 없으면 disco는 오갔으나
+/// UDP가 닿지 않은 것이다. 키·주소·이름은 담지 않는다. `docs/contracts/SwiftailMagicsock.md` "직접 경로 지연의 조사".
+struct PathEventTally: Sendable {
+    /// 직전 경로 사건의 시각. 아직 없으면 nil.
+    private let since: ContinuousClock.Instant?
+    private var unknownKey = 0
+    private var unopened = 0
+    private var misrouted = 0
+
+    init(since: ContinuousClock.Instant? = nil) {
+        self.since = since
+    }
+
+    /// disco를 버린 까닭이면 센다. 다른 까닭은 세지 않는다.
+    mutating func count(_ drop: Magicsock.Drop) {
+        switch drop {
+        case .unknownDiscoKey: unknownKey += 1
+        case .malformedDisco: unopened += 1
+        case .misroutedDisco: misrouted += 1
+        default: break
+        }
+    }
+
+    /// 예: `앞 사건 뒤 25.3초, 버린 disco: 모르는 키 10, 열리지 않음 5, 경로 규칙 0`.
+    func summary(at now: ContinuousClock.Instant) -> String {
+        var elapsed = "첫 사건"
+        if let since {
+            let (seconds, attoseconds) = max(.zero, since.duration(to: now)).components
+            let tenths = seconds * 10 + attoseconds / 100_000_000_000_000_000
+            elapsed = "앞 사건 뒤 \(tenths / 10).\(tenths % 10)초"
+        }
+        return "\(elapsed), 버린 disco: 모르는 키 \(unknownKey), 열리지 않음 \(unopened), 경로 규칙 \(misrouted)"
     }
 }
 
