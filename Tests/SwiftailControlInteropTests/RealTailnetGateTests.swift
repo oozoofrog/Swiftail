@@ -12,6 +12,7 @@ import Testing
 @testable import SwiftailControl
 
 private let realAuthKeyFile = ProcessInfo.processInfo.environment["SWIFTAIL_REAL_AUTHKEY_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+private let realStateDirectory = ProcessInfo.processInfo.environment["SWIFTAIL_REAL_STATE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
 
 @Suite("M2 마무리 관문: 운영 제어 서버", .enabled(if: realAuthKeyFile != nil,
     "SWIFTAIL_REAL_AUTHKEY_FILE이 없어 건너뜁니다"), .timeLimit(.minutes(5)))
@@ -89,6 +90,73 @@ struct RealTailnetGateTests {
               자기 주소 \(map.selfNode.addresses.count)개, 피어 \(map.peers.count)명, DERP 지역 \(regionCount)개
               DNSConfig \(map.dnsConfig != nil), 필터 규칙 \(map.packetFilter.count)개, 사용자 프로필 \(map.userProfiles.count)개
               tailnet lock \(map.tailnetLock.mode), 거른 피어 \(map.tailnetLock.filteredPeerCount)명, 서버 시각 있음 \(map.controlTime != nil), self 키 만료 있음 \(map.selfNode.keyExpiry != nil)
+            """)
+    }
+}
+
+/// M8 관문 (나)의 앞 단계: tailnet lock 전의 Swiftail(등록 요청의 `NLKey`가 0)로 등록했던 노드가, 같은 신원 파일에 새 NL 키를
+/// 채운 지금의 Swiftail로 다시 붙을 때 운영 서버가 받아들이는지 본다. 기존 사용자의 올림 경로다.
+///
+/// 상태 폴더는 M8 전 커밋(`6f30600`)으로 한 번 등록해 만든다(인증 키와 임시 노드). 여기서는 인증 키를 주지 않는다:
+/// 서버가 그 노드를 이미 지웠으면 새 등록이 되어 버려 올림 경로를 보지 못하므로, 그때는 로그인 요구로 드러나게 한다.
+///
+///   SWIFTAIL_REAL_STATE_DIR=<옛 커밋으로 등록한 상태 폴더> eyebuild swift m1-gate -- test --filter RealTailnetUpgradeTests
+@Suite("M8 관문 (나) 앞 단계: 옛 신원의 올림", .enabled(if: realStateDirectory != nil,
+    "SWIFTAIL_REAL_STATE_DIR이 없어 건너뜁니다"), .timeLimit(.minutes(3)))
+struct RealTailnetUpgradeTests {
+    @Test("NL 키 없이 등록했던 노드가 NL 키를 싣고 다시 붙어 netmap을 받는다")
+    func identityWithoutLockKeyReconnects() async throws {
+        let directory = URL(filePath: try #require(realStateDirectory), directoryHint: .isDirectory)
+        let store = NodeIdentityStore(directory: directory)
+        let before = try String(contentsOf: store.fileURL, encoding: .utf8)
+        try #require(!before.contains("NLKey"), "신원 파일에 이미 NL 키가 있다. 올림 경로가 아니다")
+        let previous = try #require(try store.load()?.nodePublicKey, "옛 신원에 node 키가 없다")
+        let controlURL = try #require(URL(string: "https://controlplane.tailscale.com"))
+
+        let client = ControlClient(
+            configuration: .init(serverURL: controlURL, hostname: "swiftail-gate", authKey: nil, ephemeral: true),
+            identityStore: store
+        )
+        let running = Task<ControlError?, Never> {
+            do { try await client.run(); return nil }
+            catch let error as ControlError { return error }
+            catch { return .connection("예상하지 않은 run 오류") }
+        }
+        defer { running.cancel() }
+
+        let observing = Task { () -> (loginRequired: Bool, registered: NodePublicKey?, netmap: Netmap?, disconnects: Int) in
+            var registered: NodePublicKey?
+            var netmap: Netmap?
+            var disconnects = 0
+            for await event in client.events {
+                switch event {
+                case .loginRequired: return (true, registered, netmap, disconnects)
+                case .registered(let key): registered = key
+                case .netmap(let map): netmap = netmap ?? map
+                case .disconnected: disconnects += 1
+                }
+            }
+            return (false, registered, netmap, disconnects)
+        }
+        try await Task.sleep(for: .seconds(30))
+        running.cancel()
+        let outcome = await observing.value
+        if let failure = await running.value {
+            Issue.record("run()이 오류로 끝났다: \(redacted(String(describing: failure)))")
+        }
+
+        #expect(!outcome.loginRequired, "서버가 로그인을 요구했다: 옛 노드가 이미 지워졌거나 NL 키가 바뀐 등록을 받지 않는다")
+        #expect(outcome.registered == previous, "같은 node 키로 등록되지 않았다")
+        let map = try #require(outcome.netmap, "netmap을 받지 못했다")
+        #expect(outcome.disconnects == 0, "맵 스트림이 유지되지 않았다")
+        #expect(map.selfNode.machineAuthorized)
+        let after = try String(contentsOf: store.fileURL, encoding: .utf8)
+        #expect(after.contains("NLKey"), "신원 파일에 NL 키가 저장되지 않았다")
+
+        print("""
+            올림 관문 요약(개수와 참·거짓만):
+              로그인 요구 \(outcome.loginRequired), 같은 node 키로 등록 \(outcome.registered == previous), 끊김 \(outcome.disconnects)회
+              피어 \(map.peers.count)명, tailnet lock \(map.tailnetLock.mode), NL 키 저장됨 \(after.contains("NLKey"))
             """)
     }
 }

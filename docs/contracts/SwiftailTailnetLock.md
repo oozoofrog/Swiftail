@@ -895,6 +895,19 @@ testcontrol이 하는 것과 못 하는 것(노트 7.3): lock 켜기(`init/begin
 - 2를 위한 서명 없는 인증 키 하나와, 서명 기기에서 `tailscale lock sign <node 키> <lock 키>`를 한 번 돌려 주는 것.
 - lock을 끄는 것은 실제 tailnet에서 하지 않는다(관문 (가) 7로만 본다).
 
+#### 앞 단계의 결과: lock이 꺼진 tailnet (2026-11-15)
+
+lock이 켜진 tailnet에 가기 전에, lock과 상관없이 모든 노드가 지나는 두 경로를 운영 서버에서 봤다(lock이 꺼진 tailnet, 임시 노드, 총괄이 직접 실행). 시험은 `Tests/SwiftailControlInteropTests/RealTailnetGateTests.swift`.
+
+| 확인한 것 | 결과 |
+| --- | --- |
+| NL 키를 실은 새 등록(`RealTailnetGateTests`) | 통과. 등록되고 맵 스트림이 90초 끊김 없이 유지됐다. 서버는 lock이 켜졌다고 알리지 않았고 `mode`는 `.disabled`, 거른 피어 0 |
+| 올림 경로(`RealTailnetUpgradeTests`): M8 전 커밋(`6f30600`, 등록 요청의 `NLKey`가 0)으로 등록한 노드의 상태 폴더를 그대로 두고 지금 버전으로 다시 붙음. 인증 키는 주지 않음 | 통과. 로그인 요구 없이 같은 node 키로 등록되고 netmap을 받았다(끊김 0). 신원 파일에 `NLKey`가 저장됐다 |
+
+뜻: **lock이 꺼진 tailnet에서는** 운영 서버가 0이던 `NLKey`가 값으로 바뀌는 재등록을 받는다. 기존 Swiftail 노드를 새 버전으로 올려도 다시 로그인하지 않는다.
+
+보지 못한 것: lock이 **켜진** tailnet에서의 같은 올림(M8 전 버전은 그런 tailnet에서 `tailnetLockEnabled`로 끝났으므로 그 상태로 등록돼 남은 Swiftail 노드는 없을 것이다. 다만 등록 뒤에 lock이 켜진 tailnet의 노드는 이 경우에 해당한다). 임시가 아닌 노드. 옛 버전과 새 버전 사이의 간격이 긴 경우(여기서는 몇 초).
+
 ## 8. 구현 단위
 
 소유 파일이 겹치지 않게 나눈다. 단위 사이의 접점은 2절의 선언이 정하고 TL-0이 확정한다.
