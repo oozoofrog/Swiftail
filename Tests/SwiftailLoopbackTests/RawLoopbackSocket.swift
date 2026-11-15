@@ -61,6 +61,18 @@ final class RawLoopbackSocket: Sendable {
         }
     }
 
+    /// 상대가 연결을 끝내기를 `seconds`초까지 기다린다(막는 호출). 끝(FIN)이나 RST를 보면 true, 그때까지 열려 있으면 false다.
+    func seesEnd(within seconds: Int) -> Bool {
+        var limit = timeval(tv_sec: seconds, tv_usec: 0)
+        guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size)) == 0 else { return false }
+        var byte: UInt8 = 0
+        while true {
+            let received = recv(descriptor, &byte, 1, 0)
+            if received > 0 { continue }
+            return received == 0 || errno != EAGAIN
+        }
+    }
+
     /// 쓰기 방향을 닫는다(FIN).
     func finishWriting() {
         _ = shutdown(descriptor, SHUT_WR)

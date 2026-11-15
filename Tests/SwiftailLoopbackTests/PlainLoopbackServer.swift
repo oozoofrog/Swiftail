@@ -91,6 +91,12 @@ final class PlainLoopbackServer: Sendable {
         return nil
     }
 
+    /// 받은 연결을 닫고 놓는다. 준비되지 않고 끝난 연결의 소켓은 `cancel()`만으로는 닫히지 않고 `NWConnection`이 풀릴 때 닫힌다.
+    func discard(_ connection: NWConnection) {
+        connection.cancel()
+        all.withLock { $0.removeAll { $0 === connection } }
+    }
+
     func close() {
         listener.cancel()
         all.withLock { connections in

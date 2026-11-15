@@ -319,11 +319,13 @@ try await withThrowingDiscardingTaskGroup { group in
     }
 }
 
-// 서버(첫 사용처): TLS 핸드셰이크가 끝난 연결마다 한 번
-guard case let .hostPort(_, sourcePort) = nwConnection.endpoint,
-      let origin = bridge.origin(forLoopbackSourcePort: sourcePort.rawValue)
-else { nwConnection.cancel(); return }      // 다리가 이은 연결이 아니다
+// 서버(첫 사용처): 리스너를 만들 때 다리의 프로토콜을 스택의 끝(TLS 아래)에 더한다
+parameters.defaultProtocolStack.applicationProtocols.append(bridge.makeListenerProtocolOptions())
+
+// 받은 연결이 `.ready`가 되면(TLS 핸드셰이크 끝) 한 번
+guard let origin = bridge.origin(of: nwConnection) else { nwConnection.cancel(); return }
 // 요청마다: origin.peer.stableID가 허용 목록에 있는가
+// 연결이 `.failed`가 되면(토큰 없는 연결은 준비 전에 여기로 온다) cancel()하고 그 NWConnection을 놓는다(동작 B7)
 ```
 
 ## 3. 동작
@@ -450,7 +452,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 4. **반닫힘**: tailnet 쪽이 쓰기를 닫으면(`read`가 nil) 루프백에 FIN을 보내고 반대 방향은 계속 나른다. 루프백 쪽이 닫으면 `finishWriting()`을 부르고 반대 방향은 계속 나른다. 두 방향이 다 끝나면 `forward`가 돌아온다.
 5. **끊김과 취소**: 어느 쪽이든 오류(`reset`, `timedOut`, `peerRemoved`, 루프백의 실패)가 나면 두 연결을 모두 RST로 끊는다(tailnet 쪽 `abort()`, 루프백 쪽 `forceCancel()`). `forward`를 부른 Task가 취소되어도, 노드가 멈춰도(`notRunning`) 같다. 루프백 → tailnet 방향이 FIN으로 이미 끝난 뒤의 루프백 RST는 다리가 다음에 루프백에 쓸 때 안다. tailnet 쪽이 더 쓰지도 닫지도 않으면 그때까지 `forward`가 남는다(신원과는 무관하다. B6).
 6. **다리가 연 연결만 신원을 얻는다**(M7-9b): ① 리스너의 스택에서 TLS 아래(TCP 바로 위)에 놓인 다리의 프로토콜(`NWProtocolFramer`)이 연결의 첫 32바이트를 읽어 기다리는 토큰을 **모두 상수 시간으로 견주어** 찾고 소비한다. 맞은 토큰은 열쇠가 달라도 소비한다. ② 토큰이 그 연결의 `(출발 포트, 리스너 포트)`를 위한 것일 때만(두 끝이 `127.0.0.1`) 그 열쇠에 허가(`Origin`)를 적고, 이미 받아 둔 바이트를 위로 올린 뒤 지나가게 하고(`passThroughInput`·`passThroughOutput`) 연결을 준비 상태로 둔다. ③ 토큰이 없거나 틀리거나, 다른 리스너·다른 출발 포트의 것이거나, 32바이트가 오기 전에 끝나거나 5초 안에 다 오지 않으면 그 연결을 실패시킨다. 위로 한 바이트도 올리지 않으므로 TLS에 닿지 못하고, 서버는 `newConnectionHandler`로 연결을 받지만 `stateUpdateHandler`에서 `.ready` 없이 `.failed`를 본다. ④ 허가는 서버의 조회가 한 번 가져가면 지워진다. 다리는 허가를 지우지 않고(연결이 끝나도), framer의 `cleanup`도 지우지 않는다. 지우는 것은 조회와, 가져가지 않은 허가가 256개를 넘을 때 가장 오래된 것뿐이다(그 연결의 조회는 nil, 닫힌 쪽). ⑤ 같은 열쇠의 허가가 남아 있는 동안 그 열쇠로 새 토큰을 적지 않는다(B1 ④). ⑥ 조회는 `.ready`인 연결에만 답한다. ⑦ 표는 잠금 하나로 지키는 동기 호출이다. 토큰은 로그·오류 문자열·`description`에 남기지 않는다.
-7. **서버가 지킬 것**(첫 사용처의 몫. 문서 주석에 적는다): 리스너를 `127.0.0.1`에만 묶고 포트는 시스템이 고르게 한다. 리스너의 `NWParameters`에 `bridge.makeListenerProtocolOptions()`를 `defaultProtocolStack.applicationProtocols`의 **끝에** 더한다(`append`. 앞에 넣으면 TLS 위에 놓여 핸드셰이크가 `bad protocol version`으로 깨진다). 리스너 하나에는 다리 하나를 쓴다. 받은 연결마다 **`.ready`가 된 뒤, 요청을 읽기 전에** `origin(of:)`을 한 번 묻고, nil이면 그 연결을 끊는다. 허가는 연결이 준비되기 전에 적히므로 평문 리스너에서도 첫 바이트를 기다리지 않는다. 답은 한 번만 나오므로 그 `Origin`을 연결이 사는 동안 쥔다.
+7. **서버가 지킬 것**(첫 사용처의 몫. 문서 주석에 적는다): 리스너를 `127.0.0.1`에만 묶고 포트는 시스템이 고르게 한다. 리스너의 `NWParameters`에 `bridge.makeListenerProtocolOptions()`를 `defaultProtocolStack.applicationProtocols`의 **끝에** 더한다(`append`. 앞에 넣으면 TLS 위에 놓여 핸드셰이크가 `bad protocol version`으로 깨진다). 리스너 하나에는 다리 하나를 쓴다. 받은 연결마다 **`.ready`가 된 뒤, 요청을 읽기 전에** `origin(of:)`을 한 번 묻고, nil이면 그 연결을 끊는다. 허가는 연결이 준비되기 전에 적히므로 평문 리스너에서도 첫 바이트를 기다리지 않는다. 답은 한 번만 나오므로 그 `Origin`을 연결이 사는 동안 쥔다. **끝난 연결은 `cancel()`하고 그 `NWConnection`의 참조를 놓는다**: 준비되지 않고 끝난 받은 연결의 소켓은 `cancel()`만으로는 닫히지 않고 객체가 풀릴 때 닫힌다(아래 "실험으로 확인한 것"). 붙잡고 있으면 토큰 없이 건 연결마다 서버의 파일 서술자가 하나씩 남고 상대는 끝을 보지 못한다.
 8. **같은 기기의 다른 프로세스가 할 수 있는 것과 없는 것**: 루프백 포트에 직접 붙을 수 있고, `SO_REUSEADDR`로 다리의 출발 포트에 묶어 다른 리스너에 붙거나, 다리의 연결이 RST로 죽어 풀린 출발 포트로 같은 리스너에 붙을 수 있다. 어느 경우든 토큰이 없어 연결이 준비되지 않는다(B6 ③). 서버가 가져가지 않은 허가가 그 4-튜플로 남아 있어도 같다: 서버는 준비된 연결에만 묻고 조회는 준비된 연결에만 답한다. 토큰은 다리와 그 리스너 포트 사이의 루프백 TCP 안에서만 오가므로 엿보려면 루프백 트래픽을 읽어야 한다(root·BPF, 범위 밖). 리스너 포트를 먼저 차지하는 것: 서버가 연 포트 번호를 `forward`에 넘기므로, 서버가 죽은 뒤 다른 프로세스가 그 포트를 열면 다리가 그쪽으로 토큰과 TLS 레코드를 보낸다. 그 토큰은 그 리스너 포트에 묶여 있어 다른 리스너에서 통하지 않고(B6 ②), 그 프로세스는 인증서의 키가 없어 핸드셰이크를 끝내지 못한다(평문 리스너에서는 내용이 보인다. 시험 전용이다). 같은 사용자 권한의 프로세스가 앱의 메모리나 상태 파일을 읽는 것은 막지 않는다(첫 사용처의 비목표와 같다, RemoteDebug `docs/protocol.md` 12절).
 9. **권한**: 루프백에서 듣는 쪽은 App Sandbox의 들어오는 연결 권한(`com.apple.security.network.server`), 다리와 노드의 소켓·`URLSession`은 나가는 연결 권한(`com.apple.security.network.client`)이 든다. 그 밖의 권한은 쓰지 않는다. Swiftail은 키체인을 쓰지 않는다(사슬과 키를 값으로 낸다). 키체인 없이 TLS 신원을 만드는 길(`SecKeyCreateWithData`·`SecIdentityCreate`)은 M7-9b의 시험이 샌드박스 밖의 macOS에서 돌렸다(자체 서명 인증서로 TLS 리스너가 핸드셰이크를 끝낸다). 샌드박스 안의 실행과 "키체인에 쓰지 않음"은 확인되지 않았다(노트 4.6·8장, 9장 V188·V189·V191). 이것을 구현의 근거로 쓰지 않는다: **첫 사용처 세션이 샌드박스 판에서 확인한다**(첫 사용처 검토 결과 5. 막히면 첫 사용처가 키체인에 넣는 길로 가고 Swiftail의 API는 그대로다).
 10. **비용**: 바이트가 Swift TCP → 다리의 복사 → 커널의 루프백 TCP → TLS를 거친다. 4GiB 전송에서의 처리량과 CPU는 관문에서 잰다.
@@ -476,6 +478,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 
 - `NWParameters(tls:tcp:)`의 `applicationProtocols`는 위(앱 쪽)부터 적힌다. framer를 `append`하면 TLS 아래에 놓인다: TLS 클라이언트의 ClientHello 첫 32바이트를 framer가 읽었다. `insert(at: 0)`이면 TLS 위에 놓여 양쪽이 `-9836 bad protocol version`으로 실패했다. 평문 리스너에서도 같은 framer가 돈다.
 - `start`가 `.willMarkReady`를 돌려주면 토큰을 확인하고 `markReady()`할 때까지 서버의 연결은 `.preparing`에 머문다. 틀린 토큰(`markFailed`)이면 서버는 `.preparing → .failed`만 보고 받기에 아무것도 오지 않는다. 토큰이 없으면(TLS 클라이언트가 바로 건 경우) ClientHello의 첫 32바이트가 토큰 자리에 와 실패한다. 10바이트 뒤 멈춘 연결은 `scheduleWakeup`의 기한에 실패한다.
+- **준비되지 않고 끝난 받은 연결은 `cancel()`·`forceCancel()`을 해도 소켓이 닫히지 않는다.** `NWConnection` 객체가 풀릴 때 닫힌다. 틀린 토큰으로 `.preparing → .failed`가 된 연결을 서버가 `cancel()`한 뒤 붙잡고 있으면 서버 쪽 소켓이 `CLOSE_WAIT`으로 남았고(20개를 걸어 서술자 20개, 17초 뒤에도 같음. `lsof`로 확인), 토큰 없이 건 TLS 클라이언트는 `.preparing`에 머물렀다. 참조를 놓으면 2초 안에 모두 닫혔다. framer 때문이 아니다: framer를 넣지 않은 TLS 리스너에서 핸드셰이크 전에 취소한 연결도 같았다. 준비된 뒤에 취소한 연결은 붙잡고 있어도 바로 닫혔다(FIN). `markFailed` 대신 `markReady()` 뒤 `markFailed`, `framer.async` 안의 `markFailed`, 아무것도 알리지 않기로 바꿔도 달라지지 않았다. 관문 (가)의 시험 서버가 받은 연결을 모두 쥐고 있어 항목 9의 직접 TLS 탐침이 끝나지 않으면서 드러났다(2026-11-15). `SwiftailLoopbackTests`의 `rejectedConnectionEndsOnceReleased`가 지킨다.
 - `passThroughInput()`은 부른 때 framer에 이미 받아 둔 바이트를 위로 올리지 않는다(토큰과 함께 온 ClientHello·평문이 사라져 TLS 핸드셰이크가 `-9816`으로 끝났다). 그 바이트를 `parseInput`으로 재고 `deliverInputNoCopy`로 올린 뒤 지나가게 하면 TLS가 끝에서 끝으로 된다.
 - framer는 `NWProtocolFramer.Options`에 실은 값(`options["table"]`)을 `init(framer:)`에서 읽는다. framer의 `remote`·`local`은 `127.0.0.1:<출발 포트>`·`127.0.0.1:<리스너 포트>`다. framer가 자기 `options`(그리고 `parameters`의 스택)에 적은 값은 서버의 `connection.parameters`에서 보이지 않고(연결마다 복사된다), `connection.metadata(definition:)`도 nil이다. framer 메시지의 메타데이터는 평문 리스너에서만 서버의 받기 문맥에 오고 TLS 리스너에서는 오지 않는다. 그래서 서버가 연결에서 바로 신원을 읽는 길은 없고, 열쇠로 표를 찾는다.
 - 상대가 RST로 끊으면 framer의 `stop`·`cleanup`이 서버가 `cancel()`하기 전에, 서버의 `.failed` 처리기보다도 먼저 돈다. 그래서 `cleanup`에서 허가를 지우면 서버의 `.ready` 처리기가 늦을 때 같은 열쇠의 새 허가가 들어갈 틈이 생긴다. 지우지 않는 까닭이다.
@@ -526,6 +529,9 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 | 다리가 잇는 연결 | 256개(노드의 연결 상한과 같다) | `limitReached` |
 | 다리가 쥐는 바이트 | 연결마다 방향당 64KiB | 읽기를 멈춘다 |
 | 루프백 연결 맺기 | 5초 | `loopbackUnavailable` |
+| 다리가 기다리는 토큰 | 256개(잇는 연결의 상한과 같다) | 그 연결을 잇지 않는다 |
+| 리스너가 토큰을 기다림 | 연결마다 5초 | 그 연결은 준비되지 않고 실패한다(`ETIMEDOUT`) |
+| 서버가 가져가지 않은 허가 | 256개 | 가장 오래된 것을 버린다(그 연결의 `origin(of:)`은 nil) |
 | 디스크의 인증서·키 파일 | 64KiB씩 | 없는 것으로 본다 |
 | Go 상태 파일 | 1MiB | `malformed` |
 
@@ -564,7 +570,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 | `tls.NewListener(ln, GetCertificate)` + `http.Server` | `tls.go:41`, `node.go:812-818` | `LoopbackBridge.forward` + 첫 사용처의 `NWListener`(TLS)와 HTTP 서버 |
 | `CertPair`로 인증서 예열, 30초~10분 재시도, `tlsReady` | `tls.go:44-51`, `node.go:825-859` | `CertificateManager.run()`. `tlsReady`는 "`certificates`에서 하나를 받았고 TLS 리스너가 섰다" |
 | `Up`·`Status`로 MagicDNS와 cert 도메인 확인, 꺼져 있으면 오류 문구 | `tls.go:22-32` | `CertificateFailure.magicDNSDisabled`·`httpsNotEnabled`. 문구는 첫 사용처 |
-| `LocalClient.WhoIs(r.RemoteAddr)`, 5초 기한, 요청마다 | `node.go:526-546`, `host.go:230-244` | `LoopbackBridge.origin(forLoopbackSourcePort:)`(연결마다 한 번, 기다림 없음). 직접 부를 때는 `node.whoIs(_:)` |
+| `LocalClient.WhoIs(r.RemoteAddr)`, 5초 기한, 요청마다 | `node.go:526-546`, `host.go:230-244` | `LoopbackBridge.origin(of:)`(준비된 연결마다 한 번, 기다림 없음). 직접 부를 때는 `node.whoIs(_:)` |
 | IPN 버스의 `ErrMessage` → `Error` 상태 | `node.go:409-458` | `run()`이 던지는 `NodeError`와 `NodeEvent.stateChanged` |
 | `StartLoginInteractive`, 30초 간격 | `node.go:752-778` | M5 계약대로(`.needsLogin(URL)`, `startInteractiveLogin()`) |
 | 페어링한 기기별 경로(`peerPaths`, 키는 `StableID`) | `node.go:141-163`, `:658-670` | `path(toPeerNamed:)`. 이름은 `Origin.peer.name`에서 얻는다(F10) |
@@ -608,7 +614,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 
 총괄 확정(2026-11-15, 초안 단계. 첫 사용처의 답으로 바뀔 수 있다): **H1~H15는 모두 권고대로 간다.** 덧붙이는 것:
 
-- H4: (가)에서 서버가 TLS 핸드셰이크 전에 물으면 정당한 연결이 끊길 뿐(닫힌 쪽) 신원이 잘못 붙지는 않는다. 표에 적기 전에는 한 바이트도 보내지 않기 때문이다(동작 B6 ①). 그래서 POSIX 소켓을 새로 쓰지 않는다. F1·F4의 답이 서버의 묻는 시점을 못 지킨다고 하면 (나)로 바꾼다.
+- H4: (가) 그대로. POSIX 소켓을 새로 쓰지 않는다. 처음에는 "표에 적기 전에는 한 바이트도 보내지 않으므로 서버가 묻는 시점만 지키면 된다"가 근거였으나, 출발 포트 표가 경계로 성립하지 않아(M7-9b) 신원의 경계는 연결 안의 토큰이 되었다(H3 (다)). 서버가 묻는 시점에 기대지 않는다.
 - H8: plan 4절(c)에 Security와 `URLSession`을 적었다. 두 프레임워크는 `SwiftailCertificates`만 쓴다.
 - H10: 시험 도구의 MPL-2.0 의존은 `Tools/`의 Go 도구 예외 안이다. 공개할 때의 고지는 U2에서 함께 정한다.
 - H12: U1의 답이 올 때까지 M7-11(Go 상태 가져오기)을 열지 않는다.
@@ -648,7 +654,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 5. **샌드박스(F7)**: 두 빌드가 모두 돌아야 하고 **관문의 기준은 샌드박스 판**이다. 공개 저장소의 Mac 앱은 샌드박스를 쓰지 않고(커밋된 권한 파일이 빈 것이 맞다), 스토어판이 App Sandbox(네트워크 서버·클라이언트, 사용자가 고른 파일, 북마크)를 켠다. 샌드박스 판의 상태 디렉터리는 앱 컨테이너 안이다. **샌드박스 안의 실행 확인(`SecIdentity` 만들기, 루프백 듣기, 다리)은 첫 사용처 세션이 맡는다.** 샌드박스 판에서 키체인은 쓸 수 있으므로, 키체인 없이 신원을 만드는 길이 막히면 첫 사용처가 키체인에 넣는 길로 간다(Swiftail의 API는 그대로다: 사슬과 키를 낸다).
 6. **DER 부품(F9)**: 첫 사용처는 직접 연결 리스너의 자체 서명 인증서(X.509 v3)를 Swift로 새로 써야 하고, Swiftail이 DER 쓰기 부품을 공개로 내주면 쓰겠다고 했다(급하지 않다). **지금은 내지 않는다**(H14 그대로): 쓰는 곳이 CSR 하나인 내부 부품을 공개 API로 굳히지 않는다. M7-3이 끝나 부품의 모양이 선 뒤, 첫 사용처가 직접 연결을 옮길 때 다시 본다.
 7. **끊김의 전달(API 의견)**: 서버가 루프백 연결을 닫으면 다리가 tailnet 쪽을 정리한다(동작 B4·B5 그대로). 반대로 **tailnet 쪽이 오류로 끝나면 루프백 쪽은 정상 닫기로 보이면 안 된다**(반쯤 받은 본문을 끝까지 받은 것으로 읽지 않게). TLS 리스너에서는 `close_notify` 없이 끝난 연결이라 서버의 TLS가 잘림으로 안다. 평문 리스너(`listenTLS=false`)에서는 RST로 끊겨야 한다. 동작 B5의 "루프백 쪽 취소"를 구현할 때 `NWConnection`의 어느 호출이 RST를 내는지 확인하고 시험으로 고정한다(관문 (가)에 항목을 더한다: tailnet 쪽을 `abort()`하면 평문 루프백 서버의 읽기가 오류로 끝난다).
-8. **묻는 시점**: 서버는 `NWListener`가 넘긴 연결이 `.ready`가 된 뒤(핸드셰이크 끝) 첫 수신 전에 `origin(forLoopbackSourcePort:)`를 묻는다. H4 (가)가 선다.
+8. **묻는 시점**: 서버는 `NWListener`가 넘긴 연결이 `.ready`가 된 뒤(핸드셰이크 끝) 첫 수신 전에 묻는다. 검토 때의 호출은 `origin(forLoopbackSourcePort:)`였고 M7-9b에서 `origin(of:)`로 바뀌었다(묻는 시점은 같다. 동작 B7).
 9. **시험 상대(F13)**: 호스트를 옮긴 뒤 첫 사용처의 가짜 iPhone은 빠른 시험에는 Swiftail 노드(`connect`), 상호 운용에는 이 저장소 `Tools/interop`의 Go tsnet 피어를 쓴다. 그쪽 저장소에 Go 시험 도구를 새로 두지 않는다. 그래서 `Tools/interop`의 `tailnet` 도구와 README의 "Swift 노드 둘을 시험 제어 서버에 붙이기"는 첫 사용처가 쓰는 접점이다(바꿀 때 알린다).
 10. **대응표**: 사실과 다른 곳은 없다. `rd_update_page_set`은 공식 Tailscale 앱에 기대는 기능이라 샌드박스 판에서는 이미 빠져 있다.
 11. **관문 (가)의 최소 HTTP 서버에 대한 참고**(첫 사용처의 보안 검토에서 넘어온 것. 계약에는 영향이 없다): 상태를 바꾸는 요청의 출처 검사, 요청 본문 크기 상한과 기기별 제한, 페어링 승인은 사람이 화면에서만. 시험 타깃의 서버도 본문 크기 상한은 둔다.
@@ -752,8 +758,8 @@ sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, "
 | 6 | 갱신 | 시험용 시계를 2/3 뒤로 옮기면 새 키의 새 인증서가 `certificates`에 나오고 옛 연결은 그대로다 |
 | 7 | 실패 | cert 도메인이 비면 `httpsNotEnabled`, MagicDNS가 꺼져 있으면 `magicDNSDisabled`이고 요청이 나가지 않으며 `nextAttempt`가 nil이다. 되돌리면(netmap이 바뀌면) 발급한다. `set-dns` 거절이면 `controlRejected`. 틀린 TXT 값이면 `validationFailed`이고 다음 시도가 15분 뒤다 |
 | 8 | **시나리오의 뼈대**: Swift 노드가 443을 듣고, 다리가 시험용 `NWListener`(TLS, 3의 인증서, ALPN `http/1.1`)로 잇고, Go 피어가 `peerHTTP`로 ① 페어링 요청(서버가 `Origin.peer`의 `stableID`·이름을 응답에 싣는다) ② 설치 세션 만들기(그 `stableID`에 묶인 토큰) ③ 매니페스트 ④ IPA 100MB를 Range 둘로 나눠 받기를 차례로 한다 | Go 피어가 pebble 루트로 TLS를 검증한다. ①의 `stableID`가 그 Go 피어의 것이다. 다른 Go 피어가 ②의 토큰으로 ④를 요청하면 서버가 거절한다(신원이 다르다). 받은 바이트의 SHA-256이 같다. 처리량을 기록한다 |
-| 9 | 다리 밖의 접속 | 시험이 루프백 포트로 직접 TLS 연결을 걸면 `origin`이 nil이고 서버가 끊는다 |
-| 10 | 주인이 바뀜 | 전송 중에 그 Go 피어를 tailnet에서 빼면 루프백 연결이 닫히고 `origin`이 사라진다 |
+| 9 | 다리 밖의 접속 | 시험이 루프백 포트로 직접 TLS 연결을 걸면 핸드셰이크가 끝나지 않고(서버의 인증서도 받지 못한다) 서버 쪽 연결은 준비되지 않고 끝난다. 서버가 그 연결을 닫아 상대가 끝을 본다(M7-9b 전에는 "`origin`이 nil이고 서버가 끊는다") |
+| 10 | 주인이 바뀜 | 전송 중에 그 Go 피어를 tailnet에서 빼면 루프백 연결이 닫혀 서버의 받기가 끝난다. 그 연결의 `Origin`은 그 피어의 것이었다 |
 | 11 | (M7-11) 가져오기 | Go 피어를 멈추고 그 상태 디렉터리에서 가져와 띄운 Swift 노드가 같은 node 키이고, testcontrol이 같은 노드로 받아들여 같은 tailnet 주소·같은 `StableID`다. 이것은 이 관문이 처음 확인할 **기대값**이다(노트 4.7 끝, 7장 7, 9장 V233). testcontrol의 결과는 운영 서버의 `NLKey` 0 처리와 중복 세션의 동작을 보장하지 않는다(관문 (나) 8). Go가 받아 둔 것과 같은 형식의 `certs/`를 복사하면 발급 없이 쓴다 |
 | 12 | 전체 | `eyebuild swift <용도> -- test` 전체 통과, 경고 0 |
 
@@ -842,7 +848,7 @@ extension NetworkSocket {
 ### 가장 큰 위험
 
 1. **실제 발급은 실제 tailnet에서만 확인된다.** 운영 제어 서버의 `set-dns`가 무엇을 요구하고 언제 답하는지는 클라이언트 소스에 없고(노트 8장), testcontrol의 처리기는 시험용이다. 틀렸을 때 되풀이할 수 있는 횟수도 Let's Encrypt의 제한(같은 이름 7일에 5장, authorization 실패 한 시간에 5번)이 묶는다. 대응: pebble로 ACME 쪽을 먼저 굳히고, 실제 tailnet에서는 스테이징으로 `set-dns`를 확인한 뒤 운영 발급을 한 번만 한다.
-2. **루프백 다리가 신원의 경계를 넘는다.** tailnet의 인증된 연결이 `127.0.0.1`의 익명 연결이 되므로, 표의 불변 조건(동작 B6)이나 서버의 규칙(B7) 가운데 하나가 어긋나면 같은 Mac의 다른 프로세스가 페어링한 기기로 보이거나 정당한 연결이 끊긴다. 서버 쪽 절반은 첫 사용처의 코드다. 대응: 신원을 연결에 고정하고(B2), 관문 9·10과 단위 시험 14로 양쪽을 본다. 덧붙여 4GiB 전송이 TCP 스택 둘과 복사를 거치는 비용은 재 보기 전에는 모른다.
+2. **루프백 다리가 신원의 경계를 넘는다.** tailnet의 인증된 연결이 `127.0.0.1`의 익명 연결이 되므로, 표의 불변 조건(동작 B6)이나 서버의 규칙(B7) 가운데 하나가 어긋나면 같은 Mac의 다른 프로세스가 페어링한 기기로 보이거나 정당한 연결이 끊긴다. 서버 쪽 절반은 첫 사용처의 코드다. 대응: 신원을 연결에 고정하고(B2), 관문 9·10과 단위 시험 14로 양쪽을 본다. 검토에서 출발 포트 표가 실제로 뚫려 연결 안의 일회용 토큰으로 바꿨다(M7-9b). 덧붙여 4GiB 전송이 TCP 스택 둘과 복사를 거치는 비용은 재 보기 전에는 모른다.
 3. **Go 상태 이관은 사용자의 실제 노드를 건드리고 되돌리기 어렵다.** 같은 node 키를 두 구현이 쓰는 순간의 서버 동작, `NLKey` 0으로 다시 붙는 영향을 모른다. 대응: 사용자 결정(U1) 전에는 구현하지 않고, 하더라도 읽기 전용·한 번·신원만으로 좁히고, 시험용 노드로 관문 (나) 8을 먼저 본다.
 
 그 밖: App Sandbox 안에서의 동작은 이 저장소에서 돌려 보지 않았고 첫 사용처 세션이 샌드박스 판에서 확인한다(검토 결과 5, 9절). 시험 도구에 MPL-2.0 모듈이 들어온다(H10).
@@ -868,10 +874,10 @@ extension NetworkSocket {
 
 - **App Sandbox 안의 실행**: `SecIdentityCreate`·`SecKeyCreateWithData`, 루프백의 `NWListener`와 `NWConnection`, `URLSession`이 네트워크 서버·클라이언트 권한만으로 도는지. 작성 세션이 적은 Apple 실험(CSR 검증, `NWListener`의 TLS·ALPN 협상, 키체인에 쓰지 않음)은 기록이 없어 확인되지 않았고(노트 8장, 9장 V173·V179·V188·V189·V191), 검증 세션이 다시 돌린 것은 노트 4.6의 키·서명·PEM 형식 검사뿐이다(샌드박스 밖). 이것을 구현의 근거로 쓰지 않는다: **첫 사용처 세션이 샌드박스 판에서 확인한다**(첫 사용처 검토 결과 5). 첫 사용처의 커밋된 Mac 앱은 권한 파일이 비어 있다(F7). 동작 B9에 적은 권한 키의 이름도 Apple 문서와 대조하지 않았다.
 - **동작 S6의 자기 서명 판별**: 주체와 발급자를 견줄 Security API를 SDK 선언과 대조하지 않았다(M7-5가 먼저 확인한다).
-- **H4의 `NWConnection` 실험**(`currentPath.localEndpoint`의 포트, 리스너가 받은 연결의 `endpoint`): 노트의 검증 범위 밖이고 기록이 없다. M7-9가 먼저 확인한다.
+- **H4의 `NWConnection` 실험**: 다리가 읽은 자기 포트와 리스너 쪽 framer의 `remote` 포트가 같은 것은 다리의 시험이 확인한다(열쇠 `(출발 포트, 리스너 포트)`가 맞지 않으면 허가되지 않는다. M7-9b).
 - **운영 제어 서버의 `set-dns`**, 태그·공유 노드의 프로필, authorization 재사용(Go 흐름의 결과), `ts.net`의 등록 도메인 경계(공개 PSL로는 `tail0001.ts.net`. 운영 CA의 배포본·예외는 모른다), `CertDomains`가 있으면 MagicDNS가 늘 켜져 있는지, `NLKey` 0으로 다시 붙는 노드, 같은 node 키의 두 세션, 키 교체 뒤 옛 키의 서버 처리: 노트 8장.
 - **`NWConnection`의 반닫힘**: 내용 없이 마지막 메시지로 보내면 TCP FIN이 나가는지, TLS를 끝내는 `NWListener` 쪽에서 상대의 FIN이 어떻게 보이는지. M7-9가 먼저 손으로 확인한다. HTTP/1.1은 요청·응답의 경계를 길이로 알므로 반닫힘에 기대지 않는다.
-- **`NWProtocolFramer`를 TLS 아래에 두기**(H3의 (다)): 되는지 확인하지 못했다.
+- **`NWProtocolFramer`를 TLS 아래에 두기**(H3의 (다)): 샌드박스 밖에서 확인했다(동작 B "실험으로 확인한 것", 관문 (가) 8~10). App Sandbox 안에서는 돌려 보지 않았다(첫 사용처 세션의 몫).
 - **중간 인증서를 싣는 길**(`sec_identity_create_with_certificates`)과 `SecTrust`로 하는 검증: 공개 API라는 것만 확인했다.
 - **pebble·challtestsrv**: 모듈(pebble `go 1.25.0`, challtestsrv `go 1.24`, 둘 다 MPL-2.0)을 받아 패키지와 함수 서명을 읽었다(노트 8장). `Tools/interop`에 넣어 빌드하지 않았고, `testcontrol`과 한 프로세스에서 도는지, `tailscale.com`의 고정 버전과 의존이 충돌하지 않는지 모른다.
 - **다리의 처리량**과 큰 전송의 CPU.

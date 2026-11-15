@@ -352,15 +352,15 @@ struct HostTests {
                 // 항목 9: 다리 밖에서 루프백 포트로 직접 TLS.
                 let handled = server.records.filter { $0.request != nil }.count
                 let probe = await DirectTLSProbe.run(port: server.port, domain: Self.fqdn)
-                try await netstackWait("항목 9: 서버가 표에 없는 연결을 끊음", seconds: 10) {
-                    server.records.contains { $0.rejected }
+                // 토큰이 없는 연결은 TLS 핸드셰이크에 닿지도 못한다: 서버 쪽 연결은 `.ready`가 되지 못하고 끝난다.
+                try await netstackWait("항목 9: 서버가 토큰 없는 연결을 준비 전에 잃음", seconds: 10) {
+                    server.records.contains { $0.stateError != nil && $0.stableID == nil && $0.request == nil }
                 }
-                let rejected = try #require(server.records.first { $0.rejected })
-                #expect(rejected.stableID == nil)
-                #expect(bridge.origin(forLoopbackSourcePort: rejected.sourcePort) == nil, "항목 9: 다리 밖의 연결은 origin이 nil")
-                #expect(probe.receivedBytes == 0, "항목 9: 서버가 응답하지 않고 끊는다")
-                #expect(probe.peerCertificates == certificate.chain.count, "항목 9: 서버가 보낸 인증서는 chain 그대로(leaf가 겹치지 않음)")
-                #expect(probe.end == "eof" || probe.end.hasPrefix("error("))
+                #expect(!probe.handshake, "항목 9: 다리 밖의 연결은 TLS 핸드셰이크를 끝내지 못한다")
+                #expect(probe.peerCertificates == 0, "항목 9: 서버의 인증서도 받지 못한다")
+                #expect(probe.receivedBytes == 0, "항목 9: 서버가 응답하지 않는다")
+                #expect(!probe.end.contains("끝나지 않음"), "항목 9: 서버가 거절한 연결을 닫아 상대가 끝을 본다(\(probe.end))")
+                #expect(!server.records.contains { $0.rejected }, "항목 9: `.ready`가 된 연결 가운데 신원 없는 것은 없다")
                 #expect(server.records.filter { $0.request != nil }.count == handled, "항목 9: 요청을 읽지 않았다")
                 await gate.tool.checkpoint("M7 항목 9: 직접 TLS 핸드셰이크 \(probe.handshake), ALPN \(probe.negotiatedALPN ?? "없음"), 받은 인증서 \(probe.peerCertificates)장(chain \(certificate.chain.count)장), 받은 바이트 \(probe.receivedBytes), 끝 \(probe.end)")
             } catch {
@@ -401,20 +401,18 @@ struct HostTests {
                     let token = try #require(sessions.issued.last).token
                     let download = try await gate.startHTTP(name, path: "/ipa?token=\(token)", scheme: scheme, port: port, timeout: 30)
                     try await netstackWait("항목 10 \(mode): IPA 전송이 8MiB에서 멈춤") { hold.isReached }
-                    let sourcePort = try #require(server.records.first { $0.request == "GET /ipa" }).sourcePort
-                    let origin = try #require(bridge.origin(forLoopbackSourcePort: sourcePort), "항목 10 \(mode): 전송 중에는 origin이 있다")
-                    #expect(origin.remoteEndpoint.address == (try peer.address()))
+                    // 서버가 `.ready`에서 얻어 쥔 신원이 그 Go 피어의 것이다.
+                    let serving = try #require(server.records.first { $0.request == "GET /ipa" })
+                    #expect(serving.stableID == (await gate.node.whoIs(try peer.address()))?.stableID, "항목 10 \(mode): 전송 중인 연결의 신원")
+                    #expect(serving.stableID != nil)
 
                     let started = ContinuousClock.now
                     try await gate.removeFromNetmap(peer, marker: marker)
                     #expect(await gate.node.whoIs(try peer.address()) == nil)
-                    try await netstackWait("항목 10 \(mode): origin이 사라짐", seconds: 10) {
-                        bridge.origin(forLoopbackSourcePort: sourcePort) == nil
-                    }
-                    let goneSeconds = started.duration(to: .now).netstackSeconds
                     try await netstackWait("항목 10 \(mode): 서버의 받기가 끝남", seconds: 10) {
                         server.records.first { $0.request == "GET /ipa" }?.receiveEnd != nil
                     }
+                    let goneSeconds = started.duration(to: .now).netstackSeconds
                     hold.release()
                     try await netstackWait("항목 10 \(mode): 서버의 보내기가 끝남", seconds: 10) {
                         let record = server.records.first { $0.request == "GET /ipa" }
@@ -432,7 +430,7 @@ struct HostTests {
                     } catch {
                         goResult = "오류(\(redacted(String(describing: error)).prefix(120)))"
                     }
-                    await gate.tool.checkpoint("M7 항목 10 \(mode): PeersRemoved 뒤 \(goneSeconds)초에 origin 사라짐, 서버 받기 끝 \(record.receiveEnd ?? "-"), 보내기 오류 \(record.sendError ?? "-"), 보낸 본문 \(record.bodyBytesSent)바이트, Go \(goResult)")
+                    await gate.tool.checkpoint("M7 항목 10 \(mode): PeersRemoved 뒤 \(goneSeconds)초에 루프백 연결이 끊김, 서버 받기 끝 \(record.receiveEnd ?? "-"), 보내기 오류 \(record.sendError ?? "-"), 보낸 본문 \(record.bodyBytesSent)바이트, Go \(goResult)")
                 }
             } catch {
                 tlsHold.release()

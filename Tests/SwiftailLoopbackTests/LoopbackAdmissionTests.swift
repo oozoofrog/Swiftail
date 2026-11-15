@@ -304,6 +304,25 @@ struct LoopbackAdmissionTests {
         }
     }
 
+    /// 관문에서 본 것: 서버가 거절된 연결을 `cancel()`만 하고 붙잡고 있으면 소켓이 닫히지 않아, 토큰 없이 건 TLS 클라이언트가
+    /// 준비 중에 머문다(framer가 없는 TLS 리스너도 준비 전에 끝난 연결은 같다). 서버는 끝난 연결을 놓아야 한다.
+    @Test("거절된 연결은 서버가 닫고 놓으면 상대가 끝을 본다", arguments: [false, true])
+    func rejectedConnectionEndsOnceReleased(tls: Bool) async throws {
+        let bridge = try Self.idleBridge()
+        let server = try await PlainLoopbackServer.start(
+            admittingFor: bridge, tls: tls ? try SelfSignedIdentity.serverOptions(try SelfSignedIdentity.make()) : nil)
+        defer { server.close() }
+        let stranger = try RawLoopbackSocket(boundTo: 0, reuseAddress: false)
+        try stranger.connect(to: server.port)
+        try stranger.send(LoopbackAdmissionTable.makeToken() + [1])
+        do {
+            let accepted = try #require(await server.nextConnection())
+            await Self.expectRejected(PeerConnection.start(accepted), bridge)
+            server.discard(accepted)
+        }
+        #expect(stranger.seesEnd(within: 5))
+    }
+
     // MARK: 도우미
 
     /// 노드를 돌리지 않는 다리. 표와 framer만 시험한다.

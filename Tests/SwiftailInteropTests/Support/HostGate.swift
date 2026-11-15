@@ -313,6 +313,8 @@ struct DirectTLSProbe: Sendable {
                 }
             }
             connection.start(queue: queue)
+            // 서버가 거절한 연결을 닫지 않으면 이 연결은 준비 중에 머문다. 기한 없이 기다리면 관문이 멈춘다.
+            queue.asyncAfter(deadline: .now() + 10) { once.withLock { $0.take() }?.resume(returning: "10초 안에 끝나지 않음") }
         }
         if let ready {
             result.withLock { $0.end = "준비 전 끝: \(ready)" }

@@ -121,8 +121,9 @@ struct IPAContent: Sendable {
 
 /// 시험 전용 최소 HTTP/1.1 서버. `127.0.0.1`의 `NWListener`(포트는 시스템이 고른다)이고 연결마다 요청 하나만 받는다.
 ///
-/// 받은 연결이 `.ready`가 되면(TLS 핸드셰이크 끝) **첫 수신 전에** `bridge.origin(forLoopbackSourcePort:)`를 묻고, nil이면
-/// 끊는다(동작 B7, 첫 사용처 검토 결과 8). 평문 모드는 첫 바이트를 받은 뒤에 묻는다.
+/// 리스너의 프로토콜 스택 끝(TLS 아래)에 다리가 준 옵션을 넣는다. 다리가 연결의 맨 앞에 보낸 일회용 토큰을 그 framer가
+/// 확인하고, 토큰이 없는 연결은 `.ready`가 되지 못한다. 받은 연결이 `.ready`가 되면 **한 번** `bridge.origin(of:)`를 묻고,
+/// nil이면 끊는다(동작 B7). 평문 모드도 같다.
 ///
 /// 경로: `POST /pair`(상대의 `stableID`·`computedName`), `POST /sessions`(그 `stableID`에 묶인 토큰),
 /// `GET /manifest?token=…`, `GET /ipa?token=…`(`Range: bytes=a-b`). 토큰의 노드가 연결의 `Origin.peer.stableID`와 다르면 403.
@@ -132,7 +133,7 @@ final class MinimalHTTPServer: Sendable {
     /// 연결 하나가 겪은 것. 시험이 서버 쪽에서 본 끊김을 읽는다.
     struct ConnectionRecord: Sendable {
         var sourcePort: UInt16 = 0
-        /// 다리의 표에서 찾은 상대. nil이면 표에 없어 끊은 연결이다.
+        /// 다리가 알려 준 상대. nil이면 신원을 얻지 못한 연결이다.
         var stableID: String?
         var rejected = false
         /// `GET /ipa` 같은 요청 줄의 앞 두 낱말.
@@ -202,6 +203,8 @@ final class MinimalHTTPServer: Sendable {
             parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
         }
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+        // 반드시 끝에(TLS 아래, TCP 바로 위) 넣는다.
+        parameters.defaultProtocolStack.applicationProtocols.append(bridge.makeListenerProtocolOptions())
         let listener = try NWListener(using: parameters)
         let (accepted, sink) = AsyncStream.makeStream(of: NWConnection.self)
         listener.newConnectionHandler = { sink.yield($0) }
@@ -294,7 +297,12 @@ final class MinimalHTTPServer: Sendable {
             $0.connections.append(connection)
             $0.records.append(log)
         }
-        Task { await self.serve(connection, log: log) }
+        Task {
+            await self.serve(connection, log: log)
+            // 끝난 연결은 놓는다. 준비되지 않고 끝난 연결의 소켓은 `cancel()`만으로는 닫히지 않고 `NWConnection`이 풀릴 때
+            // 닫힌다(붙잡고 있으면 토큰 없이 건 상대가 끝을 보지 못하고, 서버의 서술자가 남는다).
+            self.state.withLock { $0.connections.removeAll { $0 === connection } }
+        }
     }
 
     private func serve(_ connection: NWConnection, log: ConnectionLog) async {
@@ -308,16 +316,8 @@ final class MinimalHTTPServer: Sendable {
             return
         }
         log.update { $0.sourcePort = sourcePort.rawValue }
-        var buffer: [UInt8] = []
-        if mode == .plain {
-            // 평문 리스너는 첫 바이트를 받은 뒤에 묻는다(동작 B7).
-            guard case .bytes(let first) = await Self.receive(connection), !first.isEmpty else {
-                connection.cancel()
-                return
-            }
-            buffer = first
-        }
-        guard let origin = bridge.origin(forLoopbackSourcePort: sourcePort.rawValue) else {
+        let buffer: [UInt8] = []
+        guard let origin = bridge.origin(of: connection) else {
             log.update { $0.rejected = true }
             connection.cancel()
             return
