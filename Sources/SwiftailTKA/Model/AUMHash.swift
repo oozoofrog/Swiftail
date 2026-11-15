@@ -1,4 +1,5 @@
 // AUM의 해시와 그 텍스트 표기. 노트 `docs/protocol-notes/tailnet-lock.md` 3.7·3.8, Go `tailscale.com/tka/aum.go:21-51`.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 import SwiftailCrypto
 
@@ -6,6 +7,7 @@ import SwiftailCrypto
 ///
 /// 비교는 바이트로 한다. 텍스트는 끝 글자의 남는 4비트를 보지 않아서 글자가 달라도 같은 해시일 수 있다(노트 3.8).
 package struct AUMHash: Sendable, Hashable {
+    /// 해시 32바이트. 생성자가 길이를 검사하므로 늘 32바이트다.
     package let bytes: [UInt8]
 
     /// 32바이트가 아니면 nil.

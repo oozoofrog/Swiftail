@@ -1,5 +1,6 @@
 // TKA 구조(AUM·Key·State·Signature·NKS)를 `CBORValue`에서 읽는 공통 규칙. Go는 이 구조들을 `fxamacker/cbor` v2.9.3의
 // 구조체 디코딩(`decode.go`의 `parseMapToStruct`·`parseToValue`·`fill*`)으로 읽는다. 계약 동작 D3~D7, 노트 3.1·6.2·8.1.
+// `fxamacker/cbor`: Copyright (c) 2019-present Faye Amacker. MIT.
 
 /// 구조 맵에서 알려진 필드의 값을 꺼낸 것.
 ///

@@ -1,4 +1,5 @@
 // `Key.Meta`와 `AUM.Meta`(Go `map[string]string`). 노트 3.1·3.2·3.4, 계약 동작 E3·D4·D5.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 /// `Meta`의 한 쌍. Swift `String`으로 바꾸지 않는다: `String`의 비교는 유니코드 정규 동등이라 Go의 바이트 비교와 다르고,
 /// 그 차이는 다시 인코딩한 해시를 바꾼다(동작 E3).
@@ -8,6 +9,7 @@ package struct MetaEntry: Sendable, Equatable {
     /// 검증된 UTF-8.
     package var value: [UInt8]
 
+    /// 쌍 하나. UTF-8인지는 검사하지 않는다: 받은 `Meta`는 `metaField()`가 읽으며 검사하고, 값을 지어 넣는 쪽이 UTF-8을 지킨다.
     package init(key: [UInt8], value: [UInt8]) {
         self.key = key
         self.value = value

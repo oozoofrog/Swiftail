@@ -1,4 +1,5 @@
 // node 키에 대한 서명(Go `tka.NodeKeySignature`, `tailscale.com/tka/sig.go:74-242`). 노트 3.6·3.7, 계약 동작 E2·E4·E5·D·M.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 /// node 키에 대한 서명(NKS). 검증은 `Authority`가 한다(동작 S). 여기는 읽기·정준 쓰기·`SigHash`까지다.
 ///

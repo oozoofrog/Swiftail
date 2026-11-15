@@ -6,12 +6,14 @@ import SwiftailBase
 
 /// 피어 하나의 판정 입력(netmap의 `Node`에서 쓰는 것만).
 package struct PeerCredential: Sendable {
+    /// `Node.Key`. 서명이 인가해야 하는 node 키다.
     package var nodeKey: NodePublicKey
     /// `Node.KeySignature`의 바이트. 비면 서명 없음이다.
     package var keySignature: [UInt8]
     /// `Node.UnsignedPeerAPIOnly`. 서명 검사를 받지 않지만, 다른 피어의 회전으로 낡은 키가 되면 Go처럼 빠진다.
     package var unsignedPeerAPIOnly: Bool
 
+    /// netmap의 `Node` 하나에서 판정에 쓰는 세 값. 서명은 여기서 읽지 않는다: `AuthorityState.admitted(_:)`가 판정할 때 읽는다.
     package init(nodeKey: NodePublicKey, keySignature: [UInt8], unsignedPeerAPIOnly: Bool) {
         self.nodeKey = nodeKey
         self.keySignature = keySignature

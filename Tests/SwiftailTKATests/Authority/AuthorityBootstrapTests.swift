@@ -2,7 +2,7 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 계약 7절 시험 8: 부트스트랩(동작 F5)과 다시 열기(동작 F6·결정 L14).
+/// 계약 7절 시험 8: 부트스트랩(동작 F5)과 다시 열기(동작 F6·결정 L14, 5절 TL-11a 항목 2).
 @Suite("서명 권한 상태 기계: 부트스트랩과 다시 열기")
 struct AuthorityBootstrapTests {
     typealias T = AuthorityTesting
@@ -86,6 +86,44 @@ struct AuthorityBootstrapTests {
         var stored = authority.aums
         stored[stored.count - 1].signatures[0].signature[1] ^= 1
         #expect(throws: TKAError.invalidSignature) { try Authority(opening: stored, bootstrap: authority.bootstrap) }
+    }
+
+    /// 빈 `Meta`(`07a0`)만 있는 UpdateKey는 받아들일 때 정적 검사를 통과하고, 정준 바이트로 저장했다 읽으면 떨어진다. 다시 열기는
+    /// 정적 검사를 하지 않으므로 같은 머리와 상태로 열린다(TL-11a 항목 2, Go `Open`도 연다).
+    @Test func emptyMetaUpdateKeyReopens() throws {
+        var authority = try grown()
+        let update = T.signed(
+            AUM(messageKind: AUM.Kind.updateKey, prevAUMHash: authority.head.bytes, keyID: b.publicKey, meta: []), by: [a]
+        )
+        try authority.inform([update, T.noOp(after: update.hash, by: [b])])
+        let stored = try authority.aums.map { aum throws(TKAError) in try AUM(decoding: aum.serialized()) }
+        #expect(throws: TKAError.invalidAUM) { try stored.first { $0.hash == update.hash }?.validate() }
+        let reopened = try Authority(opening: stored, bootstrap: authority.bootstrap)
+        #expect(reopened.head == authority.head && reopened.state == authority.state)
+        // 서명이 바뀐 저장은 여전히 거절한다(`storeWithAChangedSignature`와 같은 검사가 이 AUM에도 걸린다).
+        var tampered = stored
+        let index = try #require(tampered.firstIndex { $0.hash == update.hash })
+        tampered[index].signatures[0].signature[1] ^= 1
+        #expect(throws: TKAError.invalidSignature) { try Authority(opening: tampered, bootstrap: authority.bootstrap) }
+    }
+
+    /// 신뢰 키가 서명했지만 정적 검사에서 떨어지는 AUM(`Votes`가 4,096을 넘는 키의 AddKey)이 저장소에 있으면, Go `Open`과 같이
+    /// 열고 그 상태로 갈래를 고른다. 가중치는 Go `uint`와 같이 감긴다(2^64−1 두 표의 합 2^64−2가 1표를 이긴다). 트랩하지 않는다.
+    @Test func storeWithAStaticallyInvalidButSignedAUM() throws {
+        let heavy1 = T.Signer()
+        let heavy2 = T.Signer()
+        let root = T.checkpoint(T.checkpointState([a.trusted()]), by: [a])
+        let add1 = T.addKey(heavy1.trusted(votes: .max), after: root.hash, by: [a])
+        let add2 = T.addKey(heavy2.trusted(votes: .max), after: add1.hash, by: [a])
+        #expect(throws: TKAError.invalidAUM) { try add1.validate() }
+        let heavyChild = T.noOp(after: add2.hash, by: [heavy1, heavy2])
+        let lightChild = T.noOp(after: add2.hash, by: [a])
+        let reopened = try Authority(opening: [root, add1, add2, lightChild, heavyChild], bootstrap: root.hash)
+        #expect(reopened.head == heavyChild.hash)
+        #expect(reopened.state.weight(of: heavyChild) == UInt64.max &+ UInt64.max)
+        // 받아들이는 길로는 들어오지 않는다.
+        var informed = try Authority(bootstrappingWith: root)
+        #expect(T.informError(&informed, [add1]) == .invalidAUM)
     }
 
     @Test func storeWithoutItsRootOrWithDuplicates() throws {

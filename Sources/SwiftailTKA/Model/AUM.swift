@@ -1,4 +1,5 @@
 // 서명 권한 상태를 바꾸는 메시지(Go `tka.AUM`, `tailscale.com/tka/aum.go:132-288`). 노트 3.4·3.7, 계약 동작 E2~E6·D3~D9·A1.
+// Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 /// 서명 권한 상태를 바꾸는 메시지 하나(Authority Update Message).
 ///
@@ -9,15 +10,19 @@ package struct AUM: Sendable, Equatable {
     package var messageKind: UInt8
     /// nil = 부모 없음(null로 인코딩). 길이 0인 바이트열은 null과 다르게 인코딩되고 정적 검사에서 떨어진다(동작 E4·A1).
     package var prevAUMHash: [UInt8]?
+    /// AddKey가 더하는 키. 그 밖의 종류에서는 정적 검사가 nil만 통과시킨다.
     package var key: TrustedKey? = nil
     /// nil과 빈 바이트열은 둘 다 인코딩에서 빠지지만(omitempty) 정적 검사에서 다르다: AddKey·Checkpoint는 nil만 통과한다
     /// (Go `aum.go:189`, `:207`의 `a.KeyID != nil`).
     package var keyID: [UInt8]? = nil
+    /// Checkpoint가 싣는 상태 전체. 그 밖의 종류에서는 정적 검사가 nil만 통과시킨다.
     package var state: AuthorityState? = nil
     /// 0이어도 있으면 인코딩한다(Go `*uint`, omitempty).
     package var votes: UInt64? = nil
     /// nil과 빈 맵은 검증에서만 다르다(인코딩에서는 둘 다 빠진다).
     package var meta: [MetaEntry]? = nil
+    /// 신뢰 키의 서명들. 해시(`hash`)에는 들고 서명의 입력(`signatureHash`)에는 들지 않으므로, 같은 서명을 되풀이하거나
+    /// 순서를 바꾼 목록은 해시가 다른 "유효한" AUM이다(계약 5절 TL-11a 항목 1).
     package var signatures: [AUMSignature] = []
 
     /// AUM 하나의 바이트 한도(동작 M, Swiftail의 선택).

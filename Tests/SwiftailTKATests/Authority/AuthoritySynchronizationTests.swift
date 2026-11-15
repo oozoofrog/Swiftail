@@ -85,6 +85,30 @@ struct AuthoritySynchronizationTests {
         #expect(throws: TKAError.noIntersection) { try local.missingAUMs(for: SyncOffer(head: unknown, ancestors: [])) }
     }
 
+    /// 상대의 조상은 중복을 지운 뒤 앞의 1,001개만 본다(TL-11a 항목 3). 되풀이한 조상은 수에 들지 않고, 1,002번째의 교차는
+    /// 찾지 않는다. 로컬에 없는 조상도 수에 든다.
+    @Test func remoteAncestorsAreDeduplicatedAndCapped() throws {
+        var authority = try start()
+        let chain = T.noOpChain(after: authority.head, count: 2, by: a)
+        try authority.inform(chain)
+        let unknown = try #require(AUMHash(Array(repeating: 9, count: 32)))
+        let fillers = try (0..<Authority.maximumSyncAncestorCount).map { index in
+            try #require(AUMHash((0..<32).map { UInt8(truncatingIfNeeded: index >> ($0 % 4 * 8)) ^ UInt8($0) }))
+        }
+        #expect(Set(fillers).count == fillers.count && !fillers.contains(authority.bootstrap))
+        #expect(Authority.maximumSyncAncestorCount == 1_001)
+
+        let repeated = SyncOffer(head: unknown, ancestors: Array(repeating: unknown, count: 5_000) + [authority.bootstrap])
+        #expect(try authority.missingAUMs(for: repeated) == chain)
+        let atLimit = SyncOffer(head: unknown, ancestors: Array(fillers.dropLast()) + [authority.bootstrap])
+        #expect(try authority.missingAUMs(for: atLimit) == chain)
+        let pastLimit = SyncOffer(head: unknown, ancestors: fillers + [authority.bootstrap])
+        #expect(throws: TKAError.noIntersection) { try authority.missingAUMs(for: pastLimit) }
+        // 되풀이를 섞어도 서로 다른 것만 센다.
+        let mixed = SyncOffer(head: unknown, ancestors: fillers.dropLast().flatMap { [$0, $0] } + [authority.bootstrap])
+        #expect(try authority.missingAUMs(for: mixed) == chain)
+    }
+
     /// 반복 한도의 경계: 체크포인트를 포함한 경로가 한도 개수까지는 된다(Go `computeStateAt`·`fastForward`와 같은 셈).
     @Test func iterationLimitBoundaries() throws {
         var authority = try start()
