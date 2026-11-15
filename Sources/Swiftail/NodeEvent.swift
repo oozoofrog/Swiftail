@@ -1,3 +1,4 @@
+import SwiftailControl
 import SwiftailMagicsock
 
 /// `TailnetNode`가 알리는 변화. `TailnetNode.events`로 받는다.
@@ -14,4 +15,11 @@ public enum NodeEvent: Sendable, Equatable {
     ///
     /// - Parameter fqdn: netmap의 노드 이름에서 끝의 점을 뗀 것(`rd-mac-1a2b3c4d.tail0001.ts.net`).
     case peerPathChanged(fqdn: String, path: PeerPath?)
+    /// tailnet lock의 모습이 바뀌었다. 값은 그때의 `NodeStatus.tailnetLock`과 같다. 같은 값은 다시 내지 않는다. 처음 값은
+    /// `.disabled`이고 그것은 내지 않는다.
+    ///
+    /// 한 netmap에서 나오는 사건 가운데 맨 앞이다. 그래서 잠긴 노드의 `stateChanged(.running)`보다 먼저 오고, 앱은 "연결됨"을
+    /// 보이기 전에 서명 안내(`signingRequest`)를 안다. 서명 기기가 서명하면 다시 시작하지 않아도 다음 netmap에서
+    /// `signingRequest`가 nil인 값으로 다시 나온다. `docs/contracts/SwiftailTailnetLock.md` 결정 L4, 첫 사용처 검토 F2.
+    case tailnetLockChanged(TailnetLockStatus)
 }

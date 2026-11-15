@@ -474,7 +474,6 @@ extension ControlError {
         case .authKeyRejected: "authKeyRejected"
         case .registrationRejected: "registrationRejected"
         case .nodeKeyExpired: "nodeKeyExpired"
-        case .tailnetLockEnabled: "tailnetLockEnabled"
         }
     }
 }
