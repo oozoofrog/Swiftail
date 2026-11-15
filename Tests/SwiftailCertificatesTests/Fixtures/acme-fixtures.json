@@ -1,0 +1,221 @@
+{
+  "reference": {
+    "go": "go1.27.3",
+    "tailscale": "v1.104.6"
+  },
+  "caseCount": 22,
+  "keys": [
+    {
+      "id": "account",
+      "testOnly": true,
+      "seed": "swiftail-fixtures/acme/0",
+      "scalarHex": "8b60c1a4505e2937be0638d9ea655caf4b66ec4fb3ffbaac4e75cdb9a1914bec",
+      "publicKey": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "kUf_yftNmu-HHZV2fX6eAqVk5lB2vSSqbN5keckCBek",
+        "y": "99iZkvSxvc_Ha2kBapSxT7pame5Bki06-9hQc8guFXE"
+      },
+      "jwkJSON": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"kUf_yftNmu-HHZV2fX6eAqVk5lB2vSSqbN5keckCBek\",\"y\":\"99iZkvSxvc_Ha2kBapSxT7pame5Bki06-9hQc8guFXE\"}",
+      "thumbprint": "CdOTv-Nn_zReHQl05HX7IvEB-wgMsia-BifMVvj1IHg",
+      "sec1PEM": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIItgwaRQXik3vgY42eplXK9LZuxPs/+6rE51zbmhkUvsoAoGCCqGSM49\nAwEHoUQDQgAEkUf/yftNmu+HHZV2fX6eAqVk5lB2vSSqbN5keckCBen32JmS9LG9\nz8draQFqlLFPulqZ7kGSLTr72FBzyC4VcQ==\n-----END EC PRIVATE KEY-----\n",
+      "pkcs8PEM": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgi2DBpFBeKTe+BjjZ\n6mVcr0tm7E+z/7qsTnXNuaGRS+yhRANCAASRR//J+02a74cdlXZ9fp4CpWTmUHa9\nJKps3mR5yQIF6ffYmZL0sb3Px2tpAWqUsU+6WpnuQZItOvvYUHPILhVx\n-----END PRIVATE KEY-----\n"
+    },
+    {
+      "id": "leading-zero-x",
+      "testOnly": true,
+      "seed": "swiftail-fixtures/acme/383",
+      "scalarHex": "4cb44a2a5ae5e8598e048220b42e054b18f44e6b2e0ecb02b3e9fe5c041975f9",
+      "publicKey": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "AB6wyN-M_k6rY5N8vd-m_JYBb0uPDJJYdpGI_pWjufg",
+        "y": "WfqwVZuM_J_7vy3XITCk8mc43jNahKGOBjF1pMvhfIc"
+      },
+      "jwkJSON": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"AB6wyN-M_k6rY5N8vd-m_JYBb0uPDJJYdpGI_pWjufg\",\"y\":\"WfqwVZuM_J_7vy3XITCk8mc43jNahKGOBjF1pMvhfIc\"}",
+      "thumbprint": "m182aeMVJ63suprrQtOobp_iKZCoL6m57jeeBwthKQo",
+      "sec1PEM": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIEy0Sipa5ehZjgSCILQuBUsY9E5rLg7LArPp/lwEGXX5oAoGCCqGSM49\nAwEHoUQDQgAEAB6wyN+M/k6rY5N8vd+m/JYBb0uPDJJYdpGI/pWjufhZ+rBVm4z8\nn/u/LdchMKTyZzjeM1qEoY4GMXWky+F8hw==\n-----END EC PRIVATE KEY-----\n",
+      "pkcs8PEM": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgTLRKKlrl6FmOBIIg\ntC4FSxj0TmsuDssCs+n+XAQZdfmhRANCAAQAHrDI34z+Tqtjk3y936b8lgFvS48M\nklh2kYj+laO5+Fn6sFWbjPyf+78t1yEwpPJnON4zWoShjgYxdaTL4XyH\n-----END PRIVATE KEY-----\n"
+    },
+    {
+      "id": "leading-zero-y",
+      "testOnly": true,
+      "seed": "swiftail-fixtures/acme/1176",
+      "scalarHex": "b2e2eed2fa068afb8003a152cd52fc13e8fbfb70d8b8b5b7756cc53553e62e09",
+      "publicKey": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "xkFrmgB8A2Pt2i_TTa8ITlorgLMlI5bi5wwacziAESE",
+        "y": "AMpAj-zZyfS2E6BOMoJH6wXxOtOS8UILwaxBDspEw2s"
+      },
+      "jwkJSON": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"xkFrmgB8A2Pt2i_TTa8ITlorgLMlI5bi5wwacziAESE\",\"y\":\"AMpAj-zZyfS2E6BOMoJH6wXxOtOS8UILwaxBDspEw2s\"}",
+      "thumbprint": "ynaXuS6rAiGCG-UhhB8R2WVr6KYcwWfm1vLqRqumwiA",
+      "sec1PEM": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEILLi7tL6Bor7gAOhUs1S/BPo+/tw2Li1t3VsxTVT5i4JoAoGCCqGSM49\nAwEHoUQDQgAExkFrmgB8A2Pt2i/TTa8ITlorgLMlI5bi5wwacziAESEAykCP7NnJ\n9LYToE4ygkfrBfE605LxQgvBrEEOykTDaw==\n-----END EC PRIVATE KEY-----\n",
+      "pkcs8PEM": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsuLu0voGivuAA6FS\nzVL8E+j7+3DYuLW3dWzFNVPmLgmhRANCAATGQWuaAHwDY+3aL9NNrwhOWiuAsyUj\nluLnDBpzOIARIQDKQI/s2cn0thOgTjKCR+sF8TrTkvFCC8GsQQ7KRMNr\n-----END PRIVATE KEY-----\n"
+    }
+  ],
+  "challenges": [
+    {
+      "keyID": "account",
+      "token": "AAECAwQFBgcICQoLDA0ODw",
+      "keyAuthorization": "AAECAwQFBgcICQoLDA0ODw.CdOTv-Nn_zReHQl05HX7IvEB-wgMsia-BifMVvj1IHg",
+      "dns01TXT": "x_JsYeRdgMooJ3-sWi9kdmpMYUm4qo0lqc0gkPRhO6o"
+    },
+    {
+      "keyID": "account",
+      "token": "_____________________w",
+      "keyAuthorization": "_____________________w.CdOTv-Nn_zReHQl05HX7IvEB-wgMsia-BifMVvj1IHg",
+      "dns01TXT": "R5xCcSval57gTaqb2FMlyAYNdDS3w4j65DrAVBSFJZI"
+    },
+    {
+      "keyID": "account",
+      "token": "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s",
+      "keyAuthorization": "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s.CdOTv-Nn_zReHQl05HX7IvEB-wgMsia-BifMVvj1IHg",
+      "dns01TXT": "QIZasNJzuj4-rUpRlQt2Nztbs1VXodUvP_NJq2XPcJs"
+    },
+    {
+      "keyID": "leading-zero-x",
+      "token": "AAECAwQFBgcICQoLDA0ODw",
+      "keyAuthorization": "AAECAwQFBgcICQoLDA0ODw.m182aeMVJ63suprrQtOobp_iKZCoL6m57jeeBwthKQo",
+      "dns01TXT": "1TeZLXqhBDyln4JlSQZGJd-YXlA4YkUEd_Pl-ruu2PI"
+    },
+    {
+      "keyID": "leading-zero-x",
+      "token": "_____________________w",
+      "keyAuthorization": "_____________________w.m182aeMVJ63suprrQtOobp_iKZCoL6m57jeeBwthKQo",
+      "dns01TXT": "FZAKXpNQiQd270wmF04QywKBgZIRWSVyRmoZmV19uF0"
+    },
+    {
+      "keyID": "leading-zero-x",
+      "token": "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s",
+      "keyAuthorization": "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s.m182aeMVJ63suprrQtOobp_iKZCoL6m57jeeBwthKQo",
+      "dns01TXT": "J4KdqZa9An-ljq-iIGu1Q6rnS3TqeeSetygIHr3JJzg"
+    },
+    {
+      "keyID": "leading-zero-y",
+      "token": "AAECAwQFBgcICQoLDA0ODw",
+      "keyAuthorization": "AAECAwQFBgcICQoLDA0ODw.ynaXuS6rAiGCG-UhhB8R2WVr6KYcwWfm1vLqRqumwiA",
+      "dns01TXT": "wLf-XV0zg7Hk5qetS6CNMP8Nby9tKMAbi9aLJ656tcg"
+    },
+    {
+      "keyID": "leading-zero-y",
+      "token": "_____________________w",
+      "keyAuthorization": "_____________________w.ynaXuS6rAiGCG-UhhB8R2WVr6KYcwWfm1vLqRqumwiA",
+      "dns01TXT": "j9aBtsV-KDV6SrMUwqzwmlXWg1KSb0HL22SwkinhZk8"
+    },
+    {
+      "keyID": "leading-zero-y",
+      "token": "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s",
+      "keyAuthorization": "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s.ynaXuS6rAiGCG-UhhB8R2WVr6KYcwWfm1vLqRqumwiA",
+      "dns01TXT": "j3QWWfXlT2q-zHdcobe_Ds4kVdedXDE8mUJkKwlkvz8"
+    }
+  ],
+  "jws": [
+    {
+      "keyID": "account",
+      "mode": "jwk",
+      "protectedJSON": "{\"alg\":\"ES256\",\"jwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"kUf_yftNmu-HHZV2fX6eAqVk5lB2vSSqbN5keckCBek\",\"y\":\"99iZkvSxvc_Ha2kBapSxT7pame5Bki06-9hQc8guFXE\"},\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"url\":\"https://acme.invalid/new-account\"}",
+      "payloadJSON": "{}",
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImtVZl95ZnRObXUtSEhaVjJmWDZlQXFWazVsQjJ2U1NxYk41a2Vja0NCZWsiLCJ5IjoiOTlpWmt2U3h2Y19IYTJrQmFwU3hUN3BhbWU1QmtpMDYtOWhRYzhndUZYRSJ9LCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ1cmwiOiJodHRwczovL2FjbWUuaW52YWxpZC9uZXctYWNjb3VudCJ9.e30",
+      "verifiedExample": {
+        "protected": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImtVZl95ZnRObXUtSEhaVjJmWDZlQXFWazVsQjJ2U1NxYk41a2Vja0NCZWsiLCJ5IjoiOTlpWmt2U3h2Y19IYTJrQmFwU3hUN3BhbWU1QmtpMDYtOWhRYzhndUZYRSJ9LCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ1cmwiOiJodHRwczovL2FjbWUuaW52YWxpZC9uZXctYWNjb3VudCJ9",
+        "payload": "e30",
+        "signature": "cstcJ0WuFVjiaLLbCwk9adjxndx3JQdxdhc0ivhfK3jty73h7QX1oS9T5B45jVj1a1ULlS6aGS8AF3ArpKDamQ"
+      }
+    },
+    {
+      "keyID": "account",
+      "mode": "kid",
+      "protectedJSON": "{\"alg\":\"ES256\",\"kid\":\"https://acme.invalid/account/1\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"url\":\"https://acme.invalid/authz/1\"}",
+      "payloadJSON": "",
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2FjY291bnQvMSIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsInVybCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2F1dGh6LzEifQ.",
+      "verifiedExample": {
+        "protected": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2FjY291bnQvMSIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsInVybCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2F1dGh6LzEifQ",
+        "payload": "",
+        "signature": "43sHEBm32N2adb0MWfASRMYM3mNZSe05ahLyWowlEfRtmtBXJ5WUWLsF2dJtwmzN-Vx-6uBJKv24CHvRLSIr5A"
+      }
+    },
+    {
+      "keyID": "leading-zero-x",
+      "mode": "jwk",
+      "protectedJSON": "{\"alg\":\"ES256\",\"jwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"AB6wyN-M_k6rY5N8vd-m_JYBb0uPDJJYdpGI_pWjufg\",\"y\":\"WfqwVZuM_J_7vy3XITCk8mc43jNahKGOBjF1pMvhfIc\"},\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"url\":\"https://acme.invalid/new-account\"}",
+      "payloadJSON": "{}",
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6IkFCNnd5Ti1NX2s2clk1Tjh2ZC1tX0pZQmIwdVBESkpZZHBHSV9wV2p1ZmciLCJ5IjoiV2Zxd1ZadU1fSl83dnkzWElUQ2s4bWM0M2pOYWhLR09CakYxcE12aGZJYyJ9LCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ1cmwiOiJodHRwczovL2FjbWUuaW52YWxpZC9uZXctYWNjb3VudCJ9.e30",
+      "verifiedExample": {
+        "protected": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6IkFCNnd5Ti1NX2s2clk1Tjh2ZC1tX0pZQmIwdVBESkpZZHBHSV9wV2p1ZmciLCJ5IjoiV2Zxd1ZadU1fSl83dnkzWElUQ2s4bWM0M2pOYWhLR09CakYxcE12aGZJYyJ9LCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ1cmwiOiJodHRwczovL2FjbWUuaW52YWxpZC9uZXctYWNjb3VudCJ9",
+        "payload": "e30",
+        "signature": "7gcC9m5u8J-85OHUaiKNmtvDuMH-Il18q_3h12Ic4qvXLXWoG_t_2HneLJxt1FYdSZ0Rf7yVFqKf1ilVXqftXg"
+      }
+    },
+    {
+      "keyID": "leading-zero-x",
+      "mode": "kid",
+      "protectedJSON": "{\"alg\":\"ES256\",\"kid\":\"https://acme.invalid/account/1\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"url\":\"https://acme.invalid/authz/1\"}",
+      "payloadJSON": "",
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2FjY291bnQvMSIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsInVybCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2F1dGh6LzEifQ.",
+      "verifiedExample": {
+        "protected": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2FjY291bnQvMSIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsInVybCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2F1dGh6LzEifQ",
+        "payload": "",
+        "signature": "fpqKtHU0AW_gYwMWofR4QTi9L-mNXChmo_GRwqIrrAVm4Iw2Pqi7bw_jeqvFGH3OL54mE47DsCkYbYpMW7wcCg"
+      }
+    },
+    {
+      "keyID": "leading-zero-y",
+      "mode": "jwk",
+      "protectedJSON": "{\"alg\":\"ES256\",\"jwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"xkFrmgB8A2Pt2i_TTa8ITlorgLMlI5bi5wwacziAESE\",\"y\":\"AMpAj-zZyfS2E6BOMoJH6wXxOtOS8UILwaxBDspEw2s\"},\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"url\":\"https://acme.invalid/new-account\"}",
+      "payloadJSON": "{}",
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6InhrRnJtZ0I4QTJQdDJpX1RUYThJVGxvcmdMTWxJNWJpNXd3YWN6aUFFU0UiLCJ5IjoiQU1wQWotelp5ZlMyRTZCT01vSkg2d1h4T3RPUzhVSUx3YXhCRHNwRXcycyJ9LCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ1cmwiOiJodHRwczovL2FjbWUuaW52YWxpZC9uZXctYWNjb3VudCJ9.e30",
+      "verifiedExample": {
+        "protected": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6InhrRnJtZ0I4QTJQdDJpX1RUYThJVGxvcmdMTWxJNWJpNXd3YWN6aUFFU0UiLCJ5IjoiQU1wQWotelp5ZlMyRTZCT01vSkg2d1h4T3RPUzhVSUx3YXhCRHNwRXcycyJ9LCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ1cmwiOiJodHRwczovL2FjbWUuaW52YWxpZC9uZXctYWNjb3VudCJ9",
+        "payload": "e30",
+        "signature": "JgFRw9aa6MkVA1yNwYxWU0DmfyG7cSMPwTzGzsw55oStI30FW60BglaJhxqXka3uYDN7bnOjgN9BC_3mE1vXyw"
+      }
+    },
+    {
+      "keyID": "leading-zero-y",
+      "mode": "kid",
+      "protectedJSON": "{\"alg\":\"ES256\",\"kid\":\"https://acme.invalid/account/1\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"url\":\"https://acme.invalid/authz/1\"}",
+      "payloadJSON": "",
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2FjY291bnQvMSIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsInVybCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2F1dGh6LzEifQ.",
+      "verifiedExample": {
+        "protected": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2FjY291bnQvMSIsIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyIsInVybCI6Imh0dHBzOi8vYWNtZS5pbnZhbGlkL2F1dGh6LzEifQ",
+        "payload": "",
+        "signature": "DbxL4zCs4Ox-RXx-_G2CYtN0L09myx_YCWr_VKRPzqxnjEIcqgV99Cz4GYpW3iStQ_I44SNiJvVLYqQvw9pXQA"
+      }
+    }
+  ],
+  "csrs": [
+    {
+      "name": "short",
+      "keyID": "account",
+      "domain": "a.ts.net",
+      "derHex": "3081f430819b02010030133111300f06035504031308612e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a026302406092a864886f70d01090e3117301530130603551d11040c300a8208612e74732e6e6574300a06082a8648ce3d0403020348003045022100ba1f7994e994f6867ca897e745ad352667c81da608c189b7dd7d5d27f1913c5d02205a9288a1814fc74df233e11f49c44b6a890b00d73d83f4bd65477c18685ac634",
+      "certificationRequestInfoHex": "30819b02010030133111300f06035504031308612e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a026302406092a864886f70d01090e3117301530130603551d11040c300a8208612e74732e6e6574",
+      "cnStringTag": 19
+    },
+    {
+      "name": "ordinary",
+      "keyID": "account",
+      "domain": "rd-mac-1a2b3c4d.tail0001.ts.net",
+      "derHex": "308201223081c9020100302a312830260603550403131f72642d6d61632d31613262336334642e7461696c303030312e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a03d303b06092a864886f70d01090e312e302c302a0603551d1104233021821f72642d6d61632d31613262336334642e7461696c303030312e74732e6e6574300a06082a8648ce3d0403020348003045022023d20baca3deaf7d8867de44bd55c5759ad44ef23392be0922328f1f12106a71022100d98cfd87677c787f96b614bd7bcf0632658d5ba16ff4c9590500243b173ce211",
+      "certificationRequestInfoHex": "3081c9020100302a312830260603550403131f72642d6d61632d31613262336334642e7461696c303030312e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a03d303b06092a864886f70d01090e312e302c302a0603551d1104233021821f72642d6d61632d31613262336334642e7461696c303030312e74732e6e6574",
+      "cnStringTag": 19
+    },
+    {
+      "name": "label-63",
+      "keyID": "account",
+      "domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tail0001.ts.net",
+      "derHex": "3082018430820129020100305a315830560603550403134f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e7461696c303030312e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a06d306b06092a864886f70d01090e315e305c305a0603551d1104533051824f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e7461696c303030312e74732e6e6574300a06082a8648ce3d0403020349003046022100f491ffada34e9184ba5cdccfcf4830642b1ca54883052401a9adc5deca684aba022100a310ecdb8b6ba5e32dc303f85ef3ac8101926ddff79e8b63e3adf4f55094e44b",
+      "certificationRequestInfoHex": "30820129020100305a315830560603550403134f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e7461696c303030312e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a06d306b06092a864886f70d01090e315e305c305a0603551d1104533051824f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e7461696c303030312e74732e6e6574",
+      "cnStringTag": 19
+    },
+    {
+      "name": "name-253",
+      "keyID": "account",
+      "domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ddddddddddddddddddddddddddddddddddddddddddddd.tail0001.ts.net",
+      "derHex": "308202f53082029b0201003082010d318201093082010506035504031381fd6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262622e6363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363632e6464646464646464646464646464646464646464646464646464646464646464646464646464646464646464642e7461696c303030312e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a08201283082012406092a864886f70d01090e31820115308201113082010d0603551d1104820104308201008281fd6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262622e6363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363632e6464646464646464646464646464646464646464646464646464646464646464646464646464646464646464642e7461696c303030312e74732e6e6574300a06082a8648ce3d040302034800304502205833ab2793c214470a1ca3ce2a3dcbe8f6333931d99d15ad9d9c99cc0ce768cf022100ec72090111a019b89c799605b6a7902c14930ab3a6388a149e1b79c6f970a72c",
+      "certificationRequestInfoHex": "3082029b0201003082010d318201093082010506035504031381fd6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262622e6363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363632e6464646464646464646464646464646464646464646464646464646464646464646464646464646464646464642e7461696c303030312e74732e6e65743059301306072a8648ce3d020106082a8648ce3d030107034200049147ffc9fb4d9aef871d95767d7e9e02a564e65076bd24aa6cde6479c90205e9f7d89992f4b1bdcfc76b69016a94b14fba5a99ee41922d3afbd85073c82e1571a08201283082012406092a864886f70d01090e31820115308201113082010d0603551d1104820104308201008281fd6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e6262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262622e6363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363632e6464646464646464646464646464646464646464646464646464646464646464646464646464646464646464642e7461696c303030312e74732e6e6574",
+      "cnStringTag": 19
+    }
+  ]
+}
