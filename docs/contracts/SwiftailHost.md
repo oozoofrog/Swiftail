@@ -342,6 +342,8 @@ else { nwConnection.cancel(); return }      // 다리가 이은 연결이 아니
 4. `name`은 `_acme-challenge.` + 자기 cert 도메인만 받는다. 그 밖의 이름을 올리는 공개 API는 없다(`package` 접점이고, 부르는 곳은 `CertificateManager`뿐이다).
 5. 노트 8장: 운영 서버가 레코드를 권한 DNS에 올린 뒤에 답하는지 모른다. Go처럼 답을 받으면 곧바로 다음 단계로 간다(동작 C6).
 
+구현에서 정해진 것(M7-2): 오류는 `ControlError`로 낸다. 200이 아니면 `http(status:)`(본문은 읽지 않는다), 60초 기한(연결을 기다린 시간과 응답까지 합한 것)·연결 끊김·4KiB 초과·객체 아닌 본문·등록 전은 `connection`, 빈 이름·값과 D4에 어긋나는 이름은 `invalidConfiguration`이다. "연결이 섰다"는 등록을 마친 연결이다. 노드의 `setDNS`는 `.running`이 아니면 `connection`이고, 이름이 `_acme-challenge.` + 자기 FQDN(끝 점 없음)이며 그 FQDN이 cert 도메인에 있을 때만 보낸다. `ControlClient.setDNS`는 `package`다(D4의 "공개 API 없음").
+
 ### C. 인증서 발급
 
 구조: ACME의 메시지 만들기·해석과 주문 절차는 소켓도 시계도 갖지 않는 값 타입이다(plan 5절 코드 기준). 계정 키와 인증서 키는 인자로 받는다. 입력은 HTTP 응답과 시각, 출력은 "이 요청을 보내라", "이 레코드를 올려라", "이만큼 기다려라", "끝났다(사슬)", "실패했다(까닭)"다. `CertificateManager`가 `URLSession`과 노드를 붙여 그것을 돌린다. 한 가지 예외: ECDSA 서명은 CryptoKit이 안에서 난수를 뽑으므로 서명 바이트는 실행마다 다르다. 시험은 서명을 바이트로 견주지 않고 검증한다.

@@ -90,6 +90,8 @@ public actor ControlClient {
         var request = Duration.seconds(120)
         /// Followup 긴 폴링.
         var followup = Duration.seconds(600)
+        /// `setDNS`: 연결을 기다리는 시간과 응답까지 합한 기한(계약 `docs/contracts/SwiftailHost.md` 동작 D2).
+        var setDNS = Duration.seconds(60)
     }
 
     let configuration: Configuration
@@ -141,6 +143,11 @@ public actor ControlClient {
     var lastTKAInfo: TKAInfo?
     /// 지금 연결의 신호 통로. 연결이 없으면 nil.
     var signals: AsyncStream<SessionSignal>.Continuation?
+    /// 등록을 마친 지금 연결. 맵 스트림 밖의 요청(`setDNS`)이 이 연결 위의 새 스트림으로 나간다. 연결이 없으면 nil.
+    var activeConnection: ControlConnection?
+    /// `activeConnection`이 서기를 기다리는 `setDNS`의 깨움 통로. 연결이 서면 모두 깨운다.
+    var connectionWaiters: [Int: AsyncStream<Void>.Continuation] = [:]
+    var nextConnectionWaiter = 0
     /// 통로에 든 채 아직 처리하지 않은 신호. 처리(상태 올리기의 물러나기, 핑 답)가 막힌 동안 통로가 끝없이 자라지
     /// 않게 한다: 상태 바뀜은 하나면 충분하고(올릴 때 마지막 값을 읽는다), 핑은 `queuedPingLimit`개까지만 넣는다.
     var isStatusChangeQueued = false
@@ -331,11 +338,14 @@ public actor ControlClient {
         defer {
             continuation.finish()
             signals = nil
+            activeConnection = nil
         }
 
         if needsRegistration {
             try await register(over: connection)
         }
+        activeConnection = connection
+        for waiter in connectionWaiters.values { waiter.yield() }
         try await uploadStatus(over: connection)
 
         lastMapActivity = .now

@@ -84,6 +84,7 @@ extension TailnetNode {
         updateNetstack(for: netmap)
         publishSettings(for: netmap)
         announce(stateMachine.receivedNetmap(machineAuthorized: netmap.selfNode.machineAuthorized))
+        publishCertificateFacts()
     }
 
     /// 터널 설정을 산출해 마지막으로 낸 것과 다르면 낸다(동작 E). 자기 주소가 없으면 내지 않는다.

@@ -83,6 +83,9 @@ public actor TailnetNode {
     private let eventStream: AsyncStream<NodeEvent>
     private let inboundStream: AsyncStream<[UInt8]>
     private let settingsStream: AsyncStream<TunnelNetworkSettings>
+    /// 인증서 관리자에게 낼 사실(`certificateFacts`). 마지막 것만 의미가 있다.
+    let certificateFactsStream: AsyncStream<CertificateFacts>
+    let certificateFactsContinuation: AsyncStream<CertificateFacts>.Continuation
     /// `startInteractiveLogin()`이 `run()` 밖에서도 불릴 수 있으므로 요청을 흐름에 담아 두고 자식이 제어로 넘긴다.
     private let loginRequests: AsyncStream<Void>
     private let loginContinuation: AsyncStream<Void>.Continuation
@@ -158,6 +161,10 @@ public actor TailnetNode {
 
     var stateMachine = NodeStateMachine()
     var settingsPublisher = NetworkSettingsPublisher()
+    /// 마지막으로 `certificateFacts`에 낸 사실.
+    var publishedCertificateFacts = CertificateFacts(state: .starting, netmap: nil)
+    /// `run()` 동안의 제어 클라이언트. `setDNS`가 쓴다.
+    var control: ControlClient?
 
     // MARK: 프로세스 안의 TCP (`.inProcess`)
 
@@ -194,6 +201,7 @@ public actor TailnetNode {
         (eventStream, eventContinuation) = AsyncStream.makeStream(of: NodeEvent.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
         (inboundStream, inboundContinuation) = AsyncStream.makeStream(of: [UInt8].self, bufferingPolicy: .bufferingNewest(Self.inboundPacketLimit))
         (settingsStream, settingsContinuation) = AsyncStream.makeStream(of: TunnelNetworkSettings.self, bufferingPolicy: .bufferingNewest(1))
+        (certificateFactsStream, certificateFactsContinuation) = AsyncStream.makeStream(of: CertificateFacts.self, bufferingPolicy: .bufferingNewest(1))
         (loginRequests, loginContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         (interfaceRequests, interfaceContinuation) = AsyncStream.makeStream(of: NWInterface.self, bufferingPolicy: .bufferingNewest(1))
         (statusUploads, statusUploadContinuation) = AsyncStream.makeStream(of: ControlClient.LocalStatus.self, bufferingPolicy: .bufferingNewest(1))
@@ -202,6 +210,8 @@ public actor TailnetNode {
         (rebindRequests, rebindContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         (handleReleaseStream, handleReleases) = AsyncStream.makeStream(of: HandleRelease.self)
         (failures, failureContinuation) = AsyncStream.makeStream(of: NodeError.self, bufferingPolicy: .bufferingOldest(1))
+        // 구독하면 지금 값부터 나오게 처음 값을 넣어 둔다.
+        certificateFactsContinuation.yield(publishedCertificateFacts)
     }
 
     /// 상태와 경로 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
@@ -242,6 +252,7 @@ public actor TailnetNode {
             eventContinuation.finish()
             inboundContinuation.finish()
             settingsContinuation.finish()
+            certificateFactsContinuation.finish()
         }
         let directory = configuration.stateDirectory
         guard StateDirectoryClaims.shared.claim(directory) else { throw .stateDirectoryInUse }
@@ -298,6 +309,8 @@ public actor TailnetNode {
             ),
             identityStore: identityStore
         )
+        self.control = control
+        defer { self.control = nil }
         // 0이 아닌 DiscoKey를 올려야 Go 피어가 이 노드를 피어로 만든다(노트 derp-stun 6절 7).
         localStatus = .init(discoKey: DiscoPublicKey(discoKey.publicKey))
         await control.setLocalStatus(localStatus)
@@ -403,6 +416,7 @@ public actor TailnetNode {
         guard let state else { return }
         Self.log.info("상태: \(state.logName, privacy: .public)")
         eventContinuation.yield(.stateChanged(state))
+        publishCertificateFacts()
     }
 }
 
