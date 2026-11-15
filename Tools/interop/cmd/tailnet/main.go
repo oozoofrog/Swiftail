@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -62,6 +64,7 @@ type command struct {
 	Range              string              `json:"range"`
 	RootPEM            string              `json:"rootPEM"`
 	Stop               bool                `json:"stop"`
+	Mode               string              `json:"mode"`
 	// Tailnet Lock 명령(lock.go).
 	LockKey     string   `json:"lockKey"`
 	Signers     []string `json:"signers"`
@@ -89,6 +92,9 @@ type network struct {
 	authKey            string
 	controlConnections int
 	derpConnections    int
+	derpTLSHandshakes  int
+	derpServerNames    map[string]bool // DERP TLS ClientHello의 SNI. 보내지 않으면 ""
+	derpCertMode       *derpCertificateMode
 	stunRequests       int
 	transfers          []*transfer
 	host               hostTools
@@ -102,7 +108,7 @@ func newNetwork() (*network, error) {
 	for _, name := range []string{"TS_AUTHKEY", "TS_CLIENT_ID", "TS_CLIENT_SECRET", "TS_ID_TOKEN", "TS_AUDIENCE"} {
 		os.Unsetenv(name)
 	}
-	n := &network{peers: map[string]*peer{}}
+	n := &network{peers: map[string]*peer{}, derpServerNames: map[string]bool{}}
 	var err error
 	n.stun, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -134,6 +140,7 @@ func newNetwork() (*network, error) {
 	}))
 	mux.HandleFunc("/derp/probe", derpserver.ProbeHandler)
 	n.derpHTTP = httptest.NewUnstartedServer(mux)
+	n.derpHTTP.TLS = &tls.Config{GetConfigForClient: n.derpTLSConfig}
 	n.derpHTTP.StartTLS()
 	port := n.derpHTTP.Listener.Addr().(*net.TCPAddr).Port
 	// testcontrol의 기본 등록 로그가 공개 nodeKey를 기록하므로 끈다.
@@ -282,8 +289,15 @@ func (n *network) execute(c command) (map[string]any, error) {
 		result = map[string]any{"event": "nodes", "nodes": nodes}
 	case "networkStatus":
 		n.mu.Lock()
-		result = map[string]any{"event": "networkStatus", "controlConnections": n.controlConnections, "derpConnections": n.derpConnections, "stunRequests": n.stunRequests}
+		serverNames := []string{}
+		for name := range n.derpServerNames {
+			serverNames = append(serverNames, name)
+		}
+		slices.Sort(serverNames)
+		result = map[string]any{"event": "networkStatus", "controlConnections": n.controlConnections, "derpConnections": n.derpConnections, "derpTLSHandshakes": n.derpTLSHandshakes, "derpServerNames": serverNames, "stunRequests": n.stunRequests}
 		n.mu.Unlock()
+	case "setDERPCertificate":
+		return n.setDERPCertificate(c)
 	case "setMagicDNS":
 		if c.Enabled == nil {
 			return nil, errors.New("enabled에 bool이 필요합니다")
@@ -556,6 +570,12 @@ func run(in io.Reader, out io.Writer) (runErr error) {
 	return scanner.Err()
 }
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "certificate-fixtures" {
+		if e := certificateFixtures(os.Stdout); e != nil {
+			log.Fatal(e)
+		}
+		return
+	}
 	if e := run(os.Stdin, os.Stdout); e != nil {
 		log.Print(e)
 		os.Exit(1)

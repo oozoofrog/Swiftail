@@ -31,7 +31,7 @@ GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-s
 
 # tailnet
 
-`sh Scripts/build-interop-tools.sh tailnet`으로 빌드한다. 인자 없는 호출은 기존과 같이 `wgpeer` 경로 한 줄을 출력한다. `tailnet`은 루프백의 평문 testcontrol, 자체 서명 TLS DERP, STUN 서버를 시작하고 `ready` JSON을 출력한다. DERPMap의 `InsecureForTests`는 인증서 검증을 끄므로 Swift 시험에서도 이 시험 서버에 한정해 자체 서명 인증서를 허용해야 한다. STUN은 `stuntest`가 실행 프로그램에서 사용할 수 없는 `testing.TB`를 요구하므로 같은 `stun` 패키지로 구현한다.
+`sh Scripts/build-interop-tools.sh tailnet`으로 빌드한다. 인자 없는 호출은 기존과 같이 `wgpeer` 경로 한 줄을 출력한다. `tailnet`은 루프백의 평문 testcontrol, 자체 서명 TLS DERP, STUN 서버를 시작하고 `ready` JSON을 출력한다. DERPMap의 `InsecureForTests`는 인증서 검증을 끄므로 Swift 시험에서도 이 시험 서버에 한정해 자체 서명 인증서를 허용해야 한다(`setDERPCertificate`로 바꾸면 인증서 고정이다. 아래 "DERP 인증서 고정"). STUN은 `stuntest`가 실행 프로그램에서 사용할 수 없는 `testing.TB`를 요구하므로 같은 `stun` 패키지로 구현한다.
 
 표준 입력은 줄마다 `id`와 `cmd`가 있는 JSON이며 출력은 각 명령의 `id`가 포함된 JSON 한 줄이다. 오류는 `error` 사건이다. `quit` 또는 EOF는 종료한다.
 
@@ -318,6 +318,19 @@ Go 피어끼리의 흐름(관문 (가)의 Go 쪽 기준):
 ```
 
 `TestTailnetLock`(`cmd/tailnet/lock_test.go`)이 Go 피어만으로 이 흐름을 돈다: lock 켜기와 켤 때 있던 피어의 서명, 서명 없는 피어가 다른 피어의 netmap에서 빠지고 스스로 잠김, 서명 뒤 나타남, 서명된 인증 키로 등록한 피어가 처음부터 보이고 그 등록의 서명이 `accepted`이며 흔적이 없음, 늦게 온 피어가 bootstrap 뒤 `sync/offer`·`sync/send`로 머리를 따라잡음, 키를 더해 다른 서명 기기가 서명한 피어가 그 키를 뺀 뒤 함께 빠짐, 재서명 요청 뒤 새 키로 바뀜, 깨진 bootstrap 뒤 lock을 켜지 못했다가 되돌리면 켬, 틀린 끄기 비밀이면 lock 유지, 맞는 비밀이면 모두 끄고 서명 없는 피어가 다시 보임, 끈 뒤의 맵 응답 모양. Swift 노드는 이 시험의 범위 밖이다(`Tests/SwiftailInteropTests/TailnetLockTests.swift`).
+
+## DERP 인증서 고정 (M8 ③)
+
+`setDERPCertificate`는 첫 제어 요청 전에만 받는다(`{"id":1,"cmd":"setDERPCertificate","mode":"pinned"}`). DERP 서버의 인증서를 derper의 수동 인증서 모드가 IP 주소 hostname에 만드는 자체 서명 인증서(`cmd/derper/cert.go`의 `createSelfSignedIPCert`와 같은 모양: P-256, CN과 IP SAN `127.0.0.1`, 서버 인증 EKU, 지금부터 1년)로 바꾸고, derper처럼 `derpserver.ModifyTLSConfigToAddMetaCert`로 meta 인증서를 뒤에 붙인다. DERPMap 노드는 `InsecureForTests: false`, `CertName: "sha256-raw:<서버 인증서 DER의 SHA-256 소문자 16진>"`가 된다. `mode`가 `wrongPin`이면 서버가 함께 내는 meta 인증서의 해시를 알린다(어떤 클라이언트도 붙지 못한다). 응답은 `{"id":1,"event":"derpCertificate","mode":"pinned","certName":"sha256-raw:…","presented":2}`이고 `presented`는 서버가 내는 인증서 수다. Go 피어도 같은 DERPMap으로 `tlsdial.SetConfigExpectedCertHash` 검증을 거친다.
+
+서버는 `tls.Config.GetConfigForClient`로 인증서를 고른다. `GetCertificate`는 `Certificates`가 있고 SNI가 없으면 불리지 않는데(Go `crypto/tls` `Config.getCertificate`), httptest가 기본 인증서를 `Certificates`에 채우므로 IP로 붙는 클라이언트를 놓치기 때문이다. 고정 모드가 아니면 nil을 돌려 httptest의 기본 인증서를 그대로 쓴다.
+
+`tailnet certificate-fixtures`는 `Tests/SwiftailIOTests/ServerCertificateFixtures.swift`의 고정 인증서를 JSON(이름 → base64 DER, 그리고 `ipLeafSHA256`·`dnsLeafSHA256`·`metaSHA256`)으로 표준 출력에 쓴다. 자체 서명 인증서는 위와 같은 모양에 날짜를 2026-01-01 ..< 2027-01-01로 고정하고(IP `100.64.0.1`, DNS 이름 `derp1a.example.test`, 같은 모양의 다른 키 하나), 시험 루트와 그것이 발급한 `derp-cert.example.test` 인증서, 실제 `derpserver.Server.MetaCert()`를 더한다. 키와 서명이 난수라 실행마다 바이트가 다르다.
+
+```sh
+cd Tools/interop
+GOCACHE="$(eyebuild dir interop-tools)/gocache" GOMODCACHE="$(eyebuild dir ref-src)/gomod" GOFLAGS=-modcacherw go run ./cmd/tailnet certificate-fixtures
+```
 
 # h2server
 
@@ -685,7 +698,7 @@ M5 메모리 관문의 관측 명령:
 
 - `startCapture`(`name`): 해당 Go 피어의 공개 `StreamDebugCapture`를 시작하고 pcap 머리를 읽은 뒤 `captureStarted`로 답한다. 피어당 한 번만 시작하며 피어 제거·도구 종료 때 닫는다.
 - `captureStatus`(`name`, `port` 1…65535): `FromPeer` 패킷 중 목적지가 두 서비스 IP인 수(`servicePackets`)와 UDP 출발 포트가 `port`인 수(`observedPackets`)를 반환한다. 원문·주소는 보관하거나 출력하지 않는다. 일반 UDP 에코의 관측을 양성 대조로 삼고, 후속 에코가 관측될 때까지 기다려 읽기 경계를 확인한다. 관측 흐름 종료·잘못된 경계는 오류다.
-- `networkStatus`: `controlConnections`(`/ts2021` 요청 수), `derpConnections`(`/derp` 요청 수), `stunRequests`(유효 STUN Binding 요청 수)를 반환한다. 인터페이스 재결속·같은 인터페이스 재평가를 주소 없이 관측하기 위한 프로세스 전체 누적 수다.
+- `networkStatus`: `controlConnections`(`/ts2021` 요청 수), `derpConnections`(`/derp` 요청 수), `derpTLSHandshakes`(DERP 서버가 받은 TLS ClientHello 수), `derpServerNames`(그 ClientHello의 SNI 값들을 정렬한 것. SNI가 없으면 `""`), `stunRequests`(유효 STUN Binding 요청 수)를 반환한다. 인터페이스 재결속·같은 인터페이스 재평가를 주소 없이 관측하기 위한 프로세스 전체 누적 수다.
 
 - `setMagicDNS`(`enabled` bool): 첫 제어 요청 전에 `DNSConfig.Proxied`를 설정하고 `magicDNS`로 답한다. `MagicDNSDomain`은 이름 접미사만 정하므로 DNS 관문은 이 명령으로 MagicDNS를 켠 뒤 피어·Swift 노드를 등록한다. 누락된 bool·등록 뒤 변경은 거절한다.
 

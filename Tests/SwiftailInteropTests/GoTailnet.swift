@@ -45,6 +45,11 @@ actor GoTailnet {
         let observedPackets: Int?
         let controlConnections: Int?
         let derpConnections: Int?
+        // M8 ③ DERP 인증서 명령(README "DERP 인증서 고정").
+        let derpTLSHandshakes: Int?
+        let derpServerNames: [String]?
+        let certName: String?
+        let presented: Int?
         let stunRequests: Int?
         let transferID: Int?
         let transfers: [Transfer]?
@@ -126,6 +131,7 @@ actor GoTailnet {
         var range: String? = nil
         var rootPEM: String? = nil
         var stop: Bool? = nil
+        var mode: String? = nil
         // Tailnet Lock 관문 명령.
         var authKey: String? = nil
         var lockKey: String? = nil

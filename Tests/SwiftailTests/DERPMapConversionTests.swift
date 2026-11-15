@@ -154,10 +154,25 @@ struct DERPMapConversionTests {
         #expect(try Self.server(Self.node(hostName: "")) == nil)
     }
 
-    @Test("certName이 hostName과 다르면 건너뛰고, 같으면 쓴다")
-    func certName() throws {
-        #expect(try Self.server(Self.node(certName: "other.example.com")) == nil)
-        #expect(try Self.server(Self.node(certName: "sha256-raw:00ff")) == nil)
-        #expect(try Self.server(Self.node(certName: "derp.example.com")) != nil)
+    @Test("인증서 확인: sha256-raw:는 나머지 그대로 고정, hostName과 다른 certName은 그 이름, 그 밖은 insecureForTests로 가른다",
+          arguments: [false, true])
+    func verification(insecureForTests: Bool) throws {
+        func verification(_ certName: String) throws -> DERPServer.Verification? {
+            try Self.server(Self.node(certName: certName, insecureForTests: insecureForTests))?.verification
+        }
+        let hash = String(repeating: "0f", count: 32)
+        // 1·2는 insecureForTests보다 앞선다(Go `tlsClient`가 CertName이 있으면 검증 훅을 다시 건다).
+        #expect(try verification("sha256-raw:\(hash)") == .pinned(sha256Hex: hash))
+        #expect(try verification("other.example.com") == .named("other.example.com"))
+        // 대문자·짧은 값·빈 값도 고치거나 건너뛰지 않는다. Go에서도 어떤 인증서와도 맞지 않아 연결이 실패한다.
+        #expect(try verification("sha256-raw:\(hash.uppercased())") == .pinned(sha256Hex: hash.uppercased()))
+        #expect(try verification("sha256-raw:00ff") == .pinned(sha256Hex: "00ff"))
+        #expect(try verification("sha256-raw:") == .pinned(sha256Hex: ""))
+        // 머리는 대소문자를 가린다(Go `strings.CutPrefix`). 다른 머리는 이름이다.
+        #expect(try verification("SHA256-RAW:\(hash)") == .named("SHA256-RAW:\(hash)"))
+        // 3: 비었거나 hostName과 같으면 지금처럼.
+        let plain: DERPServer.Verification = insecureForTests ? .noneForTests : .system
+        #expect(try verification("") == plain)
+        #expect(try verification("derp.example.com") == plain)
     }
 }
