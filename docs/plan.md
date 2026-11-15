@@ -199,7 +199,7 @@ extension TailnetNode {
 | M4 ✅ (실제 tailnet 마무리 관문은 남음) | 직접 연결 | Go 피어와 루프백·LAN에서 직접 경로가 잡힌다(Go 쪽 상태에서 직접 주소 확인). 직접 경로를 막으면 DERP로 내려가고 풀면 다시 올라온다. 마무리: 실제 tailnet에서 NAT 뒤의 기기와 직접 경로 |
 | M5 (관문 (가) 메모리 장치 통과, (나) 실기기: 시작·유휴 메모리 통과(8.7MiB, Go 13.0MiB), 전송·전환·잠금 전 시작은 남음) | iOS 패킷 터널 | MagicDNS는 UDP 질의만 답한다(아래 8절 위험 12). 메모리 TUN으로 RemoteDebug `docs/tunnel.md`의 시험 계약에 대응하는 항목(설정 산출, UDP·TCP·MagicDNS, 다시 시작, 엔진 정지) 통과. 실기기: 시험용 터널 앱으로 Mac의 tailnet HTTPS에 접속, FQDN 해석, Wi-Fi ↔ 셀룰러 전환 뒤 복구, 유휴·전송 중 `phys_footprint` 기록 |
 | M6 (관문 (가) Go 피어 통과, (나) 커널 스택 실기기 남음) | 프로세스 내 리스너(Swift TCP) | 상태 기계 단위 시험(손실·재정렬·중복·지연 주입)과, Go 피어(gVisor)·macOS 커널 스택을 상대로 한 100MB 양방향 전송의 해시 일치. 손실 1%·5% 조건에서 전송이 멈추지 않고 처리량을 기록한다 |
-| M7 (계약 초안 `docs/contracts/SwiftailHost.md`, 첫 사용처 검토 중) | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. 관문은 (가) 계정 없이(시험 제어 서버 + 시험용 ACME 서버), (나) 실제 tailnet·Let's Encrypt·실기기로 나눈다. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
+| M7 (계약 `docs/contracts/SwiftailHost.md`. **관문 (가) 1~10 통과**(2026-11-15: `HostTests` 9개, 다리로 TLS 100MiB 38MiB/s, 전체 1,801개 통과). 남음: 11 Go 상태 이관(사용자 결정 U1 뒤), 관문 (나) 실제 tailnet·Let's Encrypt·실기기(U3 뒤), App Sandbox 안의 확인(첫 사용처)) | RemoteDebug 대체 검증 | WhoIs, ts.net 인증서 발급, Go 상태 파일에서의 이관 여부 결정, C API 18개와의 대응표, RemoteDebug e2e 시나리오(페어링 → 설치 세션 → IPA 전송)를 Swiftail 노드로 재현. 관문은 (가) 계정 없이(시험 제어 서버 + 시험용 ACME 서버), (나) 실제 tailnet·Let's Encrypt·실기기로 나눈다. RemoteDebug 저장소를 바꾸는 일은 별도 승인 뒤에 한다 |
 
 메모리 목표(M5): 유휴 상주 20MiB 이하를 목표로 두고 실기기 측정으로 확정한다. Go 코어의 권장 한도 설정은 28MiB였다.
 
