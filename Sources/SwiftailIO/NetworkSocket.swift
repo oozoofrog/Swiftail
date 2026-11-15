@@ -11,7 +11,8 @@ import Synchronization
 /// 지키는 것:
 ///
 /// - continuation은 정확히 한 번 재개한다. 상태 콜백은 여러 번 오므로 `ResumeOnce`로 첫 결과만 넘긴다.
-/// - 기다리던 Task가 취소되면 continuation을 곧바로 오류로 풀고 연결을 닫는다. 이미 취소된 Task에서 부르면
+/// - 기다리던 Task가 취소되면 continuation을 곧바로 오류로 풀고 연결을 닫는다(루프백 다리의 소켓은 닫지 않는다.
+///   `connectLoopback(port:)`). 이미 취소된 Task에서 부르면
 ///   취소 처리기가 continuation보다 먼저 돌므로, 그 결과를 `ResumeOnce`에 담아 두었다가 continuation을 다는
 ///   즉시 넘긴다(취소된 `NWConnection`의 콜백이 오리라고 기대하지 않는다).
 /// - 보내기는 두 가지다. `send`는 기다리지 않고, `write`는 네트워크 스택이 바이트를 받아 갈 때까지 기다린다.
@@ -26,10 +27,16 @@ import Synchronization
 package final class NetworkSocket: Sendable {
     private static let maximumReadSize = 64 << 10
 
-    private let connection: NWConnection
+    let connection: NWConnection
+    /// 기다리던 `receive`·`write`의 Task가 취소될 때 연결을 닫는가. 닫지 않으면 닫기는 소켓의 주인이 정한다.
+    private let closesOnCancel: Bool
+    /// 상대의 끝(FIN)이 마지막 바이트와 함께 왔다. 그 바이트를 돌려준 뒤의 `receive()`는 nil이다. `NWConnection`은 끝을 한 번만
+    /// 알리고, 그 뒤의 받기는 오류(`ENODATA`)로 끝내기 때문이다.
+    private let receivedEnd = Mutex(false)
 
-    private init(connection: NWConnection) {
+    private init(connection: NWConnection, closesOnCancel: Bool) {
         self.connection = connection
+        self.closesOnCancel = closesOnCancel
     }
 
     deinit {
@@ -54,7 +61,12 @@ package final class NetworkSocket: Sendable {
         let parameters = NWParameters(tls: tls.options, tcp: tcp)
         parameters.requiredInterface = interface
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: parameters)
-        let socket = NetworkSocket(connection: connection)
+        return try await open(connection, closesOnCancel: true)
+    }
+
+    /// `connection`을 시작하고 준비될 때까지 기다린다. 실패하거나 기다리던 Task가 취소되면 연결을 닫고 던진다.
+    static func open(_ connection: NWConnection, closesOnCancel: Bool) async throws(SocketError) -> NetworkSocket {
+        let socket = NetworkSocket(connection: connection, closesOnCancel: closesOnCancel)
         let once = ResumeOnce<Void>()
         do {
             try await withTaskCancellationHandler {
@@ -102,25 +114,41 @@ package final class NetworkSocket: Sendable {
     /// 단순하다(줄어들 때를 따로 기다릴 필요가 없다).
     ///
     /// 실패는 던지지 않는다. `send`처럼 연결이 실패 상태가 되고 다음 `receive()`가 알린다. 기다리던 Task가 취소되면
-    /// 연결을 닫고 돌아온다.
+    /// 연결을 닫고 돌아온다(루프백 다리의 소켓은 닫지 않는다).
     package func write(_ bytes: [UInt8]) async {
-        guard !bytes.isEmpty else { return }
+        await writeAccepted(bytes)
+    }
+
+    /// `write`와 같고, 결과를 돌려준다.
+    ///
+    /// 읽는 방향이 이미 끝난 연결에서는 다음 `receive()`가 실패를 알려 주지 않으므로, 쓰기만 남은 쪽(루프백 다리)이
+    /// 이것으로 상대가 끊었음을 안다.
+    ///
+    /// - Returns: 네트워크 스택이 받아 갔으면 true, 보내기가 실패했거나 Task가 취소되었으면 false.
+    @discardableResult
+    package func writeAccepted(_ bytes: [UInt8]) async -> Bool {
+        guard !bytes.isEmpty else { return true }
         let connection = connection
-        let once = ResumeOnce<Void>()
-        await withTaskCancellationHandler {
-            _ = try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+        let closesOnCancel = closesOnCancel
+        let once = ResumeOnce<Bool>()
+        return await withTaskCancellationHandler {
+            (try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, any Error>) in
                 guard once.install(continuation) else { return }
-                connection.send(content: Data(bytes), completion: .contentProcessed { _ in once.resume(with: .success(())) })
-            }
+                connection.send(content: Data(bytes), completion: .contentProcessed { error in
+                    once.resume(with: .success(error == nil))
+                })
+            }) ?? false
         } onCancel: {
-            once.resume(with: .success(()))
-            connection.cancel()
+            once.resume(with: .success(false))
+            if closesOnCancel { connection.cancel() }
         }
     }
 
     /// 도착한 바이트를 받는다. 상대가 연결을 닫았으면 nil.
     package func receive() async throws(SocketError) -> [UInt8]? {
+        guard !receivedEnd.withLock({ $0 }) else { return nil }
         let connection = connection
+        let closesOnCancel = closesOnCancel
         let once = ResumeOnce<[UInt8]?>()
         do {
             return try await withTaskCancellationHandler {
@@ -128,6 +156,7 @@ package final class NetworkSocket: Sendable {
                     guard once.install(continuation) else { return }
                     connection.receive(minimumIncompleteLength: 1, maximumLength: Self.maximumReadSize) { data, _, isComplete, error in
                         if let data, !data.isEmpty {
+                            if isComplete { self.receivedEnd.withLock { $0 = true } }
                             once.resume(with: .success([UInt8](data)))
                         } else if let error {
                             once.resume(with: .failure(SocketError.readFailed("읽기 실패: \(error)")))
@@ -140,7 +169,7 @@ package final class NetworkSocket: Sendable {
                 }
             } onCancel: {
                 once.resume(with: .failure(SocketError.readFailed("읽기가 취소되었다")))
-                connection.cancel()
+                if closesOnCancel { connection.cancel() }
             }
         } catch {
             throw error as? SocketError ?? .readFailed("읽기 실패")
