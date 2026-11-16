@@ -125,7 +125,7 @@ extension PeerPathState {
     /// `bestAddr`는 언제나 후보다. 후보에서 빠졌으면 `bestAddr`와 신뢰를 지운다(Go `deleteEndpointLocked`).
     private mutating func dropBestAddrIfRemoved() {
         if let bestAddr, !candidates.contains(where: { $0.address == bestAddr.address }) {
-            clearBestAddr()
+            clearBestAddr(because: .candidateRemoved)
         }
     }
 

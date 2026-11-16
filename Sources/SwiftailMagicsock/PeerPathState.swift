@@ -75,6 +75,8 @@ struct PeerPathState: Sendable {
     var heartbeatDeadline: ContinuousClock.Instant?
     /// 마지막 외부 송신(WireGuard 데이터그램) 시각. 없으면 nil. `Magicsock`이 유휴(ReSTUN 멈춤)를 판단한다.
     private(set) var lastSend: ContinuousClock.Instant?
+    /// 마지막으로 `bestAddr`를 지운 까닭. 진단 로그에만 쓴다(`Magicsock.downgrade(of:)`).
+    private(set) var bestAddrLoss: PathDowngrade?
 
     init(homeDERP: Int64, endpoints: [IPEndpoint]) {
         self.homeDERP = homeDERP
@@ -118,7 +120,7 @@ struct PeerPathState: Sendable {
     /// 한다. 여기서는 CallMeMaybe 후보를 다음 CallMeMaybe가 빼 줄 때까지 둔다(출처 표시가 하나다). 필요해지는 시점:
     /// 재결속 뒤 옛 망의 CallMeMaybe 후보에 Ping이 낭비되는 것이 관문에서 보일 때.
     mutating func noteConnectivityChange() {
-        clearBestAddr()
+        clearBestAddr(because: .rebind)
         sentPings = [:]
         for index in candidates.indices {
             candidates[index].lastPingSent = nil
@@ -188,9 +190,10 @@ struct PeerPathState: Sendable {
         return now <= trustedUntil
     }
 
-    /// `bestAddr`와 신뢰를 함께 지운다(Go `clearBestAddrLocked`).
-    mutating func clearBestAddr() {
+    /// `bestAddr`와 신뢰를 함께 지운다(Go `clearBestAddrLocked`). 까닭은 진단 로그에 쓰려고 적어 둔다.
+    mutating func clearBestAddr(because loss: PathDowngrade) {
         bestAddr = nil
         trustedUntil = nil
+        bestAddrLoss = loss
     }
 }

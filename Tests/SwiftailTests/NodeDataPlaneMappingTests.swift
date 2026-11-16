@@ -115,15 +115,22 @@ struct NodeDataPlaneMappingTests {
         #expect(new.name(of: try Self.nodeKey(0x03)) == nil)
     }
 
-    @Test("경로 사건 로그의 진단은 앞 사건 뒤 시간(0.1초 단위)과 버린 disco만 종류별로 세고, 다른 까닭은 세지 않는다")
-    func pathEventTally() {
+    @Test("경로 사건 로그 줄은 피어를 첫 사건 순서의 번호로 가르고, 나빠진 까닭과 같은 피어의 앞 사건 뒤 시간(0.1초 단위), 버린 disco를 종류별로 적는다")
+    func pathEventLine() throws {
         let start = ContinuousClock.now
-        #expect(PathEventTally().summary(at: start) == "첫 사건, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0")
-        var tally = PathEventTally(since: start)
+        let first = try Self.nodeKey(0x02), second = try Self.nodeKey(0x03)
+        var tally = PathEventTally()
+        #expect(tally.line(for: first, path: .relayed(derpRegion: 7), downgrade: nil, at: start)
+            == "피어 1 경로: relayed(7) (첫 사건, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
         for drop in [Magicsock.Drop.unknownDiscoKey, .unknownDiscoKey, .malformedDisco, .misroutedDisco, .noRouteToPeer, .unexpectedSTUN] {
             tally.count(drop)
         }
-        #expect(tally.summary(at: start + .milliseconds(25_370))
-            == "앞 사건 뒤 25.3초, 버린 disco: 모르는 키 2, 열리지 않음 1, 경로 규칙 1")
+        #expect(tally.line(for: second, path: .relayed(derpRegion: 20), downgrade: nil, at: start + .seconds(1))
+            == "피어 2 경로: relayed(20) (첫 사건, 버린 disco: 모르는 키 2, 열리지 않음 1, 경로 규칙 1)")
+        // "앞 사건 뒤"는 같은 피어의 앞 사건부터다. 그사이 다른 피어의 사건이 있어도 그렇다. 버린 disco는 앞 사건(어느 피어든) 뒤부터 센다.
+        #expect(tally.line(for: first, path: .relayed(derpRegion: 7), downgrade: .trustExpired, at: start + .milliseconds(96_570))
+            == "피어 1 경로: relayed(7) (신뢰 만료, 앞 사건 뒤 96.5초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
+        #expect(tally.line(for: second, path: nil, downgrade: .discoKeyChanged, at: start + .seconds(3))
+            == "피어 2 경로: none (disco 키 바뀜, 앞 사건 뒤 2.0초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
     }
 }

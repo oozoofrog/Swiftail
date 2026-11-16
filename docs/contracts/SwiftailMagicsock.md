@@ -410,6 +410,7 @@ package enum LocalInterfaceAddresses {
 1. `Magicsock`은 상태를 바꾼 모든 호출 끝에서, 영향을 받은 피어의 `path(at:)`가 마지막으로 알린 값과 다르면 `.pathChanged`를 낸다. `advance`에서는 신뢰가 만료된 피어도 본다(D7).
 2. 같은 값은 다시 내지 않는다. `.direct(a)` → `.direct(b)`는 바뀐 것이다.
 3. 유휴 피어의 경로는 nil이다(2026-11-15 첫 사용처 검토 뒤 더함): 그 피어로 마지막 WireGuard 데이터그램을 보낸 지 45초(유휴 판단, D의 타이머 값)가 넘었으면 `path(to:at:)`는 nil이고, 넘는 시각의 `advance`가 `.pathChanged(key, nil)`을 낸다. 다시 보내면 그때의 경로로 `.pathChanged`가 나온다.
+4. 나빠진 까닭(2026-11-16 더함, 진단용): 경로가 `direct`에서 `relayed`로, 또는 알린 경로에서 nil로 가면 그 까닭을 기억하고 노드가 패키지 안의 `downgrade(of:)`로 묻는다(공개 API가 아니다). 까닭은 `PathDowngrade`의 여섯이다: 신뢰 만료(`bestAddr`가 남았거나 Ping 기한이 지웠음), 후보 지움(`bestAddr`였던 후보를 지움), 재결속, disco 키 바뀜(송신 기록이 지워져 nil), 유휴, 피어 빠짐. 동작에는 쓰이지 않는다.
 
 ### H. 한도 (신뢰할 수 없는 입력)
 
@@ -610,15 +611,15 @@ Go 피어 하나(`addPeer`)와 Swift 노드 하나로 시작한다. 시각 기�
 동작은 바꾸지 않았다. 범위 안(`SwiftailMagicsock`, 노드의 데이터면)에서 Go와 다른 계기나 기다림을 찾지 못했다.
 
 - 회귀 시험 `MagicsockStartupTests`: (1) 유휴 호스트와 늦게 켠 터널에서 양쪽 CallMeMaybe가 첫 데이터 뒤 3초(회차 마감) 안에 나가고 양쪽이 1초 안에 직접이 된다. (2) 호스트가 터널의 옛 disco 키를 쥔 동안은 양쪽 disco가 버려지고(`unknownDiscoKey`, `malformedDisco`), netmap이 새 키를 준 순간 호스트 경로가 nil이 되며 1초 안에 양쪽 직접이 된다.
-- 진단 로그: `피어 경로:` 줄 끝에 직전 경로 사건(어느 피어든) 뒤의 시간과, 그사이 버린 disco를 종류별로 붙인다(`앞 사건 뒤 25.3초, 버린 disco: 모르는 키 10, 열리지 않음 5, 경로 규칙 0`). 키·주소·이름은 찍지 않는다(`PathEventTally`).
+- 진단 로그: `피어 N 경로:` 줄 끝에 나빠졌으면 그 까닭(동작 G4), 같은 피어의 앞 경로 사건 뒤 시간, 앞 경로 사건(어느 피어든) 뒤 버린 disco를 종류별로 붙인다(`피어 1 경로: relayed(7) (신뢰 만료, 앞 사건 뒤 96.5초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)`). N은 이번 실행에서 그 피어의 경로 사건이 처음 난 순서다(1부터, 노드가 끝날 때까지 같다). 그 피어의 첫 사건에는 시간 대신 `첫 사건`이 붙는다. 키·주소·이름·안정 ID는 찍지 않는다(`PathEventTally`). 2026-11-16에 피어 번호, 까닭, 같은 피어 기준의 시간을 더했다(한 단말이 여러 피어와 통신하면 줄이 섞여 가릴 수 없었다).
 
 ### 실기기에서 가려내는 법
 
 양쪽 기기의 `Swiftail`/`node` 로그에서 첫 접촉 전후의 `피어 경로:` 줄을 모은다.
 
-- **disco 키 가설이 맞으면**: 호스트에 `relayed(7)` 다음 25~44초 뒤 `none (앞 사건 뒤 …초, 버린 disco: 모르는 키 N …)`(N > 0)이 찍히고 곧바로 `relayed(7)`, `direct`가 이어진다. 터널의 `direct` 줄에는 `열리지 않음` > 0이 붙는다.
+- **disco 키 가설이 맞으면**: 호스트에 `relayed(7)` 다음 25~44초 뒤 같은 피어의 `none (disco 키 바뀜, 앞 사건 뒤 …초, 버린 disco: 모르는 키 N …)`(N > 0)이 찍히고 곧바로 `relayed(7)`, `direct`가 이어진다. 터널의 `direct` 줄에는 `열리지 않음` > 0이 붙는다.
 - **둘 다 0인데 오래 걸리면**: disco는 오갔으나 UDP가 닿지 않은 것이다(같은 Wi-Fi의 단말 격리, iOS 로컬 네트워크 권한, NAT 헤어핀). 그때는 포트 매핑(노트 6.2 `shortcut:`)과 LAN 엔드포인트가 올라갔는지를 본다.
-- **유휴 `none`**: "앞 사건 뒤"가 45초 이상이고 버린 disco가 0이면 유휴(설계대로)다.
+- **유휴 `none`**: `none (유휴, …)`이면 설계대로다.
 
 ### 남은 것 (이 범위 밖)
 
@@ -732,3 +733,38 @@ TSMP disco 키 광고가 든 `b27b482`로 양쪽을 빌드해 같은 Wi-Fi에서
 - Swiftail 호스트 측정에서는 전송이 끝난 뒤였고 6.6초 뒤 유휴의 `none`이 이어졌다.
 - `relayed`는 마지막 Pong 뒤 6.5초 동안 Pong이 없었거나(`trustDuration`), UDP 소켓을 다시 묶어 경로를 버렸을 때(`noteConnectivityChange`)만 나온다. 상대가 달라도 같은 모양이므로 iPhone 쪽 까닭으로 본다. 어느 쪽인지는 그 시각의 확장 기록(`네트워크 경로:`, 재결속 줄)을 받아 가린다. 재결속이면 `SwiftailTunnel.md`에 남겨 둔 "같은 인터페이스의 경로 갱신에 전체 재결속"이 전송 중 경로를 끊는 것이다.
 - 전송은 끊기지 않았다(DERP로 이어 갔다). 까닭을 찾을 때까지 열어 둔다.
+
+### 조사 결과 (2026-11-16)
+
+뒤에 알게 된 것: iPhone은 Mac의 노드 둘(첫 사용처 앱의 Go 노드, 홈 지역 7로 보임. 시험 서버의 Swiftail 노드, 홈 지역 20으로 보임)과 통신했고 `피어 경로:` 줄은 피어를 가리지 않았다. "앞 사건 뒤"도 어느 피어든 앞 사건부터였다. 그래서 두 `relayed(7)`은 Go 노드 쪽 경로로 본다. 측정 1은 전송 상대가 그 Go 노드였고(앱의 "같은 네트워크 직접 연결"을 끈 상태), 측정 2의 `relayed(7)`은 전송 상대(Swiftail 서버)와 무관할 수 있다. 아래는 측정 1을 앞에 둔다.
+
+**`relayed`가 나오는 길**(direct였던 피어가 relayed로 가는 길 전부, Go v1.104.7과 줄 단위로 같다):
+
+| 길 | Swiftail | 일어나는 시각 | Go |
+| --- | --- | --- | --- |
+| 신뢰 만료 | 마지막 Pong 뒤 6.5초(`PeerPathState.path(at:)`, `advance`의 만료 기한). heartbeat가 3초마다 `bestAddr`에 Ping하므로(`heartbeat`) Pong을 **연달아 둘** 받지 못해야 나온다 | heartbeat 시각 + 0.5초 + 왕복 | `endpoint.go:926-930`(heartbeat Ping), `:2003-2019`(Pong이 신뢰를 늘림), `:635-652`(신뢰가 지나면 DERP로도), `magicsock.go:4099`·`:4103` |
+| 후보 지움 | `dropBestAddrIfRemoved` ← `removeStaleCandidates`(전체 Ping, netmap 갱신, 후보 100개 넘음), `receiveCallMeMaybe` | 그 호출의 시각(heartbeat 시각, netmap·CallMeMaybe가 온 시각) | `:510-521`(`shouldDeleteLocked`), `:1423-1433`, `:1762-1800`, `:1810-1846`, `:2150-2215` |
+| 재결속 | `noteConnectivityChange` | 재결속 줄과 같은 시각 | `:1876`(`noteConnectivityChange`) |
+| Ping 기한 | `expirePings`가 `bestAddr`를 지움 | 신뢰가 이미 지난 뒤에만 지우므로 새 `relayed`를 만들지 않는다 | `:1244-1257` |
+| disco 키 바뀜 | `resetForNewDiscoKey`(netmap, TSMP 광고, 비활성 키로 온 disco) | 송신 기록을 지워 `relayed`가 아니라 곧바로 `none`이 된다. 다음 송신이 `relayed → direct` | `:1694-1697`(`changedActiveDiscoLocked`), `:2294-2310`(`lastSendExt = 0`) |
+
+**가른 것**
+- 상태 기계 시험 `MagicsockLongSessionTests.repeatedDownloads`: 두 `Magicsock`을 가상 시계로 잇고(한쪽 지연 2·10·30 ms), 300초 동안 26초 내려받기(호스트 20 ms마다, 단말 100 ms마다)와 42초 유휴를 되풀이하며 netmap을 네 모양(처음 한 번, 30초마다 같은 목록, 30초마다 바뀌는 목록, 단말이 호스트 주소를 Ping으로만 배움)으로 넣었다. 12가지 모두 direct 뒤 `relayed`도 nil도 없다. 손실이 없으면 후보 지움(45초 규칙 포함), heartbeat 멈춤, netmap 갱신은 까닭이 아니다. Ping으로 배운 후보도 내려받기 동안은 호스트의 heartbeat Ping이 3초마다 새로 하고, 42초 유휴는 호스트 heartbeat(마지막 송신 뒤 45초) 안이다. 실제 Go 노드는 CallMeMaybe에 자기 엔드포인트를 실으므로 그 주소는 지우지 않는 CallMeMaybe 후보가 되기도 한다.
+- 상호 운용 시험 `LongDownloadPathTests`(루프백, 실제 Go 피어, 같은 26초·42초 되풀이): 162초 동안 780MiB를 받는 사이 경로 사건 0개. 루프백은 왕복 5 ms 아래라 1분마다의 전체 Ping 길은 타지 않는다.
+- 측정 1의 시각: 앞 사건(23:38:30.5, 첫 송신과 같은 순간이라 heartbeat 시각의 기준)에서 96.5초 = 32번째 heartbeat(96.0초) + 0.5초. 마지막 Pong이 30번째 heartbeat(90.0초)의 것이면 신뢰는 96.5초 + 왕복에 끝난다. 후보 지움이었다면 heartbeat 시각 그대로이거나 netmap이 온 시각이어야 하고, 재결속 줄은 없으며, disco 키 바뀜이었다면 `none`이 찍혀야 한다.
+- 상태 기계 시험 `MagicsockLongSessionTests.pongLossDuringDownload`: 내려받는 동안 9초 동안 호스트의 Pong만 잃게 하면 마지막 Pong(73.02초) 뒤 6.5초(79.52초)에 `relayed`, 손실이 끝난 뒤 첫 Pong(84.02초)에 `direct`다. 관측과 같은 모양이다.
+
+**판정**
+- 까닭(유력, 확정 아님): iPhone이 Go 노드에게서 heartbeat의 Pong을 연달아 둘 넘게 받지 못했다(Ping이나 Pong이 사라졌거나 5초 넘게 늦었다). 신뢰 만료 규칙과 타이머 값은 Go와 같다. Go가 그 자리의 받는 쪽이었어도 안에서 같은 신뢰 만료(DERP로도 보냄)가 일어난다. Go는 경로 사건을 내지 않아 보이지 않을 뿐이다. 그래서 동작을 바꾸지 않았다.
+- 어디서 사라졌는지는 가리지 못했다. 후보: Wi-Fi(전송 끝 무렵의 큐), 상대 Go 노드의 UDP 송신(송신 버퍼가 차면 그 데이터그램을 버린다. 확인하지 않음), iPhone의 받은 큐(`DatagramSocket`, 256개·1MiB, 오래된 것부터 버림). 셋째는 Swiftail의 것이지만 루프백 780MiB에서는 나타나지 않았다. 같은 Wi-Fi의 Swiftail 서버와 100MiB를 주고받은 측정 2와 셀룰러 측정의 서버 쪽 기록에는 전송 중 `relayed`가 없다.
+- 측정 1의 5.8초: 신뢰가 지난 뒤 93초 Ping의 기한(98초)이 `bestAddr`를 지운다. 그러면 heartbeat는 `bestAddr`에 Ping하지 않고 전체 Ping만 하는데, 후보마다 5초 안에는 다시 Ping하지 않으므로(`pingInterval`, Go `endpoint.go:1437-1439`) 96초에 Ping한 그 주소는 101초부터 다시 Ping된다. 전송은 23:40:11(100.5초)에 끝나 101초에 송신(전체 Ping의 계기)이 없었고, 102초 heartbeat의 Ping에 Pong이 와 `direct`가 되었다(96.5초 + 5.5초 + 왕복). 그러니 Pong 둘(93·96초)만 잃었어도 5.8초가 나온다. 전송 중이면 5초가 차는 순간의 송신이 곧바로 Ping한다(위 시험의 84.02초).
+- 측정 2(`relayed(7)` → 6.6초 → `none`, 그사이 `direct` 없음, 버린 disco 0): 같은 피어라면 `none`이 마지막 송신 뒤 45초가 아니라 6.6초에 나오는 길은 둘뿐이다(`Magicsock.path(of:)`, `idleDeadline`). (가) 유휴이던 Go 노드에 앱의 한 묶음을 보내 `relayed`(신뢰 없음, 전체 Ping과 CallMeMaybe), 6.6초 안에 Pong이 없었고, 그 뒤 그 피어의 활성 disco 키가 바뀌어(예: 이번 실행에서 그 피어의 TSMP 광고를 처음 받음. 값이 netmap 키와 같아도 경로를 다시 찾는다, Go와 같다) 송신 기록이 지워져 곧바로 `none`. (나) 그 피어가 netmap에서 빠졌다. 다른 피어의 줄이 섞였다면 (다) `relayed`는 신뢰 만료, `none`은 다른 피어의 유휴일 수도 있다. 새 로그에서는 각각 `none (disco 키 바뀜, …)`, `none (피어 빠짐, …)`, 서로 다른 피어 번호로 갈린다. Pong이 오지 않은 까닭은 기록으로 가릴 수 없다.
+
+**바꾼 것**: 진단 로그만(위 "고친 것"의 진단 로그 줄, 동작 G4). 상태 기계의 동작은 그대로다.
+
+**영향을 줄일 선택지**(모두 Go와 달라지므로 손실의 출처를 가린 뒤에 고른다): 신뢰가 지나는 순간 5초 규칙과 상관없이 `bestAddr`에 한 번 더 Ping하기(측정 1이면 `direct` 복귀가 약 3초 빨라진다), 신뢰 기간이나 heartbeat 간격 바꾸기(동작 D6이 막는다). 신뢰가 지난 동안에도 UDP로 계속 보내고 DERP로도 함께 보내므로 전송은 끊기지 않는다(관측도 그렇다).
+
+**다음 실기기 측정에서 볼 줄**: iPhone과 Mac 양쪽의 `피어 N 경로:` 줄.
+- `relayed(…) (신뢰 만료, …)`가 전송 중에 나오면 Pong이 끊긴 것이다. 같은 시각에 Swiftail 쪽 상대도 그 피어를 `신뢰 만료`로 내렸는지(양쪽 다 끊김), 아닌지(한쪽 방향만 끊김) 본다.
+- `후보 지움`이면 netmap이나 CallMeMaybe가 바꾼 후보다. 그 시각의 netmap 갱신 줄을 본다.
+- `재결속`이면 `SwiftailTunnel.md`의 "같은 인터페이스의 경로 갱신에 전체 재결속"이다.

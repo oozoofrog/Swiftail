@@ -67,6 +67,8 @@ public struct Magicsock: Sendable {
         /// 마지막으로 `.pathChanged`로 알린 경로. nil은 아직 알리지 않았거나 유휴를 알렸다는 뜻이다.
         /// 같은 값은 다시 알리지 않는다(동작 G2).
         var reportedPath: PeerPath?
+        /// 마지막으로 알린 경로 사건이 나빠진 것이었으면 그 까닭(동작 G4). 아니면 nil.
+        var reportedDowngrade: PathDowngrade?
 
         /// 이 피어와 disco를 하면 보내는 disco를 봉할 활성 키. nil이면 DERP만 쓴다.
         var discoKey: DiscoPublicKey? { discoKeys.active }
@@ -143,13 +145,39 @@ public struct Magicsock: Sendable {
         return lastSend + PeerPathState.sessionActiveTimeout + .nanoseconds(1)
     }
 
-    /// 피어의 지금 경로가 마지막으로 알린 것과 다르면 `.pathChanged`를 더하고 기억한다.
+    /// 피어의 지금 경로가 마지막으로 알린 것과 다르면 `.pathChanged`를 더하고 기억한다. 나빠졌으면 그 까닭도 기억한다.
     mutating func reportPathChange(of key: NodePublicKey, at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         guard let entry = peers[key] else { return }
         let current = Self.path(of: entry, at: now)
         guard entry.reportedPath != current else { return }
         peers[key]?.reportedPath = current
+        peers[key]?.reportedDowngrade = Self.downgrade(of: entry, from: entry.reportedPath, to: current)
         outputs.append(.pathChanged(key, current))
+    }
+
+    /// 피어의 마지막 경로 사건이 나빠진 것이었으면 그 까닭(동작 G4). 노드가 `.pathChanged`를 로그에 남길 때 묻는다.
+    ///
+    /// 표에 없는 피어는 빠진 피어다(`setPeers`의 `.pathChanged(key, nil)`). 진단용이라 공개 API가 아니다.
+    package func downgrade(of peer: NodePublicKey) -> PathDowngrade? {
+        guard let entry = peers[peer] else { return .peerRemoved }
+        return entry.reportedDowngrade
+    }
+
+    /// `previous`에서 `current`로 바뀐 것이 나빠진 것이면 그 까닭.
+    ///
+    /// - nil이 되었다: 송신 기록이 지워졌으면 disco 키가 바뀐 것이고(`resetForNewDiscoKey`, disco를 그만둠), 아니면 유휴다.
+    /// - direct에서 relayed가 되었다: `bestAddr`가 남아 있으면 신뢰가 지난 것이고, 지워졌으면 지운 까닭이다.
+    /// - 그 밖(첫 송신, direct가 됨, 주소·지역만 바뀜)은 나빠진 것이 아니다.
+    private static func downgrade(of entry: PeerEntry, from previous: PeerPath?, to current: PeerPath?) -> PathDowngrade? {
+        switch (previous, current) {
+        case (.some, nil):
+            return entry.path.lastSend == nil ? .discoKeyChanged : .idle
+        case (.direct, .relayed):
+            guard entry.path.bestAddr == nil else { return .trustExpired }
+            return entry.path.bestAddrLoss ?? .trustExpired
+        default:
+            return nil
+        }
     }
 
     // MARK: disco 봉하기

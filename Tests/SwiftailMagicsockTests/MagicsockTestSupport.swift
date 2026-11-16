@@ -100,7 +100,8 @@ func isTestDatagram(_ bytes: [UInt8]) -> Bool {
 /// `Magicsock` 둘을 메모리에서 맞물린 망.
 ///
 /// 각 노드의 `.udp`는 그 주소의 노드(또는 시험 STUN 서버)로, `.derp`는 그 키의 노드로 지연 뒤에 배달한다. 망은
-/// UDP를 막을 수 있다(STUN은 막지 않는다). 시각 순서대로 배달 → 기한(`advance`) → 예약한 송신을 처리한다.
+/// UDP를 막을 수 있고(STUN은 막지 않는다) 한 노드가 UDP로 보내는 Pong만 한동안 잃을 수도 있다. 시각 순서대로
+/// 배달 → 기한(`advance`) → 예약한 송신을 처리한다. 예약한 송신은 보내는 쪽·받는 쪽 짝마다 하나다.
 /// 받은 WireGuard 데이터그램은 `echo`인 노드가 보낸 쪽으로 되보낸다.
 struct TestNetwork {
     struct Node {
@@ -136,7 +137,10 @@ struct TestNetwork {
     let stunServer: IPEndpoint
     private(set) var now = sockT0
     var udpBlocked = false
-    let udpLatency: Duration = .milliseconds(1)
+    /// 이 노드가 이 기간(끝 제외)에 UDP로 보내는 Pong을 잃는다.
+    var pongLoss: (from: Int, during: Range<ContinuousClock.Instant>)?
+    /// UDP 한쪽 길의 지연.
+    var udpLatency: Duration = .milliseconds(1)
     let derpLatency: Duration = .milliseconds(10)
     let stunLatency: Duration = .milliseconds(5)
 
@@ -149,7 +153,7 @@ struct TestNetwork {
     private(set) var deadlineViolations = 0
 
     private var inFlight: [(time: ContinuousClock.Instant, to: Int, delivery: Delivery)] = []
-    private var schedule: (from: Int, to: Int, interval: Duration, next: ContinuousClock.Instant)?
+    private var schedules: [(from: Int, to: Int, interval: Duration, next: ContinuousClock.Instant)] = []
     private var sequence: UInt32 = 0
 
     init(_ identities: [TestIdentity]) throws {
@@ -182,9 +186,12 @@ struct TestNetwork {
         send(testDatagram(sequence), from: from, to: to)
     }
 
-    /// 지금부터 `interval`마다 보낸다. nil이면 멈춘다.
+    /// 지금부터 `interval`마다 `from`에서 `to`로 보낸다. nil이면 그 짝의 송신을 멈춘다.
     mutating func sendRepeatedly(from: Int, to: Int, every interval: Duration?) {
-        schedule = interval.map { (from, to, $0, now) }
+        schedules.removeAll { $0.from == from && $0.to == to }
+        if let interval {
+            schedules.append((from, to, interval, now))
+        }
     }
 
     /// `end`까지 사건을 처리하고 시각을 `end`로 둔다.
@@ -208,9 +215,9 @@ struct TestNetwork {
                 apply(step(index) { $0.advance(to: now, using: &$1) }, from: index)
                 if let after = nodes[index].sock.nextDeadline, after <= now { deadlineViolations += 1 }
             }
-            if let current = schedule, current.next <= now {
-                schedule?.next = current.next + current.interval
-                send(from: current.from, to: current.to)
+            for index in schedules.indices where schedules[index].next <= now {
+                schedules[index].next += schedules[index].interval
+                send(from: schedules[index].from, to: schedules[index].to)
             }
             checkDeadlines()
         }
@@ -267,7 +274,7 @@ struct TestNetwork {
 
     private func nextEventTime() -> ContinuousClock.Instant? {
         let deadlines = nodes.compactMap(\.sock.nextDeadline)
-        return (inFlight.map(\.time) + deadlines + [schedule?.next].compactMap { $0 }).min()
+        return (inFlight.map(\.time) + deadlines + schedules.map(\.next)).min()
     }
 
     private mutating func send(_ datagram: [UInt8], from: Int, to: Int) {
@@ -284,7 +291,8 @@ struct TestNetwork {
                 if destination == stunServer {
                     let response = TestSTUN.response(to: bytes, mapped: nodes[node].identity.address)
                     inFlight.append((now + stunLatency, node, .udp(response, from: stunServer)))
-                } else if !udpBlocked, let target = nodes.firstIndex(where: { $0.identity.address == destination }) {
+                } else if !udpBlocked, let target = nodes.firstIndex(where: { $0.identity.address == destination }),
+                          !losesPong(bytes, from: node, to: target) {
                     inFlight.append((now + udpLatency, target, .udp(bytes, from: nodes[node].identity.address)))
                 }
             case .derp(let bytes, let key, let region):
@@ -300,6 +308,12 @@ struct TestNetwork {
                 break
             }
         }
+    }
+
+    /// `pongLoss`에 걸린 Pong인가.
+    private func losesPong(_ bytes: [UInt8], from node: Int, to target: Int) -> Bool {
+        guard let pongLoss, pongLoss.from == node, pongLoss.during.contains(now), DiscoPacket.isDisco(bytes) else { return false }
+        return (try? nodes[target].identity.open(bytes))?.isPong == true
     }
 
     private mutating func deliver(_ delivery: Delivery, to node: Int) {
