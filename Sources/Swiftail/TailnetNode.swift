@@ -150,7 +150,7 @@ public actor TailnetNode {
     var blockedUDPPorts: Set<UInt16> = []
     /// 이번 처리에서 보낼 UDP 데이터그램. 가장 바깥 처리가 닫힐 때 소켓의 송신 큐로 넘긴다.
     var outgoingUDP: [DatagramSocket.OutgoingDatagram] = []
-    /// 경로 사건 로그에 붙일 진단(직전 경로 사건 뒤의 시간과 버린 disco 개수).
+    /// 경로 사건 로그에 붙일 진단(피어 번호, 같은 피어의 앞 사건 뒤 시간, 버린 disco 개수).
     var pathEventTally = PathEventTally()
 
     // MARK: 기본 인터페이스 (동작 N)
