@@ -78,8 +78,8 @@ extension TailnetNode {
             case let .homeRegionChanged(region):
                 homeRegionChanged(to: region)
             case let .pathChanged(peer, path):
-                Self.log.info("피어 경로: \(path.logName, privacy: .public) (\(self.pathEventTally.summary(at: now), privacy: .public))")
-                pathEventTally = PathEventTally(since: now)
+                let line = pathEventTally.line(for: peer, path: path, downgrade: magicsock?.downgrade(of: peer), at: now)
+                Self.log.info("\(line, privacy: .public)")
                 if let name = peerDirectory.name(of: peer) {
                     eventContinuation.yield(.peerPathChanged(fqdn: name, path: path))
                 }
@@ -231,21 +231,23 @@ extension Magicsock.Source {
     }
 }
 
-/// "피어 경로" 로그에 붙이는 진단: 직전 경로 사건(어느 피어든) 뒤의 시간과 그사이 버린 disco의 종류별 개수.
+/// "피어 N 경로" 로그 줄을 만든다. 실기기 기록에서 경로가 왜, 어느 피어에서 바뀌었는지 가르는 진단이다.
 ///
-/// 중계에서 직접으로 넘어가기까지 오래 걸릴 때 까닭을 가른다. 모르는 키가 쌓였으면 상대의 새 disco 키를 아직 모른
-/// 것이고(netmap이 늦음), 열리지 않음이 쌓였으면 상대가 이 노드의 옛 키로 봉한 것이며, 둘 다 없으면 disco는 오갔으나
-/// UDP가 닿지 않은 것이다. 키·주소·이름은 담지 않는다. `docs/contracts/SwiftailMagicsock.md` "직접 경로 지연의 조사".
+/// 줄에는 피어 번호, 경로, 나빠졌으면 그 까닭, 같은 피어의 앞 경로 사건 뒤 시간, 앞 경로 사건(어느 피어든) 뒤 버린
+/// disco의 종류별 개수가 들어간다. 예: `피어 2 경로: relayed(7) (신뢰 만료, 앞 사건 뒤 96.5초, 버린 disco: 모르는 키 0,
+/// 열리지 않음 0, 경로 규칙 0)`.
+/// - 피어 번호는 이번 실행에서 그 피어의 경로 사건이 처음 난 순서다(1부터). 공개 저장소에 로그가 실리므로 키·주소·이름·
+///   안정 ID는 담지 않는다. 번호는 노드가 끝날 때까지 바뀌지 않는다.
+/// - 버린 disco가 모르는 키로 쌓였으면 상대의 새 disco 키를 아직 모른 것이고(netmap이 늦음), 열리지 않음이 쌓였으면
+///   상대가 이 노드의 옛 키로 봉한 것이며, 둘 다 없으면 disco는 오갔으나 UDP가 닿지 않은 것이다.
+///
+/// `docs/contracts/SwiftailMagicsock.md` "직접 경로 지연의 조사"의 "고친 것", "direct가 선 뒤 약 100초에 `relayed`"의 "조사 결과".
 struct PathEventTally: Sendable {
-    /// 직전 경로 사건의 시각. 아직 없으면 nil.
-    private let since: ContinuousClock.Instant?
+    /// 경로 사건을 낸 피어의 번호와 그 피어의 앞 사건 시각.
+    private var peers: [NodePublicKey: (number: Int, lastEvent: ContinuousClock.Instant)] = [:]
     private var unknownKey = 0
     private var unopened = 0
     private var misrouted = 0
-
-    init(since: ContinuousClock.Instant? = nil) {
-        self.since = since
-    }
 
     /// disco를 버린 까닭이면 센다. 다른 까닭은 세지 않는다.
     mutating func count(_ drop: Magicsock.Drop) {
@@ -257,15 +259,45 @@ struct PathEventTally: Sendable {
         }
     }
 
-    /// 예: `앞 사건 뒤 25.3초, 버린 disco: 모르는 키 10, 열리지 않음 5, 경로 규칙 0`.
-    func summary(at now: ContinuousClock.Instant) -> String {
-        var elapsed = "첫 사건"
-        if let since {
-            let (seconds, attoseconds) = max(.zero, since.duration(to: now)).components
-            let tenths = seconds * 10 + attoseconds / 100_000_000_000_000_000
-            elapsed = "앞 사건 뒤 \(tenths / 10).\(tenths % 10)초"
+    /// 경로 사건 하나의 로그 줄. 그 피어의 사건 시각을 기억하고 버린 disco 개수를 0으로 되돌린다.
+    mutating func line(
+        for peer: NodePublicKey,
+        path: PeerPath?,
+        downgrade: PathDowngrade?,
+        at now: ContinuousClock.Instant
+    ) -> String {
+        var details: [String] = []
+        if let downgrade {
+            details.append(downgrade.logName)
         }
-        return "\(elapsed), 버린 disco: 모르는 키 \(unknownKey), 열리지 않음 \(unopened), 경로 규칙 \(misrouted)"
+        let number: Int
+        if let previous = peers[peer] {
+            number = previous.number
+            let (seconds, attoseconds) = max(.zero, previous.lastEvent.duration(to: now)).components
+            let tenths = seconds * 10 + attoseconds / 100_000_000_000_000_000
+            details.append("앞 사건 뒤 \(tenths / 10).\(tenths % 10)초")
+        } else {
+            number = peers.count + 1
+            details.append("첫 사건")
+        }
+        details.append("버린 disco: 모르는 키 \(unknownKey), 열리지 않음 \(unopened), 경로 규칙 \(misrouted)")
+        peers[peer] = (number, now)
+        (unknownKey, unopened, misrouted) = (0, 0, 0)
+        return "피어 \(number) 경로: \(path.logName) (\(details.joined(separator: ", ")))"
+    }
+}
+
+extension PathDowngrade {
+    /// 로그에 남길 한 단어.
+    var logName: String {
+        switch self {
+        case .trustExpired: "신뢰 만료"
+        case .candidateRemoved: "후보 지움"
+        case .rebind: "재결속"
+        case .discoKeyChanged: "disco 키 바뀜"
+        case .idle: "유휴"
+        case .peerRemoved: "피어 빠짐"
+        }
     }
 }
 

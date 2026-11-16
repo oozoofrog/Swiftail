@@ -102,7 +102,8 @@ extension PeerPathState {
         for (txID, ping) in expired {
             sentPings[txID] = nil
             if ping.destination == bestAddr?.address, !isTrusted(at: now) {
-                clearBestAddr()
+                // 신뢰가 이미 지난 뒤라 경로는 벌써 relayed다. 까닭은 신뢰 만료와 같다(Pong이 오지 않았다).
+                clearBestAddr(because: .trustExpired)
             }
         }
     }
