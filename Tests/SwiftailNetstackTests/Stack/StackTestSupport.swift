@@ -53,6 +53,23 @@ extension Array where Element == TCPStack.Output {
     var drops: [TCPStack.Drop] {
         compactMap { if case .dropped(let drop) = $0 { drop } else { nil } }
     }
+
+    /// 응용이 놓은 연결의 끝(`.releasedConnectionClosed`).
+    var releasedCloses: [ReleasedClose] {
+        compactMap {
+            if case .releasedConnectionClosed(let reason, let statistics) = $0 {
+                ReleasedClose(reason: reason, statistics: statistics)
+            } else {
+                nil
+            }
+        }
+    }
+}
+
+/// `.releasedConnectionClosed`에 실린 값.
+struct ReleasedClose: Equatable {
+    var reason: TCPStack.CloseReason
+    var statistics: TCPConnection.Statistics
 }
 
 extension TCPStack.Event {
@@ -102,6 +119,8 @@ struct StackPair {
     var serverEvents: [TCPStack.Event] = []
     var clientDrops: [TCPStack.Drop] = []
     var serverDrops: [TCPStack.Drop] = []
+    var clientReleasedCloses: [ReleasedClose] = []
+    var serverReleasedCloses: [ReleasedClose] = []
     /// 각 쪽이 낸 세그먼트 전부.
     var clientSent: [TCPSegment] = []
     var serverSent: [TCPSegment] = []
@@ -127,6 +146,10 @@ struct StackPair {
             case (.event(let event), .server): serverEvents.append(event)
             case (.dropped(let drop), .client): clientDrops.append(drop)
             case (.dropped(let drop), .server): serverDrops.append(drop)
+            case (.releasedConnectionClosed(let reason, let statistics), .client):
+                clientReleasedCloses.append(ReleasedClose(reason: reason, statistics: statistics))
+            case (.releasedConnectionClosed(let reason, let statistics), .server):
+                serverReleasedCloses.append(ReleasedClose(reason: reason, statistics: statistics))
             }
         }
     }

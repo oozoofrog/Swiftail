@@ -40,8 +40,12 @@ extension TCPStack {
         }
     }
 
-    /// 응용이 쥔 연결의 사건이면 ID를 붙여 낸다. `.closed`는 한 번만 낸다.
+    /// 응용이 쥔 연결의 사건이면 ID를 붙여 낸다. 끝남은 `reportClose(_:of:into:)`가 한 번만 알린다.
     private mutating func report(_ event: TCPConnection.Event, of id: ConnectionID, into outputs: inout [Output]) {
+        if case .closed(let reason) = event {
+            reportClose(CloseReason(reason), of: id, into: &outputs)
+            return
+        }
         guard let index = connections.index(forKey: id),
             connections.values[index].role == .application, !connections.values[index].hasReportedClose
         else { return }
@@ -50,10 +54,22 @@ extension TCPStack {
         case .readable: outputs.append(.event(.readable(id)))
         case .writable: outputs.append(.event(.writable(id)))
         case .endOfStream: outputs.append(.event(.endOfStream(id)))
-        case .closed(let reason):
-            connections.values[index].hasReportedClose = true
-            outputs.append(.event(.closed(id, CloseReason(reason), connections.values[index].connection.statistics)))
+        case .closed: break
         }
+    }
+
+    /// TCP의 일이 끝난 연결(CLOSED가 됐거나 TIME-WAIT에 들었다)을 연결마다 한 번 알린다. 응용이 쥔 연결이면 `.closed` 사건,
+    /// 응용이 놓은 연결이면 로그에만 쓰는 `.releasedConnectionClosed`다(계약 "연결 종료 통계 로그"). 맺는 중이거나 대기열의
+    /// 연결은 알리지 않는다.
+    private mutating func reportClose(_ reason: CloseReason, of id: ConnectionID, into outputs: inout [Output]) {
+        guard let index = connections.index(forKey: id), !connections.values[index].hasReportedClose else { return }
+        let statistics = connections.values[index].connection.statistics
+        switch connections.values[index].role {
+        case .application: outputs.append(.event(.closed(id, reason, statistics)))
+        case .released: outputs.append(.releasedConnectionClosed(reason, statistics))
+        case .halfOpen, .queued: return
+        }
+        connections.values[index].hasReportedClose = true
     }
 
     /// 연결이 움직인 뒤의 상태에 맞춰 표를 고친다.
@@ -61,7 +77,7 @@ extension TCPStack {
     /// - 맺는 중이던 수동 열기가 맺어지면 대기열로 옮기고 `.acceptable`을 낸다(계약 동작 S5).
     /// - 닫혔으면 지운다. 맺는 중이던 연결이 `.reset`으로 닫힌 것(RFC 9293 3.10.7.4 둘째의 "LISTEN으로 돌아감")도 알리지 않고
     ///   지운다. 응용이 쥔 연결에 읽지 않은 데이터가 남았으면 응용이 놓을 때까지 그것만 둔다.
-    /// - TIME-WAIT에 들었으면 응용에 `.closed(.finished)`를 알리고, 상대 FIN에 대한 ACK가 나간 뒤 기록으로 옮긴다(계약 동작
+    /// - TIME-WAIT에 들었으면 `.closed(.finished)`(놓은 연결이면 `.releasedConnectionClosed(.finished)`)를 알리고, 상대 FIN에 대한 ACK가 나간 뒤 기록으로 옮긴다(계약 동작
     ///   S6). 기록이 1,024개면 옮기지 않고 연결 그대로 두어 TIME-WAIT를 마치게 한다(기록도 연결도 상한을 넘지 않는다).
     ///   기록의 수명은 연결이 TIME-WAIT에 든 때부터 240초까지다(`TimeWaitRecord.lifetimeEnd`).
     /// - 그 밖에는 연결의 기한을 다시 적는다.
@@ -81,10 +97,7 @@ extension TCPStack {
         case .closed:
             finish(id)
         case .timeWait:
-            if role == .application, !connections.values[index].hasReportedClose {
-                connections.values[index].hasReportedClose = true
-                outputs.append(.event(.closed(id, .finished, connections.values[index].connection.statistics)))
-            }
+            reportClose(.finished, of: id, into: &outputs)
             let connection = connections.values[index].connection
             if connection.timers[.acknowledgment] == nil, timeWaitRecords.count < Self.maximumTimeWaitRecords {
                 addTimeWaitRecord(
@@ -114,12 +127,10 @@ extension TCPStack {
         }
     }
 
-    /// 아무것도 보내지 않고 연결을 끝낸다. 응용이 쥔 연결이면 `.closed(reason)`을 알린다(계약 동작 S9, X10).
+    /// 아무것도 보내지 않고 연결을 끝낸다. 응용이 쥔 연결이면 `.closed(reason)`, 놓은 연결이면
+    /// `.releasedConnectionClosed(reason)`을 알린다(계약 동작 S9, X10).
     mutating func discard(_ id: ConnectionID, reason: CloseReason, into outputs: inout [Output]) {
-        guard let entry = connections[id] else { return }
-        if entry.role == .application, !entry.hasReportedClose {
-            outputs.append(.event(.closed(id, reason, entry.connection.statistics)))
-        }
+        reportClose(reason, of: id, into: &outputs)
         removeConnection(id)
     }
 

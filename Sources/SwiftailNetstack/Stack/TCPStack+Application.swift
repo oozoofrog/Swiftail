@@ -133,7 +133,8 @@ extension TCPStack {
     }
 
     /// 연결을 닫고 놓는다(`TCPConnection.close`). 마무리(FIN 주고받기, TIME-WAIT)는 스택이 하고 그 사건은 알리지 않는다.
-    /// 이 호출에서 곧바로 끝나면(읽지 않은 데이터가 있어 RST) `.closed(id, .aborted)`가 나온다.
+    /// 마무리가 끝나면(CLOSED, TIME-WAIT) 로그용 `.releasedConnectionClosed`가 한 번 나온다. 이 호출에서 곧바로
+    /// 끝나면(읽지 않은 데이터가 있어 RST) 대신 `.closed(id, .aborted)`가 나온다.
     package mutating func close(_ id: ConnectionID, at now: ContinuousClock.Instant) -> [Output] {
         guard let index = connections.index(forKey: id), connections.values[index].role == .application else {
             return []

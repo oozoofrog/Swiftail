@@ -15,7 +15,8 @@ import SwiftailBase
 ///
 /// 연결은 `ConnectionID`로, 리스너는 `ListenerID`로 가리킨다. 둘 다 스택 하나 안에서 다시 쓰지 않는 번호라, 끝난 연결의
 /// 옛 ID로 부른 호출은 새 연결에 닿지 않고 아무 일도 하지 않는다. 사건은 응용이 쥔 연결(`connect`로 건 것, `accept`로 꺼낸 것)
-/// 에 대해서만 나온다. 맺는 중이거나 대기열에 있는 연결의 일, 응용이 `close`·`abort`한 뒤의 일은 알리지 않는다.
+/// 에 대해서만 나온다. 맺는 중이거나 대기열에 있는 연결의 일, 응용이 `close`·`abort`한 뒤의 일은 알리지 않는다. 다만 놓은
+/// 연결의 끝은 로그용 출력 `.releasedConnectionClosed`로 한 번 낸다.
 ///
 /// 이 파일은 타입의 선언과 상태, 시각을 담는다. 받기·응용 호출·연결 정리·ISN·TIME-WAIT 기록은 같은 폴더의 파일에 있다.
 /// 계약: `docs/contracts/SwiftailNetstack.md` 동작 S·X·M. 노트: `docs/protocol-notes/tcp-netstack.md` 4.2·4.3절.
@@ -40,6 +41,11 @@ package struct TCPStack: Sendable {
         case event(Event)
         /// 받은 패킷을 버렸다. 노드가 로그의 횟수를 센다(계약 동작 K2).
         case dropped(Drop)
+        /// 응용이 `close`·`abort`로 놓은 연결의 TCP 일이 끝났다(CLOSED가 됐거나 TIME-WAIT에 들었다). 까닭과 그때까지의
+        /// 통계를 싣는다(놓은 뒤의 재전송도 들어간다). 노드는 `연결이 끝남` 로그에만 쓰고 응용의 호출을 깨우지 않는다(계약
+        /// "연결 종료 통계 로그"의 "응용이 놓은 연결"). 연결마다 한 번이고, 쥔 채 `.closed`를 이미 낸 연결과 `abortAll()`로
+        /// 버리는 연결에는 나오지 않는다.
+        case releasedConnectionClosed(CloseReason, TCPConnection.Statistics)
     }
 
     /// 응용에 알릴 일. 응용이 쥔 연결과 리스너의 것만 나온다.

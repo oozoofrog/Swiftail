@@ -139,6 +139,8 @@ extension TailnetNode {
                 countLimitDrop(limit)
             case .dropped:
                 break
+            case let .releasedConnectionClosed(reason, statistics):
+                logClose(reason, statistics, afterRelease: true, at: now)
             }
         }
     }
@@ -158,13 +160,25 @@ extension TailnetNode {
         case let .writable(id):
             wakeWriter(id)
         case let .closed(id, reason, statistics):
-            guard netstack?.connections[id] != nil else { return }
-            netstack?.connections[id]?.closeReason = reason
-            wakeReader(id)
-            wakeWriter(id)
-            Self.log.info(
-                "연결이 끝남: \(reason.logName, privacy: .public), \(statistics.logSummary(closedAt: now), privacy: .public)")
+            // 기록이 없으면 앱이 close·abort로 놓은 연결이 그 호출 안에서 곧바로 끝난 것이다(abort, 읽지 않은 데이터가 있던
+            // close, 취소된 connect). 깨울 호출은 없고 로그만 남긴다.
+            let isHeld = netstack?.connections[id] != nil
+            if isHeld {
+                netstack?.connections[id]?.closeReason = reason
+                wakeReader(id)
+                wakeWriter(id)
+            }
+            logClose(reason, statistics, afterRelease: !isHeld, at: now)
         }
+    }
+
+    /// `연결이 끝남` 한 줄을 남긴다(계약 "연결 종료 통계 로그"). 숫자와 참·거짓만이다.
+    private func logClose(
+        _ reason: TCPStack.CloseReason, _ statistics: TCPConnection.Statistics, afterRelease: Bool,
+        at now: ContinuousClock.Instant
+    ) {
+        Self.log.info(
+            "\(statistics.closeLogLine(reason: reason, closedAt: now, afterRelease: afterRelease), privacy: .public)")
     }
 
     /// 읽기 쪽 사건을 적고 기다리던 `read`를 깨운다. 적어 두는 것은, 사건이 호출 자신의 출력 처리 안에서 나와 깨울 대상이
@@ -369,13 +383,18 @@ extension TCPStack.CloseReason {
 }
 
 extension TCPConnection.Statistics {
-    /// 로그에 남길 한 줄(숫자와 참·거짓만. 계약 "연결 종료 통계 로그"가 각 값의 뜻을 적는다).
-    func logSummary(closedAt now: ContinuousClock.Instant) -> String {
+    /// 연결이 끝날 때 남길 한 줄(숫자와 참·거짓만. 계약 "연결 종료 통계 로그"가 각 값의 뜻을 적는다). 앱이 놓은 뒤 끝난
+    /// 연결이면 끝에 `, 놓은 뒤 끝남`을 붙인다.
+    func closeLogLine(
+        reason: TCPStack.CloseReason, closedAt now: ContinuousClock.Instant, afterRelease: Bool
+    ) -> String {
         let lifetime = Int((now - openedAt) / .milliseconds(1))
-        return "수명 \(lifetime)ms, 보냄 \(sentBytes)B, 다시 보냄 \(retransmittedBytes)B, RTO \(retransmissionTimeouts), "
-            + "빠른 재전송 \(fastRetransmits), partial ACK 재전송 \(partialAcknowledgmentRetransmits), "
-            + "중복 ACK \(duplicateAcknowledgments), SACK 실린 ACK \(acknowledgmentsWithSACK), SACK 협상 \(sackPermitted), "
+        return "연결이 끝남: \(reason.logName), 수명 \(lifetime)ms, 보냄 \(sentBytes)B, 다시 보냄 \(retransmittedBytes)B, "
+            + "RTO \(retransmissionTimeouts), 빠른 재전송 \(fastRetransmits), "
+            + "partial ACK 재전송 \(partialAcknowledgmentRetransmits), 중복 ACK \(duplicateAcknowledgments), "
+            + "SACK 실린 ACK \(acknowledgmentsWithSACK), SACK 협상 \(sackPermitted), "
             + "cwnd 최대 \(maximumCongestionWindow)B, ssthresh 줄임 \(slowStartThresholdReductions)"
+            + (afterRelease ? ", 놓은 뒤 끝남" : "")
     }
 }
 
