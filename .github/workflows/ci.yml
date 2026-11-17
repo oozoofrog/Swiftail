@@ -27,4 +27,7 @@ jobs:
       - name: Build
         run: swift build --build-tests -Xswiftc -warnings-as-errors
       - name: Test
-        run: swift test --skip-build
+        run: swift test --skip-build --skip SwiftailControlTests
+      # 제어 클라이언트 시험에는 1초 안팎의 기한을 재는 시험이 많아, 코어가 적은 러너에서 병렬로 돌리면 기한이 늦게 걸린다.
+      - name: Test (control client, serial)
+        run: swift test --skip-build --filter SwiftailControlTests --no-parallel
