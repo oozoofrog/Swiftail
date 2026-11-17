@@ -591,11 +591,94 @@ struct PeerPathStateTests {
         #expect(state.candidates.count == PeerPathState.maxCandidates)
         #expect(state.path(at: pathTime(2)) == .direct(a))
 
-        // 가득 찬 동안은 새 netmap 후보도 들어오지 못한다. Ping으로 배운 후보가 45초를 넘기면 자리가 난다.
+        // 가득 찬 표에 새 netmap 후보가 오면 Ping으로만 배운 후보 하나를 밀어내고 들어간다. Ping으로 배운 후보는 45초를
+        // 넘기면 지워진다.
         state.update(homeDERP: 1, endpoints: [a, late], at: pathTime(3))
-        #expect(!state.candidates.contains { $0.address == late })
+        #expect(state.candidates.contains { $0.address == late })
+        #expect(state.candidates.count == PeerPathState.maxCandidates)
+        #expect(state.path(at: pathTime(3)) == .direct(a))
         state.update(homeDERP: 1, endpoints: [a, late], at: pathTime(45_002) + .nanoseconds(1))
         #expect(state.candidates.map(\.address) == [a, late])
+    }
+
+    /// 10.1.x.y:41641. 캡처한 Ping을 되풀이해 보내는 출처로 쓴다.
+    private func replaySource(_ index: Int) throws -> IPEndpoint {
+        IPEndpoint(
+            address: try #require(IPAddress(bytes: [10, 1, UInt8(index / 256), UInt8(index % 256)])), port: 41641)
+    }
+
+    @Test("같은 Ping을 서로 다른 주소 128개에서 넣어 표가 가득 차도, 새 Ping이 온 주소는 가장 오래된 것을 밀어내고 후보가 된다")
+    func fullTableAdmitsNewPingSource() throws {
+        var state = PeerPathState(homeDERP: 1, endpoints: [])
+        var random = PathTestRandom(state: 1)
+        let replayed = TransactionID.random(using: &random)
+        for index in 0..<PeerPathState.maxCandidates {
+            #expect(state.receivePing(replayed, from: try replaySource(index), at: pathTime(Int64(index))) == true)
+        }
+        #expect(state.candidates.count == PeerPathState.maxCandidates)
+
+        let real = try pathEndpoint("203.0.113.7:41641")
+        #expect(state.receivePing(TransactionID.random(using: &random), from: real, at: pathTime(1_000)) == true)
+        #expect(state.candidates.contains { $0.address == real })
+        #expect(state.candidates.count == PeerPathState.maxCandidates)
+        // 밀려난 것은 Ping을 받은 지 가장 오래된 후보 하나다.
+        #expect(!state.candidates.contains { $0.address == (try? replaySource(0)) })
+        #expect(state.candidates.contains { $0.address == (try? replaySource(1)) })
+    }
+
+    @Test("가득 찬 표에서 netmap·CallMeMaybe 후보와 bestAddr는 밀려나지 않는다. 밀어낼 것이 없으면 새 후보를 넣지 않는다")
+    func fullTableKeepsTrustedSources() throws {
+        let fromNetmap = try pathEndpoint("192.168.1.10:41641")
+        let called = try pathEndpoint("192.168.1.11:41641")
+        let best = try pathEndpoint("192.168.1.12:41641")
+        var state = PeerPathState(homeDERP: 1, endpoints: [fromNetmap])
+        var random = PathTestRandom(state: 1)
+        // `best`는 Ping으로 배운 뒤 Pong이 확인한 주소다. 가장 먼저 배웠으므로 Ping을 받은 지 가장 오래됐다.
+        #expect(state.receivePing(TransactionID.random(using: &random), from: best, at: pathT0) == true)
+        let actions = state.receiveCallMeMaybe([called], at: pathTime(1), using: &random)
+        #expect(state.receivePong(try actions.txID(to: best), from: best, at: pathTime(2)) == true)
+        #expect(state.path(at: pathTime(2)) == .direct(best))
+
+        for index in 0..<300 {
+            _ = state.receivePing(TransactionID.random(using: &random), from: try replaySource(index), at: pathTime(3))
+        }
+        #expect(state.candidates.count == PeerPathState.maxCandidates)
+        #expect(Array(state.candidates.map(\.address).prefix(3)) == [fromNetmap, best, called])
+        #expect(state.path(at: pathTime(3)) == .direct(best))
+
+        // 표가 netmap 후보로만 가득이면 밀어낼 것이 없다. Ping에는 답하되 후보로 넣지 않는다.
+        var endpoints: [IPEndpoint] = []
+        for index in 0..<PeerPathState.maxCandidates {
+            endpoints.append(IPEndpoint(
+                address: try #require(IPAddress(bytes: [10, 2, UInt8(index / 256), UInt8(index % 256)])), port: 41641))
+        }
+        var pinned = PeerPathState(homeDERP: 1, endpoints: endpoints)
+        let stranger = try pathEndpoint("203.0.113.7:41641")
+        #expect(pinned.receivePing(TransactionID.random(using: &random), from: stranger, at: pathT0) == true)
+        #expect(pinned.candidates.map(\.address) == endpoints)
+    }
+
+    @Test("같은 TxID의 재전송은 Ping으로 배운 후보의 수명(45초)을 늘리지 않는다. 새 TxID의 Ping은 늘린다")
+    func duplicatePingDoesNotExtendLifetime() throws {
+        let source = try pathEndpoint("203.0.113.7:41641")
+        var random = PathTestRandom(state: 1)
+        let first = TransactionID.random(using: &random)
+
+        var replayed = PeerPathState(homeDERP: 1, endpoints: [])
+        #expect(replayed.receivePing(first, from: source, at: pathT0) == true)
+        #expect(replayed.receivePing(first, from: source, at: pathTime(30_000)) == false)
+        replayed.update(homeDERP: 1, endpoints: [], at: pathTime(45_000))
+        #expect(replayed.candidates.map(\.address) == [source])
+        replayed.update(homeDERP: 1, endpoints: [], at: pathTime(45_000) + .nanoseconds(1))
+        #expect(replayed.candidates.isEmpty)
+
+        var refreshed = PeerPathState(homeDERP: 1, endpoints: [])
+        #expect(refreshed.receivePing(first, from: source, at: pathT0) == true)
+        #expect(refreshed.receivePing(TransactionID.random(using: &random), from: source, at: pathTime(30_000)) == true)
+        refreshed.update(homeDERP: 1, endpoints: [], at: pathTime(45_000) + .nanoseconds(1))
+        #expect(refreshed.candidates.map(\.address) == [source])
+        refreshed.update(homeDERP: 1, endpoints: [], at: pathTime(75_000) + .nanoseconds(1))
+        #expect(refreshed.candidates.isEmpty)
     }
 
     @Test("CallMeMaybe와 netmap의 주소는 앞에서부터 128개까지만 넣는다")

@@ -43,12 +43,18 @@ extension TCPStack {
     /// 리스너의 accept 대기열에서 맺어진 연결 하나를 꺼낸다. 비었거나 없는 리스너면 `nil`.
     ///
     /// 꺼낸 연결은 응용이 쥔 것이 되어 그 뒤의 사건이 나온다. 대기열에 있는 동안 받은 데이터와 FIN은 사건으로 알리지 않았으므로,
-    /// 노드는 꺼낸 뒤 `connection(_:)`으로 읽을 것과 FIN 여부를 본다.
-    package mutating func accept(from listenerID: ListenerID) -> ConnectionID? {
+    /// 노드는 꺼낸 뒤 `connection(_:)`으로 읽을 것과 FIN 여부를 본다. 대기열에 있는 동안 작게 묶어 둔 받는 창을 여기서 열고,
+    /// 출력에 그 창 갱신 ACK가 든다(`TCPConnection.openReceiveWindow(at:)`).
+    package mutating func accept(
+        from listenerID: ListenerID, at now: ContinuousClock.Instant
+    ) -> (connection: ConnectionID, outputs: [Output])? {
         guard let index = listeners.index(forKey: listenerID), !listeners.values[index].queue.isEmpty else { return nil }
         let id = listeners.values[index].queue.removeFirst()
         connections[id]?.role = .application
-        return id
+        let connectionOutputs = modifyConnection(id) { $0.openReceiveWindow(at: now) } ?? []
+        var outputs: [Output] = []
+        process(connectionOutputs, of: id, at: now, into: &outputs)
+        return (id, outputs)
     }
 
     // MARK: 걸기
@@ -59,7 +65,7 @@ extension TCPStack {
     /// 출발 주소는 목적지와 같은 계열의 첫 자기 주소이고, 포트는 49152…65535에서 차례로 고르되 연결이나 TIME-WAIT 기록이 쓰는
     /// 4-튜플은 건너뛴다(계약 동작 S8).
     ///
-    /// 연결이 256개이거나, 그 상대 주소의 연결이 64개이거나, TIME-WAIT 기록이 1,024개면 `limitReached`다(계약 동작 S6과 그 아래).
+    /// 연결이 256개이거나, 그 상대 피어의 연결이 64개이거나, TIME-WAIT 기록이 1,024개면 `limitReached`다(계약 동작 S6과 그 아래).
     package mutating func connect(
         to remote: IPEndpoint, at now: ContinuousClock.Instant
     ) throws(ConnectError) -> (connection: ConnectionID, outputs: [Output]) {

@@ -173,7 +173,7 @@ struct StackLookupTests {
         #expect(outputs.isEmpty)
         #expect(stack.connections.isEmpty)
         #expect(stack.halfOpenCount == 0)
-        #expect(stack.accept(from: listener) == nil)
+        #expect(stack.accept(from: listener, at: .now) == nil)
         expectStackInvariants(stack)
     }
 
@@ -188,8 +188,8 @@ struct StackLookupTests {
         pair.collect(pair.client.finishWriting(clientID, at: pair.now), from: .client)
         try pair.deliver()
         #expect(pair.serverEvents == [.acceptable(listener)])
-        let popped = pair.server.accept(from: listener)
-        let serverID = try #require(popped)
+        let popped = pair.server.accept(from: listener, at: pair.now)
+        let serverID = try #require(popped?.connection)
         #expect(pair.server.connection(serverID)?.readableByteCount == 3)
         #expect(pair.server.connection(serverID)?.hasReceivedEndOfStream == true)
         #expect(pair.read(serverID, from: .server) == [9, 8, 7])

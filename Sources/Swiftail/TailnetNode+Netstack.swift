@@ -221,20 +221,18 @@ extension TailnetNode {
 
     /// netmap을 적용할 때마다 부른다. 자기 주소를 스택에 넘기고, 데이터면 피어의 주소마다 주인(node 키)을 견주어 주인이
     /// 없어지거나 바뀐 주소의 연결을 끊는다(`peerRemoved`, 아무것도 보내지 않는다). 주소를 물려받은 다른 노드가 앞 노드의
-    /// 연결을 이어 쓰는 것을 막는다(계약 총괄 확정 N8).
+    /// 연결을 이어 쓰는 것을 막는다(계약 총괄 확정 N8). 같은 표에서 피어별 주소 묶음도 넘겨, 스택이 피어 하나의 몫을 그
+    /// 피어의 주소들(IPv4·IPv6)에 걸쳐 세게 한다.
     ///
     /// 피어의 패킷은 그 피어의 AllowedIPs로 출발지를 검사받으므로(엔진 계약 M3 동작 2·5), 한 주소의 연결은 모두 그때의 주인과
     /// 맺은 것이다. 그래서 연결마다 키를 적지 않고 주소마다의 주인을 견준다. 맺는 중이거나 대기열에 있는 연결도 함께 끊긴다.
     func updateNetstack(for netmap: Netmap) {
         guard netstack != nil else { return }
-        var owners: [IPAddress: NodePublicKey] = [:]
-        for peer in EnginePeer.peers(in: netmap, at: Date()) {
-            for prefix in peer.allowedIPs where prefix.isSingleAddress {
-                owners[prefix.address] = peer.key
-            }
-        }
+        let ownerNodes = EnginePeer.addressOwners(in: netmap, at: Date())
+        let owners = ownerNodes.mapValues(\.key)
         let previous = netstack?.addressOwners ?? [:]
         netstack?.addressOwners = owners
+        netstack?.stack.setRemoteAddressGroups(ownerNodes.mapValues { Int(truncatingIfNeeded: $0.id) })
 
         let localAddresses = netmap.selfNode.addresses.filter(\.isSingleAddress).map(\.address)
         var outputs = netstack?.stack.setLocalAddresses(localAddresses) ?? []
@@ -405,6 +403,7 @@ extension TCPStack.Limit {
         case .halfOpenConnections: "halfOpenConnections"
         case .halfOpenConnectionsPerAddress: "halfOpenConnectionsPerAddress"
         case .acceptQueue: "acceptQueue"
+        case .acceptQueueShare: "acceptQueueShare"
         case .connections: "connections"
         case .connectionsPerAddress: "connectionsPerAddress"
         case .timeWaitRecords: "timeWaitRecords"

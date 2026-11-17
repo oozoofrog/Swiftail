@@ -10,8 +10,9 @@ import SwiftailBase
 /// 후보는 세 곳에서 온다(노트 4.4 1). netmap의 `Endpoints`, UDP로 받은 Ping의 출처, DERP로 받은 CallMeMaybe의
 /// 주소 목록이다. 자기 STUN 결과와 Pong의 Src는 후보가 아니다. 출처마다 지우는 규칙이 다르다(노트 4.4 2).
 ///
-/// 받은 Ping과 CallMeMaybe는 상대가 정하는 입력이다. 표는 `maxCandidates`를 넘지 않고, 가득 차면 지울 것을
-/// 먼저 지운 뒤에도 자리가 없으면 새 후보를 넣지 않는다. 있는 후보와 `bestAddr`를 밀어내지 않는다(계약 H).
+/// 받은 Ping과 CallMeMaybe는 상대가 정하는 입력이다. 표는 `maxCandidates`를 넘지 않는다. 가득 차면 지울 것을
+/// 먼저 지우고, 그래도 자리가 없으면 Ping으로만 배운 후보 가운데 가장 오래된 것을 밀어낸다. netmap·CallMeMaybe로
+/// 배운 후보와 `bestAddr`는 밀어내지 않고, 밀어낼 것이 없으면 새 후보를 넣지 않는다(계약 H).
 extension PeerPathState {
     /// 후보 하나와 그 출처·측정 기록. Go `endpointState`.
     struct Candidate: Sendable, Equatable {
@@ -35,7 +36,9 @@ extension PeerPathState {
 
     /// UDP로 온 Ping(노트 4.2 4.2). 출처를 후보로 넣고, Pong을 보내야 하면 true를 돌려준다.
     ///
-    /// 같은 후보에서 직전과 같은 TxID가 오면 재전송으로 보고 false다. 후보 표가 가득 차 넣지 못해도 Pong은
+    /// 같은 후보에서 직전과 같은 TxID가 오면 재전송으로 보고 false다. 재전송은 후보의 수명(마지막 Ping 뒤 45초)도 늘리지
+    /// 않는다: disco에는 재전송 방지가 없어(계약 H) 캡처한 Ping 하나를 되풀이해 보내는 것만으로 후보를 영영 붙들 수 있기
+    /// 때문이다(Go는 재전송에도 시각을 새로 적는다). 후보 표가 가득 차 넣지 못해도 Pong은
     /// 보낸다(Ping은 공유 키 없이는 만들 수 없고 Pong은 Ping과 크기가 비슷해 증폭 수단이 되지 않는다. 받은 Ping에 답하는 Go와 같다). 받을 수 없는 출처(IPv6, 포트 0)는
     /// 답할 수도 없으므로 false다.
     mutating func receivePing(_ txID: TransactionID, from source: IPEndpoint, at now: ContinuousClock.Instant) -> Bool {
@@ -43,7 +46,7 @@ extension PeerPathState {
         if let index = candidates.firstIndex(where: { $0.address == address }) {
             let isDuplicate = candidates[index].lastPingReceivedTxID == txID
             candidates[index].lastPingReceivedTxID = txID
-            if candidates[index].lastPingReceived != nil {
+            if !isDuplicate, candidates[index].lastPingReceived != nil {
                 candidates[index].lastPingReceived = now
             }
             return !isDuplicate
@@ -113,12 +116,28 @@ extension PeerPathState {
         dropBestAddrIfRemoved()
     }
 
-    /// 표에 없는 후보 하나를 넣는다. 가득 찼으면 지울 것을 먼저 지우고, 그래도 가득이면 넣지 않는다.
+    /// 표에 없는 후보 하나를 넣는다. 가득 찼으면 지울 것을 먼저 지우고, 그래도 가득이면 Ping으로만 배운 후보 가운데 Ping을
+    /// 받은 지 가장 오래된 것을 밀어낸다(`bestAddr`는 빼고). 밀어낼 것이 없으면 넣지 않는다.
+    ///
+    /// Ping으로 배운 후보는 상대가 정한 출처일 뿐이라, 그것으로 가득 찬 표가 피어의 새 주소를 막게 두지 않는다. Go에는 상한이
+    /// 없어 이 밀어내기도 없다.
     private mutating func insertCandidate(_ candidate: Candidate, at now: ContinuousClock.Instant) {
         if candidates.count >= Self.maxCandidates {
             removeStaleCandidates(at: now)
         }
-        guard candidates.count < Self.maxCandidates else { return }
+        if candidates.count >= Self.maxCandidates {
+            var oldest: (index: Int, received: ContinuousClock.Instant)?
+            for (index, existing) in candidates.enumerated() {
+                guard let received = existing.lastPingReceived, !existing.inNetmap, !existing.fromCallMeMaybe,
+                      existing.address != bestAddr?.address
+                else { continue }
+                if oldest.map({ received < $0.received }) ?? true {
+                    oldest = (index, received)
+                }
+            }
+            guard let oldest else { return }
+            candidates.remove(at: oldest.index)
+        }
         candidates.append(candidate)
     }
 

@@ -31,12 +31,14 @@ extension TCPConnection {
     /// - Parameters:
     ///   - syn: ACK·RST가 없는 SYN.
     ///   - initialSequenceNumber: ISS.
+    ///   - receiveWindowLimit: 받는 창의 상한. 스택은 응용이 받아 갈 때까지 작게 둔다(`unacceptedReceiveWindow`).
     ///   - now: 지금.
     /// - Returns: 연결과, 보낼 SYN-ACK.
     /// - Throws: `AcceptError`. 상대 MSS가 64보다 작으면 그 SYN에 답할 RST를 담는다(계약 동작 X9).
     package static func accept(
         _ syn: TCPSegment,
         initialSequenceNumber: SequenceNumber,
+        receiveWindowLimit: Int = ReceiveBuffer.defaultCapacity,
         at now: ContinuousClock.Instant
     ) throws(AcceptError) -> (connection: TCPConnection, outputs: [Output]) {
         guard syn.flags.contains(.syn), !syn.flags.contains(.ack), !syn.flags.contains(.rst) else {
@@ -52,7 +54,7 @@ extension TCPConnection {
         var connection = TCPConnection(
             state: .synReceived, local: syn.destination, remote: syn.source,
             initialSendSequence: initialSequenceNumber, initialReceiveSequence: syn.sequenceNumber,
-            offersWindowScale: syn.windowScale != nil, at: now)
+            offersWindowScale: syn.windowScale != nil, receiveWindowLimit: receiveWindowLimit, at: now)
         connection.adoptPeerSynchronize(syn, peerSegmentSize: peerSize)
         connection.timers[.retransmission] = now + connection.retransmissionTimeout
         return (connection, [.segment(connection.synchronizeSegment())])
@@ -67,7 +69,8 @@ extension TCPConnection {
         return TCPSegment(
             source: localEndpoint, destination: remoteEndpoint, sequenceNumber: initialSendSequence,
             acknowledgmentNumber: acknowledges ? receiveNext : SequenceNumber(0),
-            flags: acknowledges ? [.syn, .ack] : [.syn], window: UInt16(Self.synchronizeWindow),
+            flags: acknowledges ? [.syn, .ack] : [.syn],
+            window: UInt16(min(Self.synchronizeWindow, receiveWindowLimit)),
             maximumSegmentSize: UInt16(receiveMaximumSegmentSize),
             windowScale: offersWindowScale ? UInt8(Self.ownWindowShift) : nil,
             sackPermitted: !acknowledges || peerPermitsSACK)

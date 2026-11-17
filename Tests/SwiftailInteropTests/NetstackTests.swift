@@ -271,19 +271,21 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 10: 33번째 미수락 연결은 대기하고 자리가 나면 맺어진다")
+    @Test("항목 10: 한 피어의 17번째 미수락 연결은 대기하고 자리가 나면 맺어진다")
     func acceptQueueLimit() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
             let listener = try await gate.node.listen(port: 9_101)
-            for _ in 0..<32 {
+            // 리스너의 대기열(32)에서 피어 하나의 몫은 16개다(계약 동작 S "피어 하나의 몫"). 대기열 전체의 상한은 피어가 둘
+            // 있어야 닿으므로 단위 시험(`StackLimitTests`)이 본다.
+            for _ in 0..<16 {
                 let id = try await netstackDial(gate, port: listener.port, count: 0)
                 try await netstackWait("accept 대기열 채우기") {
                     try await netstackTransfers(gate.tool).contains { $0.transferID == id && $0.state == "running" }
                 }
             }
             let id = try await netstackDial(gate, port: listener.port, count: 0)
-            try await assertDialWaits(gate, id: id, stage: "33번째 미수락")
+            try await assertDialWaits(gate, id: id, stage: "17번째 미수락")
             let first = try await netstackAccept(listener)
             try await netstackWait("accept 자리 반환 뒤 연결") {
                 try await netstackTransfers(gate.tool).contains { $0.transferID == id && $0.state == "running" }

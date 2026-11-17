@@ -73,7 +73,10 @@ struct StackRobustnessTests {
                 now = now + .milliseconds(Int.random(in: 0...2_000, using: &random))
             case 6:
                 for listener in listeners {
-                    while let id = stack.accept(from: listener) { owned.append(id) }
+                    while let accepted = stack.accept(from: listener, at: now) {
+                        owned.append(accepted.connection)
+                        remember(accepted.outputs)
+                    }
                 }
             case 7:
                 if let id = owned.randomElement(using: &random) {

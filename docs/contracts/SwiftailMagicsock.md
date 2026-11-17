@@ -417,7 +417,7 @@ package enum LocalInterfaceAddresses {
 | 대상 | 한도 | 넘으면 |
 | --- | --- | --- |
 | 받은 UDP 데이터그램 | 65,535바이트(소켓 읽기 버퍼) | 소켓이 자른 것은 WireGuard·disco가 형식 오류로 버린다 |
-| 피어당 후보 | 128개(Go의 정리 문턱 100 위의 상한) | 노트 4.4 2의 정리를 먼저 하고, 그래도 가득이면 새 후보를 넣지 않는다. CallMeMaybe 목록은 앞에서부터 넣는다 |
+| 피어당 후보 | 128개(Go의 정리 문턱 100 위의 상한) | 노트 4.4 2의 정리를 먼저 하고, 그래도 가득이면 Ping으로만 배운 후보 가운데 Ping을 받은 지 가장 오래된 것을 밀어내고 넣는다. netmap·CallMeMaybe로 배운 후보와 `bestAddr`는 밀어내지 않고, 밀어낼 것이 없으면 새 후보를 넣지 않는다. CallMeMaybe 목록은 앞에서부터 넣는다 |
 | 피어당 보낸 Ping 표 | 128개 | 새 Ping을 보내지 않는다(기한 5초로 비워진다) |
 | STUN 회차 표 | 지역 수 × 3 | 회차가 끝나면 비운다 |
 | CallMeMaybe를 미룬 피어 | 피어 수(피어당 한 칸) | 해당 없음 |
@@ -426,6 +426,11 @@ package enum LocalInterfaceAddresses {
 - 실패는 닫힌 쪽이다. 해석·열기·경로 규칙을 어긴 disco는 상태를 바꾸지 않고 버린다. 응답(Pong)도 보내지 않는다. 열리지 않은 패킷을 WireGuard로 넘기지 않는다(노트 3.2 6).
 - 어떤 바이트열을 `receiveUDP`·`receiveDERP`에 넣어도 죽지 않는다. 범위를 넘는 인덱스, 정수 넘침(지연 점수 계산은 나노초 `Int64`, 노트 4.7 4)이 없어야 한다.
 - disco 메시지에는 재전송 방지가 없다(Go도 TxID 중복만 본다, 노트 4.2 4.2). 캡처한 Ping을 다른 주소에서 다시 보내면 그 주소가 후보가 된다. Ping은 그 주소로 가고, Pong이 와야만 `bestAddr`가 되므로 경로를 빼앗지는 못한다.
+- 그런 Ping으로 후보 표를 묶어 두지 못한다(2026-11-17. Go와 다른 점 둘):
+  - **같은 후보에서 직전과 같은 TxID로 온 Ping(재전송)은 그 후보의 마지막 Ping 시각을 새로 적지 않는다.** Go `addCandidateEndpoint`는 재전송에도 `lastGotPing`을 새로 적어, 캡처한 Ping 하나를 되풀이해 보내는 것만으로 후보가 45초 수명을 넘겨 남는다. Pong을 보내지 않는 것은 전과 같다.
+  - **표가 가득 차면 Ping으로만 배운 후보 가운데 가장 오래된 것을 밀어낸다**(위 표). Go에는 상한이 없어 밀어내기도 없다. 전에는 가득 찬 표가 새 후보를 받지 않아, Ping 하나를 주소 128개에서 되풀이해 넣으면 그 피어의 새 주소(netmap의 엔드포인트, 진짜 Ping의 출처)가 후보가 되지 못했다.
+  - 정상 흐름은 달라지지 않는다: Go는 Ping마다 새 TxID를 쓰므로(`startDiscoPingLocked`) 재전송으로 보이는 것은 망이 겹쳐 전한 같은 데이터그램뿐이고, 후보가 128개에 닿는 일은 정상 피어에게 없다(Go의 정리 문턱이 100이다).
+  - 남는 것: 캡처한 Ping이 둘 이상이면 TxID를 번갈아 보내 후보의 수명을 늘릴 수 있고, 새 주소에서 되풀이해 보내면 아직 `bestAddr`가 되지 못한 Ping 출처의 후보를 밀어낼 수 있다. 그 후보는 다음 Ping(heartbeat 3초)에 다시 들어온다. netmap·CallMeMaybe로 배운 후보와 선 경로(`bestAddr`)는 영향받지 않는다.
 
 ### I. 비밀
 
@@ -480,7 +485,7 @@ package enum LocalInterfaceAddresses {
 
 1. **`DiscoMessage`**: Go 기준값과 같은 평문 바이트(NodeKey 있는·없는 Ping, IPv4·IPv6 Pong, 주소 0·1·3개 CallMeMaybe). 노트 7.2 1의 경계: CallMeMaybe 17·19바이트와 version 1 → 빈 목록, Pong 29바이트 → `malformed`, Ping 12·44·45바이트(패딩), 32바이트 0 NodeKey → nil, 평문 0·1바이트, type 0x04–0x0A → `unknownType`, IPv4-mapped를 풀기.
 2. **`DiscoPacket`**: 고정 키·고정 nonce로 봉한 바이트가 Go 기준값과 같다. Go가 봉한 바이트를 연다. nonce·tag·암호문·보낸 쪽 키 한 바이트 변조 → `authenticationFailed`. 37·38·61바이트의 판정. 저차수 공개 키 → `invalidKey`. `dump`에 공유 키가 나오지 않는다.
-3. **`PeerPathState`**: 노트 4.7의 `betterAddr` 표(같은 주소 MTU, 없음, loopback +50 대 LAN +20, 지연 비율 점수, 1점 규칙)와 노트 4.7 계산(loopback이 LAN을 이긴다). 경로 선택 세 갈래와 `noRouteToPeer`. 신뢰 6.5초 경계(`==`). 후보별 Ping 5초 제한과 CallMeMaybe가 푸는 것. Pong 기한 5초: 신뢰가 남았을 때는 `bestAddr`를 지키고, 지났을 때만 지운다. heartbeat 3초, 45초 유휴 뒤 멈춤과 다음 송신에서 다시 걸림, 전체 Ping 조건(5 ms 이하면 생략, 1분 개선). 후보 지우기(netmap에서 빠짐, Ping으로 배운 것 45초, CallMeMaybe 교체)와 `bestAddr` 함께 지우기. 같은 후보·같은 TxID의 Ping에 Pong하지 않음. disco 키 변경. IPv6·IPv6 link-local 후보를 넣지 않음. 후보 128개·보낸 Ping 128개 한도.
+3. **`PeerPathState`**: 노트 4.7의 `betterAddr` 표(같은 주소 MTU, 없음, loopback +50 대 LAN +20, 지연 비율 점수, 1점 규칙)와 노트 4.7 계산(loopback이 LAN을 이긴다). 경로 선택 세 갈래와 `noRouteToPeer`. 신뢰 6.5초 경계(`==`). 후보별 Ping 5초 제한과 CallMeMaybe가 푸는 것. Pong 기한 5초: 신뢰가 남았을 때는 `bestAddr`를 지키고, 지났을 때만 지운다. heartbeat 3초, 45초 유휴 뒤 멈춤과 다음 송신에서 다시 걸림, 전체 Ping 조건(5 ms 이하면 생략, 1분 개선). 후보 지우기(netmap에서 빠짐, Ping으로 배운 것 45초, CallMeMaybe 교체)와 `bestAddr` 함께 지우기. 같은 후보·같은 TxID의 Ping에 Pong하지 않고 수명도 늘리지 않음. 가득 찬 표에서 Ping으로만 배운 가장 오래된 후보를 밀어냄(netmap·CallMeMaybe 후보와 `bestAddr`는 남음). disco 키 변경. IPv6·IPv6 link-local 후보를 넣지 않음. 후보 128개·보낸 Ping 128개 한도.
 4. **`STUNMessage`**: 고정 TxID의 요청이 Go `stun.Request`와 같다. Go `stun.Response`로 만든 IPv4·IPv6 응답, `0x8020`, MAPPED-ADDRESS만 있는 응답을 해석한다. 거절: 19바이트, cookie 틀림, 타입 `01 01` 아님, 선언 길이 초과, 속성 길이가 남은 바이트 초과, family 3, 주소 속성 없음. 무작위 입력으로 죽지 않음.
 5. **`Netcheck`**: 회차의 요청 시각(0·100·200 ms)과 대상(`try % count`), 응답 대응과 회차 밖 응답, 3초 마감과 전 지역 응답 시 조기 마감, 엔드포인트 목록의 순서·중복·loopback 대체 규칙, STUN 전역 주소 규칙, 집합 비교(순서만 바뀌면 `.endpointsChanged` 없음), 주기 20–26초와 유휴·피어 없음에서 멈춤, 홈 선택(DERP 노트 4.10 5의 각 조건: 5분 5초 기록, `score`, 10 ms, 2/3, 8초 DERP 활동, 측정 없음 120초, 대체 홈 즉시 선택).
 6. **`Magicsock`**: 둘을 메모리 "망"으로 맞물린다(각자 주소를 갖고 `.udp`는 상대의 `receiveUDP`로, `.derp`는 상대의 `receiveDERP`로. 망은 데이터그램을 버리거나 지연시킬 수 있다). 확인할 것:

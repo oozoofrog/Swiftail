@@ -1,6 +1,7 @@
 import Foundation
 import SwiftailBase
 import SwiftailControl
+import SwiftailEngine
 import Testing
 @testable import Swiftail
 
@@ -83,33 +84,78 @@ struct WhoIsTests {
         }
     }
 
-    @Test("키가 만료되었거나 오프라인인 피어도 netmap에 있으면 찾는다")
+    @Test("오프라인인 피어는 찾고, 키가 만료되어 데이터면에 오르지 않은 피어의 주소는 nil이다")
     func expiredAndOfflinePeers() async throws {
-        var peer = Support.phone
-        peer.expired = true
-        peer.online = false
-        #expect(try await Self.whoIs("100.64.0.2", in: try Support.netmap(peers: [peer]))?.stableID == "nStablePhone")
+        var offline = Support.phone
+        offline.online = false
+        #expect(try await Self.whoIs("100.64.0.2", in: try Support.netmap(peers: [offline]))?.stableID == "nStablePhone")
+
+        var expired = Support.phone
+        expired.expired = true
+        let netmap = try Support.netmap(peers: [expired])
+        #expect(EnginePeer.peers(in: netmap, at: Date()).isEmpty)
+        #expect(try await Self.whoIs("100.64.0.2", in: netmap) == nil)
     }
 
-    @Test("같은 주소를 가진 노드가 여럿이면 나중 것이 이긴다(자기 노드 다음에 피어를 node ID 순으로)")
-    func duplicateAddressLastWins() async throws {
-        var first = Support.phone
-        first.id = 2
-        first.stableID = "nStableFirst"
-        var second = Support.phone
-        second.id = 3
-        second.stableID = "nStableSecond"
-        second.key = 0x33
-        let netmap = try Support.netmap(peers: [first, second])
-        #expect(try await Self.whoIs("100.64.0.2", in: netmap)?.stableID == "nStableSecond")
+    @Test("같은 주소를 가진 노드가 여럿이면 데이터면이 그 주소를 준 피어(node ID가 작은 쪽)의 신원이다")
+    func duplicateAddressFollowsDataPlane() async throws {
+        // netmap에 적힌 차례와 node ID의 차례를 다르게 둔다.
+        var high = Support.phone
+        high.id = 5
+        high.stableID = "nStableHigh"
+        high.key = 0x55
+        var low = Support.phone
+        low.id = 2
+        low.stableID = "nStableLow"
+        var last = Support.phone
+        last.id = 9
+        last.stableID = "nStableLast"
+        last.key = 0x99
+        let netmap = try Support.netmap(peers: [high, low, last])
 
+        for text in ["100.64.0.2", "fd7a:115c:a1e0::2"] {
+            let address = try Self.address(text)
+            let prefix = try #require(IPPrefix(address: address, length: address.bytes.count * 8))
+            // 그 주소를 AllowedIPs로 가진(그 주소에서 패킷을 보낼 수 있는) 피어는 하나다.
+            let owners = EnginePeer.peers(in: netmap, at: Date()).filter { $0.allowedIPs.contains(prefix) }
+            #expect(owners.map(\.key.description) == [NodeTestSupport.nodeKey(low.key)])
+            #expect(try await Self.whoIs(text, in: netmap)?.stableID == "nStableLow")
+        }
+
+        // 주소를 준 피어가 만료되어 내려가면 다음 노드가 그 주소를 갖는다.
+        low.expired = true
+        let afterExpiry = try Support.netmap(peers: [high, low, last])
+        #expect(try await Self.whoIs("100.64.0.2", in: afterExpiry)?.stableID == "nStableHigh")
+    }
+
+    @Test("자기 주소를 데이터면 피어도 가졌으면 누구의 연결인지 가릴 수 없으므로 nil이다")
+    func peerClaimingSelfAddress() async throws {
         var impostor = Support.phone
         impostor.id = 3
         impostor.stableID = "nStableImpostor"
         impostor.key = 0x33
         impostor.addresses = ["100.64.0.1/32"]
-        let overSelf = try Support.netmap(peers: [impostor])
-        #expect(try await Self.whoIs("100.64.0.1", in: overSelf)?.stableID == "nStableImpostor")
+        let netmap = try Support.netmap(peers: [impostor])
+        let claimed = try #require(IPPrefix("100.64.0.1/32"))
+        // 이 피어가 그 주소에서 패킷을 보낼 수 있는 동안에만 가릴 수 없다.
+        if EnginePeer.peers(in: netmap, at: Date()).contains(where: { $0.allowedIPs.contains(claimed) }) {
+            #expect(try await Self.whoIs("100.64.0.1", in: netmap) == nil)
+        } else {
+            #expect(try await Self.whoIs("100.64.0.1", in: netmap)?.stableID == "nStableSelf")
+        }
+        #expect(try await Self.whoIs("100.64.0.1", in: netmap)?.stableID != "nStableImpostor")
+        // 겹치지 않는 자기 주소는 그대로 자기 노드다.
+        #expect(try await Self.whoIs("fd7a:115c:a1e0::1", in: netmap)?.stableID == "nStableSelf")
+    }
+
+    @Test("Addresses에 없어도 데이터면이 받아들이는 한 주소짜리 AllowedIPs는 그 피어의 신원이다")
+    func allowedSingleAddress() async throws {
+        var peer = Support.phone
+        peer.allowedIPs = ["100.64.0.2/32", "fd7a:115c:a1e0::2/128", "100.64.0.77/32"]
+        let netmap = try Support.netmap(peers: [peer])
+        let extra = try #require(IPPrefix("100.64.0.77/32"))
+        #expect(EnginePeer.peers(in: netmap, at: Date()).first?.allowedIPs.contains(extra) == true)
+        #expect(try await Self.whoIs("100.64.0.77", in: netmap)?.stableID == "nStablePhone")
     }
 
     // MARK: 거절

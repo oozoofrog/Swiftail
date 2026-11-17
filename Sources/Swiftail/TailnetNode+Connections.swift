@@ -49,11 +49,15 @@ extension TailnetNode {
     /// 꺼낸 연결은 대기열에 있는 동안 받은 데이터와 FIN을 그대로 쥐고 있다(`read`가 스택에서 읽는다).
     func nextConnection(from token: UInt64) async -> TailnetConnection? {
         while let record = listenerRecords[token], record.waiter == nil {
-            if let stackID = record.stackID, let id = netstack?.stack.accept(from: stackID),
-                let connection = adoptConnection(id)
-            {
-                Self.log.info("연결을 받음: 포트 \(record.port, privacy: .public)")
-                return connection
+            let now = ContinuousClock.now
+            if let stackID = record.stackID, let accepted = netstack?.stack.accept(from: stackID, at: now) {
+                let connection = adoptConnection(accepted.connection)
+                // 대기열에 있는 동안 묶어 둔 받는 창을 여는 ACK가 나간다.
+                process(accepted.outputs, at: now)
+                if let connection {
+                    Self.log.info("연결을 받음: 포트 \(record.port, privacy: .public)")
+                    return connection
+                }
             }
             await suspend { listenerRecords[token]?.waiter = $0 }
             listenerRecords[token]?.waiter = nil
@@ -83,7 +87,7 @@ extension TailnetNode {
     ///
     /// - Throws: 장치가 `.inProcess`가 아니거나 포트가 0이거나 호스트가 비면 `invalidConfiguration`, 상태가 `.running`이
     ///   아니면 `notRunning`(맺는 사이 `run()`이 끝나도), 이름·주소를 찾지 못하면 `unknownHost`, 연결이 256개이거나 그
-    ///   주소의 연결이 64개면 `limitReached`, 상대가 거절하면 `refused`, 247초 안에 답이 없으면 `timedOut`, 그 사이
+    ///   피어와의 연결이 64개면 `limitReached`, 상대가 거절하면 `refused`, 247초 안에 답이 없으면 `timedOut`, 그 사이
     ///   주소의 주인이 바뀌면 `peerRemoved`, 맺어진 직후 이 호출이 돌아오기 전에 상대의 RST가 오면 `reset`, 호출한 Task가
     ///   취소되면 `cancelled`(시도를 버린다).
     public func connect(to host: String, port: UInt16) async throws(ConnectionError) -> TailnetConnection {

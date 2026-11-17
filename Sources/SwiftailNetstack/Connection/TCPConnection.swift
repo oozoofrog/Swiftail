@@ -98,8 +98,14 @@ package struct TCPConnection: Sendable {
     static let ownWindowShift = 3
     /// 상대의 shift 상한(RFC 7323 2.3).
     static let maximumWindowShift = 14
-    /// SYN·SYN-ACK에 싣는 창. SYN의 창은 확장하지 않으므로(RFC 7323 2.2) 16비트 최댓값이다.
+    /// SYN·SYN-ACK에 싣는 창. SYN의 창은 확장하지 않으므로(RFC 7323 2.2) 16비트 최댓값이다. 받는 창의 상한이 더 작으면
+    /// 그 값을 싣는다(`receiveWindowLimit`).
     static let synchronizeWindow = min(Int(UInt16.max), ReceiveBuffer.defaultCapacity)
+    /// 리스너의 대기열에 있는(응용이 아직 받아 가지 않은) 연결의 받는 창. 받는 버퍼는 쓴 자리까지 자라므로, 창을 다 열어 두면
+    /// 받아 가기도 전에 상대가 연결마다 256KiB를 잡게 할 수 있다. 16KiB는 상대의 첫 창(RFC 6928의 10×MSS, MSS 1240에서
+    /// 12,400바이트)을 담는 가장 작은 2의 거듭제곱이고, SYN-ACK의 확장하지 않는 창 필드에 그대로 실리며 자기 shift(3)의
+    /// 배수다(계약 동작 M).
+    static let unacceptedReceiveWindow = 16 * 1024
     /// 상대가 광고한 MSS가 이보다 작으면 연결을 맺지 않는다(계약 동작 X9).
     static let minimumPeerSegmentSize = 64
     /// SYN·SYN-ACK의 재전송 한도. 일곱 번째 재전송의 타이머가 만료되는 247초에 버린다(계약 동작 R4).
@@ -180,6 +186,9 @@ package struct TCPConnection: Sendable {
     var peerPermitsSACK = false
     /// 받는 버퍼. 상대의 데이터만 담는다(FIN은 `finReceived`).
     var receiveBuffer: ReceiveBuffer
+    /// 받는 창의 상한: 읽지 않은 바이트와 광고하는 창의 합이 이것을 넘지 않는다. 보통은 받는 버퍼의 용량이고, 스택이 리스너의
+    /// 대기열에 둔 연결만 `unacceptedReceiveWindow`로 시작해 응용이 받아 갈 때 연다(`openReceiveWindow(at:)`).
+    var receiveWindowLimit: Int
     /// 지금까지 광고한 창의 가장 먼 오른쪽 끝. 왼쪽으로 옮기지 않고(SHLD-14), 이것을 넘는 바이트는 받지 않는다
     /// (RFC 7323 2.4 1: 보낸 어느 ACK의 창 안이었던 것은 받는다).
     var advertisedWindowEnd: SequenceNumber
@@ -244,6 +253,7 @@ package struct TCPConnection: Sendable {
         initialSendSequence: SequenceNumber,
         initialReceiveSequence: SequenceNumber,
         offersWindowScale: Bool,
+        receiveWindowLimit: Int = ReceiveBuffer.defaultCapacity,
         at now: ContinuousClock.Instant
     ) {
         self.state = state
@@ -265,7 +275,8 @@ package struct TCPConnection: Sendable {
         self.offersWindowScale = offersWindowScale
         let receiveNext = initialReceiveSequence.advanced(by: 1)
         receiveBuffer = ReceiveBuffer(initialSequence: receiveNext)
-        advertisedWindowEnd = receiveNext.advanced(by: UInt32(Self.synchronizeWindow))
+        self.receiveWindowLimit = receiveWindowLimit
+        advertisedWindowEnd = receiveNext.advanced(by: UInt32(min(Self.synchronizeWindow, receiveWindowLimit)))
         congestionControl = NewRenoCongestionControl(
             maximumSegmentSize: ownSize, initialSequenceNumber: initialSendSequence)
         synchronizeSentAt = now
