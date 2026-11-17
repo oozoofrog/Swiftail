@@ -10,11 +10,11 @@ import SwiftailCrypto
 ///            └ 상태 1: rejected         └ 틀림: hostNotVerified   └ HMAC 틀림: hostNotVerified
 /// ```
 ///
-/// `hello`에는 nonce가 아니라 그 약속을 싣고, nonce는 여는 쪽의 nonce를 받은 뒤 `proof`에서 연다
-/// (`PairingTranscript.commitment(to:)`).
+/// `hello`에는 nonce가 아니라 그 약속을 싣고, nonce는 여는 쪽의 약속(`challenge`)을 받은 뒤 `proof`에서 연다. 여는 쪽의
+/// nonce는 `accepted`에서 오고, 그것이 `challenge`의 약속과 맞아야 한다(`PairingTranscript`).
 ///
 /// 여는 쪽을 믿게 되는 곳은 `accepted`다. 그 HMAC은 제안의 비밀과, 이쪽이 본 연결의 두 끝을 넣은 T로 만든다. 그래서
-/// `accepted`가 맞기 전에는 확인 숫자를 내지 않고, `decision`은 HMAC이 맞은 뒤에만 내용을 읽는다.
+/// `accepted`가 맞기 전에는 확인 숫자를 내지 않고(계산할 수도 없다), `decision`은 HMAC이 맞은 뒤에만 내용을 읽는다.
 struct PairingJoinerSession: Sendable {
     typealias Instant = ContinuousClock.Instant
 
@@ -39,7 +39,7 @@ struct PairingJoinerSession: Sendable {
 
     private enum Phase: Sendable {
         case challenge
-        case accepted(PairingTranscript)
+        case accepted(PairingProofTranscript)
         case decision(PairingTranscript)
         case finished
     }
@@ -69,7 +69,9 @@ struct PairingJoinerSession: Sendable {
         self.nonce = nonce
         self.deviceName = deviceName
         self.endpoints = endpoints
-        hello = PairingMessage.Hello(commitment: PairingTranscript.commitment(to: nonce), deviceName: deviceName).encoded
+        hello = PairingMessage.Hello(
+            commitment: PairingTranscript.commitment(toJoinerNonce: nonce), deviceName: deviceName
+        ).encoded
         deadline = challengeDeadline
     }
 
@@ -90,22 +92,24 @@ struct PairingJoinerSession: Sendable {
                     guard length == buffer.count else { return actions + finish(.failure(.protocolViolation)) }
                     guard challenge.status == .proceed else { return actions + finish(.failure(.rejected)) }
                     buffer = []
-                    let transcript = PairingTranscript(
-                        joinerNonce: nonce, hostNonce: challenge.nonce, offerHost: offer.host,
+                    let proofTranscript = PairingProofTranscript(
+                        joinerNonce: nonce, hostCommitment: challenge.commitment, offerHost: offer.host,
                         offerPort: offer.port, deviceName: deviceName.bytes, endpoints: endpoints)
-                    phase = .accepted(transcript)
+                    phase = .accepted(proofTranscript)
                     deadline = now + Self.decisionTimeout
-                    let proof = PairingMessage.Proof(nonce: nonce, code: transcript.proof(secret: offer.secret))
+                    let proof = PairingMessage.Proof(nonce: nonce, code: proofTranscript.proof(secret: offer.secret))
                     return actions + [.send(proof.encoded)]
                 }
 
-            case .accepted(let transcript):
-                guard buffer.count >= PairingMessage.codeLength else { return actions }
-                let code = Array(buffer.prefix(PairingMessage.codeLength))
-                guard constantTimeEqual(code, transcript.accepted(secret: offer.secret)) else {
-                    return actions + finish(.failure(.hostNotVerified))
-                }
-                buffer.removeFirst(PairingMessage.codeLength)
+            case .accepted(let proofTranscript):
+                guard buffer.count >= PairingMessage.Accepted.length else { return actions }
+                // J4: 열린 nonceH가 `challenge`의 약속과 맞아야 하고(여는 쪽도 nonceJ를 본 뒤에 nonce를 고를 수 없다),
+                // 그 nonce를 넣은 T의 HMAC이 맞아야 한다.
+                guard let accepted = PairingMessage.Accepted(Array(buffer.prefix(PairingMessage.Accepted.length))),
+                      let transcript = proofTranscript.opened(with: accepted.nonce),
+                      constantTimeEqual(accepted.code, transcript.accepted(secret: offer.secret))
+                else { return actions + finish(.failure(.hostNotVerified)) }
+                buffer.removeFirst(PairingMessage.Accepted.length)
                 phase = .decision(transcript)
                 actions.append(.awaitingApproval(confirmationCode: transcript.confirmationCode(secret: offer.secret)))
 

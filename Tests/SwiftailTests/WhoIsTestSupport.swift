@@ -19,6 +19,8 @@ enum WhoIsTestSupport {
         var hostname: String = ""
         var tags: [String] = []
         var expired = false
+        /// 키 만료 시각. nil이면 만료가 없다.
+        var keyExpiry: Date?
         var online = true
     }
 
@@ -42,6 +44,7 @@ enum WhoIsTestSupport {
             #"{"ID":\#(node.id),"StableID":"\#(node.stableID)","Name":"\#(node.name)","User":\#(node.user),"#
                 + #""Key":"\#(NodeTestSupport.nodeKey(node.key))","Addresses":[\#(list(node.addresses))],"#
                 + (node.allowedIPs.map { #""AllowedIPs":[\#(list($0))],"# } ?? "")
+                + (node.keyExpiry.map { #""KeyExpiry":"\#($0.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))","# } ?? "")
                 + #""Hostinfo":{"Hostname":"\#(node.hostname)"},"Tags":[\#(list(node.tags))],"#
                 + #""Expired":\#(node.expired),"Online":\#(node.online),"HomeDERP":1,"MachineAuthorized":true}"#
         }

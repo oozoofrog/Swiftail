@@ -134,6 +134,9 @@ public actor TailnetNode {
     var nodeKey: Curve25519.KeyAgreement.PrivateKey?
     /// 마지막으로 받은 netmap. 엔진을 새로 만들 때 다시 적용하고, DERP 지역의 서버를 찾고, `status`를 만든다.
     var lastNetmap: Netmap?
+    /// 데이터면의 주소 → 그 주소의 주인 노드. 엔진이 피어를 다시 계산할 때마다(netmap 적용, 키 만료) 엔진의 표로 바꾼다.
+    /// `whoIs`가 읽고, 스택의 주인 확인(`Netstack.addressOwners`)이 여기서 나온다(`updateAddressOwners(for:)`).
+    var addressOwners: [SwiftailBase.IPAddress: Node] = [:]
     /// 데이터면 피어의 키와 이름.
     var peerDirectory = PeerDirectory()
     /// `Magicsock`이 고른 홈 DERP 지역. 0이면 아직 없다.

@@ -91,7 +91,6 @@ extension TailnetNode {
             eventContinuation.yield(.tailnetLockChanged(netmap.tailnetLock))
         }
         configureDataPlane(netmap)
-        updateNetstack(for: netmap)
         publishSettings(for: netmap)
         announce(stateMachine.receivedNetmap(machineAuthorized: netmap.selfNode.machineAuthorized))
         publishCertificateFacts()
@@ -108,7 +107,8 @@ extension TailnetNode {
         settingsContinuation.yield(settings)
     }
 
-    /// netmap을 엔진과 `Magicsock`에 넣는다. DERPMap에서 사라졌거나 서버 정의가 바뀐 지역의 연결을 닫는다.
+    /// netmap을 엔진과 `Magicsock`에 넣는다. DERPMap에서 사라졌거나 서버 정의가 바뀐 지역의 연결을 닫는다. 끝으로 엔진이
+    /// 피어와 함께 만든 주인 표를 받아 쥐고 스택에 넘긴다(`updateAddressOwners(for:)`).
     ///
     /// 피어가 빠지면 `Magicsock`이 그 피어의 경로 사건(nil)을 낸다. 그 사건에는 표를 바꾸기 전의 이름을 쓴다(N6).
     private func configureDataPlane(_ netmap: Netmap) {
@@ -137,6 +137,7 @@ extension TailnetNode {
         // shortcut: 키 만료로 엔진이 `advance`에서 내린 피어는 다음 netmap까지 `Magicsock`에 남는다. 엔진이 그 피어에게
         // 데이터그램을 내지 않으므로 heartbeat는 45초 뒤 멈추고, 받은 WireGuard는 장치가 버린다(계약 N5).
         process(magicsock?.setRegions(Magicsock.Region.homeCandidates(in: netmap.derpMap), at: now) ?? [], at: now)
+        updateAddressOwners(for: netmap)
     }
 
     // MARK: 제어 서버에 올리기 (N4)

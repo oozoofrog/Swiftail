@@ -11,10 +11,10 @@ extension TailnetNode {
     /// 연결의 상대를 확인할 때는 `TailnetConnection.remoteEndpoint.address`를 넘긴다. 그 주소는 WireGuard가 인증한
     /// 피어의 것이고, 주소의 주인이 바뀌면 노드가 그 연결을 끊는다(`ConnectionError.peerRemoved`).
     ///
-    /// 노드 actor 안에서 `apply(_:)`가 쥔 `lastNetmap`을 읽고, 엔진·필터·스택의 주인 확인과 같은 계산으로 주인을 정한다.
-    /// 그것들도 같은 `apply(_:)` 안에서 같은 netmap으로 바뀌므로, 살아 있는 연결의 원격 주소에 대한 답은 그 연결을 맺은
-    /// 피어의 것이다(동작 W6).
+    /// 주인은 노드가 쥔 주인 표(`addressOwners`)에서 읽는다. 그 표는 엔진이 피어를 올릴 때 함께 만든 것이고, 스택의 주인
+    /// 확인도 같은 때 같은 표로 바뀐다. 그래서 살아 있는 연결의 원격 주소에 대한 답은 그 연결을 맺은 피어의 것이다(동작 W6).
+    /// 묻는 시각에 따라 달라지지 않는다: 주소의 주인이 키 만료로 바뀌면, 엔진이 그것을 처리할 때 표와 연결이 함께 바뀐다.
     public func whoIs(_ address: IPAddress) -> PeerIdentity? {
-        lastNetmap.flatMap { PeerIdentity(address: address, in: $0, at: Date()) }
+        lastNetmap.flatMap { PeerIdentity(address: address, owners: addressOwners, in: $0) }
     }
 }

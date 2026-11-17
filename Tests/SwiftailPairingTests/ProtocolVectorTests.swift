@@ -29,10 +29,12 @@ struct ProtocolVectorTests {
         var joinerPort: UInt16
         var hostAddress: String
         var hostPort: UInt16
-        var commitment: String
+        var joinerCommitment: String
+        var hostCommitment: String
         var hello: String
         var challenge: String
         var challengeNoOffer: String
+        var proofTranscript: String
         var transcript: String
         var proof: String
         var accepted: String
@@ -84,10 +86,10 @@ struct ProtocolVectorTests {
         #expect(Self.vectors.count == 4)
     }
 
-    @Test("nonce의 약속, hello와 challenge의 바이트", arguments: vectors)
+    @Test("두 nonce의 약속, hello와 challenge의 바이트", arguments: vectors)
     func messages(vector: Vector) throws {
-        let commitment = PairingTranscript.commitment(to: try #require([UInt8](hex: vector.joinerNonce)))
-        #expect(commitment.hex == vector.commitment)
+        let commitment = PairingTranscript.commitment(toJoinerNonce: try #require([UInt8](hex: vector.joinerNonce)))
+        #expect(commitment.hex == vector.joinerCommitment)
         let hello = PairingMessage.Hello(commitment: commitment, deviceName: try Sample.deviceName(vector.deviceName))
         #expect(hello.encoded.hex == vector.hello)
         guard case .complete(let parsed, let length) = PairingMessage.Hello.parse(hello.encoded) else {
@@ -96,23 +98,34 @@ struct ProtocolVectorTests {
         }
         #expect(parsed == hello && length == hello.encoded.count)
 
-        let hostNonce = try #require([UInt8](hex: vector.hostNonce))
-        #expect(PairingMessage.Challenge(status: .proceed, nonce: hostNonce).encoded.hex == vector.challenge)
-        #expect(PairingMessage.Challenge(status: .noOffer, nonce: hostNonce).encoded.hex == vector.challengeNoOffer)
+        let hostCommitment = PairingTranscript.commitment(toHostNonce: try #require([UInt8](hex: vector.hostNonce)))
+        #expect(hostCommitment.hex == vector.hostCommitment)
+        #expect(PairingMessage.Challenge(status: .proceed, commitment: hostCommitment).encoded.hex == vector.challenge)
+        #expect(
+            PairingMessage.Challenge(status: .noOffer, commitment: hostCommitment).encoded.hex == vector.challengeNoOffer)
     }
 
-    @Test("T, proof, accepted, 확인 숫자, decision", arguments: vectors)
+    @Test("P, T, proof, accepted, 확인 숫자, decision", arguments: vectors)
     func transcript(vector: Vector) throws {
         let secret = try #require([UInt8](hex: vector.secret))
         let joinerNonce = try #require([UInt8](hex: vector.joinerNonce))
-        let transcript = PairingTranscript(
-            joinerNonce: joinerNonce,
-            hostNonce: try #require([UInt8](hex: vector.hostNonce)), offerHost: vector.offerHost,
-            offerPort: vector.offerPort, deviceName: Array(vector.deviceName.utf8), endpoints: try vector.endpoints)
+        let hostNonce = try #require([UInt8](hex: vector.hostNonce))
+        let proofTranscript = PairingProofTranscript(
+            joinerNonce: joinerNonce, hostCommitment: try #require([UInt8](hex: vector.hostCommitment)),
+            offerHost: vector.offerHost, offerPort: vector.offerPort, deviceName: Array(vector.deviceName.utf8),
+            endpoints: try vector.endpoints)
+        #expect(proofTranscript.bytes.count == PairingProofTranscript.length)
+        #expect(proofTranscript.bytes.hex == vector.proofTranscript)
+        #expect(
+            PairingMessage.Proof(nonce: joinerNonce, code: proofTranscript.proof(secret: secret)).encoded.hex
+                == vector.proof)
+
+        let transcript = try #require(proofTranscript.opened(with: hostNonce))
         #expect(transcript.bytes.count == PairingTranscript.length)
         #expect(transcript.bytes.hex == vector.transcript)
-        #expect(PairingMessage.Proof(nonce: joinerNonce, code: transcript.proof(secret: secret)).encoded.hex == vector.proof)
-        #expect(transcript.accepted(secret: secret).hex == vector.accepted)
+        #expect(
+            PairingMessage.Accepted(nonce: hostNonce, code: transcript.accepted(secret: secret)).encoded.hex
+                == vector.accepted)
         #expect(transcript.confirmationCode(secret: secret) == vector.confirmationCode)
 
         let stableID = try #require(vector.approved.stableID)

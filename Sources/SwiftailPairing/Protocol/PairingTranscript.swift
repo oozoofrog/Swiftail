@@ -40,36 +40,32 @@ extension IPAddress {
     }
 }
 
-/// 절차의 전사 T와, 제안의 비밀로 T에 매기는 네 값(계약 5절).
+/// `proof`가 매겨지는 전사 P: 여는 쪽의 nonce가 열리기 전에 정해지는 것 전부(계약 5절).
 ///
 /// ```
-/// T = commitJ ‖ nonceJ ‖ nonceH ‖ SHA256(제안의 host) ‖ 제안의 port(2) ‖ SHA256(기기 이름) ‖ J의 주소(16)
+/// P = commitJ ‖ commitH ‖ nonceJ ‖ SHA256(제안의 host) ‖ 제안의 port(2) ‖ SHA256(기기 이름) ‖ J의 주소(16)
 ///     ‖ J의 포트(2) ‖ H의 주소(16) ‖ H의 포트(2)                                            198바이트
 /// ```
 ///
-/// 양쪽이 본 연결의 두 끝을 묶는다. 중간에서 바이트를 넘겨주는 노드가 끼면 두 쪽이 본 끝이 달라 T가 달라지고, 한쪽이
-/// 만든 증명이 다른 쪽에서 맞지 않는다. 네 값은 꼬리표(`swiftail-pairing-2 …`)가 달라 서로 바꿔 쓸 수 없다.
-struct PairingTranscript: Sendable, Equatable {
-    /// T의 길이.
+/// 양쪽이 본 연결의 두 끝을 묶는다. 중간에서 바이트를 넘겨주는 노드가 끼면 두 쪽이 본 끝이 달라 P가 달라지고, 한쪽이
+/// 만든 증명이 다른 쪽에서 맞지 않는다. nonceH는 들어 있지 않다: 들어오는 쪽은 그것을 모르는 채 `proof`를 낸다.
+struct PairingProofTranscript: Sendable, Equatable {
+    /// P의 길이.
     static let length = 198
 
     let bytes: [UInt8]
+    /// `challenge`로 받은(여는 쪽은 자기가 보낸) commitH.
+    private let hostCommitment: [UInt8]
 
-    /// 들어오는 쪽 nonce의 약속 commitJ = SHA256("swiftail-pairing-2 commit" ‖ nonceJ).
-    ///
-    /// 확인 숫자는 20비트 남짓이라, 상대의 nonce를 본 뒤에 자기 nonce를 고를 수 있으면 값을 갈아 원하는 숫자를 맞출 수
-    /// 있다. 들어오는 쪽은 `hello`에 이 약속만 싣고, 여는 쪽의 nonce를 받은 뒤에 nonceJ를 연다. 여는 쪽은 nonceJ를 모른
-    /// 채 자기 nonce를 내고, 들어오는 쪽은 약속과 다른 nonceJ를 열 수 없다.
-    static func commitment(to joinerNonce: [UInt8]) -> [UInt8] {
-        Array(SHA256.hash(data: Data(Array("swiftail-pairing-2 commit".utf8) + joinerNonce)))
-    }
-
-    /// - Parameter joinerNonce: 열린 nonceJ. 여는 쪽은 `hello`의 약속과 맞는지 먼저 본 값을 넣는다.
+    /// - Parameters:
+    ///   - joinerNonce: 열린 nonceJ. 여는 쪽은 `hello`의 약속과 맞는지 먼저 본 값을 넣는다.
+    ///   - hostCommitment: 여는 쪽 nonce의 약속 commitH.
     init(
-        joinerNonce: [UInt8], hostNonce: [UInt8], offerHost: String, offerPort: UInt16, deviceName: [UInt8],
+        joinerNonce: [UInt8], hostCommitment: [UInt8], offerHost: String, offerPort: UInt16, deviceName: [UInt8],
         endpoints: PairingEndpoints
     ) {
-        bytes = Self.commitment(to: joinerNonce) + joinerNonce + hostNonce
+        self.hostCommitment = hostCommitment
+        bytes = PairingTranscript.commitment(toJoinerNonce: joinerNonce) + hostCommitment + joinerNonce
             + SHA256.hash(data: Data(offerHost.utf8)) + offerPort.bigEndianBytes
             + SHA256.hash(data: Data(deviceName))
             + endpoints.joiner.address.mapped + endpoints.joiner.port.bigEndianBytes
@@ -78,30 +74,74 @@ struct PairingTranscript: Sendable, Equatable {
 
     /// J→H `proof`의 HMAC: 들어오는 쪽이 비밀을 안다.
     func proof(secret: [UInt8]) -> [UInt8] {
-        authenticate("swiftail-pairing-2 joiner", bytes, secret: secret)
+        authenticate("swiftail-pairing-3 joiner", bytes, secret: secret)
     }
 
-    /// H→J `accepted`: 여는 쪽이 비밀을 안다.
+    /// 여는 쪽의 nonce가 열린 뒤의 전사 T. `hostNonce`가 약속 commitH와 다르면 nil이다: `challenge`를 보낸 뒤에 고른
+    /// nonce로는 T를 만들 수 없다.
+    func opened(with hostNonce: [UInt8]) -> PairingTranscript? {
+        // 약속과 nonce는 선 위에 나온 값이라 상수 시간으로 견줄 까닭이 없다.
+        guard PairingTranscript.commitment(toHostNonce: hostNonce) == hostCommitment else { return nil }
+        return PairingTranscript(bytes: bytes + hostNonce)
+    }
+}
+
+/// 두 nonce가 모두 열린 뒤의 전사 T와, 제안의 비밀로 T에 매기는 세 값(계약 5절).
+///
+/// ```
+/// T = P ‖ nonceH                                                                            230바이트
+/// ```
+///
+/// 확인 숫자는 20비트 남짓이라, 상대의 nonce를 본 뒤에 자기 nonce를 고를 수 있는 쪽은 값을 갈아 원하는 숫자를 맞출 수
+/// 있다. 그래서 두 nonce는 약속으로 먼저 고정된다. 들어오는 쪽은 `hello`에 commitJ를 싣고 `proof`에서 nonceJ를 연다. 여는
+/// 쪽은 `challenge`에 commitH를 싣고, `proof`가 맞아 제안을 쓴 뒤에야 `accepted`에서 nonceH를 연다. 비밀을 아는 쪽이라도
+/// 확인 숫자를 보려면 제안을 써야 하므로, 숫자가 마음에 들 때까지 다시 걸 수 없다.
+///
+/// 값마다 꼬리표(`swiftail-pairing-3 …`)가 달라 서로 바꿔 쓸 수 없다. 두 약속의 꼬리표도 달라, 상대의 약속을 되비춰
+/// 자기 약속으로 낼 수 없다.
+struct PairingTranscript: Sendable, Equatable {
+    /// T의 길이.
+    static let length = PairingProofTranscript.length + PairingMessage.nonceLength
+
+    let bytes: [UInt8]
+
+    /// 들어오는 쪽 nonce의 약속 commitJ = SHA256("swiftail-pairing-3 commit joiner" ‖ nonceJ).
+    static func commitment(toJoinerNonce nonce: [UInt8]) -> [UInt8] {
+        Array(SHA256.hash(data: Data(Array("swiftail-pairing-3 commit joiner".utf8) + nonce)))
+    }
+
+    /// 여는 쪽 nonce의 약속 commitH = SHA256("swiftail-pairing-3 commit host" ‖ nonceH).
+    static func commitment(toHostNonce nonce: [UInt8]) -> [UInt8] {
+        Array(SHA256.hash(data: Data(Array("swiftail-pairing-3 commit host".utf8) + nonce)))
+    }
+
+    /// `PairingProofTranscript.opened(with:)`만 만든다. nonceH가 약속과 맞는 T만 있다.
+    fileprivate init(bytes: [UInt8]) {
+        self.bytes = bytes
+    }
+
+    /// H→J `accepted`의 HMAC: 여는 쪽이 비밀을 안다.
     func accepted(secret: [UInt8]) -> [UInt8] {
-        authenticate("swiftail-pairing-2 host", bytes, secret: secret)
+        authenticate("swiftail-pairing-3 host", bytes, secret: secret)
     }
 
     /// `decision`의 본문 `body`에 붙이는 HMAC. 결정을 비밀을 아는 쪽이 냈음을 보인다.
     func decisionCode(for body: [UInt8], secret: [UInt8]) -> [UInt8] {
-        authenticate("swiftail-pairing-2 decision", bytes + body, secret: secret)
+        authenticate("swiftail-pairing-3 decision", bytes + body, secret: secret)
     }
 
     /// 양쪽 화면에 보이는 확인 숫자 6자리. 사용자가 두 화면의 숫자가 같을 때 승인한다(계약 동작 P5).
     func confirmationCode(secret: [UInt8]) -> String {
-        let code = authenticate("swiftail-pairing-2 sas", bytes, secret: secret)
+        let code = authenticate("swiftail-pairing-3 sas", bytes, secret: secret)
         let number = code.prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) } % 1_000_000
         let digits = String(number)
         return String(repeating: "0", count: 6 - digits.count) + digits
     }
+}
 
-    private func authenticate(_ label: String, _ message: [UInt8], secret: [UInt8]) -> [UInt8] {
-        Array(HMAC<SHA256>.authenticationCode(for: Array(label.utf8) + message, using: SymmetricKey(data: secret)))
-    }
+/// HMAC-SHA256(비밀, 꼬리표 ‖ 메시지).
+private func authenticate(_ label: String, _ message: [UInt8], secret: [UInt8]) -> [UInt8] {
+    Array(HMAC<SHA256>.authenticationCode(for: Array(label.utf8) + message, using: SymmetricKey(data: secret)))
 }
 
 extension UInt16 {

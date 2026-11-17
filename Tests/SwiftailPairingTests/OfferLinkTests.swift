@@ -133,8 +133,12 @@ struct OfferLinkTests {
     }
 
     @Test(
-        "host: 끝 라벨이 숫자뿐이면 이름이 아니라 IP 주소 꼴이다",
-        arguments: ["192.168.1.1", "127.0.0.1", "1.2", "100.64.0.1", "rd-mac-1a2b3c4d.tail0001.0"])
+        "host: 끝 라벨이 글자로 시작하지 않으면 이름이 아니라 IP 주소 꼴이다(10진, 16진)",
+        arguments: [
+            "192.168.1.1", "127.0.0.1", "1.2", "100.64.0.1", "rd-mac-1a2b3c4d.tail0001.0",
+            // 끝 라벨이 `0x…`인 것도 OS는 IPv4 주소로 읽는다.
+            "192.168.1.0x1", "1.0x7f", "0x7f.0.0.0x1", "1.0x", "1a.2b", "rd-mac-1a2b3c4d.tail0001.-a",
+        ])
     func rejectsAddressShapedHosts(value: String) {
         #expect(Self.parseError(Self.link(replacing: "h", with: value)) == .invalidHost)
         #expect(OfferField.host(value.utf8) == nil, "여는 쪽(openOffer)도 같은 규칙으로 자기 이름을 본다")
@@ -143,10 +147,10 @@ struct OfferLinkTests {
     private static let goodHosts: [String] = [
         String(repeating: "a", count: 63) + ".ts.net",
         [63, 63, 63, 61].map { String(repeating: "a", count: $0) }.joined(separator: "."),
-        "1a.2b", "a-b.c-d",
+        "1a.b2", "a-b.c-d", "rd-mac-1a2b3c4d.tail0001.ts.net", "rd-mac-1a2b3c4d.xn--p1ai",
     ]
 
-    @Test("host의 경계: 63자 라벨, 전체 253자, 숫자로 시작하는 라벨", arguments: goodHosts)
+    @Test("host의 경계: 63자 라벨, 전체 253자, 숫자로 시작하는 라벨(끝 라벨은 글자로 시작한다)", arguments: goodHosts)
     func acceptsHosts(value: String) throws {
         #expect(try PairingOffer(link: Self.link(replacing: "h", with: value)).host == value)
     }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftailBase
 import Testing
@@ -11,10 +12,11 @@ struct JoinerSessionTests {
 
     /// 여는 쪽이 `Sample`의 값으로 만들 T.
     private static func transcript() throws -> PairingTranscript {
-        PairingTranscript(
-            joinerNonce: Sample.joinerNonce, hostNonce: Sample.hostNonce, offerHost: Sample.host,
-            offerPort: Sample.port, deviceName: Array("rd-phone-5e6f7a8b".utf8), endpoints: try Sample.endpoints())
+        try Sample.transcript()
     }
+
+    /// 여는 쪽이 보낼 `challenge`(계속).
+    private static let challenge = [0] + Sample.hostCommitment
 
     /// 본문에 맞는 HMAC을 붙인 `decision`.
     private static func signed(_ body: [UInt8]) throws -> [UInt8] {
@@ -30,9 +32,9 @@ struct JoinerSessionTests {
         var joiner = PairingJoinerSession(
             offer: Sample.offer(), deviceName: try Sample.deviceName(), nonce: Sample.joinerNonce,
             endpoints: try Sample.endpoints(), challengeDeadline: now + .seconds(60))
-        let proof = joiner.receive([0] + Sample.hostNonce, at: now)
-        #expect(proof.sentBytes == Sample.joinerNonce + (try transcript()).proof(secret: Sample.secret))
-        let waiting = joiner.receive(try transcript().accepted(secret: Sample.secret), at: now)
+        let proof = joiner.receive(challenge, at: now)
+        #expect(proof.sentBytes == Sample.joinerNonce + (try Sample.proofTranscript()).proof(secret: Sample.secret))
+        let waiting = joiner.receive(try Sample.accepted(), at: now)
         #expect(waiting.confirmationCode == (try transcript()).confirmationCode(secret: Sample.secret))
         return joiner
     }
@@ -42,27 +44,29 @@ struct JoinerSessionTests {
     @Test("challenge의 상태 1이면 rejected, 모르는 상태나 남는 바이트는 위반이다")
     func readsChallenge() throws {
         var refused = try Rehearsal().joiner
-        #expect(refused.receive([1] + Sample.hostNonce, at: .now) == [.finish(.failure(.rejected))])
+        #expect(refused.receive([1] + Sample.hostCommitment, at: .now) == [.finish(.failure(.rejected))])
 
         var unknown = try Rehearsal().joiner
         #expect(unknown.receive([2], at: .now) == [.finish(.failure(.protocolViolation))])
 
         var overlong = try Rehearsal().joiner
-        #expect(overlong.receive([0] + Sample.hostNonce + [0], at: .now) == [.finish(.failure(.protocolViolation))])
+        #expect(overlong.receive(Self.challenge + [0], at: .now) == [.finish(.failure(.protocolViolation))])
 
         var partial = try Rehearsal().joiner
-        #expect(partial.receive([0] + Sample.hostNonce.dropLast(), at: .now).isEmpty, "다 올 때까지 기다린다")
-        #expect(partial.receive([0x22], at: .now).sentBytes.count == 64)
+        #expect(partial.receive(Array(Self.challenge.dropLast()), at: .now).isEmpty, "다 올 때까지 기다린다")
+        #expect(partial.receive([Self.challenge[32]], at: .now).sentBytes.count == 64)
     }
 
     @Test("hello에는 nonce가 아니라 그 약속이 실린다. nonce는 challenge를 받은 뒤 proof에서 연다")
     func commitsToNonceBeforeChallenge() throws {
         var joiner = try Rehearsal().joiner
-        let commitment = PairingTranscript.commitment(to: Sample.joinerNonce)
-        #expect(joiner.hello == Array("SWPR".utf8) + [2] + commitment + [17] + Array("rd-phone-5e6f7a8b".utf8))
+        let commitment = PairingTranscript.commitment(toJoinerNonce: Sample.joinerNonce)
+        #expect(joiner.hello == Array("SWPR".utf8) + [3] + commitment + [17] + Array("rd-phone-5e6f7a8b".utf8))
         #expect(commitment != Sample.joinerNonce)
+        // 두 약속의 꼬리표가 달라, 같은 nonce의 약속도 쪽마다 다르다(상대의 약속을 되비춰 낼 수 없다).
+        #expect(commitment != PairingTranscript.commitment(toHostNonce: Sample.joinerNonce))
 
-        let proof = joiner.receive([0] + Sample.hostNonce, at: .now).sentBytes
+        let proof = joiner.receive(Self.challenge, at: .now).sentBytes
         #expect(Array(proof.prefix(32)) == Sample.joinerNonce)
     }
 
@@ -73,7 +77,7 @@ struct JoinerSessionTests {
         #expect(early.connectionEnded().isEmpty && early.deadline == nil, "끝난 뒤의 사건은 버린다")
 
         var proved = try Rehearsal().joiner
-        _ = proved.receive([0] + Sample.hostNonce, at: .now)
+        _ = proved.receive(Self.challenge, at: .now)
         #expect(proved.connectionEnded() == [.finish(.failure(.rejected))])
 
         var waiting = try Self.waitingJoiner()
@@ -84,24 +88,57 @@ struct JoinerSessionTests {
 
     @Test("틀린 accepted면 hostNotVerified이고 확인 숫자를 내지 않는다")
     func rejectsWrongAccepted() throws {
-        var accepted = try Self.transcript().accepted(secret: Sample.secret)
-        accepted[31] ^= 1
+        var accepted = try Sample.accepted()
+        accepted[63] ^= 1
         var joiner = try Rehearsal().joiner
-        _ = joiner.receive([0] + Sample.hostNonce, at: .now)
+        _ = joiner.receive(Self.challenge, at: .now)
         #expect(joiner.receive(accepted, at: .now) == [.finish(.failure(.hostNotVerified))])
 
         // 다른 꼬리표의 값(proof)을 되돌려 보내도 맞지 않는다.
         var echoed = try Rehearsal().joiner
-        let proof = echoed.receive([0] + Sample.hostNonce, at: .now).sentBytes
-        #expect(echoed.receive(Array(proof.suffix(32)), at: .now) == [.finish(.failure(.hostNotVerified))])
+        let proof = echoed.receive(Self.challenge, at: .now).sentBytes
+        #expect(echoed.receive(Sample.hostNonce + proof.suffix(32), at: .now) == [.finish(.failure(.hostNotVerified))])
+    }
+
+    @Test("accepted의 nonceH가 challenge의 약속과 다르면, 그 nonce로 만든 HMAC이 맞아도 hostNotVerified다")
+    func rejectsHostNonceThatBreaksCommitment() throws {
+        // 비밀을 아는 여는 쪽이 nonceJ를 본 뒤에 nonce를 갈아 확인 숫자를 고르려 한다. HMAC은 그 nonce로 제대로 만든다.
+        var other = Sample.hostNonce
+        other[0] ^= 1
+        let forged = try Sample.proofTranscript().bytes + other
+        let code = HMAC<SHA256>.authenticationCode(
+            for: Array("swiftail-pairing-3 host".utf8) + forged, using: SymmetricKey(data: Sample.secret))
+        var joiner = try Rehearsal().joiner
+        _ = joiner.receive(Self.challenge, at: .now)
+        #expect(joiner.receive(other + Array(code), at: .now) == [.finish(.failure(.hostNotVerified))])
+
+        // 같은 방법으로 만든 것이라도 약속한 nonce면 받는다(위의 거절은 HMAC이 아니라 약속 때문이다).
+        let honest = try Sample.proofTranscript().bytes + Sample.hostNonce
+        let honestCode = HMAC<SHA256>.authenticationCode(
+            for: Array("swiftail-pairing-3 host".utf8) + honest, using: SymmetricKey(data: Sample.secret))
+        var second = try Rehearsal().joiner
+        _ = second.receive(Self.challenge, at: .now)
+        #expect(second.receive(Sample.hostNonce + Array(honestCode), at: .now).confirmationCode != nil)
+    }
+
+    @Test("확인 숫자는 accepted를 확인한 뒤에야 나온다. accepted가 한 바이트씩 와도 같다")
+    func confirmationCodeFollowsAccepted() throws {
+        var joiner = try Rehearsal().joiner
+        _ = joiner.receive(Self.challenge, at: .now)
+        let accepted = try Sample.accepted()
+        for byte in accepted.dropLast() {
+            #expect(joiner.receive([byte], at: .now).isEmpty)
+        }
+        let code = try Self.transcript().confirmationCode(secret: Sample.secret)
+        #expect(joiner.receive([accepted[63]], at: .now) == [.awaitingApproval(confirmationCode: code)])
     }
 
     @Test("accepted와 decision이 한 덩어리로 와도 차례대로 읽는다")
     func readsCoalescedMessages() throws {
         var joiner = try Rehearsal().joiner
-        _ = joiner.receive([0] + Sample.hostNonce, at: .now)
+        _ = joiner.receive(Self.challenge, at: .now)
         let transcript = try Self.transcript()
-        let actions = joiner.receive(transcript.accepted(secret: Sample.secret) + (try Self.signed([2])), at: .now)
+        let actions = joiner.receive(try Sample.accepted() + (try Self.signed([2])), at: .now)
         #expect(
             actions == [
                 .awaitingApproval(confirmationCode: transcript.confirmationCode(secret: Sample.secret)),
@@ -233,35 +270,34 @@ struct JoinerSessionTests {
         #expect(rehearsal.machine.hasOpenOffer)
     }
 
-    @Test("끝 하나만 달라도 T와 네 값이 모두 달라진다", arguments: [
+    @Test("끝 하나만 달라도 P·T와 네 값이 모두 달라진다", arguments: [
         ("100.64.0.3:49152", "100.64.0.1:4747"), ("100.64.0.2:49153", "100.64.0.1:4747"),
         ("100.64.0.2:49152", "100.64.0.4:4747"), ("100.64.0.2:49152", "100.64.0.1:4748"),
         ("[fd7a:115c:a1e0::2]:49152", "100.64.0.1:4747"),
     ])
     func transcriptBindsEndpoints(joiner: String, host: String) throws {
+        let endpoints = try Sample.endpoints(joiner: joiner, host: host)
         let base = try Self.transcript()
-        let other = PairingTranscript(
-            joinerNonce: Sample.joinerNonce, hostNonce: Sample.hostNonce, offerHost: Sample.host,
-            offerPort: Sample.port, deviceName: Array("rd-phone-5e6f7a8b".utf8),
-            endpoints: try Sample.endpoints(joiner: joiner, host: host))
-        #expect(other.bytes.count == 198 && other.bytes != base.bytes)
-        #expect(other.proof(secret: Sample.secret) != base.proof(secret: Sample.secret))
+        let other = try Sample.transcript(endpoints: endpoints)
+        #expect(other.bytes.count == 230 && other.bytes != base.bytes)
+        #expect(
+            try Sample.proofTranscript(endpoints: endpoints).proof(secret: Sample.secret)
+                != (try Sample.proofTranscript()).proof(secret: Sample.secret))
         #expect(other.accepted(secret: Sample.secret) != base.accepted(secret: Sample.secret))
         #expect(other.decisionCode(for: [2], secret: Sample.secret) != base.decisionCode(for: [2], secret: Sample.secret))
+        #expect(other.confirmationCode(secret: Sample.secret) != base.confirmationCode(secret: Sample.secret))
 
         // 들어오는 쪽이 다른 끝을 보았으면 여는 쪽의 accepted도 받아들이지 않는다.
         var session = PairingJoinerSession(
             offer: Sample.offer(), deviceName: try Sample.deviceName(), nonce: Sample.joinerNonce,
-            endpoints: try Sample.endpoints(joiner: joiner, host: host), challengeDeadline: .now + .seconds(60))
-        _ = session.receive([0] + Sample.hostNonce, at: .now)
-        #expect(session.receive(base.accepted(secret: Sample.secret), at: .now) == [.finish(.failure(.hostNotVerified))])
+            endpoints: endpoints, challengeDeadline: .now + .seconds(60))
+        _ = session.receive(Self.challenge, at: .now)
+        #expect(session.receive(try Sample.accepted(), at: .now) == [.finish(.failure(.hostNotVerified))])
     }
 
     @Test("IPv4와 그 IPv4-mapped IPv6는 T에서 같은 16바이트다")
     func mapsIPv4() throws {
-        let mapped = PairingTranscript(
-            joinerNonce: Sample.joinerNonce, hostNonce: Sample.hostNonce, offerHost: Sample.host,
-            offerPort: Sample.port, deviceName: Array("rd-phone-5e6f7a8b".utf8),
+        let mapped = try Sample.transcript(
             endpoints: try Sample.endpoints(joiner: "[::ffff:100.64.0.2]:49152", host: "[::ffff:100.64.0.1]:4747"))
         #expect(mapped == (try Self.transcript()))
     }

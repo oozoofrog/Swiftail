@@ -34,25 +34,24 @@ public struct PeerIdentity: Sendable, Equatable {
 // MARK: 주소로 찾기(동작 W1~W3)
 
 extension PeerIdentity {
-    /// `netmap`의 데이터면에서 `address`의 주인인 노드의 신원. 없으면 nil.
+    /// 데이터면에서 `address`의 주인인 노드의 신원. 없으면 nil.
     ///
-    /// 피어의 주소는 엔진이 그 주소를 AllowedIPs로 준 피어의 것이다(`EnginePeer.addressOwners(in:at:)`). 그 주소에서 온
+    /// 피어의 주소는 엔진이 그 주소를 AllowedIPs로 준 피어의 것이다(`owners`, `EnginePeer.addressOwners`). 그 주소에서 온
     /// 패킷을 보낼 수 있는 노드가 그 피어뿐이므로, 연결의 원격 주소로 물은 답이 그 연결의 상대다. 그래서 데이터면에 오르지
     /// 않는 노드(키가 만료된 노드, 지원하지 않는 피어)의 주소는 nil이고, 같은 주소를 가진 노드가 여럿이면 엔진이 고른 쪽
     /// (node ID가 작은 쪽)이다. 서브넷 경로 안의 주소는 찾지 않는다. Go의 `WhoIs`는 netmap의 `Addresses` 표에서 나중 것을
     /// 고르지만, 그 표는 겹치는 netmap에서 데이터면과 다른 노드를 가리킨다.
     ///
     /// 자기 노드의 한 주소짜리 `Addresses`는 자기 노드다. 다만 그 주소를 데이터면 피어도 가졌으면 그 주소에서 온 연결이 누구의
-    /// 것인지 가릴 수 없으므로 nil이다(닫힌 쪽). IPv4-mapped IPv6 주소는 IPv4로 바꿔 찾는다. 찾은 노드의 `StableID`가
-    /// 비었거나 사용자 프로필이 netmap에 없으면 nil이다.
+    /// 것인지 가릴 수 없으므로 nil이다(닫힌 쪽). IPv4-mapped IPv6 주소는 IPv4로 바꿔 찾는다(데이터면은 mapped 주소를 피어의
+    /// 주소로 받지 않는다). 찾은 노드의 `StableID`가 비었거나 사용자 프로필이 netmap에 없으면 nil이다.
     ///
-    /// shortcut: 주소 표를 따로 쥐지 않고 질의마다 netmap에서 만든다(MagicDNS 이름 찾기와 같다). 첫 사용처는 연결마다 한 번만
-    /// 묻는다. 노드가 수천이고 질의가 초당 수천이 되면 netmap을 적용할 때 만든 표를 쥔다.
-    ///
-    /// - Parameter now: 피어의 키 만료를 판단할 지금 시각(로컬 벽시계).
-    init?(address: IPAddress, in netmap: Netmap, at now: Date) {
+    /// - Parameters:
+    ///   - owners: 데이터면의 주소 → 주인 노드. 노드가 엔진의 피어와 함께 바꾸는 표다(`TailnetNode.addressOwners`).
+    ///   - netmap: 자기 노드, 사용자 프로필, 자기 tailnet의 접미사를 읽는 netmap.
+    init?(address: IPAddress, owners: [IPAddress: Node], in netmap: Netmap) {
         let address = address.unmappedIPv4
-        let peer = EnginePeer.addressOwners(in: netmap, at: now)[address]
+        let peer = owners[address]
         let isLocal = netmap.selfNode.hasSingleAddress(address)
         guard let node = isLocal ? (peer == nil ? netmap.selfNode : nil) : peer,
             !node.stableID.isEmpty, let profile = netmap.userProfiles[node.user]

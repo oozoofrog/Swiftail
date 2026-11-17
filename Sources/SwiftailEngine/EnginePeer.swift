@@ -69,9 +69,12 @@ public struct EnginePeer: Sendable, Equatable {
         // 서브넷 경로와 /0은 여기서 빠진다. `addresses`에 있다고 새로 더하지는 않는다.
         // Go(`peerViewOf`)는 `addresses`에 있는 접두를 길이와 무관하게 자기 주소로 본다. 여기서는 넓은 접두를 받지 않는다:
         // WireGuard의 출발지 검사는 피어마다 따로라, 넓은 접두를 가진 피어는 다른 피어의 주소를 출발지로 쓸 수 있다.
+        // IPv4-mapped IPv6 주소(`::ffff:a.b.c.d`)도 받지 않는다: 주소로 신원을 찾는 쪽(`whoIs`)은 그것을 IPv4로 바꿔 찾으므로,
+        // 그 IPv4 주소의 주인이 아닌 피어가 mapped 주소를 출발지로 쓰면 다른 노드의 신원으로 보인다.
         // shortcut: Go는 호스트 비트가 남은 원문 접두를 빼지만, 여기서는 구분하지 못한다(`IPPrefix`가 해독할 때 지운다).
         var allowedIPs: [IPPrefix] = []
-        for prefix in node.allowedIPs where Self.isSingleAddress(prefix) && !allowedIPs.contains(prefix) {
+        for prefix in node.allowedIPs
+        where Self.isSingleAddress(prefix) && !Self.isIPv4Mapped(prefix.address) && !allowedIPs.contains(prefix) {
             if Self.isTailscaleAddress(prefix.address) || node.addresses.contains(prefix) {
                 allowedIPs.append(prefix)
             }
@@ -108,6 +111,11 @@ public struct EnginePeer: Sendable, Equatable {
     /// /32 또는 /128.
     static func isSingleAddress(_ prefix: IPPrefix) -> Bool {
         prefix.length == prefix.address.bytes.count * 8
+    }
+
+    /// IPv4-mapped IPv6 주소(`::ffff:a.b.c.d`).
+    static func isIPv4Mapped(_ address: IPAddress) -> Bool {
+        address.bytes.count == 16 && address.bytes.starts(with: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF])
     }
 
     /// Tailscale 주소 범위: `100.64.0.0/10`(`100.115.92.0/23` 제외)과 `fd7a:115c:a1e0::/48`.

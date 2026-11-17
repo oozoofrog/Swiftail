@@ -88,6 +88,15 @@ struct EnginePeerTests {
         #expect(try peers(addresses: ["100.64.0.0/10"]).isEmpty)
     }
 
+    @Test("IPv4-mapped IPv6 주소(::ffff:a.b.c.d/128)는 Addresses에 있어도 AllowedIPs에 넣지 않는다")
+    func mappedAddressIsExcluded() throws {
+        let addresses = ["100.64.0.2/32", "::ffff:100.64.0.9/128"]
+        let peers = try peers(addresses: addresses)
+        #expect(peers.first?.allowedIPs == ["100.64.0.2/32"].compactMap(IPPrefix.init))
+        // 그것뿐인 피어는 올리지 않는다.
+        #expect(try self.peers(addresses: ["::ffff:100.64.0.9/128"]).isEmpty)
+    }
+
     @Test("이 노드 자신의 주소는 피어의 AllowedIPs에 넣지 않는다")
     func selfAddressIsExcluded() throws {
         let allowed = #","AllowedIPs":["100.64.0.2/32","100.64.0.1/32","fd7a:115c:a1e0::1/128"]"#

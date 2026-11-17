@@ -34,23 +34,37 @@ extension PeerPathState {
     /// Ping으로 배운 후보를 넣어 후보가 이 수를 넘으면 지울 것을 지운다. Go `addCandidateEndpoint`(`endpoint.go:1835`).
     static let candidatePruneThreshold = 100
 
+    /// 최근 받은 Ping의 TxID를 기억하는 수(계약 H).
+    static let recentPingLimit = 32
+
     /// UDP로 온 Ping(노트 4.2 4.2). 출처를 후보로 넣고, Pong을 보내야 하면 true를 돌려준다.
     ///
-    /// 같은 후보에서 직전과 같은 TxID가 오면 재전송으로 보고 false다. 재전송은 후보의 수명(마지막 Ping 뒤 45초)도 늘리지
-    /// 않는다: disco에는 재전송 방지가 없어(계약 H) 캡처한 Ping 하나를 되풀이해 보내는 것만으로 후보를 영영 붙들 수 있기
-    /// 때문이다(Go는 재전송에도 시각을 새로 적는다). 후보 표가 가득 차 넣지 못해도 Pong은
-    /// 보낸다(Ping은 공유 키 없이는 만들 수 없고 Pong은 Ping과 크기가 비슷해 증폭 수단이 되지 않는다. 받은 Ping에 답하는 Go와 같다). 받을 수 없는 출처(IPv6, 포트 0)는
-    /// 답할 수도 없으므로 false다.
+    /// 최근에 본 TxID(`recentPingTxIDs`)는 어느 출처에서 오든 재전송이다. 재전송은 후보의 수명(마지막 Ping 뒤 45초)을
+    /// 늘리지 않고 새 후보도 만들지 않는다: disco에는 재전송 방지가 없어(계약 H) 캡처한 Ping을 되풀이해 보내는 것만으로
+    /// 후보를 영영 붙들거나 표를 채울 수 있기 때문이다(Go는 후보마다 직전 TxID 하나만 보고, 재전송에도 시각을 새로
+    /// 적는다). 정상 피어는 Ping마다 새 TxID를 쓴다.
+    ///
+    /// Pong은 Go와 같다: 같은 후보에서 직전과 같은 TxID가 왔을 때만 보내지 않는다. 후보로 넣지 않은 Ping에도 Pong은
+    /// 보낸다(Ping은 공유 키 없이는 만들 수 없고 Pong은 Ping과 크기가 비슷해 증폭 수단이 되지 않는다). 받을 수 없는
+    /// 출처(IPv6, 포트 0)는 답할 수도 없으므로 false다.
     mutating func receivePing(_ txID: TransactionID, from source: IPEndpoint, at now: ContinuousClock.Instant) -> Bool {
         guard let address = Self.candidateAddress(source) else { return false }
+        let isReplay = recentPingTxIDs.contains(txID)
+        if !isReplay {
+            if recentPingTxIDs.count >= Self.recentPingLimit {
+                recentPingTxIDs.removeFirst()
+            }
+            recentPingTxIDs.append(txID)
+        }
         if let index = candidates.firstIndex(where: { $0.address == address }) {
             let isDuplicate = candidates[index].lastPingReceivedTxID == txID
             candidates[index].lastPingReceivedTxID = txID
-            if !isDuplicate, candidates[index].lastPingReceived != nil {
+            if !isReplay, !isDuplicate, candidates[index].lastPingReceived != nil {
                 candidates[index].lastPingReceived = now
             }
             return !isDuplicate
         }
+        guard !isReplay else { return true }
         var candidate = Candidate(address: address)
         candidate.lastPingReceived = now
         candidate.lastPingReceivedTxID = txID

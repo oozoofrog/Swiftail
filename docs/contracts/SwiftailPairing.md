@@ -2,7 +2,7 @@
 
 M9의 목표는 **Swiftail을 쓰는 두 앱이 QR 코드나 링크 하나로 서로를 인증하는 것**이다. 한쪽(여는 쪽)이 화면에 QR과 링크를 내고, 다른 쪽(들어오는 쪽)이 그것을 읽으면 두 앱이 짝이 된다. 링크에 1회용 tailnet 인증 키를 실으면 들어오는 쪽은 로그인 없이 tailnet에 들어온 뒤 짝이 된다. 그 키를 만드는 일(Tailscale 관리 API)도 라이브러리가 한다.
 
-2026-11-17에 다른 세션이 초안을 설계 검토했고(판정: 고친 뒤에 구현), 그 발견을 이 판에 반영했다. 무엇을 바꿨는지는 9절에 있다. 같은 날의 보안 검증이 낸 발견은 11절에 있다(절차는 판 2가 됐다).
+2026-11-17에 다른 세션이 초안을 설계 검토했고(판정: 고친 뒤에 구현), 그 발견을 이 판에 반영했다. 무엇을 바꿨는지는 9절에 있다. 같은 날의 보안 검증이 낸 발견은 11절에 있다(절차는 판 2를 거쳐 판 3이 됐다).
 
 사용자 결정(2026-11-17):
 
@@ -79,7 +79,7 @@ public enum PairingOfferError: Error, Sendable, Equatable {
 
 - O1. 값은 전부 조각(`#` 뒤)에 싣는다. 조각은 서버 요청과 Referer에 실리지 않는다. `base`에 조각이 있으면 `url(base:)`는 그것을 버린다.
 - O2. 읽기는 엄격하다. 첫 `#` 뒤만 본다. 조각은 2048바이트 이하이고 `%`가 없어야 한다(값의 글자가 모두 인코딩이 필요 없는 것이다). `v`는 `1`만, 키는 위 여섯 개만, 같은 키는 한 번만.
-  - `h`: 올바른 DNS 이름(라벨 1~63자, `a-z0-9-`, 하이픈으로 시작·끝나지 않음, 전체 253자 이하, 라벨 둘 이상). 끝 라벨이 숫자뿐이면 이름이 아니라 IP 주소 꼴이므로 받지 않는다(`192.168.1.1`, `1.2`). 이름이어야 터널의 MagicDNS가 풀고, 주소를 적은 링크로 들어오는 쪽을 tailnet 밖의 곳에 걸게 할 수 없다. 여는 쪽도 같은 규칙으로 자기 FQDN을 본다(P9).
+  - `h`: 올바른 DNS 이름(라벨 1~63자, `a-z0-9-`, 하이픈으로 시작·끝나지 않음, 전체 253자 이하, 라벨 둘 이상). 끝 라벨은 글자(`a-z`)로 시작해야 한다(최상위 도메인은 숫자로 시작하지 않는다. `xn--` 라벨은 된다). 숫자로 시작하는 끝 라벨은 이름이 아니라 IP 주소 꼴이므로 받지 않는다(`192.168.1.1`, `1.2`, 그리고 OS가 IPv4 주소로 읽는 16진 꼴 `192.168.1.0x1`, `1.0x7f`). 이름이어야 터널의 MagicDNS가 풀고, 주소를 적은 링크로 들어오는 쪽을 tailnet 밖의 곳에 걸게 할 수 없다. 여는 쪽도 같은 규칙으로 자기 FQDN을 본다(P9).
   - `p`: 1~65535의 10진수, 앞자리 0 없음.
   - `s`: 채움 없는 base64url 43자, 정확히 32바이트로 풀린다(남는 비트는 0).
   - `e`: 부호와 앞자리 0이 없는 1~11자리 10진수.
@@ -143,21 +143,27 @@ public enum AuthKeyIssueError: Error, Sendable, Equatable {   // 연관 값에 �
 들어오는 쪽(J)이 여는 쪽(H)의 `host:port`로 TCP 연결을 건다. 연결은 WireGuard가 암호화하고 양쪽 노드 키로 인증한다. H는 연결의 원격 주소로 J의 노드 신원을 안다(`whoIs`). J는 H가 제안의 비밀을 안다는 증명으로 H를 확인한다. 증명에는 양쪽이 본 연결의 두 끝을 묶는다. 중간에서 바이트를 넘겨주는 다른 노드가 끼면 두 끝이 달라져 증명이 맞지 않는다.
 
 ```
-J→H  hello     "SWPR" ‖ 0x02 ‖ commitJ(32) ‖ 길이(1) ‖ 기기 이름(UTF-8, 1~64바이트)
-               commitJ = SHA256("swiftail-pairing-2 commit" ‖ nonceJ)
-H→J  challenge 상태(1) ‖ nonceH(32)            상태: 0 계속, 1 열린 제안 없음(H가 닫는다)
-J→H  proof     nonceJ(32) ‖ HMAC-SHA256(비밀, "swiftail-pairing-2 joiner" ‖ T)
-H→J  accepted  HMAC-SHA256(비밀, "swiftail-pairing-2 host" ‖ T)
-H→J  decision  D ‖ HMAC-SHA256(비밀, "swiftail-pairing-2 decision" ‖ T ‖ D)
+J→H  hello     "SWPR" ‖ 0x03 ‖ commitJ(32) ‖ 길이(1) ‖ 기기 이름(UTF-8, 1~64바이트)
+               commitJ = SHA256("swiftail-pairing-3 commit joiner" ‖ nonceJ)
+H→J  challenge 상태(1) ‖ commitH(32)           상태: 0 계속, 1 열린 제안 없음(H가 닫는다)
+               commitH = SHA256("swiftail-pairing-3 commit host" ‖ nonceH)
+J→H  proof     nonceJ(32) ‖ HMAC-SHA256(비밀, "swiftail-pairing-3 joiner" ‖ P)
+H→J  accepted  nonceH(32) ‖ HMAC-SHA256(비밀, "swiftail-pairing-3 host" ‖ T)
+H→J  decision  D ‖ HMAC-SHA256(비밀, "swiftail-pairing-3 decision" ‖ T ‖ D)
                D = 상태(1) ‖ [승인일 때: 길이(1) ‖ H의 StableID ‖ 길이(1) ‖ H의 표시 이름]
                상태: 1 승인, 2 거절, 3 승인 시간 초과
 
-T = commitJ ‖ nonceJ ‖ nonceH ‖ SHA256(제안의 host 문자열) ‖ 제안의 port(2, 빅 엔디언) ‖ SHA256(보낸 기기 이름 바이트)
+P = commitJ ‖ commitH ‖ nonceJ ‖ SHA256(제안의 host 문자열) ‖ 제안의 port(2, 빅 엔디언) ‖ SHA256(보낸 기기 이름 바이트)
     ‖ J의 주소(16) ‖ J의 포트(2) ‖ H의 주소(16) ‖ H의 포트(2)        길이 198바이트
-확인 숫자 = HMAC-SHA256(비밀, "swiftail-pairing-2 sas" ‖ T)의 앞 4바이트(빅 엔디언) mod 1000000, 6자리
+T = P ‖ nonceH                                                    길이 230바이트
+확인 숫자 = HMAC-SHA256(비밀, "swiftail-pairing-3 sas" ‖ T)의 앞 4바이트(빅 엔디언) mod 1000000, 6자리
 ```
 
-**nonce 약속(판 2).** 확인 숫자는 20비트 남짓이라, 상대의 nonce를 본 뒤에 자기 nonce를 고를 수 있는 쪽은 값을 갈아 가며 원하는 숫자를 맞출 수 있다. 그래서 양쪽 nonce가 상대 값을 보기 전에 고정되게 한다. J는 `hello`에 nonceJ가 아니라 그 약속 commitJ를 싣고, nonceJ는 nonceH를 받은 뒤 `proof`에서 연다. H는 nonceJ를 모르는 채로 nonceH를 내고, J는 nonceH를 본 뒤에는 약속과 다른 nonceJ를 열 수 없다. 판 1(`0x01`, `hello`에 nonceJ)은 받지 않는다. 쓰는 곳이 없었다.
+**nonce 약속(판 3).** 확인 숫자는 20비트 남짓이라, 상대의 nonce를 본 뒤에 자기 nonce를 고를 수 있는 쪽은 값을 갈아 가며 원하는 숫자를 맞출 수 있다. 그래서 양쪽 nonce가 상대 값을 보기 전에 고정되게 한다. J는 `hello`에 약속 commitJ를 싣고 `proof`에서 nonceJ를 연다. H는 `challenge`에 약속 commitH를 싣고 `accepted`에서 nonceH를 연다. 어느 쪽도 약속과 다른 nonce를 열 수 없다. 두 약속의 꼬리표는 서로 달라, 상대의 약속을 되비춰 자기 약속으로 낼 수 없다.
+
+**H가 nonce를 늦게 여는 까닭.** 제안의 비밀을 아는 쪽은 두 nonce를 알면 확인 숫자를 계산할 수 있다. H가 `challenge`에서 nonceH를 밝히면(판 2), 비밀을 아는 쪽이 `proof`를 내기 전에 숫자를 보고, 원하는 숫자가 아니면 끊고 다시 걸기를 되풀이할 수 있다(끊은 시도는 제안을 쓰지 않는다, P3). 그래서 H는 nonceH를 맞는 `proof`가 온 뒤에만 밝힌다. 그때는 제안이 이미 쓰였으므로(P4), 숫자를 본 뒤 그만두는 시도는 한 번뿐이다. `proof`는 nonceH 없이 만들 수 있어야 하므로 P에 매기고, 그 뒤의 값(`accepted`, `decision`, 확인 숫자)은 nonceH까지 든 T에 매긴다.
+
+판 1(`0x01`, `hello`에 nonceJ)과 판 2(`0x02`, `challenge`에 nonceH, 꼬리표 `swiftail-pairing-2`)는 받지 않는다. 쓰는 곳이 없었다.
 
 주소는 그 연결의 두 끝이다(IPv4는 IPv4-mapped IPv6 16바이트). H와 프로세스 안 J는 `TailnetConnection`의 `localEndpoint`·`remoteEndpoint`, OS 소켓 J는 준비된 `NWConnection`의 로컬·원격 끝을 쓴다. tailnet 안에서는 주소가 바뀌지 않으므로 양쪽이 같은 네 값을 본다.
 
@@ -165,8 +171,8 @@ T = commitJ ‖ nonceJ ‖ nonceH ‖ SHA256(제안의 host 문자열) ‖ 제�
 
 - P1. 연결을 받으면 먼저 `whoIs(원격 주소)`를 본다. 신원을 모르면 읽지 않고 닫는다.
 - P2. 열린 제안이 없거나 만료됐으면 `hello`를 읽은 뒤 `challenge`를 상태 1로 보내고 닫는다.
-- P3. `proof`를 받으면 먼저 연 nonceJ가 약속과 맞는지 본다: `SHA256("swiftail-pairing-2 commit" ‖ nonceJ) == commitJ`. 다르면 형식 위반으로 아무것도 보내지 않고 닫는다. 맞으면 T를 만들어 HMAC을 상수 시간으로 견준다. 틀리면 아무것도 보내지 않고 닫는다. 어느 쪽이든 제안은 그대로 둔다(비밀이 256비트라 시도로 맞힐 수 없고, 틀린 시도로 태우면 tailnet의 아무 피어나 제안을 못 쓰게 만들 수 있다).
-- P4. 맞으면 그 자리에서 제안을 쓴 것으로 한다(한 번만 쓴다). 같은 비밀의 다른 연결은 그 뒤로 P2가 된다. `accepted`를 보내고 앱의 결정을 기다린다.
+- P3. nonceH는 연결마다 새로 뽑아 쥐고, `challenge`에는 그 약속 commitH만 싣는다. `proof`를 받으면 먼저 연 nonceJ가 약속과 맞는지 본다: `SHA256("swiftail-pairing-3 commit joiner" ‖ nonceJ) == commitJ`. 다르면 형식 위반으로 아무것도 보내지 않고 닫는다. 맞으면 P를 만들어 HMAC을 상수 시간으로 견준다. 틀리면 아무것도 보내지 않고 닫는다. 어느 쪽이든, 그리고 `proof`가 오지 않고 끊기거나 기한이 지나도, 제안은 그대로 두고 nonceH는 밝히지 않는다(비밀이 256비트라 시도로 맞힐 수 없고, 틀린 시도로 태우면 tailnet의 아무 피어나 제안을 못 쓰게 만들 수 있다).
+- P4. 맞으면 그 자리에서 제안을 쓴 것으로 한다(한 번만 쓴다). 같은 비밀의 다른 연결은 그 뒤로 P2가 된다. 그 뒤에 nonceH를 열어 `accepted`를 보내고 앱의 결정을 기다린다. 확인 숫자는 여기서 처음 계산된다.
 - P5. 앱의 결정은 `decide(PairingRequest) async -> Bool`이다. 요청에는 J의 `PeerIdentity`, 기기 이름, 확인 숫자가 있다. **기기 이름은 상대가 스스로 밝힌 값이다.** 같은 OAuth 클라이언트의 키로 들어온 노드들은 로그인 이름이 같으므로, 승인 화면은 확인 숫자를 보여 주고 사용자가 들어오는 기기 화면의 숫자와 같을 때 승인하게 한다. 120초 안에 답이 없으면 상태 3. `decide`는 취소되면 곧 돌아와야 한다(취소를 무시하면 그 연결은 닫히지만 `run()`이 끝나지 못한다).
 - P6. 결정을 기다리는 동안 읽기를 걸어 둔다. EOF·오류·어떤 바이트든 오면 끊긴 것으로 보고 결정 Task를 취소한다. 그 사이 새 제안을 열거나 `closeOffer()`를 불러도 이 결정은 계속된다.
 - P7. 승인이면, 그 순간의 `whoIs`가 처음과 같은 `StableID`일 때만 짝 목록에 넣고 저장한 뒤 상태 1을 보낸다. 저장에 실패하면 상태 2다. 상태 1을 보내기 전에 끊기면 H에는 짝이 남고 J에는 없다. 다시 짝을 맺으면 항목이 바뀐다(S1).
@@ -179,7 +185,7 @@ T = commitJ ‖ nonceJ ‖ nonceH ‖ SHA256(제안의 host 문자열) ‖ 제�
 - J1. 첫 `challenge`를 받을 때까지 60초 동안 1초 간격으로 다시 건다. 방금 tailnet에 들어온 노드는 이름 풀이와 경로, 그리고 H의 netmap에 자기가 오르는 데 시간이 걸린다(그동안 H는 P1로 닫는다). 60초가 지나면 `.unreachable`.
 - J2. OS 소켓: 앱이 이 기기의 tailnet 주소(`localAddress`, 터널 확장이 노드에서 읽은 값)를 넘긴다. 그 주소가 `100.64.0.0/10`이나 `fd7a:115c:a1e0::/48` 밖이면 걸지 않고 `.invalidConfiguration`. `NWConnection`으로 `host:port`에 건다(이름은 터널의 MagicDNS가 푼다). IP 판은 `localAddress`와 같은 것으로 고정하고, Wi-Fi·셀룰러·유선·루프백 인터페이스를 금지한다(`prohibitedInterfaceTypes`. 터널 인터페이스로만 나가게). 준비된 뒤 **로컬 끝의 주소가 `localAddress`와 다르거나** 원격 끝이 위 대역 밖이면 `hello`를 보내지 않고 `.notOnTailnet`(다시 걸지 않는다). 대역만 보면 터널이 꺼진 채 같은 대역(`100.64.0.0/10`은 통신사·공유기도 쓴다)을 쓰는 로컬 네트워크의 연결이 통과한다.
 - J3. `challenge`의 상태 1이면 `.rejected`. `proof`를 보낸 뒤 `accepted` 없이 닫히면 `.rejected`.
-- J4. `accepted`를 상수 시간으로 견준다. 틀리면 `.hostNotVerified`. 맞으면 `awaitingApproval(확인 숫자)`를 부르고 `decision`을 기다린다(`proof`를 보낸 때부터 130초, 넘으면 `.timedOut`). `accepted` 뒤에 `decision` 없이 닫히거나 다른 바이트가 오면 `.protocolViolation`.
+- J4. `accepted`의 nonceH가 `challenge`의 약속과 맞는지 본다: `SHA256("swiftail-pairing-3 commit host" ‖ nonceH) == commitH`. 다르면 `.hostNotVerified`. 맞으면 T를 만들어 HMAC을 상수 시간으로 견준다. 틀리면 `.hostNotVerified`. 맞으면 `awaitingApproval(확인 숫자)`를 부르고 `decision`을 기다린다(`proof`를 보낸 때부터 130초, 넘으면 `.timedOut`). `accepted` 뒤에 `decision` 없이 닫히거나 다른 바이트가 오면 `.protocolViolation`.
 - J5. `decision`의 HMAC을 상수 시간으로 견준다. 틀리면 `.hostNotVerified`. 상태는 1~3만, `StableID`는 1~255바이트의 인쇄 가능 ASCII, 표시 이름은 0~64바이트의 올바른 UTF-8이고 기기 이름과 같은 글자 규칙이다(P8). 어긋나면 `.protocolViolation`. 상태 2 → `.denied`, 3 → `.timedOut`.
 - J6. 승인이면 `PairedHost`(`host`, `stableID`, `name`, `pairedAt`)를 돌려준다. 보관은 앱이 한다(`Codable`). 프로세스 안 노드로 들어왔으면 `decision`의 `StableID`가 `whoIs(원격 주소)`의 것과 같아야 한다. 다르면 `.hostNotVerified`.
 - J7. 호출한 Task가 취소되면 연결을 끊고 `.cancelled`.
@@ -249,9 +255,9 @@ public enum PairingError: Error, Sendable, Equatable {
 단위(`SwiftailPairingTests`):
 
 1. 링크: 왕복, O2의 거절 하나하나(`%`, 겹친 키, 모르는 키, 감싼 키, 각 값의 경계), 가린 `description`·`dump`, 가장 긴 링크의 QR.
-2. 절차 전체의 고정 벡터: 다른 구현(Go `crypto/hmac`·`crypto/sha256`로 쓴 `Tools/interop`의 도구)으로 뽑은 commitJ·`hello`·T·`proof`·`accepted`·확인 숫자·`decision` 바이트와 일치.
-3. 여는 쪽 상태 기계: 정상, 틀린 증명(제안이 남는지), 약속과 다른 nonceJ(닫히고 제안이 남는지. `hello`와 `challenge`가 오간 뒤에는 nonceJ를 바꿀 수 없다), 판 1의 `hello`, 제안 없음·만료·바뀜, 한 번만 쓰임, 잘린·넘친 메시지, 차례 밖 바이트, 10초·120초, 한도 8과 같은 노드 2, 기기 이름의 Cc·Cf, 결정 대기 중 끊김(결정 Task 취소), 승인 때 `StableID`가 바뀜, 저장 실패.
-4. 들어오는 쪽 상태 기계: `hello`에 nonceJ가 없음, 틀린 `accepted`, 틀린 `decision` HMAC, 모르는 상태·길이 넘침·잘못된 UTF-8, 130초, 취소, 주소가 다른 T(중간에 낀 경우)로 만든 증명이 서로 맞지 않는지, tailnet 대역 밖 주소, 로컬 끝이 `localAddress`와 다른 연결.
+2. 절차 전체의 고정 벡터: 다른 구현(Go `crypto/hmac`·`crypto/sha256`로 쓴 `Tools/interop`의 도구)으로 뽑은 commitJ·commitH·`hello`·`challenge`·P·T·`proof`·`accepted`·확인 숫자·`decision` 바이트와 일치.
+3. 여는 쪽 상태 기계: 정상, 틀린 증명(제안이 남고 nonceH가 나가지 않는지), 약속과 다른 nonceJ(닫히고 제안이 남는지. `hello`와 `challenge`가 오간 뒤에는 nonceJ를 바꿀 수 없다), `challenge`까지만 하고 끊기를 되풀이하는 연결(받는 것은 commitH뿐이고, 숫자를 보려고 `proof`를 내면 제안이 쓰인다), 판 1·2의 `hello`, 제안 없음·만료·바뀜, 한 번만 쓰임, 잘린·넘친 메시지, 차례 밖 바이트, 10초·120초, 한도 8과 같은 노드 2, 기기 이름의 Cc·Cf, 결정 대기 중 끊김(결정 Task 취소), 승인 때 `StableID`가 바뀜, 저장 실패.
+4. 들어오는 쪽 상태 기계: `hello`에 nonceJ가 없음, 틀린 `accepted`, 약속과 다른 nonceH(HMAC이 맞아도 `.hostNotVerified`), 확인 숫자가 `accepted` 뒤에만 나옴, 틀린 `decision` HMAC, 모르는 상태·길이 넘침·잘못된 UTF-8, 130초, 취소, 주소가 다른 T(중간에 낀 경우)로 만든 증명이 서로 맞지 않는지, tailnet 대역 밖 주소, 로컬 끝이 `localAddress`와 다른 연결.
 5. 짝 목록: 저장·다시 읽기, 다시 짝이 됨, S3의 경우 하나하나, 한도, 권한, 그룹·기타가 쓸 수 있는 디렉터리, 같은 디렉터리 둘.
 6. QR: 만든 그림을 시스템 검출기로 다시 읽어 링크와 같은지, 여백.
 7. 키 발급: 가짜 전송으로 요청의 모양(K1), 두 번째 방식, 응답·오류의 분류(K6), 검사(K4), 가림.
@@ -319,3 +325,10 @@ public enum PairingError: Error, Sendable, Equatable {
 | 제안의 `host`에 IP 주소를 적을 수 있다 | 끝 라벨이 숫자뿐이면 `.invalidHost`(O2) |
 | 짝 목록 디렉터리를 남이 쓸 수 있으면 파일을 바꿔치기해 짝을 더할 수 있다 | `init`이 주인과 권한을 본다(S2·S3) |
 | 인증 키는 페어링과 묶여 있지 않다. 키가 실린 링크를 여는 것은 그 tailnet에 가입하는 일이다 | 3절 "앱이 지킬 것"과 `PairingOffer.authKey`·`openOffer`의 문서 주석 |
+
+2차(같은 날, 위의 처리를 다른 세션이 다시 확인해 남은 것). 절차의 바이트가 다시 바뀌어 판이 3이 됐다(판 2도 받지 않는다. 쓰는 곳이 없었다).
+
+| 발견 | 처리 |
+| --- | --- |
+| 판 2는 여는 쪽이 `challenge`에서 nonceH를 바로 밝힌다. 제안의 비밀을 아는 쪽은 `proof`를 내기 전에 확인 숫자를 계산하고, 원하는 숫자가 아니면 끊고 다시 걸기를 되풀이할 수 있다(끊은 시도는 제안을 쓰지 않고 세는 것도 없다) | 여는 쪽도 nonce를 약속한다(5절): `challenge`에 commitH, 맞는 `proof` 뒤 `accepted`에서 nonceH. `proof`는 P에, 나머지는 T = P ‖ nonceH에 매긴다. 꼬리표를 `swiftail-pairing-3`으로 바꾸고 두 약속의 꼬리표를 가름. 고정 벡터를 다시 냄 |
+| 제안의 `host`에서 끝 라벨이 숫자뿐인 것만 거절해 16진 꼴 IPv4(`192.168.1.0x1`, `1.0x7f`)가 통과한다 | 끝 라벨은 글자로 시작해야 한다(O2) |

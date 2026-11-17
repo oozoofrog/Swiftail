@@ -64,7 +64,10 @@ extension AuthorityState {
     ///
     /// 저장소를 다시 열 때는 이것만 본다(TL-11a 항목 2). 정적 검사를 통과하지 않은 AUM이 와도 트랩하지 않는다: 서명의 길이는
     /// 검증이 떨어뜨리고, 적용(`applying`)은 필드가 없으면 거절하고, 가중치는 Go와 같이 넘쳐도 감긴다.
-    func verifyParentAndSignatures(of update: AUM, isBootstrap: Bool) throws(TKAError) {
+    ///
+    /// - Returns: 서명 검증을 한 횟수. 되풀이한 (KeyID, 서명) 쌍은 한 번만 센다. 시험이 검증의 비용을 이 수로 본다.
+    @discardableResult
+    func verifyParentAndSignatures(of update: AUM, isBootstrap: Bool) throws(TKAError) -> Int {
         if !isBootstrap {
             guard let parent = update.prevAUMHash, !parent.isEmpty else { throw .missingParent }
             guard let lastAUMHash, lastAUMHash.bytes == parent else { throw .rejectedUpdate }
@@ -88,6 +91,7 @@ extension AuthorityState {
         if update.messageKind == AUM.Kind.removeKey, keys.count == 1, keys[0].keyID == update.keyID ?? [] {
             throw .rejectedUpdate
         }
+        return verified.count
     }
 
     /// 갈래 해소의 서명 가중치(Go `AUM.Weight`): 서명한 신뢰 키의 `Votes` 합. 같은 키의 서명은 한 번만, 모르는 키는 0이다.

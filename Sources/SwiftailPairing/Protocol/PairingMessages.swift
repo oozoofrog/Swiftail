@@ -1,15 +1,16 @@
 /// 짝 맺기 절차의 메시지와 그 바이트(계약 5절).
 ///
 /// ```
-/// J→H  hello     "SWPR" ‖ 0x02 ‖ commitJ(32) ‖ 길이(1) ‖ 기기 이름(UTF-8, 1~64바이트)
-/// H→J  challenge 상태(1) ‖ nonceH(32)
+/// J→H  hello     "SWPR" ‖ 0x03 ‖ commitJ(32) ‖ 길이(1) ‖ 기기 이름(UTF-8, 1~64바이트)
+/// H→J  challenge 상태(1) ‖ commitH(32)
 /// J→H  proof     nonceJ(32) ‖ HMAC(32)
-/// H→J  accepted  HMAC(32)
+/// H→J  accepted  nonceH(32) ‖ HMAC(32)
 /// H→J  decision  D ‖ HMAC(32)     D = 상태(1) ‖ [승인: 길이(1) ‖ StableID ‖ 길이(1) ‖ 표시 이름]
 /// ```
 ///
-/// `hello`가 싣는 것은 nonceJ가 아니라 그 약속(commitJ)이고, nonceJ는 nonceH를 받은 뒤 `proof`에서 연다. 어느 쪽도 상대의
-/// nonce를 본 뒤에 자기 nonce를 고를 수 없다(`PairingTranscript.commitment(to:)`).
+/// `hello`와 `challenge`가 싣는 것은 nonce가 아니라 그 약속이다. 들어오는 쪽은 `proof`에서, 여는 쪽은 그 `proof`가 맞은
+/// 뒤 `accepted`에서 nonce를 연다. 어느 쪽도 상대의 nonce를 본 뒤에 자기 nonce를 고를 수 없고, 들어오는 쪽은 비밀을
+/// 증명하기 전에는 여는 쪽의 nonce를 보지 못한다(`PairingTranscript`).
 ///
 /// 길이는 메시지마다 정해져 있다. 읽기는 받은 바이트를 모아 두고 `parse`에 넘긴다: 아직 모자라면 `incomplete`, 규격과
 /// 다르면 `invalid`, 다 왔으면 값과 쓴 길이다. 남은 바이트가 위반인지는 차례를 아는 상태 기계가 정한다.
@@ -22,6 +23,11 @@ enum PairingMessage {
     /// 들어오는 쪽이 절차에서 보내는 바이트의 상한: 가장 긴 `hello`와 `proof`. 이보다 많이 왔으면 이미 위반이다.
     static let maximumJoinerLength = Hello.prefix.count + nonceLength + 1 + DeviceName.maximumLength + Proof.length
 
+    /// J→H 증명. 약속해 둔 nonceJ를 열고, 그 뒤에 비밀을 안다는 HMAC을 붙인다.
+    typealias Proof = Opening
+    /// H→J 수락. `proof`가 맞은 뒤에야 약속해 둔 nonceH를 열고, 그 뒤에 여는 쪽이 비밀을 안다는 HMAC을 붙인다.
+    typealias Accepted = Opening
+
     /// 모아 둔 바이트를 메시지 하나로 읽은 결과.
     enum Parsed<Message> {
         case incomplete
@@ -29,9 +35,9 @@ enum PairingMessage {
         case complete(Message, length: Int)
     }
 
-    /// J→H 첫 메시지. 프로토콜의 표식과 판(2), 들어오는 쪽 nonce의 약속, 스스로 밝힌 기기 이름.
+    /// J→H 첫 메시지. 프로토콜의 표식과 판(3), 들어오는 쪽 nonce의 약속, 스스로 밝힌 기기 이름.
     struct Hello: Sendable, Equatable {
-        static let prefix = Array("SWPR".utf8) + [0x02]
+        static let prefix = Array("SWPR".utf8) + [0x03]
 
         /// commitJ. nonceJ는 `proof`에서 온다.
         var commitment: [UInt8]
@@ -54,8 +60,8 @@ enum PairingMessage {
         }
     }
 
-    /// J→H 증명. 약속해 둔 nonceJ를 열고, 그 뒤에 비밀을 안다는 HMAC을 붙인다.
-    struct Proof: Sendable, Equatable {
+    /// 약속해 둔 nonce를 열고 HMAC을 붙인 메시지. `proof`와 `accepted`가 이 모양이다.
+    struct Opening: Sendable, Equatable {
         static let length = nonceLength + codeLength
 
         var nonce: [UInt8]
@@ -76,7 +82,7 @@ enum PairingMessage {
         }
     }
 
-    /// H→J 답. 계속할지와 여는 쪽의 nonce.
+    /// H→J 답. 계속할지와 여는 쪽 nonce의 약속(commitH). nonceH는 `accepted`에서 온다.
     struct Challenge: Sendable, Equatable {
         enum Status: UInt8 {
             /// 계속한다.
@@ -88,15 +94,15 @@ enum PairingMessage {
         static let length = 1 + nonceLength
 
         var status: Status
-        var nonce: [UInt8]
+        var commitment: [UInt8]
 
-        var encoded: [UInt8] { [status.rawValue] + nonce }
+        var encoded: [UInt8] { [status.rawValue] + commitment }
 
         static func parse(_ buffer: [UInt8]) -> Parsed<Challenge> {
             guard let first = buffer.first else { return .incomplete }
             guard let status = Status(rawValue: first) else { return .invalid }
             guard buffer.count >= length else { return .incomplete }
-            return .complete(Challenge(status: status, nonce: Array(buffer[1..<length])), length: length)
+            return .complete(Challenge(status: status, commitment: Array(buffer[1..<length])), length: length)
         }
     }
 
