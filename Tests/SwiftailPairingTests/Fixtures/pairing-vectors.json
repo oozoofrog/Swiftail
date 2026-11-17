@@ -1,0 +1,128 @@
+{
+  "reference": "docs/contracts/SwiftailPairing.md 5절, Go crypto/hmac·crypto/sha256",
+  "vectors": [
+    {
+      "label": "IPv4",
+      "secret": "01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da",
+      "offerHost": "rd-mac-1a2b3c4d.tail0001.ts.net",
+      "offerPort": 4747,
+      "deviceName": "rd-phone-5e6f7a8b",
+      "joinerNonce": "0205080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c5f",
+      "hostNonce": "090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4",
+      "joinerAddress": "100.64.0.2",
+      "joinerPort": 49152,
+      "hostAddress": "100.64.0.1",
+      "hostPort": 4747,
+      "hello": "53575052010205080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c5f1172642d70686f6e652d3565366637613862",
+      "challenge": "00090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4",
+      "challengeNoOffer": "01090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4",
+      "transcript": "0205080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c5f090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa49979070d9db21029119e80caeec36c123afe24cd09ee5672c2702730afb3937b128b84047fadeffe0008bc3873b731fdb88951272385e35b4d14e63f069a15ddfc5900000000000000000000ffff64400002c00000000000000000000000ffff64400001128b",
+      "proof": "b410229791690173687d66d0b83e31e670c1d9ec110b2d4a38082dcb1d9d051d",
+      "accepted": "2cb09159f209df94b844dfe75db422cd72a83a42c77488add374e965d2e9320e",
+      "confirmationCode": "144164",
+      "approved": {
+        "stableID": "nEXAMPLE1CNTRL",
+        "name": "rd-mac-1a2b3c4d",
+        "bytes": "010e6e4558414d504c4531434e54524c0f72642d6d61632d3161326233633464a047649b07702adf604e6c4a7a2b8f2349484aa08cd045222166c1a7371bc8c6"
+      },
+      "denied": {
+        "bytes": "0256e3019e2cfa7301068dbd7bcc91b4ffffd81c5867ae31fb0bfc297cc5b22652"
+      },
+      "timedOut": {
+        "bytes": "03ceb5c9da1c3274bf68883ce642c2225a06079d24024ce5aa1c00b55f17bc2543"
+      }
+    },
+    {
+      "label": "IPv6, 한글 기기 이름, 빈 표시 이름",
+      "secret": "05101b26313c47525d68737e89949faab5c0cbd6e1ecf7020d18232e39444f5a",
+      "offerHost": "rd-mac-1a2b3c4d.tail0001.ts.net",
+      "offerPort": 65535,
+      "deviceName": "거실 iPad",
+      "joinerNonce": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a",
+      "hostNonce": "031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112",
+      "joinerAddress": "fd7a:115c:a1e0::2",
+      "joinerPort": 1,
+      "hostAddress": "fd7a:115c:a1e0::1",
+      "hostPort": 65535,
+      "hello": "53575052010714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a0beab1b0ec8ba42069506164",
+      "challenge": "00031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112",
+      "challengeNoOffer": "01031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff00112",
+      "transcript": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a031425364758697a8b9cadbecfe0f102132435465768798a9bacbdcedff001129979070d9db21029119e80caeec36c123afe24cd09ee5672c2702730afb3937bffff38eb0b55b2bfa9f7b5ed18c7c68a25943482964fbcafddea6b9677300e73d8cdfd7a115ca1e0000000000000000000020001fd7a115ca1e000000000000000000001ffff",
+      "proof": "73b3a6b91c373b205cabddfb686208b487b9e7cf239ce39c981028b96a11595f",
+      "accepted": "ff6a6b7873030a09b99c6d5f003e35410401e9b683393ef248a653750a6bdd81",
+      "confirmationCode": "202789",
+      "approved": {
+        "stableID": "nEXAMPLE2CNTRL",
+        "bytes": "010e6e4558414d504c4532434e54524c000ce5e5a65391cc398fc1640e5efcb6ad691b357e5f75b01a3e78a2645ff5062f"
+      },
+      "denied": {
+        "bytes": "02319f2c497c40a5b15ed8abdd5d5748cba84b49cef456c23b73e0407288b195ef"
+      },
+      "timedOut": {
+        "bytes": "03837e73b9d8efdddfce92e3bfb9b8611eb0d1ab9fec723f1371014b081f16a902"
+      }
+    },
+    {
+      "label": "가장 긴 이름들",
+      "secret": "04172a3d506376899cafc2d5e8fb0e2134475a6d8093a6b9ccdff205182b3e51",
+      "offerHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tail0001.ts.net",
+      "offerPort": 1,
+      "deviceName": "기기기기기기기기기기기기기기기기기기기기기a",
+      "joinerNonce": "061d344b627990a7bed5ec031a31485f768da4bbd2e900172e455c738aa1b8cf",
+      "hostNonce": "0825425f7c99b6d3f00d2a4764819ebbd8f5122f4c6986a3c0ddfa1734516e8b",
+      "joinerAddress": "100.127.255.254",
+      "joinerPort": 65535,
+      "hostAddress": "100.64.0.1",
+      "hostPort": 1,
+      "hello": "5357505201061d344b627990a7bed5ec031a31485f768da4bbd2e900172e455c738aa1b8cf40eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b0eab8b061",
+      "challenge": "000825425f7c99b6d3f00d2a4764819ebbd8f5122f4c6986a3c0ddfa1734516e8b",
+      "challengeNoOffer": "010825425f7c99b6d3f00d2a4764819ebbd8f5122f4c6986a3c0ddfa1734516e8b",
+      "transcript": "061d344b627990a7bed5ec031a31485f768da4bbd2e900172e455c738aa1b8cf0825425f7c99b6d3f00d2a4764819ebbd8f5122f4c6986a3c0ddfa1734516e8b4ab4434945c87c2048e297a0e9af085f23d49730baadff3f668bc1dd4a64d858000133f8a0e6ed500f08236629f4f41408533245e8fef5fd1f36e087b750fe8e5fd900000000000000000000ffff647ffffeffff00000000000000000000ffff644000010001",
+      "proof": "3356a106ac50c9d622b7aef312ede8a91528e7e1db15ccccd777fd266a987b06",
+      "accepted": "31ff11076400d47af325ec676d4c8ee7275c163db3e6d579ce10b25787086af6",
+      "confirmationCode": "275741",
+      "approved": {
+        "stableID": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+        "name": "표표표표표표표표표표표표표표표표표표표표표b",
+        "bytes": "01ff6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e40ed919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919ced919c62a33d3862b1c1980a5b75dbe00f61b7568eb616cf6043119d42e774cbf9ded60e"
+      },
+      "denied": {
+        "bytes": "02787360702e2bf18dad992d7cc3ef5b4254fdd5d041a2882958ce605eee27726b"
+      },
+      "timedOut": {
+        "bytes": "03084e99e5387b2f64a011aefbccb1a5a5ca36be92c6c679e85bceca4751f2a25a"
+      }
+    },
+    {
+      "label": "확인 숫자가 0으로 시작",
+      "secret": "01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da",
+      "offerHost": "rd-mac-1a2b3c4d.tail0001.ts.net",
+      "offerPort": 4747,
+      "deviceName": "rd-phone-5e6f7a8b",
+      "joinerNonce": "0c0205080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c",
+      "hostNonce": "090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4",
+      "joinerAddress": "100.64.0.2",
+      "joinerPort": 49152,
+      "hostAddress": "100.64.0.1",
+      "hostPort": 4747,
+      "hello": "53575052010c0205080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c1172642d70686f6e652d3565366637613862",
+      "challenge": "00090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4",
+      "challengeNoOffer": "01090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4",
+      "transcript": "0c0205080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa49979070d9db21029119e80caeec36c123afe24cd09ee5672c2702730afb3937b128b84047fadeffe0008bc3873b731fdb88951272385e35b4d14e63f069a15ddfc5900000000000000000000ffff64400002c00000000000000000000000ffff64400001128b",
+      "proof": "258b0cfe2fc4eb51b9e61c8c2c8404169b010175291a35b04c5240bcc10bfcca",
+      "accepted": "72bed93874806039d992bb7f9641c4b9afa4dc40a4de18d62007cdc9791ff3aa",
+      "confirmationCode": "092026",
+      "approved": {
+        "stableID": "nEXAMPLE1CNTRL",
+        "name": "rd-mac-1a2b3c4d",
+        "bytes": "010e6e4558414d504c4531434e54524c0f72642d6d61632d3161326233633464aa3ed342cd4ac6601272866390d20bdd680ae6fffb3563034c2fca3fe68a3859"
+      },
+      "denied": {
+        "bytes": "0298662bce18e41c8ca534008fae490fd14958c7f7377056e204201e2843377958"
+      },
+      "timedOut": {
+        "bytes": "03a55c9af4b461639b61f858ebb32f6c6f4fd4837a81d724ebe0ae0d9aa66fe8bd"
+      }
+    }
+  ]
+}

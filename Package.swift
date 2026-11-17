@@ -88,9 +88,13 @@ let package = Package(
         // tailnet 연결을 127.0.0.1의 OS TCP 리스너에 잇는 다리.
         .target(name: "SwiftailLoopback", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(name: "SwiftailLoopbackTests", dependencies: ["SwiftailLoopback", "Swiftail", "SwiftailBase", "SwiftailIO", "SwiftailControl", "SwiftailEngine"]),
-        // 앱끼리의 QR·링크 페어링과 1회용 인증 키 발급(M9). Foundation의 URLSession을 쓴다.
-        .target(name: "SwiftailPairing", dependencies: ["Swiftail", "SwiftailBase"]),
-        .testTarget(name: "SwiftailPairingTests", dependencies: ["SwiftailPairing"]),
+        // 앱끼리의 QR·링크 페어링과 1회용 인증 키 발급(M9). CryptoKit, Network, CoreImage, Foundation의 URLSession을 쓴다.
+        .target(name: "SwiftailPairing", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
+        .testTarget(
+            name: "SwiftailPairingTests",
+            dependencies: ["SwiftailPairing", "Swiftail", "SwiftailBase"],
+            resources: [.copy("Fixtures")]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )
