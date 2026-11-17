@@ -119,7 +119,9 @@ struct ConnectionInputScenarioTests {
         do {
             _ = try TCPConnection.accept(syn, initialSequenceNumber: SequenceNumber(10_000), at: peer.now)
             Issue.record("계약 X9: MSS 63인 SYN은 거절해야 한다")
-        } catch TCPConnection.AcceptError.unacceptableMaximumSegmentSize(let reset) {
+        } catch {
+            // catch 절에 바로 패턴을 걸지 않는다: Swift 6.3의 SILGen이 typed throws의 catch 패턴에서 멈춘다.
+            guard case .unacceptableMaximumSegmentSize(let reset) = error else { throw error }
             #expect(reset.flags == [.rst, .ack])
             #expect(reset.acknowledgmentNumber == peer.peerStart)
         }

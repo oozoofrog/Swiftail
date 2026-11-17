@@ -98,12 +98,14 @@ struct WrappedAuthKeyTests {
         let lastCharacter = try #require(privateKey.last)
         let nextCharacter = try #require(["A": "B", "Q": "R", "g": "h", "w": "x"][lastCharacter])
         let nonCanonical = String(privateKey.dropLast()) + nextCharacter
-        for suffix in [
+        let brokenLine = String(privateKey.prefix(40)) + "\n" + String(privateKey.dropFirst(40))
+        let suffixes: [String] = [
             "", "-", credential, credential + "-", "-" + privateKey, String(credential.dropLast()) + "-" + privateKey,
             credential + "-" + String(privateKey.dropLast()), credential + "-" + nonCanonical,
-            credential + "-" + privateKey + "=", credential + "-" + privateKey.prefix(40) + "\n" + privateKey.dropFirst(40),
+            credential + "-" + privateKey + "=", credential + "-" + brokenLine,
             credential + "-" + privateKey + "-", credential + "-" + SignatureTesting.rawBase64(material.privateKey + [0]),
-        ] {
+        ]
+        for suffix in suffixes {
             #expect(throws: TKAError.invalidAuthKey, "\(suffix.count)") {
                 try WrappedAuthKey(parsing: Material.control + "--TL" + suffix)
             }
