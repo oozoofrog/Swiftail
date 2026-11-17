@@ -21,10 +21,9 @@ extension TailnetNode {
     ///   `control(.registrationRejected)`. 10초 안에 끝나지 않거나 연결하지 못하면 `control(.connection)`, 200이 아니면
     ///   `control(.http(status:))`, 신원 파일을 읽지 못하면 `control(.storage)`.
     public func logOut() async throws(NodeError) {
-        let directory = configuration.stateDirectory
         // `run()`과 같은 표로 막는다. 이 디렉터리를 쥔 동안 시작하는 `run()`은 `stateDirectoryInUse`로 끝난다.
-        guard StateDirectoryClaims.shared.claim(directory) else { throw .stateDirectoryInUse }
-        defer { StateDirectoryClaims.shared.release(directory) }
+        let claim = try StateDirectoryClaims.shared.claimCreating(configuration.stateDirectory)
+        defer { StateDirectoryClaims.shared.release(claim) }
 
         let control = ControlClient(
             configuration: .init(serverURL: configuration.controlURL, hostname: configuration.hostname, authKey: configuration.authKey),

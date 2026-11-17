@@ -15,10 +15,19 @@ public struct NodeConfiguration: Sendable {
 
     /// 신원 파일(`identity.json`)을 둘 디렉터리. 파일 URL이어야 한다. 같은 프로세스의 노드 둘이 같은 디렉터리로 동시에
     /// 돌지 못한다(`NodeError.stateDirectoryInUse`).
+    ///
+    /// **다른 사용자가 쓸 수 없는 디렉터리여야 한다.** 노드는 여기서 개인 키(신원)와 tailnet lock의 신뢰 상태를 읽는다.
+    /// 이 디렉터리에 쓸 수 있는 쪽은 그 파일을 바꿔 넣어 노드의 신원과 신뢰 상태를 정할 수 있다. 라이브러리는 없는
+    /// 디렉터리를 0700으로 만들 뿐, 이미 있는 디렉터리의 주인과 권한은 보지 않는다(앱 샌드박스의 컨테이너, iOS의 앱 그룹
+    /// 컨테이너처럼 OS가 지키는 자리를 쓴다).
     public var stateDirectory: URL
     /// 노드의 호스트 이름. 제어 서버가 노드 이름을 지을 때 쓴다. 비어 있으면 안 된다.
     public var hostname: String
     /// 제어 서버 URL. `http://` 또는 `https://`.
+    ///
+    /// **`http://`는 서버를 인증하지 않는다.** `https://`에서는 TLS가 서버 인증서를 확인한 뒤에 제어 서버의 공개 키를
+    /// 받는데, `http://`에서는 그 키를 평문으로 받는다. 경로 위의 상대가 자기 키를 내주고 제어 서버 노릇을 할 수 있고,
+    /// 그러면 등록(인증 키 포함)과 netmap이 모두 그 상대의 것이 된다. 시험과 루프백의 서버에만 쓴다.
     public var controlURL: URL
     /// 인증 키. 첫 등록과 node 키를 새로 등록할 때만 쓴다. 저장하지 않는다.
     public var authKey: String?

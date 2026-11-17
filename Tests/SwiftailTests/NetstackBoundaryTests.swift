@@ -76,8 +76,8 @@ struct NetstackBoundaryTests {
     @Test("run()이 시작 검사에서 끝나면 run() 전에 연 리스너의 흐름이 끝나고 그 뒤의 listen은 notRunning이다")
     func listenerEndsWhenRunFailsAtStart() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
-            #expect(StateDirectoryClaims.shared.claim(directory))
-            defer { StateDirectoryClaims.shared.release(directory) }
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory))
+            defer { StateDirectoryClaims.shared.release(claim) }
             let node = try TailnetNode(
                 configuration: try NodeTestSupport.configuration(stateDirectory: directory), device: .inProcess)
             let listener = try await node.listen(port: 9_000)

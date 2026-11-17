@@ -9,8 +9,8 @@ struct NodeLogoutTests {
     @Test("같은 상태 디렉터리의 run()이 도는 중이면 stateDirectoryInUse이고, 아무것도 만들지 않는다")
     func rejectsClaimedDirectory() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
-            #expect(StateDirectoryClaims.shared.claim(directory))
-            defer { StateDirectoryClaims.shared.release(directory) }
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory))
+            defer { StateDirectoryClaims.shared.release(claim) }
             let node = try TailnetNode(configuration: try NodeTestSupport.configuration(stateDirectory: directory))
             do throws(NodeError) {
                 try await node.logOut()
@@ -32,8 +32,8 @@ struct NodeLogoutTests {
             let node = try TailnetNode(configuration: try NodeTestSupport.configuration(stateDirectory: directory))
             try await node.logOut()
             #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
-            #expect(StateDirectoryClaims.shared.claim(directory), "logOut()은 차지를 남기지 않는다")
-            StateDirectoryClaims.shared.release(directory)
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory), "logOut()은 차지를 남기지 않는다")
+            StateDirectoryClaims.shared.release(claim)
         }
     }
 }

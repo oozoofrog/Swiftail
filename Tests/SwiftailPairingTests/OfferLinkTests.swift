@@ -132,6 +132,14 @@ struct OfferLinkTests {
         #expect(Self.parseError(Self.link(replacing: "h", with: value)) == .invalidHost)
     }
 
+    @Test(
+        "host: 끝 라벨이 숫자뿐이면 이름이 아니라 IP 주소 꼴이다",
+        arguments: ["192.168.1.1", "127.0.0.1", "1.2", "100.64.0.1", "rd-mac-1a2b3c4d.tail0001.0"])
+    func rejectsAddressShapedHosts(value: String) {
+        #expect(Self.parseError(Self.link(replacing: "h", with: value)) == .invalidHost)
+        #expect(OfferField.host(value.utf8) == nil, "여는 쪽(openOffer)도 같은 규칙으로 자기 이름을 본다")
+    }
+
     private static let goodHosts: [String] = [
         String(repeating: "a", count: 63) + ".ts.net",
         [63, 63, 63, 61].map { String(repeating: "a", count: $0) }.joined(separator: "."),

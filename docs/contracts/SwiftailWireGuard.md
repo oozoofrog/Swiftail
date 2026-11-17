@@ -95,7 +95,7 @@ public struct WireGuardDevice: Sendable {
 
     /// 피어를 등록한다. 이미 있으면 AllowedIPs만 바꾸고 세션은 유지한다.
     public mutating func addPeer(_ peer: PublicKey, allowedIPs: [IPPrefix])
-    /// 피어와 그 키 재료를 지운다.
+    /// 피어와 그 키 재료를 지운다. 마지막으로 받아들인 initiation timestamp만은 장치에 남긴다(아래 "포함").
     public mutating func removePeer(_ peer: PublicKey)
     /// 2026-11-16에 더했다. 이 피어와의 세션 키가 설 때마다 터널 안으로 먼저 보낼 평문 IP 패킷(Tailscale 포크의 priority
     /// message). nil이면 지운다. 빈 패킷은 `malformed`, 512바이트 초과는 `packetTooLarge`, 모르는 피어는 `unknownPeer`.
@@ -133,6 +133,7 @@ public struct WireGuardDevice: Sendable {
 - 메시지 4종의 직렬화·해석, mac1 생성·검사
 - Noise IKpsk2 초기자·응답자. PSK는 32바이트 0으로 고정하되 KDF3 단계는 그대로 둔다
 - TAI64N 생성, 피어별 timestamp 재전송 검사, initiation flood 검사(20ms)
+- 내린 피어의 마지막 timestamp: `removePeer`가 장치에 남기고(1,024개까지, 넘으면 먼저 내린 것부터 잊는다) 같은 키의 `addPeer`가 되살린다. 피어가 netmap에서 빠졌다 돌아와도 그 전에 받은 initiation의 재전송은 `replayed`다(2026-11-17 보안 검증). wireguard-go는 피어를 지우면 이 값도 버린다
 - 전송 암복호화, 카운터, 패딩(16의 배수), keepalive, 재전송 방지 창(8128)
 - keypair의 previous·current·next 전환. 응답자는 새 키로 온 첫 패킷이 AEAD와 재전송 검사를 통과한 뒤에만 next를 current로 올린다
 - 타이머와 키 교체: 노트 "상수와 타이머" 표의 값 그대로. 재시도마다 initiation을 새로 만든다

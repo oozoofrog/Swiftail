@@ -47,10 +47,22 @@ final class SocketPairingTransport: PairingTransport {
     }
 
     /// `host:port`로 거는 평문 TCP 연결. 이름은 OS가 푼다(터널이 연결돼 있으면 MagicDNS).
-    convenience init(host: String, port: NWEndpoint.Port) {
+    ///
+    /// - Parameters:
+    ///   - isIPv4: 쓸 IP 판. 이 기기의 tailnet 주소와 같은 판으로만 건다(로컬 끝을 그 주소와 견줄 수 있게).
+    ///   - tunnelOnly: Wi-Fi·셀룰러·유선·루프백 인터페이스로 나가지 못하게 한다. 남는 것은 터널(utun) 같은 그 밖의
+    ///     인터페이스다. 터널이 꺼져 있으면 연결이 서지 않는다. 루프백으로 도는 시험만 끈다.
+    convenience init(host: String, port: NWEndpoint.Port, isIPv4: Bool, tunnelOnly: Bool) {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
-        self.init(NWConnection(host: NWEndpoint.Host(host), port: port, using: NWParameters(tls: nil, tcp: tcp)))
+        let parameters = NWParameters(tls: nil, tcp: tcp)
+        if let ip = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ip.version = isIPv4 ? .v4 : .v6
+        }
+        if tunnelOnly {
+            parameters.prohibitedInterfaceTypes = [.wifi, .cellular, .wiredEthernet, .loopback]
+        }
+        self.init(NWConnection(host: NWEndpoint.Host(host), port: port, using: parameters))
     }
 
     deinit {

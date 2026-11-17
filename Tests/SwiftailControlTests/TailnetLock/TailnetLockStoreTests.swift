@@ -161,6 +161,18 @@ struct TailnetLockStoreTests {
         }
     }
 
+    @Test("상태 파일이 심볼릭 링크면 따라가지 않는다")
+    func refusesSymbolicLink() throws {
+        try withStore { store, directory in
+            // 올바른 상태 파일이 다른 곳에 있고, 상태 디렉터리의 파일은 그것을 가리키는 링크다.
+            let elsewhere = TailnetLockStore(directory: directory.appending(path: "elsewhere"))
+            try elsewhere.save(try chain().authority)
+            try FileManager.default.createSymbolicLink(at: store.fileURL, withDestinationURL: elsewhere.fileURL)
+            #expect(performing: { try store.load() }, throws: isStorageError)
+            #expect(try elsewhere.load() != nil)
+        }
+    }
+
     @Test("쓰지 못하면 storage 오류이고 이전 파일이 그대로 남는다")
     func saveFailure() throws {
         try withStore { store, directory in

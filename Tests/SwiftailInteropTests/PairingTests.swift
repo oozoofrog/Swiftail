@@ -2,6 +2,7 @@
 // 여기서 보지 못하는 것: 시험 제어 서버의 인증 키에는 만료·1회용·태그 정책이 없다. 관문 11은 이름 풀이와 터널을 거치지 않는다.
 
 import Foundation
+import Network
 import Swiftail
 import SwiftailBase
 import Testing
@@ -199,15 +200,17 @@ struct PairingSocketGateTests {
     func pairsOverLoopbackSocket() async throws {
         let host = try await LoopbackPairingHost.start()
         defer { host.close() }
+        // 이 시험에서 "이 기기의 tailnet 주소" 노릇을 하는 루프백 주소. 대역 검사와 인터페이스 금지만 끈다.
+        let loopback = try #require(IPAddress("127.0.0.1"))
 
         // 승인.
         let offer = await host.openOffer()
         let codes = ConfirmationCodes()
         async let serving = host.serveNext(approving: true)
         let paired = try await netstackDeadline("루프백 짝 맺기", seconds: 20) {
-            try await PairingJoiner.pair(with: offer, deviceName: "거실 iPad", requiringTailnetAddresses: false) {
-                codes.record($0)
-            }
+            try await PairingJoiner.pair(
+                with: offer, deviceName: "거실 iPad", localAddress: loopback, requiringTunnel: false
+            ) { codes.record($0) }
         }
         let served = try await serving
         #expect(paired.host == "127.0.0.1")
@@ -219,7 +222,8 @@ struct PairingSocketGateTests {
         // 쓰인 제안은 받아 주지 않는다.
         async let second = host.serveNext(approving: true)
         let reused = await pairingFailure {
-            try await PairingJoiner.pair(with: offer, deviceName: "거실 iPad", requiringTailnetAddresses: false) { _ in }
+            try await PairingJoiner.pair(
+                with: offer, deviceName: "거실 iPad", localAddress: loopback, requiringTunnel: false) { _ in }
         }
         #expect(reused == .rejected)
         #expect(try await second.ending == .noOffer)
@@ -228,18 +232,33 @@ struct PairingSocketGateTests {
         let refusedOffer = await host.openOffer()
         async let third = host.serveNext(approving: false)
         let denied = await pairingFailure {
-            try await PairingJoiner.pair(with: refusedOffer, deviceName: "거실 iPad", requiringTailnetAddresses: false) { _ in }
+            try await PairingJoiner.pair(
+                with: refusedOffer, deviceName: "거실 iPad", localAddress: loopback, requiringTunnel: false) { _ in }
         }
         #expect(denied == .denied)
         #expect(try await third.ending == .denied)
 
-        // 공개 API는 대역을 본다: 루프백은 tailnet이 아니므로 hello를 보내지 않고 끝난다(J2).
+        // 로컬 끝이 앱이 넘긴 주소와 다르면 hello를 보내지 않고 끝난다(J2). 다시 걸지도 않는다.
         let guarded = await host.openOffer()
         async let fourth = host.serveNext(approving: true)
-        let outside = await pairingFailure { try await PairingJoiner.pair(with: guarded, deviceName: "거실 iPad") }
+        let elsewhere = try #require(IPAddress("127.0.0.2"))
+        let outside = await pairingFailure {
+            try await PairingJoiner.pair(
+                with: guarded, deviceName: "거실 iPad", localAddress: elsewhere, requiringTunnel: false) { _ in }
+        }
         #expect(outside == .notOnTailnet)
         let untouched = try await fourth
         #expect(untouched.receivedByteCount == 0 && untouched.ending == .disconnected)
         #expect(await host.hasOpenOffer)
+
+        // 공개 API가 거는 인터페이스 금지: 루프백으로는 연결이 서지 않는다(터널이 아닌 길로 나가지 못한다).
+        let port = try #require(NWEndpoint.Port(rawValue: host.port))
+        let barred = SocketPairingTransport(host: "127.0.0.1", port: port, isIPv4: true, tunnelOnly: true)
+        let opened = try await netstackDeadline("금지된 인터페이스로 걸기", seconds: 10) { await barred.open() }
+        #expect(!opened)
+        await barred.close()
+        let allowed = SocketPairingTransport(host: "127.0.0.1", port: port, isIPv4: true, tunnelOnly: false)
+        #expect(await allowed.open(), "금지를 끄면 같은 곳에 닿는다")
+        await allowed.close()
     }
 }

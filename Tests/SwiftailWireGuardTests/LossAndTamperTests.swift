@@ -2,6 +2,7 @@
 // response 유실 뒤 복구, 옛 response가 새 핸드셰이크를 덮지 않음, 변조된 메시지가 상태를 바꾸지 않음,
 // AllowedIPs 밖 출발 주소 거부.
 
+import CryptoKit
 import Testing
 
 @testable import SwiftailWireGuard
@@ -57,6 +58,54 @@ struct LossAndTamperTests {
         flooded.bob.peers[pair.key(.alice)]?.lastInitiationConsumed = retryAt - .milliseconds(20)
         #expect(throws: WireGuardError.replayed) { try flooded.bob.receive(retry.datagrams[0], at: retryAt) }
         #expect(try pair.bob.receive(retry.datagrams[0], at: retryAt).messageTypes == [2])
+    }
+
+    @Test("피어를 내렸다 다시 올려도 옛 initiation의 재전송은 거절하고, 더 새 것은 받는다")
+    func removedPeerKeepsLastTimestamp() throws {
+        var pair = Pair()
+        let allowedIPs = try #require(pair.bob.peers[pair.key(.alice)]?.allowedIPs)
+        let first = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: t0)
+        _ = try pair.bob.receive(first.datagrams[0], at: t0)
+
+        // 같은 키의 피어가 netmap에서 빠졌다 돌아온다.
+        pair.bob.removePeer(pair.key(.alice))
+        #expect(throws: WireGuardError.unknownPeer) { try pair.bob.receive(first.datagrams[0], at: t0 + .seconds(1)) }
+        pair.bob.addPeer(pair.key(.alice), allowedIPs: allowedIPs)
+        #expect(throws: WireGuardError.replayed) { try pair.bob.receive(first.datagrams[0], at: t0 + .seconds(1)) }
+
+        let retryAt = try #require(pair.alice.nextDeadline)
+        let retry = pair.alice.advance(to: retryAt)
+        #expect(try pair.bob.receive(retry.datagrams[0], at: retryAt).messageTypes == [2])
+    }
+
+    @Test("내린 피어의 timestamp는 1,024개까지만 기억한다. 넘으면 먼저 내린 것부터 잊고, 되살린 것은 표에서 뺀다")
+    func retiredTimestampsAreBounded() throws {
+        var pair = Pair()
+        let allowedIPs = try #require(pair.bob.peers[pair.key(.alice)]?.allowedIPs)
+        let first = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: t0)
+        _ = try pair.bob.receive(first.datagrams[0], at: t0)
+        pair.bob.removePeer(pair.key(.alice))
+        #expect(pair.bob.retiredTimestamps.count == 1)
+
+        // 다시 올리면 표에서 빠지고, 핸드셰이크한 적 없는 피어는 내려도 남기지 않는다.
+        pair.bob.addPeer(pair.key(.alice), allowedIPs: allowedIPs)
+        #expect(pair.bob.retiredTimestamps.isEmpty)
+        let silent = PublicKey(Curve25519.KeyAgreement.PrivateKey().publicKey)
+        pair.bob.addPeer(silent, allowedIPs: [])
+        pair.bob.removePeer(silent)
+        #expect(pair.bob.retiredTimestamps.isEmpty)
+
+        // alice를 내린 뒤 다른 피어 1,024개를 내리면 alice의 것이 밀려난다.
+        pair.bob.removePeer(pair.key(.alice))
+        let stamp = try #require(pair.bob.retiredTimestamps.first?.timestamp)
+        for _ in 0..<Constants.maxRetiredTimestamps {
+            let key = PublicKey(Curve25519.KeyAgreement.PrivateKey().publicKey)
+            pair.bob.addPeer(key, allowedIPs: [])
+            pair.bob.peers[key]?.lastAcceptedTimestamp = stamp
+            pair.bob.removePeer(key)
+        }
+        #expect(pair.bob.retiredTimestamps.count == Constants.maxRetiredTimestamps)
+        #expect(!pair.bob.retiredTimestamps.contains { $0.peer == pair.key(.alice) })
     }
 
     @Test("변조한 initiation은 거절되고 상태를 바꾸지 않는다")

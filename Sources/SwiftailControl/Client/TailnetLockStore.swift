@@ -46,19 +46,11 @@ struct TailnetLockStore: Sendable {
     /// 크기, 끝의 해시, CBOR, 형식 버전, AUM마다의 디코딩, 사슬의 불변 조건과 서명을 차례로 본다. 어느 것이든 어긋나면
     /// 던지고 파일은 건드리지 않는다: 부르는 쪽은 "상태 없음"이 아니라 "확인하지 못함"으로 다뤄야 한다(동작 T4).
     func load() throws(ControlError) -> Authority? {
-        let data: Data
-        do {
-            let size = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int
-            guard let size, size <= Self.maximumFileSize else { throw ControlError.storage("tailnet lock 상태 파일이 한도보다 크다") }
-            data = try Data(contentsOf: fileURL)
-        } catch CocoaError.fileReadNoSuchFile {
+        // 신원 파일과 같은 규칙으로 읽는다: 심볼릭 링크를 따라가지 않고, 정규 파일만, 한도까지만.
+        guard let data = try StateFile.read(fileURL, limit: Self.maximumFileSize, label: "tailnet lock 상태 파일") else {
             return nil
-        } catch let error as ControlError {
-            throw error
-        } catch {
-            throw .storage("tailnet lock 상태 파일을 읽지 못했다(코드 \((error as NSError).code))")
         }
-        guard data.count <= Self.maximumFileSize, data.count > Self.digestByteCount else {
+        guard data.count > Self.digestByteCount else {
             throw .storage("tailnet lock 상태 파일의 크기가 맞지 않다")
         }
         let body = [UInt8](data.dropLast(Self.digestByteCount))
@@ -107,7 +99,7 @@ struct TailnetLockStore: Sendable {
         }
         let temporary = directory.appending(path: ".\(Self.fileName).\(UUID().uuidString)", directoryHint: .notDirectory)
         // 처음부터 0600으로 만드는 open(2)과 이름을 원자적으로 바꾸는 rename(2)만 POSIX로 부른다(`NodeIdentityStore`와 같다).
-        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw .storage("임시 tailnet lock 상태 파일을 만들지 못했다(errno \(errno))") }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {

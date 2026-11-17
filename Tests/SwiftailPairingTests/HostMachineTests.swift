@@ -10,8 +10,23 @@ struct HostMachineTests {
     private static let id = PairingRehearsal.sessionID
 
     /// 이름 칸에 `name`의 바이트를 그대로 넣은 `hello`. 검증을 거치지 않는다.
-    private static func rawHello(name: [UInt8], prefix: [UInt8] = Array("SWPR".utf8) + [1]) -> [UInt8] {
-        prefix + Sample.joinerNonce + [UInt8(truncatingIfNeeded: name.count)] + name
+    private static func rawHello(name: [UInt8], prefix: [UInt8] = Array("SWPR".utf8) + [2]) -> [UInt8] {
+        prefix + PairingTranscript.commitment(to: Sample.joinerNonce) + [UInt8(truncatingIfNeeded: name.count)] + name
+    }
+
+    /// `stableID`만 다른 들어오는 노드.
+    private static func joiner(_ stableID: String) -> PeerIdentity {
+        var identity = Sample.joinerIdentity
+        identity.stableID = stableID
+        return identity
+    }
+
+    /// 제안의 비밀을 아는 쪽이 `nonce`를 열어 만든 `proof`: 그 nonce로 만든 T의 HMAC은 맞다.
+    private static func proof(opening nonce: [UInt8], offer: PairingOffer = Sample.offer()) throws -> [UInt8] {
+        let transcript = PairingTranscript(
+            joinerNonce: nonce, hostNonce: Sample.hostNonce, offerHost: offer.host, offerPort: offer.port,
+            deviceName: Array("rd-phone-5e6f7a8b".utf8), endpoints: try Sample.endpoints())
+        return PairingMessage.Proof(nonce: nonce, code: transcript.proof(secret: offer.secret)).encoded
     }
 
     /// 제안이 열린 기계에 연결 `id`를 받아 `proof`까지 맞춘다. 결정 요청의 할 일을 돌려준다.
@@ -126,15 +141,37 @@ struct HostMachineTests {
         var machine = PairingHostMachine()
         let endpoints = try Sample.endpoints()
         for id in UInt64(0)..<8 {
-            #expect(machine.accept(id, from: Sample.joinerIdentity, endpoints: endpoints, nonce: Sample.hostNonce, at: .now).isEmpty)
+            #expect(machine.accept(id, from: Self.joiner("n\(id)"), endpoints: endpoints, nonce: Sample.hostNonce, at: .now).isEmpty)
         }
-        let ninth = machine.accept(8, from: Sample.joinerIdentity, endpoints: endpoints, nonce: Sample.hostNonce, at: .now)
+        let ninth = machine.accept(8, from: Self.joiner("n8"), endpoints: endpoints, nonce: Sample.hostNonce, at: .now)
         #expect(HostStep.steps(ninth) == [.finish(.limitReached)])
         #expect(machine.sessionCount == 8)
 
         #expect(HostStep.steps(machine.connectionEnded(3)) == [.finish(.disconnected)])
-        #expect(machine.accept(9, from: Sample.joinerIdentity, endpoints: endpoints, nonce: Sample.hostNonce, at: .now).isEmpty)
+        #expect(machine.accept(9, from: Self.joiner("n9"), endpoints: endpoints, nonce: Sample.hostNonce, at: .now).isEmpty)
         #expect(machine.sessionCount == 8)
+    }
+
+    @Test("같은 노드의 절차 중인 연결은 2개까지다. 다른 노드의 자리는 남고, 하나가 끝나면 다시 받는다(P8)")
+    func limitsSessionsPerPeer() throws {
+        var machine = PairingHostMachine()
+        machine.open(Sample.offer())
+        let endpoints = try Sample.endpoints()
+        let greedy = Self.joiner("nGREEDY")
+        #expect(machine.accept(0, from: greedy, endpoints: endpoints, nonce: Sample.hostNonce, at: .now).isEmpty)
+        #expect(machine.accept(1, from: greedy, endpoints: endpoints, nonce: Sample.hostNonce, at: .now).isEmpty)
+        for id in UInt64(2)..<6 {
+            let refused = machine.accept(id, from: greedy, endpoints: endpoints, nonce: Sample.hostNonce, at: .now)
+            #expect(HostStep.steps(refused) == [.finish(.peerLimitReached)])
+        }
+        #expect(machine.sessionCount == 2)
+        #expect(machine.receive([1], on: 2, wallClock: Sample.wallClock, now: .now).isEmpty, "거절한 연결은 올리지 않았다")
+
+        // 다른 노드는 그대로 들어와 짝 맺기를 끝까지 간다.
+        #expect(try Self.prove(&machine, id: 6, offer: Sample.offer(), at: .now).count == 2)
+
+        #expect(HostStep.steps(machine.connectionEnded(0)) == [.finish(.disconnected)])
+        #expect(machine.accept(7, from: greedy, endpoints: endpoints, nonce: Sample.hostNonce, at: .now).isEmpty)
     }
 
     // MARK: 제안 (P2~P4, P9)
@@ -176,6 +213,57 @@ struct HostMachineTests {
 
         let accepted = try Self.prove(&rehearsal.machine, id: 2, offer: Sample.offer(), at: rehearsal.start)
         #expect(accepted.count == 2, "같은 제안으로 맞는 증명을 낸 연결은 받아들인다")
+    }
+
+    @Test("약속과 다른 nonce를 연 proof는 HMAC이 맞아도 닫는다. 제안은 남아 다음 연결이 쓴다(P3)")
+    func rejectsNonceThatBreaksCommitment() throws {
+        var rehearsal = try Rehearsal()
+        _ = rehearsal.toHost(rehearsal.joiner.hello)   // 약속한 것은 Sample.joinerNonce다
+        var other = Sample.joinerNonce
+        other[31] ^= 1
+        #expect(HostStep.steps(rehearsal.toHost(try Self.proof(opening: other))) == [.finish(.malformed)])
+        #expect(rehearsal.machine.hasOpenOffer && rehearsal.machine.sessionCount == 0)
+
+        let accepted = try Self.prove(&rehearsal.machine, id: 2, offer: Sample.offer(), at: rehearsal.start)
+        #expect(accepted.count == 2)
+    }
+
+    @Test("hello와 challenge가 오간 뒤에는 nonceJ를 바꿀 수 없다: 확인 숫자를 고르려고 다른 nonce를 열면 모두 닫힌다")
+    func commitmentFixesConfirmationCode() throws {
+        // 비밀을 아는 들어오는 쪽이 nonceH를 본 뒤에 nonce를 갈아 가며 확인 숫자를 고르려 한다.
+        // 후보는 약속한 nonce(0x11을 채운 것)와 모두 다르다.
+        let candidates = (UInt8(0x80)...0xBF).map { [UInt8](repeating: $0, count: 32) }
+        let codes = try candidates.map { nonce in
+            PairingTranscript(
+                joinerNonce: nonce, hostNonce: Sample.hostNonce, offerHost: Sample.host, offerPort: Sample.port,
+                deviceName: Array("rd-phone-5e6f7a8b".utf8), endpoints: try Sample.endpoints()
+            ).confirmationCode(secret: Sample.secret)
+        }
+        #expect(Set(codes).count > 32, "nonce를 고를 수 있다면 확인 숫자도 고를 수 있다")
+
+        for nonce in candidates {
+            // 연결마다 `hello`로 약속한 것은 Sample.joinerNonce다. 여는 쪽은 그것을 모르는 채 nonceH를 냈다.
+            var rehearsal = try Rehearsal()
+            let challenge = rehearsal.toHost(rehearsal.joiner.hello)
+            #expect(challenge.sentBytes == [0] + Sample.hostNonce)
+            let actions = rehearsal.toHost(try Self.proof(opening: nonce))
+            #expect(HostStep.steps(actions) == [.finish(.malformed)], "약속과 다른 nonce는 앱에 묻지도 않는다")
+            #expect(rehearsal.machine.hasOpenOffer)
+        }
+
+        // 약속한 nonce를 열면 받아들이고, 확인 숫자는 약속할 때 이미 정해진 nonce의 것이다.
+        var honest = try Rehearsal()
+        _ = honest.toHost(honest.joiner.hello)
+        let accepted = HostStep.steps(honest.toHost(try Self.proof(opening: Sample.joinerNonce)))
+        guard case .requestDecision(_, _, let code)? = accepted.last else {
+            Issue.record("결정 요청이 나와야 한다: \(accepted)")
+            return
+        }
+        let expected = PairingTranscript(
+            joinerNonce: Sample.joinerNonce, hostNonce: Sample.hostNonce, offerHost: Sample.host, offerPort: Sample.port,
+            deviceName: Array("rd-phone-5e6f7a8b".utf8), endpoints: try Sample.endpoints()
+        ).confirmationCode(secret: Sample.secret)
+        #expect(code == expected)
     }
 
     @Test("제안은 한 번만 쓰인다. 같은 비밀의 다른 연결은 그 뒤로 받아 주지 않는다(P4)")
@@ -257,7 +345,8 @@ struct HostMachineTests {
         arguments: [
             [0x00],                                                                   // 첫 바이트부터 표식이 아니다
             Array("SWPX".utf8),
-            HostMachineTests.rawHello(name: Array("a".utf8), prefix: Array("SWPR".utf8) + [2]),   // 모르는 판
+            HostMachineTests.rawHello(name: Array("a".utf8), prefix: Array("SWPR".utf8) + [1]),   // 판 1(nonce를 그대로 싣던 판)
+            HostMachineTests.rawHello(name: Array("a".utf8), prefix: Array("SWPR".utf8) + [3]),   // 모르는 판
             HostMachineTests.rawHello(name: []),                                                   // 이름 길이 0
             HostMachineTests.rawHello(name: [UInt8](repeating: 0x61, count: 65)),                  // 이름 길이 65
             HostMachineTests.rawHello(name: [0xFF, 0xFE]),                                         // UTF-8이 아니다

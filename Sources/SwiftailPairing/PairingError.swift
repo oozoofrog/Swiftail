@@ -3,13 +3,14 @@
 /// 메시지에는 무엇이 잘못됐는지만 담는다. 비밀·인증 키·확인 숫자·이름·주소·경로는 담지 않는다.
 public enum PairingError: Error, Sendable, Equatable {
     /// 쓸 수 없는 값이다: 노드의 장치가 `.inProcess`가 아님, 포트가 0이거나 이미 쓰는 중, 수명이 1~3600초 밖, 기기 이름이
-    /// 1~64바이트의 표시할 수 있는 글이 아님.
+    /// 1~64바이트의 표시할 수 있는 글이 아님, OS 소켓 길에 준 `localAddress`가 tailnet 대역 밖.
     case invalidConfiguration(String)
     /// `openOffer`에 준 인증 키가 링크에 실을 수 있는 모양이 아니다(감싼 키 포함. 계약 동작 O2).
     case invalidAuthKey
     /// 노드에 자기 FQDN이 아직 없거나 노드의 `run()`이 끝났다.
     case notRunning
-    /// 짝 목록 파일이 있지만 읽지 못했다. 빈 목록으로 덮어쓰지 않는다.
+    /// 짝 목록 파일이 있지만 읽지 못했다(빈 목록으로 덮어쓰지 않는다). 또는 짝 목록 디렉터리가 다른 사용자의 것이거나
+    /// 그룹·기타가 쓸 수 있다.
     case storeUnreadable
     /// 같은 디렉터리를 쓰는 `PairingHost`가 이 프로세스에 이미 있다.
     case storeInUse
@@ -17,7 +18,8 @@ public enum PairingError: Error, Sendable, Equatable {
     case storeWriteFailed
     /// 60초 안에 여는 쪽의 `challenge`를 받지 못했다(이름을 찾지 못함, 경로가 없음, 여는 쪽이 이 노드를 아직 모름).
     case unreachable
-    /// OS 소켓으로 건 연결의 두 끝이 tailnet 주소가 아니다. 터널이 연결되지 않았거나 이름이 다른 곳으로 풀렸다.
+    /// OS 소켓으로 건 연결이 터널을 거친 것이 아니다: 로컬 끝이 이 기기의 tailnet 주소(`localAddress`)가 아니거나 원격
+    /// 끝이 tailnet 대역 밖이다. 터널이 연결되지 않았거나 이름이 다른 곳으로 풀렸다.
     case notOnTailnet
     /// 여는 쪽이 받아 주지 않았다: 열린 제안이 없다, 만료됐다, 이미 쓰였다, 비밀이 틀렸다.
     case rejected

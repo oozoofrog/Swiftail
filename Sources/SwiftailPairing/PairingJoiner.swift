@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Swiftail
+import SwiftailBase
 import SwiftailIO
 
 /// 짝 맺기의 들어오는 쪽. 받은 제안(`PairingOffer`)의 여는 쪽에 걸어 절차를 돌리고 짝(`PairedHost`)을 돌려준다.
@@ -63,34 +64,46 @@ public enum PairingJoiner {
 
     /// OS 소켓으로 들어온다. 노드가 터널 확장에 있는 앱이 터널이 연결된 뒤에 부른다.
     ///
-    /// 이름은 OS가 푼다(터널의 MagicDNS). 연결의 두 끝이 tailnet 주소가 아니면 아무것도 보내지 않고 `notOnTailnet`으로
+    /// 이름은 OS가 푼다(터널의 MagicDNS). 라이브러리는 이 연결이 터널로 나갔는지 직접 볼 수 없으므로, 앱이 넘긴 이 기기의
+    /// tailnet 주소와 견준다: 연결은 그 주소와 같은 IP 판으로, Wi-Fi·셀룰러·유선·루프백이 아닌 인터페이스로만 걸고,
+    /// 준비된 연결의 로컬 끝이 그 주소가 아니거나 원격 끝이 tailnet 대역 밖이면 아무것도 보내지 않고 `notOnTailnet`으로
     /// 끝난다(J2). 이 길에서는 짝이 된 뒤의 연결에서 상대가 그 짝인지 라이브러리로 확인할 수 없다.
     ///
-    /// - Throws: 위 `pair(with:deviceName:node:awaitingApproval:)`의 것과, 두 끝이 tailnet 밖이면 `notOnTailnet`.
+    /// - Parameter localAddress: 이 기기의 tailnet 주소(`100.64.0.1`). 터널 확장이 노드의 `status.addresses`에서 읽어
+    ///   앱에 넘긴 값이어야 한다. OS의 인터페이스 목록에서 짐작한 값을 넣으면 이 검사가 뜻을 잃는다.
+    /// - Throws: 위 `pair(with:deviceName:node:awaitingApproval:)`의 것과, `localAddress`가 tailnet 대역 밖이면
+    ///   `invalidConfiguration`, 연결이 터널을 거친 것이 아니면 `notOnTailnet`.
     public static func pair(
-        with offer: PairingOffer, deviceName: String,
+        with offer: PairingOffer, deviceName: String, localAddress: SwiftailBase.IPAddress,
         awaitingApproval: @escaping @Sendable (_ confirmationCode: String) -> Void = { _ in }
     ) async throws(PairingError) -> PairedHost {
         try await pair(
-            with: offer, deviceName: deviceName, requiringTailnetAddresses: true, awaitingApproval: awaitingApproval)
+            with: offer, deviceName: deviceName, localAddress: localAddress, requiringTunnel: true,
+            awaitingApproval: awaitingApproval)
     }
 
-    /// OS 소켓으로 들어온다. `requiringTailnetAddresses`는 루프백으로 도는 시험만 끈다(공개하지 않는다).
+    /// OS 소켓으로 들어온다. `requiringTunnel`은 루프백으로 도는 시험만 끈다(공개하지 않는다): 끄면 대역 검사와
+    /// 인터페이스 금지를 하지 않는다. 로컬 끝이 `localAddress`인지는 꺼도 본다.
     static func pair(
-        with offer: PairingOffer, deviceName: String, requiringTailnetAddresses: Bool,
+        with offer: PairingOffer, deviceName: String, localAddress: SwiftailBase.IPAddress, requiringTunnel: Bool,
         awaitingApproval: @escaping @Sendable (_ confirmationCode: String) -> Void
     ) async throws(PairingError) -> PairedHost {
-        try await join(offer, deviceName: deviceName, awaitingApproval: awaitingApproval) {
+        guard !requiringTunnel || PairingEndpoints.isTailnetAddress(localAddress) else {
+            throw .invalidConfiguration("localAddress는 이 기기의 tailnet 주소여야 한다")
+        }
+        return try await join(offer, deviceName: deviceName, awaitingApproval: awaitingApproval) {
             guard let port = NWEndpoint.Port(rawValue: offer.port), port.rawValue != 0 else {
                 return .failed(.invalidConfiguration("포트는 0이 아니어야 한다"))
             }
-            let transport = SocketPairingTransport(host: offer.host, port: port)
+            let transport = SocketPairingTransport(
+                host: offer.host, port: port, isIPv4: localAddress.isIPv4, tunnelOnly: requiringTunnel)
             guard await transport.open(), let ends = transport.endpoints else {
                 await transport.close()
                 return .unreachable
             }
             let endpoints = PairingEndpoints(joiner: ends.local, host: ends.remote)
-            guard !requiringTailnetAddresses || endpoints.isOnTailnet else {
+            guard requiringTunnel ? endpoints.isOnTailnet(localAddress: localAddress) : endpoints.isLocal(localAddress)
+            else {
                 await transport.close()
                 return .failed(.notOnTailnet)
             }

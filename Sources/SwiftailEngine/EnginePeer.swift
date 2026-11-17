@@ -10,7 +10,7 @@ import SwiftailControl
 /// netmap의 피어 하나를 데이터면에 올린 모습.
 ///
 /// M3은 서브넷 경로와 exit node를 받지 않는다(Go의 `RouteAll=false`, exit node 없음과 같다). 그래서 피어가
-/// 출발지로 쓸 수 있는 주소는 피어 자신의 tailnet 주소뿐이다. 지원하지 않는 피어는 올리지 않는다(닫힌 쪽).
+/// 출발지로 쓸 수 있는 주소는 피어 자신의 주소, 곧 한 주소짜리 접두뿐이다. 지원하지 않는 피어는 올리지 않는다(닫힌 쪽).
 ///
 /// `docs/protocol-notes/netmap-engine.md` 4.1·4.3, `docs/contracts/SwiftailEngine.md` 동작 2.
 public struct EnginePeer: Sendable, Equatable {
@@ -32,7 +32,7 @@ public struct EnginePeer: Sendable, Equatable {
     ///
     /// 키 하나는 피어 하나에만, 접두 하나도 피어 하나에만 준다. 같은 키나 같은 접두를 여러 노드가 내세우면
     /// node ID가 작은 쪽이 갖는다. 접두의 주인이 하나여야 "이 출발 주소는 이 피어"가 성립한다
-    /// (wireguard-go의 AllowedIPs도 접두마다 주인이 하나다).
+    /// (wireguard-go의 AllowedIPs도 접두마다 주인이 하나다). 이 노드 자신의 주소는 어느 피어에게도 주지 않는다.
     ///
     /// - Parameter now: 키 만료를 판단할 지금 시각(로컬 벽시계).
     public static func peers(in netmap: Netmap, at now: Date) -> [EnginePeer] {
@@ -42,7 +42,8 @@ public struct EnginePeer: Sendable, Equatable {
     /// 올릴 피어와 그 노드. 엔진이 노드의 주소로 송신 경로 색인을 만들 때 쓴다.
     static func eligibleNodes(in netmap: Netmap, at now: Date) -> [(node: Node, peer: EnginePeer)] {
         var claimedKeys: Set<NodePublicKey> = []
-        var claimedPrefixes: Set<IPPrefix> = []
+        // 자기 주소를 먼저 차지해 둔다. 피어가 그 주소를 내세워도 이 노드를 출발지로 한 패킷을 보낼 수 없다.
+        var claimedPrefixes = Set(netmap.selfNode.addresses)
         var result: [(node: Node, peer: EnginePeer)] = []
         for node in netmap.peers.sorted(by: { $0.id < $1.id }) {
             guard var peer = EnginePeer(node: node, at: now), !claimedKeys.contains(peer.key) else { continue }
@@ -64,12 +65,14 @@ public struct EnginePeer: Sendable, Equatable {
               Self.isSupported(node)
         else { return nil }
 
-        // AllowedIPs 가운데 피어 자신의 주소만 남긴다: 한 주소짜리 tailnet 주소이거나 `addresses`에 있는 것.
+        // AllowedIPs 가운데 피어 자신의 주소만 남긴다: 한 주소짜리(/32, /128)이고, tailnet 주소이거나 `addresses`에 있는 것.
         // 서브넷 경로와 /0은 여기서 빠진다. `addresses`에 있다고 새로 더하지는 않는다.
+        // Go(`peerViewOf`)는 `addresses`에 있는 접두를 길이와 무관하게 자기 주소로 본다. 여기서는 넓은 접두를 받지 않는다:
+        // WireGuard의 출발지 검사는 피어마다 따로라, 넓은 접두를 가진 피어는 다른 피어의 주소를 출발지로 쓸 수 있다.
         // shortcut: Go는 호스트 비트가 남은 원문 접두를 빼지만, 여기서는 구분하지 못한다(`IPPrefix`가 해독할 때 지운다).
         var allowedIPs: [IPPrefix] = []
-        for prefix in node.allowedIPs where !allowedIPs.contains(prefix) {
-            if (Self.isSingleAddress(prefix) && Self.isTailscaleAddress(prefix.address)) || node.addresses.contains(prefix) {
+        for prefix in node.allowedIPs where Self.isSingleAddress(prefix) && !allowedIPs.contains(prefix) {
+            if Self.isTailscaleAddress(prefix.address) || node.addresses.contains(prefix) {
                 allowedIPs.append(prefix)
             }
         }

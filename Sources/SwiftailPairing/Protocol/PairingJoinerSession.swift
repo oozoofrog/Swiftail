@@ -10,6 +10,9 @@ import SwiftailCrypto
 ///            └ 상태 1: rejected         └ 틀림: hostNotVerified   └ HMAC 틀림: hostNotVerified
 /// ```
 ///
+/// `hello`에는 nonce가 아니라 그 약속을 싣고, nonce는 여는 쪽의 nonce를 받은 뒤 `proof`에서 연다
+/// (`PairingTranscript.commitment(to:)`).
+///
 /// 여는 쪽을 믿게 되는 곳은 `accepted`다. 그 HMAC은 제안의 비밀과, 이쪽이 본 연결의 두 끝을 넣은 T로 만든다. 그래서
 /// `accepted`가 맞기 전에는 확인 숫자를 내지 않고, `decision`은 HMAC이 맞은 뒤에만 내용을 읽는다.
 struct PairingJoinerSession: Sendable {
@@ -47,7 +50,9 @@ struct PairingJoinerSession: Sendable {
     private(set) var deadline: Instant?
 
     private let offer: PairingOffer
-    private let helloMessage: PairingMessage.Hello
+    /// 이 연결의 nonceJ. `challenge`를 받을 때까지 내보내지 않는다.
+    private let nonce: [UInt8]
+    private let deviceName: DeviceName
     private let endpoints: PairingEndpoints
     private var phase = Phase.challenge
     private var buffer: [UInt8] = []
@@ -61,9 +66,10 @@ struct PairingJoinerSession: Sendable {
         challengeDeadline: Instant
     ) {
         self.offer = offer
+        self.nonce = nonce
+        self.deviceName = deviceName
         self.endpoints = endpoints
-        helloMessage = PairingMessage.Hello(nonce: nonce, deviceName: deviceName)
-        hello = helloMessage.encoded
+        hello = PairingMessage.Hello(commitment: PairingTranscript.commitment(to: nonce), deviceName: deviceName).encoded
         deadline = challengeDeadline
     }
 
@@ -85,11 +91,12 @@ struct PairingJoinerSession: Sendable {
                     guard challenge.status == .proceed else { return actions + finish(.failure(.rejected)) }
                     buffer = []
                     let transcript = PairingTranscript(
-                        joinerNonce: helloMessage.nonce, hostNonce: challenge.nonce, offerHost: offer.host,
-                        offerPort: offer.port, deviceName: helloMessage.deviceName.bytes, endpoints: endpoints)
+                        joinerNonce: nonce, hostNonce: challenge.nonce, offerHost: offer.host,
+                        offerPort: offer.port, deviceName: deviceName.bytes, endpoints: endpoints)
                     phase = .accepted(transcript)
                     deadline = now + Self.decisionTimeout
-                    return actions + [.send(transcript.proof(secret: offer.secret))]
+                    let proof = PairingMessage.Proof(nonce: nonce, code: transcript.proof(secret: offer.secret))
+                    return actions + [.send(proof.encoded)]
                 }
 
             case .accepted(let transcript):

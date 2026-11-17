@@ -19,12 +19,17 @@ import SwiftailBase
 /// 바꾼다. 쓰다가 멈춰도 이전 신원이 남는다. 오류 메시지에는 경로와 키를 넣지 않는다.
 /// `docs/contracts/SwiftailControl.md` 단위 4 동작 7.
 ///
+/// 읽을 때는 심볼릭 링크를 따라가지 않고, 정규 파일만, 64KiB까지만 읽는다(`StateFile`). 디렉터리의 주인과 권한은 보지
+/// 않는다. 다른 사용자가 쓸 수 없는 디렉터리를 주는 것은 앱의 몫이다(`NodeConfiguration.stateDirectory`).
+///
 /// iOS에서는 쓰기 전에 임시 파일에 데이터 보호 등급 `completeUntilFirstUserAuthentication`과 백업 제외를 건다. 패킷 터널
 /// 확장은 잠긴 화면에서도 뜨므로(`complete`면 시작이 실패한다) 첫 잠금 해제 뒤에 읽을 수 있어야 하고, 개인 키가 다른 기기로
 /// 복원되면 같은 머신 키를 가진 기기가 둘이 된다. 두 성질은 파일에 붙어 이름을 바꿔도 따라간다고 보았다(실기기 관문에서
 /// 확인한다). `docs/contracts/SwiftailTunnel.md` 동작 P 2.
 public struct NodeIdentityStore: Sendable {
     static let fileName = "identity.json"
+    /// 읽는 파일의 크기 한도. 신원 파일은 300바이트 남짓이다.
+    static let maximumFileSize = 64 * 1_024
     private static let keyPrefix = "privkey:"
     private static let lockKeyPrefix = "nlpriv:"
 
@@ -59,14 +64,7 @@ public struct NodeIdentityStore: Sendable {
 
     /// 파일을 읽어 신원과, 파일에 NL 키가 있었는지를 돌려준다. 파일이 없으면 nil.
     private func read() throws(ControlError) -> (identity: NodeIdentity, hasLockKey: Bool)? {
-        let data: Data
-        do {
-            data = try Data(contentsOf: fileURL)
-        } catch CocoaError.fileReadNoSuchFile {
-            return nil
-        } catch {
-            throw .storage("신원 파일을 읽지 못했다(코드 \((error as NSError).code))")
-        }
+        guard let data = try StateFile.read(fileURL, limit: Self.maximumFileSize, label: "신원 파일") else { return nil }
         guard let file = try? JSONDecoder().decode(IdentityFile.self, from: data),
               let machineKey = Self.privateKey(file.machineKey)
         else { throw .storage("신원 파일이 손상되었다") }
@@ -102,7 +100,7 @@ public struct NodeIdentityStore: Sendable {
         let temporary = directory.appending(path: ".\(Self.fileName).\(UUID().uuidString)", directoryHint: .notDirectory)
         // Foundation의 파일 쓰기는 권한을 쓴 뒤에 바꾼다. 개인 키가 잠깐이라도 남에게 읽히지 않도록
         // 처음부터 0600으로 만드는 open(2)과 이름을 원자적으로 바꾸는 rename(2)만 POSIX로 부른다.
-        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw .storage("임시 신원 파일을 만들지 못했다(errno \(errno))") }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {

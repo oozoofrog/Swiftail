@@ -29,6 +29,7 @@ struct ProtocolVectorTests {
         var joinerPort: UInt16
         var hostAddress: String
         var hostPort: UInt16
+        var commitment: String
         var hello: String
         var challenge: String
         var challengeNoOffer: String
@@ -83,10 +84,11 @@ struct ProtocolVectorTests {
         #expect(Self.vectors.count == 4)
     }
 
-    @Test("hello와 challenge의 바이트", arguments: vectors)
+    @Test("nonce의 약속, hello와 challenge의 바이트", arguments: vectors)
     func messages(vector: Vector) throws {
-        let hello = PairingMessage.Hello(
-            nonce: try #require([UInt8](hex: vector.joinerNonce)), deviceName: try Sample.deviceName(vector.deviceName))
+        let commitment = PairingTranscript.commitment(to: try #require([UInt8](hex: vector.joinerNonce)))
+        #expect(commitment.hex == vector.commitment)
+        let hello = PairingMessage.Hello(commitment: commitment, deviceName: try Sample.deviceName(vector.deviceName))
         #expect(hello.encoded.hex == vector.hello)
         guard case .complete(let parsed, let length) = PairingMessage.Hello.parse(hello.encoded) else {
             Issue.record("hello를 읽지 못했다")
@@ -102,13 +104,14 @@ struct ProtocolVectorTests {
     @Test("T, proof, accepted, 확인 숫자, decision", arguments: vectors)
     func transcript(vector: Vector) throws {
         let secret = try #require([UInt8](hex: vector.secret))
+        let joinerNonce = try #require([UInt8](hex: vector.joinerNonce))
         let transcript = PairingTranscript(
-            joinerNonce: try #require([UInt8](hex: vector.joinerNonce)),
+            joinerNonce: joinerNonce,
             hostNonce: try #require([UInt8](hex: vector.hostNonce)), offerHost: vector.offerHost,
             offerPort: vector.offerPort, deviceName: Array(vector.deviceName.utf8), endpoints: try vector.endpoints)
         #expect(transcript.bytes.count == PairingTranscript.length)
         #expect(transcript.bytes.hex == vector.transcript)
-        #expect(transcript.proof(secret: secret).hex == vector.proof)
+        #expect(PairingMessage.Proof(nonce: joinerNonce, code: transcript.proof(secret: secret)).encoded.hex == vector.proof)
         #expect(transcript.accepted(secret: secret).hex == vector.accepted)
         #expect(transcript.confirmationCode(secret: secret) == vector.confirmationCode)
 

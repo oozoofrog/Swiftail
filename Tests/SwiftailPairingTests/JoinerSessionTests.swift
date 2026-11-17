@@ -31,7 +31,7 @@ struct JoinerSessionTests {
             offer: Sample.offer(), deviceName: try Sample.deviceName(), nonce: Sample.joinerNonce,
             endpoints: try Sample.endpoints(), challengeDeadline: now + .seconds(60))
         let proof = joiner.receive([0] + Sample.hostNonce, at: now)
-        #expect(proof.sentBytes == (try transcript()).proof(secret: Sample.secret))
+        #expect(proof.sentBytes == Sample.joinerNonce + (try transcript()).proof(secret: Sample.secret))
         let waiting = joiner.receive(try transcript().accepted(secret: Sample.secret), at: now)
         #expect(waiting.confirmationCode == (try transcript()).confirmationCode(secret: Sample.secret))
         return joiner
@@ -52,7 +52,18 @@ struct JoinerSessionTests {
 
         var partial = try Rehearsal().joiner
         #expect(partial.receive([0] + Sample.hostNonce.dropLast(), at: .now).isEmpty, "다 올 때까지 기다린다")
-        #expect(partial.receive([0x22], at: .now).sentBytes.count == 32)
+        #expect(partial.receive([0x22], at: .now).sentBytes.count == 64)
+    }
+
+    @Test("hello에는 nonce가 아니라 그 약속이 실린다. nonce는 challenge를 받은 뒤 proof에서 연다")
+    func commitsToNonceBeforeChallenge() throws {
+        var joiner = try Rehearsal().joiner
+        let commitment = PairingTranscript.commitment(to: Sample.joinerNonce)
+        #expect(joiner.hello == Array("SWPR".utf8) + [2] + commitment + [17] + Array("rd-phone-5e6f7a8b".utf8))
+        #expect(commitment != Sample.joinerNonce)
+
+        let proof = joiner.receive([0] + Sample.hostNonce, at: .now).sentBytes
+        #expect(Array(proof.prefix(32)) == Sample.joinerNonce)
     }
 
     @Test("연결이 끝난 때에 따라: challenge 전은 unreachable, proof 뒤는 rejected, 결정 대기 중은 위반")
@@ -82,7 +93,7 @@ struct JoinerSessionTests {
         // 다른 꼬리표의 값(proof)을 되돌려 보내도 맞지 않는다.
         var echoed = try Rehearsal().joiner
         let proof = echoed.receive([0] + Sample.hostNonce, at: .now).sentBytes
-        #expect(echoed.receive(proof, at: .now) == [.finish(.failure(.hostNotVerified))])
+        #expect(echoed.receive(Array(proof.suffix(32)), at: .now) == [.finish(.failure(.hostNotVerified))])
     }
 
     @Test("accepted와 decision이 한 덩어리로 와도 차례대로 읽는다")
@@ -233,7 +244,7 @@ struct JoinerSessionTests {
             joinerNonce: Sample.joinerNonce, hostNonce: Sample.hostNonce, offerHost: Sample.host,
             offerPort: Sample.port, deviceName: Array("rd-phone-5e6f7a8b".utf8),
             endpoints: try Sample.endpoints(joiner: joiner, host: host))
-        #expect(other.bytes.count == 166 && other.bytes != base.bytes)
+        #expect(other.bytes.count == 198 && other.bytes != base.bytes)
         #expect(other.proof(secret: Sample.secret) != base.proof(secret: Sample.secret))
         #expect(other.accepted(secret: Sample.secret) != base.accepted(secret: Sample.secret))
         #expect(other.decisionCode(for: [2], secret: Sample.secret) != base.decisionCode(for: [2], secret: Sample.secret))
@@ -268,12 +279,33 @@ struct JoinerSessionTests {
         #expect(PairingEndpoints.isTailnetAddress(try #require(IPAddress(address))) == expected)
     }
 
-    @Test("두 끝 가운데 하나라도 tailnet 밖이면 hello를 보내지 않는다")
-    func requiresBothEndsOnTailnet() throws {
-        #expect(try Sample.endpoints().isOnTailnet)
-        #expect(try Sample.endpoints(joiner: "[fd7a:115c:a1e0::2]:49152", host: "[fd7a:115c:a1e0::1]:4747").isOnTailnet)
-        #expect(try !Sample.endpoints(joiner: "192.168.0.7:49152").isOnTailnet)
-        #expect(try !Sample.endpoints(host: "203.0.113.5:4747").isOnTailnet)
-        #expect(try !Sample.endpoints(joiner: "127.0.0.1:49152", host: "127.0.0.1:4747").isOnTailnet)
+    @Test("로컬 끝이 이 기기의 tailnet 주소이고 원격 끝이 tailnet 대역일 때만 터널을 거친 연결로 본다(J2)")
+    func requiresLocalAddressAndTailnetPeer() throws {
+        let local = try #require(IPAddress("100.64.0.2"))
+        let local6 = try #require(IPAddress("fd7a:115c:a1e0::2"))
+        #expect(try Sample.endpoints().isOnTailnet(localAddress: local))
+        #expect(try Sample.endpoints(joiner: "[::ffff:100.64.0.2]:49152").isOnTailnet(localAddress: local))
+        #expect(
+            try Sample.endpoints(joiner: "[fd7a:115c:a1e0::2]:49152", host: "[fd7a:115c:a1e0::1]:4747")
+                .isOnTailnet(localAddress: local6))
+
+        // 터널이 꺼진 채 같은 대역을 쓰는 로컬 네트워크: 두 끝이 모두 100.64.0.0/10이지만 로컬 끝이 이 기기의 주소가 아니다.
+        #expect(try !Sample.endpoints(joiner: "100.64.0.77:49152").isOnTailnet(localAddress: local))
+        #expect(try !Sample.endpoints(joiner: "[fd7a:115c:a1e0::2]:49152").isOnTailnet(localAddress: local))
+        #expect(try !Sample.endpoints(joiner: "192.168.0.7:49152").isOnTailnet(localAddress: local))
+        #expect(try !Sample.endpoints(host: "203.0.113.5:4747").isOnTailnet(localAddress: local))
+        #expect(try !Sample.endpoints(host: "192.168.0.1:4747").isOnTailnet(localAddress: local))
+    }
+
+    @Test("localAddress가 tailnet 대역 밖이면 걸지 않고 invalidConfiguration이다", arguments: ["192.168.0.7", "127.0.0.1", "100.128.0.1", "fe80::1"])
+    func rejectsLocalAddressOutsideTailnet(address: String) async throws {
+        let localAddress = try #require(IPAddress(address))
+        let error = await pairingError {
+            try await PairingJoiner.pair(with: Sample.offer(), deviceName: "rd-phone-5e6f7a8b", localAddress: localAddress)
+        }
+        guard case .invalidConfiguration = error else {
+            Issue.record("invalidConfiguration이어야 한다: \(String(describing: error))")
+            return
+        }
     }
 }

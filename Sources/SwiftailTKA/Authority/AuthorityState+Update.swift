@@ -72,7 +72,10 @@ extension AuthorityState {
 
         guard !update.signatures.isEmpty else { throw .unsigned }
         let signatureHash = update.signatureHash
-        for signature in update.signatures {
+        // 이미 검증한 (KeyID, 서명) 쌍. 같은 쌍은 판정도 같으므로 한 번만 검증한다. Go는 되풀이한 만큼 검증하는데,
+        // 그러면 신뢰 키의 서명 하나를 수천 번 되풀이한 AUM 하나가 받는 쪽을 수십 초 붙잡는다.
+        var verified: Set<AUMSignature> = []
+        for signature in update.signatures where verified.insert(signature).inserted {
             // 공개 키는 KeyID가 아니라 상태 안의 값을 쓴다: KeyID는 보낸 쪽이 정한다(Go `signatureVerify`의 주석).
             guard let key = key(withID: signature.keyID) else { throw .untrustedSigner }
             guard key.kind == TrustedKey.ed25519Kind, let publicKey = key.publicKey, publicKey.count == 32,

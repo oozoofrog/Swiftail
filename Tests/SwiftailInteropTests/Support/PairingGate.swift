@@ -212,7 +212,7 @@ func pairingFailure<T>(_ body: () async throws -> T) async -> PairingError? {
 /// 루프백(`127.0.0.1`) 리스너에 여는 쪽 상태 기계를 물린 것(관문 11). tailnet도 노드도 없다.
 ///
 /// 들어오는 쪽의 OS 소켓 길(`NWConnection`)이 실제 TCP 위에서 절차를 끝까지 도는지 본다. 두 끝이 루프백 주소이므로
-/// 들어오는 쪽의 대역 검사는 시험만 쓰는 스위치로 끈다. 이름 풀이와 터널은 거치지 않는다.
+/// 들어오는 쪽의 대역 검사와 인터페이스 금지는 시험만 쓰는 스위치로 끈다. 이름 풀이와 터널은 거치지 않는다.
 actor LoopbackPairingHost {
     /// 연결 하나를 돌린 결과.
     struct Served: Sendable {

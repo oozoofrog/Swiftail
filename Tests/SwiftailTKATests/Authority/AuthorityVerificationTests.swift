@@ -44,6 +44,52 @@ struct AuthorityVerificationTests {
         try expectRejected(update, .invalidSignature)
     }
 
+    @Test("같은 (KeyID, 서명)을 4,096번 되풀이한 AUM: 판정은 그대로이고 검증은 한 번만 한다", .timeLimit(.minutes(10)))
+    func repeatedSignatureIsVerifiedOnce() throws {
+        let single = try T.noOp(after: start().head, by: [a])
+        var repeated = single
+        repeated.signatures = Array(repeating: single.signatures[0], count: 4_096)
+
+        // 판정: 받아들인다. 머리는 되풀이한 서명까지 넣은 바이트의 해시이고, 상태는 서명 하나짜리를 들인 것과 같다.
+        var plain = try start()
+        try plain.inform([single])
+        var authority = try start()
+        try authority.inform([repeated])
+        #expect(authority.head == repeated.hash && repeated.hash != single.hash)
+        #expect(authority.aums.last == repeated)
+        var expected = plain.state
+        expected.lastAUMHash = repeated.hash
+        #expect(authority.state == expected)
+        #expect(authority.state.weight(of: repeated) == 1)
+
+        // 비용: 4,096번 되풀이한 것이, 서로 다른 서명 64개를 검증하는 것보다 빨리 끝난다.
+        var distinct = single
+        distinct.signatures = (0..<64).map { _ in a.signature(over: single) }
+        #expect(Set(distinct.signatures.map(\.signature)).count == 64)
+        let state = try start().state
+        let clock = ContinuousClock()
+        let distinctTime = try clock.measure { try state.verifyParentAndSignatures(of: distinct, isBootstrap: false) }
+        let repeatedTime = try clock.measure { try state.verifyParentAndSignatures(of: repeated, isBootstrap: false) }
+        #expect(repeatedTime < distinctTime, "되풀이 \(repeatedTime), 서로 다른 64개 \(distinctTime)")
+    }
+
+    @Test("되풀이를 건너뛰어도 틀린 서명과 모르는 키는 그대로 떨어진다")
+    func repeatedSignatureDoesNotHideFailures() throws {
+        let valid = try T.noOp(after: start().head, by: [a, a])
+        var tampered = valid
+        tampered.signatures[1].signature[10] ^= 1
+        try expectRejected(tampered, .invalidSignature)
+
+        var foreign = valid
+        foreign.signatures[1] = stranger.signature(over: valid)
+        try expectRejected(foreign, .untrustedSigner)
+
+        // 같은 서명에 다른 KeyID를 붙인 것은 다른 쌍이다.
+        var relabelled = valid
+        relabelled.signatures[1] = AUMSignature(keyID: b.publicKey, signature: valid.signatures[0].signature)
+        try expectRejected(relabelled, .invalidSignature)
+    }
+
     @Test func parentHashOf33Bytes() throws {
         let update = try T.signed(AUM(messageKind: AUM.Kind.noOp, prevAUMHash: start().head.bytes + [0]), by: [a])
         try expectRejected(update, .rejectedUpdate)

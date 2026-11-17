@@ -96,8 +96,8 @@ struct TailnetNodeDeviceTests {
             _ = await NodeTestSupport.drain(node.events)
             _ = await NodeTestSupport.drain(node.networkSettings)
             _ = await NodeTestSupport.drain(node.inboundPackets)
-            #expect(StateDirectoryClaims.shared.claim(directory), "끝난 노드는 상태 디렉터리를 놓는다")
-            StateDirectoryClaims.shared.release(directory)
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory), "끝난 노드는 상태 디렉터리를 놓는다")
+            StateDirectoryClaims.shared.release(claim)
         }
     }
 

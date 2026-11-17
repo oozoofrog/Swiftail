@@ -5,7 +5,7 @@
 ///
 /// Go는 nil과 빈 슬라이스를 null과 빈 바이트열로 다르게 쓰지만, 정적 검사가 32·64바이트만 통과시키므로 여기서는 가리지 않는다
 /// (동작 E6: 그 차이가 나는 AUM은 거절된다).
-package struct AUMSignature: Sendable, Equatable {
+package struct AUMSignature: Sendable, Hashable {
     /// 서명한 신뢰 키의 KeyID. 정적 검사는 32바이트만 통과시킨다.
     package var keyID: [UInt8]
     /// Ed25519 서명. 정적 검사는 64바이트만 통과시킨다.

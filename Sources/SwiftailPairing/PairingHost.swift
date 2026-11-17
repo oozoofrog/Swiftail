@@ -59,13 +59,14 @@ public actor PairingHost {
     /// - Parameters:
     ///   - node: 짝 맺기 연결을 받을 노드. 장치가 `.inProcess`여야 한다.
     ///   - port: 짝 맺기 연결을 받을 tailnet 포트. 제안의 링크에 실린다.
-    ///   - storeDirectory: `paired-peers.json`을 둘 디렉터리. 없으면 여기서 만든다(0700).
+    ///   - storeDirectory: `paired-peers.json`을 둘 디렉터리. 없으면 여기서 만든다(0700). 이미 있으면 지금 사용자의
+    ///     것이고 그룹·기타가 쓸 수 없어야 한다.
     ///   - decide: 승인을 묻는다. 상대가 끊거나 120초가 지나면 이 호출의 Task가 취소되니, 취소되면 곧 돌아와야 한다
     ///     (돌려준 값은 버린다). 사용자의 답을 continuation으로 기다린다면 `withTaskCancellationHandler`로 취소를 받는다.
     ///     돌아오지 않으면 그 연결은 닫히지만 `run()`이 끝나지 못한다.
     /// - Throws: 노드의 장치가 `.inProcess`가 아니거나 포트가 0이면 `invalidConfiguration`, 디렉터리를 만들지 못하면
-    ///   `storeWriteFailed`, 목록 파일을 읽지 못하면 `storeUnreadable`, 같은 디렉터리를 쓰는 호스트가 이 프로세스에 이미
-    ///   있으면 `storeInUse`.
+    ///   `storeWriteFailed`, 목록 파일을 읽지 못하거나 디렉터리가 다른 사용자의 것이거나 그룹·기타가 쓸 수 있으면
+    ///   `storeUnreadable`, 같은 디렉터리를 쓰는 호스트가 이 프로세스에 이미 있으면 `storeInUse`.
     public init(
         node: TailnetNode, port: UInt16, storeDirectory: URL,
         decide: @escaping @Sendable (PairingRequest) async -> Bool
@@ -82,6 +83,8 @@ public actor PairingHost {
         guard let claim = StoreDirectoryClaims.shared.claim(storeDirectory) else { throw .storeInUse }
         let file = PairedPeerFile(directory: storeDirectory)
         do throws(PairingError) {
+            // 남이 쓸 수 있는 디렉터리의 목록은 믿지 않는다(S2). 파일을 읽기 전에 본다.
+            guard file.hasPrivateDirectory else { throw .storeUnreadable }
             peers = try file.load()
         } catch {
             StoreDirectoryClaims.shared.release(claim)
@@ -103,6 +106,11 @@ public actor PairingHost {
     /// 새 제안을 연다. 앞의 제안은 그 자리에서 못 쓴다. 제안은 한 번만 쓰인다.
     ///
     /// `run()` 전에도 된다(연결은 `run()`이 듣기 시작해야 받는다). 돌려준 값의 링크와 QR은 비밀이다.
+    ///
+    /// **인증 키는 페어링과 묶여 있지 않다.** 링크를 얻은 쪽은 키가 살아 있는 동안, 이 호스트의 승인(`decide`)과 무관하게
+    /// 그 키로 tailnet에 들어온다. 승인이 막는 것은 짝이 되는 일뿐이다. 그래서 키의 수명은 제안과 같게 짧게 주고
+    /// (`AuthKeyIssuer.issue(lifetime:)`), 그 키의 태그가 닿을 수 있는 곳을 tailnet 정책(ACL)에서 페어링 포트와 앱
+    /// 포트로만 좁힌다.
     ///
     /// - Parameters:
     ///   - lifetime: 제안의 수명. 초 단위로 버리고 1~3600초여야 한다. lock이 켜진 tailnet에서는 들어오는 노드가 서명될

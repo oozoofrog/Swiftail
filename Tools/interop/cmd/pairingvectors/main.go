@@ -36,6 +36,7 @@ type vector struct {
 	JoinerPort       uint16   `json:"joinerPort"`
 	HostAddress      string   `json:"hostAddress"`
 	HostPort         uint16   `json:"hostPort"`
+	Commitment       string   `json:"commitment"`
 	Hello            string   `json:"hello"`
 	Challenge        string   `json:"challenge"`
 	ChallengeNoOffer string   `json:"challengeNoOffer"`
@@ -79,30 +80,39 @@ func tag(secret []byte, label string, parts ...[]byte) []byte {
 	return mac.Sum(nil)
 }
 
-// transcript는 T다: nonceJ ‖ nonceH ‖ SHA256(host) ‖ port ‖ SHA256(기기 이름) ‖ J 주소(16) ‖ J 포트 ‖ H 주소(16) ‖ H 포트.
-// IPv4 주소는 IPv4-mapped IPv6 16바이트로 넣는다(netip.Addr.As16).
+// commitment는 commitJ다: SHA256("swiftail-pairing-2 commit" ‖ nonceJ). 들어오는 쪽이 hello에 싣는 nonceJ의 약속이다.
+func commitment(joinerNonce []byte) []byte {
+	sum := sha256.Sum256(append([]byte("swiftail-pairing-2 commit"), joinerNonce...))
+	return sum[:]
+}
+
+// transcript는 T다: commitJ ‖ nonceJ ‖ nonceH ‖ SHA256(host) ‖ port ‖ SHA256(기기 이름) ‖ J 주소(16) ‖ J 포트 ‖ H 주소(16)
+// ‖ H 포트(198바이트). IPv4 주소는 IPv4-mapped IPv6 16바이트로 넣는다(netip.Addr.As16).
 func transcript(in input) []byte {
 	hostHash := sha256.Sum256([]byte(in.offerHost))
 	nameHash := sha256.Sum256([]byte(in.deviceName))
 	j, h := in.joiner.Addr().As16(), in.host.Addr().As16()
 	return bytes.Join([][]byte{
-		in.joinerNonce, in.hostNonce, hostHash[:], be16(in.offerPort), nameHash[:],
+		commitment(in.joinerNonce), in.joinerNonce, in.hostNonce, hostHash[:], be16(in.offerPort), nameHash[:],
 		j[:], be16(in.joiner.Port()), h[:], be16(in.host.Port()),
 	}, nil)
 }
 
 func confirmationCode(secret, t []byte) string {
-	sas := tag(secret, "swiftail-pairing-1 sas", t)
+	sas := tag(secret, "swiftail-pairing-2 sas", t)
 	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(sas[:4])%1000000)
 }
 
 func decide(secret, t, body []byte) string {
-	return hex.EncodeToString(append(body, tag(secret, "swiftail-pairing-1 decision", t, body)...))
+	return hex.EncodeToString(append(body, tag(secret, "swiftail-pairing-2 decision", t, body)...))
 }
 
 func evaluate(in input) vector {
-	hello := bytes.Join([][]byte{[]byte("SWPR"), {0x01}, in.joinerNonce, {byte(len(in.deviceName))}, []byte(in.deviceName)}, nil)
+	commit := commitment(in.joinerNonce)
+	hello := bytes.Join([][]byte{[]byte("SWPR"), {0x02}, commit, {byte(len(in.deviceName))}, []byte(in.deviceName)}, nil)
 	t := transcript(in)
+	// proof는 열어 보인 nonceJ와 그 뒤의 HMAC이다.
+	proof := append(append([]byte{}, in.joinerNonce...), tag(in.secret, "swiftail-pairing-2 joiner", t)...)
 	approved := bytes.Join([][]byte{{1, byte(len(in.hostStableID))}, []byte(in.hostStableID), {byte(len(in.hostLabel))}, []byte(in.hostLabel)}, nil)
 	return vector{
 		Label:            in.label,
@@ -116,12 +126,13 @@ func evaluate(in input) vector {
 		JoinerPort:       in.joiner.Port(),
 		HostAddress:      in.host.Addr().String(),
 		HostPort:         in.host.Port(),
+		Commitment:       hex.EncodeToString(commit),
 		Hello:            hex.EncodeToString(hello),
 		Challenge:        hex.EncodeToString(append([]byte{0}, in.hostNonce...)),
 		ChallengeNoOffer: hex.EncodeToString(append([]byte{1}, in.hostNonce...)),
 		Transcript:       hex.EncodeToString(t),
-		Proof:            hex.EncodeToString(tag(in.secret, "swiftail-pairing-1 joiner", t)),
-		Accepted:         hex.EncodeToString(tag(in.secret, "swiftail-pairing-1 host", t)),
+		Proof:            hex.EncodeToString(proof),
+		Accepted:         hex.EncodeToString(tag(in.secret, "swiftail-pairing-2 host", t)),
 		ConfirmationCode: confirmationCode(in.secret, t),
 		Approved:         decision{in.hostStableID, in.hostLabel, decide(in.secret, t, approved)},
 		Denied:           decision{Bytes: decide(in.secret, t, []byte{2})},
