@@ -1,34 +1,143 @@
 # Swiftail
 
-Swift로 쓴 tailnet 노드 라이브러리. 앱 프로세스와 iOS Network Extension 패킷 터널 안에서 Tailscale 네트워크의 노드로 동작하는 것이 목표다.
+A Tailscale tailnet node written entirely in Swift. Swiftail lets an app join a tailnet in-process, or power an iOS Network Extension packet tunnel, without embedding the Go client.
 
-실제 tailnet에 등록해 통신한다: 제어 프로토콜, WireGuard, DERP 중계, 직접 경로 탐색, Swift로 쓴 TCP 스택, Tailnet Lock, ts.net 인증서 발급, 앱끼리의 QR·링크 페어링. 공개 API는 아직 바뀔 수 있다. 진행 상황과 단계별 관문은 [docs/plan.md](docs/plan.md), 모듈별 계약은 [docs/contracts/](docs/contracts/)에 있다. Mac과 iPhone에서 돌려 보는 샘플 앱은 [Examples/PairingDemo](Examples/PairingDemo/)에 있다.
+> **Status: pre-1.0.** It registers with the production Tailscale control plane and exchanges traffic with stock Tailscale nodes. The public API may still change.
+>
+> Swiftail is an independent project. It is not made, endorsed, or supported by Tailscale Inc.
 
-## 보안 고지
+## What it does
 
-- **사람 전문가의 독립 보안 감사는 받지 않았다.**
-- 2026-11-17에 AI 모델(Claude Mythos 5.2)로 전체 소스의 보안 검토를 했다. 세 범위(앱과 맞닿는 층, 암호·WireGuard·제어 프로토콜·Tailnet Lock, 데이터면)를 읽고 재현 시험으로 확인했다. 치명·높음 등급은 없었고 중간 3건과 낮음 11건이 나왔다. 모두 고친 뒤 같은 모델로 두 번 다시 확인했다. 받아들인 한계는 각 계약 문서에 적었다. 이 검토는 결함이 없다는 보증이 아니다.
-- 일부 암호 기본기(BLAKE2s, XSalsa20-Poly1305, Ed25519 서명 검증 등)를 직접 구현했고 공개 시험 벡터와 Go 구현의 교차 벡터로 검증했다.
-- Tailscale Inc.가 만들거나 보증하는 제품이 아니다. Tailscale의 프로토콜은 공개 계약이 아니므로 제어 서버의 변경으로 동작이 멈출 수 있다.
-- 보호가 필요한 환경에는 공식 Tailscale 클라이언트를 쓴다.
+| Area | Implemented |
+| --- | --- |
+| Control plane | Noise (ts2021) transport over HTTP/2, registration (auth key, interactive login), streaming netmaps, logout |
+| Data plane | WireGuard (Noise IK, cookies, rekey), packet filter from tailnet policy, MagicDNS responder |
+| Connectivity | DERP relays, STUN, disco path discovery, direct UDP paths with fallback and upgrade |
+| Sockets | A TCP stack written in Swift: `listen` and `connect` on tailnet addresses inside the process |
+| Tunnel | A `utun` device mode for iOS/macOS packet tunnel extensions |
+| Identity | `whoIs` (tailnet address → node and user), Tailnet Lock signature verification |
+| TLS | `ts.net` certificate issuance and renewal (ACME DNS-01), loopback bridge to an OS TLS listener |
+| Pairing | App-to-app pairing by QR code or link, with one-time auth key issuance |
 
-## 요구 사항
+Not implemented: subnet routers, exit nodes, Taildrop, Tailscale SSH, Funnel, Serve.
 
-- Swift 6, iOS 18 이상, macOS 15 이상
-- 전부 Swift. 외부 패키지와 C 코드 없음. 코어는 CryptoKit, Network, Foundation만 쓰고, 선택 제품이 Security(인증서)와 CoreImage(QR)를 더 쓴다
+## Requirements
 
-## 시험
+- Swift 6 (language mode 6, strict concurrency)
+- iOS 18+ or macOS 15+
+- No third-party packages and no C code. Core targets use CryptoKit, Network, and Foundation. Optional products add Security (certificates) and CoreImage (QR codes).
+
+## Installation
+
+Add the package to `Package.swift`. There are no tagged releases yet, so pin a revision.
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/oozoofrog/Swiftail.git", revision: "<commit>")
+]
+```
+
+| Product | Use it for |
+| --- | --- |
+| `Swiftail` | The node: `TailnetNode`, connections, status, events |
+| `SwiftailBase` | Shared value types such as `IPAddress` and `IPEndpoint` |
+| `SwiftailPairing` | QR/link pairing between two apps, auth key issuance |
+| `SwiftailCertificates` | `ts.net` TLS certificates |
+| `SwiftailLoopback` | Bridging tailnet connections to a `127.0.0.1` listener |
+
+The remaining products (`SwiftailControl`, `SwiftailWireGuard`, `SwiftailDERP`, and others) are building blocks. Most apps do not import them directly.
+
+## Quick start
+
+An in-process node that accepts TCP connections on its tailnet address:
+
+```swift
+import Swiftail
+
+let configuration = NodeConfiguration(
+    stateDirectory: stateDirectoryURL,   // must not be writable by other users
+    hostname: "my-app",
+    authKey: authKey                     // omit to use a stored identity or interactive login
+)
+let node = try TailnetNode(configuration: configuration, device: .inProcess)
+
+// run() returns when its task is cancelled.
+let running = Task { try await node.run() }
+
+// Follow state changes. `.needsLogin(url)` carries the login URL.
+Task {
+    for await event in node.events {
+        if case .stateChanged(let state) = event { print(state) }
+    }
+}
+
+let listener = try await node.listen(port: 8080)
+for await connection in listener {
+    Task {
+        let peer = await node.whoIs(connection.remoteEndpoint.address)
+        while let bytes = try await connection.read() {
+            try await connection.write(bytes)
+        }
+    }
+}
+```
+
+To dial a peer: `try await node.connect(to: "peer-name", port: 8080)`.
+
+A complete app for macOS and iOS, including QR pairing, is in [`Examples/PairingDemo`](Examples/PairingDemo/).
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `Sources/` | Library targets. Protocol logic is value-type state machines; actors at the edge own sockets and clocks |
+| `Tests/` | Unit tests (swift-testing) and interoperability tests against Go peers |
+| `Examples/PairingDemo/` | Sample app for macOS and iOS (XcodeGen project) |
+| `Tools/` | Go test tools: a test control server, DERP, and vector generators. Not part of the library |
+| `docs/plan.md` | Scope, decisions, milestones, and gates |
+| `docs/contracts/` | Per-module contracts: API, behavior, limits, tests, and review records |
+| `docs/protocol-notes/` | Protocol notes verified against the Tailscale source |
+| `AGENTS.md` | Working rules for contributors and coding agents |
+
+Design documents, contracts, and source comments are written in Korean. Identifiers and protocol terms are in English.
+
+## Testing
 
 ```sh
 swift test
 ```
 
-wireguard-go와의 상호 운용 시험은 Go(1.27 이상)가 필요하고 실제 시간으로 2분 남짓 걸린다. `SWIFTAIL_WGPEER`가 없으면 건너뛴다.
+Interoperability tests need Go 1.27+ and skip themselves when their tool path is not set.
 
 ```sh
-SWIFTAIL_WGPEER="$(sh Scripts/build-interop-tools.sh)" swift test --filter SwiftailWireGuardInteropTests
+SWIFTAIL_TAILNET="$(sh Scripts/build-interop-tools.sh tailnet)" \
+SWIFTAIL_WGPEER="$(sh Scripts/build-interop-tools.sh)" \
+SWIFTAIL_AUTHKEYRECORDER="$(sh Scripts/build-interop-tools.sh authkeyrecorder)" \
+swift test --filter "SwiftailInteropTests|SwiftailWireGuardInteropTests|SwiftailDERPInteropTests"
 ```
 
-## 라이선스
+These run a local test control server, DERP relay, and Go tsnet peers. They take several minutes of wall-clock time and never contact production servers.
 
-BSD-3-Clause(`LICENSE`). 다른 프로젝트의 코드를 옮겨 적은 파일은 머리말에 출처와 라이선스를 적었고, 그 원문은 `THIRD-PARTY-NOTICES.md`에 모았다.
+## Security
+
+Swiftail has **not** been audited by independent human security experts.
+
+- **AI-assisted review (2026-11-17).** The full source was reviewed with Claude Mythos 5.2 across three scopes: the app-facing layer (pairing, loopback bridge, certificates, state files), cryptography and authenticated channels (WireGuard, control protocol, Tailnet Lock), and the data plane (path discovery, DERP, TCP stack, packet filter, DNS). Suspected issues were reproduced with tests. The review found no critical or high-severity issues, 3 medium, and 11 low. All were fixed, and the fixes were re-reviewed twice with the same model. Accepted limitations are recorded in the contracts under `docs/contracts/`.
+- **This review is not a guarantee.** It does not replace an independent audit.
+- **Hand-written cryptography.** Some primitives are implemented in Swift (BLAKE2s, BLAKE2b, XSalsa20-Poly1305, Argon2i, Ed25519 verification) and validated with published test vectors and cross-vectors from Go. Key material is not zeroed on release.
+- **Unofficial protocol.** The Tailscale control protocol is not a public contract. A server-side change can break this library.
+- For environments that need assurance, use the official Tailscale client.
+
+## For coding agents
+
+- Read [`AGENTS.md`](AGENTS.md) before changing anything. It defines language, concurrency, dependency, privacy, and build rules.
+- Each module's contract in `docs/contracts/` is the source of truth for behavior and limits. Change the contract together with the code.
+- Do not rely on memory for protocol details. Check `docs/protocol-notes/` or the Tailscale source fetched by `Scripts/fetch-reference-sources.sh`.
+- Never commit keys, auth keys, real tailnet or device names, personal names, email addresses, or local paths. Use placeholders such as `tail0001`, `rd-mac-1a2b3c4d`, and `100.64.0.1`.
+- A change is done when it has unit tests, passes the interoperability tests it touches, and builds with zero warnings.
+
+## License
+
+BSD-3-Clause. See [`LICENSE`](LICENSE). Files adapted from other projects carry their origin and license in the file header; the full texts are in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Tailscale and WireGuard are trademarks of their respective owners.
