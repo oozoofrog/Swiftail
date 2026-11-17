@@ -87,6 +87,10 @@ public enum NodeEvent: Sendable, Equatable {
     case stateChanged(NodeState)
     /// 피어의 경로가 바뀌었다. nil은 그 피어가 데이터면에서 빠졌거나 유휴라는 뜻이다(M4 그대로).
     case peerPathChanged(fqdn: String, path: PeerPath?)
+    /// (M8) tailnet lock의 모습이 바뀌었다. `docs/contracts/SwiftailTailnetLock.md` 결정 L4.
+    case tailnetLockChanged(TailnetLockStatus)
+    /// 새로 더함(2026-11-18). `status`의 값이 바뀌었다. 값은 싣지 않는다(T1). 아래 "status 바뀜 사건".
+    case statusChanged
 }
 
 /// 지금 노드의 모습. 앱의 상태 화면과 진단이 읽는다.
@@ -123,8 +127,12 @@ public actor TailnetNode {
     /// 설정과 장치를 검사한다. 파일·소켓·Task를 만들지 않는다(utun 검사는 읽기만 하는 시스템 호출이다).
     public init(configuration: NodeConfiguration, device: TunnelDevice = .memory()) throws(NodeError)
 
-    /// 상태와 경로 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// 상태·경로·lock·모습의 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// 읽지 않은 것은 가장 새 것 64개까지. `statusChanged`는 하나만 맨 뒤에 남고 이 한도에 세지 않는다.
     public nonisolated var events: AsyncStream<NodeEvent> { get }
+
+    /// 새로 더함(2026-11-18). `stateDirectory`에 등록을 마친 신원(node 키가 든 `identity.json`)이 있는가. 아래 동작 P 5.
+    public static func hasSavedIdentity(in stateDirectory: URL) throws(NodeError) -> Bool
 
     /// 앱이 OS에 적용할 터널 설정. 바뀐 경우에만 나오고, 읽지 않은 것은 **가장 새 것 하나만** 남는다.
     /// 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
@@ -201,6 +209,36 @@ public struct TunnelNetworkSettings: Sendable, Equatable {
 - `setDefaultInterface`가 이름 대신 `NWInterface`를 받는다(총괄 확인 필요 T3).
 - `init`이 던진다(총괄 확인 필요 T4).
 - `TunnelDevice.inProcess`(M6, `docs/contracts/SwiftailNetstack.md` 동작 N 1): 노드는 utun도 메모리 흐름도 쓰지 않는다. 엔진이 장치로 쓰라고 낸 패킷(동작 L의 되돌린 패킷 포함)은 스택이 받고, 스택이 낸 패킷이 엔진의 보내기를 거친다. 이 장치에서 `inboundPackets`는 아무것도 내지 않고 `send(_:)`는 버린다. `networkSettings`는 다른 장치와 같이 나온다(앱은 읽지 않아도 된다). MTU는 1280 고정이고 인자가 없다.
+
+### status 바뀜 사건 (2026-11-18)
+
+샘플 앱(`Examples/PairingDemo`)이 피어 수·자기 이름이 바뀐 것을 알 길이 없어 `status`를 주기적으로 다시 읽던 것을 없앤다.
+
+- `statusChanged`는 `status`(상태, 주소, FQDN, `StableID`, 인증서 이름, 피어 수, 터널 설정, tailnet lock)가 앞서 알린 값과 실제로 다를 때만 나온다. 같은 netmap이 다시 오면 나오지 않는다. 처음 모습(`.starting`, netmap 없음)은 내지 않으므로 앱은 시작할 때 `status`를 한 번 읽는다.
+- **겹침**: 상태와 lock이 바뀌면 `stateChanged`·`tailnetLockChanged` 뒤에 `statusChanged`도 나온다. 앞의 둘은 전이 자체를 값과 함께 알리고(로그인 URL, 서명 안내), `statusChanged`는 값 없이 "화면에 보일 모습을 다시 읽어라"만 뜻한다. T1의 "같은 사실을 두 길로 알리지 않는다"는 값을 두 사건에 싣지 않는다는 뜻으로 지킨다. 화면만 맞추는 앱은 `statusChanged`만 보면 된다. `networkSettings` 흐름이 낸 설정도 `status.networkSettings`에 들어 있으므로 설정이 바뀌면 `statusChanged`가 함께 나온다.
+- **차례**: 한 갱신(netmap 하나, 상태 전이 하나)에서 `tailnetLockChanged` → `peerPathChanged` → `stateChanged` → `statusChanged`. 어느 사건을 받든 `status`는 이미 그 갱신을 담고 있다.
+- **버퍼**: 읽지 않은 `statusChanged`는 하나만 남는다. 새로 나면 앞의 것을 지우고 맨 뒤에 둔다. 그래서 64개 한도에 세지 않고 다른 사건을 밀어내지 않으며, 앱이 어느 사건을 읽은 뒤에 `status`가 바뀌었으면 그 뒤에 반드시 하나가 있다. `AsyncStream`의 버퍼는 종류를 가려 지우지 못하므로 노드가 버퍼(`NodeEventQueue`)를 쥐고 `AsyncStream(unfolding:)`으로 내준다(`DERPClient.EventQueue`와 같은 모양).
+- 소스 호환: `NodeEvent`에 경우가 늘었으므로 `switch`로 모든 경우를 적은 코드는 `.statusChanged`를 더해야 한다.
+
+### 공개 API에 나오는 다른 모듈의 타입 (2026-11-18)
+
+`import Swiftail`만으로 공개 API의 타입 이름을 쓴다. `Swiftail`의 공개 선언(심볼 그래프에서 다른 모듈의 USR을 가진 타입 식별자를 모은 것)과, 그 타입의 공개 속성·연관 값에 나오는 다른 모듈의 타입:
+
+| 타입 | 원래 모듈 | `Swiftail`에서 나오는 자리 |
+| --- | --- | --- |
+| `IPAddress` | `SwiftailBase` | `NodeStatus.addresses`, `NodeStatus.init`, `TailnetNode.whoIs(_:)`, `TunnelNetworkSettings.dnsServers`, `IPEndpoint.address` |
+| `IPEndpoint` | `SwiftailBase` | `TailnetConnection.localEndpoint`·`remoteEndpoint`, `PeerPath.direct(_:)` |
+| `IPPrefix` | `SwiftailBase` | `TunnelNetworkSettings.addresses`·`routes` |
+| `ControlError` | `SwiftailControl` | `NodeError.control(_:)` |
+| `TailnetLockStatus`(중첩 `Mode`·`Issue`·`SigningRequest` 포함) | `SwiftailControl` | `NodeStatus.tailnetLock`, `NodeStatus.init`, `NodeEvent.tailnetLockChanged(_:)` |
+| `TunnelNetworkSettings` | `SwiftailEngine` | `TailnetNode.networkSettings`, `NodeStatus.networkSettings`, `NodeStatus.init` |
+| `PeerPath` | `SwiftailMagicsock` | `NodeEvent.peerPathChanged(fqdn:path:)`, `TailnetNode.path(toPeerNamed:)`·`path(toPeerWithStableID:)` |
+
+내보내지 않는 것: `TunnelNetworkSettings.init?(netmap:mtu:at:)`의 `Netmap`(앱은 설정을 노드에서 받는다).
+
+방법: `Swiftail`이 이 이름들만 `public typealias`로 낸다(`Sources/Swiftail/ReexportedTypes.swift`). `@_exported import`는 밑줄 붙은 비공식 기능이고 모듈 전체(tailcfg 모델, 키 타입, 제어 클라이언트)를 `Swiftail`의 표면으로 넓힌다. Swift 6의 `public import`(SE-0409)는 이름을 내보내지 않는다. 별명은 같은 타입이므로 원래 모듈을 함께 가져온 코드와 값을 그대로 주고받는다.
+
+소스 호환: `Swiftail`과 원래 모듈(`SwiftailBase` 등)을 **함께** 가져온 파일에서는 그 이름이 두 선언(별명과 원래 타입)으로 보인다. 타입 자리(`let a: IPAddress`, `[IPAddress: Node]`, `extension IPAddress`)와 호출(`IPAddress("…")`)은 그대로 되지만, 식 안에서 타입을 값처럼 쓰는 두 꼴은 모호해져 컴파일되지 않는다: `[IPAddress]()`(배열 타입의 생성), `(IPAddress).self`(swift-testing의 `@Test(arguments:)`가 매개변수 타입으로 만드는 꼴). 고치는 길은 이제 필요 없는 원래 모듈의 `import`를 지우거나 모듈 이름을 붙이는 것(`SwiftailBase.IPAddress`)이다. 이 저장소에서는 `Tests/SwiftailTests/NodeTailnetLockTests.swift`의 매개변수 하나가 걸려 모듈 이름을 붙였다.
 
 ## 동작
 
@@ -323,6 +361,7 @@ DNS 노트 4.6과 magicsock 노트 4.11. Swiftail에는 `AF_ROUTE` 감시가 없
 2. **파일 보호**(iOS): `identity.json`에 데이터 보호 등급 `completeUntilFirstUserAuthentication`과 `isExcludedFromBackup`을 노드가 직접 건다. 신원 파일은 개인 키이므로 다른 기기로 복원되면 같은 머신 키를 가진 기기가 둘이 된다(총괄 확인 필요 T6). 디렉터리의 위치(App Group 컨테이너)와 디렉터리 자체의 보호는 앱이 정한다.
 3. **중복 거절**: 프로세스 전역 표(`Mutex<Set<String>>`, 표준화한 디렉터리 경로)에 `run()`이 시작할 때 디렉터리를 올리고 끝날 때 내린다. 이미 있으면 `run()`이 곧바로 `stateDirectoryInUse`를 던진다(파일·소켓을 열기 전). 다른 프로세스 사이는 막지 않는다(첫 사용처 Go도 프로세스 안에서만 막는다, DNS 노트 4.4.3). 올리기 전에 디렉터리를 0700으로 만든다(`run()`도 `logOut()`도. 만들지 못하면 `control(.storage)`): 없는 경로는 심볼릭 링크가 풀리지 않아, 디렉터리가 생긴 뒤의 같은 자리와 다른 열쇠가 된다. 내릴 때는 올릴 때 얻은 열쇠를 쓴다(2026-11-17 보안 검증).
 4. 상태 디렉터리는 첫 사용처 Go 코어의 것과 따로 둔다(결정 D8). Go `tailscaled.state`에서의 이관은 M7 결정이다.
+5. **저장된 신원 묻기**(2026-11-18): `TailnetNode.hasSavedIdentity(in:)`는 앱이 노드를 띄우기 전에 "저장된 신원으로 스스로 이을지, 인증 키나 로그인을 받을지"를 정하게 한다. 신원 파일을 `run()`과 같은 규칙(심볼릭 링크를 따라가지 않음, 정규 파일만, 64KiB까지)으로 읽고 형식까지 본다. 있기만 하고 읽을 수 없는 파일은 `run()`도 `control(.storage)`로 끝나므로 같은 실패를 먼저 던진다(앱이 인증 키를 받아 놓고 시작에서 실패하지 않게). node 키가 있어야 true다: machine 키만 있는 파일은 등록 전에 멈춘 것이다(`run()`은 등록 전에 machine 키를 저장한다). 파일이 없으면 false이고 디렉터리를 만들지 않는다. 파일 URL이 아니면 `invalidConfiguration`. true여도 서버가 노드를 지웠거나 키가 만료됐으면 `run()`이 `.needsLogin`이나 실패로 알린다. 키는 내보내지 않는다.
 
 ### M. 메모리
 
@@ -384,7 +423,7 @@ Go 기준값 대조(`GoMagicDNSComparisonTests`, `GoTunnelSettingsComparisonTest
 
 ## 총괄 확인 필요
 
-총괄 확정(2026-11-15, 첫 사용처의 검토 뒤): T1~T6은 아래 권고대로 정했다. T7은 권고와 달리 **첫 사용처 터널 확장의 빌드 변형**으로 한다(서명·App Group·실기기 설치 경로가 그쪽에 있고 Go 터널과 같은 기기에서 나란히 견줄 수 있다). Swiftail은 SwiftPM 경로 의존으로 붙는다: 확장은 제품 `Swiftail`을 링크하고, 공개 API가 쓰는 타입 때문에 `SwiftailBase`·`SwiftailControl`·`SwiftailEngine`·`SwiftailMagicsock`을 필요한 만큼 `import`한다. 확장(App Extension)에서 쓸 수 없는 API를 쓰지 않는다.
+총괄 확정(2026-11-15, 첫 사용처의 검토 뒤): T1~T6은 아래 권고대로 정했다. T7은 권고와 달리 **첫 사용처 터널 확장의 빌드 변형**으로 한다(서명·App Group·실기기 설치 경로가 그쪽에 있고 Go 터널과 같은 기기에서 나란히 견줄 수 있다). Swiftail은 SwiftPM 경로 의존으로 붙는다: 확장은 제품 `Swiftail`을 링크하고, 공개 API가 쓰는 타입 때문에 `SwiftailBase`·`SwiftailControl`·`SwiftailEngine`·`SwiftailMagicsock`을 필요한 만큼 `import`한다(2026-11-18부터는 `import Swiftail`만으로 된다. 위 "공개 API에 나오는 다른 모듈의 타입"). 확장(App Extension)에서 쓸 수 없는 API를 쓰지 않는다.
 
 | # | 무엇 | 선택지 | 권고 |
 | --- | --- | --- | --- |

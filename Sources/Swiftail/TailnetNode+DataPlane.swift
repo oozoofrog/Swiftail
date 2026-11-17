@@ -81,7 +81,7 @@ extension TailnetNode {
                 let line = pathEventTally.line(for: peer, path: path, downgrade: magicsock?.downgrade(of: peer), at: now)
                 Self.log.info("\(line, privacy: .public)")
                 if let name = peerDirectory.name(of: peer) {
-                    eventContinuation.yield(.peerPathChanged(fqdn: name, path: path))
+                    eventQueue.push(.peerPathChanged(fqdn: name, path: path))
                 }
             case let .dropped(reason):
                 pathEventTally.count(reason)

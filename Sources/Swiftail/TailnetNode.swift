@@ -77,7 +77,8 @@ public actor TailnetNode {
     /// utun 장치의 인터페이스 이름. `init`이 읽는다. 기본 인터페이스 통지에서 자기 utun을 걸러 낸다(동작 N 1).
     let tunnelName: String?
     let identityStore: NodeIdentityStore
-    let eventContinuation: AsyncStream<NodeEvent>.Continuation
+    /// 읽지 않은 사건. `events`가 여기서 당겨 간다(`NodeEventQueue`).
+    nonisolated let eventQueue = NodeEventQueue()
     let inboundContinuation: AsyncStream<[UInt8]>.Continuation
     let settingsContinuation: AsyncStream<TunnelNetworkSettings>.Continuation
     private let eventStream: AsyncStream<NodeEvent>
@@ -166,6 +167,8 @@ public actor TailnetNode {
     // MARK: 알린 상태
 
     var stateMachine = NodeStateMachine()
+    /// 마지막으로 `statusChanged`를 낼 때의 `status`. 처음 모습(`.starting`, netmap 없음)에서 시작한다.
+    var announcedStatus = NodeStatus(state: .starting, netmap: nil, networkSettings: nil)
     var settingsPublisher = NetworkSettingsPublisher()
     /// `run()` 동안의 제어 클라이언트. `setDNS`가 쓴다.
     var control: ControlClient?
@@ -202,7 +205,8 @@ public actor TailnetNode {
         self.configuration = configuration
         self.device = device
         identityStore = NodeIdentityStore(directory: configuration.stateDirectory)
-        (eventStream, eventContinuation) = AsyncStream.makeStream(of: NodeEvent.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
+        let queue = eventQueue
+        eventStream = AsyncStream(unfolding: { await queue.next() })
         (inboundStream, inboundContinuation) = AsyncStream.makeStream(of: [UInt8].self, bufferingPolicy: .bufferingNewest(Self.inboundPacketLimit))
         (settingsStream, settingsContinuation) = AsyncStream.makeStream(of: TunnelNetworkSettings.self, bufferingPolicy: .bufferingNewest(1))
         (loginRequests, loginContinuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
@@ -215,9 +219,10 @@ public actor TailnetNode {
         (failures, failureContinuation) = AsyncStream.makeStream(of: NodeError.self, bufferingPolicy: .bufferingOldest(1))
     }
 
-    /// 상태와 경로 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// 상태·경로·lock·모습의 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
     ///
-    /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다.
+    /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. `statusChanged`는 읽지 않은 것 하나만 맨 뒤에 남고
+    /// 이 한도에 세지 않는다(`NodeEvent.statusChanged`).
     public nonisolated var events: AsyncStream<NodeEvent> { eventStream }
 
     /// 앱이 OS에 적용할 터널 설정. 바뀐 경우에만 나오고, 읽지 않은 것은 가장 새 것 하나만 남는다(동작 E).
@@ -231,7 +236,7 @@ public actor TailnetNode {
     /// 소비가 느리면 가장 새 것 256개까지만 쥐고 오래된 것부터 버린다.
     public nonisolated var inboundPackets: AsyncStream<[UInt8]> { inboundStream }
 
-    /// 지금 상태.
+    /// 지금 노드의 모습. 바뀌면 `events`에 `statusChanged`가 나온다.
     public var status: NodeStatus {
         NodeStatus(state: stateMachine.state, netmap: lastNetmap, networkSettings: settingsPublisher.published)
     }
@@ -250,7 +255,7 @@ public actor TailnetNode {
         defer {
             // 시작 검사에서 끝났으면 `run()` 전에 연 리스너가 여기서 끝난다.
             stopNetstack()
-            eventContinuation.finish()
+            eventQueue.finish()
             inboundContinuation.finish()
             settingsContinuation.finish()
             certificateFactsPublisher.finish()
@@ -424,8 +429,17 @@ public actor TailnetNode {
     func announce(_ state: NodeState?) {
         guard let state else { return }
         Self.log.info("상태: \(state.logName, privacy: .public)")
-        eventContinuation.yield(.stateChanged(state))
+        eventQueue.push(.stateChanged(state))
+        announceStatusIfChanged()
         publishCertificateFacts()
+    }
+
+    /// `status`가 마지막으로 알린 것과 다르면 `statusChanged`를 낸다. 한 번의 갱신에서 나오는 다른 사건 뒤에 부른다.
+    func announceStatusIfChanged() {
+        let current = status
+        guard current != announcedStatus else { return }
+        announcedStatus = current
+        eventQueue.push(.statusChanged)
     }
 }
 

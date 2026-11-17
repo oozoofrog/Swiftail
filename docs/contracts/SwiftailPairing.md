@@ -50,6 +50,8 @@ Swiftail ◄─ SwiftailPairing   (CryptoKit, Foundation, Network, CoreImage)
 
 폴더: `AuthKey/`(4절), `Offer/`(3절: 제안, 링크, QR), `Protocol/`(5절의 값 타입 상태 기계), `Store/`(6절), 맨 위에 가장자리(`PairingHost`, `PairingJoiner`).
 
+앱은 `import Swiftail`과 `import SwiftailPairing`만으로 공개 API의 타입 이름을 모두 쓴다(2026-11-18). 공개 선언에 나오는 다른 모듈의 타입은 `Swiftail`의 `TailnetNode`·`PeerIdentity`와 `SwiftailBase`의 `IPAddress`뿐이고, `IPAddress`는 `Swiftail`이 별명으로 내보낸다(`docs/contracts/SwiftailTunnel.md` "공개 API에 나오는 다른 모듈의 타입"). `SwiftailPairing`은 따로 별명을 내지 않는다: 이 제품을 쓰는 앱은 노드를 만들려고 어차피 `Swiftail`을 가져오고, 같은 이름을 두 모듈이 내면 둘을 함께 가져온 파일에서 이름이 모호해지는 자리가 생긴다.
+
 ## 3. 제안과 링크
 
 ```swift
@@ -179,6 +181,7 @@ T = P ‖ nonceH                                                    길이 230�
 - P8. 한도: 절차 중인 연결 8개, 그 가운데 같은 노드(`StableID`)의 것은 2개(넘으면 받자마자 닫는다. 피어 하나가 자리를 모두 쥐고 있지 못한다), 연결을 받은 때부터 `proof`까지 10초, 메시지는 위 길이 그대로(넘거나 모자라면 닫는다). 자기 차례가 아닐 때 온 바이트는 위반이다. 기기 이름은 올바른 UTF-8이어야 하고 제어 문자(Cc)와 서식 문자(Cf, 방향 바꿈 포함)를 받지 않는다. 글자를 잇는 U+200C·U+200D만은 받는다(이은 이모지, 페르시아어·인도계 문자의 이름).
 - P9. 제안은 한 번에 하나다. 새로 열면 앞의 것은 그 자리에서 못 쓴다. 수명은 기본 300초, 1~3600초. `openOffer`는 `run()` 전에도 된다(연결은 `run()`이 듣기 시작해야 받는다). 노드의 자기 FQDN이 없으면 `.notRunning`, `authKey`가 O2에 어긋나면 `.invalidAuthKey`.
 - P10. 로그에는 요약만 남긴다(받음, 닫은 까닭, 결정). 비밀·증명·인증 키·확인 숫자·이름·주소는 남기지 않는다.
+- P11. 짝 목록과 제안의 변화를 `events`로 알린다(2026-11-18, 샘플 앱이 `pairedPeers`를 주기적으로 다시 읽던 것을 없앤다). 사건에는 비밀(제안의 비밀과 링크)·증명·확인 숫자·인증 키를 싣지 않는다: 짝이 됐을 때는 그 `PairedPeer`, 지웠을 때는 `StableID`, 제안은 상태만이다. 읽지 않은 사건은 `TailnetNode.events`처럼 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. 짝 목록은 `run()` 밖에서도 바뀌므로 흐름은 `run()`과 함께 끝나지 않고 `PairingHost`가 사라질 때 끝난다. 만료는 `run()`의 자식(`expireOffers()`)이 열린 제안의 만료 시각에 깨어나 제안을 지우며 알린다(이미 쓸 수 없던 제안이라 절차는 그대로다). 새 제안을 열면 그 만료 시각으로 다시 잔다.
 
 들어오는 쪽:
 
@@ -204,6 +207,20 @@ public actor PairingHost {
     public var pairedPeers: [PairedPeer] { get }
     public func pairedPeer(withStableID stableID: String) -> PairedPeer?
     public func removePairedPeer(withStableID stableID: String) throws(PairingError)
+    /// 짝 목록과 제안의 변화(P11). 구독자는 하나, 읽지 않은 것은 가장 새 것 64개까지. 이 호스트가 사라질 때 끝난다.
+    public nonisolated var events: AsyncStream<Event> { get }
+
+    public enum Event: Sendable, Equatable {
+        case pairedPeerAdded(PairedPeer)          // 저장한 뒤. 같은 노드가 다시 짝이 되어도 나온다(S1)
+        case pairedPeerRemoved(stableID: String)  // removePairedPeer가 지우고 저장한 뒤. 없는 짝이면 나오지 않는다
+        case offerChanged(OfferState)
+    }
+    public enum OfferState: Sendable, Equatable {
+        case opened    // openOffer. 앞의 제안이 밀려난 것은 따로 알리지 않는다(P9)
+        case used      // 맞는 proof로 쓰였다(P4). 그 연결의 decide보다 먼저 나온다
+        case expired   // run() 동안 만료 시각에. run() 밖에서 지난 만료는 run()이 시작할 때
+        case closed    // closeOffer가 열린 제안을 닫았다
+    }
 }
 
 public struct PairingRequest: Sendable {

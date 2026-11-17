@@ -26,9 +26,9 @@ struct NodeLinkStateTests {
         await node.apply(try Self.netmap(regions: ""))
 
         #expect(await node.status.state == .running)
-        await node.eventContinuation.finish()
+        node.eventQueue.finish()
         let seen = await NodeTestSupport.drain(node.events)
-        #expect(seen == [.stateChanged(.running)])
+        #expect(seen == [.stateChanged(.running), .statusChanged])
     }
 
     /// 고치기 전에는 DERPMap에서 사라진 지역만 닫아, 서버가 바뀐 지역의 연결이 옛 서버로만 다시 붙으려 했다.

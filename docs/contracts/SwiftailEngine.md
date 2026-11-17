@@ -147,6 +147,8 @@ public struct TailnetEngine: Sendable {
 
 ## 노드 API (`Swiftail`)
 
+아래는 M3 시점의 선언이다. 지금의 사건과 공개 API는 `docs/contracts/SwiftailTunnel.md` "공개 API"가 정본이다. 2026-11-18에 더한 것: `NodeEvent.statusChanged`(`status`가 실제로 바뀔 때만, 값 없이), `TailnetNode.hasSavedIdentity(in:)`(저장된 신원이 있는지), 공개 API에 나오는 다른 모듈 타입의 별명(`import Swiftail`만으로 이름을 쓴다).
+
 ```swift
 public struct NodeConfiguration: Sendable {
     /// 신원 파일을 둘 디렉터리.
@@ -329,7 +331,7 @@ extension TailnetNode {
 }
 ```
 
-`PeerPath`는 `SwiftailMagicsock`의 공개 타입이다(`IPAddress`가 `SwiftailBase`의 것인 것과 같다).
+`PeerPath`는 `SwiftailMagicsock`의 공개 타입이다(`IPAddress`가 `SwiftailBase`의 것인 것과 같다). 2026-11-18부터 `Swiftail`이 둘 다 같은 이름의 별명으로 낸다(`docs/contracts/SwiftailTunnel.md` "공개 API에 나오는 다른 모듈의 타입").
 
 동작 변경:
 

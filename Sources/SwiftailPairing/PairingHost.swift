@@ -10,7 +10,8 @@ import os
 ///
 /// ```
 /// run()
-///  └ TaskGroup: 받은 연결마다 serve(connection)
+///  └ TaskGroup: 받은 연결마다 serve(connection), 그리고 expireOffers()
+///     ├ expireOffers()  열린 제안의 만료 시각에 깨어나 지우고 알린다(`OfferState.expired`)
 ///     └ TaskGroup: 연결 하나의 수명. 절차가 끝나면 나머지를 취소한다
 ///        ├ 읽기            받은 바이트·끊김 → 상태 기계
 ///        ├ 기한            증명 10초, 승인 120초
@@ -24,6 +25,7 @@ import os
 /// let running = Task { try await host.run() }
 /// let offer = try await host.openOffer()
 /// show(offer.qrCode(base: pairingBaseURL))   // 앱의 주소: myapp://pair, https://example.com/pair
+/// for await event in host.events { … }       // 짝 목록과 제안의 변화
 /// ```
 ///
 /// 짝이 된 뒤의 연결은 앱이 가린다: 연결의 신원을 `TailnetNode.whoIs(_:)`로 얻어 `pairedPeer(withStableID:)`에 묻는다.
@@ -33,6 +35,8 @@ import os
 public actor PairingHost {
     /// 요약만 남긴다: 받음, 닫은 까닭, 결정. 비밀·증명·인증 키·확인 숫자·이름·주소는 남기지 않는다(계약 동작 P10).
     private static let log = Logger(subsystem: "Swiftail", category: "pairing")
+    /// 읽지 않은 사건 수의 한도. 넘으면 오래된 것부터 버린다(`TailnetNode.events`와 같다).
+    static let eventBufferLimit = 64
 
     /// 연결 하나의 흐름에 들어오는 사건.
     private enum SessionEvent: Sendable {
@@ -53,6 +57,10 @@ public actor PairingHost {
     private var peers: PairedPeerList
     private var machine = PairingHostMachine()
     private var nextSessionID: PairingHostMachine.SessionID = 0
+    private let eventStream: AsyncStream<Event>
+    private let eventContinuation: AsyncStream<Event>.Continuation
+    /// 만료 타이머(`expireOffers()`)를 깨운다. 새 제안을 열면 만료 시각이 바뀐다. `run()` 동안만 있다.
+    private var offerChanges: AsyncStream<Void>.Continuation?
 
     /// 짝 목록을 읽고 여는 쪽을 만든다. 듣기는 `run()`이 시작한다.
     ///
@@ -95,11 +103,22 @@ public actor PairingHost {
         self.decide = decide
         self.file = file
         self.claim = claim
+        (eventStream, eventContinuation) = AsyncStream.makeStream(
+            of: Event.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
     }
 
     deinit {
         StoreDirectoryClaims.shared.release(claim)
+        eventContinuation.finish()
     }
+
+    // MARK: 사건
+
+    /// 짝 목록과 제안의 변화. 구독자는 하나다. 짝 목록은 `run()` 밖에서도 바뀌므로 `run()`이 끝나도 흐름은 끝나지 않고,
+    /// 이 `PairingHost`가 사라질 때 끝난다.
+    ///
+    /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. 흐름을 읽지 않는 앱에서도 그 이상 자라지 않는다.
+    public nonisolated var events: AsyncStream<Event> { eventStream }
 
     // MARK: 제안 (동작 P9)
 
@@ -140,13 +159,46 @@ public actor PairingHost {
             secret: PairingRandom.bytes(PairingOffer.secretLength))
         machine.open(offer)
         Self.log.info("제안을 엶: 수명 \(seconds, privacy: .public)초")
+        eventContinuation.yield(.offerChanged(.opened))
+        offerChanges?.yield()
         return offer
     }
 
     /// 열린 제안을 닫는다. 이미 증명을 마치고 승인을 기다리는 연결은 그대로 간다(동작 P6).
     public func closeOffer() {
+        let wasOpen = machine.hasOpenOffer
         machine.closeOffer()
         Self.log.info("제안을 닫음")
+        if wasOpen { eventContinuation.yield(.offerChanged(.closed)) }
+    }
+
+    /// 열린 제안의 만료 시각에 깨어나 제안을 지우고 알린다. 새 제안을 열면(`offerChanges`) 그 만료 시각으로 다시 잔다.
+    ///
+    /// 바뀜 신호를 받을 흐름은 매번 새로 만든다. 경쟁에서 진 쪽을 취소하면 그 흐름이 끝나기 때문이다(`TailnetNode`의
+    /// 타이머와 같은 모양). 통로를 거는 일과 만료 시각을 읽는 일 사이에 `await`가 없으므로 그 사이의 바뀜을 놓치지 않는다.
+    private func expireOffers() async {
+        while !Task.isCancelled {
+            let (changes, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+            offerChanges = continuation
+            let expiry = machine.openOfferExpiry
+            await withTaskGroup(of: Void.self) { group in
+                if let expiry {
+                    let delay = max(0, expiry.timeIntervalSinceNow)
+                    group.addTask { try? await Task.sleep(for: .seconds(delay)) }
+                }
+                group.addTask {
+                    for await _ in changes { return }
+                }
+                await group.next()
+                group.cancelAll()
+            }
+            // 일찍 깨어났으면(시계 차이) 지우지 않고 다시 잔다.
+            if machine.expireOffer(at: Date()) {
+                Self.log.info("제안이 만료됨")
+                eventContinuation.yield(.offerChanged(.expired))
+            }
+        }
+        offerChanges = nil
     }
 
     // MARK: 짝 목록 (동작 S1~S4)
@@ -167,6 +219,7 @@ public actor PairingHost {
         guard updated.remove(stableID: stableID) else { return }
         try file.save(updated)
         peers = updated
+        eventContinuation.yield(.pairedPeerRemoved(stableID: stableID))
     }
 
     /// 짝을 넣고 저장한다. 목록이 가득 찼거나 저장하지 못하면 넣지 않고 false.
@@ -179,6 +232,7 @@ public actor PairingHost {
             return false
         }
         peers = updated
+        eventContinuation.yield(.pairedPeerAdded(peer))
         return true
     }
 
@@ -202,6 +256,7 @@ public actor PairingHost {
         }
         Self.log.info("짝 맺기 연결을 듣기 시작")
         await withDiscardingTaskGroup { group in
+            group.addTask { await self.expireOffers() }
             for await connection in listener {
                 group.addTask { await self.serve(connection) }
             }
@@ -245,7 +300,12 @@ public actor PairingHost {
                     let actions: [PairingHostMachine.Action]
                     switch event {
                     case .received(let bytes):
+                        let hadOffer = machine.hasOpenOffer
                         actions = machine.receive(bytes, on: id, wallClock: Date(), now: .now)
+                        // 제안을 지우는 것은 맞는 proof뿐이다(P4).
+                        if hadOffer, !machine.hasOpenOffer {
+                            eventContinuation.yield(.offerChanged(.used))
+                        }
                     case .ended:
                         actions = machine.connectionEnded(id)
                     case .timer:

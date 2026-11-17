@@ -110,6 +110,8 @@ struct PairingHostMachine: Sendable {
 
     /// 쓸 수 있는 제안이 열려 있는가(만료는 보지 않는다).
     var hasOpenOffer: Bool { offer != nil }
+    /// 열린 제안의 만료 시각. 열린 제안이 없으면 nil.
+    var openOfferExpiry: Date? { offer?.offer.expires }
     /// 절차 중인 연결 수.
     var sessionCount: Int { sessions.count }
 
@@ -124,6 +126,16 @@ struct PairingHostMachine: Sendable {
     /// 제안을 닫는다. 이미 `proof`가 맞아 결정을 기다리는 연결은 그대로다(P6).
     mutating func closeOffer() {
         offer = nil
+    }
+
+    /// 만료된 제안을 지운다. 만료된 제안은 이미 쓰이지 않으므로(`usableOffer`) 지워도 절차는 그대로다. 가장자리가 만료를
+    /// 알리려고 부른다.
+    ///
+    /// - Returns: 지운 제안이 있으면 true.
+    mutating func expireOffer(at wallClock: Date) -> Bool {
+        guard let offer, wallClock >= offer.offer.expires else { return false }
+        self.offer = nil
+        return true
     }
 
     // MARK: 연결

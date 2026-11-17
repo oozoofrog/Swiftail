@@ -1,10 +1,10 @@
-import SwiftailControl
-import SwiftailMagicsock
-
 /// `TailnetNode`가 알리는 변화. `TailnetNode.events`로 받는다.
 ///
 /// 주소·이름 같은 지금의 모습은 사건에 싣지 않고 `TailnetNode.status`로 읽는다. 같은 사실을 두 길로 알리지 않는다
 /// (`docs/contracts/SwiftailTunnel.md` 총괄 확인 T1).
+///
+/// 한 번의 갱신(netmap 하나, 상태 전이 하나)에서 나오는 사건의 차례는 `tailnetLockChanged` → `peerPathChanged` →
+/// `stateChanged` → `statusChanged`다. 사건이 나올 때 `status`는 이미 그 갱신을 담고 있다.
 public enum NodeEvent: Sendable, Equatable {
     /// 상태가 바뀌었다. 같은 상태는 다시 내지 않는다. 처음 상태는 `.starting`이고 그것은 내지 않는다.
     case stateChanged(NodeState)
@@ -22,4 +22,14 @@ public enum NodeEvent: Sendable, Equatable {
     /// 보이기 전에 서명 안내(`signingRequest`)를 안다. 서명 기기가 서명하면 다시 시작하지 않아도 다음 netmap에서
     /// `signingRequest`가 nil인 값으로 다시 나온다. `docs/contracts/SwiftailTailnetLock.md` 결정 L4, 첫 사용처 검토 F2.
     case tailnetLockChanged(TailnetLockStatus)
+    /// `TailnetNode.status`의 값이 바뀌었다. 지금의 모습은 `status`로 읽는다.
+    ///
+    /// 앞서 알린 `status`와 실제로 다를 때만 나온다(피어 수, 자기 이름·주소, 인증서 이름, 터널 설정, 상태, tailnet lock 가운데
+    /// 하나라도). 상태와 lock이 바뀌면 `stateChanged`·`tailnetLockChanged` 뒤에 이것도 나온다. 그 둘은 전이 자체를
+    /// 알리고(로그인 URL 열기, 서명 안내), 이것은 화면에 보일 모습을 다시 읽으라는 신호다. 화면만 맞추는 앱은 이 사건만
+    /// 보면 된다.
+    ///
+    /// 읽지 않은 것은 하나만 남는다. 새로 나면 앞의 것을 지우고 맨 뒤에 둔다. 그래서 사건 버퍼의 한도에 세지 않고 다른 사건을
+    /// 밀어내지 않는다. 처음 모습(`.starting`, netmap 없음)은 내지 않으니 앱은 시작할 때 `status`를 한 번 읽는다.
+    case statusChanged
 }

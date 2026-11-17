@@ -92,7 +92,7 @@ let package = Package(
         .target(name: "SwiftailPairing", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(
             name: "SwiftailPairingTests",
-            dependencies: ["SwiftailPairing", "Swiftail", "SwiftailBase"],
+            dependencies: ["SwiftailPairing", "Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailEngine"],
             resources: [.copy("Fixtures")]
         ),
     ],

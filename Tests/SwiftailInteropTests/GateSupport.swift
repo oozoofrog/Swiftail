@@ -227,7 +227,7 @@ func running(_ node: TailnetNode, containing marker: IPAddress? = nil) async thr
         switch event {
         case .stateChanged(.running): return await node.status.addresses
         case .stateChanged(.needsLogin): throw GateFailure("자동 승인 서버에서 needsLogin 수신")
-        case .stateChanged, .peerPathChanged, .tailnetLockChanged: continue
+        case .stateChanged, .peerPathChanged, .tailnetLockChanged, .statusChanged: continue
         }
     }
 }
