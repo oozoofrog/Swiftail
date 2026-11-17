@@ -228,6 +228,22 @@ struct PairedPeerStoreTests {
         }
     }
 
+    @Test("심볼릭 링크를 거친 경로도, 디렉터리가 생기기 전후에 같은 것으로 본다")
+    func claimsStoreDirectoryThroughSymlink() async throws {
+        try await Self.withDirectory { directory in
+            let node = try Self.node(directory)
+            let real = directory.appending(path: "real")
+            let link = directory.appending(path: "link")
+            try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+            let first = try await Self.host(node, store: link.appending(path: "store"))
+            for same in [link.appending(path: "store"), real.appending(path: "store")] {
+                #expect(await pairingError { try await Self.host(node, port: 4748, store: same) } == .storeInUse)
+            }
+            #expect(await first.pairedPeers.isEmpty)
+        }
+    }
+
     @Test("장치가 .inProcess가 아니거나 포트가 0이면 만들지 못하고, 디렉터리를 쥐지도 않는다")
     func validatesConfiguration() async throws {
         try await Self.withDirectory { directory in

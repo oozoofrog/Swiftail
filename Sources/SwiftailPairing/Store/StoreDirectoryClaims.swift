@@ -11,7 +11,8 @@ final class StoreDirectoryClaims: Sendable {
 
     private let claimed = Mutex<Set<String>>([])
 
-    /// `directory`를 차지한다. 이미 차지되어 있으면 nil, 아니면 풀 때 쓸 열쇠.
+    /// `directory`를 차지한다. 이미 차지되어 있으면 nil, 아니면 풀 때 쓸 열쇠. 디렉터리는 이미 있어야 한다(없는 경로는
+    /// 심볼릭 링크가 풀리지 않는다).
     func claim(_ directory: URL) -> String? {
         // `.`·`..`을 풀고 심볼릭 링크를 따라가며 끝의 `/`를 뗀다. 같은 디렉터리의 다른 표기가 같은 열쇠가 된다.
         let path = directory.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)

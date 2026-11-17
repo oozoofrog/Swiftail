@@ -54,7 +54,10 @@ extension PairingOffer {
         let text = base.absoluteString
         let stem = text.firstIndex(of: "#").map { String(text[..<$0]) } ?? text
         // 조각의 글자는 모두 URL에 그대로 쓸 수 있는 것이라, `base`가 URL이면 이것도 URL이다.
-        return URL(string: stem + "#" + fragment) ?? base
+        guard let url = URL(string: stem + "#" + fragment) else {
+            preconditionFailure("URL에 허용된 글자만 더했으므로 올바른 URL이다")
+        }
+        return url
     }
 
     /// 조각의 글(`#` 뒤).

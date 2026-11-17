@@ -59,11 +59,13 @@ public actor PairingHost {
     /// - Parameters:
     ///   - node: 짝 맺기 연결을 받을 노드. 장치가 `.inProcess`여야 한다.
     ///   - port: 짝 맺기 연결을 받을 tailnet 포트. 제안의 링크에 실린다.
-    ///   - storeDirectory: `paired-peers.json`을 둘 디렉터리. 없으면 첫 저장 때 만든다.
+    ///   - storeDirectory: `paired-peers.json`을 둘 디렉터리. 없으면 여기서 만든다(0700).
     ///   - decide: 승인을 묻는다. 상대가 끊거나 120초가 지나면 이 호출의 Task가 취소되니, 취소되면 곧 돌아와야 한다
-    ///     (돌려준 값은 버린다).
-    /// - Throws: 노드의 장치가 `.inProcess`가 아니거나 포트가 0이면 `invalidConfiguration`, 목록 파일을 읽지 못하면
-    ///   `storeUnreadable`, 같은 디렉터리를 쓰는 호스트가 이 프로세스에 이미 있으면 `storeInUse`.
+    ///     (돌려준 값은 버린다). 사용자의 답을 continuation으로 기다린다면 `withTaskCancellationHandler`로 취소를 받는다.
+    ///     돌아오지 않으면 그 연결은 닫히지만 `run()`이 끝나지 못한다.
+    /// - Throws: 노드의 장치가 `.inProcess`가 아니거나 포트가 0이면 `invalidConfiguration`, 디렉터리를 만들지 못하면
+    ///   `storeWriteFailed`, 목록 파일을 읽지 못하면 `storeUnreadable`, 같은 디렉터리를 쓰는 호스트가 이 프로세스에 이미
+    ///   있으면 `storeInUse`.
     public init(
         node: TailnetNode, port: UInt16, storeDirectory: URL,
         decide: @escaping @Sendable (PairingRequest) async -> Bool
@@ -73,6 +75,10 @@ public actor PairingHost {
         }
         guard port != 0 else { throw .invalidConfiguration("포트는 0이 아니어야 한다") }
         guard storeDirectory.isFileURL else { throw .invalidConfiguration("짝 목록 디렉터리는 파일 URL이어야 한다") }
+        // 차지하기 전에 만든다. 없는 경로는 심볼릭 링크가 풀리지 않아, 만들어진 뒤의 같은 디렉터리와 다른 열쇠가 된다.
+        guard (try? FileManager.default.createDirectory(
+            at: storeDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil
+        else { throw .storeWriteFailed }
         guard let claim = StoreDirectoryClaims.shared.claim(storeDirectory) else { throw .storeInUse }
         let file = PairedPeerFile(directory: storeDirectory)
         do throws(PairingError) {

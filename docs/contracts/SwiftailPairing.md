@@ -12,7 +12,7 @@ M9의 목표는 **Swiftail을 쓰는 두 앱이 QR 코드나 링크 하나로 �
 | U2 | QR 그림은 CoreImage로 만든다. 읽는 쪽 카메라 화면은 앱이 만든다 |
 | U3 | 라이브러리에 새 기능으로 만든다. 첫 사용처(RemoteDebug)의 지금 페어링은 그대로 두고, 옮길지는 끝난 뒤 따로 정한다 |
 
-참고한 것: 첫 사용처의 페어링(`docs/protocol.md` 2~4.3절, `docs/protocol-addenda.md` B.3·J. 읽기만), `tailscale.com` v1.104.7 `client/tailscale/keys.go`(`CreateKeyWithExpiry`)·`cmd/get-authkey/main.go`·`feature/oauthkey/oauthkey.go`·`tailcfg/tailcfg.go`(`CheckTag`), `golang.org/x/oauth2` v0.37.0 `clientcredentials`·`internal/token.go`. 짝 맺기 절차(5절)는 Swiftail의 것이고 Go에 대응하는 것이 없다.
+참고한 것: 첫 사용처의 페어링(`docs/protocol.md` 2~4.3절, `docs/protocol-addenda.md` B.3·J. 읽기만), `tailscale.com` v1.104.7(시험 도구는 v1.104.6으로 짓는다. 아래 파일은 두 판이 같다) `client/tailscale/keys.go`(`CreateKeyWithExpiry`)·`cmd/get-authkey/main.go`·`feature/oauthkey/oauthkey.go`·`tailcfg/tailcfg.go`(`CheckTag`), `golang.org/x/oauth2` v0.37.0 `clientcredentials`·`internal/token.go`. 짝 맺기 절차(5절)는 Swiftail의 것이고 Go에 대응하는 것이 없다.
 
 ## 1. 범위
 
@@ -161,7 +161,7 @@ T = nonceJ ‖ nonceH ‖ SHA256(제안의 host 문자열) ‖ 제안의 port(2,
 - P2. 열린 제안이 없거나 만료됐으면 `hello`를 읽은 뒤 `challenge`를 상태 1로 보내고 닫는다.
 - P3. `proof`는 상수 시간으로 견준다. 틀리면 아무것도 보내지 않고 닫는다. 제안은 그대로 둔다(비밀이 256비트라 시도로 맞힐 수 없고, 틀린 시도로 태우면 tailnet의 아무 피어나 제안을 못 쓰게 만들 수 있다).
 - P4. 맞으면 그 자리에서 제안을 쓴 것으로 한다(한 번만 쓴다). 같은 비밀의 다른 연결은 그 뒤로 P2가 된다. `accepted`를 보내고 앱의 결정을 기다린다.
-- P5. 앱의 결정은 `decide(PairingRequest) async -> Bool`이다. 요청에는 J의 `PeerIdentity`, 기기 이름, 확인 숫자가 있다. **기기 이름은 상대가 스스로 밝힌 값이다.** 같은 OAuth 클라이언트의 키로 들어온 노드들은 로그인 이름이 같으므로, 승인 화면은 확인 숫자를 보여 주고 사용자가 들어오는 기기 화면의 숫자와 같을 때 승인하게 한다. 120초 안에 답이 없으면 상태 3.
+- P5. 앱의 결정은 `decide(PairingRequest) async -> Bool`이다. 요청에는 J의 `PeerIdentity`, 기기 이름, 확인 숫자가 있다. **기기 이름은 상대가 스스로 밝힌 값이다.** 같은 OAuth 클라이언트의 키로 들어온 노드들은 로그인 이름이 같으므로, 승인 화면은 확인 숫자를 보여 주고 사용자가 들어오는 기기 화면의 숫자와 같을 때 승인하게 한다. 120초 안에 답이 없으면 상태 3. `decide`는 취소되면 곧 돌아와야 한다(취소를 무시하면 그 연결은 닫히지만 `run()`이 끝나지 못한다).
 - P6. 결정을 기다리는 동안 읽기를 걸어 둔다. EOF·오류·어떤 바이트든 오면 끊긴 것으로 보고 결정 Task를 취소한다. 그 사이 새 제안을 열거나 `closeOffer()`를 불러도 이 결정은 계속된다.
 - P7. 승인이면, 그 순간의 `whoIs`가 처음과 같은 `StableID`일 때만 짝 목록에 넣고 저장한 뒤 상태 1을 보낸다. 저장에 실패하면 상태 2다. 상태 1을 보내기 전에 끊기면 H에는 짝이 남고 J에는 없다. 다시 짝을 맺으면 항목이 바뀐다(S1).
 - P8. 한도: 절차 중인 연결 8개(넘으면 받자마자 닫는다), 연결을 받은 때부터 `proof`까지 10초, 메시지는 위 길이 그대로(넘거나 모자라면 닫는다). 자기 차례가 아닐 때 온 바이트는 위반이다. 기기 이름은 올바른 UTF-8이어야 하고 제어 문자(Cc)와 서식 문자(Cf, 방향 바꿈 포함)를 받지 않는다. 글자를 잇는 U+200C·U+200D만은 받는다(이은 이모지, 페르시아어·인도계 문자의 이름).
@@ -234,7 +234,7 @@ public enum PairingError: Error, Sendable, Equatable {
 - S2. `storeDirectory/paired-peers.json`에 둔다(`{"version":1,"peers":[…]}`). 바꿀 때마다 같은 디렉터리의 임시 파일에 쓰고 바꿔치기한다. 권한은 0600.
 - S3. 파일이 없으면 빈 목록이다. 읽지 못하면 `init`이 `.storeUnreadable`을 던진다(빈 목록으로 덮어쓰지 않는다): JSON이 아님, 다른 `version`, 빈 `StableID`, 겹친 `StableID`, 256개 초과, 1MiB 초과. 모르는 필드는 넘긴다.
 - S4. 256개까지. 꽉 찼으면 새 짝은 거절(상태 2)이다. 이미 있는 `StableID`를 바꾸는 것은 된다.
-- S5. 같은 디렉터리를 쓰는 `PairingHost`는 한 프로세스에 하나다(둘이면 한쪽이 지운 짝을 다른 쪽이 되살린다). 프로세스 사이는 막지 않는다.
+- S5. 같은 디렉터리를 쓰는 `PairingHost`는 한 프로세스에 하나다(둘이면 한쪽이 지운 짝을 다른 쪽이 되살린다). 프로세스 사이는 막지 않는다. `init`이 디렉터리를 먼저 만들고(0700, 실패하면 `.storeWriteFailed`) 심볼릭 링크를 푼 경로로 견준다.
 
 ## 7. 시험과 관문
 
@@ -284,3 +284,15 @@ public enum PairingError: Error, Sendable, Equatable {
 | 시계가 `hello`부터면 말없는 연결이 남는다. 결정 대기 중 끊김을 알 길 | P8(받은 때부터 10초), P6 |
 | 기기 이름의 방향 바꿈 문자 | Cf도 거절(P8) |
 | 줄일 것 | `ephemeral`·`preauthorized` 매개변수, `IssuedAuthKey.id`, `init(url:)`, `moduleSize`, `Equatable`, `PairedHost.port`를 뺌 |
+
+## 10. 코드 검토 (2026-11-17)
+
+작성과 다른 세션이 구현 전체를 계약 항목별로 대조했다. 판정은 "이대로 공개해도 된다"이고 발견은 낮음 셋이었다.
+
+| 발견 | 처리 |
+| --- | --- |
+| 디렉터리가 생기기 전후에 심볼릭 링크를 거친 경로의 열쇠가 달라 S5가 뚫린다(재현됨) | `init`이 디렉터리를 먼저 만든다. 시험을 더함 |
+| `decide`가 취소를 무시하면 `run()`이 끝나지 못한다 | 문서 주석과 P5에 적음 |
+| `url(base:)`가 만들기 실패를 `base`로 숨긴다 | `preconditionFailure` |
+
+남긴 것: 가장자리 `PairingHost`의 10초 기한·한도 8·읽기 상한을 직접 보는 시험은 없다(상태 기계 시험과 관문 9가 간접으로 본다). tailnet 피어 하나가 연결 8개를 계속 다시 열면 짝 맺기 자리를 막을 수 있다(P8의 한계). U+2028·U+2029는 기기 이름에 들어간다. 노드의 `StateDirectoryClaims`도 같은 방식이라 없는 경로의 심볼릭 링크에서 같은 문제가 있을 수 있다(확인하지 않음).
