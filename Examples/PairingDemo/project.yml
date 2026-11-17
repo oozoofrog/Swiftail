@@ -26,8 +26,6 @@ targets:
         product: Swiftail
       - package: Swiftail
         product: SwiftailPairing
-      - package: Swiftail
-        product: SwiftailBase
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(DEMO_BUNDLE_PREFIX).PairingDemo

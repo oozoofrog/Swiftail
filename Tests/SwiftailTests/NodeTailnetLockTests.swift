@@ -54,7 +54,7 @@ struct NodeTailnetLockTests {
         await node.apply(try Self.netmap(TailnetLockStatus()))
         await node.apply(try Self.netmap(TailnetLockStatus()))
         await node.finishEventsForTesting()
-        #expect(await NodeTestSupport.drain(node.events) == [.stateChanged(.running)])
+        #expect(await NodeTestSupport.drain(node.events) == [.stateChanged(.running), .statusChanged])
         #expect(await node.status.tailnetLock.mode == .disabled)
     }
 
@@ -79,7 +79,7 @@ struct NodeTailnetLockTests {
         let request = try #require(secondStatus.tailnetLock.signingRequest)
         #expect(request.nodeKey.hasPrefix("nodekey:") && request.nodeKey.count == 8 + 64)
         #expect(request.lockKey.hasPrefix("tlpub:") && request.lockKey.count == 6 + 64)
-        #expect(await Self.remaining(&events) == [])
+        #expect(await Self.remaining(&events) == [.statusChanged])
     }
 
     @Test("F2 4: 서명 뒤의 netmap에서 다시 시작 없이 풀린다: lock 사건 하나만 오고 signingRequest가 nil이다")
@@ -99,11 +99,11 @@ struct NodeTailnetLockTests {
         #expect(status.peerCount == 1)
         await node.finishEventsForTesting()
         #expect(await NodeTestSupport.drain(node.events) == [
-            .tailnetLockChanged(Self.locked), .stateChanged(.running), .tailnetLockChanged(Self.signed),
+            .tailnetLockChanged(Self.locked), .stateChanged(.running), .tailnetLockChanged(Self.signed), .statusChanged,
         ])
     }
 
-    @Test("lock 모습만 바뀐 netmap(피어 그대로)은 lock 사건만 내고, 같은 lock 모습이 거듭 와도 사건은 한 번이다")
+    @Test("lock 모습만 바뀐 netmap(피어 그대로)은 lock 사건과 statusChanged만 내고, 같은 lock 모습이 거듭 와도 사건은 한 번이다")
     func onlyLockChanges() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.markConnectedForTesting()
@@ -118,7 +118,7 @@ struct NodeTailnetLockTests {
         await node.finishEventsForTesting()
 
         #expect(await NodeTestSupport.drain(node.events) == [
-            .tailnetLockChanged(Self.signed), .stateChanged(.running), .tailnetLockChanged(oneFiltered),
+            .tailnetLockChanged(Self.signed), .stateChanged(.running), .tailnetLockChanged(oneFiltered), .statusChanged,
         ])
         #expect(await node.status.tailnetLock == oneFiltered)
         #expect(await node.status.peerCount == 1)
@@ -138,7 +138,7 @@ struct NodeTailnetLockTests {
         #expect(await NodeTestSupport.drain(node.events) == [
             .tailnetLockChanged(Self.signed), .stateChanged(.running),
             .tailnetLockChanged(Self.locked), .tailnetLockChanged(Self.signed),
-            .tailnetLockChanged(TailnetLockStatus()), .tailnetLockChanged(Self.unverified),
+            .tailnetLockChanged(TailnetLockStatus()), .tailnetLockChanged(Self.unverified), .statusChanged,
         ])
     }
 
@@ -148,7 +148,11 @@ struct NodeTailnetLockTests {
         (locked, .enforcing, true),
         (unverified, .unverified, false),
     ])
-    func fourCases(lock: TailnetLockStatus, mode: TailnetLockStatus.Mode, waitsForSignature: Bool) async throws {
+    // 모듈 이름을 붙인다. `Swiftail`의 별명과 `SwiftailControl`의 원래 이름이 함께 보이는 파일에서는 `@Test`가 만드는
+    // `(TailnetLockStatus).self`가 모호하다(`ReexportedTypes.swift`).
+    func fourCases(
+        lock: SwiftailControl.TailnetLockStatus, mode: SwiftailControl.TailnetLockStatus.Mode, waitsForSignature: Bool
+    ) async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.markConnectedForTesting()
         await node.apply(try Self.netmap(lock))
@@ -166,7 +170,9 @@ struct NodeTailnetLockTests {
         await node.apply(try Self.netmap(Self.unverified))
         await node.finishEventsForTesting()
 
-        #expect(await NodeTestSupport.drain(node.events) == [.tailnetLockChanged(Self.unverified), .stateChanged(.running)])
+        #expect(await NodeTestSupport.drain(node.events) == [
+            .tailnetLockChanged(Self.unverified), .stateChanged(.running), .statusChanged,
+        ])
         let status = await node.status
         #expect(status.state == .running)
         #expect(status.peerCount == 0)
@@ -201,6 +207,6 @@ private extension TailnetNode {
 
     /// 사건 흐름을 끝내, 남은 사건을 끝까지 읽을 수 있게 한다.
     func finishEventsForTesting() {
-        eventContinuation.finish()
+        eventQueue.finish()
     }
 }

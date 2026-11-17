@@ -25,10 +25,13 @@ final class NodeModel {
 
     /// 이 기기가 전에 등록한 적이 있는가. 있으면 앱이 뜰 때 인증 없이 노드를 시작한다.
     ///
-    /// 우회: 라이브러리에 저장된 신원이 있는지 묻는 API가 없어, `NodeConfiguration.stateDirectory`의 문서가 말하는 파일
-    /// 이름(`identity.json`)을 직접 본다.
+    /// 신원 파일을 읽지 못하면 true다. 노드를 띄워 `run()`의 실패(`.control(.storage)`)로 안내를 보인다.
     var hasSavedIdentity: Bool {
-        FileManager.default.fileExists(atPath: Storage.nodeState.appending(path: "identity.json").path)
+        do throws(NodeError) {
+            return try TailnetNode.hasSavedIdentity(in: Storage.nodeState)
+        } catch {
+            return true
+        }
     }
 
     /// 노드를 만들고 돌린다. 이미 돌고 있으면 아무 일도 하지 않는다.
@@ -65,18 +68,18 @@ final class NodeModel {
         return nil
     }
 
-    /// `run()`이 끝날 때까지 돌며 화면의 상태를 맞춘다.
+    /// `run()`이 끝날 때까지 돌며 화면의 상태를 맞춘다. 상태 전이와 lock 변화는 기록에 남기고, 화면은 `statusChanged`마다
+    /// `status`를 다시 읽는다.
     private func run(_ node: TailnetNode) async {
+        // 처음 모습은 사건으로 오지 않는다.
+        await refresh(from: node)
+        if let status {
+            log.record(.node, "state", status.state.label)
+            log.record(.node, "tailnet-lock", status.tailnetLock.label)
+        }
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
-                for await _ in node.events { await self.refresh(from: node) }
-            }
-            // 우회: netmap이 바뀌어 피어 수나 이름이 달라져도 사건이 오지 않으므로 주기적으로도 읽는다.
-            group.addTask {
-                while !Task.isCancelled {
-                    await self.refresh(from: node)
-                    try? await Task.sleep(for: .seconds(2))
-                }
+                for await event in node.events { await self.handle(event, from: node) }
             }
             do throws(NodeError) {
                 try await node.run()
@@ -91,11 +94,18 @@ final class NodeModel {
         log.record(.node, "stopped", failure == nil ? "중지" : "실패")
     }
 
+    private func handle(_ event: NodeEvent, from node: TailnetNode) async {
+        switch event {
+        case .stateChanged(let state): log.record(.node, "state", state.label)
+        case .tailnetLockChanged(let lock): log.record(.node, "tailnet-lock", lock.label)
+        case .statusChanged: await refresh(from: node)
+        case .peerPathChanged: break
+        }
+    }
+
     private func refresh(from node: TailnetNode) async {
         let status = await node.status
         guard self.node === node else { return }
-        if status.state != self.status?.state { log.record(.node, "state", status.state.label) }
-        if status.lockLabel != self.status?.lockLabel { log.record(.node, "tailnet-lock", status.lockLabel) }
         self.status = status
     }
 
@@ -126,11 +136,12 @@ extension NodeState {
     }
 }
 
-extension NodeStatus {
-    var lockLabel: String {
-        switch tailnetLock.mode {
+extension TailnetLockStatus {
+    /// 화면과 기록에 쓰는 이름.
+    var label: String {
+        switch mode {
         case .disabled: "꺼짐"
-        case .enforcing: tailnetLock.signingRequest == nil ? "켜짐 · 이 노드 서명됨" : "켜짐 · 서명을 기다림"
+        case .enforcing: signingRequest == nil ? "켜짐 · 이 노드 서명됨" : "켜짐 · 서명을 기다림"
         case .unverified: "확인하지 못함 · 피어를 올리지 않음"
         }
     }

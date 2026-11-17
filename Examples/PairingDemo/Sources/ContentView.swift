@@ -51,7 +51,7 @@ private struct NodeSection: View {
                 }
                 LabeledContent("이름", value: status.fqdn ?? "—")
                 LabeledContent("피어", value: "\(status.peerCount)")
-                LabeledContent("tailnet lock", value: status.lockLabel)
+                LabeledContent("tailnet lock", value: status.tailnetLock.label)
                 if let request = status.tailnetLock.signingRequest {
                     let command = "tailscale lock sign \(request.nodeKey) \(request.lockKey)"
                     Text("이 노드는 아직 서명되지 않아 다른 기기와 통신할 수 없습니다. tailnet의 서명 기기에서 아래 명령을 실행하세요.")

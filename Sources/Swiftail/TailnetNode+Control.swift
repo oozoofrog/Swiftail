@@ -12,7 +12,7 @@ import SwiftailMagicsock
 ///   연결을 모두 다시 연다(disco 키와 소켓은 그대로). 상태 기계의 로그인 URL을 지운다.
 /// - `netmap`: lock 모습이 바뀌었으면 먼저 알리고(`tailnetLockChanged`), 엔진에 적용하고, 피어와 홈 후보 지역을 `Magicsock`에 넣고, DERPMap에서 사라진 지역의 연결을 닫고,
 ///   (`.inProcess`면) 스택의 자기 주소와 피어 주소의 주인을 고치고, 터널 설정을 산출해 바뀌었으면 내고(동작 E), 상태
-///   기계에 넣는다.
+///   기계에 넣고, `status`가 바뀌었으면 끝으로 알린다(`statusChanged`).
 /// - `disconnected`: 로그만 남긴다. `.running` 뒤 끊겨도 상태는 그대로다(동작 B).
 ///
 /// 계약 `docs/contracts/SwiftailEngine.md` 노드 API 동작 1~4와 "M4에서 바뀌는 것" N2·N3·N5·N6,
@@ -88,11 +88,13 @@ extension TailnetNode {
         // `status`를 먼저 고치고 사건을 낸다. lock 사건은 이 netmap의 다른 사건보다 앞선다(F2 1).
         lastNetmap = netmap
         if netmap.tailnetLock != previousLock {
-            eventContinuation.yield(.tailnetLockChanged(netmap.tailnetLock))
+            eventQueue.push(.tailnetLockChanged(netmap.tailnetLock))
         }
         configureDataPlane(netmap)
         publishSettings(for: netmap)
         announce(stateMachine.receivedNetmap(machineAuthorized: netmap.selfNode.machineAuthorized))
+        // 상태가 그대로여도 이름·주소·피어 수·설정이 바뀌었을 수 있다. 이 netmap의 사건 가운데 맨 뒤다.
+        announceStatusIfChanged()
         publishCertificateFacts()
     }
 

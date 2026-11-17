@@ -12,7 +12,7 @@ import SwiftailPairing
 /// serve
 ///  ├ PairingHost.run()   짝 맺기 포트(4747). 끝나면 나머지를 취소한다
 ///  ├ greet               짝이 된 뒤의 연결 예(4748)
-///  └ 짝 목록 다시 읽기
+///  └ PairingHost.events  짝 목록이 바뀌면 다시 읽는다
 /// ```
 @MainActor @Observable
 final class HostModel {
@@ -91,12 +91,12 @@ final class HostModel {
     private func serve(_ host: PairingHost, on node: TailnetNode) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.greet(host, on: node) }
-            // 우회: `PairingHost`가 짝 목록이 바뀐 것을 알리지 않는다. 승인(`decide`가 돌아옴)과 저장 사이에도 틈이 있어
-            // 주기적으로 다시 읽는다.
             group.addTask {
-                while !Task.isCancelled {
-                    await self.refreshPeers(from: host)
-                    try? await Task.sleep(for: .seconds(1))
+                for await event in host.events {
+                    switch event {
+                    case .pairedPeerAdded, .pairedPeerRemoved: await self.refreshPeers(from: host)
+                    case .offerChanged: break
+                    }
                 }
             }
             do throws(PairingError) {
@@ -225,7 +225,6 @@ final class HostModel {
         } catch {
             fail("peer-removed", error)
         }
-        await refreshPeers(from: host)
     }
 
     private func refreshPeers(from host: PairingHost) async {
