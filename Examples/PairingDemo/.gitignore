@@ -1,0 +1,3 @@
+# 개발 팀 ID와 번들 ID 앞부분
+Config/Signing.local.xcconfig
+/Build/
