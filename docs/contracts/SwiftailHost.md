@@ -63,9 +63,9 @@ import SwiftailBase
 extension TailnetNode {
     /// 이 tailnet 주소를 가진 노드가 누구인지 지금의 netmap에서 찾는다. tsnet `LocalClient().WhoIs(addr)`.
     ///
-    /// 자기 노드와 피어의 주소(netmap `Addresses`의 한 주소짜리)만 찾는다. 서브넷 경로 안의 주소는 찾지 않는다.
-    /// netmap이 아직 없거나, 그 주소의 노드가 없거나, 노드를 만든 사용자의 프로필이 netmap에 없으면 nil이다.
-    /// 기다리지 않는다.
+    /// 데이터면이 그 주소의 주인으로 삼은 피어(그 주소를 WireGuard AllowedIPs로 가진 피어)와 자기 노드만 찾는다. 서브넷 경로
+    /// 안의 주소, 키가 만료되는 등 데이터면에 오르지 않은 노드의 주소는 찾지 않는다. netmap이 아직 없거나, 그 주소의 노드가
+    /// 없거나, 노드를 만든 사용자의 프로필이 netmap에 없으면 nil이다. 기다리지 않는다.
     ///
     /// 연결의 상대를 확인할 때는 `TailnetConnection.remoteEndpoint.address`를 넘긴다. 그 주소는 WireGuard가 인증한
     /// 피어의 것이고, 주소의 주인이 바뀌면 노드가 그 연결을 끊는다(`ConnectionError.peerRemoved`).
@@ -338,15 +338,16 @@ guard let origin = bridge.origin(of: nwConnection) else { nwConnection.cancel();
 
 ### W. `whoIs`
 
-1. **주소 표**: 노드는 netmap을 적용할 때마다 자기 노드와 모든 피어의 `Addresses` 가운데 한 주소짜리 접두(/32, /128)를 주소 → 노드 표로 만든다. `AllowedIPs`는 넣지 않는다. netmap에 있는 노드는 만료·오프라인이어도 넣는다(노트 4.1 1. Go와 같다).
+1. **주소 표**: 주소의 주인은 **데이터면이 정한 대로**다(2026-11-17). 피어의 주소는 엔진이 그 주소 한 주소짜리 접두(/32, /128)를 WireGuard AllowedIPs로 준 피어의 것이다(`EnginePeer.addressOwners(in:at:)`. 엔진 계약 동작 2: 한 주소짜리 tailnet 주소이거나 `Addresses`에 있는 `AllowedIPs`, 같은 접두를 여러 노드가 내세우면 node ID가 작은 쪽). 서브넷 경로는 넣지 않는다. 데이터면에 오르지 않는 노드(키가 만료된 노드, 지원하지 않는 피어)의 주소는 표에 없다. 오프라인인 노드는 있다. 자기 노드는 `Addresses`의 한 주소짜리 접두다.
+   - Go와 다른 점: Go의 `WhoIs`는 netmap의 `Addresses`로 만든 표를 보고(노트 4.1 1), 만료된 노드도 찾고, 같은 주소를 가진 노드가 여럿이면 나중 것을 고른다. 그 표는 주소가 겹친 netmap에서 데이터면(그 주소에서 패킷을 보낼 수 있는 피어)과 다른 노드를 가리킨다. 그러면 앱이 연결의 상대를 다른 노드의 신원으로 본다. 겹치지 않는 netmap에서 데이터면에 오른 노드에 대한 답은 Go와 같다(관문 (가) 1).
 2. **찾기**: IPv4-mapped IPv6 주소는 IPv4로 바꾼 뒤 찾는다(노트 4.1 2). 표에 없으면 nil이다. `ProxyMapper`에 해당하는 길은 없다.
 3. **사용자**: 노드의 `User`로 `Netmap.userProfiles`에서 찾는다. 프로필이 없으면 nil이다(노트 4.1 3. 총괄 확인 필요 H11). `StableID`가 빈 노드도 nil이다(첫 사용처가 거절하는 경우다).
-4. **이름**: `name`은 `Node.name`에서 끝의 점 하나를 뗀 것이다. `computedName`은 Go `Node.ComputedName`의 규칙이다(노트 4.1 5, `tailcfg/tailcfg.go:660-689`): ① 자기 tailnet의 접미사를 구한다. 자기 노드 `Name`의 양 끝 점을 모두 뗀 뒤 첫 점 뒤의 나머지이고, 점이 없으면 그 이름 그대로다(`types/netmap/netmap.go:256-270`). ② 노드의 `Name`에서 그 접미사를 Go `dnsname.TrimSuffix`처럼 뗀다: 접미사가 **레이블 경계에서** 맞을 때만(`.` + 접미사로 끝날 때만) 떼고, 끝 점을 뗀다(`util/dnsname/dnsname.go:203-239`). 그래서 `rd-a.xtail0001.ts.net.`은 `tail0001.ts.net`을 떼지 않는다. **다른 tailnet에서 공유받은 노드는 접미사가 달라 끝 점 없는 FQDN이 남는다.** ③ 결과가 비면 `Hostinfo.Hostname`에서 `.local`·`.localdomain`·`.lan`을 떼고 Go `dnsname.SanitizeLabel`로 정리한 것(63자로 자르고, 처음·끝의 영숫자가 아닌 문자를 버리고, 가운데의 구분자를 `-`로 바꾸고, DNS에 쓸 수 없는 문자를 버리고, 소문자로. 결과는 그 Go 함수와 같아야 한다. `dnsname.go:162-200`), ④ 그것도 비면 node 공개 키의 텍스트(`nodekey:` + hex)다. 자기 노드와 모든 피어에 같은 규칙을 쓴다(`control/controlclient/direct.go:1419-1434`). W1~W3·W5는 Go의 주소 조회와 같다. W3의 빈 `StableID` 거절은 Go에 없는 첫 사용처의 정책이다(노트 10장).
-5. **자기 주소**: 자기 노드의 신원을 돌려준다(Go와 같다). 자기 주소로 건 연결(`SwiftailNetstack.md` 동작 N3)의 상대가 자기 자신으로 확인된다.
-6. **일관성**: `whoIs`는 노드 actor 안에서 지금의 netmap을 읽는다. 주소의 주인이 바뀐 연결을 끊는 일(`SwiftailNetstack.md` 동작 X10)과 같은 actor의 같은 netmap 적용에서 일어나므로, 살아 있는 연결의 원격 주소에 대한 답은 그 연결을 맺은 피어의 것이다. 이미 끊긴 연결의 주소를 뒤늦게 물으면 새 주인이 나올 수 있다(동작 B2가 이 틈을 막는다).
+4. **이름**: `name`은 `Node.name`에서 끝의 점 하나를 뗀 것이다. `computedName`은 Go `Node.ComputedName`의 규칙이다(노트 4.1 5, `tailcfg/tailcfg.go:660-689`): ① 자기 tailnet의 접미사를 구한다. 자기 노드 `Name`의 양 끝 점을 모두 뗀 뒤 첫 점 뒤의 나머지이고, 점이 없으면 그 이름 그대로다(`types/netmap/netmap.go:256-270`). ② 노드의 `Name`에서 그 접미사를 Go `dnsname.TrimSuffix`처럼 뗀다: 접미사가 **레이블 경계에서** 맞을 때만(`.` + 접미사로 끝날 때만) 떼고, 끝 점을 뗀다(`util/dnsname/dnsname.go:203-239`). 그래서 `rd-a.xtail0001.ts.net.`은 `tail0001.ts.net`을 떼지 않는다. **다른 tailnet에서 공유받은 노드는 접미사가 달라 끝 점 없는 FQDN이 남는다.** ③ 결과가 비면 `Hostinfo.Hostname`에서 `.local`·`.localdomain`·`.lan`을 떼고 Go `dnsname.SanitizeLabel`로 정리한 것(63자로 자르고, 처음·끝의 영숫자가 아닌 문자를 버리고, 가운데의 구분자를 `-`로 바꾸고, DNS에 쓸 수 없는 문자를 버리고, 소문자로. 결과는 그 Go 함수와 같아야 한다. `dnsname.go:162-200`), ④ 그것도 비면 node 공개 키의 텍스트(`nodekey:` + hex)다. 자기 노드와 모든 피어에 같은 규칙을 쓴다(`control/controlclient/direct.go:1419-1434`). W2·W3은 Go의 주소 조회와 같다. W1·W5는 데이터면을 따르는 데서 Go와 다르다(W1). W3의 빈 `StableID` 거절은 Go에 없는 첫 사용처의 정책이다(노트 10장).
+5. **자기 주소**: 자기 노드의 신원을 돌려준다(Go와 같다). 자기 주소로 건 연결(`SwiftailNetstack.md` 동작 N3)의 상대가 자기 자신으로 확인된다. 다만 netmap이 그 주소를 데이터면 피어에게도 주었으면(그 피어가 그 주소에서 패킷을 보낼 수 있으면) nil이다: 그 주소에서 온 연결이 자기 것인지 그 피어의 것인지 가릴 수 없다(닫힌 쪽).
+6. **일관성**: `whoIs`는 노드 actor 안에서 지금의 netmap을 읽고, 엔진의 피어·스택의 주인 확인과 같은 계산으로 주인을 정한다. 주소의 주인이 바뀐 연결을 끊는 일(`SwiftailNetstack.md` 동작 X10)과 같은 actor의 같은 netmap 적용에서 일어나므로, 살아 있는 연결의 원격 주소에 대한 답은 그 연결을 맺은 피어의 것이다. 이미 끊긴 연결의 주소를 뒤늦게 물으면 새 주인이 나올 수 있다(동작 B2가 이 틈을 막는다).
 7. 로그에 주소 전체와 로그인 이름을 남기지 않는다.
 
-구현에서 정해진 것(M7-1): 주소 표를 따로 만들지 않고 질의마다 `lastNetmap`을 훑는다(M6의 MagicDNS 이름 찾기와 같다. `shortcut:`으로 남겼다). 같은 주소를 가진 노드가 여럿이면 Go의 표처럼 나중 것(자기 노드 다음에 피어를 node ID 순으로)이 이기고, 이긴 노드가 `StableID`나 프로필이 없으면 다른 노드로 넘어가지 않고 nil이다. `whoIs`는 `TailnetNode` actor의 메서드라 밖에서는 `await`로 부른다. `PeerIdentity`의 init은 `Swiftail` 안에만 있다(값은 `whoIs`가 낸다).
+구현에서 정해진 것(M7-1, 2026-11-17에 W1을 따라 고침): 주소 표를 따로 쥐지 않고 질의마다 `lastNetmap`에서 만든다(M6의 MagicDNS 이름 찾기와 같다. `shortcut:`으로 남겼다). 키 만료는 질의 시각의 벽시계로 본다. 같은 주소를 가진 노드가 여럿이면 엔진이 그 주소를 준 쪽(node ID가 작은 쪽)이고, 그 노드가 `StableID`나 프로필이 없으면 다른 노드로 넘어가지 않고 nil이다. `whoIs`는 `TailnetNode` actor의 메서드라 밖에서는 `await`로 부른다. `PeerIdentity`의 init은 `Swiftail` 안에만 있다(값은 `whoIs`가 낸다).
 
 ### D. 제어 서버의 `set-dns`
 
@@ -733,7 +734,7 @@ sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, "
 
 `Tests/SwiftailTests`:
 
-1. **`whoIs`**: 피어의 IPv4·IPv6 주소, 자기 주소, IPv4-mapped 주소, 없는 주소, netmap 전, `AllowedIPs`에만 있는 주소(서브넷), 프로필이 없는 노드, `StableID`가 빈 노드, 태그 노드, netmap이 바뀐 뒤의 답. `computedName`(동작 W4): 같은 tailnet의 노드(접미사를 뗌), 다른 tailnet에서 공유받은 노드(끝 점 없는 FQDN), 레이블 경계가 아닌 곳에서 접미사가 맞는 이름(`rd-a.xtail0001.ts.net.`은 떼지 않음), 점이 없는 자기 이름, 이름이 빈 노드의 호스트 이름(`.local`·`.localdomain`·`.lan`을 떼고 정리)과 node 키 텍스트. 기대값은 Go `Node.ComputedName`의 결과와 같다(관문 (가) 1).
+1. **`whoIs`**: 피어의 IPv4·IPv6 주소, 자기 주소, IPv4-mapped 주소, 없는 주소, netmap 전, `AllowedIPs`에만 있는 주소(서브넷), 만료된 노드(nil), 주소가 겹친 netmap(그 주소를 AllowedIPs로 가진 피어와 같은 노드), 피어가 자기 주소를 가진 netmap(nil), 프로필이 없는 노드, `StableID`가 빈 노드, 태그 노드, netmap이 바뀐 뒤의 답. `computedName`(동작 W4): 같은 tailnet의 노드(접미사를 뗌), 다른 tailnet에서 공유받은 노드(끝 점 없는 FQDN), 레이블 경계가 아닌 곳에서 접미사가 맞는 이름(`rd-a.xtail0001.ts.net.`은 떼지 않음), 점이 없는 자기 이름, 이름이 빈 노드의 호스트 이름(`.local`·`.localdomain`·`.lan`을 떼고 정리)과 node 키 텍스트. 기대값은 Go `Node.ComputedName`의 결과와 같다(관문 (가) 1).
 
 `Tests/SwiftailControlTests`:
 

@@ -75,7 +75,7 @@ struct StackRemovalTests {
                 from: source, to: Self.server, sequence: 11, acknowledgment: synAck.sequenceNumber.advanced(by: 1),
                 flags: [.ack])
             _ = stack.receive(ack.packet, at: .now)
-            if port == 1_000, let id = stack.accept(from: listener) { accepted.append(id) }
+            if port == 1_000, let id = stack.accept(from: listener, at: .now)?.connection { accepted.append(id) }
         }
         _ = stack.receive(
             peerSegment(from: IPEndpoint(address: peer, port: 2_000), to: Self.server, flags: [.syn]).packet, at: .now)

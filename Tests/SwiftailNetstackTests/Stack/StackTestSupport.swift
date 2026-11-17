@@ -199,10 +199,12 @@ struct StackPair {
         let (clientID, outputs) = try client.connect(to: IPEndpoint(address: address, port: port), at: now)
         collect(outputs, from: .client)
         try deliver()
-        guard let serverID = server.accept(from: listener) else {
+        guard let accepted = server.accept(from: listener, at: now) else {
             throw HarnessError(description: "서버의 대기열이 비었다: \(serverDrops)")
         }
-        return (clientID, serverID)
+        collect(accepted.outputs, from: .server)
+        try deliver()
+        return (clientID, accepted.connection)
     }
 
     mutating func write(_ bytes: [UInt8], to id: TCPStack.ConnectionID, from side: Side) -> Int {
@@ -252,8 +254,8 @@ extension TCPStack {
         let ack = peerSegment(
             from: peer, to: local, sequence: 1_001, acknowledgment: synAck.sequenceNumber.advanced(by: 1), flags: [.ack])
         _ = receive(ack.packet, at: now)
-        guard let id = accept(from: listener) else { throw HarnessError(description: "대기열이 비었다") }
-        return id
+        guard let accepted = accept(from: listener, at: now) else { throw HarnessError(description: "대기열이 비었다") }
+        return accepted.connection
     }
 
     /// 응용이 먼저 `close`하고 상대가 이 쪽 FIN을 확인하며 FIN을 보낸다. 같은 시각의 `advance`로 ACK가 나가면 연결은

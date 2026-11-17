@@ -101,16 +101,18 @@ struct StackLimitTests {
     func acceptQueue() throws {
         var stack = makeServer()
         let listener = try stack.listen(on: 443)
+        // 대기열에서 피어 하나의 몫은 16개라 두 주소로 채운다(`StackPeerGroupTests`).
         for port in UInt16(1_000)..<1_032 {
-            #expect(handshake(&stack, from: IPEndpoint(address: StackHosts.peer(1), port: port)) == [.event(.acceptable(listener))])
+            let address = StackHosts.peer(port < 1_016 ? 1 : 2)
+            #expect(handshake(&stack, from: IPEndpoint(address: address, port: port)) == [.event(.acceptable(listener))])
         }
         #expect(stack.listeners[listener]?.queue.count == 32)
         let peer = IPEndpoint(address: StackHosts.peer(1), port: 2_000)
         let syn = peerSegment(from: peer, to: Self.server, flags: [.syn])
         #expect(stack.receive(syn.packet, at: .now) == [.dropped(.limitReached(.acceptQueue))])
 
-        let popped = stack.accept(from: listener)
-        let first = try #require(popped)
+        let popped = stack.accept(from: listener, at: .now)
+        let first = try #require(popped?.connection)
         #expect(stack.connection(first)?.remoteEndpoint.port == 1_000)
         #expect(handshake(&stack, from: peer) == [.event(.acceptable(listener))])
         expectStackInvariants(stack)
@@ -121,7 +123,7 @@ struct StackLimitTests {
         var stack = makeServer()
         let listener = try stack.listen(on: 443)
         for port in UInt16(1_000)..<1_020 {
-            _ = handshake(&stack, from: IPEndpoint(address: StackHosts.peer(1), port: port))
+            _ = handshake(&stack, from: IPEndpoint(address: StackHosts.peer(port < 1_010 ? 1 : 20), port: port))
         }
         for host in UInt8(2)...13 {
             let syn = peerSegment(from: IPEndpoint(address: StackHosts.peer(host), port: 1_000), to: Self.server, flags: [.syn])

@@ -68,7 +68,7 @@ struct StackResetTests {
         #expect(stack.connections.isEmpty)
     }
 
-    @Test("리스너에 온 ACK에는 <SEQ=SEG.ACK><CTL=RST>, SYN도 ACK도 RST도 없으면 버린다")
+    @Test("리스너에 온 ACK에는 <SEQ=SEG.ACK><CTL=RST>, SYN도 ACK도 RST도 없으면 듣지 않는 포트처럼 <RST,ACK>로 답한다")
     func listenerRules() throws {
         var stack = try makeStack()
         let ack = peerSegment(from: Self.peer, to: Self.listening, acknowledgment: SequenceNumber(4_321), flags: [.ack])
@@ -80,9 +80,10 @@ struct StackResetTests {
         let synAck = peerSegment(from: Self.peer, to: Self.listening, acknowledgment: SequenceNumber(10), flags: [.syn, .ack])
         #expect(stack.receive(synAck.packet, at: .now).segments.map(\.flags) == [[.rst]])
 
+        // 듣지 않는 포트와 같은 답이어야 한다(`StackListenProbeTests`).
         for flags: TCPSegment.Flags in [[], [.fin], [.psh]] {
             let stray = peerSegment(from: Self.peer, to: Self.listening, flags: flags, payload: [1])
-            #expect(stack.receive(stray.packet, at: .now).isEmpty)
+            #expect(stack.receive(stray.packet, at: .now).segments.map(\.flags) == [[.rst, .ack]])
         }
         #expect(stack.connections.isEmpty)
     }

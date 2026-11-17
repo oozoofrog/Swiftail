@@ -38,6 +38,19 @@ extension TCPConnection {
         return (bytes, outputs)
     }
 
+    /// 받는 창의 상한을 버퍼의 용량으로 올리고, 맺어진 연결이면 새 창을 곧바로 알린다(창 갱신 ACK). 스택이 리스너의
+    /// 대기열에서 연결을 꺼내 응용에 넘길 때 부른다(`receiveWindowLimit`, 계약 동작 M).
+    package mutating func openReceiveWindow(at now: ContinuousClock.Instant) -> [Output] {
+        receiveWindowLimit = receiveBuffer.capacity
+        var outputs: [Output] = []
+        guard state != .closed else { return outputs }
+        if state == .established, windowUpdateIsDue {
+            scheduleAcknowledgment(immediately: true, at: now)
+        }
+        completeCall(at: now, into: &outputs)
+        return outputs
+    }
+
     /// 보내기를 끝낸다(반닫힘). 보내는 버퍼가 비면 FIN이 나간다: ESTABLISHED → FIN-WAIT-1, CLOSE-WAIT → LAST-ACK.
     /// 읽기는 계속할 수 있다. 맺어지기 전에 부르면 맺어진 뒤에 나간다.
     package mutating func finishWriting(at now: ContinuousClock.Instant) -> [Output] {

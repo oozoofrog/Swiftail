@@ -7,7 +7,8 @@ import SwiftailBase
 /// 자기 주소 목록의 갱신이다. 출력은 내보낼 IP 패킷, 사건, 버린 것(`Output`)이고 낸 순서대로 처리해야 한다(계약 동작 S10).
 ///
 /// 노드가 부르는 순서:
-/// 1. 만든 뒤 `setLocalAddresses(_:)`로 자기 tailnet 주소를 넘긴다(netmap을 적용할 때마다 다시).
+/// 1. 만든 뒤 `setLocalAddresses(_:)`로 자기 tailnet 주소를, `setRemoteAddressGroups(_:)`로 피어별 상대 주소 묶음을
+///    넘긴다(netmap을 적용할 때마다 다시).
 /// 2. 받은 패킷 묶음을 하나씩 `receive(_:at:)`에 넣고, 묶음이 끝나면 **같은 시각으로 `advance(to:)`를 부른다**. 곧바로 보낼
 ///    ACK(순서가 어긋난 데이터 등)는 그 패킷의 `receive` 출력으로 나오고, 순서대로 온 데이터의 ACK만 2×MSS마다 하나로
 ///    합쳐진다(계약 동작 F5).
@@ -109,13 +110,16 @@ package struct TCPStack: Sendable {
     package enum Limit: Sendable, Equatable {
         /// 맺는 중인 연결 64개(스택 전체).
         case halfOpenConnections
-        /// 맺는 중인 연결 16개(상대 주소 하나).
+        /// 맺는 중인 연결 16개(상대 피어 하나. 피어의 주소들을 함께 센다, `setRemoteAddressGroups(_:)`).
         case halfOpenConnectionsPerAddress
         /// 리스너 하나의 accept 대기열 32개(맺는 중인 것을 함께 센다).
         case acceptQueue
+        /// 리스너 하나의 accept 대기열에서 상대 피어 하나가 쥘 수 있는 16개(맺는 중인 것을 함께 센다). 한 피어가 대기열을
+        /// 다 채워 다른 피어의 SYN을 막지 못하게 한다.
+        case acceptQueueShare
         /// 연결 256개(스택 전체).
         case connections
-        /// 연결 64개(상대 주소 하나). 한 피어가 256개를 채워 다른 피어를 막지 못하게 한다(M6 검토 A).
+        /// 연결 64개(상대 피어 하나). 한 피어가 256개를 채워 다른 피어를 막지 못하게 한다(M6 검토 A).
         case connectionsPerAddress
         /// TIME-WAIT 기록 1,024개(스택 전체).
         case timeWaitRecords
@@ -133,17 +137,23 @@ package struct TCPStack: Sendable {
     package enum ConnectError: Error, Sendable, Equatable {
         /// 목적지와 같은 계열의 자기 주소가 없다(계약 동작 S8. 노드는 `unknownHost`로 알린다).
         case noLocalAddress
-        /// 연결이 256개이거나, 그 상대 주소의 연결이 64개이거나, TIME-WAIT 기록이 1,024개이거나, 그 목적지로 쓸 나가는
+        /// 연결이 256개이거나, 그 상대 피어의 연결이 64개이거나, TIME-WAIT 기록이 1,024개이거나, 그 목적지로 쓸 나가는
         /// 포트가 없다.
         case limitReached
     }
 
     // MARK: 상한 (계약 동작 M)
+    //
+    // 이름이 `PerAddress`인 상한은 상대 피어 하나의 몫이다. 피어의 주소들(IPv4·IPv6)을 함께 세고, 노드가 피어의 것으로 알려
+    // 주지 않은 주소는 그 주소 하나가 한 몫이다(`setRemoteAddressGroups(_:)`).
 
     static let maximumListeners = 16
     static let maximumHalfOpenConnections = 64
     static let maximumHalfOpenConnectionsPerAddress = 16
     static let maximumAcceptQueueLength = 32
+    /// 리스너 하나의 accept 대기열(맺는 중인 것 포함)에서 상대 피어 하나가 쥘 수 있는 수. 대기열의 절반이고 피어 하나의
+    /// 맺는 중 상한과 같다.
+    static let maximumAcceptQueueShare = maximumAcceptQueueLength / 2
     static let maximumConnections = 256
     static let maximumConnectionsPerAddress = 64
     static let maximumTimeWaitRecords = 1_024
@@ -159,14 +169,17 @@ package struct TCPStack: Sendable {
     /// `insertConnection(_:)`과 `removeConnection(_:)`으로만 넣고 뺀다(상대 주소별 수가 어긋나지 않게). 항목의 값은 제자리에서
     /// 고친다.
     var connections: [ConnectionID: ConnectionEntry] = [:]
-    /// 상대 주소별 연결 수(`connections`의 항목 수). 주소 하나에 64개까지다.
+    /// 상대 주소별 연결 수(`connections`의 항목 수). 상한(64)은 피어의 주소들을 합쳐서 본다.
     private(set) var connectionCountByAddress: [IPAddress: Int] = [:]
+    /// 상대 주소 → 상한을 함께 세는 묶음(피어 하나)의 주소들. 노드가 netmap마다 넘긴다(`setRemoteAddressGroups(_:)`).
+    /// 여기에 없는 주소는 그 주소 하나가 한 묶음이다.
+    private(set) var remoteAddressGroups: [IPAddress: [IPAddress]] = [:]
     /// 4-튜플 → 연결. TCP가 끝난(TIME-WAIT 기록으로 옮겼거나 닫힌) 연결은 여기서 빠진다.
     var connectionsByTuple: [FourTuple: ConnectionID] = [:]
     /// 연결마다의 `nextDeadline`. 연결을 움직일 때마다 고친다(기한 찾기가 연결의 타이머를 다시 훑지 않게).
     var connectionDeadlines: [ConnectionID: ContinuousClock.Instant] = [:]
-    /// TIME-WAIT 기록. 1,024개까지이고 기한 전에 버리지 않는다(계약 동작 S6). 다만 상대 주소 하나의 기록이 64개를 넘으면
-    /// 그 주소의 가장 오래된 기록을 지운다(M6 검토 A). 아래 "TIME-WAIT 기록"의 함수로만 고친다.
+    /// TIME-WAIT 기록. 1,024개까지이고 기한 전에 버리지 않는다(계약 동작 S6). 다만 상대 피어 하나의 기록이 64개를 넘으면
+    /// 그 피어의 가장 오래된 기록을 지운다(M6 검토 A). 아래 "TIME-WAIT 기록"의 함수로만 고친다.
     private(set) var timeWaitRecords: [FourTuple: TimeWaitRecord] = [:]
     /// 상대 주소별 TIME-WAIT 기록의 4-튜플. 만든 순서이고 `timeWaitRecords`와 같은 기록을 가리킨다.
     private(set) var timeWaitTuplesByAddress: [IPAddress: [FourTuple]] = [:]
@@ -174,7 +187,7 @@ package struct TCPStack: Sendable {
     private(set) var earliestTimeWaitDeadline: ContinuousClock.Instant?
     var listeners: [ListenerID: Listener] = [:]
     var listenersByPort: [UInt16: ListenerID] = [:]
-    /// SYN-RECEIVED인 연결 수(스택 전체, 상대 주소별).
+    /// SYN-RECEIVED인 연결 수(스택 전체, 상대 주소별). 상대 하나의 상한(16)은 피어의 주소들을 합쳐서 본다.
     var halfOpenCount = 0
     var halfOpenCountByAddress: [IPAddress: Int] = [:]
     /// 다음에 줄 ID. 연결과 리스너가 함께 쓴다.
@@ -269,9 +282,42 @@ extension TCPStack {
         }
     }
 
-    /// 상대 주소 `address`의 연결이 64개다. 새 SYN과 `connect`를 받지 않는다.
+    /// 상대 주소 `address`를 가진 피어의 연결이 64개다. 새 SYN과 `connect`를 받지 않는다.
     func isConnectionLimitReached(for address: IPAddress) -> Bool {
-        connectionCountByAddress[address, default: 0] >= Self.maximumConnectionsPerAddress
+        let count = addressesSharingLimits(with: address).reduce(0) { $0 + connectionCountByAddress[$1, default: 0] }
+        return count >= Self.maximumConnectionsPerAddress
+    }
+}
+
+// MARK: - 상대 주소의 묶음
+
+extension TCPStack {
+    /// 상대 주소를 피어별로 묶는다. 노드가 netmap을 적용할 때마다 자기 주소와 함께 넘긴다(계약 동작 S의 "피어 하나의 몫").
+    ///
+    /// 상대 하나의 몫으로 둔 상한(연결 64, 맺는 중 16, 리스너 대기열의 몫 16, TIME-WAIT 기록 64)은 같은 묶음의 주소를
+    /// 합쳐서 센다. 주소별로만 세면 IPv4·IPv6 주소를 가진 피어 하나가 몫을 두 번 쥔다. 수는 주소별로 적어 두고 볼 때 합치므로,
+    /// 묶음이 바뀌어도 고칠 것이 없다.
+    ///
+    /// - Parameter groups: 상대 주소 → 묶음의 이름. 같은 값을 가진 주소끼리 한 묶음이다. 값의 뜻은 스택이 모른다(노드는
+    ///   그 주소를 가진 피어의 node ID를 넘긴다). 여기에 없는 주소는 그 주소 하나가 한 묶음이다.
+    package mutating func setRemoteAddressGroups(_ groups: [IPAddress: Int]) {
+        var members: [Int: [IPAddress]] = [:]
+        for (address, group) in groups {
+            members[group, default: []].append(address)
+        }
+        remoteAddressGroups = [:]
+        for addresses in members.values where addresses.count > 1 {
+            // 차례를 정해 둔다(같은 입력에 같은 기록을 지우게).
+            let sorted = addresses.sorted { $0.bytes.lexicographicallyPrecedes($1.bytes) }
+            for address in sorted {
+                remoteAddressGroups[address] = sorted
+            }
+        }
+    }
+
+    /// `address`와 상한을 함께 세는 상대 주소들(`address` 포함).
+    func addressesSharingLimits(with address: IPAddress) -> [IPAddress] {
+        remoteAddressGroups[address] ?? [address]
     }
 }
 
@@ -280,15 +326,22 @@ extension TCPStack {
 extension TCPStack {
     /// 기록을 더한다. 4-튜플의 연결은 이미 표에서 빠졌어야 하고, 그 4-튜플의 기록은 없어야 한다.
     ///
-    /// 상대 주소의 기록이 이미 64개면 그 주소의 가장 오래된 기록을 먼저 지운다. 기한 전에 버리지 않는다는 동작 S6의 예외이고,
+    /// 상대 피어의 기록이 이미 64개면 그 피어의 가장 오래된 기록을 먼저 지운다. 기한 전에 버리지 않는다는 동작 S6의 예외이고,
     /// 영향은 그 피어 자신의 옛 연결에만 간다(그 4-튜플의 늦은 세그먼트에는 RST로 답하게 된다). 한 피어가 기록 1,024개를 채워
-    /// 다른 피어의 SYN과 `connect`를 막지 못하게 한다(M6 검토 A).
+    /// 다른 피어의 SYN과 `connect`를 막지 못하게 한다(M6 검토 A). 피어의 주소들을 합쳐 세고, 가장 오래된 것은 주소마다의 첫
+    /// 기록(만든 순서) 가운데 TIME-WAIT에 먼저 든 것(`lifetimeEnd`가 이른 것)이다.
     mutating func addTimeWaitRecord(_ record: TimeWaitRecord, for tuple: FourTuple) {
         let address = tuple.remote.address
-        if let sameAddress = timeWaitTuplesByAddress[address],
-            sameAddress.count >= Self.maximumTimeWaitRecordsPerAddress
-        {
-            let evicted = forgetTimeWaitRecord(sameAddress[0])
+        let tupleLists = addressesSharingLimits(with: address).compactMap { timeWaitTuplesByAddress[$0] }
+        if tupleLists.reduce(0, { $0 + $1.count }) >= Self.maximumTimeWaitRecordsPerAddress {
+            var oldest: (tuple: FourTuple, lifetimeEnd: ContinuousClock.Instant)?
+            for tuples in tupleLists {
+                guard let first = tuples.first, let lifetimeEnd = timeWaitRecords[first]?.lifetimeEnd else { continue }
+                if oldest.map({ lifetimeEnd < $0.lifetimeEnd }) ?? true {
+                    oldest = (first, lifetimeEnd)
+                }
+            }
+            let evicted = oldest.flatMap { forgetTimeWaitRecord($0.tuple) }
             if evicted?.deadline == earliestTimeWaitDeadline {
                 earliestTimeWaitDeadline = timeWaitRecords.values.lazy.map(\.deadline).min()
             }

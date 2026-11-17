@@ -43,27 +43,31 @@ extension TCPStack {
 
     // MARK: LISTEN (RFC 9293 3.10.7.2)
 
-    /// 리스너에 온 세그먼트. 차례로: RST는 무시, ACK가 있으면 `<SEQ=SEG.ACK><CTL=RST>`, SYN이면 상한을 본 뒤 연결을 만든다,
-    /// 그 밖은 버린다. SYN의 보안·구획 검사(같은 절 셋째)는 쓰지 않는다.
+    /// 리스너에 온 세그먼트. SYN만 있는 세그먼트(ACK·RST 없음)면 상한을 본 뒤 연결을 만든다. SYN의 보안·구획 검사(같은 절
+    /// 셋째)는 쓰지 않는다.
     ///
-    /// 상한(계약 동작 S4~S6, X7, 상대 주소 하나의 연결 64개)에 닿은 SYN은 응답 없이 버린다. 상대는 SYN을 다시 보낸다.
+    /// 그 밖의 세그먼트에는 듣지 않는 포트와 똑같이 답한다(`reset(answering:)`): RST는 무시, ACK가 있으면
+    /// `<SEQ=SEG.ACK><CTL=RST>`, 둘 다 없으면 `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>`. 마지막 것은 RFC 9293
+    /// 3.10.7.2 넷째("버린다")와 다르다: 수신 필터가 SYN만 규칙에 견주므로(계약 동작 X), 조용히 버리면 ACL이 막은 피어가
+    /// FIN만 든 세그먼트의 답이 있고 없음으로 듣는 포트를 가려낸다.
+    ///
+    /// 상한(계약 동작 S4~S6, X7, 상대 피어 하나의 연결 64개와 대기열 몫 16개)에 닿은 SYN은 응답 없이 버린다. 상대는 SYN을
+    /// 다시 보낸다.
     private mutating func receiveInListen(
         _ segment: TCPSegment, listener listenerID: ListenerID, at now: ContinuousClock.Instant,
         into outputs: inout [Output]
     ) {
         let flags = segment.flags
-        if flags.contains(.rst) { return }
-        if flags.contains(.ack) {
-            append(
-                TCPSegment(
-                    source: segment.destination, destination: segment.source,
-                    sequenceNumber: segment.acknowledgmentNumber, flags: [.rst]),
-                to: &outputs)
+        guard flags.contains(.syn), !flags.contains(.ack), !flags.contains(.rst), let listener = listeners[listenerID]
+        else {
+            if let reset = Self.reset(answering: segment) {
+                append(reset, to: &outputs)
+            }
             return
         }
-        guard flags.contains(.syn), let listener = listeners[listenerID] else { return }
 
         let remoteAddress = segment.source.address
+        let peerAddresses = addressesSharingLimits(with: remoteAddress)
         let exceeded: Limit? =
             if connections.count >= Self.maximumConnections {
                 .connections
@@ -73,10 +77,14 @@ extension TCPStack {
                 .timeWaitRecords
             } else if halfOpenCount >= Self.maximumHalfOpenConnections {
                 .halfOpenConnections
-            } else if halfOpenCountByAddress[remoteAddress, default: 0] >= Self.maximumHalfOpenConnectionsPerAddress {
+            } else if peerAddresses.reduce(0, { $0 + halfOpenCountByAddress[$1, default: 0] })
+                >= Self.maximumHalfOpenConnectionsPerAddress
+            {
                 .halfOpenConnectionsPerAddress
             } else if listener.queue.count + listener.halfOpenCount >= Self.maximumAcceptQueueLength {
                 .acceptQueue
+            } else if pendingConnectionCount(of: listenerID, from: peerAddresses) >= Self.maximumAcceptQueueShare {
+                .acceptQueueShare
             } else {
                 nil
             }
@@ -89,7 +97,9 @@ extension TCPStack {
             local: segment.destination, remote: segment.source, at: now)
         let opened: (connection: TCPConnection, outputs: [TCPConnection.Output])
         do {
-            opened = try TCPConnection.accept(segment, initialSequenceNumber: initialSequenceNumber, at: now)
+            opened = try TCPConnection.accept(
+                segment, initialSequenceNumber: initialSequenceNumber,
+                receiveWindowLimit: TCPConnection.unacceptedReceiveWindow, at: now)
         } catch {
             // 상대 MSS가 64보다 작으면 그 SYN에 RST로 답한다(계약 동작 X9). notInitialSYN은 위에서 걸렀다.
             if case .unacceptableMaximumSegmentSize(let reset) = error {
@@ -103,6 +113,16 @@ extension TCPStack {
         halfOpenCountByAddress[remoteAddress, default: 0] += 1
         listeners[listenerID]?.halfOpenCount += 1
         process(opened.outputs, of: id, at: now, into: &outputs)
+    }
+
+    /// 리스너 `listenerID`의 대기열과 맺는 중인 연결 가운데 상대 주소가 `addresses`에 드는 것의 수.
+    // shortcut: SYN마다 연결 표(256개까지)를 훑는다. 리스너마다 피어별 수를 따로 적으면 옮기고 지우는 길마다 맞춰야 한다.
+    // 필요해지는 시점: 연결 상한을 크게 올릴 때.
+    private func pendingConnectionCount(of listenerID: ListenerID, from addresses: [IPAddress]) -> Int {
+        connections.values.lazy.filter { entry in
+            (entry.role == .halfOpen(listenerID) || entry.role == .queued(listenerID))
+                && addresses.contains(entry.connection.remoteEndpoint.address)
+        }.count
     }
 
     // MARK: 연결 없는 곳 (RFC 9293 3.10.7.1)

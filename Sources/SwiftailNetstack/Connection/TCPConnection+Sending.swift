@@ -222,7 +222,7 @@ extension TCPConnection {
     /// (SHLD-14). 내림 탓에 필드가 가리키는 끝이 전보다 앞이어도 전에 광고한 끝까지는 받는다(RFC 7323 2.4).
     mutating func advertisedWindowField() -> UInt16 {
         let receiveNext = self.receiveNext
-        let candidateEnd = receiveBuffer.windowEnd
+        let candidateEnd = receiveWindowEnd
         let threshold = min(receiveBuffer.capacity / 2, sendMaximumSegmentSize)
         if Int(candidateEnd.distance(from: advertisedWindowEnd)) >= threshold {
             let span = max(0, Int(candidateEnd.distance(from: receiveNext)))
@@ -246,6 +246,12 @@ extension TCPConnection {
         let remaining = Int(advertisedWindowEnd.distance(from: receiveNext))
         guard remaining <= receiveBuffer.capacity / 2 else { return false }
         let threshold = min(receiveBuffer.capacity / 2, sendMaximumSegmentSize)
-        return Int(receiveBuffer.windowEnd.distance(from: advertisedWindowEnd)) >= threshold
+        return Int(receiveWindowEnd.distance(from: advertisedWindowEnd)) >= threshold
+    }
+
+    /// 지금 광고할 수 있는 창의 오른쪽 끝: 버퍼의 남은 자리와 `receiveWindowLimit`이 함께 허락하는 데까지.
+    private var receiveWindowEnd: SequenceNumber {
+        let limit = min(receiveBuffer.capacity, receiveWindowLimit)
+        return receiveBuffer.nextSequence.advanced(by: UInt32(max(0, limit - receiveBuffer.readableCount)))
     }
 }

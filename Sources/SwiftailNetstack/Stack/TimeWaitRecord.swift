@@ -2,7 +2,7 @@
 ///
 /// 먼저 닫은 쪽은 TIME-WAIT에 머물며 상대의 FIN 재전송에 ACK하고, 앞 연결의 늦은 세그먼트가 같은 4-튜플의 새 연결에
 /// 섞이지 않게 한다(RFC 9293 3.6.1, MUST-13). 버퍼를 쥔 연결을 60초씩 두지 않으려고 4-튜플(표의 열쇠)과 시퀀스 번호 둘,
-/// 기한만 남긴다. 기록은 기한 전에 버리지 않는다(상대 주소별 상한을 넘을 때의 예외는 `TCPStack.addTimeWaitRecord`).
+/// 기한만 남긴다. 기록은 기한 전에 버리지 않는다(상대 피어별 상한을 넘을 때의 예외는 `TCPStack.addTimeWaitRecord`).
 struct TimeWaitRecord: Sendable, Equatable {
     /// SND.NXT: 이 쪽 FIN의 다음 번호.
     var sendNext: SequenceNumber
