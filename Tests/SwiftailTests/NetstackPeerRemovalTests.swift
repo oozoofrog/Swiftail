@@ -41,6 +41,38 @@ struct NetstackPeerRemovalTests {
         }
     }
 
+    @Test("앞 주인의 키가 만료되어 주소가 다른 노드로 넘어가면, 새 netmap이 없어도 그 연결이 끝나고 whoIs와 스택의 주인이 함께 바뀐다")
+    func ownerKeyExpires() async throws {
+        var low = WhoIsTestSupport.phone
+        low.stableID = "nStableLow"
+        var high = WhoIsTestSupport.phone
+        high.id = 5
+        high.stableID = "nStableHigh"
+        high.key = 0x55
+        let (owner, heir) = (low, high)
+        let stableIDs = [
+            NodeTestSupport.nodeKey(low.key): "nStableLow", NodeTestSupport.nodeKey(high.key): "nStableHigh",
+        ]
+        try await Support.withRunningNode(try WhoIsTestSupport.netmap(peers: [owner, heir])) { node in
+            let address = try #require(IPAddress("100.64.0.2"))
+            // 주인(node ID가 작은 쪽)의 키가 곧 만료되는 netmap. 주인은 그대로라 이 적용은 연결을 건드리지 않는다.
+            var expiring = owner
+            expiring.keyExpiry = Date().addingTimeInterval(2)
+            await node.apply(try WhoIsTestSupport.netmap(peers: [expiring, heir]))
+            let connector = try await Self.pendingConnect(node)
+            #expect(await node.ownerViews(of: address).identity == "nStableLow")
+
+            // 만료 시각이 지나 엔진이 피어를 바꿀 때까지 본다. 그동안 whoIs의 답은 늘 스택이 쥔 주인의 것이다.
+            try await Support.waitUntil("키 만료가 처리됨") {
+                let views = await node.ownerViews(of: address)
+                #expect(views.identity == views.stackOwner.flatMap { stableIDs[$0.description] })
+                return views.identity == "nStableHigh"
+            }
+            try await Support.waitUntil("옛 주인의 연결이 끝남") { await !node.isConnecting }
+            #expect(await Support.error { try await connector.value } == .peerRemoved)
+        }
+    }
+
     @Test("주인이 그대로인 netmap은 연결을 건드리지 않는다")
     func unchangedOwnerKeepsConnection() async throws {
         try await Support.withRunningNode(try Support.netmap(peers: [Support.phone])) { node in
@@ -68,5 +100,12 @@ struct NetstackPeerRemovalTests {
             await pair.server.close()
             #expect(await node.trackedConnectionCount == 0)
         }
+    }
+}
+
+extension TailnetNode {
+    /// 한 번의 actor 실행에서 본 `whoIs`의 답(`StableID`)과 스택이 그 주소의 주인으로 쥔 키.
+    func ownerViews(of address: IPAddress) -> (identity: String?, stackOwner: NodePublicKey?) {
+        (whoIs(address)?.stableID, netstack?.addressOwners[address])
     }
 }

@@ -219,20 +219,29 @@ extension TailnetNode {
 
     // MARK: netmap (동작 N7, S9, X10)
 
-    /// netmap을 적용할 때마다 부른다. 자기 주소를 스택에 넘기고, 데이터면 피어의 주소마다 주인(node 키)을 견주어 주인이
-    /// 없어지거나 바뀐 주소의 연결을 끊는다(`peerRemoved`, 아무것도 보내지 않는다). 주소를 물려받은 다른 노드가 앞 노드의
-    /// 연결을 이어 쓰는 것을 막는다(계약 총괄 확정 N8). 같은 표에서 피어별 주소 묶음도 넘겨, 스택이 피어 하나의 몫을 그
-    /// 피어의 주소들(IPv4·IPv6)에 걸쳐 세게 한다.
+    /// 엔진이 피어를 다시 계산할 때마다 부른다: netmap을 적용할 때, 그리고 키 만료를 처리했을 때(새 netmap 없이 주소의
+    /// 주인이 바뀐다). 주인 표를 엔진이 피어와 함께 만든 것으로 바꾸고 스택에 넘긴다. `whoIs`와 스택이 같은 때의 같은 표를
+    /// 보므로, 살아 있는 연결의 원격 주소에 대한 `whoIs`의 답은 그 연결을 맺은 피어의 것이다(호스트 계약 동작 W6).
+    ///
+    /// 엔진이 없으면(등록 전) 데이터면도 없다. 같은 계산을 netmap에서 직접 한다.
+    func updateAddressOwners(for netmap: Netmap) {
+        addressOwners = engine?.addressOwners ?? EnginePeer.addressOwners(in: netmap, at: Date())
+        updateNetstack(for: netmap)
+    }
+
+    /// 주인 표(`addressOwners`)가 바뀔 때마다 부른다. 자기 주소를 스택에 넘기고, 데이터면 피어의 주소마다 주인(node 키)을
+    /// 견주어 주인이 없어지거나 바뀐 주소의 연결을 끊는다(`peerRemoved`, 아무것도 보내지 않는다). 주소를 물려받은 다른 노드가
+    /// 앞 노드의 연결을 이어 쓰는 것을 막는다(계약 총괄 확정 N8). 같은 표에서 피어별 주소 묶음도 넘겨, 스택이 피어 하나의
+    /// 몫을 그 피어의 주소들(IPv4·IPv6)에 걸쳐 세게 한다.
     ///
     /// 피어의 패킷은 그 피어의 AllowedIPs로 출발지를 검사받으므로(엔진 계약 M3 동작 2·5), 한 주소의 연결은 모두 그때의 주인과
     /// 맺은 것이다. 그래서 연결마다 키를 적지 않고 주소마다의 주인을 견준다. 맺는 중이거나 대기열에 있는 연결도 함께 끊긴다.
-    func updateNetstack(for netmap: Netmap) {
+    private func updateNetstack(for netmap: Netmap) {
         guard netstack != nil else { return }
-        let ownerNodes = EnginePeer.addressOwners(in: netmap, at: Date())
-        let owners = ownerNodes.mapValues(\.key)
+        let owners = addressOwners.mapValues(\.key)
         let previous = netstack?.addressOwners ?? [:]
         netstack?.addressOwners = owners
-        netstack?.stack.setRemoteAddressGroups(ownerNodes.mapValues { Int(truncatingIfNeeded: $0.id) })
+        netstack?.stack.setRemoteAddressGroups(addressOwners.mapValues { Int(truncatingIfNeeded: $0.id) })
 
         let localAddresses = netmap.selfNode.addresses.filter(\.isSingleAddress).map(\.address)
         var outputs = netstack?.stack.setLocalAddresses(localAddresses) ?? []
@@ -270,7 +279,7 @@ typealias Wakeup = AsyncStream<Void>.Continuation
 /// `.inProcess` 장치에서 `run()` 동안 노드가 쥐는 TCP 상태.
 struct Netstack: Sendable {
     var stack: TCPStack
-    /// 데이터면 피어의 tailnet 주소 → 그 주소의 주인. netmap마다 견준다(동작 X10).
+    /// 데이터면 피어의 tailnet 주소 → 그 주소의 주인. 노드의 주인 표가 바뀔 때마다 견준다(동작 X10).
     var addressOwners: [IPAddress: NodePublicKey] = [:]
     /// 응용이 쥔 연결과 거는 중인 연결. 응용이 `close`·`abort`하거나 핸들이 버려지면 지운다.
     var connections: [TCPStack.ConnectionID: ConnectionRecord] = [:]

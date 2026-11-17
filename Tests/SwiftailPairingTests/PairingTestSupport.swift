@@ -41,6 +41,31 @@ enum Sample {
         try #require(DeviceName(text))
     }
 
+    /// 여는 쪽이 `challenge`에 싣는 약속 commitH.
+    static let hostCommitment = PairingTranscript.commitment(toHostNonce: hostNonce)
+
+    /// `Sample`의 값으로 만든 P. 들어오는 쪽의 nonce, 제안, 연결의 두 끝은 바꿀 수 있다.
+    static func proofTranscript(
+        joinerNonce: [UInt8] = joinerNonce, offer: PairingOffer = offer(), endpoints: PairingEndpoints? = nil
+    ) throws -> PairingProofTranscript {
+        PairingProofTranscript(
+            joinerNonce: joinerNonce, hostCommitment: hostCommitment, offerHost: offer.host, offerPort: offer.port,
+            deviceName: Array("rd-phone-5e6f7a8b".utf8), endpoints: try endpoints ?? Sample.endpoints())
+    }
+
+    /// 같은 값으로 만든 T(여는 쪽의 nonce까지 열린 뒤).
+    static func transcript(
+        joinerNonce: [UInt8] = joinerNonce, offer: PairingOffer = offer(), endpoints: PairingEndpoints? = nil
+    ) throws -> PairingTranscript {
+        try #require(
+            try proofTranscript(joinerNonce: joinerNonce, offer: offer, endpoints: endpoints).opened(with: hostNonce))
+    }
+
+    /// 여는 쪽이 `Sample`의 값으로 보낼 `accepted`: 열어 보인 nonceH와 T의 HMAC.
+    static func accepted() throws -> [UInt8] {
+        hostNonce + (try transcript()).accepted(secret: secret)
+    }
+
     /// 시험이 만들고 지우는 빈 임시 디렉터리의 자리(만들지는 않는다).
     static func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory.appending(path: "swiftail-pairing-\(UUID().uuidString)")

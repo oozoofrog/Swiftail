@@ -15,6 +15,10 @@ import SwiftailCrypto
 ///
 /// 제안은 한 번에 하나이고 한 번만 쓰인다. 맞는 `proof`가 온 그 자리에서 지운다(P4). 틀린 `proof`는 제안을 건드리지
 /// 않는다(P3): 비밀이 256비트라 시도로 맞힐 수 없고, 틀린 시도로 태우면 tailnet의 아무 피어나 제안을 못 쓰게 만들 수 있다.
+///
+/// 이 연결의 nonce는 `challenge`에 약속으로만 나가고, `proof`가 맞아 제안을 지운 뒤에야 `accepted`로 나간다. 확인 숫자는
+/// 그 nonce 없이는 계산할 수 없으므로, 제안의 비밀을 아는 쪽도 숫자를 보려면 제안을 써야 한다(숫자를 고르려고 다시 걸 수
+/// 없다).
 struct PairingHostMachine: Sendable {
     typealias SessionID = UInt64
     typealias Instant = ContinuousClock.Instant
@@ -91,8 +95,11 @@ struct PairingHostMachine: Sendable {
         /// 연결을 받았을 때의 상대 신원(P1).
         let peer: PeerIdentity
         let endpoints: PairingEndpoints
-        /// 이 연결에 쓸 여는 쪽의 nonce.
+        /// 이 연결에 쓸 여는 쪽의 nonce. `challenge`에는 그 약속만 싣고, `proof`가 맞은 뒤 `accepted`에서 연다.
         let nonce: [UInt8]
+
+        /// `challenge`에 싣는 약속 commitH.
+        var commitment: [UInt8] { PairingTranscript.commitment(toHostNonce: nonce) }
         let acceptedAt: Instant
         var phase: Phase
     }
@@ -125,7 +132,7 @@ struct PairingHostMachine: Sendable {
     ///
     /// - Parameters:
     ///   - peer: 원격 주소의 `whoIs`. 모르면 읽지 않고 닫는다.
-    ///   - nonce: 이 연결에 쓸 난수 32바이트.
+    ///   - nonce: 이 연결에 쓸 난수 32바이트. 맞는 `proof`가 올 때까지 밖으로 내지 않는다.
     ///   - now: 연결을 받은 때. `proof`의 기한을 여기서부터 잰다.
     mutating func accept(
         _ id: SessionID, from peer: PeerIdentity?, endpoints: PairingEndpoints, nonce: [UInt8], at now: Instant
@@ -158,12 +165,12 @@ struct PairingHostMachine: Sendable {
             case .complete(let hello, let length) where length == buffer.count:
                 // P2: 제안이 없거나 만료됐으면 hello를 다 읽은 뒤에 알리고 닫는다.
                 guard let offer = usableOffer(at: wallClock) else {
-                    let challenge = PairingMessage.Challenge(status: .noOffer, nonce: session.nonce)
+                    let challenge = PairingMessage.Challenge(status: .noOffer, commitment: session.commitment)
                     return [.send(challenge.encoded)] + finish(id, .noOffer)
                 }
                 session.phase = .proof(buffer: [], hello: hello, offerSerial: offer.serial)
                 sessions[id] = session
-                return [.send(PairingMessage.Challenge(status: .proceed, nonce: session.nonce).encoded)]
+                return [.send(PairingMessage.Challenge(status: .proceed, commitment: session.commitment).encoded)]
             case .complete, .invalid:
                 return finish(id, .malformed)
             }
@@ -175,24 +182,24 @@ struct PairingHostMachine: Sendable {
                 sessions[id] = session
                 return []
             }
-            // P3: 연 nonceJ가 `hello`의 약속과 맞아야 한다. 이 연결의 nonceH를 본 뒤에 고른 nonce는 여기서 걸린다.
+            // P3: 연 nonceJ가 `hello`의 약속과 맞아야 한다. `challenge`를 본 뒤에 고른 nonce는 여기서 걸린다.
             // 약속은 공개된 값이라 상수 시간으로 견줄 까닭이 없다.
             guard let proof = PairingMessage.Proof(buffer),
-                  PairingTranscript.commitment(to: proof.nonce) == hello.commitment
+                  PairingTranscript.commitment(toJoinerNonce: proof.nonce) == hello.commitment
             else { return finish(id, .malformed) }
             // 그 사이 제안이 닫혔거나, 바뀌었거나, 다른 연결이 썼거나, 만료됐으면 아무것도 보내지 않고 닫는다.
             guard let offer = usableOffer(at: wallClock), offer.serial == offerSerial else {
                 return finish(id, .noOffer)
             }
             let secret = offer.offer.secret
-            let transcript = PairingTranscript(
-                joinerNonce: proof.nonce, hostNonce: session.nonce, offerHost: offer.offer.host,
+            let proofTranscript = PairingProofTranscript(
+                joinerNonce: proof.nonce, hostCommitment: session.commitment, offerHost: offer.offer.host,
                 offerPort: offer.offer.port, deviceName: hello.deviceName.bytes, endpoints: session.endpoints)
-            // P3: 상수 시간으로 견주고, 틀리면 제안을 그대로 둔다.
-            guard constantTimeEqual(proof.code, transcript.proof(secret: secret)) else {
-                return finish(id, .wrongProof)
-            }
-            // P4: 제안은 한 번만 쓴다.
+            // P3: 상수 시간으로 견주고, 틀리면 제안을 그대로 둔다. nonceH도 내지 않는다.
+            guard constantTimeEqual(proof.code, proofTranscript.proof(secret: secret)),
+                  let transcript = proofTranscript.opened(with: session.nonce)
+            else { return finish(id, .wrongProof) }
+            // P4: 제안은 한 번만 쓴다. nonceH를 여는 것은 그 뒤다.
             self.offer = nil
             let approval = Approval(transcript: transcript, secret: secret, deviceName: hello.deviceName.text)
             session.phase = .decision(approval, deadline: now + Self.decisionTimeout)
@@ -200,7 +207,8 @@ struct PairingHostMachine: Sendable {
             let request = PairingRequest(
                 peer: session.peer, deviceName: approval.deviceName,
                 confirmationCode: transcript.confirmationCode(secret: secret))
-            return [.send(transcript.accepted(secret: secret)), .requestDecision(request)]
+            let accepted = PairingMessage.Accepted(nonce: session.nonce, code: transcript.accepted(secret: secret))
+            return [.send(accepted.encoded), .requestDecision(request)]
 
         case .decision, .saving:
             // P6: 결정을 기다리는 동안 온 바이트는 끊긴 것으로 본다.

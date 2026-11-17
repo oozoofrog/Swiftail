@@ -297,7 +297,7 @@ tsnet과의 대응:
 - **ID**: `TCPStack.ConnectionID`·`ListenerID`는 스택 안에서 다시 쓰지 않는 `UInt64`다. 옛 ID로 부른 호출은 새 연결에 닿지 않고, 응용이 쥐지 않은 ID(없는 것, `close`·`abort`로 놓은 것, 대기열에 있는 것)는 아무 일도 하지 않는다.
 - **선언**: `init(isnSecret:now:)`, 입력 `receive(_:at:)`·`advance(to:)`·`setLocalAddresses(_:)`·`setRemoteAddressGroups(_:)`·`removeConnections(toRemoteAddress:)`, 응용 호출 `listen(on:) throws(ListenError)`·`stopListening(_:)`·`accept(from:at:)`(연결 ID와 출력)·`connect(to:at:) throws(ConnectError)`와 ID로 부르는 `write`·`read`·`finishWriting`·`close`·`abort`, 읽는 값 `connection(_:)`(복사본)·`nextDeadline`·`localAddresses`. 출력은 `.ipPacket`·`.event`·`.dropped`이고 사건은 `.established(id)`·`.acceptable(listener)`·`.readable(id)`·`.writable(id)`·`.endOfStream(id)`·`.closed(id, 까닭)`이다. 까닭에 `peerRemoved`가 더해진다.
 - **사건은 응용이 쥔 연결에만 나온다.** 맺는 중이거나 대기열에 있거나 `close`한 뒤의 연결은 알리지 않는다. 대기열에 있는 동안 받은 데이터와 FIN은 `accept` 뒤에 `connection(_:)`으로 본다. `.closed(.finished)`는 TIME-WAIT에 들 때 알리고, 남은 데이터는 응용이 `close`할 때까지 읽힌다.
-- **노드가 부르는 순서**: 스택을 만들고 `setLocalAddresses` → 패킷 묶음을 하나씩 `receive`에 넣은 뒤 같은 시각으로 `advance(to:)`(미뤄 둔 ACK가 나온다) → `nextDeadline`에 타이머를 맞춘다 → 출력은 낸 순서대로 처리한다. netmap을 적용할 때마다 `setLocalAddresses`와 `setRemoteAddressGroups`를 다시 부르고, 주인이 바뀌거나 없어진 상대 주소마다 `removeConnections(toRemoteAddress:)`를 부른다(동작 X10에서 스택이 맡는 부분).
+- **노드가 부르는 순서**: 스택을 만들고 `setLocalAddresses` → 패킷 묶음을 하나씩 `receive`에 넣은 뒤 같은 시각으로 `advance(to:)`(미뤄 둔 ACK가 나온다) → `nextDeadline`에 타이머를 맞춘다 → 출력은 낸 순서대로 처리한다. netmap을 적용할 때마다, 그리고 엔진이 키 만료를 처리해 피어를 바꿀 때마다 `setLocalAddresses`와 `setRemoteAddressGroups`를 다시 부르고, 주인이 바뀌거나 없어진 상대 주소마다 `removeConnections(toRemoteAddress:)`를 부른다(동작 X10에서 스택이 맡는 부분).
 - **한도**: accept 대기열 32개에는 맺는 중인 연결도 센다(대기열이 32개를 넘지 않게). 연결 256개에는 맺는 중·대기열·응용이 쥔 것·놓았지만 닫는 중인 것이 모두 든다. 넘친 것은 `.dropped(.limitReached(종류))`로 알린다. TIME-WAIT 기록이 1,024개면 그 뒤 TIME-WAIT에 든 연결은 기록으로 옮기지 않고 연결인 채로 마친다.
 - **TIME-WAIT 기록**: RST는 무시한다(RFC 9293 3.10.7.4는 CLOSED로 가라고 하지만 기한 전에 버리지 않기로 한 S6과 gVisor를 따른다). SYN과 데이터에는 ACK로 답하고 같은 4-튜플의 새 연결을 다시 열지 않는다. FIN의 재전송에는 ACK하고 기한을 다시 잰다. 데이터 없는 ACK에는 답하지 않는다. 주소가 바뀌어도 기록은 기한까지 둔다.
 - 나가는 포트는 차례로 고른다(RFC 6056의 무작위 고르기가 아니다. 상대는 인증된 tailnet 피어다). 포트 0은 노드가 거른다. `stopListening`은 맺는 중인 연결을 아무것도 보내지 않고 버린다.
@@ -313,7 +313,7 @@ tsnet과의 대응:
 피어 하나의 몫(데이터면 보안 검증에서 고친 것, 2026-11-17):
 
 - **위의 "상대 주소 하나"의 상한은 모두 상대 피어 하나의 상한이다**: 연결 64개, 맺는 중 16개, TIME-WAIT 기록 64개. 피어는 IPv4·IPv6 두 주소를 가지므로, 주소별로만 세면 피어 하나가 몫을 두 번 쥔다(맺는 중 16 × 2 = 32개가 리스너의 대기열 32개와 같아, 피어 하나가 리스너 하나를 다른 모든 피어에게서 막았다).
-- **묶음**: 노드가 netmap을 적용할 때마다 자기 주소와 함께 "상대 주소 → 묶음" 표를 넘긴다(`setRemoteAddressGroups(_:)`). 표는 주소의 주인 확인(동작 X10)과 같은 계산(`EnginePeer.addressOwners(in:at:)`: 그 주소를 AllowedIPs로 가진 피어)에서 나오고, 묶음의 이름은 그 피어의 node ID다(스택은 값의 뜻을 모른다). 표에 없는 주소(자기 주소 등)는 그 주소 하나가 한 묶음이다. 스택은 수를 주소별로 적어 두고 볼 때 묶음의 주소를 합치므로, 표가 바뀌면 그때부터 새 묶음으로 센다.
+- **묶음**: 노드가 주인 표를 바꿀 때마다(netmap 적용, 키 만료 처리) 자기 주소와 함께 "상대 주소 → 묶음" 표를 넘긴다(`setRemoteAddressGroups(_:)`). 표는 주소의 주인 확인(동작 X10)과 같은 표(`EnginePeer.addressOwners`: 그 주소를 AllowedIPs로 가진 피어)에서 나오고, 묶음의 이름은 그 피어의 node ID다(스택은 값의 뜻을 모른다). 표에 없는 주소(자기 주소 등)는 그 주소 하나가 한 묶음이다. 스택은 수를 주소별로 적어 두고 볼 때 묶음의 주소를 합치므로, 표가 바뀌면 그때부터 새 묶음으로 센다.
 - **리스너의 대기열에서 피어 하나의 몫은 16개다**(맺어진 것과 맺는 중인 것을 합쳐. 넘는 SYN은 `.dropped(.limitReached(.acceptQueueShare))`). 맺어진 연결은 맺는 중인 수에서 빠지므로, 이 몫이 없으면 피어 하나가 핸드셰이크를 끝낸 연결 32개로 대기열을 다 채운다. 16은 대기열의 절반이고 피어 하나의 맺는 중 상한과 같으며, 첫 사용처의 기기당 10개 안팎(검토 결과 2)을 한꺼번에 걸어도 닿지 않는다. 남는 것: ACL이 허용한 피어 둘이 함께하면 리스너 하나의 대기열을 채워 셋째 피어를 막을 수 있다. 몫을 더 줄이면 정상 피어가 한꺼번에 거는 연결이 SYN 재전송을 기다리게 된다.
 - TIME-WAIT 기록의 "그 피어의 가장 오래된 기록"은 피어의 주소마다의 첫 기록(만든 순서) 가운데 TIME-WAIT에 먼저 든 것이다.
 - `shortcut:` 리스너의 피어별 수는 SYN마다 연결 표(256개까지)를 훑어 센다. 필요해지는 시점: 연결 상한을 크게 올릴 때.
@@ -343,7 +343,7 @@ tailnet 피어는 WireGuard로 인증되고 출발 주소는 그 피어의 Allow
 4. **한 사건을 끝까지**: 패킷 하나(또는 앱 호출·타이머 하나)에서 비롯된 스택과 엔진 사이의 주고받기는 `await` 없이 끝까지 돈다. 재귀가 아니라 대기열로 돈다(자기 주소로 건 연결의 큰 전송에서 호출 깊이가 자라지 않게 한다). 대기열이 빈 뒤에 미뤄 둔 ACK를 낸다(동작 F5).
 5. **사건**: 스택의 사건으로 기다리던 호출을 깨운다. `readable` → 그 연결의 `read`, `writable` → `write`, `established` → `connect` 또는 리스너의 대기열, `closed(까닭)` → 그 연결의 모든 대기와 이후 호출이 그 까닭의 오류를 받는다.
 6. **타이머**: 노드의 타이머가 엔진·`Magicsock`·스택의 `nextDeadline` 가운데 이른 것에 깨어 셋 다 `advance`한다.
-7. **netmap**: 적용할 때마다 자기 주소(동작 S9)와 피어별 상대 주소 묶음(동작 S "피어 하나의 몫")을 스택에 넘기고, 연결마다 적어 둔 상대 키를 견준다(동작 X10).
+7. **netmap**: 적용할 때마다, 그리고 엔진이 키 만료를 처리해 피어를 바꿀 때마다 자기 주소(동작 S9)와 피어별 상대 주소 묶음(동작 S "피어 하나의 몫")을 스택에 넘기고, 연결마다 적어 둔 상대 키를 견준다(동작 X10).
 8. **노드가 멈출 때**: `run()`이 끝나며 열린 연결마다 RST를 한 번 낸다(직접 경로면 나간다. DERP 통로에 있던 것은 사라질 수 있다). 기다리던 호출은 `notRunning`으로 깨어나고 리스너의 흐름은 끝난다. 그 뒤의 `listen`·`connect`는 `notRunning`이다.
 9. **버려진 핸들**: `TailnetConnection`·`TailnetListener`의 `deinit`은 기다리지 않는 통로에 "끊기" 요청을 넣고, `run()`의 자식 하나가 그것을 처리한다(M5의 `startInteractiveLogin`과 같은 방식). 분리된 Task를 만들지 않는다.
 10. **손실에서 오는 역압**: 스택이 낸 패킷이 UDP 송신 실패나 DERP 통로의 넘침(256개·1MiB, 터널 계약 동작 M)으로 사라지는 것은 TCP에게 보통의 손실이다. 혼잡 제어가 줄인다. 통로에서 스택으로 가는 신호는 따로 없다.
@@ -355,7 +355,7 @@ tailnet 피어는 WireGuard로 인증되고 출발 주소는 그 피어의 Allow
 - **스택의 수명**: `.inProcess`의 `run()` 동안에만 있다. `run()`이 시작할 때 ISN 비밀 32바이트를 시스템 난수로 뽑아 만들고 `run()` 전에 연 리스너를 올린다. 끝날 때 리스너를 닫고, 응용이 쥔 연결을 abort하고, 나머지(맺는 중, 대기열, `close`로 놓았지만 닫는 중인 것)를 `TCPStack.abortAll()`로 끊는다. 소켓과 엔진을 닫기 전에 한다(RST가 직접 경로로 나간다. DERP 통로에 있던 것은 사라질 수 있다).
 - **기다리는 호출**: 기다릴 때마다 값을 나르지 않는 통로를 새로 걸고, 깨우는 쪽은 그것을 끝내기만 한다. 깨어난 호출이 상태를 다시 보고 무엇을 할지 정한다(그래서 이중 재개가 없다). 기록을 지우는 쪽(`close`·`abort`·리스너 닫기·`run()`의 끝)은 걸린 통로를 반드시 끝낸다. 자기 주소로 건 연결에서는 사건이 호출 자신의 출력 처리 안에서 나올 수 있어, 놓친 사건을 적어 두고 기다리기 전에 본다.
 - **취소**: `read`는 `cancelled`를 던지고 연결과 데이터는 그대로다. `write`는 연결을 abort(RST)한 뒤 `cancelled`. `connect`는 시도를 버리고 `cancelled`. 리스너의 흐름은 끝나고 리스너는 그대로다. `run()`이 끝나면 기다리던 호출은 `notRunning`이다. 버려진 핸들은 `run()`의 자식 하나가 RST(연결)·닫기(리스너)로 거둔다.
-- **주인 바뀜(X10)**: 연결마다 키를 적지 않고, netmap마다 데이터면 피어 주소의 주인 키를 앞의 것과 견주어 없어지거나 바뀐 주소에 `removeConnections(toRemoteAddress:)`를 부른다. AllowedIPs 출발지 검사가 있으므로 한 주소의 연결은 모두 그때의 주인과 맺은 것이다.
+- **주인 바뀜(X10)**: 연결마다 키를 적지 않고, 엔진이 피어를 다시 계산할 때마다(netmap 적용, 키 만료 처리) 데이터면 피어 주소의 주인 키를 앞의 것과 견주어 없어지거나 바뀐 주소에 `removeConnections(toRemoteAddress:)`를 부른다. 주인은 `whoIs`가 읽는 것과 같은 표(노드가 엔진에서 받아 쥔 `addressOwners`)에서 나온다(호스트 계약 동작 W6). AllowedIPs 출발지 검사가 있으므로 한 주소의 연결은 모두 그때의 주인과 맺은 것이다.
 - **이름 해석**: 이름이 겹치면 Go처럼 나중 노드가 이긴다(자기 노드 → 피어를 ID 순으로. `path(toPeerNamed:)`의 "ID가 작은 쪽"과 다르다). 짧은 이름의 접미사는 대소문자를 바꾸지 않고 견준다(Go와 같다).
 - **공개 API의 세부**: `read(upTo:)`의 0 이하 길이는 `invalidConfiguration`. 리스너를 두 Task가 동시에 돌면 나중 Task의 흐름이 곧바로 끝난다(`Failure = Never`라 던질 수 없다). `finishWriting()`을 두 번 불러도 오류가 아니다. `connect`는 상태가 `.running`이어야 한다(앱이 `events`로 기다린다).
 - **버려진 리스너**(M6 검토 B 반영): 리스너 기록은 핸들을 약한 참조로 쥔다. `listen(port:)`과 `run()`의 시작이 핸들이 버려진 리스너를 먼저 닫으므로, 버린 리스너는 `run()` 전에도 중에도 포트와 상한(16)을 쥐지 않는다. `run()` 중 스택의 리스너와 대기열 연결(RST)을 닫는 일은 버려진 핸들을 거두는 자식 또는 다음 `listen`이 한다(그 사이에 들어온 SYN은 맺혔다가 RST로 끊긴다).

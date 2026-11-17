@@ -266,6 +266,24 @@ struct WhoIsTests {
         #expect(await node.whoIs(try Self.address("100.64.0.1"))?.stableID == "nStableSelf")
     }
 
+    @Test("주인은 netmap을 적용할 때 정해진다. 묻는 시각이 앞 주인의 키 만료를 넘어도 답은 데이터면이 바뀔 때까지 그대로다")
+    func answerDoesNotDependOnQueryTime() async throws {
+        var low = Support.phone
+        low.stableID = "nStableLow"
+        low.keyExpiry = Date().addingTimeInterval(2)
+        var high = Support.phone
+        high.id = 5
+        high.stableID = "nStableHigh"
+        high.key = 0x55
+        // 돌지 않는 노드라 키 만료를 처리할 타이머가 없다. 데이터면의 주인은 적용한 때 그대로다.
+        let node = try Self.node()
+        await node.apply(try Support.netmap(peers: [low, high]))
+        let address = try Self.address("100.64.0.2")
+        #expect(await node.whoIs(address)?.stableID == "nStableLow")
+        try await Task.sleep(for: .seconds(3))
+        #expect(await node.whoIs(address)?.stableID == "nStableLow")
+    }
+
     @Test("주소의 주인이 바뀌어 연결이 peerRemoved로 끝나는 시점에 whoIs는 이미 새 주인을 가리킨다")
     func tableChangesWithConnectionTeardown() async throws {
         try await NetstackTestSupport.withRunningNode(try Support.netmap(peers: [Support.phone])) { node in

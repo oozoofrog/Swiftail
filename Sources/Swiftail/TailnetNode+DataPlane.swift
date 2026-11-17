@@ -168,7 +168,12 @@ extension TailnetNode {
             // 일찍 깨어났어도 괜찮다. 기한 전의 advance는 아무것도 하지 않는다.
             let now = ContinuousClock.now
             beginProcessing()
+            // 키 만료로 엔진이 피어를 바꾸면 주소의 주인도 바뀔 수 있다. 같은 때에 주인 표를 다시 읽는다.
+            let recomputesPeers = engine?.recomputesPeers(at: now) ?? false
             process(engine?.advance(to: now) ?? [], at: now)
+            if recomputesPeers, let lastNetmap {
+                updateAddressOwners(for: lastNetmap)
+            }
             process(magicsock?.advance(to: now) ?? [], at: now)
             process(netstack?.stack.advance(to: now) ?? [], at: now)
             endProcessing(at: now)

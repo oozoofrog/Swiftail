@@ -69,6 +69,10 @@ public struct TailnetEngine: Sendable {
     var peers: [NodePublicKey: EnginePeer] = [:]
     /// 피어의 한 주소짜리 `addresses` → 그 피어. 보낼 피어를 고른다.
     var peerByAddress: [IPAddress: NodePublicKey] = [:]
+    /// 데이터면의 주소 → 그 주소의 주인 노드(`EnginePeer.addressOwners`). 피어를 다시 계산할 때마다(netmap 적용, 키 만료)
+    /// 같은 계산에서 함께 바뀐다. 노드의 `whoIs`와 연결의 주인 확인이 읽는다: 따로 계산하면 시각이 달라, 주소가 겹친
+    /// netmap에서 한쪽 키가 만료되는 순간 엔진이 올린 피어와 다른 노드를 가리킬 수 있다.
+    package private(set) var addressOwners: [IPAddress: Node] = [:]
     /// 마지막으로 적용한 netmap. 키 만료 시각에 피어를 다시 계산할 때 쓴다.
     private var netmap: Netmap?
     /// 다음으로 키가 만료되는 노드(피어 또는 자기)가 생기는 시각.
@@ -123,10 +127,16 @@ public struct TailnetEngine: Sendable {
     /// 자기 키가 만료되면 새 netmap이 오지 않아도 응답기를 비운다(모든 이름이 SERVFAIL). 그 시각은 `nextDeadline`에
     /// 들어 있으므로 부르는 쪽이 그때 `advance`를 불러야 한다.
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
-        if let deadline = keyExpiryDeadline, deadline <= now {
+        if recomputesPeers(at: now) {
             applyKeyExpiry(at: now)
         }
         return route(device.advance(to: now))
+    }
+
+    /// `advance(to: now)`가 키 만료를 처리해 피어와 `addressOwners`를 다시 계산하는가. 노드가 그때 주인 표를 다시 읽어
+    /// 주인이 바뀐 주소의 연결을 끊는다.
+    package func recomputesPeers(at now: ContinuousClock.Instant) -> Bool {
+        keyExpiryDeadline.map { $0 <= now } ?? false
     }
 
     /// 다음에 advance를 불러야 하는 시각. 노드가 처리마다 부르므로 배열을 만들지 않는다.
@@ -185,6 +195,7 @@ public struct TailnetEngine: Sendable {
         }
         peers = current
         peerByAddress = addressIndex
+        addressOwners = EnginePeer.addressOwners(of: eligible)
     }
 
     /// wallNow 뒤에 오는 피어와 자기 노드의 가장 이른 키 만료까지의 시간. 하루보다 멀면 하루 뒤에 다시 본다.

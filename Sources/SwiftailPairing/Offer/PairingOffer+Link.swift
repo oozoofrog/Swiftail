@@ -78,11 +78,12 @@ enum OfferField {
 
     /// 올바른 DNS 이름: 라벨은 1~63자의 `a-z0-9-`이고 하이픈으로 시작·끝나지 않는다. 전체 253자 이하, 라벨 둘 이상.
     ///
-    /// 끝 라벨이 숫자뿐이면 이름이 아니라 IP 주소 꼴이다(`192.168.1.1`). 받지 않는다: 주소를 적은 링크가 들어오는 쪽을
-    /// MagicDNS를 거치지 않고 tailnet 밖의 곳에 걸게 하지 못한다(`SwiftailCertificates`의 이름 규칙과 같다).
+    /// 끝 라벨은 글자(`a-z`)로 시작해야 한다(최상위 도메인은 숫자로 시작하지 않는다). 숫자로 시작하는 끝 라벨은 이름이 아니라
+    /// IP 주소 꼴이고(`192.168.1.1`, `192.168.1.0x1`), OS는 16진 꼴도 IPv4 주소로 읽는다. 받지 않는다: 주소를 적은 링크가
+    /// 들어오는 쪽을 MagicDNS를 거치지 않고 tailnet 밖의 곳에 걸게 하지 못한다.
     static func host(_ bytes: some BidirectionalCollection<UInt8>) -> String? {
         let labels = bytes.split(separator: UInt8(ascii: "."), omittingEmptySubsequences: false)
-        guard (1...253).contains(bytes.count), labels.count >= 2, let last = labels.last, !last.allSatisfy(\.isDigit)
+        guard (1...253).contains(bytes.count), labels.count >= 2, labels.last?.first?.isLowercaseLetter == true
         else { return nil }
         for label in labels {
             guard (1...63).contains(label.count), label.first != UInt8(ascii: "-"), label.last != UInt8(ascii: "-"),

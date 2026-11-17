@@ -11,12 +11,18 @@ extension EnginePeer {
     /// 하나만 있다. 자기 노드의 주소는 넣지 않는다.
     ///
     /// 노드가 연결의 주인 확인(`SwiftailNetstack` 계약 동작 X10), 피어별 한도, `whoIs`에 함께 쓴다. 셋이 서로 다른 표를
-    /// 보면 앱이 연결의 상대를 다른 노드의 신원으로 볼 수 있다.
+    /// 보면 앱이 연결의 상대를 다른 노드의 신원으로 볼 수 있다. 엔진이 있으면 엔진이 피어를 올릴 때 함께 만든 표
+    /// (`TailnetEngine.addressOwners`)를 쓴다. 이 함수는 엔진이 없을 때 같은 계산을 netmap에서 직접 한다.
     ///
     /// - Parameter now: 키 만료를 판단할 지금 시각(로컬 벽시계).
     package static func addressOwners(in netmap: Netmap, at now: Date) -> [IPAddress: Node] {
+        addressOwners(of: eligibleNodes(in: netmap, at: now))
+    }
+
+    /// 올릴 피어들(`eligibleNodes(in:at:)`)의 주소 → 주인 노드.
+    static func addressOwners(of eligible: [(node: Node, peer: EnginePeer)]) -> [IPAddress: Node] {
         var owners: [IPAddress: Node] = [:]
-        for (node, peer) in eligibleNodes(in: netmap, at: now) {
+        for (node, peer) in eligible {
             for prefix in peer.allowedIPs where isSingleAddress(prefix) {
                 owners[prefix.address] = node
             }

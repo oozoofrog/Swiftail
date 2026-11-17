@@ -62,15 +62,13 @@ struct AuthorityVerificationTests {
         #expect(authority.state == expected)
         #expect(authority.state.weight(of: repeated) == 1)
 
-        // 비용: 4,096번 되풀이한 것이, 서로 다른 서명 64개를 검증하는 것보다 빨리 끝난다.
+        // 비용: 4,096번 되풀이한 것은 검증 한 번, 서로 다른 서명 64개는 검증 64번이다.
         var distinct = single
         distinct.signatures = (0..<64).map { _ in a.signature(over: single) }
         #expect(Set(distinct.signatures.map(\.signature)).count == 64)
         let state = try start().state
-        let clock = ContinuousClock()
-        let distinctTime = try clock.measure { try state.verifyParentAndSignatures(of: distinct, isBootstrap: false) }
-        let repeatedTime = try clock.measure { try state.verifyParentAndSignatures(of: repeated, isBootstrap: false) }
-        #expect(repeatedTime < distinctTime, "되풀이 \(repeatedTime), 서로 다른 64개 \(distinctTime)")
+        #expect(try state.verifyParentAndSignatures(of: repeated, isBootstrap: false) == 1)
+        #expect(try state.verifyParentAndSignatures(of: distinct, isBootstrap: false) == 64)
     }
 
     @Test("되풀이를 건너뛰어도 틀린 서명과 모르는 키는 그대로 떨어진다")

@@ -63,6 +63,9 @@ struct PeerPathState: Sendable {
     private(set) var homeDERP: Int64
     /// 직접 경로 후보. 들어온 순서를 지켜 같은 입력열에는 같은 순서로 Ping한다(`+Candidates`).
     var candidates: [Candidate] = []
+    /// 최근에 UDP로 받은 Ping의 TxID(받은 차례대로, `recentPingLimit`개까지). 여기 있는 TxID는 어느 출처에서 오든
+    /// 재전송이다(`+Candidates`).
+    var recentPingTxIDs: [TransactionID] = []
     /// Pong을 기다리는 Ping. TxID → 보낸 곳과 시각(`+Ping`).
     var sentPings: [TransactionID: SentPing] = [:]
     /// Pong이 확인한 가장 나은 직접 주소. 언제나 `candidates`에 있는 주소다(지울 때 함께 지운다).
@@ -95,8 +98,9 @@ struct PeerPathState: Sendable {
     ///
     /// 옛 키로 보낸 Ping의 Pong은 새 키로 오지 않으므로 기다리던 Ping과 신뢰를 버리고 처음부터 다시 찾는다.
     /// `bestAddr` 주소는 남겨 새 경로가 설 때까지 UDP로도 함께 보낸다. heartbeat는 다음 기한에 송신 기록이
-    /// 없으면 멈춘다(Go와 같다).
+    /// 없으면 멈춘다(Go와 같다). 옛 키로 받은 Ping의 TxID도 잊는다.
     mutating func resetForNewDiscoKey() {
+        recentPingTxIDs = []
         trustedUntil = nil
         lastSend = nil
         lastFullPing = nil
