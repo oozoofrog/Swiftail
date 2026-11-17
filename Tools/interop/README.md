@@ -853,6 +853,10 @@ CSR의 구문·자기 서명과 P-256 키를 검사한다. 이름·SAN·태그�
 
 `sh Scripts/build-interop-tools.sh argon2fixtures`로 빌드하고, 인자 없이 실행하면 `golang.org/x/crypto` `argon2.Key` 출력 75개를 JSON으로 표준 출력에 쓴다(`argon2fixtures > Tests/SwiftailCryptoTests/Vectors/argon2i-go.json`). 마지막 항목은 TKA 끄기 비밀의 인자 그대로이며 `tka.DisablementKDF`와 다르면 실패한다. 입력은 시험 전용 고정 패턴이다. Swift 시험은 `SWIFTAIL_ARGON2FIXTURES=<경로>`가 있으면 새로 뽑아 견준다.
 
+# 페어링 기준 벡터 생성 (`pairingvectors`)
+
+`sh Scripts/build-interop-tools.sh pairingvectors`로 빌드하고, 인자 없이 실행하면 페어링 절차(`docs/contracts/SwiftailPairing.md` 5절)의 고정 벡터 4개를 JSON으로 표준 출력에 쓴다(`pairingvectors > Tests/SwiftailPairingTests/Fixtures/pairing-vectors.json`). 계약의 글만 보고 Go 표준 라이브러리(`crypto/hmac`, `crypto/sha256`, `net/netip`)로 썼고 Swift 구현은 읽거나 호출하지 않는다. 벡터마다 입력(`secret`, `offerHost`, `offerPort`, `deviceName`, 두 nonce, 연결의 두 끝)과 그 결과인 `hello`, `challenge`(상태 0)·`challengeNoOffer`(상태 1), `transcript`(T, 166바이트), `proof`, `accepted`, `confirmationCode`, `approved`·`denied`·`timedOut`(`decision`의 본문 ‖ HMAC)를 16진으로 싣는다. 입력은 시험 전용 고정 패턴이다. 경우: IPv4의 두 끝, IPv6의 두 끝과 한글 기기 이름·빈 표시 이름, 가장 긴 이름들(기기 이름 64바이트, `StableID` 255바이트, 표시 이름 64바이트), 확인 숫자가 0으로 시작하는 것(들어오는 쪽 nonce의 첫 바이트를 0부터 올려 처음 나오는 값). `go test ./cmd/pairingvectors`는 연속 생성의 일치와 저장 자료와의 일치를 본다. Swift 시험(`ProtocolVectorTests`)은 저장 자료를 코덱·계산 하나하나와 견주고, 두 상태 기계를 맞물려 선 위의 바이트가 같은지 본다.
+
 # TKA 기준 자료 생성 (`tkafixtures`)
 
 Tailnet Lock 계약(`docs/contracts/SwiftailTailnetLock.md`) 7절 "Go 기준값 대조"의 도구다. `tailscale.com` v1.104.6의 `tka` 패키지가 낸 판정을 JSON으로 쓴다. Swift 소스는 읽거나 실행하지 않는다. 네트워크·현재 시각·외부 난수를 쓰지 않는다. 키는 모두 `SHA-256("swiftail-fixtures/tka/<역할>/<번호>")`를 Ed25519 씨앗이나 node 키(X25519 개인 키) 입력으로 쓴다(역할: `lock`·`nl`·`credential`·`fork`·`node`·`disablement`). **자료에 든 개인 키는 공개된 시험 전용 값이다.** Go의 Ed25519 서명은 결정적이라 다시 뽑아도 같은 바이트가 나온다.

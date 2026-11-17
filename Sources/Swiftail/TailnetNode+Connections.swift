@@ -204,6 +204,12 @@ extension TailnetNode {
 
     // MARK: 도우미
 
+    /// 장치가 `.inProcess`인가. `listen`·`connect`가 되는 노드인지를 `SwiftailPairing`이 `PairingHost`를 만들 때 본다.
+    package nonisolated var hasInProcessDevice: Bool {
+        if case .inProcess = device { return true }
+        return false
+    }
+
     private func checkInProcessDevice(port: UInt16) throws(ConnectionError) {
         guard case .inProcess = device else { throw .invalidConfiguration("listen·connect는 .inProcess 장치에서만 쓴다") }
         guard port != 0 else { throw .invalidConfiguration("포트는 0이 아니어야 한다") }
