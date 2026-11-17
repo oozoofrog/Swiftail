@@ -1,0 +1,13 @@
+// PairingDemo의 서명 설정.
+// 개인 값(개발 팀 ID, 번들 ID 앞부분)은 같은 폴더의 Signing.local.xcconfig에 둔다. 그 파일은 저장소에 올리지 않고,
+// 없으면 아래 #include? 줄은 건너뛴다. 예시 파일: Signing.local.xcconfig.example
+
+// 번들 ID 앞부분. 앱은 $(DEMO_BUNDLE_PREFIX).PairingDemo가 된다. 이 값은 자리 표시다. iPhone에 설치하려면
+// Signing.local.xcconfig에서 자기 팀이 쓸 수 있는 값으로 바꾼다.
+DEMO_BUNDLE_PREFIX = com.example.swiftail-demo
+
+// Mac 앱의 서명. 기본은 이 Mac에서만 실행하는 임시 서명(-)이다. 임시 서명은 빌드마다 다른 앱으로 보여서
+// 키체인에 둔 OAuth 클라이언트를 다시 빌드할 때마다 허용해야 한다.
+DEMO_MAC_SIGN_IDENTITY = -
+
+#include? "Signing.local.xcconfig"

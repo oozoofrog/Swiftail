@@ -1,0 +1,44 @@
+name: PairingDemo
+options:
+  createIntermediateGroups: true
+  developmentLanguage: ko
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  Swiftail:
+    path: ../..
+targets:
+  PairingDemo:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources: [Sources]
+    dependencies:
+      - package: Swiftail
+        product: Swiftail
+      - package: Swiftail
+        product: SwiftailPairing
+      - package: Swiftail
+        product: SwiftailBase
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DEMO_BUNDLE_PREFIX).PairingDemo
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Swiftail 페어링
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        # App Sandbox는 Mac에서만 켠다. iOS 앱은 권한 파일이 없다.
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Config/PairingDemo-macOS.entitlements
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": $(DEMO_MAC_SIGN_IDENTITY)
