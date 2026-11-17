@@ -1,5 +1,10 @@
 # Swiftail
 
+[![CI](https://github.com/oozoofrog/Swiftail/actions/workflows/ci.yml/badge.svg)](https://github.com/oozoofrog/Swiftail/actions/workflows/ci.yml)
+[![Swift versions](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Foozoofrog%2FSwiftail%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/oozoofrog/Swiftail)
+[![Platforms](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Foozoofrog%2FSwiftail%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/oozoofrog/Swiftail)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
+
 A Tailscale tailnet node written entirely in Swift. Swiftail lets an app join a tailnet in-process, or power an iOS Network Extension packet tunnel, without embedding the Go client.
 
 > **Status: pre-1.0.** It registers with the production Tailscale control plane and exchanges traffic with stock Tailscale nodes. The public API may still change.

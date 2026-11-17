@@ -1,0 +1,27 @@
+# 빌드(경고 0)와 단위 시험. Go 상호 운용 시험은 도구 경로가 없으면 스스로 건너뛴다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - name: Build
+        run: swift build --build-tests -Xswiftc -warnings-as-errors
+      - name: Test
+        run: swift test --skip-build
