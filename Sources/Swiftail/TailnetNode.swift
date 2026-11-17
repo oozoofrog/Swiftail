@@ -252,9 +252,8 @@ public actor TailnetNode {
             settingsContinuation.finish()
             certificateFactsPublisher.finish()
         }
-        let directory = configuration.stateDirectory
-        guard StateDirectoryClaims.shared.claim(directory) else { throw .stateDirectoryInUse }
-        defer { StateDirectoryClaims.shared.release(directory) }
+        let claim = try StateDirectoryClaims.shared.claimCreating(configuration.stateDirectory)
+        defer { StateDirectoryClaims.shared.release(claim) }
 
         if case let .utun(descriptor, mtu) = device {
             do {

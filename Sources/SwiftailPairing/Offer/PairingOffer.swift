@@ -15,6 +15,13 @@ public struct PairingOffer: Sendable {
     public let expires: Date
     /// 1회용 tailnet 인증 키. 들어오는 쪽이 아직 tailnet에 없으면 노드 설정(`NodeConfiguration.authKey`)에 한 번 넣는다.
     /// 저장하지 않는다.
+    ///
+    /// 이 키로 노드를 띄우는 것은 **이 링크가 가리키는 tailnet에 가입하는 일**이다. 그 tailnet의 관리자가 이 기기의 노드를
+    /// 보고 정책을 정한다. 링크는 어디서든 올 수 있으니, 앱은 키가 있는 제안으로 노드를 띄우기 전에 그 사실을 사용자에게
+    /// 보여 주고 묻는다.
+    ///
+    /// 키는 페어링과 묶여 있지 않다. 링크를 얻은 쪽은 키가 살아 있는 동안 여는 쪽의 승인과 무관하게 tailnet에 들어온다
+    /// (`PairingHost.openOffer(lifetime:authKey:)`).
     public let authKey: String?
     /// 제안의 비밀 32바이트. 짝 맺기 절차의 HMAC 키다. 앱에는 내보내지 않는다.
     package let secret: [UInt8]

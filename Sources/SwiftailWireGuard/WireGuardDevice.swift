@@ -61,6 +61,9 @@ public struct WireGuardDevice: Sendable {
     private let wallClockOrigin: Duration
 
     var peers: [PublicKey: Peer] = [:]
+    /// 내린 피어가 마지막으로 받아들인 initiation timestamp(내린 차례대로). 같은 키의 피어가 다시 오면 되살린다.
+    /// 버리면 내리기 전에 받은 initiation의 재전송이 새 피어에게 통한다.
+    var retiredTimestamps: [(peer: PublicKey, timestamp: TAI64N)] = []
     /// 우리가 배정한 index → 그 index를 가진 피어. 핸드셰이크 중인 index와 keypair의 index가 함께 있다.
     var indexTable: [UInt32: PublicKey] = [:]
 
@@ -84,12 +87,16 @@ public struct WireGuardDevice: Sendable {
             peers[peer]?.allowedIPs = allowedIPs
             return
         }
-        peers[peer] = Peer(
+        var added = Peer(
             publicKey: peer,
             allowedIPs: allowedIPs,
             staticStaticSecret: sharedSecret(staticKey, peer.rawValue),
             cookieGenerator: CookieGenerator(peer: peer)
         )
+        if let index = retiredTimestamps.firstIndex(where: { $0.peer == peer }) {
+            added.lastAcceptedTimestamp = retiredTimestamps.remove(at: index).timestamp
+        }
+        peers[peer] = added
     }
 
     /// 이 피어와의 세션 키가 새로 설 때마다 터널 안으로 먼저 보낼 평문 IP 패킷을 정한다. nil이면 지운다.
@@ -110,10 +117,18 @@ public struct WireGuardDevice: Sendable {
     }
 
     /// 피어와 그 키 재료를 지운다. 그 피어의 index로 오는 메시지는 이후 `unknownPeer`다.
+    ///
+    /// 마지막으로 받아들인 initiation timestamp만은 남긴다(`maxRetiredTimestamps`개까지). 같은 키로 다시 등록된 피어에게
+    /// 옛 initiation을 재전송해도 받아들이지 않는다.
     public mutating func removePeer(_ peer: PublicKey) {
         guard let removed = peers.removeValue(forKey: peer) else { return }
         for index in removed.localIndices {
             indexTable[index] = nil
+        }
+        guard let timestamp = removed.lastAcceptedTimestamp else { return }
+        retiredTimestamps.append((peer, timestamp))
+        if retiredTimestamps.count > Constants.maxRetiredTimestamps {
+            retiredTimestamps.removeFirst(retiredTimestamps.count - Constants.maxRetiredTimestamps)
         }
     }
 

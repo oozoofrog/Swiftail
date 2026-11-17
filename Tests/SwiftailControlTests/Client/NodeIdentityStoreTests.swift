@@ -160,6 +160,55 @@ struct NodeIdentityStoreTests {
         }
     }
 
+    /// `load()`가 storage 오류로 끝나는가.
+    private func expectStorageError(_ store: NodeIdentityStore, sourceLocation: SourceLocation = #_sourceLocation) {
+        do throws(ControlError) {
+            _ = try store.load()
+            Issue.record("읽으면 안 되는 파일을 받아들였다", sourceLocation: sourceLocation)
+        } catch {
+            guard case .storage = error else {
+                Issue.record("storage 오류가 아니다: \(error)", sourceLocation: sourceLocation)
+                return
+            }
+        }
+    }
+
+    @Test("신원 파일이 심볼릭 링크면 따라가지 않는다")
+    func refusesSymbolicLink() throws {
+        try withDirectory { directory in
+            // 올바른 신원 파일이 다른 곳에 있고, 상태 디렉터리의 `identity.json`은 그것을 가리키는 링크다.
+            let elsewhere = NodeIdentityStore(directory: directory.appending(path: "elsewhere"))
+            try elsewhere.save(NodeIdentity())
+            let store = NodeIdentityStore(directory: directory.appending(path: "state"))
+            try FileManager.default.createDirectory(at: directory.appending(path: "state"), withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: store.fileURL, withDestinationURL: elsewhere.fileURL)
+            expectStorageError(store)
+        }
+    }
+
+    @Test("신원 파일은 64KiB까지만 읽는다")
+    func limitsFileSize() throws {
+        try withDirectory { directory in
+            let store = NodeIdentityStore(directory: directory)
+            try store.save(NodeIdentity())
+            let contents = try Data(contentsOf: store.fileURL)
+            // 뒤에 공백을 채워도 올바른 JSON이다. 한도까지는 읽고, 한 바이트 넘으면 읽지 않는다.
+            try (contents + Data(repeating: 0x20, count: 65_536 - contents.count)).write(to: store.fileURL)
+            #expect(try store.load() != nil)
+            try (contents + Data(repeating: 0x20, count: 65_537 - contents.count)).write(to: store.fileURL)
+            expectStorageError(store)
+        }
+    }
+
+    @Test("신원 파일 자리에 정규 파일이 아닌 것이 있으면 읽지 않는다")
+    func refusesNonRegularFile() throws {
+        try withDirectory { directory in
+            let store = NodeIdentityStore(directory: directory)
+            try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: true)
+            expectStorageError(store)
+        }
+    }
+
     /// Go 기준값의 NL 개인 키(`tka-fixtures.json`의 `nlpriv-decode`. 시험 전용 공개 값).
     static let validLockKeyHex = "d132274d5c925219b42ed925e1b1c8aed8b70c35cd1ba669de00a9f56c9dd5caeea291d210cd96c16600e331c931c130d142e0b0fd9ddcfa1fcfb756e6a00438"
 

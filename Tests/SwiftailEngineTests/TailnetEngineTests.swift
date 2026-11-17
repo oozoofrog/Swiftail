@@ -243,6 +243,28 @@ struct TailnetEngineTests {
         #expect(delivery.drops[.alice] == [.wireGuard(.disallowedSource)])
     }
 
+    @Test("넓은 접두를 자기 주소로 내세운 피어도 다른 피어의 주소를 출발지로 쓰지 못한다")
+    func widePrefixPeerCannotSpoofOtherPeer() throws {
+        var pair = try EnginePair()
+        // bob이 tailnet 대역 전체를 자기 주소로 내세운다. carol(100.64.0.3)은 alice의 다른 피어다.
+        let wideBob = makeNodeJSON(
+            id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32", "100.64.0.0/10", "fd7a:115c:a1e0::/48"],
+            extra: #","DiscoKey":"\#(discoKeyText)","HomeDERP":\#(EnginePair.homeDERP)"#)
+        let carol = makeNodeJSON(
+            id: 3, key: makeNodeKey(byte: 3), addresses: ["100.64.0.3/32"],
+            extra: #","DiscoKey":"\#(discoKeyText)","HomeDERP":\#(EnginePair.homeDERP)"#)
+        _ = pair.alice.apply(try pair.netmap(for: .alice, peers: [wideBob, carol]), at: clockStart, wallClock: wallClockStart)
+
+        let asCarol = TestPacket.udp(from: "100.64.0.3", 1, to: "100.64.0.1", 7)
+        let delivery = pair.send(asCarol, from: .bob)
+        #expect(delivery.packets[.alice] == nil)
+        #expect(delivery.drops[.alice] == [.wireGuard(.disallowedSource)])
+
+        // 자기 주소로 보낸 것은 그대로 닿는다.
+        let asBob = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
+        #expect(pair.send(asBob, from: .bob, at: clockStart + .milliseconds(1)).packets[.alice] == [asBob])
+    }
+
     @Test("TSMP는 엔진이 소비하고 위로 올리지 않는다: 장치에서 온 것은 보내는 쪽이, 피어가 보낸 것은 받는 쪽이")
     func tsmpIsConsumed() throws {
         var pair = try EnginePair()

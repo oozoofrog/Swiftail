@@ -1,23 +1,26 @@
 /// 짝 맺기 절차의 메시지와 그 바이트(계약 5절).
 ///
 /// ```
-/// J→H  hello     "SWPR" ‖ 0x01 ‖ nonceJ(32) ‖ 길이(1) ‖ 기기 이름(UTF-8, 1~64바이트)
+/// J→H  hello     "SWPR" ‖ 0x02 ‖ commitJ(32) ‖ 길이(1) ‖ 기기 이름(UTF-8, 1~64바이트)
 /// H→J  challenge 상태(1) ‖ nonceH(32)
-/// J→H  proof     HMAC(32)
+/// J→H  proof     nonceJ(32) ‖ HMAC(32)
 /// H→J  accepted  HMAC(32)
 /// H→J  decision  D ‖ HMAC(32)     D = 상태(1) ‖ [승인: 길이(1) ‖ StableID ‖ 길이(1) ‖ 표시 이름]
 /// ```
 ///
+/// `hello`가 싣는 것은 nonceJ가 아니라 그 약속(commitJ)이고, nonceJ는 nonceH를 받은 뒤 `proof`에서 연다. 어느 쪽도 상대의
+/// nonce를 본 뒤에 자기 nonce를 고를 수 없다(`PairingTranscript.commitment(to:)`).
+///
 /// 길이는 메시지마다 정해져 있다. 읽기는 받은 바이트를 모아 두고 `parse`에 넘긴다: 아직 모자라면 `incomplete`, 규격과
 /// 다르면 `invalid`, 다 왔으면 값과 쓴 길이다. 남은 바이트가 위반인지는 차례를 아는 상태 기계가 정한다.
 enum PairingMessage {
-    /// nonce의 길이.
+    /// nonce와 그 약속의 길이.
     static let nonceLength = 32
     /// `proof`·`accepted`와 `decision`의 HMAC-SHA256 길이.
     static let codeLength = 32
 
     /// 들어오는 쪽이 절차에서 보내는 바이트의 상한: 가장 긴 `hello`와 `proof`. 이보다 많이 왔으면 이미 위반이다.
-    static let maximumJoinerLength = Hello.prefix.count + nonceLength + 1 + DeviceName.maximumLength + codeLength
+    static let maximumJoinerLength = Hello.prefix.count + nonceLength + 1 + DeviceName.maximumLength + Proof.length
 
     /// 모아 둔 바이트를 메시지 하나로 읽은 결과.
     enum Parsed<Message> {
@@ -26,15 +29,16 @@ enum PairingMessage {
         case complete(Message, length: Int)
     }
 
-    /// J→H 첫 메시지. 프로토콜의 표식과 판, 들어오는 쪽의 nonce, 스스로 밝힌 기기 이름.
+    /// J→H 첫 메시지. 프로토콜의 표식과 판(2), 들어오는 쪽 nonce의 약속, 스스로 밝힌 기기 이름.
     struct Hello: Sendable, Equatable {
-        static let prefix = Array("SWPR".utf8) + [0x01]
+        static let prefix = Array("SWPR".utf8) + [0x02]
 
-        var nonce: [UInt8]
+        /// commitJ. nonceJ는 `proof`에서 온다.
+        var commitment: [UInt8]
         var deviceName: DeviceName
 
         var encoded: [UInt8] {
-            Self.prefix + nonce + [UInt8(deviceName.bytes.count)] + deviceName.bytes
+            Self.prefix + commitment + [UInt8(deviceName.bytes.count)] + deviceName.bytes
         }
 
         static func parse(_ buffer: [UInt8]) -> Parsed<Hello> {
@@ -45,8 +49,30 @@ enum PairingMessage {
             guard (1...DeviceName.maximumLength).contains(nameLength) else { return .invalid }
             guard buffer.count >= nameStart + nameLength else { return .incomplete }
             guard let name = DeviceName(bytes: buffer[nameStart..<nameStart + nameLength]) else { return .invalid }
-            let nonce = Array(buffer[prefix.count..<prefix.count + nonceLength])
-            return .complete(Hello(nonce: nonce, deviceName: name), length: nameStart + nameLength)
+            let commitment = Array(buffer[prefix.count..<prefix.count + nonceLength])
+            return .complete(Hello(commitment: commitment, deviceName: name), length: nameStart + nameLength)
+        }
+    }
+
+    /// J→H 증명. 약속해 둔 nonceJ를 열고, 그 뒤에 비밀을 안다는 HMAC을 붙인다.
+    struct Proof: Sendable, Equatable {
+        static let length = nonceLength + codeLength
+
+        var nonce: [UInt8]
+        var code: [UInt8]
+
+        var encoded: [UInt8] { nonce + code }
+
+        /// 정확히 `length`바이트일 때만 읽는다. 모자라면 nil(더 넘치는지는 차례를 아는 상태 기계가 본다).
+        init?(_ buffer: [UInt8]) {
+            guard buffer.count == Self.length else { return nil }
+            nonce = Array(buffer[..<nonceLength])
+            code = Array(buffer[nonceLength...])
+        }
+
+        init(nonce: [UInt8], code: [UInt8]) {
+            self.nonce = nonce
+            self.code = code
         }
     }
 

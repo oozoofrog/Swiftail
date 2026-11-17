@@ -81,6 +81,20 @@ struct EnginePeerTests {
         #expect(peers.first?.allowedIPs == ["100.64.0.9/32", "10.1.2.3/32", "fd7a:115c:a1e0::9/128"].compactMap(IPPrefix.init))
     }
 
+    @Test("addresses에 있어도 한 주소짜리가 아닌 접두는 뺀다. 남는 것이 없으면 올리지 않는다")
+    func widePrefixInAddressesIsExcluded() throws {
+        let wide = try peers(addresses: ["100.64.0.2/32", "100.64.0.0/10", "fd7a:115c:a1e0::/48", "0.0.0.0/0"])
+        #expect(wide.first?.allowedIPs == ["100.64.0.2/32"].compactMap(IPPrefix.init))
+        #expect(try peers(addresses: ["100.64.0.0/10"]).isEmpty)
+    }
+
+    @Test("이 노드 자신의 주소는 피어의 AllowedIPs에 넣지 않는다")
+    func selfAddressIsExcluded() throws {
+        let allowed = #","AllowedIPs":["100.64.0.2/32","100.64.0.1/32","fd7a:115c:a1e0::1/128"]"#
+        #expect(try peers(Self.reachable + allowed).first?.allowedIPs == ["100.64.0.2/32"].compactMap(IPPrefix.init))
+        #expect(try peers(addresses: ["100.64.0.1/32"]).isEmpty, "자기 주소만 내세운 피어는 올리지 않는다")
+    }
+
     @Test("지원하지 않는 피어(WireGuard 전용, jailed, masquerade, 서명 없는 피어)는 올리지 않는다")
     func unsupportedPeers() throws {
         #expect(try peers(Self.reachable + #","UnsignedPeerAPIOnly":true"#).isEmpty)

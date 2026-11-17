@@ -76,8 +76,8 @@ struct NodeLogoutReviewTests {
                 Issue.record("control(.connection)이 아니다")
                 return
             }
-            #expect(StateDirectoryClaims.shared.claim(directory), "던진 logOut()은 차지를 남기지 않는다")
-            StateDirectoryClaims.shared.release(directory)
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory), "던진 logOut()은 차지를 남기지 않는다")
+            StateDirectoryClaims.shared.release(claim)
             #expect(try Self.identityFile(in: directory) == before)
         }
     }
@@ -122,8 +122,8 @@ struct NodeLogoutReviewTests {
                     return
                 }
                 #expect(ContinuousClock.now - start < .seconds(3), "취소는 기한(10초)을 기다리지 않는다")
-                #expect(StateDirectoryClaims.shared.claim(directory), "취소한 logOut()은 차지를 남기지 않는다")
-                StateDirectoryClaims.shared.release(directory)
+                let claim = try #require(StateDirectoryClaims.shared.claim(directory), "취소한 logOut()은 차지를 남기지 않는다")
+                StateDirectoryClaims.shared.release(claim)
                 #expect(try Self.identityFile(in: directory) == before)
             }
         }
@@ -162,8 +162,8 @@ struct NodeLogoutReviewTests {
             #expect(await run.value == nil)
             // run()이 끝난 뒤: 등록한 적이 없어 아무것도 보내지 않고 돌아온다.
             #expect(await Self.logOutError(node) == nil)
-            #expect(StateDirectoryClaims.shared.claim(directory))
-            StateDirectoryClaims.shared.release(directory)
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory))
+            StateDirectoryClaims.shared.release(claim)
         }
     }
 }

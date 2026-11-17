@@ -464,7 +464,7 @@ AUM과 NKS에 같은 규칙을 쓴다(3.1의 `Unmarshal` 경로).
 
 1. **정적 검사**(3.4, 3.5): `PrevAUMHash`가 길이 0인 바이트열이면 거절(null은 된다. 길이는 보지 않는다). `Key`가 있으면 `Kind`가 1, `Votes`가 1~4,096, `Meta`의 키·값 길이 합이 512바이트 이하(3.2). 모든 서명의 KeyID가 32바이트, 서명이 64바이트. `State`가 있으면 체크포인트 검사: `LastAUMHash` 없음, `DisablementValues` 1~32개·각 32바이트·서로 다름, `Keys` 1~512개·각각 검사 통과·KeyID 서로 다름. 종류별: AddKey는 `Key` 필수이고 `KeyID`·`State`·`Votes`·`Meta` 금지, RemoveKey는 `KeyID`(길이>0) 필수이고 `Key`·`State`·`Votes`·`Meta` 금지, UpdateKey는 `KeyID`(길이>0)와 `Votes`나 `Meta` 가운데 하나 이상(빈 맵 `Meta`도 "있음"이다) 필수이고 `Key`·`State` 금지, Checkpoint는 `State` 필수이고 `KeyID`·`Key`·`Votes`·`Meta` 금지. NoOp(3), 종류 0, 6 이상은 종류별 검사가 없다.
 2. **부모**(4.1 2): 부모 없는 AUM이 아니면 부모 상태의 `LastAUMHash`가 있고 `PrevAUMHash`와 바이트가 같아야 한다. 길이가 32가 아닌 `PrevAUMHash`는 여기서 떨어진다(3.4).
-3. **서명**(4.1 3·4, 3.7): 하나 이상 있어야 한다. **모든** 서명의 KeyID가 부모 상태의 신뢰 키여야 하고, 그 키의 `Public`(상태 안의 값. 32바이트가 아니면 실패)으로 `SigHash`에 대한 `Ed25519Verification.isValidZIP215`가 참이어야 한다. 모르는 키의 서명이 하나라도 섞이면 거절한다.
+3. **서명**(4.1 3·4, 3.7): 하나 이상 있어야 한다. **모든** 서명의 KeyID가 부모 상태의 신뢰 키여야 하고, 그 키의 `Public`(상태 안의 값. 32바이트가 아니면 실패)으로 `SigHash`에 대한 `Ed25519Verification.isValidZIP215`가 참이어야 한다. 모르는 키의 서명이 하나라도 섞이면 거절한다. 한 AUM 안에서 같은 (KeyID, 서명) 쌍은 한 번만 검증한다(2026-11-17 보안 검증). 판정은 되풀이한 만큼 검증하는 Go와 같고, 신뢰 키의 서명 하나를 4,096번 되풀이한 AUM 하나가 받는 쪽을 수십 초 붙잡지 못한다.
 4. `Votes`의 문턱은 없다. 신뢰 키 하나의 서명으로 충분하다(4.1).
 5. 키가 하나뿐인 상태에서 그 키를 지우는 RemoveKey는 거절한다(4.1 5).
 6. **적용**(4.2): 결과 상태의 `LastAUMHash`는 이 AUM의 해시다. NoOp는 그대로. Checkpoint는 `StateID1/2`가 부모와 같아야 하고 상태 전체를 체크포인트의 것으로 바꾼다. AddKey는 KeyID가 이미 있으면 거절하고 끝에 덧붙인다(512개 검사는 여기에 없다). UpdateKey는 키가 없으면 거절하고, `Votes`·`Meta`를 바꾼 키가 A1의 키 검사를 다시 통과해야 한다. RemoveKey는 키가 없으면 거절하고 순서를 지키며 지운다. 그 밖의 종류는 상태를 그대로 둔다.

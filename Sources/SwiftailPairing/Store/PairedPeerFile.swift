@@ -3,7 +3,8 @@ import Foundation
 /// 짝 목록의 파일 `storeDirectory/paired-peers.json`을 읽고 쓰는 가장자리(계약 동작 S2·S3).
 ///
 /// 쓰기는 같은 디렉터리의 임시 파일(0600)에 다 쓰고 디스크에 내린 뒤 이름을 바꾼다. 쓰는 도중에 멈춰도 옛 파일이 남는다.
-/// 읽기는 심볼릭 링크를 따라가지 않고 1MiB까지만 읽는다. 오류에는 경로를 싣지 않는다.
+/// 읽기는 심볼릭 링크를 따라가지 않고 1MiB까지만 읽는다. 오류에는 경로를 싣지 않는다. 디렉터리는 지금 사용자의 것이고
+/// 그룹·기타가 쓸 수 없어야 한다(`hasPrivateDirectory`).
 struct PairedPeerFile: Sendable {
     static let name = "paired-peers.json"
     /// 파일의 한도(S3).
@@ -12,6 +13,21 @@ struct PairedPeerFile: Sendable {
     let directory: URL
 
     private var path: String { directory.appending(path: Self.name).path(percentEncoded: false) }
+
+    /// 이 주인과 권한의 디렉터리에 짝 목록을 두어도 되는가(S2): 디렉터리이고, 지금 사용자의 것이고, 그룹·기타가 쓸 수 없다.
+    ///
+    /// 디렉터리에 쓸 수 있는 쪽은 목록 파일을 바꿔치기해 짝을 더할 수 있다. 파일의 권한(0600)만으로는 막지 못한다.
+    /// `SwiftailCertificates`가 `certs/`에 거는 것과 같은 규칙이다.
+    static func isPrivateDirectory(mode: mode_t, owner: uid_t, currentUser: uid_t) -> Bool {
+        mode & S_IFMT == S_IFDIR && owner == currentUser && mode & (S_IWGRP | S_IWOTH) == 0
+    }
+
+    /// 디렉터리가 있고 `isPrivateDirectory`에 맞는가. 경로의 심볼릭 링크는 따라가서 가리키는 디렉터리를 본다.
+    var hasPrivateDirectory: Bool {
+        var status = stat()
+        return stat(directory.path(percentEncoded: false), &status) == 0
+            && Self.isPrivateDirectory(mode: status.st_mode, owner: status.st_uid, currentUser: geteuid())
+    }
 
     /// 저장된 목록. 파일이 없으면 빈 목록이다.
     ///

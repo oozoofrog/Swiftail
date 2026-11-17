@@ -244,6 +244,32 @@ struct PairedPeerStoreTests {
         }
     }
 
+    @Test("그룹이나 기타가 쓸 수 있는 디렉터리는 쓰지 않고, 쥐지도 않는다", arguments: [0o777, 0o770, 0o702])
+    func refusesWritableStoreDirectory(mode: Int) async throws {
+        try await Self.withDirectory { directory in
+            let node = try Self.node(directory)
+            let store = directory.appending(path: "store")
+            try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: store.path)
+            #expect(await pairingError { try await Self.host(node, store: store) } == .storeUnreadable)
+
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: store.path)
+            _ = try await Self.host(node, store: store)
+        }
+    }
+
+    @Test("짝 목록 디렉터리의 규칙: 디렉터리이고, 지금 사용자의 것이고, 그룹·기타가 쓸 수 없다(S2)")
+    func judgesStoreDirectory() {
+        let directory = mode_t(S_IFDIR)
+        #expect(PairedPeerFile.isPrivateDirectory(mode: directory | 0o700, owner: 501, currentUser: 501))
+        #expect(PairedPeerFile.isPrivateDirectory(mode: directory | 0o755, owner: 501, currentUser: 501))
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o700, owner: 502, currentUser: 501), "다른 사용자의 것")
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o700, owner: 0, currentUser: 501))
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o720, owner: 501, currentUser: 501), "그룹이 쓴다")
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o702, owner: 501, currentUser: 501), "기타가 쓴다")
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: mode_t(S_IFREG) | 0o600, owner: 501, currentUser: 501))
+    }
+
     @Test("장치가 .inProcess가 아니거나 포트가 0이면 만들지 못하고, 디렉터리를 쥐지도 않는다")
     func validatesConfiguration() async throws {
         try await Self.withDirectory { directory in
