@@ -102,9 +102,11 @@ public struct TailscaleOAuthClient: Sendable {   // description·dump에서 비�
     public var id: String
     public var secret: String      // tskey-client-…
     public var tags: [String]      // tag:… 하나 이상
+    public init(id: String, secret: String, tags: [String])   // 검사는 AuthKeyIssuer.init이 한다
 }
 
-public struct AuthKeyIssuer: Sendable {
+public struct AuthKeyIssuer: Sendable {           // description·dump에서 클라이언트 비밀을 가린다
+    public static let defaultBaseURL: URL          // https://api.tailscale.com
     public init(client: TailscaleOAuthClient, baseURL: URL = AuthKeyIssuer.defaultBaseURL) throws(AuthKeyIssueError)
     /// 한 번만 쓸 수 있고 미리 승인된, 임시가 아닌 키 하나.
     public func issue(lifetime: Duration) async throws(AuthKeyIssueError) -> IssuedAuthKey
@@ -114,16 +116,22 @@ public struct IssuedAuthKey: Sendable {          // description·dump에서 key�
     public let key: String
     public let expires: Date
 }
+
+public enum AuthKeyIssueError: Error, Sendable, Equatable {   // 연관 값에 비밀·토큰·키·서버 본문이 없다
+    case invalidClient, invalidTags, invalidLifetime, invalidBaseURL
+    case clientRejected, unauthorized, forbidden, http(status: Int)
+    case invalidResponse, network, cancelled
+}
 ```
 
-- K1. 요청은 둘이다.
-  1. `POST <base>/api/v2/oauth/token`, `Content-Type: application/x-www-form-urlencoded`, 본문 `grant_type=client_credentials`, `Authorization: Basic base64(<id>:<secret>)`. 2xx가 아니면 Basic 없이 본문에 `client_id`·`client_secret`을 더해 **한 번만** 다시 보낸다(`x/oauth2` `internal/token.go`의 자동 감지와 같다). 2xx의 JSON에서 `access_token`을 읽는다.
-  2. `POST <base>/api/v2/tailnet/-/keys`, `Authorization: Bearer <토큰>`, 본문은 Go `CreateKeyWithExpiry`와 같다(`client/tailscale/keys.go:93-96`): `{"capabilities":{"devices":{"create":{"reusable":false,"ephemeral":false,"preauthorized":true,"tags":[…]}}},"expirySeconds":<초>}`. `Content-Type: application/json`을 붙인다(Go는 붙이지 않는다). 200의 JSON에서 `key`(`tskey-auth-`로 시작)와 `expires`(RFC 3339, 소수 초 허용)를 읽는다.
+- K1. 요청은 Go `get-authkey`의 흐름과 같다(`x/oauth2/clientcredentials` + `client/tailscale`).
+  1. `POST <base>/api/v2/oauth/token`, `Content-Type: application/x-www-form-urlencoded`. 먼저 `Authorization: Basic base64(<QueryEscape(id)>:<QueryEscape(secret)>)`와 본문 `grant_type=client_credentials`로 보낸다(`x/oauth2` `internal/token.go:186-205`). 이 시도가 **어떤 까닭으로든** 실패하면(2xx가 아님, 전송 실패, 읽지 못한 본문, `error` 필드, 빈 `access_token`) `Authorization` 없이 본문 `client_id=…&client_secret=…&grant_type=client_credentials`(키 순, `url.Values.Encode`)로 한 번만 다시 보내고 그 결과로 분류한다(`internal/token.go:226-243`의 자동 감지). Task 취소만은 다시 보내지 않는다. 방식은 기억하지 않고 호출마다 Basic부터 묻는다(K2). 2xx이고 JSON에 `error`가 없거나 비었으며 `access_token`이 비지 않아야 성공이다(`internal/token.go:269`, `:326-331`). `token_type`은 거르지 않는다. 폼 형식의 토큰 응답은 읽지 않는다.
+  2. `POST <base>/api/v2/tailnet/-/keys`, `Authorization: Bearer <토큰>`, 본문은 Go `CreateKeyWithExpiry`와 같은 `{"capabilities":{"devices":{"create":{"reusable":false,"ephemeral":false,"preauthorized":true,"tags":[…]}}},"expirySeconds":<초>}`(`client/tailscale/keys.go:93-96`). `get-authkey`는 `CreateKey`(만료 0)를 불러 `expirySeconds`를 보내지 않으므로 관문 8의 Go 쪽은 `CreateKeyWithExpiry`를 부른다. `Content-Type: application/json`은 Swift만 붙인다(Go는 안 붙인다, `keys.go:103`, `tailscale.go:156-165`). 견줄 때 이 머리는 뺀다. 200(Go와 같다, `keys.go:112`)의 JSON에서 `key`(`tskey-auth-`로 시작)와 `expires`(RFC 3339, 소수 초가 있어도 된다)를 읽는다.
 - K2. 토큰은 호출마다 새로 받고 쥐고 있지 않는다. 발급은 드문 일이다.
-- K3. `reusable`·`ephemeral`은 늘 `false`, `preauthorized`는 늘 `true`다. 임시 노드는 지워지면 `StableID`가 바뀌어 짝이 깨지고, 승인 대기는 짝 맺기를 멈춘다. `lifetime`은 초 단위로 버린다. 1초 미만이면 `.invalidLifetime`. 위쪽 상한은 서버가 정한다.
-- K4. 검사: `id`와 `secret`은 `A-Za-z0-9-_.~`만 쓰는 1~512바이트(`QueryEscape`가 그대로 두는 글자라 Go의 Basic 값과 같아진다). `secret`은 `tskey-client-`로 시작한다. 태그는 하나 이상이고 Go `tailcfg.CheckTag`와 같다: `tag:` 뒤가 비지 않고 첫 글자는 ASCII 영문, 나머지는 ASCII 영문·숫자·`-`. `baseURL`은 `https`여야 한다(시험용으로 루프백 주소의 `http`만 받는다). 어긋나면 `.invalidClient`·`.invalidTags`·`.invalidBaseURL`.
+- K3. 본문 값은 고정이다: `reusable` 거짓, `ephemeral` 거짓(임시 노드는 StableID가 사라져 짝이 깨진다), `preauthorized` 참(승인 대기는 짝 맺기를 멈춘다). `lifetime`은 초 단위로 버리고(Go `int64(expiry.Seconds())`), 1초 미만이면 아무것도 보내지 않고 `.invalidLifetime`. 위쪽 상한은 두지 않는다(Go에 없다. 서버가 거절하면 `.http(status)`).
+- K4. 검사: `id`와 `secret`은 1~512바이트이고 `A-Za-z0-9-_.~`(QueryEscape가 그대로 두는 글자)만 쓴다. `secret`은 `tskey-client-`로 시작한다. 태그는 하나 이상이고 각각 Go `tailcfg.CheckTag`(`tailcfg/tailcfg.go:766-786`) 그대로다: `tag:` 뒤가 비지 않고 첫 글자는 ASCII 영문, 나머지는 ASCII 영문·숫자·`-`. 길이 상한은 없다. `baseURL`은 `https`여야 한다(시험용으로 루프백 호스트 `127.0.0.1`·`::1`·`localhost`의 `http`만 받는다). 사용자 정보·쿼리·조각이 있으면 거절한다. 경로가 있으면 그 뒤에 `/api/v2/…`를 잇는다(Go와 같다). 어긋나면 `.invalidClient`·`.invalidTags`·`.invalidBaseURL`.
 - K5. HTTP: `URLSessionConfiguration.ephemeral`, 요청마다 15초, 리다이렉트는 따르지 않는다, 응답 본문은 64KiB까지만 읽는다. 쿠키와 캐시를 쓰지 않는다.
-- K6. 오류: 토큰 요청이 두 방식 모두 400·401이거나, 2xx인데 `error` 필드가 있거나 `access_token`이 비면 `.clientRejected`. 키 요청의 401 → `.unauthorized`, 403 → `.forbidden`(권한 `auth_keys` 쓰기나 태그가 없다). 그 밖의 상태 → `.http(status)`, 읽지 못한 응답 → `.invalidResponse`, 전송 실패 → `.network`, Task 취소 → `.cancelled`. 오류와 로그에 비밀·토큰·키·서버 본문을 넣지 않는다.
+- K6. 오류: 토큰 요청의 400·401과, 2xx인데 `error`가 있거나 `access_token`이 빈 것 → `.clientRejected`, 키 요청의 401 → `.unauthorized`, 403 → `.forbidden`(권한 `auth_keys` 쓰기나 태그가 없다), 그 밖의 상태(따르지 않은 3xx 포함) → `.http(status)`, 읽지 못한 응답(64KiB 초과, 머리에 실을 수 없는 토큰 포함) → `.invalidResponse`, 전송 실패(15초 기한 초과 포함) → `.network`, Task 취소 → `.cancelled`. 토큰 요청은 다시 보낸 뒤의 마지막 결과로 분류한다. 오류와 로그에 비밀·토큰·키·서버 본문을 넣지 않는다.
 - K7. OAuth 클라이언트로 만든 키로 들어온 노드는 태그 노드다. 그 태그에서 여는 노드의 **페어링 포트와 짝이 된 뒤 쓰는 앱 포트** 양쪽으로 가는 연결을 tailnet 정책이 허용해야 한다(앱의 안내 몫).
 - K8. 쓰지 않은 키는 만료될 때까지 살아 있다. 지우는 요청은 넣지 않는다(수명을 제안과 같게 짧게 준다).
 
@@ -256,7 +264,7 @@ public enum PairingError: Error, Sendable, Equatable {
 
 ## 8. 확인하지 못한 것
 
-- 실제 관리 API가 Basic과 본문 방식 가운데 무엇을 받는지, `expires`의 형식, 수명의 상한(관문 12).
+- 실제 관리 API가 Basic과 본문 방식 가운데 무엇을 받는지, 토큰 응답이 JSON인지(폼 형식은 읽지 않는다), `expires`의 형식, 수명의 상한(관문 12).
 - iOS에서 사용자 지정 스킴이 겹칠 때의 배달, 연결 도메인으로 열 때 조각이 앱까지 오는지(관문 13).
 - `CIQRCodeGenerator`가 둘레 여백을 넣는지(구현이 확인하고 없으면 더한다).
 - OS 소켓 J의 `NWConnection` 로컬 끝이 터널의 tailnet 주소·포트와 같은지(관문 13).

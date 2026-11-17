@@ -17,6 +17,7 @@ let package = Package(
         // 서버 노릇을 하는 앱만 쓰는 선택 제품(M7). iOS 터널 확장은 링크하지 않는다.
         .library(name: "SwiftailCertificates", targets: ["SwiftailCertificates"]),
         .library(name: "SwiftailLoopback", targets: ["SwiftailLoopback"]),
+        .library(name: "SwiftailPairing", targets: ["SwiftailPairing"]),
     ],
     targets: [
         .target(name: "SwiftailCrypto"),
@@ -75,7 +76,7 @@ let package = Package(
         .testTarget(name: "SwiftailTests", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailDERP", "SwiftailMagicsock"]),
         .testTarget(
             name: "SwiftailInteropTests",
-            dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailMagicsock", "SwiftailCertificates", "SwiftailLoopback"]
+            dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailMagicsock", "SwiftailCertificates", "SwiftailLoopback", "SwiftailPairing"]
         ),
         // ts.net 인증서의 발급·저장·갱신(ACME DNS-01). CryptoKit, Security, Foundation의 URLSession을 쓴다.
         .target(name: "SwiftailCertificates", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl"]),
@@ -87,6 +88,9 @@ let package = Package(
         // tailnet 연결을 127.0.0.1의 OS TCP 리스너에 잇는 다리.
         .target(name: "SwiftailLoopback", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(name: "SwiftailLoopbackTests", dependencies: ["SwiftailLoopback", "Swiftail", "SwiftailBase", "SwiftailIO", "SwiftailControl", "SwiftailEngine"]),
+        // 앱끼리의 QR·링크 페어링과 1회용 인증 키 발급(M9). Foundation의 URLSession을 쓴다.
+        .target(name: "SwiftailPairing", dependencies: ["Swiftail", "SwiftailBase"]),
+        .testTarget(name: "SwiftailPairingTests", dependencies: ["SwiftailPairing"]),
     ],
     swiftLanguageModes: [.v6]
 )
