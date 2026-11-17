@@ -24,7 +24,7 @@ public enum NodeEvent: Sendable, Equatable {
     case tailnetLockChanged(TailnetLockStatus)
     /// `TailnetNode.status`의 값이 바뀌었다. 지금의 모습은 `status`로 읽는다.
     ///
-    /// 앞서 알린 `status`와 실제로 다를 때만 나온다(피어 수, 자기 이름·주소, 인증서 이름, 터널 설정, 상태, tailnet lock 가운데
+    /// 앞서 알린 `status`와 실제로 다를 때만 나온다(피어 수, 자기 이름·주소·`StableID`, 인증서 이름, 터널 설정, 상태, tailnet lock 가운데
     /// 하나라도). 상태와 lock이 바뀌면 `stateChanged`·`tailnetLockChanged` 뒤에 이것도 나온다. 그 둘은 전이 자체를
     /// 알리고(로그인 URL 열기, 서명 안내), 이것은 화면에 보일 모습을 다시 읽으라는 신호다. 화면만 맞추는 앱은 이 사건만
     /// 보면 된다.

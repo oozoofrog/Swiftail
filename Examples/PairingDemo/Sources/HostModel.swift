@@ -42,6 +42,9 @@ final class HostModel {
     /// 여는 쪽이 돌고 있는가.
     var isRunning: Bool { host != nil }
     private(set) var offer: OpenOffer?
+    /// 이 호스트에서 연 제안의 수와, 사건(`.opened`)으로 알려진 수. 같을 때의 상태 사건만 지금 제안의 것이다.
+    @ObservationIgnored private var openedOffers = 0
+    @ObservationIgnored private var announcedOffers = 0
     private(set) var approvals: [Approval] = []
     private(set) var peers: [PairedPeer] = []
     /// 저장된 OAuth 클라이언트의 ID. 없으면 nil.
@@ -74,6 +77,8 @@ final class HostModel {
             }
             self.host = host
             hostedNode = node
+            openedOffers = 0
+            announcedOffers = 0
             peers = await host.pairedPeers
             log.record(.host, "started", "짝 \(peers.count)개")
             serving = Task { await self.serve(host, on: node) }
@@ -95,7 +100,7 @@ final class HostModel {
                 for await event in host.events {
                     switch event {
                     case .pairedPeerAdded, .pairedPeerRemoved: await self.refreshPeers(from: host)
-                    case .offerChanged: break
+                    case .offerChanged(let state): await self.offerChanged(state)
                     }
                 }
             }
@@ -114,11 +119,22 @@ final class HostModel {
 
     // MARK: 제안
 
+    /// 제안의 사건을 화면에 맞춘다. 쓰였거나 만료됐거나 닫힌 제안의 QR과 링크는 더 보이지 않는다(비밀이 든 링크다).
+    /// 사건은 차례대로 오므로, 받은 `.opened`의 수가 연 수와 같을 때의 상태 사건만 지금 화면의 제안의 것이다.
+    private func offerChanged(_ state: PairingHost.OfferState) {
+        switch state {
+        case .opened: announcedOffers += 1
+        case .used, .expired, .closed:
+            if announcedOffers == openedOffers { offer = nil }
+        }
+    }
+
     func openOffer(lifetime: Duration, authKey: String?) async {
         guard let host else { return }
         message = nil
         do throws(PairingError) {
             let offer = try await host.openOffer(lifetime: lifetime, authKey: authKey)
+            openedOffers += 1
             let url = offer.url(base: Self.linkBase)
             self.offer = OpenOffer(
                 url: url, qrCode: offer.qrCode(base: Self.linkBase), expires: offer.expires, carriesAuthKey: authKey != nil)

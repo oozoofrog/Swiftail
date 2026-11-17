@@ -238,7 +238,7 @@ public struct TunnelNetworkSettings: Sendable, Equatable {
 
 방법: `Swiftail`이 이 이름들만 `public typealias`로 낸다(`Sources/Swiftail/ReexportedTypes.swift`). `@_exported import`는 밑줄 붙은 비공식 기능이고 모듈 전체(tailcfg 모델, 키 타입, 제어 클라이언트)를 `Swiftail`의 표면으로 넓힌다. Swift 6의 `public import`(SE-0409)는 이름을 내보내지 않는다. 별명은 같은 타입이므로 원래 모듈을 함께 가져온 코드와 값을 그대로 주고받는다.
 
-소스 호환: `Swiftail`과 원래 모듈(`SwiftailBase` 등)을 **함께** 가져온 파일에서는 그 이름이 두 선언(별명과 원래 타입)으로 보인다. 타입 자리(`let a: IPAddress`, `[IPAddress: Node]`, `extension IPAddress`)와 호출(`IPAddress("…")`)은 그대로 되지만, 식 안에서 타입을 값처럼 쓰는 두 꼴은 모호해져 컴파일되지 않는다: `[IPAddress]()`(배열 타입의 생성), `(IPAddress).self`(swift-testing의 `@Test(arguments:)`가 매개변수 타입으로 만드는 꼴). 고치는 길은 이제 필요 없는 원래 모듈의 `import`를 지우거나 모듈 이름을 붙이는 것(`SwiftailBase.IPAddress`)이다. 이 저장소에서는 `Tests/SwiftailTests/NodeTailnetLockTests.swift`의 매개변수 하나가 걸려 모듈 이름을 붙였다.
+소스 호환: `Swiftail`과 원래 모듈(`SwiftailBase` 등)을 **함께** 가져온 파일에서는 그 이름이 두 선언(별명과 원래 타입)으로 보인다. 타입 자리(`let a: IPAddress`, `[IPAddress: Node]`, `extension IPAddress`)와 호출(`IPAddress("…")`)은 그대로 되지만, 식 안에서 타입을 문법 설탕으로 쓰는 자리와 루트를 적은 키 경로는 모호해져 컴파일되지 않는다(2026-11-18 검토에서 `swiftc -typecheck`로 확인): `[IPAddress]()`·`[IPAddress].self`, `[IPAddress: Int]()`, `IPAddress?.self`·`IPAddress?.none`, `(IPAddress, Int).self`·`(IPAddress).self`(swift-testing의 `@Test(arguments:)`가 만드는 꼴), `IPAddress.Type.self`, 별명을 거친 중첩 타입의 배열 `[TailnetLockStatus.Mode]()`, `\IPEndpoint.address`. `Array<IPAddress>()`·`Set<…>`·`extension`·패턴 매칭·`as?`·`MemoryLayout<IPAddress>`·`TailnetLockStatus.Mode.enforcing`은 된다. 고치는 길은 이제 필요 없는 원래 모듈의 `import`를 지우거나 모듈 이름을 붙이는 것(`SwiftailBase.IPAddress`)이다. 이 저장소에서는 `Tests/SwiftailTests/NodeTailnetLockTests.swift`의 매개변수 하나가 걸려 모듈 이름을 붙였다.
 
 ## 동작
 

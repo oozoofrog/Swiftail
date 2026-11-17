@@ -9,6 +9,10 @@ extension PairingHost {
         /// `removePairedPeer(withStableID:)`가 짝을 지우고 저장했다. 없는 짝을 지우면 나오지 않는다.
         case pairedPeerRemoved(stableID: String)
         /// 제안의 상태가 바뀌었다.
+        ///
+        /// 사건은 일어난 차례대로 온다. `.opened` 뒤에 오는 `.used`·`.expired`·`.closed`는 그 `.opened`가 알린 제안의 것이다
+        /// (앞 제안의 사건은 반드시 다음 `.opened`보다 앞에 있다). 그래서 화면의 제안은 `openOffer`가 돌려준 때가 아니라 이
+        /// 사건의 차례로 맞춘다: 받은 `.opened`의 수가 `openOffer`를 부른 수와 같아진 뒤의 상태 사건만 지금 제안의 것이다.
         case offerChanged(OfferState)
     }
 

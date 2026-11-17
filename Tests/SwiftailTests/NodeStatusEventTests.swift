@@ -130,6 +130,29 @@ struct NodeStatusEventTests {
     }
 }
 
+extension NodeStatusEventTests {
+    @Test("둘째 소비자가 와도 첫째의 흐름이 끝나지 않는다. 끝낼 때는 기다리던 소비자가 모두 nil을 받는다")
+    func secondConsumerDoesNotEndTheFirst() async {
+        let queue = NodeEventQueue()
+        let first = Task { await queue.next() }
+        try? await Task.sleep(for: .milliseconds(20))
+        let second = Task { await queue.next() }
+        try? await Task.sleep(for: .milliseconds(20))
+        queue.push(.stateChanged(.running))
+        queue.push(.statusChanged)
+        let received = [await first.value, await second.value]
+        #expect(received.contains(.stateChanged(.running)))
+        #expect(received.contains(.statusChanged))
+
+        let waitingA = Task { await queue.next() }
+        let waitingB = Task { await queue.next() }
+        try? await Task.sleep(for: .milliseconds(20))
+        queue.finish()
+        #expect(await waitingA.value == nil)
+        #expect(await waitingB.value == nil)
+    }
+}
+
 private extension TailnetNode {
     /// 홈 DERP 연결이 선 것처럼 상태 기계에 넣는다(netmap 뒤면 `.running`).
     func markHomeConnectedForStatusTesting() {
