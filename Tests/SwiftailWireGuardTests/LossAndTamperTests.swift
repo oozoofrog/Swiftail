@@ -108,27 +108,26 @@ struct LossAndTamperTests {
         #expect(!pair.bob.retiredTimestamps.contains { $0.peer == pair.key(.alice) })
     }
 
-    @Test("표가 가득 차면 timestamp가 가장 오래된 것부터 잊는다. 먼저 내렸어도 더 새 timestamp는 남는다")
-    func retiredTimestampsForgetOldestTimestampFirst() throws {
+    @Test("표가 가득 차면 먼저 내린 것부터 잊는다. 상대가 정한 먼 미래의 timestamp가 표를 차지하지 못한다")
+    func retiredTimestampsForgetFirstRetired() throws {
         var pair = Pair()
         let allowedIPs = try #require(pair.bob.peers[pair.key(.alice)]?.allowedIPs)
-        let first = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: t0)
-        _ = try pair.bob.receive(first.datagrams[0], at: t0)
-
-        // alice를 가장 먼저 내리고, 그 뒤로 더 오래된 timestamp의 피어를 한도보다 하나 많이 내린다.
-        pair.bob.removePeer(pair.key(.alice))
-        for second in 0...Int64(Constants.maxRetiredTimestamps) {
+        // 먼 미래의 timestamp를 쓴 피어들로 표를 가득 채운다.
+        for second in 0..<Int64(Constants.maxRetiredTimestamps) {
             let key = PublicKey(Curve25519.KeyAgreement.PrivateKey().publicKey)
             pair.bob.addPeer(key, allowedIPs: [])
-            pair.bob.peers[key]?.lastAcceptedTimestamp = TAI64N(sinceUnixEpoch: .seconds(1_000 + second))
+            pair.bob.peers[key]?.lastAcceptedTimestamp = TAI64N(sinceUnixEpoch: .seconds(4_000_000_000 + second))
             pair.bob.removePeer(key)
         }
         #expect(pair.bob.retiredTimestamps.count == Constants.maxRetiredTimestamps)
-        // 잊힌 것은 timestamp가 가장 오래된 둘이다.
-        let oldest = try #require(pair.bob.retiredTimestamps.map(\.timestamp).min())
-        #expect(oldest == TAI64N(sinceUnixEpoch: .seconds(1_002)))
 
-        // alice의 것은 남아, 다시 올린 뒤에도 옛 initiation의 재전송을 거절한다.
+        // 그 뒤에 핸드셰이크하고 내린 정상 피어의 기록은 남는다. 잊히는 것은 가장 먼저 내린 것이다.
+        let first = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: t0)
+        _ = try pair.bob.receive(first.datagrams[0], at: t0)
+        pair.bob.removePeer(pair.key(.alice))
+        #expect(pair.bob.retiredTimestamps.count == Constants.maxRetiredTimestamps)
+        #expect(pair.bob.retiredTimestamps.first?.timestamp == TAI64N(sinceUnixEpoch: .seconds(4_000_000_001)))
+
         pair.bob.addPeer(pair.key(.alice), allowedIPs: allowedIPs)
         #expect(throws: WireGuardError.replayed) { try pair.bob.receive(first.datagrams[0], at: t0 + .seconds(1)) }
     }

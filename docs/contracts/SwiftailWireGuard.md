@@ -133,7 +133,7 @@ public struct WireGuardDevice: Sendable {
 - 메시지 4종의 직렬화·해석, mac1 생성·검사
 - Noise IKpsk2 초기자·응답자. PSK는 32바이트 0으로 고정하되 KDF3 단계는 그대로 둔다
 - TAI64N 생성, 피어별 timestamp 재전송 검사, initiation flood 검사(20ms)
-- 내린 피어의 마지막 timestamp: `removePeer`가 장치에 남기고(1,024개까지, 넘으면 timestamp가 가장 오래된 것부터 잊는다. 같으면 먼저 내린 것) 같은 키의 `addPeer`가 되살린다. 피어가 netmap에서 빠졌다 돌아와도 그 전에 받은 initiation의 재전송은 `replayed`다(2026-11-17 보안 검증). wireguard-go는 피어를 지우면 이 값도 버린다. 한계: 표는 1,024개뿐이라, 그만큼의 피어가 더 새 timestamp를 남기고 빠지면 그 전에 빠진 피어의 것은 잊힌다. 잊힌 피어가 돌아오면 그 전에 받은 initiation의 재전송이 다시 통한다
+- 내린 피어의 마지막 timestamp: `removePeer`가 장치에 남기고(1,024개까지, 넘으면 먼저 내린 것부터 잊는다. timestamp는 상대가 정하는 값이라 잊는 차례의 기준으로 쓰지 않는다) 같은 키의 `addPeer`가 되살린다. 피어가 netmap에서 빠졌다 돌아와도 그 전에 받은 initiation의 재전송은 `replayed`다(2026-11-17 보안 검증). wireguard-go는 피어를 지우면 이 값도 버린다. 한계: 표는 1,024개뿐이라, 그만큼의 피어가 더 새 timestamp를 남기고 빠지면 그 전에 빠진 피어의 것은 잊힌다. 잊힌 피어가 돌아오면 그 전에 받은 initiation의 재전송이 다시 통한다
 - 전송 암복호화, 카운터, 패딩(16의 배수), keepalive, 재전송 방지 창(8128)
 - keypair의 previous·current·next 전환. 응답자는 새 키로 온 첫 패킷이 AEAD와 재전송 검사를 통과한 뒤에만 next를 current로 올린다
 - 타이머와 키 교체: 노트 "상수와 타이머" 표의 값 그대로. 재시도마다 initiation을 새로 만든다
