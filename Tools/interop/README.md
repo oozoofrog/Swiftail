@@ -943,3 +943,25 @@ TL-11a 검토(`SwiftailTKA` 보안 검토)가 더한 것(`review.go`, Swift 쪽 
 - `reviewSignatures`: direct·rotation 서명 63·65·0바이트, 33바이트 회전 키, 같은 node 키로의 회전, 바깥 rotation의 KeyID(쓰이지 않음), 회전 키가 신뢰 키 자신, 지운 키(전후)의 credential, credential을 감싼 rotation 위의 rotation(가운데 `WrappingPubkey`, 틀린 서명 키), 잘린 NKS, 비최단 `SigKind`.
 
 `tkafixtures verify-nks`는 표준 입력으로 JSON 객체 하나 `{"aums":["<16진>",…],"nodeKey":"<32바이트 16진>","nks":"<16진>"}`를 받는다. `aums`의 첫 것으로 부트스트랩하고 나머지를 `Inform`한 상태에서 `NodeKeyAuthorizedWithDetails`로 판정해 `{"ok":true,"authorized":…,"error":…,"rotation":…}` 한 줄을 쓰고 0으로 끝난다(판정이 거절이어도 0이다). 입력이 4MiB를 넘거나, JSON 객체 하나가 아니거나, 모르는 필드·대문자 16진이 있거나, 부트스트랩·`Inform`이 실패하면 `{"ok":false,"error":"…"}`를 쓰고 1로 끝난다. Swift가 만든 서명(`SignByCredential`·재서명. CryptoKit 서명은 결정적이지 않다)을 이것으로 확인한다.
+
+# 인증 키 발급 기록 서버 (`authkeyrecorder`)
+
+M9 관문 (가) 7(`docs/contracts/SwiftailPairing.md` 7절)의 도구다. Go의 인증 키 발급 흐름과 Swift `AuthKeyIssuer`가 같은 서버에 보낸 요청을 견주게 한다. 빌드는 `sh Scripts/build-interop-tools.sh authkeyrecorder`. 의존성은 `golang.org/x/oauth2` v0.37.0(BSD-3-Clause)과 `tailscale.com` v1.104.6의 공개 `client/tailscale`(BSD-3-Clause)이다. 실제 관리 API(`api.tailscale.com`)는 부르지 않는다.
+
+`authkeyrecorder serve [-reject-basic]`는 `127.0.0.1`의 임의 포트에서 듣고 표준 출력의 첫 줄에 서버 URL(`http://127.0.0.1:12345`)을 쓴다. 표준 입력이 닫히면(EOF) 끝난다. `-reject-basic`이면 `Authorization`이 있거나 폼에 `client_id`·`client_secret`이 없는 토큰 요청을 401 `{"error":"invalid_client"}`로 거절한다(요청은 적는다). 두 클라이언트가 머리 방식에서 본문 방식으로 다시 묻는 길을 견주는 데 쓴다.
+
+- `/api/v2/oauth/token`: 요청을 적고 `{"access_token":"tskey-api-EXAMPLE-token","token_type":"Bearer","expires_in":3600}`을 돌려준다.
+- `/api/v2/tailnet/-/keys`: 요청을 적고 `{"id":"kEXAMPLE","key":"tskey-auth-EXAMPLE","created":"2026-01-01T00:00:00Z","expires":"2026-01-01T00:10:00Z","capabilities":{…}}`를 돌려준다.
+- `GET /recorded`: 적은 요청을 받은 순서대로 JSON 배열로 내놓고 비운다. 한 줄은 `{"method","path","authorization","contentType","body","json","form"}`이다. `json`은 본문이 JSON이면 키를 정렬해 다시 쓴 것, `form`은 JSON이 아닌 폼 본문이면 `url.Values.Encode()`로 다시 쓴 것(키 정렬)이고 아니면 `""`다. 본문은 64KiB까지만 읽는다.
+
+기록 서버는 받은 `Authorization` 머리를 그대로 내놓는다. 가짜 값만 다루는 시험 도구이므로 실제 OAuth 클라이언트 비밀을 넣지 않는다.
+
+`authkeyrecorder issue -base <서버 URL> -tags tag:a,tag:b -expiry <초>`는 `cmd/get-authkey`(tailscale.com v1.104.7)와 같은 짜임으로 키 하나를 만들어 표준 출력에 쓴다: `clientcredentials.Config{TokenURL: <base>/api/v2/oauth/token}.Client`를 HTTP 클라이언트로 쓰는 `tailscale.NewClient("-", nil)`의 `CreateKeyWithExpiry`. get-authkey가 쓰는 `internal/client/tailscale`은 모듈 밖에서 쓸 수 없어 같은 코드의 공개 패키지를 쓰고 `I_Acknowledge_This_API_Is_Unstable`을 켠다. get-authkey의 `CreateKey`는 만료가 0(본문에서 `expirySeconds` 생략)이므로 수명을 주는 `CreateKeyWithExpiry`를 부른다. 클라이언트 ID와 비밀은 get-authkey처럼 `TS_API_CLIENT_ID`·`TS_API_CLIENT_SECRET`에서 읽는다. `-base`는 루프백 주소의 `http`만 받는다. 키의 `reusable`·`ephemeral`·`preauthorized`는 계약 4절 K3대로 거짓·거짓·참으로 고정한다. 머리 방식이 실패하면 `x/oauth2`가 본문 방식으로 한 번 다시 묻는다(`internal/token.go` `RetrieveToken`). 보통의 `serve`에서는 첫 시도가 200이라 다시 묻지 않는다.
+
+Go `client/tailscale`은 키 요청에 `Content-Type`을 싣지 않는다(`keys.go`의 `CreateKeyWithExpiry`, `tailscale.go`의 `Do`). Swift는 `application/json`을 싣는다. 관문 시험은 이 차이를 따로 확인하고 나머지(요청 수와 순서, 메서드, 경로, `Authorization` 값 전체(본문 방식은 빈 값), 토큰 요청의 `Content-Type`, 폼·JSON 본문의 정규형)는 같아야 한다. 보통의 `serve`와 `-reject-basic` 둘 다 견준다.
+
+Swift 시험은 `SWIFTAIL_AUTHKEYRECORDER`에 도구 경로를 넣어 돌린다. 값이 없으면 건너뛴다.
+
+```sh
+SWIFTAIL_AUTHKEYRECORDER="$(sh Scripts/build-interop-tools.sh authkeyrecorder)" eyebuild swift <용도> -- test --filter AuthKeyInteropTests
+```
