@@ -247,6 +247,11 @@ struct HostMachineTests {
         #expect(rehearsal.machine.hasOpenOffer)
     }
 
+    @Test("글자를 잇는 서식 문자(U+200C, U+200D)가 든 기기 이름은 받는다", arguments: ["\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} iPad", "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}"])
+    func acceptsJoinedDeviceName(name: String) {
+        #expect(DeviceName(name)?.text == name)
+    }
+
     @Test(
         "규격과 다른 hello는 challenge 없이 닫는다",
         arguments: [

@@ -164,7 +164,7 @@ T = nonceJ ‖ nonceH ‖ SHA256(제안의 host 문자열) ‖ 제안의 port(2,
 - P5. 앱의 결정은 `decide(PairingRequest) async -> Bool`이다. 요청에는 J의 `PeerIdentity`, 기기 이름, 확인 숫자가 있다. **기기 이름은 상대가 스스로 밝힌 값이다.** 같은 OAuth 클라이언트의 키로 들어온 노드들은 로그인 이름이 같으므로, 승인 화면은 확인 숫자를 보여 주고 사용자가 들어오는 기기 화면의 숫자와 같을 때 승인하게 한다. 120초 안에 답이 없으면 상태 3.
 - P6. 결정을 기다리는 동안 읽기를 걸어 둔다. EOF·오류·어떤 바이트든 오면 끊긴 것으로 보고 결정 Task를 취소한다. 그 사이 새 제안을 열거나 `closeOffer()`를 불러도 이 결정은 계속된다.
 - P7. 승인이면, 그 순간의 `whoIs`가 처음과 같은 `StableID`일 때만 짝 목록에 넣고 저장한 뒤 상태 1을 보낸다. 저장에 실패하면 상태 2다. 상태 1을 보내기 전에 끊기면 H에는 짝이 남고 J에는 없다. 다시 짝을 맺으면 항목이 바뀐다(S1).
-- P8. 한도: 절차 중인 연결 8개(넘으면 받자마자 닫는다), 연결을 받은 때부터 `proof`까지 10초, 메시지는 위 길이 그대로(넘거나 모자라면 닫는다). 자기 차례가 아닐 때 온 바이트는 위반이다. 기기 이름은 올바른 UTF-8이어야 하고 제어 문자(Cc)와 서식 문자(Cf, 방향 바꿈 포함)를 받지 않는다.
+- P8. 한도: 절차 중인 연결 8개(넘으면 받자마자 닫는다), 연결을 받은 때부터 `proof`까지 10초, 메시지는 위 길이 그대로(넘거나 모자라면 닫는다). 자기 차례가 아닐 때 온 바이트는 위반이다. 기기 이름은 올바른 UTF-8이어야 하고 제어 문자(Cc)와 서식 문자(Cf, 방향 바꿈 포함)를 받지 않는다. 글자를 잇는 U+200C·U+200D만은 받는다(이은 이모지, 페르시아어·인도계 문자의 이름).
 - P9. 제안은 한 번에 하나다. 새로 열면 앞의 것은 그 자리에서 못 쓴다. 수명은 기본 300초, 1~3600초. `openOffer`는 `run()` 전에도 된다(연결은 `run()`이 듣기 시작해야 받는다). 노드의 자기 FQDN이 없으면 `.notRunning`, `authKey`가 O2에 어긋나면 `.invalidAuthKey`.
 - P10. 로그에는 요약만 남긴다(받음, 닫은 까닭, 결정). 비밀·증명·인증 키·확인 숫자·이름·주소는 남기지 않는다.
 
@@ -173,8 +173,8 @@ T = nonceJ ‖ nonceH ‖ SHA256(제안의 host 문자열) ‖ 제안의 port(2,
 - J1. 첫 `challenge`를 받을 때까지 60초 동안 1초 간격으로 다시 건다. 방금 tailnet에 들어온 노드는 이름 풀이와 경로, 그리고 H의 netmap에 자기가 오르는 데 시간이 걸린다(그동안 H는 P1로 닫는다). 60초가 지나면 `.unreachable`.
 - J2. OS 소켓: `NWConnection`으로 `host:port`에 건다(이름은 터널의 MagicDNS가 푼다). 준비된 뒤 로컬·원격 주소가 `100.64.0.0/10`이나 `fd7a:115c:a1e0::/48` 밖이면 `hello`를 보내지 않고 `.notOnTailnet`(다시 걸지 않는다).
 - J3. `challenge`의 상태 1이면 `.rejected`. `proof`를 보낸 뒤 `accepted` 없이 닫히면 `.rejected`.
-- J4. `accepted`를 상수 시간으로 견준다. 틀리면 `.hostNotVerified`. 맞으면 `awaitingApproval(확인 숫자)`를 부르고 `decision`을 기다린다(130초, 넘으면 `.timedOut`). 기다리는 동안 다른 바이트가 오면 위반이다.
-- J5. `decision`의 HMAC을 상수 시간으로 견준다. 틀리면 `.hostNotVerified`. 상태는 1~3만, `StableID`는 1~255바이트의 인쇄 가능 ASCII, 표시 이름은 0~64바이트의 올바른 UTF-8이고 Cc·Cf가 없어야 한다. 어긋나면 `.protocolViolation`. 상태 2 → `.denied`, 3 → `.timedOut`.
+- J4. `accepted`를 상수 시간으로 견준다. 틀리면 `.hostNotVerified`. 맞으면 `awaitingApproval(확인 숫자)`를 부르고 `decision`을 기다린다(`proof`를 보낸 때부터 130초, 넘으면 `.timedOut`). `accepted` 뒤에 `decision` 없이 닫히거나 다른 바이트가 오면 `.protocolViolation`.
+- J5. `decision`의 HMAC을 상수 시간으로 견준다. 틀리면 `.hostNotVerified`. 상태는 1~3만, `StableID`는 1~255바이트의 인쇄 가능 ASCII, 표시 이름은 0~64바이트의 올바른 UTF-8이고 기기 이름과 같은 글자 규칙이다(P8). 어긋나면 `.protocolViolation`. 상태 2 → `.denied`, 3 → `.timedOut`.
 - J6. 승인이면 `PairedHost`(`host`, `stableID`, `name`, `pairedAt`)를 돌려준다. 보관은 앱이 한다(`Codable`). 프로세스 안 노드로 들어왔으면 `decision`의 `StableID`가 `whoIs(원격 주소)`의 것과 같아야 한다. 다르면 `.hostNotVerified`.
 - J7. 호출한 Task가 취소되면 연결을 끊고 `.cancelled`.
 
