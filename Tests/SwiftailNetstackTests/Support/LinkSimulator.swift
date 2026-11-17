@@ -24,6 +24,12 @@ struct LinkSimulator {
         var occurrences: Set<Int> = [1]
         var matches: @Sendable (TCPSegment) -> Bool
         fileprivate var count = 0
+
+        // Swift 6.3 이하의 멤버별 초기화는 fileprivate 속성 때문에 fileprivate이 되므로 직접 쓴다.
+        init(occurrences: Set<Int> = [1], matches: @escaping @Sendable (TCPSegment) -> Bool) {
+            self.occurrences = occurrences
+            self.matches = matches
+        }
     }
 
     struct Transmission: Sendable, Equatable {
