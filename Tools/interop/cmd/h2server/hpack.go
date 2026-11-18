@@ -27,7 +27,7 @@ type connection struct {
 func hpackFixtures() []connection {
 	var buf bytes.Buffer
 	encoder := hpack.NewEncoder(&buf)
-	c := connection{Name: "허프만·동적 표·크기 갱신"}
+	c := connection{Name: "Huffman encoding, dynamic table, and size updates"}
 	add := func(fields ...header) {
 		buf.Reset()
 		for _, f := range fields {
@@ -56,7 +56,7 @@ func hpackFixtures() []connection {
 	e := hpack.NewEncoder(&other)
 	f := header{"x-message", "www.example.test", false}
 	_ = e.WriteField(hpack.HeaderField{Name: f.Name, Value: f.Value})
-	return []connection{c, {Name: "새 연결은 표를 공유하지 않음", Blocks: []block{{Hex: hex.EncodeToString(other.Bytes()), Headers: []header{f}}}}}
+	return []connection{c, {Name: "A new connection has a separate table", Blocks: []block{{Hex: hex.EncodeToString(other.Bytes()), Headers: []header{f}}}}}
 }
 func writeHPACK(path string) error {
 	b, err := json.MarshalIndent(hpackFixtures(), "", "  ")

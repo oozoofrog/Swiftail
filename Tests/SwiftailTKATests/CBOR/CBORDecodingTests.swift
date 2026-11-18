@@ -190,7 +190,7 @@ struct CBORDecodingTests {
             let input = (0..<Int.random(in: 0...64, using: &random)).map { _ in UInt8.random(in: 0...255, using: &random) }
             _ = try? CBOR.decode(input)
         }
-        let genesis = try #require(CBORVectorFile.load().vectors.first { $0.name == "genesis 체크포인트" }).input()
+        let genesis = try #require(CBORVectorFile.load().vectors.first { $0.name == "Genesis checkpoint" }).input()
         for index in genesis.indices {
             for byte in [0x00, 0x1b, 0x5b, 0x9b, 0xbb, 0x9f, 0xc2, 0xf8, 0xff] as [UInt8] {
                 var mutated = genesis

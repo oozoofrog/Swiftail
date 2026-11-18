@@ -63,16 +63,16 @@ func buildDisco(a, b testKey) discoPart {
 		message    disco.Message
 	}
 	sends := []send{
-		{"Ping, NodeKey 있음", a, b, &disco.Ping{TxID: txID, NodeKey: key.NodePublicFromRaw32(mem.B(nodeKey[:]))}},
-		{"Ping, NodeKey 없음", a, b, &disco.Ping{TxID: txID2}},
-		{"Ping, NodeKey와 패딩 10", a, b, &disco.Ping{TxID: txID, NodeKey: key.NodePublicFromRaw32(mem.B(nodeKey[:])), Padding: 10}},
+		{"Ping with NodeKey", a, b, &disco.Ping{TxID: txID, NodeKey: key.NodePublicFromRaw32(mem.B(nodeKey[:]))}},
+		{"Ping without NodeKey", a, b, &disco.Ping{TxID: txID2}},
+		{"Ping with NodeKey and 10 bytes of padding", a, b, &disco.Ping{TxID: txID, NodeKey: key.NodePublicFromRaw32(mem.B(nodeKey[:])), Padding: 10}},
 		{"Pong, IPv4", b, a, &disco.Pong{TxID: txID, Src: netip.MustParseAddrPort("127.0.0.1:41641")}},
 		{"Pong, IPv6", b, a, &disco.Pong{TxID: txID2, Src: netip.MustParseAddrPort("[2001:db8::7]:5060")}},
-		{"CallMeMaybe, 주소 0개", a, b, &disco.CallMeMaybe{}},
-		{"CallMeMaybe, 주소 1개", a, b, &disco.CallMeMaybe{MyNumber: []netip.AddrPort{
+		{"CallMeMaybe with no addresses", a, b, &disco.CallMeMaybe{}},
+		{"CallMeMaybe with one address", a, b, &disco.CallMeMaybe{MyNumber: []netip.AddrPort{
 			netip.MustParseAddrPort("192.0.2.1:41641"),
 		}}},
-		{"CallMeMaybe, 주소 3개(IPv4 둘, IPv6 하나)", b, a, &disco.CallMeMaybe{MyNumber: []netip.AddrPort{
+		{"CallMeMaybe with three addresses (two IPv4 and one IPv6)", b, a, &disco.CallMeMaybe{MyNumber: []netip.AddrPort{
 			netip.MustParseAddrPort("127.0.0.1:41641"),
 			netip.MustParseAddrPort("[2001:db8::7]:5060"),
 			netip.MustParseAddrPort("198.51.100.9:1"),
@@ -206,43 +206,43 @@ func parseCases(txID [12]byte, nodeKey [32]byte) []parseCase {
 		name      string
 		plaintext []byte
 	}{
-		{"평문 0바이트", nil},
-		{"평문 1바이트", []byte{0x01}},
+		{"Empty plaintext", nil},
+		{"1-byte plaintext", []byte{0x01}},
 
-		{"Ping 본문 11바이트", withHeader(0x01, 0, txID[:11])},
-		{"Ping 본문 12바이트(TxID만)", withHeader(0x01, 0, pingBody())},
-		{"Ping 본문 13바이트(NodeKey 자리가 모자람)", withHeader(0x01, 0, pingBody([]byte{0xaa}))},
-		{"Ping 본문 43바이트(NodeKey 자리가 1바이트 모자람)", withHeader(0x01, 0, pingBody(nodeKey[:31]))},
-		{"Ping 본문 44바이트(NodeKey)", withHeader(0x01, 0, pingBody(nodeKey[:]))},
-		{"Ping 본문 45바이트(NodeKey와 패딩 1)", withHeader(0x01, 0, pingBody(nodeKey[:], []byte{0}))},
-		{"Ping 본문 44바이트, 32바이트가 모두 0인 NodeKey", withHeader(0x01, 0, pingBody(body(32)))},
-		{"Ping 본문 76바이트, 0 NodeKey와 패딩", withHeader(0x01, 0, pingBody(body(64)))},
+		{"11-byte Ping body", withHeader(0x01, 0, txID[:11])},
+		{"12-byte Ping body (TxID only)", withHeader(0x01, 0, pingBody())},
+		{"13-byte Ping body (too short for NodeKey)", withHeader(0x01, 0, pingBody([]byte{0xaa}))},
+		{"43-byte Ping body (one byte short of NodeKey)", withHeader(0x01, 0, pingBody(nodeKey[:31]))},
+		{"44-byte Ping body (NodeKey)", withHeader(0x01, 0, pingBody(nodeKey[:]))},
+		{"45-byte Ping body (NodeKey and one byte of padding)", withHeader(0x01, 0, pingBody(nodeKey[:], []byte{0}))},
+		{"44-byte Ping body with a 32-byte all-zero NodeKey", withHeader(0x01, 0, pingBody(body(32)))},
+		{"76-byte Ping body with a zero NodeKey and padding", withHeader(0x01, 0, pingBody(body(64)))},
 		{"Ping version 7", withHeader(0x01, 7, pingBody(nodeKey[:]))},
-		{"Ping 본문 1000바이트(NodeKey와 긴 패딩)", withHeader(0x01, 0, join(pingBody(nodeKey[:]), body(956)))},
+		{"1000-byte Ping body (NodeKey and long padding)", withHeader(0x01, 0, join(pingBody(nodeKey[:]), body(956)))},
 
-		{"Pong 본문 29바이트", withHeader(0x02, 0, pongBody(mapped(1))[:29])},
-		{"Pong 본문 30바이트, IPv4-mapped", withHeader(0x02, 0, pongBody(mapped(1)[:16]))},
-		{"Pong 본문 30바이트, IPv6", withHeader(0x02, 0, pongBody(native(1)[:16]))},
-		{"Pong 본문 31바이트(뒤 바이트 무시)", withHeader(0x02, 0, join(pongBody(mapped(1)[:16]), []byte{0xee}))},
+		{"29-byte Pong body", withHeader(0x02, 0, pongBody(mapped(1))[:29])},
+		{"30-byte Pong body, IPv4-mapped", withHeader(0x02, 0, pongBody(mapped(1)[:16]))},
+		{"30-byte Pong body, IPv6", withHeader(0x02, 0, pongBody(native(1)[:16]))},
+		{"31-byte Pong body (trailing byte ignored)", withHeader(0x02, 0, join(pongBody(mapped(1)[:16]), []byte{0xee}))},
 		{"Pong version 1", withHeader(0x02, 1, pongBody(mapped(1)[:16]))},
 
-		{"CallMeMaybe 본문 0바이트", withHeader(0x03, 0, nil)},
-		{"CallMeMaybe 본문 17바이트", withHeader(0x03, 0, mapped(1)[:17])},
-		{"CallMeMaybe 본문 18바이트(주소 1개, IPv4-mapped)", withHeader(0x03, 0, mapped(1))},
-		{"CallMeMaybe 본문 19바이트", withHeader(0x03, 0, join(mapped(1), []byte{0}))},
-		{"CallMeMaybe 본문 35바이트", withHeader(0x03, 0, join(mapped(1), mapped(2))[:35])},
-		{"CallMeMaybe 본문 36바이트(주소 2개, IPv4-mapped와 IPv6)", withHeader(0x03, 0, join(mapped(1), native(2)))},
-		{"CallMeMaybe version 1, 본문 18바이트", withHeader(0x03, 1, mapped(1))},
+		{"Empty CallMeMaybe body", withHeader(0x03, 0, nil)},
+		{"17-byte CallMeMaybe body", withHeader(0x03, 0, mapped(1)[:17])},
+		{"18-byte CallMeMaybe body (one IPv4-mapped address)", withHeader(0x03, 0, mapped(1))},
+		{"19-byte CallMeMaybe body", withHeader(0x03, 0, join(mapped(1), []byte{0}))},
+		{"35-byte CallMeMaybe body", withHeader(0x03, 0, join(mapped(1), mapped(2))[:35])},
+		{"36-byte CallMeMaybe body (IPv4-mapped and IPv6 addresses)", withHeader(0x03, 0, join(mapped(1), native(2)))},
+		{"CallMeMaybe version 1 with an 18-byte body", withHeader(0x03, 1, mapped(1))},
 
-		{"종류 0x00", withHeader(0x00, 0, body(30))},
-		{"종류 0x0a", withHeader(0x0a, 0, body(30))},
-		{"종류 0xff", withHeader(0xff, 0, body(30))},
-		{"종류 0x04(BindUDPRelayEndpoint), 본문 72바이트", withHeader(0x04, 0, body(72))},
-		{"종류 0x05, 본문 72바이트", withHeader(0x05, 0, body(72))},
-		{"종류 0x06, 본문 72바이트", withHeader(0x06, 0, body(72))},
-		{"종류 0x07(CallMeMaybeVia), 본문 142바이트", withHeader(0x07, 0, body(142))},
-		{"종류 0x08, 본문 68바이트", withHeader(0x08, 0, body(68))},
-		{"종류 0x09, 본문 146바이트", withHeader(0x09, 0, body(146))},
+		{"Type 0x00", withHeader(0x00, 0, body(30))},
+		{"Type 0x0a", withHeader(0x0a, 0, body(30))},
+		{"Type 0xff", withHeader(0xff, 0, body(30))},
+		{"Type 0x04 (BindUDPRelayEndpoint), 72-byte body", withHeader(0x04, 0, body(72))},
+		{"Type 0x05, 72-byte body", withHeader(0x05, 0, body(72))},
+		{"Type 0x06, 72-byte body", withHeader(0x06, 0, body(72))},
+		{"Type 0x07 (CallMeMaybeVia), 142-byte body", withHeader(0x07, 0, body(142))},
+		{"Type 0x08, 68-byte body", withHeader(0x08, 0, body(68))},
+		{"Type 0x09, 146-byte body", withHeader(0x09, 0, body(146))},
 	}
 
 	var out []parseCase

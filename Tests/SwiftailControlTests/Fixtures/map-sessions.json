@@ -3,8 +3,8 @@
     "name": "full-keepalive",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -17,7 +17,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -33,7 +33,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -197,12 +197,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -213,7 +213,7 @@
         "netmap": null
       },
       {
-        "name": "빈 응답",
+        "name": "Empty response",
         "response": "{}",
         "netmap": null
       }
@@ -223,8 +223,8 @@
     "name": "peer-upsert-remove",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -237,7 +237,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -253,7 +253,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -417,18 +417,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "피어 추가",
+        "name": "Add peer",
         "response": "{\"PeersChanged\":[{\"Addresses\":[\"100.64.0.5/32\",\"fd7a:115c:a1e0::5/128\"],\"AllowedIPs\":[\"100.64.0.5/32\",\"fd7a:115c:a1e0::5/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46da750367cc7cd2a76d0dd796a31a73f884ee72562bd1b1d3f2bc1e7782ab7d\",\"Endpoints\":[\"100.64.0.5:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":5,\"Key\":\"nodekey:680e0cb6c3daed86b95c11590db5c8299aa233ca2b7ff0eab17e660489536003\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000005.tail0001.test.\",\"Online\":true,\"StableID\":\"node-5\",\"User\":2}]}",
         "netmap": {
           "DERPMap": {
@@ -442,7 +442,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -458,7 +458,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -650,18 +650,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "같은 ID 갱신",
+        "name": "Update the same ID",
         "response": "{\"PeersChanged\":[{\"Addresses\":[\"100.64.0.5/32\",\"fd7a:115c:a1e0::5/128\"],\"AllowedIPs\":[\"100.64.0.5/32\",\"fd7a:115c:a1e0::5/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46da750367cc7cd2a76d0dd796a31a73f884ee72562bd1b1d3f2bc1e7782ab7d\",\"Endpoints\":[\"100.64.0.5:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":5,\"Key\":\"nodekey:680e0cb6c3daed86b95c11590db5c8299aa233ca2b7ff0eab17e660489536003\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000005-updated.tail0001.test.\",\"Online\":true,\"StableID\":\"node-5\",\"User\":2}]}",
         "netmap": {
           "DERPMap": {
@@ -675,7 +675,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -691,7 +691,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -883,18 +883,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "제거 뒤 upsert가 우선",
+        "name": "Upsert takes precedence after removal",
         "response": "{\"PeersChanged\":[{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1}],\"PeersRemoved\":[2]}",
         "netmap": {
           "DERPMap": {
@@ -908,7 +908,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -924,7 +924,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -1088,18 +1088,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "일부 제거",
+        "name": "Remove some peers",
         "response": "{\"PeersRemoved\":[2,5,999]}",
         "netmap": {
           "DERPMap": {
@@ -1113,7 +1113,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -1129,7 +1129,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -1265,18 +1265,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "마지막까지 제거",
+        "name": "Remove the last peer too",
         "response": "{\"PeersRemoved\":[3,4]}",
         "netmap": {
           "DERPMap": {
@@ -1290,7 +1290,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -1306,7 +1306,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -1385,7 +1385,7 @@
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -1396,8 +1396,8 @@
     "name": "peer-patches",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -1410,7 +1410,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -1426,7 +1426,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -1590,12 +1590,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -1615,7 +1615,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -1631,7 +1631,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -1795,12 +1795,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -1820,7 +1820,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -1836,7 +1836,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -2001,12 +2001,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -2026,7 +2026,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -2042,7 +2042,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -2207,12 +2207,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -2232,7 +2232,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -2248,7 +2248,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -2413,12 +2413,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -2438,7 +2438,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -2454,7 +2454,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -2619,12 +2619,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -2644,7 +2644,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -2660,7 +2660,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -2825,12 +2825,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -2850,7 +2850,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -2866,7 +2866,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -3031,12 +3031,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -3056,7 +3056,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -3072,7 +3072,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -3237,18 +3237,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "동시 갱신",
+        "name": "Update together",
         "response": "{\"PeersChangedPatch\":[{\"Cap\":150,\"DERPRegion\":3,\"DiscoKey\":\"discokey:2be6759d783bd80e0cc6ee09ec41ffa8c8e5a0dd9e2e5fb91ee94864880d9107\",\"Endpoints\":[],\"Key\":\"nodekey:77a37f6faa1d4e6b94b7e61740a243ddc906d9ba34a607d52762c31ab0c91e41\",\"KeyExpiry\":\"2028-01-01T00:00:00Z\",\"LastSeen\":\"2026-02-01T00:00:00Z\",\"NodeID\":2,\"Online\":true}]}",
         "netmap": {
           "DERPMap": {
@@ -3262,7 +3262,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -3278,7 +3278,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -3440,18 +3440,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "seen·online 뒤 patch가 우선",
+        "name": "Patch takes precedence after seen and online changes",
         "response": "{\"OnlineChange\":{\"2\":false},\"PeerSeenChange\":{\"2\":true},\"PeersChangedPatch\":[{\"LastSeen\":\"2026-03-01T00:00:00Z\",\"NodeID\":2,\"Online\":true}]}",
         "netmap": {
           "DERPMap": {
@@ -3465,7 +3465,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -3481,7 +3481,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -3643,23 +3643,23 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "0·null은 유지",
+        "name": "Zero and null preserve values",
         "response": "{\"PeersChangedPatch\":[{\"Cap\":0,\"DERPRegion\":0,\"Endpoints\":null,\"KeyExpiry\":null,\"LastSeen\":null,\"NodeID\":2,\"Online\":null}]}",
         "netmap": null
       },
       {
-        "name": "없는 ID patch",
+        "name": "Patch an unknown ID",
         "response": "{\"PeersChangedPatch\":[{\"DERPRegion\":5,\"NodeID\":999}]}",
         "netmap": null
       }
@@ -3669,8 +3669,8 @@
     "name": "online-seen",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -3683,7 +3683,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -3699,7 +3699,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -3863,12 +3863,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -3888,7 +3888,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -3904,7 +3904,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -4068,12 +4068,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -4093,7 +4093,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -4109,7 +4109,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -4273,18 +4273,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "반대 online·seen",
+        "name": "Opposite online and seen changes",
         "response": "{\"OnlineChange\":{\"2\":true,\"3\":false},\"PeerSeenChange\":{\"2\":false,\"3\":true}}",
         "netmap": {
           "DERPMap": {
@@ -4298,7 +4298,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -4314,7 +4314,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -4478,12 +4478,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -4494,8 +4494,8 @@
     "name": "peer-full-empty-omitted",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -4508,7 +4508,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -4524,7 +4524,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -4688,18 +4688,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "전체 교체는 delta보다 우선",
+        "name": "Full replacement takes precedence over deltas",
         "response": "{\"Peers\":[{\"Addresses\":[\"100.64.0.5/32\",\"fd7a:115c:a1e0::5/128\"],\"AllowedIPs\":[\"100.64.0.5/32\",\"fd7a:115c:a1e0::5/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46da750367cc7cd2a76d0dd796a31a73f884ee72562bd1b1d3f2bc1e7782ab7d\",\"Endpoints\":[\"100.64.0.5:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":5,\"Key\":\"nodekey:680e0cb6c3daed86b95c11590db5c8299aa233ca2b7ff0eab17e660489536003\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000005.tail0001.test.\",\"Online\":true,\"StableID\":\"node-5\",\"User\":2}],\"PeersChanged\":[{\"Addresses\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"AllowedIPs\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d14a3fe96f0222e09262056cb4f2b872871b18faec78bf7896f68f8063624d5f\",\"Endpoints\":[\"100.64.0.6:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":6,\"Key\":\"nodekey:467fe195cafdf12d9684d8e7eec4bc0d9bfcfb4f5c1b3f1a0aa890f327797161\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000006.tail0001.test.\",\"Online\":true,\"StableID\":\"node-6\",\"User\":1}],\"PeersRemoved\":[5]}",
         "netmap": {
           "DERPMap": {
@@ -4713,7 +4713,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -4729,7 +4729,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -4837,18 +4837,18 @@
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "Peers 빈 배열",
+        "name": "Empty Peers array",
         "response": "{\"Peers\":[]}",
         "netmap": null
       },
       {
-        "name": "Peers 키 생략",
+        "name": "Peers key omitted",
         "response": "{}",
         "netmap": null
       },
@@ -4858,7 +4858,7 @@
         "netmap": null
       },
       {
-        "name": "빈 배열과 delta",
+        "name": "Empty array with delta",
         "response": "{\"Peers\":[],\"PeersChanged\":[{\"Addresses\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"AllowedIPs\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d14a3fe96f0222e09262056cb4f2b872871b18faec78bf7896f68f8063624d5f\",\"Endpoints\":[\"100.64.0.6:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":6,\"Key\":\"nodekey:467fe195cafdf12d9684d8e7eec4bc0d9bfcfb4f5c1b3f1a0aa890f327797161\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000006.tail0001.test.\",\"Online\":true,\"StableID\":\"node-6\",\"User\":1}]}",
         "netmap": {
           "DERPMap": {
@@ -4872,7 +4872,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -4888,7 +4888,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -5024,18 +5024,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "명시적으로 모두 제거",
+        "name": "Explicitly remove all peers",
         "response": "{\"PeersRemoved\":[5,6]}",
         "netmap": {
           "DERPMap": {
@@ -5049,7 +5049,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -5065,7 +5065,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -5144,7 +5144,7 @@
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -5155,8 +5155,8 @@
     "name": "derp-replacement-and-preservation",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -5169,7 +5169,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -5185,7 +5185,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -5349,19 +5349,19 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "전체 교체",
-        "response": "{\"DERPMap\":{\"Regions\":{\"3\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp3.tail0001.test\",\"IPv4\":\"100.64.0.3\",\"IPv6\":\"fd7a:115c:a1e0::3\",\"Name\":\"3a\",\"RegionID\":3,\"STUNPort\":3478}],\"RegionCode\":\"test3\",\"RegionID\":3,\"RegionName\":\"시험 지역 3\"}},\"omitDefaultRegions\":false}}",
+        "name": "Full replacement",
+        "response": "{\"DERPMap\":{\"Regions\":{\"3\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp3.tail0001.test\",\"IPv4\":\"100.64.0.3\",\"IPv6\":\"fd7a:115c:a1e0::3\",\"Name\":\"3a\",\"RegionID\":3,\"STUNPort\":3478}],\"RegionCode\":\"test3\",\"RegionID\":3,\"RegionName\":\"Test Region 3\"}},\"omitDefaultRegions\":false}}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -5374,7 +5374,7 @@
               "3": {
                 "RegionID": 3,
                 "RegionCode": "test3",
-                "RegionName": "시험 지역 3",
+                "RegionName": "Test Region 3",
                 "Nodes": [
                   {
                     "Name": "3a",
@@ -5537,19 +5537,19 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "지역 일부만 보내도 전체 교체",
-        "response": "{\"DERPMap\":{\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":null},\"omitDefaultRegions\":true}}",
+        "name": "Partial region list still replaces all regions",
+        "response": "{\"DERPMap\":{\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":null},\"omitDefaultRegions\":true}}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -5562,7 +5562,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -5726,23 +5726,23 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "Regions null이면 omitDefaultRegions도 유지",
+        "name": "Null Regions also preserves omitDefaultRegions",
         "response": "{\"DERPMap\":{\"HomeParams\":{},\"Regions\":null,\"omitDefaultRegions\":false}}",
         "netmap": null
       },
       {
-        "name": "Regions 생략·점수 교체",
+        "name": "Omit Regions and replace scores",
         "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.75}}}}",
         "netmap": {
           "DERPMap": {
@@ -5755,7 +5755,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -5919,18 +5919,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "빈 점수 초기화",
+        "name": "Reset scores with an empty object",
         "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{}}}}",
         "netmap": {
           "DERPMap": {
@@ -5939,7 +5939,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -6103,18 +6103,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "빈 지역 객체",
+        "name": "Empty regions object",
         "response": "{\"DERPMap\":{\"Regions\":{},\"omitDefaultRegions\":false}}",
         "netmap": {
           "DERPMap": {
@@ -6269,12 +6269,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -6290,8 +6290,8 @@
     "name": "dns-replacement",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -6304,7 +6304,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -6320,7 +6320,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -6484,18 +6484,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "객체 교체",
+        "name": "Replace object",
         "response": "{\"DNSConfig\":{\"Domains\":[\"changed.tail0001.test\"]}}",
         "netmap": {
           "DERPMap": {
@@ -6509,7 +6509,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -6525,7 +6525,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -6685,28 +6685,28 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "생략 유지",
+        "name": "Omission preserves value",
         "response": "{}",
         "netmap": null
       },
       {
-        "name": "null 유지",
+        "name": "Null preserves value",
         "response": "{\"DNSConfig\":null}",
         "netmap": null
       },
       {
-        "name": "빈 객체 교체",
+        "name": "Replace with an empty object",
         "response": "{\"DNSConfig\":{}}",
         "netmap": {
           "DERPMap": {
@@ -6720,7 +6720,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -6736,7 +6736,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -6892,12 +6892,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
@@ -6908,8 +6908,8 @@
     "name": "packet-filters",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -6922,7 +6922,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -6938,7 +6938,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -7102,18 +7102,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "전체 base 교체",
+        "name": "Replace the entire base",
         "response": "{\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}]}",
         "netmap": {
           "DERPMap": {
@@ -7127,7 +7127,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -7143,7 +7143,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -7307,18 +7307,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "빈 배열로 base 모두 차단",
+        "name": "An empty array denies all traffic in the base",
         "response": "{\"PacketFilter\":[]}",
         "netmap": {
           "DERPMap": {
@@ -7332,7 +7332,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -7348,7 +7348,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -7494,23 +7494,23 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "생략은 차단 유지",
+        "name": "Omission preserves the deny-all base",
         "response": "{}",
         "netmap": null
       },
       {
-        "name": "base 복원",
+        "name": "Restore base",
         "response": "{\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}]}",
         "netmap": {
           "DERPMap": {
@@ -7524,7 +7524,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -7540,7 +7540,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -7704,23 +7704,23 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "null은 base 유지",
+        "name": "Null preserves the base",
         "response": "{\"PacketFilter\":null}",
         "netmap": null
       },
       {
-        "name": "이름 추가·이름 순 정렬",
+        "name": "Add name and sort by name",
         "response": "{\"PacketFilters\":{\"a-first\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":53,\"Last\":53}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"z-last\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":22,\"Last\":22}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}]}}",
         "netmap": {
           "DERPMap": {
@@ -7734,7 +7734,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -7750,7 +7750,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -7948,18 +7948,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "이름 교체",
+        "name": "Replace named filter",
         "response": "{\"PacketFilters\":{\"a-first\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":8080,\"Last\":8080}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}]}}",
         "netmap": {
           "DERPMap": {
@@ -7973,7 +7973,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -7989,7 +7989,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -8187,18 +8187,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "null로 이름 삭제",
+        "name": "Delete named filter with null",
         "response": "{\"PacketFilters\":{\"z-last\":null}}",
         "netmap": {
           "DERPMap": {
@@ -8212,7 +8212,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -8228,7 +8228,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -8409,18 +8409,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "빈 base는 다른 이름을 유지",
+        "name": "Empty base preserves the other names",
         "response": "{\"PacketFilter\":[]}",
         "netmap": {
           "DERPMap": {
@@ -8434,7 +8434,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -8450,7 +8450,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -8614,18 +8614,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "base 처리 뒤 별 초기화",
+        "name": "Reset with wildcard after processing the base",
         "response": "{\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":9000,\"Last\":9000}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"PacketFilters\":{\"*\":null,\"b\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":8443,\"Last\":8443}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}]}}",
         "netmap": {
           "DERPMap": {
@@ -8639,7 +8639,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -8655,7 +8655,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -8819,18 +8819,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "모두 초기화",
+        "name": "Reset all",
         "response": "{\"PacketFilters\":{\"*\":null}}",
         "netmap": {
           "DERPMap": {
@@ -8844,7 +8844,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -8860,7 +8860,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -9006,28 +9006,28 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "빈 배열 모두 차단",
+        "name": "Empty array denies all",
         "response": "{\"PacketFilter\":[]}",
         "netmap": null
       },
       {
-        "name": "생략 유지",
+        "name": "Omission preserves value",
         "response": "{}",
         "netmap": null
       },
       {
-        "name": "PacketFilter null 유지",
+        "name": "Null PacketFilter preserves value",
         "response": "{\"PacketFilter\":null}",
         "netmap": null
       }
@@ -9037,8 +9037,8 @@
     "name": "profiles-domain-tka",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -9051,7 +9051,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -9067,7 +9067,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -9231,19 +9231,19 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "사용자 누적·기존 사용자 교체",
-        "response": "{\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 3\",\"ID\":3,\"LoginName\":\"user3@tail0001.test\"},{\"DisplayName\":\"시험 사용자 1 갱신\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"}]}",
+        "name": "Accumulate users and replace an existing user",
+        "response": "{\"UserProfiles\":[{\"DisplayName\":\"Test User 3\",\"ID\":3,\"LoginName\":\"user3@tail0001.test\"},{\"DisplayName\":\"Test User 1 Updated\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -9256,7 +9256,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -9272,7 +9272,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -9436,18 +9436,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1 갱신"
+              "DisplayName": "Test User 1 Updated"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "새 사용자 피어 추가",
+        "name": "Add a peer with a new user",
         "response": "{\"PeersChanged\":[{\"Addresses\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"AllowedIPs\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d14a3fe96f0222e09262056cb4f2b872871b18faec78bf7896f68f8063624d5f\",\"Endpoints\":[\"100.64.0.6:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":6,\"Key\":\"nodekey:467fe195cafdf12d9684d8e7eec4bc0d9bfcfb4f5c1b3f1a0aa890f327797161\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000006.tail0001.test.\",\"Online\":true,\"StableID\":\"node-6\",\"User\":3}]}",
         "netmap": {
           "DERPMap": {
@@ -9461,7 +9461,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -9477,7 +9477,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -9669,23 +9669,23 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1 갱신"
+              "DisplayName": "Test User 1 Updated"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             },
             "3": {
               "ID": 3,
               "LoginName": "user3@tail0001.test",
-              "DisplayName": "시험 사용자 3"
+              "DisplayName": "Test User 3"
             }
           }
         }
       },
       {
-        "name": "사용자 피어 제거",
+        "name": "Remove the user's peer",
         "response": "{\"PeersRemoved\":[6]}",
         "netmap": {
           "DERPMap": {
@@ -9699,7 +9699,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -9715,7 +9715,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -9879,18 +9879,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1 갱신"
+              "DisplayName": "Test User 1 Updated"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "프로필 재전송 없이 재등장",
+        "name": "Peer returns without resending the profile",
         "response": "{\"PeersChanged\":[{\"Addresses\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"AllowedIPs\":[\"100.64.0.6/32\",\"fd7a:115c:a1e0::6/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d14a3fe96f0222e09262056cb4f2b872871b18faec78bf7896f68f8063624d5f\",\"Endpoints\":[\"100.64.0.6:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":6,\"Key\":\"nodekey:467fe195cafdf12d9684d8e7eec4bc0d9bfcfb4f5c1b3f1a0aa890f327797161\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000006.tail0001.test.\",\"Online\":true,\"StableID\":\"node-6\",\"User\":3}]}",
         "netmap": {
           "DERPMap": {
@@ -9904,7 +9904,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -9920,7 +9920,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -10112,23 +10112,23 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1 갱신"
+              "DisplayName": "Test User 1 Updated"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             },
             "3": {
               "ID": 3,
               "LoginName": "user3@tail0001.test",
-              "DisplayName": "시험 사용자 3"
+              "DisplayName": "Test User 3"
             }
           }
         }
       },
       {
-        "name": "Domain 변경·TKA 활성화",
+        "name": "Change Domain and enable TKA",
         "response": "{\"Domain\":\"changed.tail0001.test\",\"TKAInfo\":{\"Disabled\":false}}",
         "netmap": {
           "DERPMap": {
@@ -10142,7 +10142,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -10158,7 +10158,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -10350,28 +10350,28 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1 갱신"
+              "DisplayName": "Test User 1 Updated"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             },
             "3": {
               "ID": 3,
               "LoginName": "user3@tail0001.test",
-              "DisplayName": "시험 사용자 3"
+              "DisplayName": "Test User 3"
             }
           }
         }
       },
       {
-        "name": "빈 Domain·TKA null 유지",
+        "name": "Empty Domain and null TKA preserve values",
         "response": "{\"Domain\":\"\",\"TKAInfo\":null}",
         "netmap": null
       },
       {
-        "name": "TKA 비활성화",
+        "name": "Disable TKA",
         "response": "{\"TKAInfo\":{\"Disabled\":true}}",
         "netmap": {
           "DERPMap": {
@@ -10385,7 +10385,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -10401,7 +10401,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -10593,17 +10593,17 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1 갱신"
+              "DisplayName": "Test User 1 Updated"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             },
             "3": {
               "ID": 3,
               "LoginName": "user3@tail0001.test",
-              "DisplayName": "시험 사용자 3"
+              "DisplayName": "Test User 3"
             }
           }
         }
@@ -10614,8 +10614,8 @@
     "name": "json-time-capmap-unknown",
     "steps": [
       {
-        "name": "첫 전체 맵",
-        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"시험 지역 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"시험 지역 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"시험 사용자 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"시험 사용자 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
+        "name": "Initial full map",
+        "response": "{\"DERPMap\":{\"HomeParams\":{\"RegionScore\":{\"1\":0.5,\"2\":1.5}},\"Regions\":{\"1\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp1.tail0001.test\",\"IPv4\":\"100.64.0.1\",\"IPv6\":\"fd7a:115c:a1e0::1\",\"Name\":\"1a\",\"RegionID\":1,\"STUNPort\":3478}],\"RegionCode\":\"test1\",\"RegionID\":1,\"RegionName\":\"Test Region 1\"},\"2\":{\"Nodes\":[{\"DERPPort\":443,\"HostName\":\"derp2.tail0001.test\",\"IPv4\":\"100.64.0.2\",\"IPv6\":\"fd7a:115c:a1e0::2\",\"Name\":\"2a\",\"RegionID\":2,\"STUNPort\":3478}],\"RegionCode\":\"test2\",\"RegionID\":2,\"RegionName\":\"Test Region 2\"}},\"omitDefaultRegions\":true},\"DNSConfig\":{\"Domains\":[\"tail0001.test\"],\"Nameservers\":[\"100.64.0.1\"],\"Proxied\":true},\"Domain\":\"tail0001.test\",\"Node\":{\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:282caae55c7352eac5be5174f8356acb708b24c874fc59a72155e2928f1b746b\",\"Endpoints\":[\"100.64.0.1:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":1,\"Key\":\"nodekey:525f9ec3350950c7733377478804ce32dcc682f802473fe22032ba0e97711b5d\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000001.tail0001.test.\",\"Online\":true,\"StableID\":\"node-1\",\"User\":2},\"PacketFilter\":[{\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":80,\"Last\":80}}],\"IPProto\":[6],\"SrcIPs\":[\"100.64.0.0/10\"]}],\"Peers\":[{\"Addresses\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"AllowedIPs\":[\"100.64.0.4/32\",\"fd7a:115c:a1e0::4/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:fe766d36bd6155ae87d401108b2a60bc135af29e2a7601563371ba1a6c5e9938\",\"Endpoints\":[\"100.64.0.4:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":4,\"Key\":\"nodekey:e251ee916b16ab393d21ff14a6853713235defb167dea8cad54e79af7d5c2928\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000004.tail0001.test.\",\"Online\":true,\"StableID\":\"node-4\",\"User\":1},{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":2,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1},{\"Addresses\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"AllowedIPs\":[\"100.64.0.3/32\",\"fd7a:115c:a1e0::3/128\"],\"Cap\":148,\"DiscoKey\":\"discokey:46f7fec0404c3ee60ebcd32c1c1b88ceeec9f9fbca12a7bffa9a0bdc37ac4f10\",\"Endpoints\":[\"100.64.0.3:41641\"],\"Expired\":false,\"HomeDERP\":1,\"ID\":3,\"Key\":\"nodekey:63d0faac0194c1beb8fbe14c6b876047effeb5b7482c4c77b019bf024a87227b\",\"KeyExpiry\":\"2027-01-01T00:00:00Z\",\"LastSeen\":\"2026-01-01T00:00:00Z\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000003.tail0001.test.\",\"Online\":true,\"StableID\":\"node-3\",\"User\":2}],\"UserProfiles\":[{\"DisplayName\":\"Test User 1\",\"ID\":1,\"LoginName\":\"user1@tail0001.test\"},{\"DisplayName\":\"Test User 2\",\"ID\":2,\"LoginName\":\"user2@tail0001.test\"}]}",
         "netmap": {
           "DERPMap": {
             "HomeParams": {
@@ -10628,7 +10628,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -10644,7 +10644,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -10808,18 +10808,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "소수 초·오프셋·CapMap null·모르는 키·큰 ID",
+        "name": "Fractional seconds, offset, null CapMap, unknown key, and large ID",
         "response": "{\"FutureMapField\":[1,\"unknown\",null],\"PeersChanged\":[{\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"AllowedIPs\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Cap\":148,\"CapMap\":{\"cap/empty\":[],\"cap/test\":null,\"cap/value\":[{\"enabled\":true}]},\"DiscoKey\":\"discokey:d68d83cc2cf8a22e15ba8c336c6ff48c53494d85ea04e151a0cec338d74ae14c\",\"Endpoints\":[\"100.64.0.2:41641\"],\"Expired\":false,\"FutureNodeField\":{\"unknown\":42},\"HomeDERP\":1,\"ID\":9007199254740993,\"Key\":\"nodekey:af6751cc55dc67fab520603005d137262517c65f9f5e680b9ab4277e94390064\",\"KeyExpiry\":\"2027-01-02T03:04:05.120000000+09:00\",\"LastSeen\":\"2026-01-02T03:04:05.123456789+09:00\",\"MachineAuthorized\":true,\"Name\":\"rd-mac-00000002.tail0001.test.\",\"Online\":true,\"StableID\":\"node-2\",\"User\":1}]}",
         "netmap": {
           "DERPMap": {
@@ -10833,7 +10833,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -10849,7 +10849,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -11049,18 +11049,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "생략 AllowedIPs는 Addresses를 사용",
+        "name": "Omitted AllowedIPs uses Addresses",
         "response": "{\"PeersChanged\":[{\"Addresses\":[\"100.64.0.8/32\"],\"DERP\":\"127.3.3.40:2\",\"ID\":8,\"Key\":\"nodekey:70d459d5c067aa2ae1b2ebefab5074f37934429bfbf6e0121a07c8b3fe22360d\",\"Name\":\"rd-mac-00000008.tail0001.test.\",\"StableID\":\"node-8\",\"User\":1}]}",
         "netmap": {
           "DERPMap": {
@@ -11074,7 +11074,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -11090,7 +11090,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -11314,18 +11314,18 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }
       },
       {
-        "name": "명시적 빈 AllowedIPs는 유지",
+        "name": "Preserve explicitly empty AllowedIPs",
         "response": "{\"PeersChanged\":[{\"Addresses\":[\"100.64.0.9/32\"],\"AllowedIPs\":[],\"Expired\":true,\"ID\":9,\"Key\":\"nodekey:48c027c2290c886fe8c7c2f6c19488a9edd4a69b3a640e8b15688af6cd1f4235\",\"Name\":\"rd-mac-00000009.tail0001.test.\",\"StableID\":\"node-9\",\"User\":1}]}",
         "netmap": {
           "DERPMap": {
@@ -11339,7 +11339,7 @@
               "1": {
                 "RegionID": 1,
                 "RegionCode": "test1",
-                "RegionName": "시험 지역 1",
+                "RegionName": "Test Region 1",
                 "Nodes": [
                   {
                     "Name": "1a",
@@ -11355,7 +11355,7 @@
               "2": {
                 "RegionID": 2,
                 "RegionCode": "test2",
-                "RegionName": "시험 지역 2",
+                "RegionName": "Test Region 2",
                 "Nodes": [
                   {
                     "Name": "2a",
@@ -11601,12 +11601,12 @@
             "1": {
               "ID": 1,
               "LoginName": "user1@tail0001.test",
-              "DisplayName": "시험 사용자 1"
+              "DisplayName": "Test User 1"
             },
             "2": {
               "ID": 2,
               "LoginName": "user2@tail0001.test",
-              "DisplayName": "시험 사용자 2"
+              "DisplayName": "Test User 2"
             }
           }
         }

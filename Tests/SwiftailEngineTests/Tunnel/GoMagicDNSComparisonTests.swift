@@ -86,8 +86,8 @@ struct GoMagicDNSComparisonTests {
     func calibrateContractExpectations() throws {
         let fixture = try loadGoDNSFixture()
         let base = try #require(fixture.scenarios.first, "Expected a scenario, got none")
-        let servfail = try #require(base.steps.first { $0.name == "영역 밖 라우트 없음" }, "Expected the out-of-zone step, got none")
-        let nxdomain = try #require(base.steps.first { $0.name == "모르는 로컬 이름" }, "Expected the unknown local name step, got none")
+        let servfail = try #require(base.steps.first { $0.name == "No out-of-zone route" }, "Expected the out-of-zone step, got none")
+        let nxdomain = try #require(base.steps.first { $0.name == "Unknown local name" }, "Expected the unknown local name step, got none")
         let servfailQuery = try #require([UInt8](hex: servfail.query))
         let servfailResponse = try #require([UInt8](hex: servfail.response))
         #expect(Self.servfailShape(query: servfailQuery) == servfailResponse, "Expected Go SERVFAIL bytes, got mismatched calibration bytes")
@@ -106,7 +106,7 @@ struct GoMagicDNSComparisonTests {
                 if try Self.hasStaleQuestion(query: query, goResponse: response) { found.append("\(scenario.name) [\(step.name)]") }
             }
         }
-        #expect(found == ["기본 노드·질의 형식 [머리 비트 8100]"], "Expected one step with a question leak, got \(found)")
+        #expect(found == ["Basic nodes and query formats [Header bits 8100]"], "Expected one step with a question leak, got \(found)")
     }
 
     @Test("Verify the fixture reference version and scenario, step, and marker counts")
@@ -207,7 +207,7 @@ struct GoMagicDNSComparisonTests {
         if reason.contains("NXDOMAIN") {
             // An unknown name inside the zone yields NXDOMAIN + the zone's SOA. Behavior D2. Take the SOA from a Go response for the same zone.
             let base = try #require(fixture.scenarios.first, "Expected a scenario, got none")
-            let reference = try #require(base.steps.first { $0.name == "모르는 로컬 이름" }, "Expected the unknown local name step, got none")
+            let reference = try #require(base.steps.first { $0.name == "Unknown local name" }, "Expected the unknown local name step, got none")
             return try Self.nxdomainShape(query: query, reference: reference)
         }
         Issue.record("\(context), no basis for an expected value (reason \(reason))")

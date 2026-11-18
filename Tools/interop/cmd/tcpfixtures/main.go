@@ -231,7 +231,7 @@ func evaluate() ([]byte, error) {
 		plain(family+"-non-syn-options", packet(v6, false, ack, mssws(1200, 15), nil))
 		defaults := packet(v6, false, syn, nil, nil)
 		if v6 {
-			add(family+"-no-options", defaults, "W2·T5: gVisor ParseSynOptions의 기본 MSS는 계열과 무관하게 536, 계약의 IPv6 기본값은 1220이다.", "", 1220, -1)
+			add(family+"-no-options", defaults, "W2 and T5: gVisor ParseSynOptions defaults to MSS 536 for both address families. The contract sets the IPv6 default to 1220.", "", 1220, -1)
 		} else {
 			plain(family+"-no-options", defaults)
 		}
@@ -240,7 +240,7 @@ func evaluate() ([]byte, error) {
 		if v6 {
 			fallback = 1220
 		}
-		add(family+"-mss-zero", zero, "W2: gVisor는 MSS 0에서 옵션 해석을 중단해 WS도 읽지 않는다. 계약은 기본 MSS로 바꾸고 뒤의 WS를 읽는다.", "", fallback, 3)
+		add(family+"-mss-zero", zero, "W2: gVisor stops parsing options at MSS 0 and skips WS. The contract substitutes the default MSS and reads the following WS.", "", fallback, 3)
 		plain(family+"-shift-15", packet(v6, false, syn, mssws(1220, 15), nil))
 		bad := packet(v6, false, ack, nil, []byte{1, 2, 3})
 		bad[len(bad)-1] ^= 1
@@ -253,7 +253,7 @@ func evaluate() ([]byte, error) {
 	plain("sack-timestamp-options", packet(false, false, syn, []byte{4, 2, 8, 10, 0, 0, 0, 1, 0, 0, 0, 0, 2, 4, 4, 216, 3, 3, 3}, nil))
 	plain("shift-14", packet(false, false, syn, mssws(1240, 14), nil))
 	plain("max-tcp-header", packet(false, false, syn, append(mssws(1240, 3), make([]byte, 32)...), nil))
-	add("small-mss", packet(false, false, syn, mssws(1, 3), nil), "W2·X9: gVisor는 0이 아닌 MSS를 최소 48로 올린다. 계약의 코덱은 광고한 값 1을 보존하고 연결 상태 기계가 64 미만을 거절한다.", "", 1, -1)
+	add("small-mss", packet(false, false, syn, mssws(1, 3), nil), "W2 and X9: gVisor clamps a nonzero MSS to at least 48. The contract's codec preserves the advertised value of 1 and the connection state machine rejects values below 64.", "", 1, -1)
 	for _, opts := range []struct {
 		name  string
 		bytes []byte
@@ -264,7 +264,7 @@ func evaluate() ([]byte, error) {
 		{"missing-option-length", []byte{1, 1, 1, 254}},
 		{"mss-outside", []byte{1, 1, 2, 4}},
 	} {
-		add(opts.name, packet(false, false, syn, opts.bytes, nil), "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다.", "malformed", -1, -1)
+		add(opts.name, packet(false, false, syn, opts.bytes, nil), "W2: gVisor TCPValid does not check the option length and ParseSynOptions stops parsing. The contract rejects the packet as malformed.", "malformed", -1, -1)
 	}
 	// For MSS and Window Scale options with a nonstandard length of at least 2 that fit within the header, the contract also skips by length without reading the value (W's "Decisions made
 	// during implementation"). This matches gVisor's result, so it is not marked as a difference.
@@ -291,7 +291,7 @@ func evaluate() ([]byte, error) {
 		{"sack-outside", []byte{1, 1, 5, 10, 0, 0, 0, 1}},
 		{"sack-five-blocks", append([]byte{5, 42}, make([]byte, 38)...)},
 	} {
-		add(opts.name, packet(false, false, ack, opts.bytes, nil), "W2: gVisor ParseTCPOptions는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다. 계약은 malformed로 버린다.", "malformed", -1, -1)
+		add(opts.name, packet(false, false, ack, opts.bytes, nil), "W2: gVisor ParseTCPOptions stops parsing when SACK extends past the header. The contract rejects the packet as malformed.", "malformed", -1, -1)
 	}
 	// After truncation, adjust only the IP length so processing reaches the TCP header length check.
 	for _, size := range []int{0, 1, 19} {

@@ -469,7 +469,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor는 MSS 0에서 옵션 해석을 중단해 WS도 읽지 않는다. 계약은 기본 MSS로 바꾸고 뒤의 WS를 읽는다."
+      "swiftailDiffers": "W2: gVisor stops parsing options at MSS 0 and skips WS. The contract substitutes the default MSS and reads the following WS."
     },
     {
       "name": "ipv4-shift-15",
@@ -990,7 +990,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2·T5: gVisor ParseSynOptions의 기본 MSS는 계열과 무관하게 536, 계약의 IPv6 기본값은 1220이다."
+      "swiftailDiffers": "W2 and T5: gVisor ParseSynOptions defaults to MSS 536 for both address families. The contract sets the IPv6 default to 1220."
     },
     {
       "name": "ipv6-mss-zero",
@@ -1043,7 +1043,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor는 MSS 0에서 옵션 해석을 중단해 WS도 읽지 않는다. 계약은 기본 MSS로 바꾸고 뒤의 WS를 읽는다."
+      "swiftailDiffers": "W2: gVisor stops parsing options at MSS 0 and skips WS. The contract substitutes the default MSS and reads the following WS."
     },
     {
       "name": "ipv6-shift-15",
@@ -1564,7 +1564,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2·X9: gVisor는 0이 아닌 MSS를 최소 48로 올린다. 계약의 코덱은 광고한 값 1을 보존하고 연결 상태 기계가 64 미만을 거절한다."
+      "swiftailDiffers": "W2 and X9: gVisor clamps a nonzero MSS to at least 48. The contract's codec preserves the advertised value of 1 and the connection state machine rejects values below 64."
     },
     {
       "name": "unknown-length-zero",
@@ -1617,7 +1617,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+      "swiftailDiffers": "W2: gVisor TCPValid does not check the option length and ParseSynOptions stops parsing. The contract rejects the packet as malformed."
     },
     {
       "name": "unknown-length-one",
@@ -1670,7 +1670,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+      "swiftailDiffers": "W2: gVisor TCPValid does not check the option length and ParseSynOptions stops parsing. The contract rejects the packet as malformed."
     },
     {
       "name": "unknown-length-outside",
@@ -1723,7 +1723,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+      "swiftailDiffers": "W2: gVisor TCPValid does not check the option length and ParseSynOptions stops parsing. The contract rejects the packet as malformed."
     },
     {
       "name": "missing-option-length",
@@ -1776,7 +1776,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+      "swiftailDiffers": "W2: gVisor TCPValid does not check the option length and ParseSynOptions stops parsing. The contract rejects the packet as malformed."
     },
     {
       "name": "mss-outside",
@@ -1829,7 +1829,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다."
+      "swiftailDiffers": "W2: gVisor TCPValid does not check the option length and ParseSynOptions stops parsing. The contract rejects the packet as malformed."
     },
     {
       "name": "mss-length-three",
@@ -2638,7 +2638,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor ParseTCPOptions는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다. 계약은 malformed로 버린다."
+      "swiftailDiffers": "W2: gVisor ParseTCPOptions stops parsing when SACK extends past the header. The contract rejects the packet as malformed."
     },
     {
       "name": "sack-five-blocks",
@@ -2691,7 +2691,7 @@
           "dataLength": 0
         }
       },
-      "swiftailDiffers": "W2: gVisor ParseTCPOptions는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다. 계약은 malformed로 버린다."
+      "swiftailDiffers": "W2: gVisor ParseTCPOptions stops parsing when SACK extends past the header. The contract rejects the packet as malformed."
     },
     {
       "name": "tcp-truncated-0",

@@ -4,7 +4,7 @@ Contains fixtures from the Go reference values (`tkafixtures` under `Tools/inter
 
 ## `cbor-vectors.json`(TL-1)
 
-63 CBOR item-level outcome vectors. Sources are the decoding acceptance and rejection tables in §8.1 of `docs/protocol-notes/tailnet-lock.md`, the verification session's map key type, `Meta` map, and other decoding rows, and the limits from §3.1 (16/17 levels, 4,096/4,097 elements, and 1,024/1,025 pairs). The `genesis 체크포인트` vector decodes the base64 from `tailscale.com/tka/aum_test.go:181` (v1.104.7) to hex (note §7.1).
+63 CBOR item-level outcome vectors. Sources are the decoding acceptance and rejection tables in §8.1 of `docs/protocol-notes/tailnet-lock.md`, the verification session's map key type, `Meta` map, and other decoding rows, and the limits from §3.1 (16/17 levels, 4,096/4,097 elements, and 1,024/1,025 pairs). The `Genesis checkpoint` vector decodes the base64 from `tailscale.com/tka/aum_test.go:181` (v1.104.7) to hex (note §7.1).
 
 This unit constructed the input bytes to match the note's descriptions (usually a NoOp AUM of `{1: 3, 2: null}` with one pair added). The note does not record running Go on these exact bytes. TL-5's `tkafixtures` confirms the outcomes with Go.
 
