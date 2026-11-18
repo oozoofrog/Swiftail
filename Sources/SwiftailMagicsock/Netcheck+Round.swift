@@ -1,41 +1,41 @@
-// 회차의 요청 계획은 Tailscale의 `net/netcheck/netcheck.go`(BSD-3-Clause, Copyright (c) Tailscale Inc & contributors)
-// `makeProbePlanInitial`(:559-587)과 `runProbe`, `addNodeLatency`를 따른다. 코드는 Swift로 새로 썼다.
+// The round's request plan follows Tailscale's `net/netcheck/netcheck.go` (BSD-3-Clause, Copyright (c) Tailscale Inc & contributors),
+// specifically `makeProbePlanInitial` (:559-587), `runProbe`, and `addNodeLatency`. The code was written from scratch in Swift.
 
 import SwiftailBase
 
 extension Netcheck {
-    /// 아직 보내지 않은 요청 하나.
+    /// A request that has yet to be sent.
     struct PendingRequest: Sendable, Equatable {
         var due: ContinuousClock.Instant
         var region: Int64
         var server: IPEndpoint
     }
 
-    /// 보내고 응답을 기다리는 요청 하나.
+    /// A sent request awaiting a response.
     struct SentRequest: Sendable, Equatable {
         var region: Int64
         var sentAt: ContinuousClock.Instant
     }
 
-    /// 회차 하나. 회차가 끝나면 버린다(그래서 표의 크기는 지역 수 × 3을 넘지 않는다. 계약 H).
+    /// One round, discarded when it ends (so the table cannot exceed the number of regions × 3, contract H).
     struct Round: Sendable {
         let start: ContinuousClock.Instant
-        /// 보낼 시각 순으로 늘어놓은, 아직 보내지 않은 요청.
+        /// Unsent requests in scheduled send order.
         var pending: [PendingRequest]
-        /// 보낸 요청. 응답의 TxID가 여기 있을 때만 이번 회차의 응답이다(DERP 노트 4.10 1).
+        /// Sent requests. A response belongs to this round only if its TxID is here (DERP notes 4.10 1).
         var inFlight: [TransactionID: SentRequest] = [:]
-        /// 이 회차가 기다리는 지역: STUN 서버가 있는 지역.
+        /// The regions this round waits for, namely those with STUN servers.
         let expected: Set<Int64>
-        /// 지역별 최소 지연(나노초).
+        /// Minimum latency per region (nanoseconds).
         var latency: [Int64: Int64] = [:]
-        /// 응답에서 본 바깥 주소와 관측 횟수. 처음 본 순서대로다(노트 4.9 1.2).
+        /// External addresses observed in replies and how often they were seen, in first-seen order (notes 4.9 1.2).
         var observations: [(address: IPEndpoint, count: Int)] = []
     }
 
-    /// 회차를 시작하고 첫 요청들을 낸다. 보낼 곳이 없는 회차는 곧바로 끝난다.
+    /// Starts a round and emits the first requests. A round with no destinations ends immediately.
     ///
-    /// 지역마다 `stunServers[try % count]`로 0, 100, 200 ms에 하나씩, 지역당 3개를 계획한다. 시작하면서 주기 시각을 비우고
-    /// 다음 주기 간격을 미리 뽑는다.
+    /// Schedules 3 requests per region using `stunServers[try % count]`, one each at 0, 100, and 200 ms. At the start, clears the periodic deadline
+    /// and draws the next periodic interval in advance.
     mutating func startRound(at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action] {
         periodicAt = nil
         periodicInterval = .milliseconds(Int.random(in: Self.periodicIntervalMilliseconds, using: &generator))
@@ -57,7 +57,7 @@ extension Netcheck {
         return actions
     }
 
-    /// 보낼 시각이 된 요청을 TxID를 뽑아 낸다. 이미 답한 지역의 요청은 계획에서 이미 빠졌다.
+    /// Draws TxIDs and emits due requests. Requests for regions that already replied have already been removed from the plan.
     mutating func sendDueRequests(at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action] {
         guard var current = round else { return [] }
         let dueCount = current.pending.prefix(while: { $0.due <= now }).count
@@ -72,10 +72,10 @@ extension Netcheck {
         return actions
     }
 
-    /// STUN 응답 하나를 맞춰 본다. 진행 중인 회차에서 보낸 요청의 응답이 아니면 nil이다(`unexpectedSTUN`).
+    /// Matches a STUN response. Returns nil if it is not a response to a request sent in the active round (`unexpectedSTUN`).
     ///
-    /// 첫 응답이 그 지역의 지연을 정하고 그 지역의 남은 요청을 취소한다(Go `cancelSet`). 같은 TxID의 두 번째 응답은
-    /// 받지 않는다. 기다리는 지역이 모두 답하면 회차를 끝낸다.
+    /// The first response sets the region's latency and cancels its remaining requests (Go `cancelSet`). Rejects a second response
+    /// with the same TxID. Ends the round once every region it is waiting for has answered.
     mutating func receive(
         _ txID: TransactionID,
         mapped: IPEndpoint,
@@ -85,7 +85,7 @@ extension Netcheck {
         let elapsed = Self.nanoseconds(sent.sentAt.duration(to: now))
         current.latency[sent.region] = min(current.latency[sent.region] ?? .max, elapsed)
         current.pending.removeAll { $0.region == sent.region }
-        // 소켓이 IPv4 하나이므로 IPv6나 포트 0인 바깥 주소는 엔드포인트로 올리지 않는다. 그래도 그 지역이 답했다는 사실은 센다.
+        // The single IPv4 socket prevents publishing external IPv6 or port 0 addresses as endpoints. Still counts the region as having answered.
         if mapped.address.isIPv4, mapped.port != 0 {
             if let index = current.observations.firstIndex(where: { $0.address == mapped }) {
                 current.observations[index].count += 1
@@ -98,10 +98,10 @@ extension Netcheck {
         return finishRound(at: now)
     }
 
-    /// 회차를 끝낸다: 홈 지역과 엔드포인트 목록을 다시 정하고 주기를 잇거나 멈춘다.
+    /// Finishes the round, recomputes the home region and endpoint list, and continues or stops periodic rounds.
     ///
-    /// 낸 순서는 `.endpointsChanged`, `.homeRegionChanged`, `.endpointsRefreshed`다. `.endpointsRefreshed`가 마지막인 것은
-    /// 그 뒤에 보내는 CallMeMaybe가 새 목록을 담게 하기 위해서다.
+    /// Emits `.endpointsChanged`, `.homeRegionChanged`, and `.endpointsRefreshed` in that order. `.endpointsRefreshed` comes last
+    /// so CallMeMaybe messages sent afterward include the new list.
     mutating func finishRound(at now: ContinuousClock.Instant) -> [Action] {
         guard let finished = round else { return [] }
         round = nil

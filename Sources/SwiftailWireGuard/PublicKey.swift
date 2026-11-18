@@ -1,24 +1,24 @@
 import CryptoKit
 import SwiftailBase
 
-/// Curve25519 공개 키 32바이트. 피어를 가리키는 이름으로 쓴다.
+/// A 32-byte Curve25519 public key. Used to identify a peer.
 ///
-/// 공개 키는 비밀이 아니므로 `==`과 해시는 보통 비교로 충분하다.
+/// Public keys are public, so ordinary equality via `==` and hashing suffice.
 public struct PublicKey: Hashable, Sendable, CustomStringConvertible {
-    /// 키 바이트 32개.
+    /// The 32 key bytes.
     public let rawValue: [UInt8]
 
-    /// 32바이트가 아니면 `nil`.
+    /// Returns `nil` unless the input is 32 bytes long.
     public init?(rawValue: some Collection<UInt8>) {
         let bytes = Array(rawValue)
         guard bytes.count == 32 else { return nil }
         self.rawValue = bytes
     }
 
-    /// 로그용 짧은 표기. 앞 8자리 16진 + "…".
+    /// A short representation for logs. The first 8 base-16 digits + "…".
     public var description: String { String(rawValue.hex.prefix(8)) + "…" }
 
-    /// CryptoKit 공개 키는 늘 32바이트이므로 길이 검사가 필요 없다.
+    /// A CryptoKit public key is always 32 bytes, so no length check is needed.
     init(_ key: Curve25519.KeyAgreement.PublicKey) {
         rawValue = Array(key.rawRepresentation)
     }

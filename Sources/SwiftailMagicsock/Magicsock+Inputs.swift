@@ -1,22 +1,22 @@
 import SwiftailBase
 
-/// `Magicsock`에 넣고 받는 값 가운데 여러 부품이 함께 쓰는 것: 피어, 홈 후보 지역, 자기 엔드포인트.
+/// Input and output values shared by parts of `Magicsock`, including peers, candidate home regions, and local endpoints.
 ///
-/// 노드는 netmap과 DERPMap에서 이 값들을 뽑아 넘긴다. 이 타깃은 tailcfg 모델을 모른다.
-/// `docs/contracts/SwiftailMagicsock.md` "공개 API".
+/// The node extracts these values from the netmap and DERPMap and passes them in. This target does not know the tailcfg models.
+/// "Public API" in `docs/contracts/SwiftailMagicsock.md`.
 extension Magicsock {
-    /// netmap의 피어 하나 가운데 경로 찾기에 필요한 부분. 노드가 `EnginePeer`에서 만든다.
+    /// The portion of a netmap peer needed for path discovery. The node creates it from `EnginePeer`.
     public struct Peer: Sendable, Equatable {
-        /// 피어의 node 키. WireGuard 공개 키와 같다.
+        /// The peer's node key. It is the WireGuard public key.
         public var key: NodePublicKey
-        /// 0이면 이 피어와 disco를 하지 않는다(DERP만).
+        /// A value of 0 disables disco with this peer (DERP only).
         public var discoKey: DiscoPublicKey
-        /// 0이면 모른다.
+        /// A value of 0 means unknown.
         public var homeDERP: Int64
-        /// netmap의 `Endpoints`. IPv4만 후보로 쓴다.
+        /// The netmap's `Endpoints`. Only IPv4 addresses are candidates.
         public var endpoints: [IPEndpoint]
 
-        /// netmap의 피어 하나를 옮긴다. disco를 하지 않는 피어는 `discoKey`에, 홈을 모르는 피어는 `homeDERP`에 0을 넣는다.
+        /// Copies a netmap peer. Use 0 for `discoKey` if the peer does not use disco, and for `homeDERP` if its home is unknown.
         public init(key: NodePublicKey, discoKey: DiscoPublicKey, homeDERP: Int64, endpoints: [IPEndpoint]) {
             self.key = key
             self.discoKey = discoKey
@@ -25,16 +25,16 @@ extension Magicsock {
         }
     }
 
-    /// 홈으로 고를 수 있는 DERP 지역. 노드가 DERPMap에서 뽑는다.
+    /// A DERP region that can be selected as home. The node extracts it from DERPMap.
     public struct Region: Sendable, Equatable {
-        /// DERP 지역 ID.
+        /// The DERP region ID.
         public var id: Int64
-        /// STUN을 물을 주소. 비면 이 지역은 재지 않는다(측정이 없을 때의 대체 홈으로만 고른다).
+        /// The address to query for STUN. If empty, the region is left unmeasured and can only be chosen as a fallback home when there are no measurements.
         public var stunServers: [IPEndpoint]
-        /// DERPMap `HomeParams.RegionScore`. 양수일 때만 지연에 곱한다. 없으면 0.
+        /// DERPMap `HomeParams.RegionScore`. Multiplies latency only when positive. Defaults to 0 if absent.
         public var score: Double
 
-        /// 홈 후보 지역 하나. `score`의 기본값 0은 지연을 그대로 비교한다는 뜻이다.
+        /// Creates a candidate home region. The default `score` of 0 compares latency as is.
         public init(id: Int64, stunServers: [IPEndpoint], score: Double = 0) {
             self.id = id
             self.stunServers = stunServers
@@ -42,22 +42,22 @@ extension Magicsock {
         }
     }
 
-    /// 제어 서버에 올릴 자기 엔드포인트 하나.
+    /// A local endpoint to publish to the control server.
     public struct Endpoint: Sendable, Equatable {
-        /// 이 주소를 어떻게 알았는가. tailcfg `EndpointType`으로 옮겨진다.
+        /// How this address was discovered. Converted to tailcfg `EndpointType`.
         public enum Source: Sendable, Equatable {
-            /// 인터페이스 주소 + 소켓 포트. tailcfg `EndpointLocal`(1).
+            /// An interface address + socket port. tailcfg `EndpointLocal` (1).
             case local
-            /// STUN 응답의 바깥 주소. tailcfg `EndpointSTUN`(2).
+            /// The external address from a STUN response. tailcfg `EndpointSTUN` (2).
             case stun
         }
 
-        /// 피어가 이 노드에 닿을 수 있는 주소와 포트.
+        /// The address and port a peer can use to reach this node.
         public var address: IPEndpoint
-        /// 주소의 출처.
+        /// The origin of the address.
         public var source: Source
 
-        /// 주소와 그 출처로 엔드포인트를 만든다.
+        /// Creates an endpoint from an address and its origin.
         public init(address: IPEndpoint, source: Source) {
             self.address = address
             self.source = source

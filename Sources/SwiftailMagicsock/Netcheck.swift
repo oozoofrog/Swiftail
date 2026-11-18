@@ -1,88 +1,88 @@
-// STUN 회차와 홈 지역 선택은 Tailscale의 `net/netcheck/netcheck.go`와
-// `wgengine/magicsock/magicsock.go`(BSD-3-Clause, Copyright (c) Tailscale Inc & contributors)의 규칙을 따른다.
-// 상수와 판정 조건을 옮겼고 코드는 Swift로 새로 썼다.
+// STUN rounds and home region selection follow the rules in Tailscale's `net/netcheck/netcheck.go` and
+// `wgengine/magicsock/magicsock.go` (BSD-3-Clause, Copyright (c) Tailscale Inc & contributors).
+// The constants and decision criteria were ported. The code was written from scratch in Swift.
 
 import SwiftailBase
 
-/// 자기 바깥 주소(엔드포인트)와 홈 DERP 지역을 정하는 상태 기계. 소켓도 시계도 갖지 않는다.
+/// A state machine that determines the local external addresses (endpoints) and home DERP region. It has no sockets or clock.
 ///
-/// 하는 일: DERP 지역의 STUN 서버에 요청을 보내는 **회차**를 돌리고, 응답으로 자기 바깥 주소와 지역별 지연을 모으고,
-/// 회차가 끝나면 엔드포인트 목록과 홈 지역을 다시 정한다. 노드는 `Action`의 `.sendSTUN`을 UDP 소켓으로 보내고,
-/// 받은 STUN 응답을 `receive`에, 시각이 `nextDeadline`에 이르면 `advance`에 넣는다. 시각과 난수(TxID, 다음 회차 간격)는
-/// 인자로 받으므로 시험이 직접 넘길 수 있다.
+/// Runs a **round** that sends requests to STUN servers in DERP regions, gathers local external addresses and per-region latencies from responses,
+/// and recomputes the endpoint list and home region at the end. The node sends `Action` values of `.sendSTUN` through the UDP socket,
+/// passes received STUN responses to `receive`, and calls `advance` when the time reaches `nextDeadline`. Time and randomness (TxID and the next round interval)
+/// are arguments that tests can provide directly.
 ///
-/// 절차: `docs/protocol-notes/derp-stun.md` 4.8(홈 지역)·4.10(STUN 질의와 홈 선택), `disco-magicsock.md` 4.9(엔드포인트),
-/// 계약 `docs/contracts/SwiftailMagicsock.md` E절. 이 파일은 상태와 진입점을 담고, 회차는 `Netcheck+Round.swift`,
-/// 엔드포인트 목록은 `Netcheck+Endpoints.swift`, 홈 선택은 `Netcheck+Home.swift`에 있다.
+/// See `docs/protocol-notes/derp-stun.md` 4.8 (home region) and 4.10 (STUN queries and home selection), `disco-magicsock.md` 4.9 (endpoints),
+/// and contract `docs/contracts/SwiftailMagicsock.md` §E for the procedure. This file holds state and entry points. Rounds are in `Netcheck+Round.swift`,
+/// the endpoint list is in `Netcheck+Endpoints.swift`, and home selection is in `Netcheck+Home.swift`.
 ///
-/// - `shortcut:` UDP가 막혀 STUN 응답이 하나도 없을 때의 HTTPS 지연 측정(DERP 노트 4.10 4)은 하지 않는다. 그때는 기존 홈을
-///   유지한다. 필요해지는 시점: UDP가 막힌 망에서 홈이 잘못 남는 것이 관문에서 보일 때.
-/// - `shortcut:` `ipv4`가 빈 DERP 노드의 DNS 조회는 하지 않는다(값 타입은 DNS를 못 한다). STUN 주소는 노드가 IPv4 리터럴로
-///   뽑아 `Magicsock.Region.stunServers`에 넣는다. 필요해지는 시점: 리터럴 없는 DERPMap을 만날 때.
-/// - `shortcut:` Go의 증분 회차(홈과 가까운 지역만 다시 재기)와 "세 지역이 답하면 지연의 2배 뒤 마감"은 쓰지 않는다. 회차는
-///   언제나 모든 지역을 재고 모두 답하거나 3초가 지나면 끝난다. 필요해지는 시점: 지역이 많은 DERPMap에서 회차 비용이 문제일 때.
+/// - `shortcut:` Skips HTTPS latency measurements when UDP is blocked and no STUN responses arrive (DERP notes 4.10 4). Keeps the existing home
+///   in that case. This will be needed when a gate shows the wrong home being retained on a network that blocks UDP.
+/// - `shortcut:` Skips DNS lookups for DERP nodes with empty `ipv4` (the value type cannot resolve DNS). The node extracts STUN addresses as IPv4 literals
+///   and puts them in `Magicsock.Region.stunServers`. This will be needed when a DERPMap without literals is encountered.
+/// - `shortcut:` Skips Go's incremental rounds (remeasuring only home and nearby regions) and its "stop after 2 times the latency once three regions reply" rule. Rounds
+///   always measure every region and end when all reply or 3 seconds elapse. This will be needed if round cost becomes a problem for a DERPMap with many regions.
 struct Netcheck: Sendable {
     enum Action: Sendable, Equatable {
-        /// UDP 소켓으로 `to`에 보낸다. WireGuard·disco와 같은 소켓이어야 응답의 주소가 엔드포인트가 된다(DERP 노트 4.10 2).
+        /// Sends to `to` through the UDP socket. It must share the WireGuard and disco socket for the response address to become an endpoint (DERP notes 4.10 2).
         case sendSTUN([UInt8], to: IPEndpoint)
-        /// 올릴 엔드포인트 목록이 집합으로 바뀌었다(순서는 의미가 있다. 노트 4.9 1).
+        /// The set of endpoints to publish changed (order matters, notes 4.9 1).
         case endpointsChanged([Magicsock.Endpoint])
-        /// 홈 지역이 바뀌었다.
+        /// The home region changed.
         case homeRegionChanged(Int64)
-        /// 회차가 끝나 자기 엔드포인트를 다시 정했다(목록이 같아도). 미뤄 둔 CallMeMaybe를 보낼 때다.
+        /// A round finished and refreshed the local endpoints, even if the list stayed the same. It is time to send deferred CallMeMaybe messages.
         case endpointsRefreshed
     }
 
-    // MARK: 상수. Go와 같다. 바꿀 수 있게 하지 않는다.
+    // MARK: Constants. They match Go and are not configurable.
 
-    /// 지역마다 보내는 요청 수. 0, 100, 200 ms에 하나씩이다(`netcheck.go:559-587`, `makeProbePlanInitial`).
+    /// Requests sent per region, one each at 0, 100, and 200 ms (`netcheck.go:559-587`, `makeProbePlanInitial`).
     static let requestsPerRegion = 3
-    /// 같은 지역의 요청 사이 간격(`netcheck.go:87` `defaultInitialRetransmitTime`).
+    /// The interval between requests to the same region (`netcheck.go:87` `defaultInitialRetransmitTime`).
     static let retransmitInterval = Duration.milliseconds(100)
-    /// 회차의 최대 길이. 이 시간 안에 답하지 않은 지역은 빠진다(`netcheck.go:66` `stunProbeTimeout`).
+    /// The maximum round length. Regions that do not respond within this time are omitted (`netcheck.go:66` `stunProbeTimeout`).
     static let roundTimeout = Duration.seconds(3)
-    /// 주기 회차 간격의 범위(밀리초). 30초인 흔한 NAT 매핑 수명보다 짧다(`magicsock.go:904`).
+    /// The range of intervals between periodic rounds (milliseconds). Shorter than a common NAT mapping lifetime of 30 seconds (`magicsock.go:904`).
     static let periodicIntervalMilliseconds = 20_000...26_000
-    /// 홈 선택에 쓰는 회차 기록의 보존 기간: 5분 + 보고 시간 5초(`netcheck.go:1379`, `:1416`).
+    /// Retention period for round history used in home selection, 5 minutes + 5 seconds of report time (`netcheck.go:1379`, `:1416`).
     static let historyRetention = Duration.seconds(5 * 60 + 5)
-    /// 홈을 옮기려면 새 후보가 옛 홈보다 이만큼 이상 빨라야 한다(`netcheck.go:1387` `preferredDERPAbsoluteDiff`).
+    /// A new candidate must be at least this much faster than the old home to replace it (`netcheck.go:1387` `preferredDERPAbsoluteDiff`).
     static let homeAbsoluteDifference = Duration.milliseconds(10)
-    /// 이 안에 DERP 패킷을 받은 지역은 STUN 응답이 없어도 닿는다고 본다(`netcheck.go:1396` `PreferredDERPFrameTime`).
+    /// A region that sent a DERP packet within this time is considered reachable even without a STUN response (`netcheck.go:1396` `PreferredDERPFrameTime`).
     static let homeFrameRecency = Duration.seconds(8)
-    /// 측정이 없는 회차 뒤에도 측정해서 고른 홈을 기준으로 남기는 DERP 활동의 나이(Go `PreferredDERPKeepAliveTimeout`, 2 × 60초).
+    /// The age of DERP activity that keeps a measured home as the reference after a round with no measurements (Go `PreferredDERPKeepAliveTimeout`, 2 × 60 seconds).
     static let homeKeepAliveTimeout = Duration.seconds(120)
 
-    // MARK: 입력
+    // MARK: Inputs
 
-    /// 소켓이 묶인 포트와 인터페이스 주소. 엔드포인트 목록의 입력이고 `rebind`만 바꾼다.
+    /// The socket's bound port and the interface addresses, inputs to the endpoint list that only `rebind` changes.
     private(set) var localPort: UInt16
     private(set) var localAddresses: [IPAddress]
     private(set) var loopbackAddresses: [IPAddress]
 
-    // MARK: 상태
+    // MARK: State
 
-    /// 홈 후보 지역(중복 ID는 앞의 것만 갖는다).
+    /// Candidate home regions. Keeps only the first occurrence of a duplicate ID.
     var regions: [Magicsock.Region] = []
-    /// 진행 중인 회차. 없으면 nil.
+    /// The active round, or nil if none.
     var round: Round?
-    /// 다음 주기 회차의 시각. nil이면 주기가 멈췄다.
+    /// The next periodic round time. Nil means the periodic rounds stopped.
     var periodicAt: ContinuousClock.Instant?
-    /// 다음 회차 간격. 회차를 시작할 때 뽑아 두므로 회차가 `receive`로 끝나도 난수가 필요 없다.
+    /// The next round interval. Drawn when the round starts so no randomness is needed if the round ends in `receive`.
     var periodicInterval = Duration.milliseconds(Self.periodicIntervalMilliseconds.lowerBound)
-    /// `advance`가 마지막으로 받은 `isActive`. `receive`로 끝나는 회차가 주기를 이을지 정한다.
+    /// The last `isActive` passed to `advance`. Determines whether a round ending in `receive` continues the periodic schedule.
     var isActive = true
-    /// 최근 회차들의 지역별 최소 지연(홈 선택의 입력).
+    /// Minimum latencies per region from recent rounds, used for home selection.
     var history: [LatencyRecord] = []
-    /// 지역별로 DERP 패킷을 마지막으로 받은 시각(홈 후보 지역만).
+    /// When the last DERP packet was received from each region (candidate home regions only).
     var derpActivity: [Int64: ContinuousClock.Instant] = [:]
 
-    /// 지금 홈 지역. 0이면 아직 없다.
+    /// The current home region, or 0 if none yet.
     var homeRegion: Int64 = 0
-    /// 마지막 회차가 측정해서 고른 홈(Go의 앞 보고서 `PreferredDERP`). 대체 홈이거나 측정이 끊겼으면 0. 홈 유지 조건의 기준이다.
+    /// The home selected by measurements in the last round (Go's previous report's `PreferredDERP`). 0 for a fallback home or if measurements stopped. The reference for deciding whether to keep home.
     var measuredHome: Int64 = 0
-    /// 마지막으로 정한 자기 엔드포인트 목록. 첫 회차가 끝나기 전에는 비어 있다.
+    /// The last computed list of local endpoints. Empty until the first round completes.
     var endpoints: [Magicsock.Endpoint] = []
-    /// 마지막으로 회차를 끝낸 시각. CallMeMaybe의 27초 신선도(노트 4.8 4.1)를 판단하는 데 쓴다.
+    /// When a round last completed. Used to check the 27-second freshness window for CallMeMaybe (notes 4.8 4.1).
     var endpointsRefreshedAt: ContinuousClock.Instant?
 
     init(localPort: UInt16, localAddresses: [IPAddress], loopbackAddresses: [IPAddress]) {
@@ -91,13 +91,13 @@ struct Netcheck: Sendable {
         self.loopbackAddresses = loopbackAddresses
     }
 
-    // MARK: 진입점
+    // MARK: Entry points
 
-    /// 홈 후보 지역을 맞춘다. 바뀌었으면 홈을 보정하고 곧바로 새 회차를 시작한다.
+    /// Synchronizes candidate home regions. If they changed, adjusts home and immediately starts a new round.
     ///
-    /// 홈이 없거나 새 목록에 없으면 지역 ID가 가장 작은 것을 곧바로 홈으로 낸다. 첫 회차(3초)를 기다리지 않고 DERP에 붙기
-    /// 위해서다(DERP 노트 4.8 1, 계약 E6 "대체 홈"). 지역이 하나도 없으면 회차를 돌리지 않는다. Go도 DERPMap과 STUN 결과가
-    /// 없는 엔드포인트는 저장하지도 올리지도 않는다(노트 4.9 5).
+    /// If home is absent or missing from the new list, immediately emits the lowest region ID as home. This lets the node connect to DERP without waiting for
+    /// the first round (3 seconds) (DERP notes 4.8 1, contract E6 "Fallback home"). Runs no round if no regions exist. Go also neither stores nor publishes endpoints
+    /// without a DERPMap and STUN results (notes 4.9 5).
     mutating func setRegions(
         _ regions: [Magicsock.Region],
         at now: ContinuousClock.Instant,
@@ -127,23 +127,23 @@ struct Netcheck: Sendable {
         return actions
     }
 
-    /// 회차가 진행 중이 아니면 새로 시작한다(노트 4.8 4.1의 ReSTUN). 지역이 없으면 아무것도 하지 않는다.
+    /// Starts a round if none is active (ReSTUN in notes 4.8 4.1). Does nothing if there are no regions.
     ///
-    /// 주기가 멈춘 상태(`nextDeadline`이 nil)에서 피어에게 보낼 때도 이것을 불러 주기를 다시 건다.
+    /// Also call when sending to a peer while the schedule is stopped (`nextDeadline` is nil) to re-arm periodic rounds.
     mutating func reSTUN(at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action] {
         guard round == nil, !regions.isEmpty else { return [] }
         isActive = true
         return startRound(at: now, using: &generator)
     }
 
-    /// 소켓이 새로 묶였다(노트 4.11 2). 엔드포인트의 입력을 바꾸고, 진행 중인 회차를 버리고 새 회차를 곧바로 시작한다.
+    /// Reports that a socket was newly bound (notes 4.11 2). Replaces endpoint inputs, discards the active round, and immediately starts a new one.
     ///
-    /// 진행 중이던 회차는 옛 소켓에서 보낸 것이라 그 응답은 이제 어떤 요청과도 맞지 않는다(`unexpectedSTUN`). 지역이
-    /// 없으면 회차를 시작하지 않고, 지역이 올 때 `setRegions`가 새 입력으로 회차를 시작한다.
+    /// Requests in the previous round went out on the old socket, so their replies no longer match any request (`unexpectedSTUN`). If there are
+    /// no regions, starts no round. When regions arrive, `setRegions` starts a round with the new inputs.
     ///
-    /// 엔드포인트를 정한 시각도 지운다. 지금 목록은 옛 소켓의 것이라, 새 회차가 끝나기 전의 CallMeMaybe는 미뤄졌다가
-    /// 새 엔드포인트로 나간다(동작 F2). Go는 이 시각을 남겨 재결속 직후의 CallMeMaybe가 옛 엔드포인트를 담는다
-    /// (`magicsock.go`의 `enqueueCallMeMaybe`). 망이 바뀐 뒤의 옛 주소는 피어에게 쓸모가 없어 따르지 않는다.
+    /// Also clears the time when endpoints were set. The current list belongs to the old socket, so CallMeMaybe before the new round completes is deferred and
+    /// sent with new endpoints (behavior F2). Go keeps that time, so CallMeMaybe just after rebinding contains old endpoints
+    /// (`enqueueCallMeMaybe` in `magicsock.go`). Old addresses are useless to the peer after a network change, so this does not follow Go.
     mutating func rebind(
         localPort: UInt16,
         localAddresses: [IPAddress],
@@ -160,16 +160,16 @@ struct Netcheck: Sendable {
         return reSTUN(at: now, using: &generator)
     }
 
-    /// DERP 지역에서 패킷을 받았다. 옛 홈이 아직 닿는지 판단하는 데 쓴다(DERP 노트 4.10 5). 후보가 아닌 지역은 무시한다.
+    /// Notes a packet received from a DERP region. Used to determine whether the old home remains reachable (DERP notes 4.10 5). Ignores regions outside the candidates.
     mutating func noteDERPActivity(region: Int64, at now: ContinuousClock.Instant) {
         guard regions.contains(where: { $0.id == region }) else { return }
         derpActivity[region] = now
     }
 
-    /// 기한이 지난 일을 처리한다: 회차의 다음 요청, 회차 마감, 주기 회차 시작.
+    /// Handles due work, including the next request in the round, the round cutoff, and the start of the periodic round.
     ///
-    /// - Parameter isActive: 피어가 있고 45초 안에 송신이 있었다. 거짓이면 주기 회차를 멈춘다(노트 4.9 5).
-    ///   멈춘 주기는 `reSTUN`이 다시 건다.
+    /// - Parameter isActive: There are peers and a send occurred within 45 seconds. If false, stops periodic rounds (notes 4.9 5).
+    ///   `reSTUN` re-arms the stopped schedule.
     mutating func advance(
         to now: ContinuousClock.Instant,
         isActive: Bool,
@@ -189,15 +189,15 @@ struct Netcheck: Sendable {
         return []
     }
 
-    /// 다음에 `advance`를 불러야 하는 시각. 회차도 주기도 없으면 nil.
+    /// The next time to call `advance`. Nil if there is neither an active round nor a periodic schedule.
     var nextDeadline: ContinuousClock.Instant? {
         guard let round else { return periodicAt }
         return periodicAt.earlier(round.start + Self.roundTimeout).earlier(round.pending.first?.due)
     }
 
-    // MARK: 값 변환
+    // MARK: Value conversion
 
-    /// 지연을 나노초 `Int64`로 바꾼다. 음수는 0으로, 넘치면 최댓값으로 막는다(계약 H: 정수 넘침 없음).
+    /// Converts latency to `Int64` nanoseconds. Clamps negatives to 0 and overflow to the maximum (contract H requires no integer overflow).
     static func nanoseconds(_ duration: Duration) -> Int64 {
         let (seconds, attoseconds) = duration.components
         guard seconds >= 0 else { return 0 }

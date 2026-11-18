@@ -1,10 +1,10 @@
 import SwiftailBase
 
-/// 피어에게 가는 길. Go `ipnstate.PeerStatus`의 `CurAddr`와 같은 뜻이다(노트 6.3 마지막 줄, 7.1).
+/// The path to a peer. Equivalent to `CurAddr` in Go's `ipnstate.PeerStatus` (last line of notes 6.3 and notes 7.1).
 public enum PeerPath: Sendable, Equatable {
-    /// 신뢰 기간 안의 직접 UDP 주소로만 보낸다.
+    /// Sends only to a direct UDP address within its trust duration.
     case direct(IPEndpoint)
-    /// DERP를 거친다. 직접 주소로 함께 보내는 중(신뢰가 지난 `bestAddr`)이어도 여기에 든다.
-    /// - Parameter derpRegion: 피어의 홈 DERP 지역. 0이면 모른다.
+    /// Uses DERP. Includes cases that also send to a direct address (an expired `bestAddr`).
+    /// - Parameter derpRegion: The peer's home DERP region, or 0 if unknown.
     case relayed(derpRegion: Int64)
 }

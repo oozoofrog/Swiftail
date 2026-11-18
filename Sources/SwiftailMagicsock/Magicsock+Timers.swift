@@ -1,35 +1,35 @@
-// 주기 ReSTUN의 유휴 판단은 Go 구현을 따랐다.
-// 출처: tailscale.com v1.104.6 `wgengine/magicsock/magicsock.go` (`shouldDoPeriodicReSTUNLocked`, `sessionActiveTimeout`).
+// The idleness rule for periodic ReSTUN follows the Go implementation.
+// Origin: tailscale.com v1.104.6 `wgengine/magicsock/magicsock.go` (`shouldDoPeriodicReSTUNLocked`, `sessionActiveTimeout`).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
 import SwiftailBase
 
-/// 기한과 STUN 회차(계약 동작 D7·E·G1·G3, 노트 4.6 3·4.8 3·4.9 5).
+/// Deadlines and STUN rounds (contract behaviors D7, E, G1, and G3, notes 4.6 3, 4.8 3, and 4.9 5).
 ///
-/// `Magicsock`의 기한은 부품들의 기한을 합친 것이다: 피어마다 Ping 기한·heartbeat·신뢰 만료(`PeerPathState`), 그리고
-/// STUN 회차의 다음 요청·마감·주기(`Netcheck`), 그리고 피어가 유휴가 되는 시각(동작 G3). 노드는 `nextDeadline`에
-/// `advance(to:)`를 부르고, `advance`는 기한이 된 부품만 돌린다. 신뢰가 만료된 피어는 그 기한의 `advance`에서
-/// `.pathChanged(.relayed)`가, 유휴가 된 피어는 `.pathChanged(nil)`이 나온다.
+/// `Magicsock` combines deadlines from its components, including each peer's Ping deadlines, heartbeat, and trust expiration (`PeerPathState`),
+/// the STUN round's next request, cutoff, and period (`Netcheck`), and the time when each peer becomes idle (behavior G3). The node calls
+/// `advance(to:)` at `nextDeadline`. `advance` runs only due components. At that deadline, `advance` emits
+/// `.pathChanged(.relayed)` for a peer whose trust expired or `.pathChanged(nil)` for a peer that became idle.
 ///
-/// STUN 회차의 결과(`Netcheck.Action`)도 여기서 출력으로 바꾼다. 회차가 끝나 엔드포인트를 다시 정하면 미뤄 둔
-/// CallMeMaybe를 보낸다.
+/// Converts each STUN round result (`Netcheck.Action`) to outputs here as well. When a round completes and endpoints are refreshed, sends deferred
+/// CallMeMaybe messages.
 extension Magicsock {
-    /// 홈 후보 지역을 맞춘다. 바뀌면 곧바로 STUN 회차를 시작한다. 홈이 없으면 대체 홈을 곧바로 고른다.
+    /// Synchronizes candidate home regions. Starts a STUN round immediately if they changed. Immediately selects a fallback home if there is no home.
     public mutating func setRegions(_ regions: [Region], at now: ContinuousClock.Instant) -> [Output] {
         var random = SystemRandomNumberGenerator()
         return setRegions(regions, at: now, using: &random)
     }
 
-    /// now까지 기한이 지난 타이머를 처리한다(Ping 기한, heartbeat, 신뢰 만료, STUN 회차).
+    /// Processes timers due by now (Ping deadlines, heartbeat, trust expiration, STUN round).
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
         var random = SystemRandomNumberGenerator()
         return advance(to: now, using: &random)
     }
 
-    /// 다음에 `advance`를 불러야 하는 시각. 걸린 타이머가 없으면 nil.
+    /// The next time to call `advance`, or nil if no timer is armed.
     ///
-    /// 피어마다 경로 상태 기계의 기한과, 알린 경로가 유휴로 nil이 되는 시각(동작 G3)을 넣는다. 노드가 처리마다 부르므로
-    /// 배열을 만들지 않는다.
+    /// Includes each peer path state machine's deadline and when a reported path becomes idle and turns nil (behavior G3). The node calls this on each processing step,
+    /// so it does not allocate an array.
     public var nextDeadline: ContinuousClock.Instant? {
         var earliest = netcheck.nextDeadline
         for entry in peers.values {
@@ -38,7 +38,7 @@ extension Magicsock {
         return earliest
     }
 
-    /// `setRegions(_:at:)`과 같다. 난수를 `generator`에서 뽑는다.
+    /// Equivalent to `setRegions(_:at:)`, drawing random values from `generator`.
     mutating func setRegions(
         _ regions: [Region],
         at now: ContinuousClock.Instant,
@@ -47,9 +47,9 @@ extension Magicsock {
         handle(netcheck.setRegions(regions, at: now, using: &generator), at: now, using: &generator)
     }
 
-    /// `advance(to:)`와 같다. 난수를 `generator`에서 뽑는다.
+    /// Equivalent to `advance(to:)`, drawing random values from `generator`.
     ///
-    /// 피어는 `setPeers`의 순서로 돌리고, 그다음 STUN 회차를 돌린다. 기한이 되지 않은 부품은 건드리지 않는다.
+    /// Runs peers in `setPeers` order, then runs the STUN round. Leaves components that are not due untouched.
     mutating func advance(to now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Output] {
         var outputs: [Output] = []
         for key in peerOrder {
@@ -69,17 +69,17 @@ extension Magicsock {
         return outputs
     }
 
-    /// 주기 회차를 이어 갈 만큼 쓰이고 있는가(동작 E5): 피어가 있고, 어느 피어든 마지막 송신 뒤 45초가 지나지 않았다.
+    /// Whether usage warrants continuing periodic rounds (behavior E5). There must be peers, and some peer must have sent within the last 45 seconds.
     ///
-    /// Go는 TUN 송수신의 유휴 시간을 보지만(`idleFor > sessionActiveTimeout`이면 멈춤), 이 타입은 WireGuard 송신 시각으로
-    /// 대신한다(계약 E5).
+    /// Go checks idle time for sending and receiving on the TUN (stopping when `idleFor > sessionActiveTimeout`). This type uses the WireGuard send time
+    /// instead (contract E5).
     func isActive(at now: ContinuousClock.Instant) -> Bool {
         peers.values.contains { entry in
             entry.path.lastSend.map { now - $0 <= PeerPathState.sessionActiveTimeout } ?? false
         }
     }
 
-    /// STUN 회차가 낸 일을 출력으로 바꾼다. 엔드포인트를 다시 정했으면 미뤄 둔 CallMeMaybe를 보낸다(동작 F2).
+    /// Converts STUN round actions into outputs. Sends deferred CallMeMaybe messages if endpoints were refreshed (behavior F2).
     mutating func handle(
         _ actions: [Netcheck.Action],
         at now: ContinuousClock.Instant,
@@ -103,7 +103,7 @@ extension Magicsock {
 }
 
 extension Optional<ContinuousClock.Instant> {
-    /// 두 기한 가운데 이른 것. nil은 기한이 없다는 뜻이라 다른 쪽이 남는다. 기한 계산이 배열을 만들지 않게 쓴다.
+    /// The earlier of two deadlines. Nil means no deadline, so the other one wins. Used to compute deadlines without allocating an array.
     func earlier(_ other: ContinuousClock.Instant?) -> ContinuousClock.Instant? {
         guard let self else { return other }
         guard let other else { return self }

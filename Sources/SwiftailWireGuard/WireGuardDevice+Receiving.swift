@@ -1,29 +1,29 @@
-/// 수신 쪽: 데이터그램을 해석해 type별로 처리한다.
+/// Parses incoming datagrams and handles them by type.
 ///
-/// - initiation: 응답자로서 초기자를 인증하고 response를 보낸다. 새 keypair는 확인 전까지 next에 둔다.
-/// - response: 초기자로서 응답자를 인증하고 세션을 연다. priority message와, 응답자의 next를 확인시키려고 대기열이나
-///   keepalive를 곧바로 보낸다.
-/// - cookie reply: 다음 핸드셰이크 메시지의 mac2에 쓸 cookie를 보관한다.
-/// - transport: 복호화, 재전송 검사, next 확인(이때 priority message와 대기열을 보낸다), IP 패킷 검사와 AllowedIPs 검사.
+/// - initiation: As responder, authenticates the initiator and sends a response. Holds the new keypair in next until confirmed.
+/// - response: As initiator, authenticates the responder and opens the session. Immediately sends the priority message and either the queue or
+///   a keepalive to confirm the responder's next.
+/// - cookie reply: Stores the cookie for mac2 in the next handshake message.
+/// - transport: Decrypts, checks for replays, confirms next (then sends the priority message and queue), and checks the IP packet and AllowedIPs.
 ///
-/// initiation과 response는 먼저 mac1을 보고, 부하 상태이면 mac2와 출처별 속도 제한을 본다(`admitHandshake`).
-/// mac2가 틀리면 X25519를 하기 전에 cookie reply로 답하고 메시지는 처리하지 않는다.
+/// Checks mac1 first for initiation and response. Under load, also checks mac2 and the per-source rate limit (`admitHandshake`).
+/// If mac2 is invalid, sends a cookie reply before doing X25519 and skips processing the message.
 ///
-/// 어느 경로든 실패하면 오류를 던지고 상태를 바꾸지 않는다. 인증된 transport 안의 IP 패킷이 잘못된
-/// 경우는 데이터그램의 실패가 아니므로 오류가 아니라 `rejectedIPPacket` 출력으로 알린다.
+/// Failure in any path throws and leaves state unchanged. An invalid IP packet inside authenticated transport
+/// does not invalidate the datagram, so it emits `rejectedIPPacket` without throwing.
 ///
-/// 백서 §5.4, §6, `docs/protocol-notes/wireguard.md` "응답자: initiation 소비", "초기자: response 소비",
-/// "mac1·mac2와 cookie", "전송 데이터: 받기" (출처: wireguard-go `device/receive.go`, `device/noise-protocol.go`).
+/// Whitepaper §5.4, §6, `docs/protocol-notes/wireguard.md` "Responder: consuming an initiation", "Initiator: consuming a response",
+/// "mac1, mac2, and cookies", and "Transport data: receiving" (origin: wireguard-go `device/receive.go`, `device/noise-protocol.go`).
 extension WireGuardDevice {
-    /// 네트워크에서 받은 데이터그램 하나를 처리한다.
+    /// Processes one datagram received from the network.
     ///
-    /// 오류를 던진 경우 상태는 바뀌지 않는다. 예외는 공격을 세는 기록이다: 부하 판정을 위한 mac1 통과 수와 속도 제한 표.
-    /// flood 검사의 기준 시각은 initiation을 받아들였을 때만 바뀐다(wireguard-go와 같다).
-    /// 인증된 transport의 평문이 올바른 IP 패킷이 아니거나 출발 주소가 AllowedIPs 밖이면 오류를 던지지
-    /// 않고 `rejectedIPPacket`을 낸다. 그 패킷도 인증된 수신이므로 세션 상태는 정상 수신과 같이 갱신한다.
+    /// Throwing leaves state unchanged, except for attack accounting in the count of valid mac1 messages for load detection and the rate limit table.
+    /// The reference time for the flood check changes only when an initiation is accepted (as in wireguard-go).
+    /// If the plaintext of authenticated transport is not a valid IP packet or the source address is outside AllowedIPs, emits
+    /// `rejectedIPPacket` without throwing. The packet was authenticated, so updates session state as for a normal receipt.
     ///
-    /// - Parameter source: 데이터그램이 온 곳. 부하 상태에서 cookie를 묶고 속도 제한을 센다. `.cookieReply` 출력은
-    ///   이곳으로 되돌려 보낸다.
+    /// - Parameter source: The datagram's source. Under load, binds the cookie and tracks the rate limit. Send any `.cookieReply` output
+    ///   back to this source.
     public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         switch try Message(parsing: datagram) {
         case let .initiation(message, macs):
@@ -46,17 +46,17 @@ extension WireGuardDevice {
         }
     }
 
-    // MARK: - 핸드셰이크
+    // MARK: - Handshake
 
-    /// mac1을 통과한 핸드셰이크 메시지의 문지기(wireguard-go `device/receive.go`의 `IsUnderLoad` 분기).
+    /// Gates handshake messages that pass mac1 (the `IsUnderLoad` branch of wireguard-go `device/receive.go`).
     ///
-    /// mac1은 우리 공개 키를 아는 사람이면 누구나 만들 수 있다. 그래서 이 메시지를 부하 판정에 세고, 부하 상태이면
-    /// 비싼 X25519 전에 두 가지를 더 본다.
-    /// 1. mac2가 이 출처에 준 cookie로 만든 것이 아니면 cookie reply를 돌려준다. 메시지는 처리하지 않는다.
-    /// 2. mac2가 맞아도 출처 호스트의 몫을 넘으면 `rateLimited`.
-    /// 부하 상태가 아니면 mac2는 보지 않는다.
+    /// Anyone who knows our public key can create mac1. Count the message toward load detection and, under load,
+    /// perform two more checks before the expensive X25519.
+    /// 1. If mac2 was not computed with the cookie issued to this source, returns a cookie reply and skips the message.
+    /// 2. Even if mac2 is valid, throws `rateLimited` when the source host exceeds its allowance.
+    /// Checks mac2 only under load.
     ///
-    /// - Returns: 보낼 cookie reply. nil이면 메시지를 처리해도 된다.
+    /// - Returns: A cookie reply to send, or nil if the message can be processed.
     private mutating func admitHandshake(
         from sender: UInt32,
         over bytesBeforeMACs: [UInt8],
@@ -89,7 +89,7 @@ extension WireGuardDevice {
               let initiation = Handshake.authenticate(opened, staticStaticSecret: staticStaticSecret)
         else { throw .authenticationFailed }
 
-        // 같은 initiation의 재전송과 짧은 간격의 initiation 홍수를 막는다.
+        // Block replays of the same initiation and floods of closely spaced initiations.
         if let last = peer.lastAcceptedTimestamp, initiation.timestamp <= last { throw .replayed }
         if let last = peer.lastInitiationConsumed, now - last <= Constants.handshakeInitiationRate { throw .replayed }
 
@@ -101,7 +101,7 @@ extension WireGuardDevice {
         peer.lastInitiationConsumed = now
         peer.timers.anyAuthenticatedPacketReceived()
 
-        // 우리가 보낸 initiation이 response를 기다리고 있었다면 버린다. 상대의 initiation이 이긴다.
+        // Discard any initiation we sent that is still awaiting a response. The peer's initiation wins.
         peer.pendingHandshake = nil
         peer.lastSentHandshake = now
         let macs = peer.cookieGenerator.macs(for: response.bytesBeforeMACs, at: now)
@@ -119,7 +119,7 @@ extension WireGuardDevice {
     }
 
     private func acceptResponse(_ message: Response, for peer: inout Peer, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
-        // index가 이미 keypair로 바뀌었다면 이 response는 처리한 적이 있다.
+        // If the index already references a keypair, this response has already been processed.
         guard let pending = peer.pendingHandshake, pending.localIndex == message.receiver else { throw .replayed }
         guard let keys = Handshake.consumeResponse(message, pending: pending, localStatic: staticKey) else {
             throw .authenticationFailed
@@ -130,13 +130,13 @@ extension WireGuardDevice {
         peer.keypairs.install(Keypair(keys: keys, localIndex: pending.localIndex, remoteIndex: message.sender, isInitiator: true, created: now))
         peer.timers.sessionDerived(at: now)
         peer.timers.handshakeComplete()
-        // priority message를 먼저 보낸다. 응답자는 이 키로 온 첫 패킷을 받아야 next를 확정한다. 대기열이 비어 있으면
-        // keepalive라도 보낸다(wireguard-go도 priority message 뒤에 `SendKeepalive`를 부른다).
+        // Send the priority message first. The responder must receive the first packet with this key to confirm next. If the queue is empty,
+        // send a keepalive (wireguard-go also calls `SendKeepalive` after the priority message).
         return sendPriorityMessage(&peer, at: now) + sendKeepalive(&peer, at: now)
     }
 
     private mutating func receiveCookieReply(_ reply: CookieReply, at now: ContinuousClock.Instant) throws(WireGuardError) {
-        // 핸드셰이크 index든 keypair index든 그 피어의 것이면 받는다.
+        // Accept either a handshake index or a keypair index as long as it belongs to the peer.
         guard let owner = indexTable[reply.receiver],
               let consumed = try edit(owner, { _, peer throws(WireGuardError) in
                   guard peer.cookieGenerator.consume(reply, at: now) else { throw .authenticationFailed }
@@ -146,7 +146,7 @@ extension WireGuardDevice {
         _ = consumed
     }
 
-    // MARK: - 전송 데이터
+    // MARK: - Transport data
 
     private mutating func receiveTransportData(_ message: TransportData, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         guard let owner = indexTable[message.receiver],
@@ -157,12 +157,12 @@ extension WireGuardDevice {
 
     private func receiveTransportData(_ message: TransportData, for peer: inout Peer, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         guard let slot = peer.keypairs.slot(forLocalIndex: message.receiver) else { throw .unknownPeer }
-        // 오류를 던지는 검사(만료, 복호화, 재전송 창)는 피어를 고치기 전에 끝낸다. 재전송 창은 인증된 counter를
-        // 받아들일 때만 바뀌고, 거절할 때는 바뀌지 않는다.
+        // Finish checks that can throw (expiration, decryption, replay window) before modifying the peer. The replay window changes only when it accepts
+        // an authenticated counter and stays unchanged on rejection.
         let plaintext = try peer.keypairs.open(message, in: slot, at: now)
 
-        // 여기부터 패킷은 인증되었다. 안에 든 IP 패킷이 잘못됐더라도 인증된 수신으로 다룬다:
-        // next 확정, 대기열 방출, rekey, 타이머 갱신은 IP 검사와 무관하다(wireguard-go와 같다).
+        // The packet is now authenticated. Treat it as an authenticated receipt even if the enclosed IP packet is invalid.
+        // Confirming next, draining the queue, rekeying, and updating timers are independent of IP validation (as in wireguard-go).
         var outputs: [Output] = []
         if peer.keypairs.confirm(slot) {
             peer.timers.handshakeComplete()
@@ -171,15 +171,15 @@ extension WireGuardDevice {
         }
         outputs += keepKeyFreshReceiving(&peer, at: now)
         peer.timers.anyAuthenticatedPacketReceived()
-        if !plaintext.isEmpty {  // 빈 평문은 keepalive다.
+        if !plaintext.isEmpty {  // Empty plaintext is a keepalive.
             peer.timers.dataReceived(at: now)
             outputs.append(delivery(of: plaintext, from: peer))
         }
         return outputs
     }
 
-    /// 복호화한 평문을 IP 패킷으로 검증한다. 출발 주소가 그 피어의 AllowedIPs 안이어야 위로 올린다.
-    /// 이 검사가 "키가 곧 주소"라는 WireGuard의 cryptokey routing이다.
+    /// Validates decrypted plaintext as an IP packet. Delivers it up the stack only if its source address is within the peer's AllowedIPs.
+    /// This check is WireGuard's cryptokey routing, where "the key is the address."
     private func delivery(of plaintext: [UInt8], from peer: Peer) -> Output {
         guard let packet = InboundIPPacket(plaintext: plaintext) else {
             return .rejectedIPPacket(.malformed, from: peer.publicKey)
@@ -190,8 +190,8 @@ extension WireGuardDevice {
         return .ipPacket(packet.bytes, from: peer.publicKey)
     }
 
-    /// 받은 뒤: 초기자 keypair가 165초(RejectAfterTime − Keepalive − RekeyTimeout)를 넘었으면
-    /// 만료 전에 한 번 rekey한다. 받기만 하고 보내지 않는 초기자도 세션이 끊기지 않게 하기 위해서다.
+    /// After receiving, rekeys once before expiration if the initiator's keypair is older than
+    /// 165 seconds (RejectAfterTime − Keepalive − RekeyTimeout). This keeps the session alive even if the initiator only receives.
     private func keepKeyFreshReceiving(_ peer: inout Peer, at now: ContinuousClock.Instant) -> [Output] {
         guard !peer.timers.sentLastMinuteHandshake,
               let current = peer.keypairs.current,

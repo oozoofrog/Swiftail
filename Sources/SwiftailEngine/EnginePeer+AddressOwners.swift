@@ -3,23 +3,23 @@ import SwiftailBase
 import SwiftailControl
 
 extension EnginePeer {
-    /// 데이터면의 주소 → 그 주소의 주인 노드. 주인은 그 주소 한 주소짜리 접두(/32, /128)를 AllowedIPs로 가진 피어다.
+    /// Maps data-plane addresses to their owner nodes. The owner is the peer with the single-address prefix (/32 or /128) for that address in AllowedIPs.
     ///
-    /// WireGuard는 피어가 보낸 패킷의 출발 주소를 그 피어의 AllowedIPs로 검사하므로, 이 표의 노드가 그 주소에서 온 연결의
-    /// 상대다. 엔진이 피어를 올릴 때 쓰는 것과 같은 계산(`eligibleNodes(in:at:)`)에서 만든다: 데이터면에 오르지 않는 노드
-    /// (만료, 지원하지 않는 피어)의 주소는 없고, 같은 주소를 여러 노드가 내세우면 엔진이 그 주소를 준 노드(node ID가 작은 쪽)
-    /// 하나만 있다. 자기 노드의 주소는 넣지 않는다.
+    /// WireGuard checks a packet's source address against the sending peer's AllowedIPs, so the node in this table is the remote end of a connection
+    /// from that address. Built by the same computation the engine uses to install peers (`eligibleNodes(in:at:)`). It omits addresses of nodes outside the data plane
+    /// (expired or unsupported peers). If several nodes claim the same address, it includes only the node the engine assigned that address to (the lower node ID).
+    /// It omits the local node's addresses.
     ///
-    /// 노드가 연결의 주인 확인(`SwiftailNetstack` 계약 동작 X10), 피어별 한도, `whoIs`에 함께 쓴다. 셋이 서로 다른 표를
-    /// 보면 앱이 연결의 상대를 다른 노드의 신원으로 볼 수 있다. 엔진이 있으면 엔진이 피어를 올릴 때 함께 만든 표
-    /// (`TailnetEngine.addressOwners`)를 쓴다. 이 함수는 엔진이 없을 때 같은 계산을 netmap에서 직접 한다.
+    /// The node uses this for connection owner verification (`SwiftailNetstack` contract behavior X10), per-peer limits, and `whoIs`. If the three use different tables,
+    /// the app may see a connection's remote end under another node's identity. When an engine is present, use the table built alongside peer installation
+    /// (`TailnetEngine.addressOwners`). Without an engine, this function runs the same computation directly on the netmap.
     ///
-    /// - Parameter now: 키 만료를 판단할 지금 시각(로컬 벽시계).
+    /// - Parameter now: The current time (local wall clock) for checking key expiration.
     package static func addressOwners(in netmap: Netmap, at now: Date) -> [IPAddress: Node] {
         addressOwners(of: eligibleNodes(in: netmap, at: now))
     }
 
-    /// 올릴 피어들(`eligibleNodes(in:at:)`)의 주소 → 주인 노드.
+    /// Maps addresses of peers to install (`eligibleNodes(in:at:)`) to their owner nodes.
     static func addressOwners(of eligible: [(node: Node, peer: EnginePeer)]) -> [IPAddress: Node] {
         var owners: [IPAddress: Node] = [:]
         for (node, peer) in eligible {

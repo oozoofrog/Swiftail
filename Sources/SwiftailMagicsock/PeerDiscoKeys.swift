@@ -1,39 +1,39 @@
-// netmap 키와 TSMP 키 가운데 활성 키를 고르는 규칙은 Go 구현을 옮겼다.
-// 출처: tailscale.com v1.104.7 `wgengine/magicsock/endpoint.go` (`endpointDisco`, `updateDiscoKey`,
+// The rules for choosing the active key from the netmap and TSMP keys are ported from the Go implementation.
+// Origin: tailscale.com v1.104.7 `wgengine/magicsock/endpoint.go` (`endpointDisco`, `updateDiscoKey`,
 // `updateTSMPDiscoKey`, `checkAndUpdateDiscoKey`), `wgengine/magicsock/magicsock.go` (`HandleDiscoKeyAdvertisement`).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
 import SwiftailBase
 
-/// 피어 하나의 disco 키 두 벌과 그 가운데 활성인 것(계약 "TSMP disco 키 광고" 동작 T4, 노트 4.10 2).
+/// A peer's two disco keys and which one is active (contract "TSMP disco key advertisement" behavior T4, notes 4.10 2).
 ///
-/// netmap으로 배운 키와 TSMP 광고로 배운 키를 따로 쥐고, 보내는 disco는 활성 키 하나로 봉한다. 규칙은 Go와 같다.
-/// - TSMP 광고가 오면 그 키가 활성이 된다(netmap이 더 새 키를 줬더라도).
-/// - netmap이 키를 바꿔도 TSMP 키가 활성이면 활성은 그대로다. netmap 키가 활성이 되는 길은 TSMP 키가 없을 때와,
-///   비활성 키로 봉한 Ping·CallMeMaybe를 받았을 때(`noteSeen`)뿐이다.
+/// Holds the key learned from the netmap and the key learned from a TSMP advertisement separately. Seals outgoing disco messages with the one active key. The rules match Go.
+/// - When a TSMP advertisement arrives, its key becomes active even if the netmap supplied a newer key.
+/// - Changing the netmap key leaves the active TSMP key active. The netmap key becomes active only if there is no TSMP key or
+///   a Ping or CallMeMaybe sealed with the inactive key arrives (`noteSeen`).
 ///
-/// 바꾸는 진입점은 Go의 같은 함수가 참을 돌려줄 때 참을 돌려준다. 활성 키 값이 그대로여도 참일 수 있다(처음 온 광고가
-/// netmap 키와 같을 때, TSMP 키가 활성인데 netmap 키가 바뀔 때). 참이면 부르는 쪽이 경로를 다시 찾게 한다(Go
+/// A mutating entry point returns true when its Go counterpart does. It can return true even if the active key's value did not change (when the first advertisement
+/// matches the netmap key, or when the netmap key changes while the TSMP key is active). On true, the caller rediscovers the path (Go
 /// `changedActiveDiscoLocked`, `PeerPathState.resetForNewDiscoKey`).
 ///
-/// 0 키는 넣지 않는다. 0이거나 공유 키를 계산할 수 없는 netmap 키는 부르는 쪽이 nil로 넘긴다(동작 B1). 다른 피어가
-/// 같은 키를 쥐었는지는 이 값과 상관없다(키 하나를 여러 피어가 쥘 수 있다).
+/// Keys of 0 are omitted. The caller passes nil for a netmap key of 0 or one whose shared key cannot be computed (behavior B1). Whether another peer
+/// holds the same key has no bearing on this value (multiple peers can hold one key).
 struct PeerDiscoKeys: Sendable, Equatable {
-    /// netmap으로 배운 키. Go `controlKey`.
+    /// The key learned from netmap. Go `controlKey`.
     private(set) var netmap: DiscoPublicKey?
-    /// TSMP 광고로 배운 키. Go `tsmpKey`.
+    /// The key learned from a TSMP advertisement. Go `tsmpKey`.
     private(set) var tsmp: DiscoPublicKey?
-    /// TSMP 키가 활성인가. Go `tsmpActive`.
+    /// Whether the TSMP key is active. Go `tsmpActive`.
     private(set) var tsmpActive = false
 
-    /// 보내는 disco를 봉할 키. 두 키가 모두 없으면 nil(disco 없이 DERP만).
+    /// The key for sealing outgoing disco messages. Nil if both keys are absent (DERP only, no disco).
     var active: DiscoPublicKey? {
         tsmpActive ? tsmp : netmap
     }
 
-    /// netmap이 준 키(Go `updateFromNode` → `updateDiscoKey`). netmap 키가 그대로면 아무것도 하지 않는다.
+    /// The key supplied by netmap (Go `updateFromNode` → `updateDiscoKey`). Does nothing if the netmap key is unchanged.
     ///
-    /// nil이면 netmap 키를 지우고 TSMP 키가 있으면 그것을 활성으로 둔다. 아니면 TSMP 키가 활성이던 때만 활성이 그대로다.
+    /// If nil, clears the netmap key and makes the TSMP key active if present. Otherwise the TSMP key stays active only if it already was.
     mutating func updateNetmap(_ key: DiscoPublicKey?) -> Bool {
         guard key != netmap else { return false }
         tsmpActive = tsmpActive || key == nil
@@ -42,9 +42,9 @@ struct PeerDiscoKeys: Sendable, Equatable {
         return true
     }
 
-    /// TSMP 광고가 준 키(Go `updateTSMPDiscoKey`). 이전 TSMP 키와 같으면 활성이 netmap 키여도 바꾸지 않는다(Go
-    /// `HandleDiscoKeyAdvertisement`가 그 경우를 "바뀌지 않음"으로 먼저 거른다). TSMP 키는 지우지 않는다(Go도 광고의
-    /// 0 키는 받지 않는다). 피어가 빠질 때 이 값째 버린다.
+    /// The key supplied by a TSMP advertisement (Go `updateTSMPDiscoKey`). If it matches the previous TSMP key, changes nothing even when the netmap key is active (Go
+    /// `HandleDiscoKeyAdvertisement` first filters that case as "unchanged"). The TSMP key is never cleared (Go also rejects
+    /// keys of 0 in advertisements). Discards it with this entire value when the peer is removed.
     mutating func updateTSMP(_ key: DiscoPublicKey) -> Bool {
         guard key != tsmp else { return false }
         tsmp = key
@@ -52,10 +52,10 @@ struct PeerDiscoKeys: Sendable, Equatable {
         return true
     }
 
-    /// 이 피어가 보낸 것으로 확인된 disco 메시지의 보낸 쪽 키(Go `checkAndUpdateDiscoKey`).
+    /// The sender key of a disco message confirmed to be from this peer (Go `checkAndUpdateDiscoKey`).
     ///
-    /// - Returns: `known`은 그 키가 이 피어의 두 키 가운데 하나인가, `changed`는 비활성 키였어서 활성을 그쪽으로
-    ///   바꿨는가.
+    /// - Returns: `known` indicates whether the key was one of the peer's two keys, and `changed` indicates whether it was inactive and
+    ///   became active.
     mutating func noteSeen(_ key: DiscoPublicKey) -> (known: Bool, changed: Bool) {
         if active == key { return (true, false) }
         let inactive = tsmpActive ? netmap : tsmp
@@ -64,7 +64,7 @@ struct PeerDiscoKeys: Sendable, Equatable {
         return (true, true)
     }
 
-    /// 두 키가 다 없으면 처음 상태로 돌린다(Go는 `endpointDisco`를 nil로 둔다).
+    /// Resets to the initial state if both keys are absent (Go sets `endpointDisco` to nil).
     private mutating func normalize() {
         if netmap == nil, tsmp == nil {
             tsmpActive = false

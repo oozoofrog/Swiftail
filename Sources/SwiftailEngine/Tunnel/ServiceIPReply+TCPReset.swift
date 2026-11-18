@@ -1,18 +1,18 @@
-// RST의 seq·ack 규칙과 창 0은 gVisor가 닫힌 포트에 보내는 RST와 같다.
-// 출처: gvisor.dev/gvisor v0.0.0-20230927004350-cbd86285d259 `pkg/tcpip/transport/tcp/protocol.go` (`replyWithReset`),
+// RST seq and ack rules and the window of 0 match the RST gVisor sends for a closed port.
+// Origin: gvisor.dev/gvisor v0.0.0-20230927004350-cbd86285d259 `pkg/tcpip/transport/tcp/protocol.go` (`replyWithReset`),
 // RFC 9293 3.10.7.1.
 // Copyright 2018 The gVisor Authors. Apache-2.0.
 
 extension ServiceIPReply {
-    /// TCP 세그먼트에 대한 RST. 서비스 IP에는 TCP 스택이 없으므로 어떤 포트의 어떤 세그먼트에도 RST로 답한다(결정 D4).
-    /// 요청이 TCP가 아니거나 RST면 `nil`이다(RST에는 답하지 않는다, RFC 9293 3.10.7.1).
+    /// An RST for a TCP segment. The service IP has no TCP stack, so it answers any segment to any port with an RST (decision D4).
+    /// Returns `nil` if the request is not TCP or is an RST (RSTs receive no reply, RFC 9293 3.10.7.1).
     ///
-    /// 닫힌 연결에 오는 세그먼트에 대한 규칙(RFC 9293 3.10.7.1):
-    /// - ACK가 켜져 있으면 `seq = SEG.ACK`이고 RST만 켠다. `ack`는 0이다.
-    /// - 아니면 `seq = 0`, `ack = SEG.SEQ + SEG.LEN`이고 RST와 ACK를 켠다. `SEG.LEN`은 payload 바이트 수에
-    ///   SYN과 FIN을 1씩 더한 것이다. `UInt32`를 넘치면 순환한다(시퀀스 번호 공간).
+    /// The following rules apply to segments arriving on a closed connection (RFC 9293 3.10.7.1).
+    /// - If ACK is set, `seq = SEG.ACK` and only RST is set. `ack` is 0.
+    /// - Otherwise, `seq = 0`, `ack = SEG.SEQ + SEG.LEN`, and both RST and ACK are set. `SEG.LEN` is the payload byte count
+    ///   plus 1 each for SYN and FIN. Overflow past `UInt32` wraps in the sequence number space.
     ///
-    /// 머리는 옵션 없는 20바이트이고, 창은 0, urgent 포인터는 0이다.
+    /// The header is 20 bytes with no options, a window of 0, and an urgent pointer of 0.
     static func tcpReset(inReplyTo segment: IPPacket) -> [UInt8]? {
         guard segment.transportProtocol == .tcp else { return nil }
         let bytes = segment.bytes
@@ -32,7 +32,7 @@ extension ServiceIPReply {
             acknowledgement = 0
             replyFlags = reset
         } else {
-            // 해석 단계가 TCP 머리 길이(data offset)를 패킷 안에서 확인했다.
+            // Parsing verified that the TCP header length (data offset) fits within the packet.
             let headerLength = Int(bytes[offset + 12] >> 4) * 4
             let payloadLength = bytes.count - offset - headerLength
             let flagLength = (flags & syn != 0 ? 1 : 0) + (flags & fin != 0 ? 1 : 0)
@@ -41,7 +41,7 @@ extension ServiceIPReply {
             replyFlags = reset | ack
         }
 
-        // 포트 맞바꿈, seq, ack, data offset 5, 플래그, 창 0, 체크섬 자리, urgent 0.
+        // Swapped ports, seq, ack, data offset 5, flags, window 0, checksum field, and urgent 0.
         let transport = Self.bytes(segment.destinationPort) + Self.bytes(segment.sourcePort)
             + Self.bytes(sequence) + Self.bytes(acknowledgement)
             + [0x50, replyFlags, 0, 0, 0, 0, 0, 0]

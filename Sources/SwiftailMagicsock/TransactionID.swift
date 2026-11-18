@@ -1,18 +1,18 @@
-/// disco Ping·Pong과 STUN 바인딩 요청이 함께 쓰는 12바이트 트랜잭션 ID.
+/// The 12-byte transaction ID shared by disco Ping and Pong and STUN binding requests.
 ///
-/// 난수는 호출한 쪽이 넘긴다. 시험은 고정 난수 생성기를 넘길 수 있다.
+/// The caller supplies randomness. Tests can pass a fixed random number generator.
 struct TransactionID: Hashable, Sendable {
     static let byteCount = 12
 
     let bytes: [UInt8]
 
-    /// 정확히 12바이트가 아니면 `nil`.
+    /// Returns `nil` unless the input is exactly 12 bytes.
     init?(_ bytes: some Collection<UInt8>) {
         guard bytes.count == Self.byteCount else { return nil }
         self.bytes = Array(bytes)
     }
 
-    /// `generator`로 12바이트를 뽑는다.
+    /// Draws 12 bytes using `generator`.
     static func random(using generator: inout some RandomNumberGenerator) -> TransactionID {
         let bytes = (0..<byteCount).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         return TransactionID(storage: bytes)

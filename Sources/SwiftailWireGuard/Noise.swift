@@ -1,14 +1,14 @@
 import CryptoKit
 import SwiftailCrypto
 
-/// Noise 프로토콜의 대칭 상태(chaining key와 hash)와 그 연산.
+/// The Noise protocol's symmetric state (chaining key and hash) and its operations.
 ///
-/// 핸드셰이크의 매 단계는 받은·보낸 값을 hash에 섞고(transcript), DH 결과를 chaining key에 섞어
-/// 다음 AEAD 키를 뽑는다. 마지막 chaining key에서 전송 키 둘이 나온다.
-/// `Handshake`는 이 연산들을 WireGuard가 정한 순서로 부를 뿐이다.
+/// Each handshake stage mixes received and sent values into the hash (the transcript) and mixes DH results into the chaining key
+/// to derive the next AEAD key. The two transport keys come from the final chaining key.
+/// `Handshake` simply calls these operations in the order WireGuard specifies.
 ///
-/// 백서 §5.4, Noise 규격 §5.2, `docs/protocol-notes/wireguard.md` "기본 연산"·"초기 상수"
-/// (출처: wireguard-go `device/noise-protocol.go`, `device/noise-helpers.go`).
+/// Whitepaper §5.4, Noise specification §5.2, `docs/protocol-notes/wireguard.md` "Basic operations" and "Initial constants"
+/// (origin: wireguard-go `device/noise-protocol.go`, `device/noise-helpers.go`).
 struct SymmetricState {
     private(set) var chainingKey: [UInt8]
     private(set) var hash: [UInt8]
@@ -30,14 +30,14 @@ struct SymmetricState {
         chainingKey = HKDFBLAKE2s.derive(chainingKey: chainingKey, input: input, outputCount: 1)[0]
     }
 
-    /// (ck, k) = KDF2(ck, input). k는 바로 다음 AEAD 하나에만 쓴다.
+    /// (ck, k) = KDF2(ck, input). Use k only for the very next AEAD operation.
     mutating func mixKeyAndDeriveKey(_ input: [UInt8]) -> SymmetricKey {
         let outputs = HKDFBLAKE2s.derive(chainingKey: chainingKey, input: input, outputCount: 2)
         chainingKey = outputs[0]
         return SymmetricKey(data: outputs[1])
     }
 
-    /// (ck, τ, k) = KDF3(ck, psk), h = HASH(h ‖ τ). PSK 계층을 쓰지 않아도 이 단계는 그대로 거친다.
+    /// (ck, τ, k) = KDF3(ck, psk), h = HASH(h ‖ τ). This step runs even when the PSK layer is unused.
     mutating func mixPresharedKey(_ presharedKey: [UInt8]) -> SymmetricKey {
         let outputs = HKDFBLAKE2s.derive(chainingKey: chainingKey, input: presharedKey, outputCount: 3)
         chainingKey = outputs[0]
@@ -52,27 +52,27 @@ struct SymmetricState {
         return ciphertext
     }
 
-    /// encryptAndHash의 역. 태그가 틀리면 `nil`이고 상태는 그대로다.
+    /// The inverse of encryptAndHash. Returns `nil` and leaves state unchanged if the tag is invalid.
     mutating func decryptAndHash(_ ciphertext: [UInt8], key: SymmetricKey) -> [UInt8]? {
         guard let plaintext = AEAD.open(ciphertext, key: key, counter: 0, authenticating: hash) else { return nil }
         mixHash(ciphertext)
         return plaintext
     }
 
-    /// (T1, T2) = KDF2(ck, 빈 입력). 초기자는 (송신, 수신), 응답자는 (수신, 송신)으로 쓴다.
+    /// (T1, T2) = KDF2(ck, empty input). The initiator uses them as (send, receive) and the responder as (receive, send).
     func split() -> (first: SymmetricKey, second: SymmetricKey) {
         let outputs = HKDFBLAKE2s.derive(chainingKey: chainingKey, input: [], outputCount: 2)
         return (SymmetricKey(data: outputs[0]), SymmetricKey(data: outputs[1]))
     }
 }
 
-/// X25519 DH. 상대 공개 키가 저차 점이라 결과가 전부 0이면 `nil`이다(백서 §5.4의 "DH 실패").
+/// X25519 DH. Returns `nil` if the peer's public key is a low-order point whose result is all 0 ("DH failure" in whitepaper §5.4).
 func sharedSecret(_ privateKey: Curve25519.KeyAgreement.PrivateKey, _ publicKey: [UInt8]) -> [UInt8]? {
     guard let peer = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKey),
           let secret = try? privateKey.sharedSecretFromKeyAgreement(with: peer)
     else { return nil }
-    // SharedSecret은 바이트를 withUnsafeBytes로만 내준다. 클로저 안에서 배열로 복사할 뿐
-    // 포인터를 밖으로 내보내지 않는다.
+    // SharedSecret exposes its bytes only through withUnsafeBytes. Copy them into an array inside the closure
+    // without letting the pointer escape.
     let bytes = secret.withUnsafeBytes { Array($0) }
     guard !constantTimeEqual(bytes, [UInt8](repeating: 0, count: 32)) else { return nil }
     return bytes
