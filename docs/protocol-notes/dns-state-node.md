@@ -1,573 +1,573 @@
-# DNS·상태 저장·노드 표면 노트
+# DNS, State Storage, and Node API Notes
 
-## 1. 머리말
+## 1. Introduction
 
-| 항목 | 내용 |
+| Item | Details |
 | --- | --- |
-| 기준 버전 | `tailscale.com` v1.104.6 (CapabilityVersion 148). DNS 메시지 파서는 `golang.org/x/net` v0.60.0(`tailscale.com/go.mod:143`), gVisor 상수는 go.mod가 고정한 `gvisor.dev/gvisor@v0.0.0-20260915211658-a6f909f08a72` |
-| 쓰는 마일스톤 | M5(iOS 패킷 터널), M6(프로세스 내 리스너·다이얼), M7(WhoIs, ts.net 인증서, Go 상태 파일 이관) |
-| 작성 모델 | Claude Sonnet 5.5 (`claude-sonnet-5-5`) |
-| 검증 | Claude Opus 5.5, 2026-11-15. 사실 정정 16건(8.3), 출처 줄 정정 12건, M5 절차(4.1.4, 4.2, 4.3)와 결정 표(6.4) 보충 |
+| Reference version | `tailscale.com` v1.104.6 (CapabilityVersion 148). The DNS message parser is `golang.org/x/net` v0.60.0 (`tailscale.com/go.mod:143`). gVisor constants are from `gvisor.dev/gvisor@v0.0.0-20260915211658-a6f909f08a72`, pinned by go.mod |
+| Applicable milestones | M5 (iOS packet tunnel), M6 (in-process listeners and dialing), M7 (WhoIs, ts.net certificates, Go state file migration) |
+| Authoring model | Claude Sonnet 5.5 (`claude-sonnet-5-5`) |
+| Verification | Claude Opus 5.5, 2026-11-15. Corrected 16 facts (§8.3) and 12 origin line references, and expanded the M5 procedures (§§4.1.4, 4.2, and 4.3) and decision table (§6.4) |
 
-읽는 법: 절 제목의 `[M5]`·`[M6]`·`[M7]`은 그 절이 필요한 마일스톤이다. M5 구현자는 3.1, 4.1~4.6, 6.1, 6.4만 읽으면 된다(3.2는 M7 이관용). TUN 주소·경로 산출은 [netmap-engine.md](netmap-engine.md) 4.8을, 링크 변경 뒤 magicsock 재결속의 세부는 [disco-magicsock.md](disco-magicsock.md) 4.11을 따르고 여기서 되풀이하지 않는다. 출처는 모듈 루트 기준 `경로:줄`이다. 첫 사용처(RemoteDebug)의 요구 사항은 그 저장소 HEAD의 경로로 적는다. 예시 값은 가짜(`rd-mac-1a2b3c4d.tail0001.ts.net`, `100.64.0.1`)다.
+Section tags `[M5]`, `[M6]`, and `[M7]` indicate the milestone that needs the section. M5 implementers need only §§3.1, 4.1~4.6, 6.1, and 6.4 (§3.2 is for M7 migration). TUN address and route derivation follows [netmap-engine.md](netmap-engine.md) §4.8, and magicsock rebinding after link changes follows [disco-magicsock.md](disco-magicsock.md) §4.11. Those details are covered there. Origins use `path:line` relative to the module root. Requirements for the first adopter (RemoteDebug) use paths at that repository's HEAD. Example values are fictitious (`rd-mac-1a2b3c4d.tail0001.ts.net`, `100.64.0.1`).
 
-## 2. 범위
+## 2. Scope
 
-다루는 것
-- [M5] netmap `DNSConfig` → OS DNS 설정(`OSConfig`)과 내장 리졸버 설정의 산출, MagicDNS 응답 규칙과 DNS 바이트 형식, 서비스 IP(`100.100.100.100`, `fd7a:115c:a1e0::53`) 패킷의 가로채기, 상태 저장 형식과 재시작, backend state 기계, 링크 변경(Wi-Fi ↔ 셀룰러) 처리와 소켓 결속.
-- [M6] tsnet `Listen`·`Dial`과 netstack 설정.
-- [M7] `WhoIs`, ts.net 인증서(ACME DNS-01과 제어의 `set-dns`), Go 상태 파일 이관에 필요한 키와 형식.
+In scope
+- [M5] Deriving OS DNS settings (`OSConfig`) and built-in resolver settings from netmap `DNSConfig`, MagicDNS response rules and the DNS byte format, intercepting service IP packets (`100.100.100.100`, `fd7a:115c:a1e0::53`), persistent state format and restart, the backend state machine, and handling link changes (Wi-Fi ↔ cellular) and socket binding.
+- [M6] tsnet `Listen` and `Dial`, and netstack configuration.
+- [M7] `WhoIs`, ts.net certificates (ACME DNS-01 and the control server's `set-dns`), and the keys and format needed to migrate Go state files.
 
-다루지 않는 것
-- WireGuard, DERP, disco, 제어 프로토콜(다른 노트). 제어 쪽은 `/machine/set-dns`의 형태만 적는다.
-- Linux·Windows의 OS DNS 구성기, 출구 노드 DNS 프록시(DoH·PeerAPI DNS), Taildrive, SSH, Serve/Funnel, 앱 커넥터, tailnet lock.
-- iOS 앱 쪽 코드(`OSConfig` → `NEDNSSettings` 변환, `GetBaseConfig` 구현). Tailscale의 iOS 앱 코드는 기준 소스에 없다(8장).
+Out of scope
+- WireGuard, DERP, disco, and the control protocol (covered in other notes). The only control protocol format here is `/machine/set-dns`.
+- Linux and Windows OS DNS configurators, exit-node DNS proxy (DoH and PeerAPI DNS), Taildrive, SSH, Serve/Funnel, app connectors, and tailnet lock.
+- iOS app code (`OSConfig` → `NEDNSSettings` conversion and `GetBaseConfig` implementation). The reference sources exclude the Tailscale iOS app code (§8).
 
-## 3. 와이어 형식과 저장 형식
+## 3. Wire and Storage Formats
 
-### 3.1 [M5] DNS 메시지 — 응답기가 다루는 부분
+### 3.1 [M5] DNS Message Fields Handled by the Responder
 
-Go는 `golang.org/x/net/dns/dnsmessage`로 머리와 **첫 질문 하나만** 읽는다(`tailscale.com/net/dns/resolver/tsdns.go:1020-1033`). 질문이 둘 이상이면 나머지는 읽지 않고, 응답에는 첫 질문만 싣는다.
+Go reads the header and **only the first question** with `golang.org/x/net/dns/dnsmessage` (`tailscale.com/net/dns/resolver/tsdns.go:1020-1033`). If there are multiple questions, it skips the rest and includes only the first question in the response.
 
-머리(12바이트, 빅엔디언. 배치는 RFC 1035 4.1.1, AD·CD 비트는 RFC 4035)
+Header (12 bytes, big-endian. Layout in RFC 1035 4.1.1, AD and CD bits in RFC 4035)
 
-| 오프셋 | 길이 | 필드 | 응답에서의 값(Go 로컬 응답) |
+| Offset | Length | Field | Response value (Go local response) |
 | --- | --- | --- | --- |
-| 0 | 2 | ID | 질의 값 |
-| 2 | 2 | QR·Opcode(4)·AA·TC·RD·RA·Z·AD·CD·RCODE(4) | 질의 머리를 그대로 복사한 뒤 QR=1, AA=1, RD=1이면 RA=1로 덮는다. 그 밖의 비트(Opcode, TC, AD, CD, RD=0일 때의 RA)는 질의 값이 남는다. Opcode는 검사하지 않는다(`tsdns.go:1009-1011`, `:1203-1208`) |
-| 4 | 2 | QDCOUNT | 1(질문을 싣는 경우) 또는 0 |
-| 6 | 2 | ANCOUNT | 0 또는 1 |
-| 8 | 2 | NSCOUNT | 부정 응답에 SOA를 붙이면 1 |
-| 10 | 2 | ARCOUNT | 0. 질의의 EDNS OPT를 응답에 싣지 않는다(`tsdns.go:1203-1287`) |
+| 0 | 2 | ID | Query value |
+| 2 | 2 | QR·Opcode(4)·AA·TC·RD·RA·Z·AD·CD·RCODE(4) | Copy the query header as is, then overwrite QR=1, AA=1, and RA=1 if RD=1. Other bits (Opcode, TC, AD, CD, and RA when RD=0) retain their query values. Opcode is unchecked (`tsdns.go:1009-1011`, `:1203-1208`) |
+| 4 | 2 | QDCOUNT | 1 (if including the question) or 0 |
+| 6 | 2 | ANCOUNT | 0 or 1 |
+| 8 | 2 | NSCOUNT | 1 if an SOA is attached to a negative response |
+| 10 | 2 | ARCOUNT | 0. The response omits the query's EDNS OPT (`tsdns.go:1203-1287`) |
 
-질문 구역은 RCODE가 NOERROR이거나 질문의 TYPE이 0이 아닐 때 싣는다(`tsdns.go:1222-1232`). 즉 질문을 읽지 못한 FORMERR만 질문 없이 나간다.
+Include the question section when RCODE is NOERROR or the question's TYPE is nonzero (`tsdns.go:1222-1232`). That is, only FORMERR due to failure to read the question goes out without a question.
 
-이름
-- 읽기: 길이 바이트(0x00~0x3F) + 레이블, 0x00으로 끝. 상위 두 비트가 11이면 14비트 오프셋 포인터이고, 한 이름에서 포인터는 10번까지 따라간다. 01·10은 오류. 레이블 안에 `.` 바이트가 있으면 오류. 이어 붙인 이름(끝 점 포함)이 254바이트를 넘으면(255바이트부터) 오류(254바이트는 받는다. Go를 실행해 확인, 2026-11-15. `golang.org/x/net@v0.60.0/dns/dnsmessage/message.go:2039-2111`). 오류는 FORMERR로 이어진다.
-- 비교: ASCII `A`-`Z`만 소문자로 바꾸고(`tsdns.go:1320-1331`), 끝 점이 있는 FQDN으로 정규화한다. 바이트 0x20 이하나 0x7F가 있거나, 빈 레이블·64바이트 이상 레이블이 있거나, 끝 점을 더해 254바이트를 넘으면 유효한 FQDN이 아니다(`tailscale.com/util/dnsname/dnsname.go:29-84`). 비교는 소문자 이름으로 하지만 응답의 질문과 답변 이름은 **질의에 온 대소문자 그대로** 쓴다(`tsdns.go:1009-1011`, `:1037-1094`).
-- 쓰기: Go 로컬 응답은 이름 압축을 쓰지 않는다. 압축은 `resp.IPs`가 둘 이상일 때만 켜는데 로컬 경로는 `resp.IP` 하나만 채운다(`tsdns.go:1213-1218`, `:1484`). Swiftail도 압축 없이 쓰면 Go와 바이트가 같다.
+Names
+- Reading. Length byte (0x00~0x3F) + label, terminated by 0x00. High two bits 11 indicate a 14-bit offset pointer. Follow at most 10 pointers per name. 01 and 10 are errors. A `.` byte within a label is an error. An assembled name (including the trailing dot) longer than 254 bytes (255 bytes onward) is an error (254 bytes are accepted, verified by running Go on 2026-11-15. `golang.org/x/net@v0.60.0/dns/dnsmessage/message.go:2039-2111`). Errors produce FORMERR.
+- Comparison. Lowercase only ASCII `A`-`Z` (`tsdns.go:1320-1331`) and normalize to an FQDN with a trailing dot. A name fails FQDN validation if it contains a byte at or below 0x20 or equal to 0x7F, has an empty label or a label of 64 bytes or more, or exceeds 254 bytes after appending the trailing dot (`tailscale.com/util/dnsname/dnsname.go:29-84`). Comparisons use lowercase names, and question and answer names in responses preserve **the case received in the query** (`tsdns.go:1009-1011`, `:1037-1094`).
+- Writing. Go's local responses omit name compression. Compression activates only with two or more `resp.IPs`, while the local path populates only one `resp.IP` (`tsdns.go:1213-1218`, `:1484`). Swiftail can match Go's bytes by writing without compression too.
 
-답변 레코드(모두 CLASS IN)
+Answer records (all CLASS IN)
 
-| 타입 | 소유자 이름 | TTL | RDATA | 출처 |
+| Type | Owner name | TTL | RDATA | Origin |
 | --- | --- | --- | --- | --- |
-| A | 질문 이름 | 5초 | IPv4 4바이트 | `tsdns.go:58`, `:1037-1049` |
-| AAAA | 질문 이름 | 5초 | IPv6 16바이트 | `tsdns.go:1053-1065` |
-| PTR | 질문 이름 | 5초 | 노드 FQDN(끝 점 포함, 압축 없음) | `tsdns.go:1079-1094` |
-| SOA(권한 구역) | 권한 영역 이름 | 10초 | MNAME·RNAME = 영역 이름, SERIAL = 현재 유닉스 초, REFRESH·RETRY·EXPIRE·MINIMUM = 10 | `tsdns.go:68`, `:1177-1199` |
+| A | Question name | 5 seconds | 4 IPv4 bytes | `tsdns.go:58`, `:1037-1049` |
+| AAAA | Question name | 5 seconds | 16 IPv6 bytes | `tsdns.go:1053-1065` |
+| PTR | Question name | 5 seconds | Node FQDN (with trailing dot, no compression) | `tsdns.go:1079-1094` |
+| SOA (authority section) | Authoritative zone name | 10 seconds | MNAME and RNAME = zone name, SERIAL = current Unix seconds, REFRESH, RETRY, EXPIRE, and MINIMUM = 10 | `tsdns.go:68`, `:1177-1199` |
 
-- A·AAAA·ANY 답은 최대 하나다. 노드가 주소를 여럿 가져도 질의 타입에 맞는 첫 주소만 나간다(`tsdns.go:791-822`, `:1484`).
-- SOA는 부정 응답에만 붙는다: NXDOMAIN, 그리고 A·AAAA·ANY 질의에서 이름은 있으나 그 타입 주소가 없는 NOERROR. 권한 영역(4.1.3의 `LocalDomains` 가운데 이름을 포함하는 것)을 찾지 못하면 붙이지 않는다(`tsdns.go:1405-1414`, `:1427-1429`, `:1486-1496`).
-- 응답 크기: 압축이 없으므로 이론상 최대는 머리 12 + 질문 259 + SOA(영역 이름 ≤255를 세 번 + 고정 30) ≈ 1,066바이트다. 실제 tailnet 영역(`tail0001.ts.net.`, 역방향 영역)에서는 질문 이름이 최대여도 약 350바이트라 512바이트를 넘지 않는다(계산. 4.2.4).
+- A, AAAA, and ANY answers contain at most one record. Even for a node with multiple addresses, only the first address matching the query type is returned (`tsdns.go:791-822`, `:1484`).
+- SOA appears only on negative responses: NXDOMAIN, and NOERROR for A, AAAA, or ANY when the name exists but no address of the given type exists. Skip SOA if no authoritative zone is found (a `LocalDomains` entry from §4.1.3 that contains the name) (`tsdns.go:1405-1414`, `:1427-1429`, `:1486-1496`).
+- Response size. Without compression, the theoretical maximum is 12 bytes of header + 259 for the question + SOA (zone name ≤255 three times + 30 fixed) ≈ 1,066 bytes. Actual tailnet zones (`tail0001.ts.net.` and reverse zones) yield about 350 bytes even with a maximum-length question name, so they stay within 512 bytes (calculation, §4.2.4).
 
-RCODE 규칙(로컬 판단, 위에서부터)
+RCODE rules (local decisions, in order)
 
-| 상황 | 결과 | 출처 |
+| Situation | Result | Origin |
 | --- | --- | --- |
-| 머리를 읽지 못함, 질의가 QR=1, 질문이 없음 | FORMERR, 질문 없음 | `tsdns.go:1028-1032`, `:1447-1459` |
-| 질문 이름이 유효한 FQDN이 아님 | FORMERR, 질문 포함 | `tsdns.go:1461-1468` |
-| PTR 질의 | 역방향 규칙(4.2.2 5) | `tsdns.go:1473-1475` |
-| 이름이 `.onion`으로 끝남 | NXDOMAIN(SOA는 영역 안일 때만) | `tsdns.go:727-731` |
-| `magicdns.localhost-tailscale-daemon.`의 A / AAAA | `100.100.100.100` / `fd7a:115c:a1e0::53` | `tsdns.go:45`, `:736-743` |
-| 이름을 찾지 못함, `LocalDomains` 안 | NXDOMAIN + SOA | `tsdns.go:772-778` |
-| 이름을 찾지 못함, `LocalDomains` 밖 | 로컬 답 없음 → 전달 단계(4.2.3) | `tsdns.go:779-782`, `:1477-1480` |
-| 찾음, A: IPv4 있음 / 없음 | A 1개 / NOERROR 빈 답 + SOA | `tsdns.go:792-800` |
-| 찾음, AAAA: IPv6 있음 / 없음 | AAAA 1개 / NOERROR 빈 답 + SOA | `tsdns.go:801-809` |
-| 찾음, ANY(255) | 주소 목록의 첫 주소(A 또는 AAAA) 1개, 주소가 없으면 NOERROR 빈 답 + SOA | `tsdns.go:810-820` |
-| 찾음, NS·SOA·AXFR·HINFO | NOTIMP(SOA 없음) | `tsdns.go:824-826` |
-| 찾음, 그 밖의 타입 | NOERROR 빈 답(SOA 없음) | `tsdns.go:834-837` |
+| Unreadable header, query QR=1, or missing question | FORMERR, no question | `tsdns.go:1028-1032`, `:1447-1459` |
+| Question name is an invalid FQDN | FORMERR, includes question | `tsdns.go:1461-1468` |
+| PTR query | Reverse lookup rules (§4.2.2 step 5) | `tsdns.go:1473-1475` |
+| Name ends in `.onion` | NXDOMAIN (SOA only if inside the zone) | `tsdns.go:727-731` |
+| A / AAAA for `magicdns.localhost-tailscale-daemon.` | `100.100.100.100` / `fd7a:115c:a1e0::53` | `tsdns.go:45`, `:736-743` |
+| Name not found, within `LocalDomains` | NXDOMAIN + SOA | `tsdns.go:772-778` |
+| Name not found, outside `LocalDomains` | No local answer → forwarding stage (§4.2.3) | `tsdns.go:779-782`, `:1477-1480` |
+| Found, A: IPv4 present / absent | 1 A / empty NOERROR answer + SOA | `tsdns.go:792-800` |
+| Found, AAAA: IPv6 present / absent | 1 AAAA / empty NOERROR answer + SOA | `tsdns.go:801-809` |
+| Found, ANY(255) | First address in the list (1 A or AAAA), or empty NOERROR answer + SOA if there are no addresses | `tsdns.go:810-820` |
+| Found, NS, SOA, AXFR, or HINFO | NOTIMP (no SOA) | `tsdns.go:824-826` |
+| Found, other type | Empty NOERROR answer (no SOA) | `tsdns.go:834-837` |
 
-TCP 프레임(Go가 TCP 53을 받을 때): 2바이트 빅엔디언 길이 + 메시지. 요청 길이가 4096을 넘으면 연결을 닫는다. 한 연결에서 여러 질의를 받고 응답 순서는 보장하지 않는다. 유휴 45초(`tailscale.com/net/dns/manager.go:678-688`, `:743-815`).
+TCP framing (when Go accepts TCP 53) uses a 2-byte big-endian length followed by the message. Close the connection if request length exceeds 4096. One connection accepts multiple queries with no response order guarantee. Idle timeout is 45 seconds (`tailscale.com/net/dns/manager.go:678-688`, `:743-815`).
 
-### 3.2 [M5·M7] Go 상태 파일(FileStore) 형식
+### 3.2 [M5·M7] Go State File (FileStore) Format
 
-M5는 Swiftail 자신의 저장(`Sources/SwiftailControl/Client/NodeIdentityStore.swift`)을 쓰므로 이 형식이 필요 없다. M7의 이관 결정과 상호 운용 시험에 쓴다.
+M5 uses Swiftail's own storage (`Sources/SwiftailControl/Client/NodeIdentityStore.swift`) and does not need this format. It is used in the M7 migration decision and interop tests.
 
-- 파일은 JSON 객체 하나다. 타입은 `map[ipn.StateKey][]byte`이므로 키는 문자열, 값은 표준 base64 문자열이다(`tailscale.com/ipn/store/stores.go:145-150`, Go `encoding/json`의 `[]byte` 규칙). 쓸 때마다 두 칸 들여쓰기 `MarshalIndent`로 통째로 다시 쓰고, 같은 디렉터리의 임시 파일 → 이름 바꾸기로 0600 파일을 교체한다. 값이 같으면 쓰지 않고, `nil`을 쓰면 키를 지운다(`stores.go:211-227`, `tailscale.com/atomicfile/atomicfile.go:21-51`). 디렉터리는 0700(`tailscale.com/paths/paths.go:147-152`).
-- 파일이 없거나 비어 있으면 `{}`를 써 보고 빈 저장소로 시작한다(`stores.go:158-190`).
-- tsnet은 `Dir/tailscaled.state`를 `store.New`로 연다(`tailscale.com/tsnet/tsnet.go:965-972`). 첫 사용처의 iOS 터널도 같은 이름의 FileStore를 App Group 컨테이너 안에 둔다(RemoteDebug `core/internal/tunnel/tunnel.go:134-139`).
+- The file is a single JSON object. Its type is `map[ipn.StateKey][]byte`, so keys are strings and values are standard base64 strings (`tailscale.com/ipn/store/stores.go:145-150`, Go `encoding/json` rules for `[]byte`). Each write replaces the whole file via `MarshalIndent` with two-space indentation and renames a temporary file in the same directory to replace the 0600 file. Equal values skip the write. Writing `nil` removes the key (`stores.go:211-227`, `tailscale.com/atomicfile/atomicfile.go:21-51`). The directory is 0700 (`tailscale.com/paths/paths.go:147-152`).
+- If the file is absent or empty, attempt to write `{}` and start with an empty store (`stores.go:158-190`).
+- tsnet opens `Dir/tailscaled.state` with `store.New` (`tailscale.com/tsnet/tsnet.go:965-972`). The first adopter's iOS tunnel keeps a FileStore of the same name in the App Group container (RemoteDebug `core/internal/tunnel/tunnel.go:134-139`).
 
-키(단일 사용자, Windows 아님)
+Keys (single user, non-Windows)
 
-| 키 | 값(base64를 푼 바이트) | 출처 |
+| Key | Value (base64-decoded bytes) | Origin |
 | --- | --- | --- |
-| `_machinekey` | `privkey:` + 소문자 hex 64자(머신 개인 키 32바이트) | `tailscale.com/ipn/store.go:24`, `tailscale.com/types/key/machine.go:24`, `:76-78` |
-| `_current-profile` | 현재 프로필의 키 문자열(예: `profile-3fa2`) | `ipn/store.go:55-57`, `tailscale.com/ipn/ipnlocal/profiles.go:657-667` |
-| `_profiles` | JSON 객체 `{프로필 ID: LoginProfile}`. `store.go`의 주석은 배열이라 하지만 실제 타입은 맵이다 | `ipn/store.go:51-53`, `profiles.go:819-826`, `:912-926` |
-| `profile-<id>` | 그 프로필의 `Prefs` JSON(탭 들여쓰기). `<id>`는 난수 2바이트의 소문자 hex 4자 | `profiles.go:494-504`, `:563-572`, `tailscale.com/ipn/prefs.go:650-656` |
-| `_daemon` | 프로필 도입 전의 단일 prefs. 프로필이 하나도 없을 때만 읽어 이주하고 지우지 않는다. iOS·샌드박스 macOS는 `ipn-go-bridge`, Android는 `ipn-android`를 읽는다 | `ipn/store.go:26-40`, `tailscale.com/ipn/ipnlocal/profiles_notwindows.go:16-30`, `profiles.go:951-958` |
+| `_machinekey` | `privkey:` + 64 lowercase hex characters (32-byte machine private key) | `tailscale.com/ipn/store.go:24`, `tailscale.com/types/key/machine.go:24`, `:76-78` |
+| `_current-profile` | Key string of the current profile (e.g., `profile-3fa2`) | `ipn/store.go:55-57`, `tailscale.com/ipn/ipnlocal/profiles.go:657-667` |
+| `_profiles` | JSON object `{profile ID: LoginProfile}`. The comment in `store.go` describes an array, but the actual type is a map | `ipn/store.go:51-53`, `profiles.go:819-826`, `:912-926` |
+| `profile-<id>` | The profile's `Prefs` JSON (tab indentation). `<id>` is 4 lowercase hex characters from 2 random bytes | `profiles.go:494-504`, `:563-572`, `tailscale.com/ipn/prefs.go:650-656` |
+| `_daemon` | Single prefs entry from before profiles. Read and migrate only if there are no profiles, then retain the entry. iOS and sandboxed macOS read `ipn-go-bridge`, and Android reads `ipn-android` | `ipn/store.go:26-40`, `tailscale.com/ipn/ipnlocal/profiles_notwindows.go:16-30`, `profiles.go:951-958` |
 
-그 밖에 `server-mode-start-key`(Windows), `_taildrop-received`가 있다(`ipn/store.go:49`, `:62`). 인증서는 이 파일에 들어가지 않는다(4.9 1).
+Other keys are `server-mode-start-key` (Windows) and `_taildrop-received` (`ipn/store.go:49`, `:62`). Certificates are stored outside this file (§4.9 item 1).
 
-`LoginProfile` JSON: `ID`, `Name`, `NetworkProfile`, `Key`, `UserProfile`, `NodeID`, `LocalUserID`, `ControlURL`, `Created`(0이면 생략)(`ipn/prefs.go:1077-1124`).
+`LoginProfile` JSON contains `ID`, `Name`, `NetworkProfile`, `Key`, `UserProfile`, `NodeID`, `LocalUserID`, `ControlURL`, and `Created` (omitted if 0) (`ipn/prefs.go:1077-1124`).
 
-`Prefs` JSON에서 `Persist`는 키 이름 `Config`로 들어간다(`ipn/prefs.go:319`). `Persist` 필드(`tailscale.com/types/persist/persist.go:20-38`):
+In `Prefs` JSON, `Persist` uses the key `Config` (`ipn/prefs.go:319`). `Persist` fields (`tailscale.com/types/persist/persist.go:20-38`):
 
-| 필드 | 형식 |
+| Field | Format |
 | --- | --- |
-| `PrivateNodeKey` | `privkey:` + hex 64자(`tailscale.com/types/key/node.go:29`, `:115-123`) |
-| `OldPrivateNodeKey` | 같은 형식. 키 교체 요청에 쓴다. 없으면 0바이트 32개의 텍스트 |
+| `PrivateNodeKey` | `privkey:` + 64 hex characters (`tailscale.com/types/key/node.go:29`, `:115-123`) |
+| `OldPrivateNodeKey` | Same format. Used for key replacement requests. If absent, text representation of 32 zero bytes |
 | `UserProfile` | `tailcfg.UserProfile` |
 | `NetworkLockKey` | `nlpriv:` + hex(`tailscale.com/types/key/nl.go:18`) |
-| `NodeID` | `tailcfg.StableNodeID` 문자열 |
-| `AttestationKey` | 하드웨어 증명 키. 0이면 생략 |
-| `DisallowedTKAStateIDs` | 문자열 배열. 비면 생략 |
+| `NodeID` | `tailcfg.StableNodeID` string |
+| `AttestationKey` | Hardware attestation key. Omitted if zero |
+| `DisallowedTKAStateIDs` | String array. Omitted if empty |
 
-## 4. 절차와 상태 기계
+## 4. Procedures and State Machine
 
-### 4.1 [M5] netmap `DNSConfig` → OS DNS 설정
+### 4.1 [M5] Netmap `DNSConfig` → OS DNS Settings
 
-#### 4.1.1 `DNSConfig` 필드와 M5에서의 쓰임
+#### 4.1.1 `DNSConfig` Fields and Their Use in M5
 
-필드 정의는 `tailscale.com/tailcfg/tailcfg.go:1788-1872`. Swiftail 모델은 `Sources/SwiftailControl/Tailcfg/DNSConfig.swift`(`Nameservers`, `ExitNodeFilteredSet`이 없다).
+Fields are defined in `tailscale.com/tailcfg/tailcfg.go:1788-1872`. The Swiftail model is `Sources/SwiftailControl/Tailcfg/DNSConfig.swift` (no `Nameservers` or `ExitNodeFilteredSet`).
 
-| 필드 | Go가 쓰는 곳 | M5 |
+| Field | Go usage | M5 |
 | --- | --- | --- |
-| `Proxied` | 참이면 MagicDNS 루트 영역(4.1.2 6)을 내장 리졸버가 권한을 갖는 라우트로 넣는다. 주석대로 "MagicDNS 켜짐"의 뜻이다(`tailscale.com/ipn/ipnlocal/node_backend.go:1539-1551`). 거짓이면 점 없는 짧은 이름을 찾지 않는다(`node_backend.go:1276-1278`) | 필요 |
-| `Routes` | 빈 목록 = 내장 리졸버가 답하는 영역(`LocalDomains`, match 도메인). 리졸버가 있는 목록 = 그 리졸버로 전달하는 분할 DNS(`tailscale.com/net/dns/manager.go:341-353`) | 빈 목록 키는 필요. 리졸버가 있는 라우트는 결정 D2 |
-| `ExtraRecords` | `Type`이 `""`·`A`·`AAAA`이고 값이 IP인 것만 내장 리졸버의 호스트 표에 넣는다. 그 이름을 덮는 라우트가 없으면 이름 자체를 빈 라우트로 더한다(`node_backend.go:1497-1521`, `:1592-1606`) | 필요 |
-| `Resolvers` | 비어 있지 않으면 기본 리졸버. 이 경우 iOS에서도 quad-100이 모든 이름의 1차 리졸버가 된다(4.1.3 표 3행) | 결정 D2 |
-| `Domains` | 검색 도메인. Apple 확장은 1차 리졸버 모드에서만 설치한다는 주석이 있다(`manager.go:361-366`) | 결정 D3 |
-| `FallbackResolvers` | 출구 노드를 쓰는데 기본 리졸버가 없을 때만 기본 리졸버로 쓴다(`node_backend.go:1657-1677`) | 무시(출구 노드 미지원) |
-| `ExitNodeFilteredSet` | 이 노드가 출구 노드 DNS 프록시일 때만 쓴다(`tailcfg.go:1835-1848`) | 무시 |
-| `Nameservers` | 폐기(MapRequest.Version 9 이상 14 미만 전용). 클라이언트 코드는 읽지 않는다(`tailcfg.go:1817-1821`) | 무시 |
-| `CertDomains` | DNS 응답에 쓰지 않는다. 인증서 발급 대상(4.9) | M7 |
+| `Proxied` | If true, add MagicDNS root zones (§4.1.2 step 6) as routes for which the built-in resolver is authoritative. As the comment says, this means MagicDNS is enabled (`tailscale.com/ipn/ipnlocal/node_backend.go:1539-1551`). If false, skip short names without dots (`node_backend.go:1276-1278`) | Required |
+| `Routes` | Empty list = zone answered by the built-in resolver (`LocalDomains`, match domain). List with resolvers = split DNS forwarded to those resolvers (`tailscale.com/net/dns/manager.go:341-353`) | Keys with empty lists are required. Resolver-bearing routes are decision D2 |
+| `ExtraRecords` | Add only entries with `Type` of `""`, `A`, or `AAAA` and an IP value to the built-in resolver's host table. If no route covers the name, add the name itself as an empty route (`node_backend.go:1497-1521`, `:1592-1606`) | Required |
+| `Resolvers` | Default resolvers if nonempty. Then quad-100 becomes the primary resolver for all names even on iOS (§4.1.3 table row 3) | Decision D2 |
+| `Domains` | Search domains. A comment says the Apple extension installs them only in primary resolver mode (`manager.go:361-366`) | Decision D3 |
+| `FallbackResolvers` | Used as default resolvers only when using an exit node without default resolvers (`node_backend.go:1657-1677`) | Ignore (exit nodes unsupported) |
+| `ExitNodeFilteredSet` | Used only if this node is an exit-node DNS proxy (`tailcfg.go:1835-1848`) | Ignore |
+| `Nameservers` | Obsolete (only for MapRequest.Version ≥9 and <14). Client code does not read it (`tailcfg.go:1817-1821`) | Ignore |
+| `CertDomains` | Unused in DNS responses. Certificate issuance targets (§4.9) | M7 |
 
 #### 4.1.2 `dnsConfigForNetmap` — netmap → `dns.Config`
 
-`tailscale.com/ipn/ipnlocal/node_backend.go:1435-1680`. 출구 노드·앱 커넥터 분기는 생략한다.
+`tailscale.com/ipn/ipnlocal/node_backend.go:1435-1680`. Exit-node and app connector branches are omitted.
 
-1. netmap이 없으면 설정 없음. 자기 노드 키가 만료됐으면 빈 설정(DNS 없음)(`:1436-1453`).
-2. 자기 주소가 IPv6뿐이면 `OnlyIPv6`. 자기 노드의 `AllCaps`에 `magicdns-aaaa`(`nodecap.MagicDNSPeerAAAA`)가 있으면 피어 AAAA를 허용한다(`:1461-1470`, `tailscale.com/tailcfg/nodecap/nodecap.go:306`).
-3. 노드 이름 → 주소는 설정에 넣지 않는다(Windows만 예외). 리졸버가 질의 때 가져간다(4.2.1)(`:1472-1496`).
-4. `ExtraRecords` → `Hosts`(같은 이름의 주소는 이어 붙임)(`:1497-1521`).
-5. prefs `CorpDNS`가 거짓이면 여기서 끝. 라우트가 없으므로 OS 설정도 없다(`:1523-1525`, 4.1.3 1행).
-6. `Domains` → 검색 도메인(FQDN으로 못 바꾸면 버림)(`:1527-1538`). `Proxied`면 다음을 빈 라우트로 넣는다: MagicDNS 접미사(자기 노드 `Name`에서 앞뒤 점을 떼고 첫 레이블을 뗀 나머지), `0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.`, `64.100.in-addr.arpa.`부터 `127.100.in-addr.arpa.`까지 64개(`:1539-1542`, `tailscale.com/ipn/ipnlocal/local.go:6665-6687`, `tailscale.com/types/netmap/netmap.go:256-270`). 거짓이면 `MagicDNSHostsUnrouted = SelfNode.Valid()`(`:1543-1551`).
-7. `Resolvers` → 기본 리졸버(`:1640-1641`). `Routes` → 각 접미사를 FQDN으로 바꿔 복제(빈 목록도 항목을 만든다)(`:1557-1568`, `:1649`). 라우트로 덮이지 않는 `ExtraRecords` 이름을 빈 라우트로 더한다(`:1592-1606`, `:1651`).
+1. No netmap gives no configuration. An expired local node key gives empty configuration (no DNS) (`:1436-1453`).
+2. Use `OnlyIPv6` if the local addresses are IPv6-only. If the local node's `AllCaps` includes `magicdns-aaaa` (`nodecap.MagicDNSPeerAAAA`), allow peer AAAA (`:1461-1470`, `tailscale.com/tailcfg/nodecap/nodecap.go:306`).
+3. Leave node name → address mappings out of the configuration (except on Windows). The resolver obtains them at query time (§4.2.1) (`:1472-1496`).
+4. `ExtraRecords` → `Hosts` (append addresses with the same name) (`:1497-1521`).
+5. If prefs `CorpDNS` is false, stop here. With no routes, there are no OS settings (`:1523-1525`, §4.1.3 row 1).
+6. `Domains` → search domains (discard entries that cannot convert to FQDNs) (`:1527-1538`). If `Proxied`, add empty routes for the MagicDNS suffix (trim leading and trailing dots from the local node's `Name` and remove the first label), `0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.`, and the 64 zones from `64.100.in-addr.arpa.` through `127.100.in-addr.arpa.` (`:1539-1542`, `tailscale.com/ipn/ipnlocal/local.go:6665-6687`, `tailscale.com/types/netmap/netmap.go:256-270`). If false, set `MagicDNSHostsUnrouted = SelfNode.Valid()` (`:1543-1551`).
+7. `Resolvers` → default resolvers (`:1640-1641`). Duplicate `Routes` with each suffix converted to an FQDN (create entries even for empty lists) (`:1557-1568`, `:1649`). Add `ExtraRecords` names not covered by any route as empty routes (`:1592-1606`, `:1651`).
 
-#### 4.1.3 `compileConfig` — `dns.Config` → (리졸버 설정, `OSConfig`), `goos == "ios"`
+#### 4.1.3 `compileConfig`: `dns.Config` → (Resolver Settings, `OSConfig`), `goos == "ios"`
 
-`tailscale.com/net/dns/manager.go:334-526`. `OSConfig`는 `Nameservers`, `SearchDomains`, `MatchDomains`(비면 1차 리졸버로 설치), `Hosts`(Windows), `Resolvers`(입력 전용)다(`tailscale.com/net/dns/osconfig.go:55-80`).
+`tailscale.com/net/dns/manager.go:334-526`. `OSConfig` has `Nameservers`, `SearchDomains`, `MatchDomains` (install as primary resolver if empty), `Hosts` (Windows), and `Resolvers` (input only) (`tailscale.com/net/dns/osconfig.go:55-80`).
 
-공통(`:338-366`)
-- 빈 목록 라우트의 키는 리졸버의 `LocalDomains`(정렬)가 되고, 리졸버가 있는 라우트만 전달 라우트가 된다.
-- `ocfg.SearchDomains = 검색 도메인`(분할 DNS 접미사는 더하지 않는다).
-- `serviceIPs`: `OnlyIPv6`면 `[fd7a:115c:a1e0::53]`. 아니면 `[100.100.100.100, fd7a:115c:a1e0::53]`. 단 제어가 `force-register-magicdns-ipv4-only` 능력을 주면 `[100.100.100.100]`(`tailscale.com/net/dns/config.go:79-94`, `tailscale.com/control/controlknobs/controlknobs.go:248-250`, `nodecap.go:362`).
-- `matchDomains`: 모든 라우트 키를 끝 점 포함 문자열 순으로 정렬한 목록(`config.go:232-242`).
+Common steps (`:338-366`)
+- Keys of routes with empty lists become the resolver's sorted `LocalDomains`. Only routes with resolvers become forwarding routes.
+- `ocfg.SearchDomains = search domains` (do not add split DNS suffixes).
+- `serviceIPs`: `[fd7a:115c:a1e0::53]` if `OnlyIPv6`. Otherwise `[100.100.100.100, fd7a:115c:a1e0::53]`. If the control server grants `force-register-magicdns-ipv4-only`, use `[100.100.100.100]` (`tailscale.com/net/dns/config.go:79-94`, `tailscale.com/control/controlknobs/controlknobs.go:248-250`, `nodecap.go:362`).
+- `matchDomains`: all route keys sorted by string, including the trailing dot (`config.go:232-242`).
 
-iOS 절차(위에서부터 처음 맞는 것)
+iOS procedure (first match in order)
 
-| # | 조건 | 결과 | 출처 |
+| # | Condition | Result | Origin |
 | --- | --- | --- | --- |
-| 1 | 기본 리졸버도 라우트도 없음 | 검색 도메인만. 네임서버 없음 | `manager.go:373-377`, `config.go:112-120` |
-| 2 | 기본 리졸버가 모두 `IP:53`(DoH 전용 IP 아님)이고 라우트가 없고 라우트로 덮이지 않은 호스트 없음 | `Nameservers` = 그 IP들(1차 리졸버). quad-100 없음 | `manager.go:378-390`, `config.go:123-151` |
-| 3 | 기본 리졸버가 있음 | `Nameservers = serviceIPs`, `MatchDomains` 없음(1차), 전달 라우트 + `"." = 기본 리졸버` | `manager.go:391-397` |
-| 4 | (분할 DNS) 범위 지정 가능(`scopeApple`) | `Nameservers = serviceIPs`, `MatchDomains = matchDomains`. 이어 `GetBaseConfig`로 OS 기본 리졸버를 읽어 `"."` 라우트로 둔다. 기본 리졸버가 비어도 오류가 아니다(quad-100에 직접 온 tailnet 밖 질의만 답을 못 한다) | `manager.go:434`, `:446-451`, `:463`, `:491-515` |
-| 5 | (분할 DNS) 범위 지정 불가 | `Nameservers = serviceIPs`, `MatchDomains` 없음(1차). OS 기본 리졸버를 `"."`로 쓰고 그 검색 도메인을 뒤에 붙인다. 기본 리졸버가 비면 `errEmptyBaseConfig`로 실패하고 OS 설정을 바꾸지 않는다(Apple은 재시도하지 않고 앱이 `RecompileDNSConfig`를 다시 부르기를 기다린다) | `manager.go:463-525`, `:207-214` |
+| 1 | No default resolvers or routes | Search domains only. No name servers | `manager.go:373-377`, `config.go:112-120` |
+| 2 | All default resolvers are `IP:53` (no DoH-only IP), with no routes or hosts outside the routes | `Nameservers` = those IPs (primary resolver). No quad-100 | `manager.go:378-390`, `config.go:123-151` |
+| 3 | Default resolvers exist | `Nameservers = serviceIPs`, no `MatchDomains` (primary), forwarding routes + `"." = default resolvers` | `manager.go:391-397` |
+| 4 | (Split DNS) Scoping available (`scopeApple`) | `Nameservers = serviceIPs`, `MatchDomains = matchDomains`. Read OS default resolvers via `GetBaseConfig` and use them as the `"."` route. An empty list is allowed (only queries for names outside the tailnet sent directly to quad-100 go unanswered) | `manager.go:434`, `:446-451`, `:463`, `:491-515` |
+| 5 | (Split DNS) Scoping unavailable | `Nameservers = serviceIPs`, no `MatchDomains` (primary). Use OS default resolvers for `"."` and append their search domains. An empty list fails with `errEmptyBaseConfig` and leaves OS settings intact (Apple skips retries and waits for the app to call `RecompileDNSConfig` again) | `manager.go:463-525`, `:207-214` |
 
-- `scopeApple` = iOS이고 제어가 `disable-split-dns-when-no-custom-resolvers` 능력을 주지 않았음 **그리고** 리졸버가 있는 라우트가 없음(`ts.net` 라우트는 예외로 무시) **그리고** 라우트로 덮이지 않은 호스트가 없음(MagicDNS가 꺼져 `MagicDNSHostsUnrouted`이면 거짓) **그리고** `Hosts`의 모든 주소의 역방향 이름이 라우트로 덮임(`manager.go:446-449`, `:557-559`, `tailscale.com/net/dns/resolver/tsdns.go:209-226`, `config.go:137-189`, `nodecap.go:227`).
-- iOS는 분할 DNS를 OS에 직접 맡기는 분기(`:421-429`)와 기본 설정 없이 끝나는 분기(`:453-455`)를 타지 않는다. `GetBaseConfig`가 `ErrGetBaseConfigNotSupported`를 돌려주고 범위 지정이 가능하면 `"."` 없이 4행으로 끝난다(`:473-484`).
-- 표 4·5행은 `OSConfigurator.SupportsSplitDNS()`가 참일 때다. iOS의 `OSConfigurator`는 앱 쪽 코드라 기준 소스에 없다(`tailscale.com/wgengine/userspace.go:330-337`). 첫 사용처는 참을 돌려주고, `GetBaseConfig`로 "상위 리졸버 없음"을 뜻하는 가짜 리졸버를 돌려준다(RemoteDebug `core/internal/tunnel/settings.go:227-251`).
-- 결론: MagicDNS가 켜져 있고 tailnet이 전역 네임서버·사용자 지정 분할 DNS를 쓰지 않으면, iOS의 Go는 `dnsServers = serviceIPs`, `matchDomains = [MagicDNS 접미사, ip6.arpa 영역, in-addr.arpa 64개, ExtraRecords 이름…]`을 내놓는다(4행). 그 밖에는 quad-100이 모든 이름의 1차 리졸버가 되고 상위 전달이 필요하다(3·5행).
+- `scopeApple` = iOS without the control server's `disable-split-dns-when-no-custom-resolvers` capability **and** no routes with resolvers (ignore `ts.net` as an exception) **and** no hosts outside the routes (false if MagicDNS is off and `MagicDNSHostsUnrouted` is set) **and** all reverse names for addresses in `Hosts` covered by routes (`manager.go:446-449`, `:557-559`, `tailscale.com/net/dns/resolver/tsdns.go:209-226`, `config.go:137-189`, `nodecap.go:227`).
+- iOS takes neither the branch delegating split DNS directly to the OS (`:421-429`) nor the branch that finishes without base configuration (`:453-455`). If `GetBaseConfig` returns `ErrGetBaseConfigNotSupported` and scoping is possible, finish at row 4 without `"."` (`:473-484`).
+- Rows 4 and 5 assume `OSConfigurator.SupportsSplitDNS()` is true. The iOS `OSConfigurator` is app code outside the reference sources (`tailscale.com/wgengine/userspace.go:330-337`). The first adopter returns true and returns a dummy resolver from `GetBaseConfig` meaning no upstream resolver (RemoteDebug `core/internal/tunnel/settings.go:227-251`).
+- With MagicDNS enabled and no global name servers or custom split DNS in the tailnet, Go on iOS produces `dnsServers = serviceIPs`, `matchDomains = [MagicDNS suffix, ip6.arpa zone, 64 in-addr.arpa zones, ExtraRecords names…]` (row 4). Otherwise quad-100 is the primary resolver for all names and needs upstream forwarding (rows 3 and 5).
 
-#### 4.1.4 Swiftail M5 산출 절차(권고)
+#### 4.1.4 Swiftail M5 Derivation Procedure (Recommended)
 
-Go의 4행만 구현하고 3·5행은 결정 D2의 권고대로 범위를 좁힌다. 첫 사용처가 Go 위에서 하는 일과 같다: 1차 리졸버 설정이 나오면 "quad-100이 스스로 답하는 접미사"로 좁히고, 접미사가 없으면 DNS를 설정하지 않는다(RemoteDebug `core/internal/tunnel/settings.go:179-215`, `docs/tunnel.md:111-114`).
+Implement Go's row 4 only and narrow rows 3 and 5 per decision D2's recommendation. The first adopter does the same on top of Go. Restrict any primary resolver setting to the suffixes quad-100 answers itself, and leave DNS unconfigured if there are no suffixes (RemoteDebug `core/internal/tunnel/settings.go:179-215`, `docs/tunnel.md:111-114`).
 
-1. netmap이 없거나 자기 키가 만료됐으면 DNS 없음(`dnsServers = []`, `dnsMatchDomains = []`). 4.1.2 1.
-2. `localZones` = (`Proxied`면 4.1.2 6의 66개 영역) ∪ (`Routes`에서 리졸버 목록이 빈 키) ∪ (어느 영역에도 덮이지 않는 유효한 `ExtraRecords` 이름). 모두 소문자 FQDN.
-3. `localZones`가 비면 DNS 없음.
-4. `dnsServers`: 자기 주소에 IPv4가 있으면 `100.100.100.100`, IPv6가 있으면 `fd7a:115c:a1e0::53`(IPv4 먼저). Go의 `serviceIPs`는 IPv4 전용 노드에도 IPv6 서비스 IP를 넣지만 그 노드에는 `fd7a:115c:a1e0::53/128` 경로가 없으므로([netmap-engine.md](netmap-engine.md) 4.8 2) 첫 사용처처럼 뺀다(RemoteDebug `settings.go:58-77`). `force-register-magicdns-ipv4-only`이면 IPv4만.
-5. `dnsMatchDomains`: `localZones`를 끝 점 포함 문자열 순으로 정렬하고 끝 점을 뗀다(`config.go:232-242`, RemoteDebug `settings.go:78-80`).
-6. 같은 리졸버 설정을 4.2의 응답기에 준다: `LocalDomains = localZones`, 호스트 표 = `ExtraRecords`, 노드 색인 = netmap.
-7. `TunnelNetworkSettings`는 이전 값과 다를 때만 `NodeEvent.networkSettings`로 낸다. DNS만 바뀌어도 낸다(RemoteDebug `docs/tunnel.md:170-174`). 주소·경로·MTU는 [netmap-engine.md](netmap-engine.md) 4.8.
+1. No DNS if netmap is absent or the local key has expired (`dnsServers = []`, `dnsMatchDomains = []`). §4.1.2 step 1.
+2. `localZones` = (66 zones from §4.1.2 step 6 if `Proxied`) ∪ (keys in `Routes` with empty resolver lists) ∪ (valid `ExtraRecords` names outside every zone). All are lowercase FQDNs.
+3. No DNS if `localZones` is empty.
+4. For `dnsServers`, include `100.100.100.100` for a local IPv4 address and `fd7a:115c:a1e0::53` for a local IPv6 address (IPv4 first). Go's `serviceIPs` includes the IPv6 service IP even on IPv4-only nodes, but those lack a `fd7a:115c:a1e0::53/128` route ([netmap-engine.md](netmap-engine.md) §4.8 item 2), so omit it as the first adopter does (RemoteDebug `settings.go:58-77`). Use IPv4 only with `force-register-magicdns-ipv4-only`.
+5. For `dnsMatchDomains`, sort `localZones` by string with trailing dots, then remove the dots (`config.go:232-242`, RemoteDebug `settings.go:78-80`).
+6. Give the responder in §4.2 the same configuration: `LocalDomains = localZones`, host table = `ExtraRecords`, node index = netmap.
+7. Emit `TunnelNetworkSettings` as `NodeEvent.networkSettings` only when it differs from the previous value, even if only DNS changed (RemoteDebug `docs/tunnel.md:170-174`). Addresses, routes, and MTU are in [netmap-engine.md](netmap-engine.md) §4.8.
 
-### 4.2 [M5] MagicDNS 응답기
+### 4.2 [M5] MagicDNS Responder
 
-#### 4.2.1 이름 색인
+#### 4.2.1 Name Index
 
-v1.104.6은 노드 레코드를 설정으로 밀어 넣지 않고 질의 때 netmap 색인에서 가져간다(`tsdns.go:253-300`, 설치 `tailscale.com/ipn/ipnlocal/local.go:647-651`).
+v1.104.6 obtains node records from the netmap index at query time without pushing them into configuration (`tsdns.go:253-300`, installation in `tailscale.com/ipn/ipnlocal/local.go:647-651`).
 
-- 이름 색인(`nodeByName`): 자기 노드와 모든 피어(이 순서로 넣고 뒤가 덮는다)의 `Name`을 끝 점을 떼고 소문자로 만든 키, 그리고 MagicDNS 접미사로 끝나면 그 접미사를 뗀 짧은 이름 키. `Name`이 빈 노드는 넣지 않는다(`node_backend.go:778-787`, `:805-821`).
-- 정방향(`LookupHost`): 질의 이름을 끝 점을 떼고 소문자로 만든 뒤 `Proxied`가 거짓이고 점이 없으면 모른다. 색인에 없으면 모른다. 노드에 주소가 **하나도 없으면 모른다**(`node_backend.go:1198-1220`, `:1266-1282`).
-- 답할 주소(`magicDNSAddrs`, `node_backend.go:1299-1325`): 자기가 IPv6 전용이면 대상의 IPv6 주소만. 아니면 대상의 주소 전부이되, 대상에 IPv4가 있고 `magicdns-aaaa` 능력이 없으면 IPv6를 뺀다. 결과는 대상 `Addresses` 순서다. 예: IPv4·IPv6를 모두 가진 피어의 AAAA 질의는 기본으로 NOERROR 빈 답 + SOA다.
-- 역방향(`LookupPTR`): 노드 자신의 주소(서브넷 라우트 제외) → 노드 `Name`의 FQDN(`node_backend.go:119-121`, `:1214-1233`).
-- `ExtraRecords`: 리졸버의 호스트 표가 노드 색인보다 먼저 조회되고, 역방향 표도 이 호스트 표에서 만든다(`tsdns.go:347-372`, `:756-759`, `:943-946`).
-- 서브도메인: 호스트 표·색인에 없으면 부모 이름을 하나씩 올라가며, 부모가 `dns-subdomain-resolve` 능력을 가진 노드면 그 노드의 주소로 답한다(`tsdns.go:760-771`, `node_backend.go:1246-1264`). M5에서는 생략할 수 있다(6.1).
+- Name index (`nodeByName`). Insert the local node followed by all peers (later entries overwrite earlier ones), keyed by lowercase `Name` with no trailing dot. If it ends with the MagicDNS suffix, also key by the short name without that suffix. Skip empty `Name` (`node_backend.go:778-787`, `:805-821`).
+- Forward lookup (`LookupHost`). Lowercase the query name and remove its trailing dot. It is unknown if `Proxied` is false and it contains no dot, if it is missing from the index, or if the node has **no addresses at all** (`node_backend.go:1198-1220`, `:1266-1282`).
+- Returned addresses (`magicDNSAddrs`, `node_backend.go:1299-1325`). If the local node is IPv6-only, use only target IPv6 addresses. Otherwise use all target addresses, omitting IPv6 if the target has IPv4 and the `magicdns-aaaa` capability is absent. Preserve target `Addresses` order. For example, an AAAA query for a dual-stack peer defaults to an empty NOERROR answer + SOA.
+- Reverse lookup (`LookupPTR`). A node's own addresses (excluding subnet routes) → FQDN of the node's `Name` (`node_backend.go:119-121`, `:1214-1233`).
+- `ExtraRecords`. Consult the resolver's host table before the node index and build the reverse table from the same host table (`tsdns.go:347-372`, `:756-759`, `:943-946`).
+- Subdomains. If absent from the host table and index, walk up parent names one at a time. If a parent is a node with `dns-subdomain-resolve`, answer with its addresses (`tsdns.go:760-771`, `node_backend.go:1246-1264`). M5 can omit it (§6.1).
 
-#### 4.2.2 질의 처리 절차
+#### 4.2.2 Query Processing
 
 `Resolver.Query`(`tsdns.go:408-439`) → `respond`(`tsdns.go:1437-1499`).
 
-1. 머리와 첫 질문을 읽는다. 실패하면 FORMERR(3.1 RCODE 표).
-2. 질문 이름을 소문자 FQDN으로 바꾼다. 실패하면 FORMERR(질문 포함).
-3. PTR이면 5로. 아니면 `resolveLocal`(`tsdns.go:725-839`): `.onion` → 상징 이름 → 4via6 이름 → 호스트 표 → 노드 색인 → 서브도메인 → 영역 판정 → 타입별 결과. 결과가 "모름 + 영역 밖"이면 전달 단계(4.2.3).
-4. 4via6 이름(`<점 대신 하이픈을 쓴 IPv4>-via-<사이트 ID>`, 뒤가 없거나 `ts.net`·`tailscale.net` 이하): A는 이름만 있는 NOERROR, AAAA·ANY는 Via 범위의 IPv6(`tsdns.go:850-900`). M5에서 생략 가능.
-5. 역방향(`tsdns.go:903-958`, `:1416-1433`):
-   - 첫 레이블이 `b`·`db`·`r`·`dr`·`lb`이고 다음이 `_dns-sd._udp.`인 이름(Bonjour)은 로컬에서 답하지 않고 전달 단계로 보낸다. 전달 단계는 이를 상위로 보내지 않고 NXDOMAIN(질문 포함, RA = RD, AA 없음)으로 답한다(`tsdns.go:1304-1316`, `tailscale.com/net/dns/resolver/forwarder.go:1296-1306`, `:1510-1528`).
-   - `*.in-addr.arpa.`는 앞부분을 점 넷 IPv4로 읽어 뒤집는다. `*.ip6.arpa.`는 앞부분이 정확히 63바이트(니블 32개, 점 31개)여야 한다. 둘 다 아니거나 파싱에 실패하면 전달 단계로(`tsdns.go:1343-1397`).
-   - 주소가 `fd7a:115c:a1e0:ab12:4843:cd96:6200::/104` 안이면 `100.x.y.z`(마지막 3바이트)로 먼저 찾는다(`tailscale.com/net/tsaddr/tsaddr.go:104-110`, `:151-157`).
-   - 서비스 IP 두 개는 `magicdns.localhost-tailscale-daemon.`. 그 밖에는 호스트 표의 역방향 → 노드 색인. 못 찾으면 질의 이름이 `LocalDomains` 안이면 NXDOMAIN + SOA, 밖이면 전달 단계.
-6. 응답을 만든 뒤 UDP이면 크기 검사(4.2.4).
+1. Read the header and first question. Return FORMERR on failure (§3.1 RCODE table).
+2. Convert the question name to a lowercase FQDN. Return FORMERR with the question on failure.
+3. For PTR, go to step 5. Otherwise use `resolveLocal` (`tsdns.go:725-839`): `.onion` → symbolic name → 4via6 name → host table → node index → subdomain → zone determination → result by type. Unknown names outside the zone go to forwarding (§4.2.3).
+4. 4via6 name (`<IPv4 with hyphens in place of dots>-via-<site ID>`, with no suffix or under `ts.net` or `tailscale.net`). A returns NOERROR with an existing name and no address. AAAA and ANY return IPv6 in the Via range (`tsdns.go:850-900`). Optional in M5.
+5. Reverse lookup (`tsdns.go:903-958`, `:1416-1433`):
+   - Names starting with `b`, `db`, `r`, `dr`, or `lb` followed by `_dns-sd._udp.` (Bonjour) go to forwarding without a local reply. Forwarding returns NXDOMAIN (question included, RA = RD, no AA) without sending upstream (`tsdns.go:1304-1316`, `tailscale.com/net/dns/resolver/forwarder.go:1296-1306`, `:1510-1528`).
+   - For `*.in-addr.arpa.`, parse the prefix as four dotted IPv4 components and reverse them. For `*.ip6.arpa.`, the prefix must be exactly 63 bytes (32 nibbles, 31 dots). If neither matches or parsing fails, go to forwarding (`tsdns.go:1343-1397`).
+   - For addresses in `fd7a:115c:a1e0:ab12:4843:cd96:6200::/104`, look up `100.x.y.z` (last 3 bytes) first (`tailscale.com/net/tsaddr/tsaddr.go:104-110`, `:151-157`).
+   - Both service IPs return `magicdns.localhost-tailscale-daemon.`. Otherwise use the reverse host table → node index. If missing, return NXDOMAIN + SOA for a query name in `LocalDomains`, or forward if outside.
+6. After creating a UDP response, check its size (§4.2.4).
 
-#### 4.2.3 모르는 이름과 tailnet 밖의 이름
+#### 4.2.3 Unknown Names and Names Outside the Tailnet
 
-- Go: 로컬 답이 없으면 전달기로 넘긴다(질의 전체 제한 10초). 라우트를 레이블 수가 많은 순으로 보고 이름을 포함하는 첫 라우트의 리졸버로 보낸다. `"."`은 모든 이름에 맞는다. 맞는 라우트가 없거나 리졸버가 비면 SERVFAIL(질문 포함, AA=1, RA는 질의 값 그대로)로 답한다(`tsdns.go:403-431`, `forwarder.go:491-494`, `:1180-1200`, `:1316-1330`, `:1534-1551`). 전송 방식(UDP 뒤 2초 후 TCP 경쟁, DoH, 응답 집계, 지연)은 `forwarder.go:96-112`, `:383-443`, `:683-810`, `:1358-1459`.
-- M5에서 OS가 quad-100에 보내는 이름은 match 도메인 안의 이름뿐이다(4.1.4. `matchDomains`의 OS 쪽 의미는 Apple 문서 `NEDNSSettings.matchDomains` 항목에 근거하며 이 소스 밖이다. 8장). 그 안의 이름은 모두 `LocalDomains` 안이므로 로컬에서 NOERROR·NXDOMAIN으로 끝나고 전달이 일어나지 않는다. 전달이 필요한 것은 사용자가 `dig @100.100.100.100 example.com`처럼 quad-100에 직접 묻는 경우뿐이다.
-- 권고: M5는 전달을 구현하지 않고 Go의 "라우트 없음"과 같은 SERVFAIL로 답한다. 첫 사용처도 상위 리졸버 없이 SERVFAIL을 낸다(RemoteDebug `settings.go:244-251`, `tunnel.go:118-122`). Bonjour 역방향 이름은 NXDOMAIN(5).
+- Go hands queries without a local answer to the forwarder (10-second overall query timeout). Check routes in descending label count and send to resolvers of the first route containing the name. `"."` matches every name. If no route matches or the resolvers are empty, return SERVFAIL (question included, AA=1, RA retains query value) (`tsdns.go:403-431`, `forwarder.go:491-494`, `:1180-1200`, `:1316-1330`, `:1534-1551`). Transport (TCP racing UDP after 2 seconds, DoH, response aggregation, latency) is in `forwarder.go:96-112`, `:383-443`, `:683-810`, `:1358-1459`.
+- In M5, the OS sends only names within match domains to quad-100 (§4.1.4. OS semantics of `matchDomains` come from Apple's `NEDNSSettings.matchDomains` documentation and are outside these sources, §8). All are in `LocalDomains`, so they resolve locally as NOERROR or NXDOMAIN without forwarding. Forwarding is needed only when a user queries quad-100 directly, as with `dig @100.100.100.100 example.com`.
+- The M5 recommendation is to omit forwarding and return SERVFAIL as Go does when no route matches. The first adopter also returns SERVFAIL without an upstream resolver (RemoteDebug `settings.go:244-251`, `tunnel.go:118-122`). Bonjour reverse names return NXDOMAIN (step 5).
 
-#### 4.2.4 UDP 크기·잘림·EDNS
+#### 4.2.4 UDP Size, Truncation, and EDNS
 
-- 로컬 응답의 UDP 검사(`forwarder.go:220-261`): 질의 끝에 유효한 OPT가 있으면 그 광고 크기를, 없으면 512바이트를 넘을 때 TC 비트만 켠다. 응답을 자르지는 않는다. TCP 질의는 검사하지 않는다.
-- OPT 인식(`forwarder.go:148-191`): ARCOUNT가 0이 아니고, 메시지의 **마지막 11바이트**가 NAME 0, TYPE 41, 버전(오프셋 6) 0, RDLEN 0인 레코드일 것. 옵션이 붙은 OPT는 EDNS로 인식하지 않는다(512 규칙이 적용된다).
-- 3.1의 크기 계산대로 tailnet 영역의 로컬 응답은 512바이트를 넘지 않으므로 TC가 서는 일은 사실상 없다. 그래도 검사는 몇 줄이므로 Go와 같게 둔다(권고). 응답 IP 패킷은 1,066 + 48 < 1280이라 TUN MTU 안이다.
-- 상위 전달 응답(M5에서 쓰지 않음): 질의의 OPT 광고 크기를 4095로 깎아 보내고, 4096바이트 버퍼로 받아 넘치면 잘라 TC를 켠다(`forwarder.go:193-210`, `:868-941`, `tsdns.go:50`).
+- UDP check for local responses (`forwarder.go:220-261`). Set only TC if the reply exceeds the size advertised by a valid OPT at the end of the query, or 512 bytes if absent. Leave the response intact. Skip TCP queries.
+- OPT recognition (`forwarder.go:148-191`). ARCOUNT must be nonzero and the **last 11 bytes** must be a record with NAME 0, TYPE 41, version 0 (offset 6), and RDLEN 0. An OPT with options is not recognized as EDNS (the 512 rule applies).
+- By §3.1's calculation, local responses in tailnet zones stay within 512 bytes, so TC is practically never set. The check is only a few lines, so keeping Go's behavior is recommended. A response IP packet fits the TUN MTU because 1,066 + 48 < 1280.
+- Upstream responses (unused in M5). Cap the query's advertised OPT size at 4095, receive into a 4096-byte buffer, and truncate and set TC on overflow (`forwarder.go:193-210`, `:868-941`, `tsdns.go:50`).
 
 #### 4.2.5 TCP 53
 
-Go는 서비스 IP의 TCP 53을 netstack에서 받아 3.1의 TCP 프레임으로 처리한다(`tailscale.com/wgengine/netstack/netstack.go:1723-1734`). Swiftail M5는 TCP 스택이 없다(plan 8절 위험 12). 로컬 응답에 TC가 서지 않으므로 OS가 TCP로 다시 물을 일은 없다. 결정 D4.
+Go accepts TCP 53 on the service IP in netstack and uses §3.1 TCP framing (`tailscale.com/wgengine/netstack/netstack.go:1723-1734`). Swiftail M5 has no TCP stack (plan §8 risk 12). Local replies leave TC clear, so the OS will not retry over TCP. Decision D4.
 
-### 4.3 [M5] 서비스 IP 패킷의 가로채기
+### 4.3 [M5] Service IP Packet Interception
 
-OS가 TUN으로 보낸(utun에서 읽은) 패킷은 WireGuard로 가기 전에 `filterPacketOutboundToWireGuard`를 지난다(`tailscale.com/net/tstun/wrap.go:752-830`, `:920`).
+Packets sent by the OS to TUN (read from utun) pass through `filterPacketOutboundToWireGuard` before WireGuard (`tailscale.com/net/tstun/wrap.go:752-830`, `:920`).
 
-1. ICMP echo 요청이고 목적지가 `100.100.100.100` 또는 `fd7a:115c:a1e0::53`이면 tstun 래퍼가 머리를 응답으로 바꿔(주소 맞바꿈, echo reply) payload를 그대로 실은 패킷을 OS 쪽으로 주입하고 원래 패킷은 버린다(`wrap.go:752-769`).
-2. TSMP·자기 disco 패킷 버림(`wrap.go:773-789`).
-3. netstack 가로채기: 목적지가 두 서비스 IP이면 프로토콜·포트와 무관하게 netstack으로 흡수하고 WireGuard로 보내지 않는다(`wrap.go:790-796`, `netstack.go:866-897`).
-   - UDP 53 → `handleMagicDNSUDP`: 같은 흐름의 질의를 150ms 읽기 기한의 루프로 받고, 각 질의를 `Manager.Query(…, "udp", 발신지)`에 넘겨 응답을 같은 흐름으로 돌려준다. `Query`가 오류(동시 질의 256개 초과 등)면 답하지 않는다(`netstack.go:2036-2041`, `:2080-2113`, `manager.go:652-676`).
-   - 그 밖의 UDP 포트: 엔드포인트를 닫고 답하지 않는다. ICMP port unreachable도 보내지 않는다(`netstack.go:2000-2011`, `:2042-2051`).
-   - TCP 53 → `HandleTCPConn`. 80·8080(웹 클라이언트·Taildrive)과 디버그 루프백 포트는 각 핸들러. 그 밖의 TCP 포트는 RST(`netstack.go:1723-1787`, `tailscale.com/ipn/ipnlocal/netstack.go:21-39`).
-   - 그 밖의 프로토콜: 흡수되어 사라진다(netstack에 핸들러가 없다).
-4. 응답 방향: netstack이 낸 패킷 가운데 출발지가 서비스 IP인 것은 OS 쪽(TUN 쓰기)으로 나간다(`netstack.go:1047-1062`, `:1119-1147`).
-5. darwin·ios에서는 이어서 엔진이 자기 터널 주소로 가는 패킷을 OS로 되돌린다(`wgengine/userspace.go:652-667`).
+1. For an ICMP echo request to `100.100.100.100` or `fd7a:115c:a1e0::53`, the tstun wrapper rewrites the header for a reply (swaps addresses, echo reply), injects the packet with its original payload toward the OS, and drops the original packet (`wrap.go:752-769`).
+2. Drop TSMP and local disco packets (`wrap.go:773-789`).
+3. netstack interception. Consume packets to either service IP in netstack regardless of protocol or port and skip WireGuard (`wrap.go:790-796`, `netstack.go:866-897`).
+   - UDP 53 → `handleMagicDNSUDP`. Receive queries on the same flow in a loop with a 150ms read deadline, pass each to `Manager.Query(…, "udp", source)`, and reply on the same flow. No reply on `Query` error (e.g., above 256 concurrent queries) (`netstack.go:2036-2041`, `:2080-2113`, `manager.go:652-676`).
+   - Other UDP ports. Close the endpoint without replying. No ICMP port unreachable is sent (`netstack.go:2000-2011`, `:2042-2051`).
+   - TCP 53 → `HandleTCPConn`. 80 and 8080 (web client and Taildrive) and the debug loopback port have respective handlers. Other TCP ports get RST (`netstack.go:1723-1787`, `tailscale.com/ipn/ipnlocal/netstack.go:21-39`).
+   - Other protocols. Consume and drop (no netstack handler).
+4. Response direction. Outgoing netstack packets sourced from a service IP go toward the OS (TUN write) (`netstack.go:1047-1062`, `:1119-1147`).
+5. On darwin and ios, the engine then returns packets for its own tunnel address to the OS (`wgengine/userspace.go:652-667`).
 
-[netmap-engine.md](netmap-engine.md) 4.8 첫 문단(ICMP echo는 래퍼가, 나머지는 netstack이)과 맞는다. 이 노트의 이전 판이 echo 처리를 "확인하지 못함"으로 둔 것이 틀렸다.
+This matches the first paragraph of [netmap-engine.md](netmap-engine.md) §4.8 (wrapper handles ICMP echo, netstack handles the rest). An earlier revision of these notes incorrectly left echo handling unverified.
 
-Swiftail M5 권고(패킷 단위 처리, TCP 스택 없음)
-- UDP 53(IPv4·IPv6): 4.2의 응답을 출발지·목적지 주소와 포트를 맞바꾼 UDP로 돌려준다. IPv6 UDP는 체크섬이 필수다(RFC 8200 8.1). 응답 하나가 1280 안에 들어가므로 단편화가 필요 없다(4.2.4).
-- ICMP·ICMPv6 echo: echo reply를 돌려준다(Go와 같음).
-- 그 밖의 패킷: 버리고 WireGuard로 보내지 않는다. TCP는 결정 D4.
+Swiftail M5 recommendations (per-packet processing, no TCP stack)
+- UDP 53 (IPv4 and IPv6). Return the §4.2 response in UDP with source and destination addresses and ports swapped. IPv6 UDP requires a checksum (RFC 8200 8.1). One response fits within 1280, so fragmentation is unnecessary (§4.2.4).
+- ICMP and ICMPv6 echo. Return an echo reply, matching Go.
+- Other packets. Drop before WireGuard. TCP follows decision D4.
 
-### 4.4 [M5] 상태 저장과 신원
+### 4.4 [M5] State Storage and Identity
 
-#### 4.4.1 Go가 시작할 때 읽는 순서
+#### 4.4.1 Go Startup Read Order
 
-1. `_current-profile`을 읽는다(`profiles.go:898-910`). `_profiles`를 읽어 맵을 만든다. 없으면 빈 맵(`:912-926`).
-2. 키가 있으면 그 프로필을 찾는다. 키도 프로필도 없으면 `_daemon`(iOS는 `ipn-go-bridge`)에서 이주를 시도한다. 그래도 없으면 저장되지 않은 새 프로필이다. 새 프로필의 prefs는 `NewPrefs()`에 `LoggedOut=true`, `WantRunning=false`(`profiles.go:860-866`, `:952-977`).
-3. 프로필 키의 값을 `NewPrefs()` 위에 덮어 읽는다. 값이 없거나 비면 2의 기본 prefs. 저장된 `ControlURL`이 기본 제어 서버의 동의어면 비운다(`profiles.go:669-720`).
-4. `Start`는 상태를 `NoState`로 두고(`local.go:3151`), `WantRunning`이면 `_machinekey`를 읽는다. 없을 때만 새로 만들어 쓴다. 있는데 파싱 실패이거나 0이면 오류로 멈춘다(`local.go:3207-3211`, `:4619-4651`).
+1. Read `_current-profile` (`profiles.go:898-910`). Read `_profiles` into a map, empty if absent (`:912-926`).
+2. If the key exists, look up its profile. If both key and profile are absent, try migrating from `_daemon` (`ipn-go-bridge` on iOS). If still absent, use a new unsaved profile with `NewPrefs()`, `LoggedOut=true`, and `WantRunning=false` (`profiles.go:860-866`, `:952-977`).
+3. Read the profile key's value over `NewPrefs()`. If absent or empty, use the default prefs from step 2. Clear a stored `ControlURL` that is a synonym for the default control server (`profiles.go:669-720`).
+4. `Start` sets state to `NoState` (`local.go:3151`) and reads `_machinekey` if `WantRunning`. Generate and write a new key only if absent. Stop with an error if present but unparseable or zero (`local.go:3207-3211`, `:4619-4651`).
 
-#### 4.4.2 쓰는 시점
+#### 4.4.2 When State Is Written
 
-- 프로필은 `Persist.NodeID`와 `Persist.UserProfile.LoginName`이 모두 채워져야(= 로그인이 끝나 netmap의 자기 노드를 받아야) 저장소에 생긴다. 그 전의 prefs는 메모리에만 있다. 따라서 첫 로그인 전 파일에 남는 것은 `_machinekey`뿐이다(`profiles.go:350-356`, `:425-428`, `:545-551`).
-- 로그인 뒤: 같은 노드·사용자의 프로필이 있으면 그것을 쓰고 중복은 지운다. 새 프로필이면 ID·키를 만들고 `_profiles` → `profile-<id>` → `_current-profile` 순으로 쓴다(`profiles.go:357-404`, `:411-492`, `:657-667`).
-- 노드 키: 등록 때 `PrivateNodeKey`가 0이거나 재생성이 요청되면 새 키를 만들고 이전 키를 `OldPrivateNodeKey`로 옮긴다. `NetworkLockKey`가 0이면 새로 만든다(`tailscale.com/control/controlclient/direct.go:704-723`).
-- tsnet은 `Start`마다 `NewPrefs()`에 `Hostname`·`WantRunning=true`·`ControlURL`·`RunWebClient`·`AdvertiseTags`를 채워 `UpdatePrefs`로 넘기고, 이것이 `Persist`를 뺀 저장 prefs를 모두 덮는다(`tsnet/tsnet.go:991-1004`, `ipn/backend.go:685-690`, `local.go:3157-3173`).
+- A profile appears in storage only after both `Persist.NodeID` and `Persist.UserProfile.LoginName` are populated (login has finished and the netmap's self node has arrived). Before then, prefs exist only in memory. Before first login, only `_machinekey` persists in the file (`profiles.go:350-356`, `:425-428`, `:545-551`).
+- After login, use any existing profile for the same node and user and remove duplicates. For a new profile, make an ID and key and write `_profiles` → `profile-<id>` → `_current-profile` in order (`profiles.go:357-404`, `:411-492`, `:657-667`).
+- Node key. At registration, if `PrivateNodeKey` is zero or regeneration is requested, create a new key and move the previous key to `OldPrivateNodeKey`. Generate `NetworkLockKey` if zero (`tailscale.com/control/controlclient/direct.go:704-723`).
+- On every `Start`, tsnet fills `NewPrefs()` with `Hostname`, `WantRunning=true`, `ControlURL`, `RunWebClient`, and `AdvertiseTags` and passes it to `UpdatePrefs`, overwriting all stored prefs except `Persist` (`tsnet/tsnet.go:991-1004`, `ipn/backend.go:685-690`, `local.go:3157-3173`).
 
-#### 4.4.3 "다시 시작해도 같은 노드"에 필요한 것
+#### 4.4.3 Requirements for Keeping the Same Node on Restart
 
-| 항목 | 구분 | 근거 |
+| Item | Classification | Rationale |
 | --- | --- | --- |
-| 노드 개인 키 | 필수. 등록이 이 키로 같은 노드를 가리킨다. 없으면 새 키를 만든다 | `direct.go:704-713` |
-| 머신 개인 키 | 필수(보존). 없으면 새로 만든다. 바뀐 머신 키를 서버가 어떻게 다루는지는 확인하지 못했다(8장) | `local.go:4619-4651` |
-| 이전 노드 키, NetworkLock 키 | 키 교체·tailnet lock용. Swiftail은 등록 요청의 `NLKey`를 0으로 보낸다 | `direct.go:714-723`, `Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:38` |
-| `NodeID`, `UserProfile`, 프로필 | Go 프로필 관리용. 재등록에는 쓰지 않는다 | `profiles.go:350-356` |
-| disco 키 | 저장하지 않는다. 시작마다 새로 만든다 | `tailscale.com/wgengine/magicsock/magicsock.go:580` |
-| netmap 디스크 캐시 | 선택 기능 | `tailscale.com/ipn/ipnlocal/diskcache.go:32-65` |
+| Node private key | Required. Registration uses it to refer to the same node. Generate a new one if absent | `direct.go:704-713` |
+| Machine private key | Required (retain). Generate a new one if absent. How the server handles a changed machine key is unverified (§8) | `local.go:4619-4651` |
+| Previous node key, NetworkLock key | For key replacement and tailnet lock. Swiftail sends zero `NLKey` in registration requests | `direct.go:714-723`, `Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:38` |
+| `NodeID`, `UserProfile`, profile | For Go profile management. Unused in re-registration | `profiles.go:350-356` |
+| disco key | Not persisted. Generate anew on each start | `tailscale.com/wgengine/magicsock/magicsock.go:580` |
+| On-disk netmap cache | Optional feature | `tailscale.com/ipn/ipnlocal/diskcache.go:32-65` |
 
-Swiftail의 `identity.json`(머신 키 + 노드 키)이 이 최소 집합이다. M5에서 더할 것은 위치와 보호다: 첫 사용처는 상태를 App Group 컨테이너 아래에 두고, 파일 보호 등급 `completeUntilFirstUserAuthentication`, 백업 제외로 만든다(잠긴 기기에서 재부팅 뒤 첫 잠금 해제 전에는 읽을 수 없다). 같은 상태 디렉터리로 두 번 시작하면 거절한다(RemoteDebug `Apps/iOSTunnel/Shared/TunnelStorage.swift:5-56`, `core/internal/api/api.go:75-90`). 보호 등급의 의미는 Apple 문서 `FileProtectionType.completeUntilFirstUserAuthentication` 항목이다.
+Swiftail's `identity.json` (machine key + node key) is this minimum set. M5 adds location and protection. The first adopter puts state under the App Group container with file protection `completeUntilFirstUserAuthentication` and excludes it from backup (on a locked device, unreadable after reboot until first unlock). A second start with the same state directory is rejected (RemoteDebug `Apps/iOSTunnel/Shared/TunnelStorage.swift:5-56`, `core/internal/api/api.go:75-90`). See Apple's `FileProtectionType.completeUntilFirstUserAuthentication` documentation for the protection class.
 
-`ipn.Prefs` 가운데 노드에 의미 있는 것(`ipn/prefs.go:59-320`): `ControlURL`(비면 `https://controlplane.tailscale.com`, `:42`), `Hostname`, `WantRunning`, `LoggedOut`, `CorpDNS`, `RouteAll`, `AdvertiseTags`, `ShieldsUp`, `Persist`. `NewPrefs()`의 기본은 `CorpDNS=true`, `WantRunning=false`, `NoStatefulFiltering=true`, `NetfilterMode=on`, `AutoUpdate.Check=true`, 그리고 `RouteAll`은 플랫폼별로 windows·android·**ios에서 true**, 샌드박스 macOS에서 true, 그 밖은 false다(`prefs.go:734-757`, `:787-799`). 첫 사용처는 iOS에서 `RouteAll=false`, `CorpDNS=true`, `WantRunning=true`로 덮는다(RemoteDebug `core/internal/tunnel/tunnel.go:155-160`). Swiftail M5는 서브넷 라우트를 받지 않는다([netmap-engine.md](netmap-engine.md) 6.1 1).
+Relevant `ipn.Prefs` fields for a node (`ipn/prefs.go:59-320`) are `ControlURL` (`https://controlplane.tailscale.com` if empty, `:42`), `Hostname`, `WantRunning`, `LoggedOut`, `CorpDNS`, `RouteAll`, `AdvertiseTags`, `ShieldsUp`, and `Persist`. `NewPrefs()` defaults to `CorpDNS=true`, `WantRunning=false`, `NoStatefulFiltering=true`, `NetfilterMode=on`, and `AutoUpdate.Check=true`. `RouteAll` is true on windows, android, and **ios**, true on sandboxed macOS, and false elsewhere (`prefs.go:734-757`, `:787-799`). The first adopter overrides iOS with `RouteAll=false`, `CorpDNS=true`, and `WantRunning=true` (RemoteDebug `core/internal/tunnel/tunnel.go:155-160`). Swiftail M5 accepts no subnet routes ([netmap-engine.md](netmap-engine.md) §6.1 item 1).
 
-### 4.5 [M5] 노드 상태 기계
+### 4.5 [M5] Node State Machine
 
-값: `NoState`=0, `InUseOtherUser`=1, `NeedsLogin`=2, `NeedsMachineAuth`=3, `Stopped`=4, `Starting`=5, `Running`=6(`ipn/backend.go:25-35`). `nextStateLocked`가 위에서부터 처음 맞는 규칙을 쓴다(`local.go:7024-7097`).
+Values are `NoState`=0, `InUseOtherUser`=1, `NeedsLogin`=2, `NeedsMachineAuth`=3, `Stopped`=4, `Starting`=5, and `Running`=6 (`ipn/backend.go:25-35`). `nextStateLocked` uses the first matching rule (`local.go:7024-7097`).
 
-| # | 조건 | 결과 | 줄 |
+| # | Condition | Result | Line |
 | --- | --- | --- | --- |
-| 0 | 상태 저장소 초기화 실패 | `NoState` | `:7026-7028` |
-| 1 | `WantRunning` 거짓, `LoggedOut` 거짓, 엔진 차단 아님, 노드 키 있음 | `Stopped` | `:7048-7049` |
-| 2 | netmap 없음 + (제어 클라이언트가 사람 없이 인증을 계속할 수 없음 또는 `LoggedOut`) | `NeedsLogin` | `:7050-7055` |
-| 3 | netmap 없음, 이전 `Stopped` / `NoState` / `Starting`·`Running`·`NeedsLogin` | `Starting` / `NoState` / 이전 유지 | `:7056-7072` |
-| 4 | netmap 있음, `WantRunning` 거짓 | `Stopped` | `:7074-7075` |
-| 5 | 자기 키 만료: netmap 자기 노드의 `KeyExpiry`가 0이 아니고 현재 시각보다 이전 | `NeedsLogin` | `:7076-7079`, `local.go:1924-1929` |
-| 6 | 자기 노드가 `MachineAuthorized`가 아님(자기 노드가 없으면 Unknown) | `NeedsMachineAuth` | `:7080-7082`, `types/netmap/netmap.go:200-208` |
-| 7 | 이전 `NeedsMachineAuth` | `Starting` | `:7083-7085` |
-| 8 | 이전 `Starting`: 핸드셰이크가 한 번이라도 된 피어가 있거나 활성 DERP 연결이 있음 | `Running`, 아니면 `Starting` | `:7086-7091`, `local.go:4920-4934` |
-| 9 | 이전 `Running` | `Running` | `:7092-7093` |
-| 10 | 그 밖 | `Starting` | `:7094-7095` |
+| 0 | State store initialization failed | `NoState` | `:7026-7028` |
+| 1 | `WantRunning` false, `LoggedOut` false, engine unblocked, node key present | `Stopped` | `:7048-7049` |
+| 2 | No netmap + (control client cannot continue authentication without human intervention, or `LoggedOut`) | `NeedsLogin` | `:7050-7055` |
+| 3 | No netmap, previous `Stopped` / `NoState` / `Starting`, `Running`, or `NeedsLogin` | `Starting` / `NoState` / retain previous | `:7056-7072` |
+| 4 | Netmap present, `WantRunning` false | `Stopped` | `:7074-7075` |
+| 5 | Local key expired: netmap self node's `KeyExpiry` is nonzero and earlier than now | `NeedsLogin` | `:7076-7079`, `local.go:1924-1929` |
+| 6 | Self node is not `MachineAuthorized` (Unknown if missing) | `NeedsMachineAuth` | `:7080-7082`, `types/netmap/netmap.go:200-208` |
+| 7 | Previous `NeedsMachineAuth` | `Starting` | `:7083-7085` |
+| 8 | Previous `Starting`: a peer has completed at least one handshake or a DERP connection is active | `Running`, else `Starting` | `:7086-7091`, `local.go:4920-4934` |
+| 9 | Previous `Running` | `Running` | `:7092-7093` |
+| 10 | Other | `Starting` | `:7094-7095` |
 
-- 로그인 URL: 제어가 준 URL을 6일 23시간까지 재사용한다(`local.go:4818-4823`). `Running`에 처음 들어갈 때 지운다(`local.go:6934-6937`). tsnet은 시작 직후 `NeedsLogin`이면 `StartLoginInteractive`를 부른다(`tsnet.go:1008-1016`).
-- 상태 진입 부작용(`local.go:6917-7000`): 바뀔 때만 `Notify{State}`. `NeedsLogin`은 엔진 갱신을 막고 `NeedsLogin`·`Stopped`·`NoState`는 엔진·라우터·DNS를 빈 설정으로 되돌린다(= OS 설정의 주소·DNS가 빠진다). `Starting`·`NeedsMachineAuth`는 설정을 다시 계산한다.
+- Login URL. Reuse the control server's URL for up to 6 days and 23 hours (`local.go:4818-4823`). Clear on first entry to `Running` (`local.go:6934-6937`). tsnet calls `StartLoginInteractive` if in `NeedsLogin` just after startup (`tsnet.go:1008-1016`).
+- Side effects on state entry (`local.go:6917-7000`). Emit `Notify{State}` only on change. `NeedsLogin` blocks engine updates. `NeedsLogin`, `Stopped`, and `NoState` restore empty engine, router, and DNS settings (= remove addresses and DNS from OS settings). `Starting` and `NeedsMachineAuth` recompute settings.
 
-plan 6절 `NodeState`와 첫 사용처 사건의 대응(권고)
+Mapping plan §6 `NodeState` and first adopter events (recommended)
 
-| Go | 첫 사용처가 내는 값 | Swiftail `NodeState` |
+| Go | First adopter output | Swiftail `NodeState` |
 | --- | --- | --- |
 | `NoState` | `Starting` | `.starting` |
-| `NeedsLogin` | `NeedsLogin`(+ authURL, https만) | `.needsLogin` + `authURL` |
-| `NeedsMachineAuth` | 그대로 | `.needsMachineAuth` |
-| `Starting`, `Running`, `Stopped` | 그대로 | 같은 이름 |
-| `InUseOtherUser`, 백엔드 오류 메시지(Running 아님), TUN 읽기 오류로 엔진 종료 | `Error` + 메시지. 엔진 종료는 stop 전까지 풀리지 않음 | `.failed` + `errorMessage` |
+| `NeedsLogin` | `NeedsLogin` (+ authURL, https only) | `.needsLogin` + `authURL` |
+| `NeedsMachineAuth` | As is | `.needsMachineAuth` |
+| `Starting`, `Running`, `Stopped` | As is | Same names |
+| `InUseOtherUser`, backend error message (outside Running), engine exit due to TUN read error | `Error` + message. Engine exit persists until stop | `.failed` + `errorMessage` |
 
-출처: RemoteDebug `core/internal/node/node.go:409-484`, `:577-627`, `:876-878`, `Apps/iOSTunnel/Shared/TunnelStateMapping.swift:45-88`. 첫 사용처는 `NeedsLogin`인데 URL도 인증 키도 없으면 30초마다 대화형 로그인을 다시 요청한다(`node.go:54`, `:752-778`).
+Origin: RemoteDebug `core/internal/node/node.go:409-484`, `:577-627`, `:876-878`, `Apps/iOSTunnel/Shared/TunnelStateMapping.swift:45-88`. If `NeedsLogin` with neither URL nor auth key, the first adopter requests interactive login again every 30 seconds (`node.go:54`, `:752-778`).
 
-### 4.6 [M5] 네트워크 전환(Wi-Fi ↔ 셀룰러)
+### 4.6 [M5] Network Switching (Wi-Fi ↔ Cellular)
 
-#### 4.6.1 기본 인터페이스
+#### 4.6.1 Default Interface
 
-- iOS 앱이 `NWPathMonitor`에서 만족된 경로의 인터페이스 이름을 `UpdateLastKnownDefaultRouteInterface(name)`로 넘긴다. 빈 이름은 무시한다. 이 값은 그 인터페이스가 있고 올라와 있고 주소가 하나라도 있을 때만 기본 경로로 쓰이고, 아니면 라우팅 테이블에서 찾는다(`tailscale.com/net/netmon/defaultroute_darwin.go:16-112`). 이유: NetworkExtension이 위임 인터페이스를 터널 생성 때 한 번만 정한다(`:38-48`의 주석).
-- 이름만 바꾸면 아무 일도 일어나지 않는다. 즉시 다시 계산하려면 `netmon.InjectEvent()`를 부른다. `InjectEvent`는 상태가 같아도 통지를 강제하고 `Poll`은 상태가 바뀐 경우에만 통지한다(`tailscale.com/net/netmon/netmon.go:544-570`, `:640-648`). 첫 사용처는 이름이 바뀌면 둘을 차례로 부르고, 시작 전에 utun 이름을 `SetTailscaleInterfaceProps`로 알린다(GOOS=ios에서는 스스로 알아보지 못한다)(RemoteDebug `core/internal/tunnel/tunnel.go:85-91`, `:211-229`). 이름 검사: 15자 이하, 영숫자와 `_.-`(`docs/tunnel.md:130`).
-- darwin 빌드(iOS 포함)의 `netmon`은 `AF_ROUTE` 소켓을 읽고 흥미롭지 않은 인터페이스(`llw`, `awdl`, `ipsec`, `gif`, `XHC`, `anpi`, `lo`, `utun` 접두)의 메시지를 버린다. 확인 사이 최소 간격은 1초다(`netmon_darwin.go:19-46`, `:110-178`, `netmon.go:583-630`). 폴링 구현은 darwin이 아닌 곳에만 있다(`polling.go:4`).
+- The iOS app passes the interface name of a satisfied path from `NWPathMonitor` to `UpdateLastKnownDefaultRouteInterface(name)`. Ignore an empty name. Use the interface as the default route only if it exists, is up, and has at least one address. Otherwise look in the routing table (`tailscale.com/net/netmon/defaultroute_darwin.go:16-112`). NetworkExtension selects the delegated interface only once at tunnel creation (comment at `:38-48`).
+- Changing the name alone does nothing. Call `netmon.InjectEvent()` to recompute immediately. `InjectEvent` forces notification even if state is equal, and `Poll` notifies only on state change (`tailscale.com/net/netmon/netmon.go:544-570`, `:640-648`). The first adopter calls both in order when the name changes and announces the utun name via `SetTailscaleInterfaceProps` before start (it cannot detect it itself on GOOS=ios) (RemoteDebug `core/internal/tunnel/tunnel.go:85-91`, `:211-229`). Name validation allows at most 15 characters, alphanumeric and `_.-` (`docs/tunnel.md:130`).
+- In darwin builds (including iOS), `netmon` reads the `AF_ROUTE` socket and discards messages for uninteresting interfaces (prefixes `llw`, `awdl`, `ipsec`, `gif`, `XHC`, `anpi`, `lo`, `utun`). The minimum check interval is 1 second (`netmon_darwin.go:19-46`, `:110-178`, `netmon.go:583-630`). The polling implementation is only for platforms other than darwin (`polling.go:4`).
 
-#### 4.6.2 변화의 판정(`ChangeDelta`)
+#### 4.6.2 Detecting Changes (`ChangeDelta`)
 
-`netmon.go:153-209`. 이전 상태가 없으면 처음 상태. 아니면 `DefaultInterfaceChanged`(기본 인터페이스 이름), `InterfaceIPsChanged`, `AvailableProtocolsChanged`(HaveV4·HaveV6), `IsLessExpensive`, `HasPACOrProxyConfigChanged`를 계산한다. `DefaultInterfaceMaybeViable` = 기본 인터페이스가 올라와 있고 Tailscale 인터페이스가 아님. `RebindLikelyRequired` = (처음 상태 ∨ 10분 이상 시계 점프 ∨ 위 변화 중 하나) ∧ `DefaultInterfaceMaybeViable`. iOS는 시계 점프 감시를 하지 않는다(`netmon.go:726`).
+`netmon.go:153-209`. Without a previous state, this is the initial state. Otherwise compute `DefaultInterfaceChanged` (default interface name), `InterfaceIPsChanged`, `AvailableProtocolsChanged` (HaveV4 and HaveV6), `IsLessExpensive`, and `HasPACOrProxyConfigChanged`. `DefaultInterfaceMaybeViable` = default interface is up and is not a Tailscale interface. `RebindLikelyRequired` = (initial state ∨ clock jump of at least 10 minutes ∨ any change above) ∧ `DefaultInterfaceMaybeViable`. iOS does not monitor clock jumps (`netmon.go:726`).
 
-#### 4.6.3 통지를 받는 쪽과 하는 일
+#### 4.6.3 Notification Recipients and Actions
 
-1. 엔진(`wgengine/userspace.go:1155-1225`): 올라온 인터페이스가 없으면 DNS 캐시를 비우고 magicsock에 네트워크 내려감을 알려 모든 DERP 연결을 닫는다(`magicsock.go:2755-2773`). `RebindLikelyRequired`이고 올라와 있으면 DNS 캐시를 비우고, iOS에서 마지막 DNS 설정을 다시 적용한 뒤 VPN 설정을 필요하면 다시 낸다. 올라와 있으면 홈 DERP 연결을 시작하고, `RebindLikelyRequired`면 `Rebind`, 이어서 항상 `ReSTUN`(엔드포인트 재수집과 제어 갱신).
-2. `Rebind`: UDP 소켓을 같은 포트로 다시 결속하고, 기본 인터페이스 주소를 로컬 주소로 갖지 않는 DERP 연결은 닫거나 다시 잇고(홈), 나머지는 3초 핑으로 확인하며, 모든 피어의 경로 상태를 지운다. 세부는 [disco-magicsock.md](disco-magicsock.md) 4.11(`magicsock.go:3880-3916`, `derp.go:908-938`).
-3. 백엔드(`local.go:1128-1164`, `:1215-1250`): 올라온 인터페이스가 없으면 제어 클라이언트를 일시 정지하고, 있으면 재개한다. 패킷 필터를 다시 계산한다.
-4. 시스템 연결(`tailscale.com/net/tsdial/tsdial.go:301-355`): `SystemDial`로 연 TCP 연결(제어 등)은 처음 상태가 아니면서 기본 인터페이스나 PAC·프록시가 바뀌었거나, 기본 인터페이스 이름이 비었거나, 연결의 로컬 IP가 사라졌으면 닫혀 상위가 다시 잇는다.
+1. Engine (`wgengine/userspace.go:1155-1225`). If no interfaces are up, clear the DNS cache and tell magicsock the network is down, closing all DERP connections (`magicsock.go:2755-2773`). If `RebindLikelyRequired` and an interface is up, clear the DNS cache, reapply the last DNS settings on iOS, and emit VPN settings again if needed. If up, start the home DERP connection, call `Rebind` if `RebindLikelyRequired`, then always `ReSTUN` (rediscover endpoints and update control).
+2. `Rebind`. Rebind UDP sockets to the same port. Close DERP connections without the default interface address as their local address, reconnecting the home connection. Check the rest with a 3-second ping and clear path state for all peers. See [disco-magicsock.md](disco-magicsock.md) §4.11 for details (`magicsock.go:3880-3916`, `derp.go:908-938`).
+3. Backend (`local.go:1128-1164`, `:1215-1250`). Pause the control client if no interface is up and resume otherwise. Recompute the packet filter.
+4. System connections (`tailscale.com/net/tsdial/tsdial.go:301-355`). TCP connections opened by `SystemDial` (control and others) close for the upper layer to reconnect if the state is no longer initial and the default interface, PAC, or proxy changes, if the default interface name is empty, or if the connection's local IP disappears.
 
-#### 4.6.4 소켓 결속
+#### 4.6.4 Socket Binding
 
-- 루프 방지를 위해 제어·DERP·magicsock UDP·netcheck·포트매퍼 소켓을 기본 인터페이스에 결속한다. IPv4는 `IP_BOUND_IF`, IPv6는 `IPV6_BOUND_IF`를 `setsockopt`로 건다. 로컬호스트 주소는 결속하지 않고, 인덱스를 얻지 못하면 결속 없이 진행한다(`tailscale.com/net/netns/netns_darwin.go:38-55`, `:295-315`). iOS에서는 기본으로 켜진다. 끄는 스위치는 일반용 `SetDisableBindConnToInterface`(기본 꺼짐)와 macOS GUI 변형에서만 듣는 Apple 확장용이다(`netns_darwin.go:40`, `tailscale.com/net/netns/netns.go:61-95`).
-- 인덱스: `UpdateLastKnownDefaultRouteInterface`로 받은 인터페이스가 우선이고 없으면 `netmon` 캐시. 고른 것이 Tailscale `utun`이면 무효(`netns_darwin.go:57-145`).
-- 결속은 소켓을 열 때 한 번이다. 인터페이스가 바뀌면 4.6.3의 Rebind·DERP 재연결·시스템 연결 닫기로 새 소켓이 새 인덱스를 얻는다.
+- To prevent loops, bind control, DERP, magicsock UDP, netcheck, and port mapper sockets to the default interface. Set `IP_BOUND_IF` for IPv4 and `IPV6_BOUND_IF` for IPv6 with `setsockopt`. Leave localhost unbound and proceed without binding if the index is unavailable (`tailscale.com/net/netns/netns_darwin.go:38-55`, `:295-315`). Enabled by default on iOS. The switches to disable it are the general `SetDisableBindConnToInterface` (off by default) and an Apple extension switch honored only in macOS GUI variants (`netns_darwin.go:40`, `tailscale.com/net/netns/netns.go:61-95`).
+- Index selection. Prefer the interface from `UpdateLastKnownDefaultRouteInterface`, falling back to the `netmon` cache. Reject a selected Tailscale `utun` (`netns_darwin.go:57-145`).
+- Bind once at socket creation. On interface change, Rebind, DERP reconnection, and system connection closure from §4.6.3 let new sockets obtain the new index.
 
-M5에 필요한 것(권고): `setDefaultInterface(name)` → 이름 검사 → 바뀌었으면 기본 인터페이스 갱신과 링크 변경 처리(엔진 1의 순서: DERP 닫기·다시 잇기, UDP 재결속, ReSTUN, 제어 연결 재연결, DNS 설정 다시 내기). `disco-magicsock.md`가 M5로 미룬 링크 변경 감지·Rebind·ReSTUN·DERP 재확인·iOS 결속이 이것이다. Swiftail에는 `AF_ROUTE` 감시가 없으므로 앱이 부르는 `setDefaultInterface`가 유일한 통지원이다(결정 D6).
+M5 requirements (recommended). `setDefaultInterface(name)` → validate name → if changed, update the default interface and handle link change (engine step 1 order: close and reconnect DERP, rebind UDP, ReSTUN, reconnect control, and re-emit DNS settings). This is the link change detection, Rebind, ReSTUN, DERP recheck, and iOS binding that `disco-magicsock.md` deferred to M5. Swiftail has no `AF_ROUTE` monitor, so the app's `setDefaultInterface` call is the sole notification source (decision D6).
 
-### 4.7 [M6] tsnet 리스너와 다이얼
+### 4.7 [M6] tsnet Listeners and Dialing
 
-#### 4.7.1 수신 경로
+#### 4.7.1 Inbound Path
 
-가짜 TUN(`Tun == nil`) 경로(`tsnet.go:922-934`).
+Fake TUN (`Tun == nil`) path (`tsnet.go:922-934`).
 
-1. 복호화된 패킷이 패킷 필터를 통과한 뒤 netstack으로 온다(`netstack.go:465`, `:1472-1480`). 목적지가 자기 주소이고 `ProcessLocalIPs`면 netstack이 처리한다(`netstack.go:1352-1354`).
-2. 진행 중 TCP 연결 상한: 전역 모바일 1024·Linux 8192·그 밖 2048, 원격 IP당 그 2/3. 같은 4-튜플의 SYN 재전송은 무시(`netstack.go:76-120`, `:539-627`).
-3. `acceptTCP`: 서비스 IP 처리 → `TCPHandlerForDst`(quad-100의 80·Drive, VIP 서비스, 22, 웹 클라이언트, PeerAPI, serve. tsnet 리스너보다 먼저 가져간다. 리스너 포트가 PeerAPI 포트와 겹치면 PeerAPI가 이긴다) → tsnet `getTCPHandlerForFlow`(`netstack.go:1736-1762`, `ipnlocal/netstack.go:21-72`).
-4. 리스너 조회: (`tcp4`/`tcp6`, 도착 IP, 포트) → (`tcp`, IP, 포트) → (`tcp4`/`tcp6`, 호스트 없음, 포트) → (`tcp`, 호스트 없음, 포트). 호스트 없는 리스너는 목적지가 자기 노드 주소일 때만. 없으면 RST(`tsnet.go:1238-1266`, `:1289-1303`).
-5. `CreateEndpoint`는 핸드셰이크를 **시작만** 하고, 곧바로 keepalive를 켠 `gonet.TCPConn`을 리스너에 넘긴다. 그래서 `Accept`가 돌려준 연결은 핸드셰이크가 끝나지 않았을 수 있고(읽기·쓰기는 끝날 때까지 막힌다), 그 전에는 주소 조회가 비어 있다(`netstack.go:1666-1673`, `:1702`, `:1712-1720`). 버퍼 없는 채널로 넘기며 1초 안에 `Accept`가 가져가지 않으면 닫는다(`tsnet.go:2406-2417`).
+1. Decrypted packets reach netstack after the packet filter (`netstack.go:465`, `:1472-1480`). Netstack handles packets to local addresses if `ProcessLocalIPs` is set (`netstack.go:1352-1354`).
+2. In-progress TCP connection limits: global 1024 on mobile, 8192 on Linux, 2048 elsewhere, and 2/3 of that per remote IP. Ignore retransmitted SYNs with the same 4-tuple (`netstack.go:76-120`, `:539-627`).
+3. `acceptTCP`: service IP handling → `TCPHandlerForDst` (quad-100 port 80 and Drive, VIP services, 22, web client, PeerAPI, serve. These take precedence over tsnet listeners. PeerAPI wins a listener port collision with PeerAPI) → tsnet `getTCPHandlerForFlow` (`netstack.go:1736-1762`, `ipnlocal/netstack.go:21-72`).
+4. Listener lookup: (`tcp4`/`tcp6`, destination IP, port) → (`tcp`, IP, port) → (`tcp4`/`tcp6`, no host, port) → (`tcp`, no host, port). Hostless listeners apply only when the destination is the local node address. If none is found, send RST (`tsnet.go:1238-1266`, `:1289-1303`).
+5. `CreateEndpoint` **only starts** the handshake and immediately hands a keepalive-enabled `gonet.TCPConn` to the listener. The connection returned by `Accept` may still be handshaking (reads and writes block until it completes), and address lookups are empty before completion (`netstack.go:1666-1673`, `:1702`, `:1712-1720`). Delivery uses an unbuffered channel and closes the connection if `Accept` does not take it within 1 second (`tsnet.go:2406-2417`).
 
-`Listen`(`tsnet.go:1321-1323`, `:2090-2094`, `:2115-2271`): `0.0.0.0`·`::`는 호스트 없음으로 정규화. 포트 0은 10002~19999에서 `nextEphemeralPort`부터 순환 할당. 같은 키로 다시 열면 `listener already open` 오류. `Server.Tun`을 쓰는 경우 `tcp`·빈 값은 `tcp4`/`tcp6`으로 바뀌고 호스트가 없으면 tcp6 듀얼 스택이다(`tsnet.go:2160-2180`).
+`Listen` (`tsnet.go:1321-1323`, `:2090-2094`, `:2115-2271`). Normalize `0.0.0.0` and `::` to no host. Port 0 cycles through 10002~19999 starting from `nextEphemeralPort`. Reopening the same key gives `listener already open`. With `Server.Tun`, rewrite `tcp` and the empty value to `tcp4`/`tcp6`. No host uses dual-stack tcp6 (`tsnet.go:2160-2180`).
 
-#### 4.7.2 다이얼
+#### 4.7.2 Dialing
 
-1. 주소가 IP가 아니면 MagicDNS 콜백(노드 FQDN·짧은 이름·`Type`이 빈 `ExtraRecords`)으로 푼다. `tcp`이면 IPv4 우선. quad-100을 거치지 않는다. 못 풀면 시스템 리졸버(`tsdial.go:401-489`, `ipnlocal/resolve.go:60-77`, `:115-146`, `node_backend.go:823-836`).
-2. 주소가 여럿이면 300ms 간격 경쟁(`tsdial.go:640-656`).
-3. `PeerForIP`가 성공하면(테일넷 주소 또는 라우트를 가진 피어) netstack 다이얼, 아니면 OS 네트워크(`tsnet.go:935-939`, `tsdial.go:608-638`, `ipnlocal/resolve.go:166-198`). 출발지는 같은 계열의 자기 테일넷 IP(`tsnet.go:940-951`).
-4. tsnet `Dial`은 상태가 `Running`이 될 때까지 기다린다(`NeedsLogin`·`Starting`이면 대기, 그 밖의 상태는 오류)(`tsnet.go:382-419`).
+1. Resolve non-IP addresses through the MagicDNS callback (node FQDNs, short names, and `ExtraRecords` with empty `Type`). Prefer IPv4 for `tcp`. Bypass quad-100, falling back to the system resolver if unresolved (`tsdial.go:401-489`, `ipnlocal/resolve.go:60-77`, `:115-146`, `node_backend.go:823-836`).
+2. Race multiple addresses at 300ms intervals (`tsdial.go:640-656`).
+3. If `PeerForIP` succeeds (a peer with the tailnet address or route), dial through netstack, otherwise through OS networking (`tsnet.go:935-939`, `tsdial.go:608-638`, `ipnlocal/resolve.go:166-198`). The source is the local tailnet IP of the same family (`tsnet.go:940-951`).
+4. tsnet `Dial` waits until `Running` (`NeedsLogin` and `Starting` wait, other states give an error) (`tsnet.go:382-419`).
 
-#### 4.7.3 netstack 설정(Swift TCP의 비교 기준)
+#### 4.7.3 Netstack Configuration (Swift TCP Reference)
 
-| 항목 | 값 | 출처 |
+| Item | Value | Origin |
 | --- | --- | --- |
-| 프로토콜 | IPv4·IPv6, TCP·UDP·ICMPv4·ICMPv6, NIC 1개(프로미스큐어스), 두 기본 경로 | `netstack.go:388-391`, `:436-464` |
-| MTU·큐 | 1280(`DefaultTUNMTU`), 512 | `netstack.go:434`, `tailscale.com/net/tstun/mtu.go:77-79` |
-| 혼잡 제어·손실 복구 | `cubic`, RACK 끔(`TS_NETSTACK_ENABLE_RACK=true`일 때만 켬. 같은 파일 `:141-145` 주석은 반대로 적혀 있으나 코드를 따랐다) | `netstack.go:405-417` |
-| 수신 버퍼 | 최소 4096, 기본 1MiB, 최대 8MiB(iOS는 gVisor 최대 4MiB) | `netstack_tcpbuf_default.go:13-19`, `netstack_tcpbuf_ios.go:13-23`, `gvisor/pkg/tcpip/transport/tcp/protocol.go:41-52` |
-| 송신 버퍼 | 최소 4096, 기본 1MiB, 최대 6MiB(iOS 4MiB). 기본 상수 이름이 송·수신 뒤바뀌어 있으나 값이 같다 | 같음 |
-| 포워더 수신 윈도 인자 | 1MiB | `netstack.go:669` |
-| keepalive | 수락 연결에 켬. idle 2시간, interval 75초, count 9 | `gvisor/pkg/tcpip/transport/tcp/protocol.go:72-80` |
+| Protocols | IPv4 and IPv6, TCP, UDP, ICMPv4 and ICMPv6, 1 NIC (promiscuous), two default routes | `netstack.go:388-391`, `:436-464` |
+| MTU and queue | 1280 (`DefaultTUNMTU`), 512 | `netstack.go:434`, `tailscale.com/net/tstun/mtu.go:77-79` |
+| Congestion control and loss recovery | `cubic`, RACK off (enabled only with `TS_NETSTACK_ENABLE_RACK=true`. The comment at `:141-145` in the same file says the reverse, so these notes follow the code) | `netstack.go:405-417` |
+| Receive buffer | Minimum 4096, default 1MiB, maximum 8MiB (iOS uses the gVisor maximum of 4MiB) | `netstack_tcpbuf_default.go:13-19`, `netstack_tcpbuf_ios.go:13-23`, `gvisor/pkg/tcpip/transport/tcp/protocol.go:41-52` |
+| Send buffer | Minimum 4096, default 1MiB, maximum 6MiB (iOS 4MiB). Default constant names are swapped for send and receive, but their values are equal | Same |
+| Forwarder receive window argument | 1MiB | `netstack.go:669` |
+| keepalive | Enabled on accepted connections. Idle 2 hours, interval 75 seconds, count 9 | `gvisor/pkg/tcpip/transport/tcp/protocol.go:72-80` |
 
-iOS가 최대 버퍼를 gVisor 기본(4MiB)으로 두는 것은 NetworkExtension 메모리 한도에 압박을 더하지 않으려는 것이다(`netstack_tcpbuf_ios.go:13-16`).
+iOS keeps the buffer maximum at the gVisor default (4MiB) to avoid adding pressure to the NetworkExtension memory limit (`netstack_tcpbuf_ios.go:13-16`).
 
 ### 4.8 [M7] `WhoIs`
 
 `LocalBackend.WhoIs(proto, ipport)`(`local.go:1753-1805`):
 
-1. `::ffff:a.b.c.d`를 IPv4로 바꾼다.
-2. `nodeByAddr`(노드 자신의 주소, 자기 노드 포함)에서 찾는다. 테일넷 주소면 포트 0이어도 된다(`node_backend.go:119-121`).
-3. 못 찾으면(빌드에 netstack 기능이 있을 때) 포트가 0이면 실패, 아니면 `ProxyMapper`로 (proto, ip:port)를 실제 원격 IP로 바꿔 다시 찾는다. `proto`가 비면 tcp, udp 순(`local.go:1773-1797`). tsnet 리스너가 받은 연결은 원격 주소가 이미 피어 주소다.
-4. netmap이 없으면 실패. 노드의 `User`로 사용자 프로필을 찾고, 없으면 실패(`local.go:1799-1805`).
+1. Convert `::ffff:a.b.c.d` to IPv4.
+2. Look up in `nodeByAddr` (node-owned addresses including the local node). Port 0 is allowed for tailnet addresses (`node_backend.go:119-121`).
+3. If absent (and the build includes netstack), fail for port 0. Otherwise map (proto, ip:port) to the real remote IP with `ProxyMapper` and look up again. With empty `proto`, try tcp then udp (`local.go:1773-1797`). The remote address of a connection accepted by a tsnet listener is already the peer address.
+4. Fail without a netmap. Look up the user profile by the node's `User` and fail if absent (`local.go:1799-1805`).
 
-로컬 API `GET /localapi/v0/whois?addr=`(`ip`, `ip:port`, `nodekey:…`. 그 밖에 `proto`, `svc_name`, `dst_ip`)의 응답(`tailscale.com/ipn/localapi/localapi.go:516-629`, `tailscale.com/client/tailscale/apitype/apitype.go:35-42`):
+Local API `GET /localapi/v0/whois?addr=` response (`ip`, `ip:port`, `nodekey:…`, plus `proto`, `svc_name`, `dst_ip`) (`tailscale.com/ipn/localapi/localapi.go:516-629`, `tailscale.com/client/tailscale/apitype/apitype.go:35-42`):
 
-| 키 | 내용 |
+| Key | Contents |
 | --- | --- |
-| `Node` | `tailcfg.Node` 전체 |
-| `UserProfile` | `ID`, `LoginName`, `DisplayName`, `ProfilePicURL`(빈 값 생략), `Groups`(빈 값 생략)(`tailcfg.go:307-319`) |
-| `CapMap` | src = 원격 노드의 첫 주소, dst = 같은 계열의 자기 노드 첫 주소로 패킷 필터의 `CapsWithValues(src, dst)`. `UnsignedPeerAPIOnly` 피어는 ingress 능력만. 노드에 주소가 없으면 생략(`node_backend.go:443-466`) |
+| `Node` | Full `tailcfg.Node` |
+| `UserProfile` | `ID`, `LoginName`, `DisplayName`, `ProfilePicURL` (omit empty), `Groups` (omit empty) (`tailcfg.go:307-319`) |
+| `CapMap` | Packet filter `CapsWithValues(src, dst)`, with src = first remote node address and dst = first local address of the same family. Only ingress capability for `UnsignedPeerAPIOnly` peers. Omit if the node has no address (`node_backend.go:443-466`) |
 
-상태 코드: 읽기 권한 없음 403, `addr` 없음·잘못됨 400, 못 찾음 404. tsnet에는 `WhoIs` 메서드가 없고 `LocalClient().WhoIs`를 쓴다. 404는 `ErrPeerNotFound`(`tailscale.com/client/local/local.go:353-362`). 첫 사용처는 `Node.StableID`(필수, 없으면 거절), `Node.Name`의 첫 레이블(비면 `ComputedName`), `UserProfile.LoginName`만 읽는다(RemoteDebug `core/internal/node/node.go:526-551`).
+Status codes: no read permission 403, absent or invalid `addr` 400, missing peer 404. tsnet has no `WhoIs` method and uses `LocalClient().WhoIs`. A 404 becomes `ErrPeerNotFound` (`tailscale.com/client/local/local.go:353-362`). The first adopter reads only `Node.StableID` (required, reject if absent), the first label of `Node.Name` (or `ComputedName` if empty), and `UserProfile.LoginName` (RemoteDebug `core/internal/node/node.go:526-551`).
 
-### 4.9 [M7] ts.net 인증서
+### 4.9 [M7] ts.net Certificates
 
-1. 저장 위치(`tailscale.com/feature/acme/certstore.go:64-104`, `:247-261`): 상태 저장소가 FileStore나 메모리 저장소면 `<varRoot>/certs/`(0700) 아래 파일. 그 밖의 저장소이고 Kubernetes 환경이면 상태 저장소 안의 같은 이름 키. varRoot가 비면 실패. tsnet은 varRoot = `Dir`이다(`tsnet.go:848-862`, `:984`).
+1. Storage location (`tailscale.com/feature/acme/certstore.go:64-104`, `:247-261`). With FileStore or in-memory state storage, use files in `<varRoot>/certs/` (0700). With another store in Kubernetes, use keys of the same names in the state store. Empty varRoot fails. tsnet uses varRoot = `Dir` (`tsnet.go:848-862`, `:984`).
 
-   | 파일 | 내용 | 권한 |
+   | File | Contents | Permissions |
    | --- | --- | --- |
-   | `<도메인>.key` | 인증서 개인 키, PEM `EC PRIVATE KEY`(SEC1, P-256) | 0600 |
-   | `<도메인>.crt` | 체인, PEM `CERTIFICATE` 블록 나열 | 0644 |
-   | `acme-account.key.pem` | ACME 계정 키, PEM `EC PRIVATE KEY`(P-256) | 0600 |
+   | `<domain>.key` | Certificate private key, PEM `EC PRIVATE KEY` (SEC1, P-256) | 0600 |
+   | `<domain>.crt` | Chain, series of PEM `CERTIFICATE` blocks | 0644 |
+   | `acme-account.key.pem` | ACME account key, PEM `EC PRIVATE KEY` (P-256) | 0600 |
 
-   와일드카드의 `*.`는 파일 이름에서 `wildcard_.`(`certstore.go:116-169`, `:284-330`, `:361-389`).
-2. 호출 경로: `LocalClient.CertPair` → `GET /localapi/v0/cert/<도메인>?type=pair&min_validity=` → 개인 키 PEM 뒤에 인증서 PEM(`client/local/cert.go:102-135`, `ipn/localapi/cert.go:21-70`). 이 로컬 API 핸들러의 빌드 태그는 `!ios && !android && !js && !ts_omit_acme`다(`ipn/localapi/cert.go:4`). `feature/acme` 자체는 iOS에도 링크되지만 tsnet의 TLS는 로컬 API를 거치므로 iOS에서 Go tsnet의 `ListenTLS`는 인증서를 얻지 못한다(`tsnet/maybe_acme.go:4`, `tsnet.go:1505-1511`에서의 추론).
-3. `GetCertificate`: SNI가 없으면 오류, 점이 없으면 `CertDomains`에서 그 이름으로 시작하고 다음이 점인 항목으로 확장, 1분 제한(`client/local/cert.go:162-205`). `ListenTLS`는 `tcp`만 받고, `Up`이 끝날 때까지 기한 없이 기다린 뒤 `MagicDNSEnabled`와 비지 않은 `CertDomains`를 요구한다. `min_validity=0`이라 핸드셰이크는 캐시를 받고 갱신은 비동기다(`tsnet.go:1458-1481`). 첫 사용처는 `ListenTLS` 대신 `Listen` + `tls.NewListener(GetCertificate)`를 쓰고 `CertPair`로 예열한다(30초부터 10분까지 늘려 재시도)(RemoteDebug `core/internal/node/tls.go:22-51`, `node.go:825-859`).
-4. 발급(`feature/acme/cert.go:81-168`, `:345-447`, `:487-654`):
-   1. 끝 점을 떼고 이름을 검사한다(점 필수, `..`·`:`·`/`·`\`·NUL 금지, `*`는 `*.`로 시작할 때만)(`:96-100`, `:662-678`).
-   2. netmap 필요. `CertDomains`에 정확히 있는 이름만(BYO Funnel 도메인은 예외). `*.<도메인>`은 `dns-subdomain-resolve` 능력이 필요(`:689-728`).
-   3. 저장된 쌍을 읽어 `DNSName`과 현재 시각으로 체인 검증(시스템 루트 → 내장 Let's Encrypt 루트)(`certstore.go:135-154`, `:411-474`).
-   4. 갱신 판정: `min_validity`가 0이 아니면 남은 기간이 그보다 짧을 때 동기 갱신. 0이면 ARI 제안 구간의 무작위 시각이 지났을 때(ARI 조회 5초 실패 시 수명의 2/3 지점) 도메인별로 하나씩 비동기 갱신하고 현재 것을 돌려준다(`:138-251`, `:306-340`).
-   5. 계정 키(없으면 P-256 생성·저장), 디렉터리 기본 `https://acme-v02.api.letsencrypt.org/directory`(`TS_DEBUG_ACME_DIRECTORY_URL`로 바꿈), HTTP는 `http.DefaultClient`(`certstore.go:361-404`, `tempfork/acme/acme.go:47`, `tempfork/acme/http.go:264-269`). `GetReg` → 없으면 `Register` → `valid` 확인(`cert.go:386-392`, `:451-473`).
-   6. 주문(이전 인증서가 있으면 ARI `replaces`) → 권한마다 DNS-01(TLS-ALPN-01은 :443 Funnel + 이전 인증서 또는 BYO Funnel일 때만)(`:253-275`, `:394-446`, `:515-536`).
-   7. DNS-01: TXT 값 = `base64url(SHA-256(token + "." + JWK 지문))`(패딩 없음), 이름 = `_acme-challenge.<도메인>`. 시스템 리졸버로 500ms 안에 이미 있는지 보고, 없으면 제어에 노이즈 채널 `POST /machine/set-dns`, JSON `SetDNSRequest{Version, NodeKey, Name, Type: "TXT", Value}`(Version은 `CurrentCapabilityVersion`으로 채워진다). 200이 아니면 오류, 200이면 `{}`를 해독(`:615-654`, `tempfork/acme/acme.go:591-598`, `local.go:7809-7839`, `direct.go:1758-1781`, `tailcfg.go:2595-2621`). 그 뒤 `Accept`.
-   8. `WaitOrder` → 새 P-256 키, CSR(`CN`·SAN = 도메인) → `CreateOrderCert(bundle=true)` → 키 파일, 인증서 파일 순으로 저장(`:563-613`, `certstore.go:164-169`, `:305-330`).
-5. 백그라운드 갱신 루프(1시간, 첫 회 즉시): 상태가 `Running`이고 serve 설정에 Web 항목이나 `TerminateTLS`가 있을 때만 돈다. `Listen`·`ListenTLS`·`ListenFunnel`만 쓰면 돌지 않고, `ListenService`(HTTP 모드·`TerminateTLS`)를 쓰면 돈다. `TS_CERT_SHARE_MODE=ro`면 발급·갱신하지 않는다(`feature/acme/refresh.go:21-76`, `:134-155`, `tsnet.go:2007-2039`, `cert.go:123-125`).
+   A wildcard `*.` becomes `wildcard_.` in a filename (`certstore.go:116-169`, `:284-330`, `:361-389`).
+2. Call path: `LocalClient.CertPair` → `GET /localapi/v0/cert/<domain>?type=pair&min_validity=` → certificate PEM after private key PEM (`client/local/cert.go:102-135`, `ipn/localapi/cert.go:21-70`). The local API handler's build tag is `!ios && !android && !js && !ts_omit_acme` (`ipn/localapi/cert.go:4`). `feature/acme` itself also links on iOS, but tsnet TLS goes through the local API, so Go tsnet `ListenTLS` cannot obtain a certificate on iOS (inference from `tsnet/maybe_acme.go:4`, `tsnet.go:1505-1511`).
+3. `GetCertificate`. Missing SNI is an error. A name without dots expands to a `CertDomains` entry starting with the name followed by a dot. Timeout is 1 minute (`client/local/cert.go:162-205`). `ListenTLS` accepts only `tcp`, waits indefinitely for `Up`, and then requires `MagicDNSEnabled` and nonempty `CertDomains`. With `min_validity=0`, the handshake uses the cached certificate and renewal is asynchronous (`tsnet.go:1458-1481`). The first adopter uses `Listen` + `tls.NewListener(GetCertificate)` in place of `ListenTLS` and prewarms with `CertPair` (retries increasing from 30 seconds to 10 minutes) (RemoteDebug `core/internal/node/tls.go:22-51`, `node.go:825-859`).
+4. Issuance (`feature/acme/cert.go:81-168`, `:345-447`, `:487-654`):
+   1. Remove the trailing dot and validate the name (requires a dot, prohibits `..`, `:`, `/`, `\`, and NUL, permits `*` only in an initial `*.`) (`:96-100`, `:662-678`).
+   2. Requires a netmap. Only exact names in `CertDomains` (except BYO Funnel domains). `*.<domain>` requires `dns-subdomain-resolve` (`:689-728`).
+   3. Read the stored pair and validate the chain using `DNSName` and current time (system roots → bundled Let's Encrypt roots) (`certstore.go:135-154`, `:411-474`).
+   4. Renewal decision. With nonzero `min_validity`, renew synchronously when remaining lifetime is shorter. For 0, once a random time in the suggested ARI window has passed (2/3 of lifetime if the 5-second ARI lookup fails), renew asynchronously once per domain and return the current certificate (`:138-251`, `:306-340`).
+   5. Account key (generate and save P-256 if absent), default directory `https://acme-v02.api.letsencrypt.org/directory` (override with `TS_DEBUG_ACME_DIRECTORY_URL`), HTTP uses `http.DefaultClient` (`certstore.go:361-404`, `tempfork/acme/acme.go:47`, `tempfork/acme/http.go:264-269`). `GetReg` → `Register` if absent → check `valid` (`cert.go:386-392`, `:451-473`).
+   6. Order (ARI `replaces` if a previous certificate exists) → DNS-01 for each authorization (TLS-ALPN-01 only for :443 Funnel + previous certificate, or BYO Funnel) (`:253-275`, `:394-446`, `:515-536`).
+   7. DNS-01. TXT value = `base64url(SHA-256(token + "." + JWK thumbprint))` (no padding), name = `_acme-challenge.<domain>`. Check whether it already exists via the system resolver within 500ms. If absent, send `POST /machine/set-dns` on the Noise channel to the control server with JSON `SetDNSRequest{Version, NodeKey, Name, Type: "TXT", Value}` (Version is `CurrentCapabilityVersion`). A non-200 is an error, and 200 decodes `{}` (`:615-654`, `tempfork/acme/acme.go:591-598`, `local.go:7809-7839`, `direct.go:1758-1781`, `tailcfg.go:2595-2621`). Then call `Accept`.
+   8. `WaitOrder` → new P-256 key and CSR (`CN` and SAN = domain) → `CreateOrderCert(bundle=true)` → save key file, then certificate file (`:563-613`, `certstore.go:164-169`, `:305-330`).
+5. Background renewal loop (1 hour, first run immediately). Runs only in `Running` with a Web entry or `TerminateTLS` in serve settings. Using only `Listen`, `ListenTLS`, or `ListenFunnel` leaves it off. `ListenService` (HTTP mode or `TerminateTLS`) enables it. `TS_CERT_SHARE_MODE=ro` disables issuance and renewal (`feature/acme/refresh.go:21-76`, `:134-155`, `tsnet.go:2007-2039`, `cert.go:123-125`).
 
-### 4.10 [M6·M7] tsnet 표면 요약
+### 4.10 [M6·M7] tsnet API Summary
 
-| 호출 | 요지 | 출처 |
+| Call | Summary | Origin |
 | --- | --- | --- |
-| `Up` | 버스를 초기 상태와 함께 구독, `Running`이면 `Status` 반환, `ErrMessage`면 실패, `NeedsLogin`·`NeedsMachineAuth`는 계속 대기. 첫 `Up`에서 serve 설정을 비운다 | `tsnet.go:573-636` |
+| `Up` | Subscribe to the bus including initial state, return `Status` on `Running`, fail on `ErrMessage`, continue waiting on `NeedsLogin` or `NeedsMachineAuth`. Clear serve settings on first `Up` | `tsnet.go:573-636` |
 | `Status` | `ipnstate.Status`: `Version`, `TUN`, `BackendState`, `HaveNodeKey`, `AuthURL`, `TailscaleIPs`, `Self`, `ExitNodeStatus`, `Health`, `MagicDNSSuffix`, `CurrentTailnet`, `CertDomains`, `Peer`, `User`, `ClientVersion` | `ipn/ipnstate/ipnstate.go:32-91` |
-| `WatchIPNBus` | `Notify` JSON 스트림(`State`, `ErrMessage`, `BrowseToURL`, `LoginFinished`, `Prefs`, `InitialStatus` 등) | `client/local/local.go:1516-1544`, `ipn/backend.go:84-227`, `:335-509` |
-| `StartLoginInteractive` | 유효한 URL이 있으면 바로 알림, 없으면 대화형 로그인 요청 | `local.go:4798-4839` |
+| `WatchIPNBus` | `Notify` JSON stream (`State`, `ErrMessage`, `BrowseToURL`, `LoginFinished`, `Prefs`, `InitialStatus`, etc.) | `client/local/local.go:1516-1544`, `ipn/backend.go:84-227`, `:335-509` |
+| `StartLoginInteractive` | Notify immediately if a valid URL exists, otherwise request interactive login | `local.go:4798-4839` |
 
-## 5. 상수와 타이머
+## 5. Constants and Timers
 
-| 이름 | 값 | 출처 |
+| Name | Value | Origin |
 | --- | --- | --- |
-| [M5] 서비스 IP | `100.100.100.100`, `fd7a:115c:a1e0::53` | `tailscale.com/net/tsaddr/tsaddr.go:52-68` |
-| [M5] 4to6 범위 | `fd7a:115c:a1e0:ab12:4843:cd96:6200::/104` | `tsaddr.go:104-110` |
-| [M5] 로컬 응답 TTL(A·AAAA·PTR) | 5초 | `tsdns.go:58` |
+| [M5] Service IP | `100.100.100.100`, `fd7a:115c:a1e0::53` | `tailscale.com/net/tsaddr/tsaddr.go:52-68` |
+| [M5] 4to6 range | `fd7a:115c:a1e0:ab12:4843:cd96:6200::/104` | `tsaddr.go:104-110` |
+| [M5] Local reply TTL (A, AAAA, PTR) | 5 seconds | `tsdns.go:58` |
 | [M5] SOA TTL·REFRESH·RETRY·EXPIRE·MINIMUM | 10 | `tsdns.go:68`, `:1186-1198` |
-| [M5] UDP 기본 최대(EDNS 없음) | 512바이트 | `forwarder.go:228` |
-| [M5] 동시 DNS 질의 | 256 | `manager.go:60` |
-| [M5] 서비스 IP UDP 읽기 기한 | 150ms | `netstack.go:2085` |
-| [M5] DNS TCP 유휴·최대 요청 | 45초·4096바이트 | `manager.go:682`, `:687` |
-| [M5] 질의 전체 제한(전달) | 10초 | `tsdns.go:406` |
-| [M5] 전달 응답 최대 | 4095바이트(버퍼 4096) | `tsdns.go:50` |
-| [M5] 이름 포인터 최대 | 10 | `golang.org/x/net@v0.60.0/dns/dnsmessage/message.go:2097` |
-| [M5] TUN MTU 기본 | 1280 | `tailscale.com/net/tstun/mtu.go:79` |
-| [M5] `netmon` 최소 확인 간격 | 1초 | `netmon.go:627` |
-| [M5] 큰 시계 점프(iOS는 감시 안 함) | 10분 | `netmon.go:42`, `:726` |
-| [M5] Rebind 뒤 DERP 핑 | 3초 | `derp.go:923` |
-| [M5] 로그인 URL 재사용 | 6일 23시간 | `local.go:4822` |
-| [M5] 빈 기본 설정 재시도(Apple 아님) | 1초부터 2배, 6회 | `manager.go:54-55` |
-| [M6] 진행 중 연결 상한 | 모바일 1024, Linux 8192, 그 밖 2048, 원격 IP당 2/3 | `netstack.go:85-120` |
-| [M6] `Accept` 전달 대기 | 1초 | `tsnet.go:2412` |
-| [M6] 임시 포트 | 10002~19999 | `tsnet.go:2110-2113` |
-| [M6] 다이얼 경쟁 간격 | 300ms | `tsdial.go:643` |
-| [M7] 인증서 갱신 루프 | 1시간(첫 회 즉시), 호출당 2분 | `refresh.go:21`, `:84-132` |
-| [M7] ARI 실패 시 갱신 지점 | 수명의 2/3 | `cert.go:248` |
-| [M7] ARI 조회·TXT 사전 조회 | 5초·500ms | `cert.go:306-340`, `:615-636` |
-| [M7] `GetCertificate` 제한 | 1분 | `client/local/cert.go:162-205` |
+| [M5] Default UDP maximum (without EDNS) | 512 bytes | `forwarder.go:228` |
+| [M5] Concurrent DNS queries | 256 | `manager.go:60` |
+| [M5] Service IP UDP read deadline | 150ms | `netstack.go:2085` |
+| [M5] DNS TCP idle time and maximum request | 45 seconds and 4096 bytes | `manager.go:682`, `:687` |
+| [M5] Overall query timeout (forwarding) | 10 seconds | `tsdns.go:406` |
+| [M5] Maximum forwarded response | 4095 bytes (4096-byte buffer) | `tsdns.go:50` |
+| [M5] Maximum name pointers | 10 | `golang.org/x/net@v0.60.0/dns/dnsmessage/message.go:2097` |
+| [M5] Default TUN MTU | 1280 | `tailscale.com/net/tstun/mtu.go:79` |
+| [M5] Minimum `netmon` check interval | 1 second | `netmon.go:627` |
+| [M5] Large clock jump (unmonitored on iOS) | 10 minutes | `netmon.go:42`, `:726` |
+| [M5] DERP ping after Rebind | 3 seconds | `derp.go:923` |
+| [M5] Login URL reuse | 6 days and 23 hours | `local.go:4822` |
+| [M5] Retry on empty base configuration (non-Apple) | Double from 1 second, 6 attempts | `manager.go:54-55` |
+| [M6] In-progress connection limit | Mobile 1024, Linux 8192, others 2048, 2/3 per remote IP | `netstack.go:85-120` |
+| [M6] `Accept` delivery wait | 1 second | `tsnet.go:2412` |
+| [M6] Ephemeral ports | 10002~19999 | `tsnet.go:2110-2113` |
+| [M6] Dial race interval | 300ms | `tsdial.go:643` |
+| [M7] Certificate renewal loop | 1 hour (first run immediately), 2 minutes per call | `refresh.go:21`, `:84-132` |
+| [M7] Renewal point on ARI failure | 2/3 of lifetime | `cert.go:248` |
+| [M7] ARI lookup and preliminary TXT lookup | 5 seconds and 500ms | `cert.go:306-340`, `:615-636` |
+| [M7] `GetCertificate` timeout | 1 minute | `client/local/cert.go:162-205` |
 
-## 6. Swiftail에 필요한 최소 부분과 생략할 수 있는 부분
+## 6. Minimum Swiftail Requirements and Optional Parts
 
-### 6.1 M5 — iOS 패킷 터널
+### 6.1 M5 — iOS Packet Tunnel
 
-필요한 최소 구현
-1. DNS 설정 산출: 4.1.4의 1~7. 결과를 `TunnelNetworkSettings.dnsServers`·`dnsMatchDomains`로 낸다.
-2. 응답기: 3.1의 바이트 형식(머리, 질문 하나, 포인터를 따르는 이름 읽기, 압축 없는 쓰기)과 RCODE 표, 4.2.1 색인 규칙, 4.2.2의 1~3·5·6, 4.2.3의 SERVFAIL, 4.2.4의 TC 검사.
-3. 서비스 IP 가로채기: 4.3 권고(UDP 53 응답, echo 응답, 나머지 버림).
-4. 상태: 기존 `identity.json`을 App Group 경로·파일 보호 등급과 함께 쓰기, 같은 디렉터리 중복 시작 거절(4.4.3).
-5. 상태 기계: 4.5 표(netmap·`MachineAuthorized`·`KeyExpiry`·라이브 여부)와 `NodeState` 대응. 키 만료·`NeedsLogin`이면 DNS·주소를 빈 설정으로 되돌린다.
-6. 네트워크 전환: 4.6 끝의 권고와 [disco-magicsock.md](disco-magicsock.md) 4.11, 소켓 결속(4.6.4).
+Minimum implementation
+1. DNS settings derivation. Steps 1~7 of §4.1.4. Emit results as `TunnelNetworkSettings.dnsServers` and `dnsMatchDomains`.
+2. Responder. Byte format (header, one question, reading names with pointers, writing without compression) and RCODE table in §3.1, index rules in §4.2.1, steps 1~3, 5, and 6 in §4.2.2, SERVFAIL in §4.2.3, TC check in §4.2.4.
+3. Service IP interception. §4.3 recommendation (reply to UDP 53 and echo, drop the rest).
+4. State. Use existing `identity.json` with the App Group path and file protection class. Reject duplicate starts in the same directory (§4.4.3).
+5. State machine. §4.5 table (netmap, `MachineAuthorized`, `KeyExpiry`, liveness) and `NodeState` mapping. Return DNS and addresses to empty settings on key expiry or `NeedsLogin`.
+6. Network switching. Recommendations at the end of §4.6 and in [disco-magicsock.md](disco-magicsock.md) §4.11, and socket binding (§4.6.4).
 
-생략 가능(근거)
-- 상위 전달 전체(라우트 선택, UDP·TCP·DoH, 응답 집계): match 도메인만 주면 OS가 tailnet 밖 이름을 quad-100에 보내지 않는다(4.2.3). 첫 사용처도 전달하지 않는다.
-- `GetBaseConfig`와 1차 리졸버 모드(4.1.3 3·5행): 결정 D2.
-- TCP 53: 로컬 응답은 TC가 서지 않는다(4.2.4). 결정 D4.
-- 4via6 이름, 서브도메인 규칙(`dns-subdomain-resolve`), `.onion`(한 줄이라 넣어도 된다), `FallbackResolvers`·`ExitNodeFilteredSet`·`Nameservers`(4.1.1).
-- Go 상태 파일 형식(3.2): M7.
+Optional parts and reasons
+- All upstream forwarding (route selection, UDP, TCP, DoH, response aggregation). With only match domains, the OS does not send names outside the tailnet to quad-100 (§4.2.3). The first adopter also skips forwarding.
+- `GetBaseConfig` and primary resolver mode (§4.1.3 rows 3 and 5). Decision D2.
+- TCP 53. Local replies leave TC clear (§4.2.4). Decision D4.
+- 4via6 names, subdomain rules (`dns-subdomain-resolve`), `.onion` (one line, so it could be included), `FallbackResolvers`, `ExitNodeFilteredSet`, and `Nameservers` (§4.1.1).
+- Go state file format (§3.2). M7.
 
-### 6.2 M6 — 프로세스 내 리스너·다이얼
+### 6.2 M6 — In-Process Listeners and Dialing
 
-필요한 최소 구현: 4.7.1의 수신 경로(필터 뒤 수신, 리스너 조회 4단계, 리스너 없으면 RST, `Accept` 1초, 진행 중 연결 상한, keepalive), `Listen`의 정규화·임시 포트·중복 오류, 4.7.2의 다이얼(이름은 MagicDNS 색인으로, quad-100을 거치지 않음, 출발지 자기 IP). Accept 시점의 연결 상태(핸드셰이크 완료 여부)는 M6 계약에서 정한다(Go는 미완료 상태로 넘긴다).
+The minimum implementation includes the §4.7.1 inbound path (receive after filtering, 4-step listener lookup, RST without a listener, 1 second for `Accept`, in-progress connection limits, keepalive), `Listen` normalization, ephemeral ports and duplicate errors, and §4.7.2 dialing (MagicDNS index for names, bypass quad-100, local IP as source). The M6 contract determines the connection state at Accept (whether the handshake is complete). Go hands it off before completion.
 
-생략 가능: `ListenPacket`, `ListenTLS`/Funnel/Service, 서브넷, PeerAPI·SSH·웹 클라이언트(`TCPHandlerForDst`), `ProxyMapper`.
+Optional parts are `ListenPacket`, `ListenTLS`/Funnel/Service, subnets, PeerAPI, SSH, and web client (`TCPHandlerForDst`), and `ProxyMapper`.
 
-### 6.3 M7 — 첫 사용처 대체 검증
+### 6.3 M7 — Verification of Replacement at the First Adopter
 
-필요한 최소 구현
-- `whoIs`: 4.8의 1·2·4와 `Node`·`UserProfile` 반환. 첫 사용처가 읽는 것은 `StableID`, `Name`(또는 `ComputedName`), `LoginName`.
-- 인증서: 4.9 4의 1~8(DNS-01만), 1의 파일 형식, 요청 시 갱신 판정(2/3 규칙으로 충분). 필요한 부품: ACME(RFC 8555) 클라이언트, ES256 JWS, P-256 키·SEC1 PEM, PKCS#10 CSR, X.509 체인 검증, 제어 `set-dns`, 도메인별 잠금. ACME HTTP 요청의 결속 정책은 따로 정한다(Go는 OS 기본 경로).
-- Go 상태 파일 이관: 3.2의 `_machinekey`와 `_current-profile` → `profile-<id>` → `Config.PrivateNodeKey`(필요하면 `OldPrivateNodeKey`)만 읽으면 Swiftail `identity.json`을 만들 수 있다. 값은 base64를 푼 뒤 `privkey:` + hex.
+Minimum implementation
+- `whoIs`. §4.8 steps 1, 2, and 4, returning `Node` and `UserProfile`. The first adopter reads `StableID`, `Name` (or `ComputedName`), and `LoginName`.
+- Certificates. §4.9 item 4 steps 1~8 (DNS-01 only), file format in item 1, and renewal decisions on request (2/3 rule is sufficient). Required parts are an ACME (RFC 8555) client, ES256 JWS, P-256 keys and SEC1 PEM, PKCS#10 CSR, X.509 chain verification, control server `set-dns`, and per-domain locking. Determine the binding policy for ACME HTTP requests separately (Go uses the OS default route).
+- Go state file migration. Create Swiftail `identity.json` by reading only `_machinekey` and `_current-profile` → `profile-<id>` → `Config.PrivateNodeKey` (and `OldPrivateNodeKey` if needed) from §3.2. After base64 decoding, values are `privkey:` + hex.
 
-생략 가능: ARI·`replaces`, 와일드카드, TLS-ALPN-01, 백그라운드 루프, Kubernetes 저장소, 프로필 여럿.
+Optional parts are ARI and `replaces`, wildcards, TLS-ALPN-01, the background loop, Kubernetes storage, and multiple profiles.
 
-### 6.4 M5 계약에서 총괄이 정할 결정
+### 6.4 M5 Contract Decisions for the Lead Session
 
-| # | 결정 | 선택지 | 권고 |
+| # | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| D1 | DNS를 OS에 주는 방식 | (가) match 도메인만(Go 4행, 첫 사용처) / (나) Go 그대로 1차 리졸버 모드까지 | (가). (나)는 상위 전달과 NE 안에서 OS 기본 리졸버를 읽는 방법이 필요한데 후자는 확인하지 못했다(8장) |
-| D2 | `DNSConfig.Resolvers`(전역 네임서버)·리졸버가 있는 `Routes`(사용자 지정 분할 DNS)가 올 때 | (가) 무시하고 로컬 영역만 match(첫 사용처) / (나) 그 접미사도 match에 넣고 SERVFAIL / (다) 전달 구현 | (가). 지원하지 않음을 계약과 상태에 기록한다. 해당 이름은 OS 기본 DNS로 간다 |
-| D3 | 검색 도메인(`Domains`)과 `matchDomainsNoSearch` | (가) 내지 않음, 앱은 `matchDomainsNoSearch = true`(첫 사용처. 짧은 이름은 풀리지 않음) / (나) `TunnelNetworkSettings`에 검색 도메인 필드 추가 | (가). Go 주석상 Apple 범위 지정 모드는 match 도메인을 검색 목록으로 쓰는데, 그러면 역방향 영역 65개도 검색 목록이 된다(8장) |
-| D4 | 서비스 IP TCP(53 포함) | (가) 조용히 버림 / (나) RST를 만들어 보냄 / (다) M6 TCP 스택 연결 | (나). Go도 53 밖의 포트는 RST다. 53은 M6 뒤 (다) |
-| D5 | 서비스 IP의 ICMP echo | 응답 / 버림 | 응답(Go와 같고 진단에 쓰인다) |
-| D6 | 링크 변경의 통지원 | (가) `setDefaultInterface`만 / (나) Swiftail 안에 `NWPathMonitor` | (가). 라이브러리는 NetworkExtension·Network 프레임워크 정책을 앱에 둔다(plan 6절). 이름이 같아도 앱이 다시 부르면 재평가한다(Go `InjectEvent`처럼) |
-| D7 | 피어 AAAA | Go 규칙(IPv4가 있으면 AAAA 없음, `magicdns-aaaa`면 허용) / 항상 AAAA | Go 규칙 |
-| D8 | 상태 디렉터리 | 첫 사용처의 Go 상태 파일과 같은 디렉터리 / 별도 | 별도 디렉터리. 이관은 M7 결정(6.3) |
-| D9 | `Running` 판정 | Go 규칙(핸드셰이크된 피어 또는 DERP 연결) / netmap 수신만 | Go 규칙. 피어가 없는 tailnet에서도 DERP로 `Running`이 된다 |
+| D1 | How to provide DNS to the OS | (a) Match domains only (Go row 4, first adopter) / (b) Follow Go including primary resolver mode | (a). (b) requires upstream forwarding and a way to read OS default resolvers inside NE. The latter is unverified (§8) |
+| D2 | Incoming `DNSConfig.Resolvers` (global name servers) and `Routes` with resolvers (custom split DNS) | (a) Ignore and match local zones only (first adopter) / (b) Include those suffixes in the match list and return SERVFAIL / (c) Implement forwarding | (a). Record the lack of support in the contract and state. Those names go to OS default DNS |
+| D3 | Search domains (`Domains`) and `matchDomainsNoSearch` | (a) Omit, app sets `matchDomainsNoSearch = true` (first adopter. Short names do not resolve) / (b) Add a search domains field to `TunnelNetworkSettings` | (a). Go comments say Apple scoped mode uses match domains as the search list, which would include all 65 reverse zones (§8) |
+| D4 | Service IP TCP (including 53) | (a) Drop silently / (b) Generate and send RST / (c) Connect M6 TCP stack | (b). Go also sends RST for ports other than 53. Use (c) for 53 after M6 |
+| D5 | Service IP ICMP echo | Reply / Drop | Reply (matches Go and supports diagnostics) |
+| D6 | Link-change notification source | (a) `setDefaultInterface` only / (b) `NWPathMonitor` inside Swiftail | (a). The library leaves NetworkExtension and Network framework policy to the app (plan §6). Reevaluate when called again even with the same name (like Go `InjectEvent`) |
+| D7 | Peer AAAA | Go rules (no AAAA if IPv4 exists unless `magicdns-aaaa` permits it) / Always AAAA | Go rules |
+| D8 | State directory | Same directory as the first adopter's Go state file / Separate | Separate directory. Migration is an M7 decision (§6.3) |
+| D9 | `Running` determination | Go rules (peer with completed handshake or DERP connection) / Receipt of netmap alone | Go rules. DERP permits `Running` even in a tailnet without peers |
 
-## 7. 상호 운용 시험에서 확인할 것
+## 7. Interop Test Checks
 
-아래는 실행하지 않은 계획이다.
+These plans were unexecuted.
 
-M5 DNS(메모리 TUN, Go 노드와 비교)
-1. 설정 산출: MagicDNS 켬·끔, `ExtraRecords`(라우트로 덮임·안 덮임), 빈 라우트, 리졸버가 있는 라우트, 전역 `Resolvers`, IPv4 전용·IPv6 전용 노드, `force-register-magicdns-ipv4-only`. Go `dns.NewManager(goos "ios")`의 `OSConfig`와 4.1.4 결과를 나란히 기록한다(첫 사용처의 시험 `docs/tunnel.md:175-176`과 같은 방식).
-2. `100.100.100.100:53`·`[fd7a:115c:a1e0::53]:53`에 A, AAAA, ANY, PTR(IPv4·IPv6·4to6·서비스 IP), NS, SOA, TXT, 모르는 타입을 보내 Go와 바이트 단위 비교: RCODE, AA, RA(RD 0·1), TTL, SOA 유무·내용(SERIAL 제외), 질문 대소문자 보존.
-3. 짧은 이름, FQDN, 대소문자 섞인 이름, 끝 점 없는 이름, 주소 없는 노드, 영역 밖 이름(SERVFAIL), `.onion`, Bonjour 역방향 이름, 질문 0개·2개, QR=1, 포인터 압축된 질문, 잘못된 레이블(FORMERR).
-4. EDNS(`+bufsize=4096`)에서 응답에 OPT가 없음, 512바이트 경계 TC.
-5. 서비스 IP: UDP 다른 포트 무응답, TCP RST(D4), ICMP·ICMPv6 echo 응답, 어떤 패킷도 WireGuard로 나가지 않음.
+M5 DNS (in-memory TUN, compared with a Go node)
+1. Settings derivation. MagicDNS on and off, `ExtraRecords` covered and uncovered by routes, empty routes, routes with resolvers, global `Resolvers`, IPv4-only and IPv6-only nodes, and `force-register-magicdns-ipv4-only`. Record Go `dns.NewManager(goos "ios")`'s `OSConfig` alongside §4.1.4 results (same approach as the first adopter's test in `docs/tunnel.md:175-176`).
+2. Send A, AAAA, ANY, PTR (IPv4, IPv6, 4to6, service IP), NS, SOA, TXT, and unknown types to `100.100.100.100:53` and `[fd7a:115c:a1e0::53]:53` and compare byte for byte with Go. Check RCODE, AA, RA (RD 0 and 1), TTL, SOA presence and contents (except SERIAL), and question case preservation.
+3. Short names, FQDNs, mixed case, names without a trailing dot, nodes without addresses, names outside the zone (SERVFAIL), `.onion`, Bonjour reverse names, 0 or 2 questions, QR=1, pointer-compressed questions, and invalid labels (FORMERR).
+4. EDNS (`+bufsize=4096`) with no OPT in response, TC at the 512-byte boundary.
+5. Service IP. No response on other UDP ports, TCP RST (D4), ICMP and ICMPv6 echo replies, no packets going to WireGuard.
 
-M5 상태·전환
-6. 같은 디렉터리로 다시 시작하면 `NeedsLogin` 없이 같은 IP, 새 디렉터리면 다른 IP(첫 사용처 `docs/tunnel.md:163`). 키 만료 → `NeedsLogin`과 DNS·주소 제거, 머신 미승인 → `NeedsMachineAuth`, 피어 없는 tailnet에서 DERP만으로 `Running`.
-7. 실기기 Wi-Fi ↔ 셀룰러, 비행기 모드 해제: DERP 재연결·UDP 재결속·제어 재연결까지의 시간, 전환 뒤 FQDN 해석.
+M5 state and switching
+6. Restart in the same directory gives the same IP without `NeedsLogin`. A new directory gives a different IP (first adopter `docs/tunnel.md:163`). Key expiry → `NeedsLogin` and removal of DNS and addresses, unauthorized machine → `NeedsMachineAuth`, DERP alone gives `Running` in a tailnet without peers.
+7. Wi-Fi ↔ cellular and disabling airplane mode on a real device. Measure time to DERP reconnection, UDP rebinding, and control reconnection, and check FQDN resolution after switching.
 
 M6·M7
-8. 리스너 없는 포트 RST, `Accept` 1초, 원격 IP당 상한, Accept 시점 상태(6.2).
-9. `whoIs`가 Go `LocalClient.WhoIs`와 같은 `Node.StableID`·`LoginName`을 돌려줌.
-10. Let's Encrypt 스테이징 디렉터리로 발급, 제어가 `set-dns`를 받는지(testcontrol `tstest/integration/testcontrol/testcontrol.go:605`), 갱신 판정.
-11. Go `tailscaled.state`에서 이관한 노드가 같은 IP로 올라오는지.
+8. RST on ports without a listener, 1 second for `Accept`, limit per remote IP, and state at Accept (§6.2).
+9. `whoIs` returns the same `Node.StableID` and `LoginName` as Go `LocalClient.WhoIs`.
+10. Issue through the Let's Encrypt staging directory and check whether control receives `set-dns` (testcontrol `tstest/integration/testcontrol/testcontrol.go:605`) and the renewal decision.
+11. Verify that a node migrated from Go `tailscaled.state` starts with the same IP.
 
-## 8. 확인하지 못한 것
+## 8. Unverified Items
 
-### 8.1 미확인 사실
+### 8.1 Unverified Facts
 
-- iOS 앱 쪽 Go 바깥 코드: Tailscale iOS 앱의 `OSConfigurator`(`SupportsSplitDNS`, `GetBaseConfig`)와 `OSConfig` → `NEDNSSettings` 변환은 기준 소스에 없다. `manager.go:361-366`, `:436-445`의 주석("Apple 확장은 1차 모드에서만 검색 도메인을 설치하고 범위 지정 모드에서는 match 도메인을 검색 목록으로 쓴다", "`NEDNSSettings.searchDomains`는 configd가 지운다")은 주석으로만 확인했다.
-- `NEDNSSettings.matchDomains`의 OS 동작(match 밖 이름을 터널 DNS로 보내지 않음, `matchDomainsNoSearch`)은 Apple 문서 항목에 근거해야 하며 이 검증에서 문서를 대조하지 않았다. NE 확장 안에서 OS 기본 리졸버를 읽는 방법도 확인하지 못했다(D1).
-- `selfExpired`일 때: 설정은 비지만 리졸버의 노드 색인 조회는 설정과 무관하다(`tsdns.go:756-759`). 다만 OS 경로·DNS가 빠지므로(4.5) quad-100으로 패킷이 오지 않는 것으로 보인다. 실행으로 확인하지 않았다.
-- 머신 키가 바뀐 노드를 제어 서버가 어떻게 다루는지, `NLKey`를 0으로 보내는 것의 영향(제어 노트의 몫).
-- `force-register-magicdns-ipv4-only`·`disable-split-dns-when-no-custom-resolvers`를 운영 제어 서버가 언제 주는지.
-- iOS에서 `AF_ROUTE` 소켓(`netmon_darwin.go`)이 확장 샌드박스에서 실제로 열리는지. Go는 `GOOS=ios`도 `darwin` 빌드 태그에 맞춘다는 Go 빌드 규칙에 기대고 있다.
-- `ProxyMapper`가 채워지는 정확한 조건, `InUseOtherUser`를 만드는 경로(Windows 전용으로 보임).
-- ACME: `tempfork/acme`의 JWS·논스·폴링 간격 세부, Let's Encrypt 속도 제한.
-- tsnet `Listen("")`(빈 network)으로 등록한 리스너를 수신 경로가 찾지 못하는 것은 코드 관찰이다(`tsnet.go:2117`, `:1238-1266`).
+- iOS app code outside Go. The reference sources omit the Tailscale iOS app's `OSConfigurator` (`SupportsSplitDNS`, `GetBaseConfig`) and `OSConfig` → `NEDNSSettings` conversion. The claims in comments at `manager.go:361-366`, `:436-445` (the Apple extension installs search domains only in primary mode and uses match domains as the search list in scoped mode, and configd clears `NEDNSSettings.searchDomains`) were verified only as comments.
+- OS behavior of `NEDNSSettings.matchDomains` (names outside the match list do not go to tunnel DNS, `matchDomainsNoSearch`) should be based on Apple's documentation, which this review did not check. How to read OS default resolvers inside the NE extension is also unverified (D1).
+- With `selfExpired`, settings are empty but resolver lookups in the node index are independent of settings (`tsdns.go:756-759`). Removing OS routes and DNS (§4.5) appears to prevent packets from reaching quad-100. This was unverified by execution.
+- How the control server handles a node with a changed machine key and the effect of sending zero `NLKey` (covered by the control notes).
+- When the production control server grants `force-register-magicdns-ipv4-only` and `disable-split-dns-when-no-custom-resolvers`.
+- Whether the `AF_ROUTE` socket (`netmon_darwin.go`) actually opens in the iOS extension sandbox. Go relies on the build rule that `GOOS=ios` also matches the `darwin` build tag.
+- Exact conditions for populating `ProxyMapper` and the path to `InUseOtherUser` (appears Windows-only).
+- ACME. JWS, nonce, and polling interval details in `tempfork/acme`, and Let's Encrypt rate limits.
+- The inbound path's failure to find a listener registered with tsnet `Listen("")` (empty network) is a code observation (`tsnet.go:2117`, `:1238-1266`).
 
-### 8.2 첫 사용처 요구 가운데 plan·계약에 아직 없는 것
+### 8.2 First Adopter Requirements Still Missing from the Plan and Contracts
 
-- 상태 파일의 파일 보호 등급·백업 제외·App Group 경로, 같은 상태 디렉터리 중복 시작 거절(4.4.3).
-- 설정 사건의 규칙: 주소가 없으면 내지 않음, 같으면 내지 않음, DNS만 바뀌어도 냄, 큐에는 최신 하나만(RemoteDebug `core/internal/tunnel/settings.go:125-142`, `core/internal/node/node.go:396-407`).
-- 엔진 종료(TUN 읽기 오류) → 오류 상태, stop 전까지 유지(`docs/tunnel.md:162`).
-- utun fd 처리: dup, close-on-exec, non-blocking, `UTUN_OPT_IFNAME`으로 `utun*` 확인, 호출자 fd를 닫지 않음(`core/internal/tunnel/utun_darwin.go:16-60`). MTU 1280~1420(기본 1280)과 상태의 mtu 보고(`docs/tunnel.md` 시험 10·11).
-- `setDefaultInterface` 이름 검사와 즉시 재평가(4.6.1).
-- `NeedsLogin`에서 URL·인증 키가 없을 때 30초 간격 대화형 로그인 재요청(4.5).
-- 상태에 노출되는 값: `CertDomains`, 자기 FQDN, 자기 `StableID`(페어링이 `StableID`에 묶인다, `docs/tunnel.md:28`).
+- State file protection class, backup exclusion, App Group path, and rejection of duplicate starts with the same state directory (§4.4.3).
+- Settings event rules. Skip emission with no addresses or unchanged settings, emit even for DNS-only changes, and keep only the latest entry in the queue (RemoteDebug `core/internal/tunnel/settings.go:125-142`, `core/internal/node/node.go:396-407`).
+- Engine exit (TUN read error) → error state, retained until stop (`docs/tunnel.md:162`).
+- utun fd handling. dup, close-on-exec, non-blocking, verify `utun*` with `UTUN_OPT_IFNAME`, leave caller fd open (`core/internal/tunnel/utun_darwin.go:16-60`). MTU 1280~1420 (default 1280) and reported mtu in state (`docs/tunnel.md` tests 10 and 11).
+- `setDefaultInterface` name validation and immediate reevaluation (§4.6.1).
+- Repeat interactive login requests every 30 seconds in `NeedsLogin` when URL and auth key are absent (§4.5).
+- Values exposed in state: `CertDomains`, local FQDN, and local `StableID` (pairing is tied to `StableID`, `docs/tunnel.md:28`).
 
-### 8.3 사실 정정 집계
+### 8.3 Factual Correction Tally
 
-같은 오류의 반복은 한 건으로 셌다. 출처 줄만 고친 것(12건)과 새로 채운 절은 세지 않았다.
+Repeated instances of the same error counted once. The tally excludes changes only to origin line references (12) and newly filled sections.
 
-| # | 고친 주장 | 확인 출처 |
+| # | Corrected claim | Verification origin |
 | --- | --- | --- |
-| 1 | 서비스 IP ICMP echo 처리는 확인하지 못함 → tstun 래퍼가 echo reply를 주입 | `tailscale.com/net/tstun/wrap.go:752-769` |
-| 2 | 모드 B만 구현해도 동작은 모드 A와 같다 → 모드 B는 quad-100을 모든 이름의 1차 리졸버로 만들어 상위 전달과 OS 기본 리졸버가 있어야 하며, 기본 리졸버가 비면 OS 설정 자체를 바꾸지 않는다 | `manager.go:463-525`, `:207-214` |
-| 3 | 로컬 응답은 512바이트를 넘지 않는다 → 압축이 없어 이론상 약 1,066바이트까지 가능, tailnet 영역에서는 넘지 않음 | `tsdns.go:1213-1218`, `:1177-1199` |
-| 4 | 이름이 있으면 주소가 비어도 "이름은 있음" → 주소가 하나도 없는 노드는 모르는 이름 | `node_backend.go:1205-1207` |
-| 5 | FORMERR는 모두 질문 없이 → 유효하지 않은 FQDN의 FORMERR는 질문 포함 | `tsdns.go:1222`, `:1461-1468` |
-| 6 | RA는 RD가 1일 때만 1 → RD가 0이면 질의의 RA 값이 그대로 남음(머리 전체 복사) | `tsdns.go:1009-1011`, `:1206-1208` |
-| 7 | `NewPrefs()` 기본값 목록에 `RouteAll` 없음 → iOS에서 `RouteAll=true`가 기본 | `ipn/prefs.go:756`, `:787-799` |
-| 8 | `InjectEvent`·`Poll` 모두 즉시 재계산 → `InjectEvent`만 상태가 같아도 통지를 강제 | `netmon.go:544-570`, `:640-648` |
-| 9 | 수락 연결은 핸드셰이크 완료 뒤 넘긴다 → 시작만 하고 넘긴다 | `netstack.go:1666-1720` |
-| 10 | iOS 최대 버퍼를 "줄이지 않고" → gVisor 최대(4MiB)가 다른 플랫폼보다 작으며 "올리지 않는" 것 | `gvisor/pkg/tcpip/transport/tcp/protocol.go:52`, `netstack_tcpbuf_ios.go:13-16` |
-| 11 | 인증서 갱신 루프는 tsnet에서 돌지 않는다 → `ListenService`(Web·`TerminateTLS`)를 쓰면 돈다 | `feature/acme/refresh.go:36`, `:134-155`, `tsnet.go:2007-2039` |
-| 12 | 인증서는 늘 `<varRoot>/certs/` → Kubernetes 환경의 비파일 저장소는 상태 저장소 키 | `feature/acme/certstore.go:83-104`, `:247-261` |
-| 13 | WhoIs: 포트 0이면 ProxyMapper를 건너뜀 → 실패. netmap 없음도 실패 | `local.go:1773-1802` |
-| 14 | `Server.Tun` 경로는 `tcp4`/`tcp6`만 → tsnet이 `tcp`·빈 값을 바꿔 줌 | `tsnet.go:2160-2180` |
-| 15 | 인증서 로컬 API 빌드 태그 `!ios && !android` → `!ios && !android && !js && !ts_omit_acme`, iOS Go tsnet `ListenTLS`는 인증서를 못 얻음 | `ipn/localapi/cert.go:4`, `tsnet/maybe_acme.go:4` |
-| 16 | 비동기 갱신은 한 번에 하나 → 도메인별 하나. `CertDomains`가 비어도 BYO Funnel 도메인은 통과 | `feature/acme/cert.go:212-221`, `:700`, `:723-725` |
+| 1 | Service IP ICMP echo handling unverified → tstun wrapper injects an echo reply | `tailscale.com/net/tstun/wrap.go:752-769` |
+| 2 | Implementing mode B alone gives the same behavior as mode A → Mode B makes quad-100 primary resolver for all names, requiring upstream forwarding and OS default resolvers. Empty default resolvers leave OS settings intact | `manager.go:463-525`, `:207-214` |
+| 3 | Local replies never exceed 512 bytes → Without compression, about 1,066 bytes are theoretically possible. Tailnet zones stay within 512 | `tsdns.go:1213-1218`, `:1177-1199` |
+| 4 | An existing name is known even when its addresses are empty → A node without any addresses has an unknown name | `node_backend.go:1205-1207` |
+| 5 | Every FORMERR omits the question → FORMERR for invalid FQDN includes the question | `tsdns.go:1222`, `:1461-1468` |
+| 6 | RA is 1 only when RD is 1 → If RD is 0, RA retains the query value (whole header copied) | `tsdns.go:1009-1011`, `:1206-1208` |
+| 7 | `RouteAll` absent from `NewPrefs()` defaults → iOS defaults to `RouteAll=true` | `ipn/prefs.go:756`, `:787-799` |
+| 8 | Both `InjectEvent` and `Poll` recompute immediately → Only `InjectEvent` forces notification even if state is equal | `netmon.go:544-570`, `:640-648` |
+| 9 | Accepted connection handed off after handshake completion → Handed off after merely starting the handshake | `netstack.go:1666-1720` |
+| 10 | iOS maximum buffer is left without reducing it → gVisor's maximum (4MiB) is smaller than on other platforms and is left without increasing it | `gvisor/pkg/tcpip/transport/tcp/protocol.go:52`, `netstack_tcpbuf_ios.go:13-16` |
+| 11 | Certificate renewal loop does not run in tsnet → Runs with `ListenService` (Web or `TerminateTLS`) | `feature/acme/refresh.go:36`, `:134-155`, `tsnet.go:2007-2039` |
+| 12 | Certificates always in `<varRoot>/certs/` → Non-file stores in Kubernetes use state store keys | `feature/acme/certstore.go:83-104`, `:247-261` |
+| 13 | WhoIs skips ProxyMapper for port 0 → Fails. Missing netmap also fails | `local.go:1773-1802` |
+| 14 | `Server.Tun` path accepts only `tcp4`/`tcp6` → tsnet rewrites `tcp` and the empty value | `tsnet.go:2160-2180` |
+| 15 | Certificate local API build tag `!ios && !android` → `!ios && !android && !js && !ts_omit_acme`. iOS Go tsnet `ListenTLS` cannot obtain a certificate | `ipn/localapi/cert.go:4`, `tsnet/maybe_acme.go:4` |
+| 16 | One asynchronous renewal at a time → One per domain. BYO Funnel domains pass even with empty `CertDomains` | `feature/acme/cert.go:212-221`, `:700`, `:723-725` |
