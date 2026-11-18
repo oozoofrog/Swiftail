@@ -8,7 +8,7 @@ import Foundation
 /// A storage failure. `CertificateManager` maps it to the same-named `CertificateError` case.
 enum CertificateStoreError: Error, Sendable, Equatable {
     /// Failed to create, open, write, or read `certs/`. Also covers an existing certs/ owned by another user or writable by the group or others
-    /// (behavior S1, H20). The message includes only the reason and error code, omitting paths, names, and keys (behavior K3).
+    /// (behavior S1, H20). The message includes the reason and, when available, an error code. It omits paths, names, and keys (behavior K3).
     case storage(String)
     /// `acme-account.key.pem` exists but could not be read as a P-256 key (RSA, corrupt, or over 64KiB). It is kept as is (behavior C4, H16).
     case accountKeyUnreadable

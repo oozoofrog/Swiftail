@@ -43,13 +43,13 @@ struct VerifiedCertificate: Sendable {
     let lifetime: CertificateLifetime
     /// The original chain as received (DER, leaf first). Write this to `<name>.crt` (behavior S6, same as Go).
     let receivedChain: [[UInt8]]
-    /// The chain for the TLS identity, with non-leaf self-signed certificates (roots) removed from the received chain (behavior S6).
+    /// The received chain for the TLS identity. Removes the evaluated trust anchor if present and always retains the leaf (behavior S6).
     /// This is `TailnetCertificate.chain`.
     let chain: [[UInt8]]
     /// The leaf private key.
     let privateKey: P256.Signing.PrivateKey
 
-    /// The minimum certificate lifetime (behavior X3 ⑤). A shorter lifetime makes renewal decisions run pointlessly.
+    /// The minimum certificate lifetime (behavior X3 ⑤). A shorter lifetime can cause pointless renewal attempts.
     static let minimumLifetime: TimeInterval = 3600
 
     /// Reads and verifies a PEM chain.
@@ -58,8 +58,8 @@ struct VerifiedCertificate: Sendable {
     /// ③ require a lifetime of at least 1 hour, and ④ require `SecTrust` acceptance (SSL server policy and `domain`, verification time `now`, `anchors`).
     /// On success, builds `chain` according to behavior S6.
     ///
-    /// `SecTrustEvaluateWithError` blocks the calling thread. Network fetching for missing intermediate certificates is disabled
-    /// (`SecTrustSetNetworkFetchAllowed`), so verification uses only the chain sent by the server.
+    /// `SecTrustEvaluateWithError` blocks the calling thread. The verifier disables network fetching for missing intermediates
+    /// with `SecTrustSetNetworkFetchAllowed` for both ACME responses and stored chains.
     ///
     /// - Parameter maximumByteCount: The PEM input limit (256KiB for ACME responses, 64KiB for disk files, behavior M).
     init(

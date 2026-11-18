@@ -40,7 +40,7 @@ struct ACMEHTTPResponse: Sendable, Equatable {
 
 /// The reason the transport received no response. There are no associated values, keeping URLs and bodies out of errors (contract behaviors K2 and K3).
 enum ACMETransportError: Error, Sendable, Equatable {
-    /// The connection failed or dropped in progress. This includes TLS server verification failures.
+    /// The connection could not be established or dropped mid-request. This includes TLS server verification failures.
     case network
     /// The per-request deadline (30 seconds, contract behavior C10) elapsed.
     case timedOut

@@ -36,7 +36,7 @@ extension AuthorityState {
         return details
     }
 
-    /// Go `State.GetKey` searches from the beginning and fails immediately if it first encounters a key without a KeyID (a kind other than `Key25519`).
+    /// Go `State.GetKey` searches from the beginning and fails immediately if it encounters a key without a KeyID (a kind other than `Key25519`) before finding a match.
     private func trustedKey(withID keyID: [UInt8]) -> TrustedKey? {
         for key in keys {
             guard let candidate = key.keyID else { return nil }
@@ -47,7 +47,7 @@ extension AuthorityState {
 }
 
 extension NodeKeySignature {
-    /// The signing key for a rotation that wraps this signature (Go `wrappingPublic`). A rotation with an empty `WrappingPubkey` uses the nested one.
+    /// The public key that verifies a rotation wrapping this signature (Go `wrappingPublic`). A rotation with an empty `WrappingPubkey` uses the nested one.
     var rotationKey: [UInt8]? {
         if !wrappingPublicKey.isEmpty { return wrappingPublicKey }
         guard kind == Kind.rotation else { return nil }
@@ -88,7 +88,7 @@ extension NodeKeySignature {
 
     /// The rotation history (Go `rotationDetails`). Returns nil if a nested `Pubkey` cannot be read in np format.
     ///
-    /// A verified rotation chain ends in a non-rotation signature, so a chain of rotations all the way down (Go's nil `InitialSig`) also returns nil.
+    /// A verified rotation chain ends in a non-rotation signature, so a chain with no non-rotation signature (Go's nil `InitialSig`) also returns nil.
     fileprivate var rotationDetails: RotationDetails? {
         var previousNodeKeys: [NodePublicKey] = []
         var current = nested

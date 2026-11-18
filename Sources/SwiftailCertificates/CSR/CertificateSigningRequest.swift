@@ -65,7 +65,7 @@ struct CertificateSigningRequest: Sendable, Equatable {
             // Name ::= RDNSequence. One RDN containing one CN (RFC 5280 4.1.2.4).
             .sequence([.setOf([.sequence([.objectIdentifier(.commonName), .printableString(commonName)])])]),
             subjectPublicKeyInfo(publicKey),
-            // attributes [0] IMPLICIT SET OF Attribute. The value of extensionRequest is one Extensions (RFC 2985 5.4.2).
+            // attributes [0] IMPLICIT SET OF Attribute. The value of extensionRequest is one `Extensions` value (RFC 2985 5.4.2).
             .implicitlyTagged(number: 0, .setOf([
                 .sequence([.objectIdentifier(.extensionRequest), .setOf([.sequence([subjectAltName])])]),
             ])),

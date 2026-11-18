@@ -51,7 +51,7 @@ final class SocketPairingTransport: PairingTransport {
     /// - Parameters:
     ///   - isIPv4: The IP version to use. Dial only with the same version as this device's tailnet address so the local endpoint can be compared with it.
     ///   - tunnelOnly: Prevents the connection from using Wi-Fi, cellular, wired, or loopback interfaces. This leaves other interfaces
-    ///     such as the tunnel (utun). No connection is established if the tunnel is off. Only loopback tests turn this off.
+    ///     such as the tunnel (utun). With the tunnel off, a connection can still use another allowed interface. Only loopback tests turn this off.
     convenience init(host: String, port: NWEndpoint.Port, isIPv4: Bool, tunnelOnly: Bool) {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true

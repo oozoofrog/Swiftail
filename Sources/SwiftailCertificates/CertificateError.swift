@@ -4,8 +4,8 @@
 public enum CertificateError: Error, Sendable, Equatable {
     /// An invalid directory URL. Also covers calling `run()` twice.
     case invalidConfiguration(String)
-    /// Failed to create, write, or read `certs/`. Also covers an existing certs/ writable by the group or others (behavior S1).
-    /// The message contains only an error code.
+    /// Failed to create, open, write, or read `certs/`. Also covers an existing `certs/` owned by another user or writable by the group or others (behavior S1).
+    /// The message contains a reason and, when available, an error code. It omits paths, names, and keys.
     case storage(String)
     /// `certs/acme-account.key.pem` exists but could not be read as a P-256 account key (an RSA key left by Go, a corrupt file, or an oversized file).
     /// Preserve the file because creating a new account would lose the account it identified (behavior C4).

@@ -14,7 +14,7 @@ import SwiftailCrypto
 /// nonce arrives in `accepted` and must match the `challenge` commitment (`PairingTranscript`).
 ///
 /// The joiner establishes trust in the host at `accepted`. Its HMAC uses the offer secret and T, which includes both endpoints as seen by the joiner.
-/// The SAS is neither emitted nor computable before `accepted` verifies. The `decision` contents are read only after its HMAC verifies.
+/// Computing the SAS requires the host nonce revealed in `accepted`. The joiner computes and emits it only after `accepted` verifies. The `decision` contents are read only after its HMAC verifies.
 struct PairingJoinerSession: Sendable {
     typealias Instant = ContinuousClock.Instant
 

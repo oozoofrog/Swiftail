@@ -17,7 +17,7 @@ enum RenewalFailure: Sendable, Equatable {
     /// Rejection by the ACME server or certificate authority (`validationFailed`, `orderFailed`, `unexpectedResponse`, `acme` with a non-5xx status).
     /// Starts at 15 minutes and doubles up to 6 hours.
     case rejected
-    /// A rate limit (`rateLimited`). Wait until the server's time, or 15 minutes if it is absent or sooner than 15 minutes.
+    /// A rate limit (`rateLimited`). Wait until the server's time, or until 15 minutes have elapsed if the server gives no time or gives an earlier one.
     case rateLimited
     /// The received certificate failed verification (`invalidCertificate`). Wait 6 hours.
     case invalidCertificate
@@ -40,11 +40,11 @@ enum RenewalDecision: Sendable, Equatable {
 /// `CertificateManager` queries `decision(for:holding:at:)` on each wake (behavior R3) and records the result with `recordFailure` or
 /// `recordSuccess`.
 ///
-/// No jitter is applied. The contract does not define a formula, and a single node sending requests to a single server has no crowding to disperse.
+/// No jitter is applied. The contract does not define a formula, and one node sends these requests to one server on its own, so there is no need to spread them out.
 struct RenewalSchedule: Sendable, Equatable {
     /// The last failure's classification, or nil after a success.
     private(set) var lastFailure: RenewalFailure?
-    /// The number of consecutive failures of the same classification. Resets to 1 when the classification changes. Used as the exponent for doubling the interval.
+    /// The number of consecutive failures of the same classification. Resets to 1 when the classification changes. The interval doubles once for each failure after the first, up to the cap.
     private(set) var consecutiveFailures = 0
     /// The next attempt time defined by table R4, or nil when waiting for conditions.
     private(set) var backoffUntil: Date?

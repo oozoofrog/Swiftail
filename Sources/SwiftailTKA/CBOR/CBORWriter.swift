@@ -11,7 +11,7 @@ package struct CBORWriter: Sendable {
     /// Starts with empty output.
     package init() {}
 
-    /// Writes a positive integer (major 0) using the shortest header.
+    /// Writes a unsigned integer (major 0) using the shortest header.
     package mutating func unsigned(_ value: UInt64) {
         appendHead(major: 0, argument: value)
     }

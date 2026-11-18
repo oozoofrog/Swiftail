@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// Performs HTTPS round trips to the ACME server with `URLSession`. This is the only use of URLSession in this target (contract H8).
+/// Performs HTTPS round trips to the ACME server with `URLSession`. This is the only use of `URLSession` in this target (contract H8).
 ///
 /// - Uses an ephemeral configuration with no cookie, cache, or credential storage. It does not wait for connectivity.
 /// - Returns 3xx responses unchanged without following redirects (contract behavior X1).

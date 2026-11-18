@@ -4,7 +4,7 @@ import Foundation
 /// using `init(link:)`.
 ///
 /// This holds a secret and an auth key, so `description` and `dump` redact them. Logging the value as is does not reveal them, but `url(base:)` and
-/// `qrCode(base:)` output the secret itself. Keep those outputs out of logs, analytics, and chat history. The type intentionally omits `Equatable`
+/// `qrCode(base:)` produce outputs that contain the secret itself. Keep those outputs out of logs, analytics, and chat history. The type intentionally omits `Equatable`
 /// because it would permit comparing secrets. See contract `docs/contracts/SwiftailPairing.md` §3.
 public struct PairingOffer: Sendable {
     /// The host node's MagicDNS FQDN in lowercase and without a trailing dot (`rd-mac-1a2b3c4d.tail0001.ts.net`).

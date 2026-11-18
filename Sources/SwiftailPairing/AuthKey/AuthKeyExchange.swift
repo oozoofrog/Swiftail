@@ -1,4 +1,4 @@
-// The request format follows the same flow as Go.
+// The request format follows the equivalent Go flow.
 // Origin: golang.org/x/oauth2 v0.37.0 `internal/token.go` (`newTokenRequest`, `RetrieveToken`, `doTokenRoundTrip`),
 //       Go 1.27 `net/url` (`QueryEscape`, `Values.Encode`),
 //       tailscale.com v1.104.7 `client/tailscale/keys.go` (`CreateKeyWithExpiry`, `KeyCapabilities`),
@@ -47,7 +47,7 @@ enum AuthKeyExchange {
 
     /// Extracts `access_token` from the token response (`doTokenRoundTrip` in `x/oauth2`).
     ///
-    /// Success is 2xx with no `error` and a nonempty `access_token`. A 400 or 401, or a 2xx with an error or an empty access_token,
+    /// Success is 2xx with no `error` and a nonempty `access_token`. A 400 or 401, or a 2xx with an error or an empty `access_token`,
     /// means the client was rejected. Does not filter `token_type` (same as Go). Because the token goes in a Bearer header,
     /// characters that could split the header make the response unreadable.
     static func accessToken(from response: AuthKeyHTTPResponse) throws(AuthKeyIssueError) -> String {

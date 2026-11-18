@@ -1,7 +1,7 @@
 // Trust state (Go `tka.State`, `tailscale.com/tka/state.go:26-53`, `:258-316`). Notes §3.5, contract behaviors E4, E6, D8, and A1.
 // Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
-/// Trust state after applying through a given AUM. A checkpoint AUM carries this entire state.
+/// Trust state after applying updates through a given AUM. A checkpoint AUM carries this entire state.
 ///
 /// Does not distinguish nil and empty arrays or nil elements and empty byte strings. In an accepted checkpoint, arrays are nonempty and their elements
 /// contain 32 bytes (behavior E6).

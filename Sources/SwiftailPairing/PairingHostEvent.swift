@@ -10,9 +10,10 @@ extension PairingHost {
         case pairedPeerRemoved(stableID: String)
         /// The offer state changed.
         ///
-        /// Events arrive in occurrence order. Any `.used`, `.expired`, or `.closed` after an `.opened` refers to the offer announced by that `.opened`
+        /// Events arrive in the order they occur. Any `.used`, `.expired`, or `.closed` after an `.opened` refers to the offer announced by that `.opened`
         /// (events for the previous offer always precede the next `.opened`). Update the offer on screen in event order, independently of when
-        /// `openOffer` returns. Only state events after the count of received `.opened` events matches the `openOffer` call count refer to the current offer.
+        /// `openOffer` returns. If no events were dropped, state events refer to the current offer once the number of received
+        /// `.opened` events matches the number of successful `openOffer` calls.
         case offerChanged(OfferState)
     }
 
@@ -20,10 +21,10 @@ extension PairingHost {
     public enum OfferState: Sendable, Equatable {
         /// `openOffer(lifetime:authKey:)` opened a new offer. The previous offer becomes unusable immediately, without a separate event.
         case opened
-        /// A valid joiner proof used the offer. Emitted immediately before requesting approval (`decide`) for this connection. An offer can be used only once.
+        /// The offer was used when the joiner's proof verified. Emitted immediately before requesting approval (`decide`) for this connection. An offer can be used only once.
         case used
-        /// The offer passed its expiration time unused. Emitted at that time while `run()` is active. Expiration outside run() is emitted when
-        /// run() starts.
+        /// The offer passed its expiration time unused. Emitted at that time while `run()` is active. Expiration outside `run()` is emitted when
+        /// `run()` starts.
         case expired
         /// `closeOffer()` closed the open offer. No event is emitted if there was no open offer.
         case closed

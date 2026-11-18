@@ -1,6 +1,6 @@
 import Foundation
 
-/// Performs HTTPS round trips with the admin API using `URLSession`. This is the only use of URLSession in this target.
+/// Performs HTTPS round trips with the admin API using `URLSession`. This is the only use of `URLSession` in this target.
 ///
 /// See contract `docs/contracts/SwiftailPairing.md` §4 K5.
 /// - Uses an ephemeral configuration with cookie, cache, and credential storage disabled. Does not wait for connectivity.

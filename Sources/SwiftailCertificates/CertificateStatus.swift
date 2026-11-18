@@ -1,13 +1,13 @@
 import Foundation
 
-/// The current `CertificateManager` status. Apps use it to display the expiration time, failure message, and next attempt time and decide
+/// The current `CertificateManager` status. Apps use it to display the expiration time, failure message, and next attempt time. They also use it to decide
 /// whether to offer "Retry Now".
 public struct CertificateStatus: Sendable, Equatable {
     /// The name for which a certificate is requested, or nil if the node name is still unknown.
     public var domain: String?
     /// The expiration time of the currently held certificate, or nil if absent.
     public var notAfter: Date?
-    /// The reason the last attempt failed. Returns to nil on success.
+    /// An unmet issuance prerequisite, if any, or the reason the last attempt failed. A successful attempt clears the last attempt's failure.
     public var lastFailure: CertificateFailure?
     /// The time to attempt issuance or renewal again. If the ACME server's `Retry-After` time is later, uses that time (capped at 7 days,
     /// behavior X5). Returns nil when waiting for conditions (login, MagicDNS, HTTPS, cert domains), with no timer-based retry.
@@ -23,7 +23,7 @@ public struct CertificateStatus: Sendable, Equatable {
 }
 
 extension CertificateStatus: CustomStringConvertible, CustomReflectable {
-    /// Displays only values safe to log. Redacts `domain` because it contains the tailnet name (behavior K2).
+    /// Omits `domain` because it contains the tailnet name (behavior K2). Includes `lastFailure` and its associated values.
     public var description: String {
         """
         CertificateStatus(notAfter: \(String(describing: notAfter)), lastFailure: \(String(describing: lastFailure)), \

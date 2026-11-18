@@ -6,7 +6,7 @@ import Foundation
 /// The account URL identifies the person holding the account key, so it is kept out of logs (contract behavior K2).
 enum ACMEIssuanceResult: Sendable, Equatable {
     /// Issuance succeeded. `certificateChainPEM` is the unmodified response body from the certificate URL (`application/pem-certificate-chain`,
-    /// up to 256KiB). The recipient parses and verifies the chain (contract behavior X3). `accountURL` can skip account lookup
+    /// up to 256KiB). The recipient parses and verifies the chain (contract behavior X3). The caller can use `accountURL` to skip account lookup
     /// on the next attempt (keep it in memory only, contract behavior C4).
     case issued(certificateChainPEM: [UInt8], accountURL: String)
     /// Issuance failed. `retryNotBefore` is the time the ACME server announced via `Retry-After`, if later than the end of the attempt (capped
@@ -14,7 +14,7 @@ enum ACMEIssuanceResult: Sendable, Equatable {
     case failed(CertificateFailure, retryNotBefore: Date?, accountURL: String?)
 }
 
-/// A single ACME (RFC 8555) DNS-01 order flow. This value-type state machine owns no sockets, clock, or randomness (plan §5, code criteria).
+/// A single ACME (RFC 8555) DNS-01 order flow. This value-type state machine owns no sockets, clock, or randomness (plan §5, Code Standards).
 ///
 /// The flow emits one action to take now (`Step`) and advances when it receives the result (a response and its receipt time,
 /// the end time of a wait, or confirmation that a TXT record was published). The stages follow the twelve steps in notes §4.3 and contract behaviors C4–C7, C12, X1, X2, X4, and X5.
@@ -31,7 +31,7 @@ enum ACMEIssuanceResult: Sendable, Equatable {
 ///   (RFC 8555 6.5 and 7.2). On `badNonce`, re-sign the same request with the response nonce and send it again, up to 3 times per request (contract X4).
 /// - Emit `.wait(until:)` and withhold all requests until the time given by `Retry-After` (RFC 7231 7.1.3). If the time exceeds the
 ///   deadline for one issuance attempt (5 minutes), finish immediately with `timedOut` and include that time in the result (contract X5).
-/// - Poll the order at the `Retry-After` interval, or after 1 second if the interval is absent or shorter (the same value as Go's `WaitOrder`, which the RFC does not specify).
+/// - Poll the order at the `Retry-After` interval, with a 1-second minimum and a 1-second default (the same value as Go's `WaitOrder`, which the RFC does not specify).
 /// - Use the supplied account and certificate keys. The certificate key must differ from the account key (RFC 8555 11.1). Create the CSR
 ///   on the first finalize and reuse it through the end of the attempt (contract C7, including the same key and CSR on repeated `ready` or `pending`).
 ///
@@ -445,7 +445,7 @@ struct ACMEOrderFlow: Sendable {
     /// | invalid | `orderFailed` | Classify failure | Classify failure | Classify failure |
     ///
     /// "New order" applies to an order that became `valid` or `processing` before the CSR was sent. The corresponding private key is unavailable,
-    /// so skip that certificate (once per attempt, contract H17). Allow one "repeat" per order and report `unexpectedResponse` on the second (H17).
+    /// so discard that order and create a new one at most once per attempt (contract H17). Allow one "repeat" per order and report `unexpectedResponse` on the second (H17).
     private mutating func handleOrder(_ current: ACMEOrder, context: OrderContext, at now: Date) -> Step {
         // The response identifiers must match the requested set (RFC 8555 7.4, contract C5).
         guard Set(current.identifiers) == [requestedIdentifier], var state = order else { return unexpected(at: now) }
@@ -522,7 +522,7 @@ struct ACMEOrderFlow: Sendable {
 
     // MARK: authorization
 
-    /// Processes all authorizations for the order regardless of order (contract C5).
+    /// Processes all authorizations for the order regardless of their sequence (contract C5).
     private mutating func processAuthorizations(at now: Date) -> Step {
         guard let authorizations = order?.authorizations, !authorizations.isEmpty else { return unexpected(at: now) }
         order?.remainingAuthorizations = authorizations
@@ -578,7 +578,7 @@ struct ACMEOrderFlow: Sendable {
         return .publishTXT(name: domain.challengeRecordName, value: keyAuthorization.dns01TXTValue)
     }
 
-    /// The failure kind for an `invalid` authorization is the dns-01 challenge's `error` or, if absent, the first challenge's `error` that is present.
+    /// The failure kind for an `invalid` authorization is the dns-01 challenge's `error` or, if absent, the `error` from the first challenge that has one.
     private static func validationErrorType(_ authorization: ACMEAuthorization) -> String {
         let failed = authorization.dns01Challenge?.error ?? authorization.challenges.lazy.compactMap(\.error).first
         return failed?.type ?? ""

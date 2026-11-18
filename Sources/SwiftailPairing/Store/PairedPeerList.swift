@@ -3,7 +3,7 @@ import Swiftail
 
 /// The host's paired peer list and its file format (contract behaviors S1, S3, and S4). This value type leaves file access to `PairedPeerFile`.
 ///
-/// The file is `{"version":1,"peers":[…]}`. Each entry contains `stableID`, `name`, `computedName`, and `loginName` (the PeerIdentity
+/// The file is `{"version":1,"peers":[…]}`. Each entry contains `stableID`, `name`, `computedName`, and `loginName` (the `PeerIdentity`
 /// at pairing), `deviceName`, and `pairedAt` (Unix seconds). Ignore unknown fields.
 struct PairedPeerList: Sendable, Equatable {
     /// The paired peer limit (S4).

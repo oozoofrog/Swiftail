@@ -33,12 +33,13 @@ public enum PairingJoiner {
     ///
     /// - Parameters:
     ///   - offer: The offer read from a link or QR code.
-    ///   - deviceName: This device's name as shown on the host's approval screen. Must be 1–64 bytes with no control or format characters.
+    ///   - deviceName: This device's name as shown on the host's approval screen. Must be 1–64 bytes of displayable text
+    ///     with no control characters and no format characters other than U+200C and U+200D.
     ///   - node: A running `.inProcess` node. If the offer included an auth key, this node was started with that key.
     ///   - awaitingApproval: Called once after the host has been verified. Display the supplied SAS on screen.
-    /// - Throws: `PairingError`. `invalidConfiguration` for an invalid device name or node device, unreachable if the host cannot be reached within 60 seconds,
-    ///   `rejected` if the offer is absent or expired or the secret is wrong, hostNotVerified if the host could not be verified,
-    ///   `denied` if approval was denied, `timedOut` if approval did not arrive within 130 seconds, protocolViolation for bytes outside the protocol,
+    /// - Throws: `PairingError`. `invalidConfiguration` for an invalid device name or node device, `unreachable` if the host cannot be reached within 60 seconds,
+    ///   `rejected` if the offer is absent, expired, or already used, or the secret is wrong, `hostNotVerified` if the host could not be verified,
+    ///   `denied` if approval was denied, `timedOut` if approval did not arrive within 130 seconds, `protocolViolation` for bytes outside the protocol,
     ///   or `cancelled` if the calling Task was canceled.
     public static func pair(
         with offer: PairingOffer, deviceName: String, node: TailnetNode,
@@ -64,15 +65,16 @@ public enum PairingJoiner {
 
     /// Joins using an OS socket. An app whose node is in a tunnel extension calls this after the tunnel connects.
     ///
-    /// The OS resolves the name (the tunnel's MagicDNS). The library cannot directly observe whether this connection used the tunnel, so it checks this
-    /// device's tailnet address supplied by the app. It dials only using the same IP version as that address and only through interfaces other than Wi-Fi,
-    /// cellular, wired, or loopback. If the ready connection's local endpoint differs from that address or its remote endpoint falls outside the tailnet range,
-    /// it ends with notOnTailnet without sending anything (J2). The library cannot identify the paired peer on subsequent connections through this path.
+    /// The OS resolves the name (the tunnel's MagicDNS). The library cannot directly observe whether the connection used the tunnel, so it compares
+    /// the local endpoint with the device's tailnet address supplied by the app. It dials only with the same IP version as that address and only through
+    /// interfaces other than Wi-Fi, cellular, wired, or loopback. If the ready connection's local endpoint differs from that address or its remote
+    /// endpoint falls outside the tailnet range, pairing ends with `notOnTailnet` without sending anything (J2). The library cannot identify the
+    /// paired peer on subsequent connections through this path.
     ///
     /// - Parameter localAddress: This device's tailnet address (`100.64.0.1`). The tunnel extension must read it from the node's `status.addresses` and pass
     ///   it to the app. Converts IPv4-mapped IPv6 to IPv4. Guessing the value from the OS interface list defeats
     ///   this check.
-    /// - Throws: The errors from `pair(with:deviceName:node:awaitingApproval:)`, plus invalidConfiguration if `localAddress` is outside the tailnet range,
+    /// - Throws: The errors from `pair(with:deviceName:node:awaitingApproval:)`, plus `invalidConfiguration` if `localAddress` is outside the tailnet range,
     ///   or `notOnTailnet` if the connection did not traverse the tunnel.
     public static func pair(
         with offer: PairingOffer, deviceName: String, localAddress: SwiftailBase.IPAddress,
@@ -201,7 +203,7 @@ public enum PairingJoiner {
                 let received = try await withTimeout(ContinuousClock.now.duration(to: deadline)) {
                     await transport.receive()
                 }
-                // A read unblocked by cancellation does not indicate a disconnect. The preceding check ends the attempt with `cancelled`.
+                // A read unblocked by cancellation does not indicate a disconnect. The next iteration ends the attempt with `cancelled`.
                 actions = Task.isCancelled ? [] : received.map { session.receive($0, at: .now) }
                     ?? session.connectionEnded()
             } catch {
