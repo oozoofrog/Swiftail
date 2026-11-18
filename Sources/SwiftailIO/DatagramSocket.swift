@@ -5,7 +5,7 @@ import Synchronization
 
 /// Wraps a UDP socket bound to the IPv4 wildcard address (0.0.0.0) with an async datagram stream and a nonblocking send queue.
 ///
-/// WireGuard, disco, and STUN share the socket (`docs/protocol-notes/derp-stun.md` 4.10 2). A POSIX socket lets them
+/// WireGuard, disco, and STUN share the socket (`docs/protocol-notes/derp-stun.md` §4.10 item 2). A POSIX socket lets them
 /// send to and receive from multiple peers on one port, which is why this uses POSIX over the `Network` framework
 /// (`docs/plan.md` §4 (c)). The caller is the node that drives the `SwiftailMagicsock` state machine. Failures are
 /// reported as `SocketError`.
@@ -20,7 +20,7 @@ import Synchronization
 /// - **The receive and send queues each hold at most 256 datagrams and 1MiB.** On overflow, the oldest datagrams are
 ///   dropped first (`DatagramQueue`). A count limit alone would allow 256 × 65,535 bytes (16MiB in the worst case), so
 ///   total bytes are capped as well (`queuedByteLimit`). UDP already tolerates loss.
-/// - **The file descriptor is closed exactly once and is never written to after closing.** `close()` removes the
+/// - **The socket closes its file descriptor exactly once and never uses it after closing.** `close()` removes the
 ///   descriptor from state and then cancels the read source, whose cancellation handler performs the actual `close(2)`.
 ///   The handler runs after reads and sends on the same serial queue have finished, leaving the descriptor open until
 ///   then. After `close()`, the state is empty, so neither `send` nor the remaining send queue touches the descriptor.
@@ -28,7 +28,8 @@ import Synchronization
 /// - **The socket can bind to an interface.** When given an `interfaceIndex`, it uses `IP_BOUND_IF` to send through
 ///   that interface. This keeps the socket inside the tunnel from routing back through the tunnel (contract behavior N
 ///   4). This type knows the interface only by index.
-/// - **Signals do not terminate the process.** The socket sets `SO_NOSIGPIPE`. On Darwin, even a UDP send can produce `EPIPE` and SIGPIPE.
+/// - **The socket suppresses SIGPIPE.** It sets `SO_NOSIGPIPE` because on Darwin, even a UDP send can produce
+///   `EPIPE` and SIGPIPE.
 /// - **The socket preserves structured concurrency.** The dispatch source and queue handle reads and sends without a
 ///   Task. Canceling the Task waiting on the stream ends `for await`. Releasing the socket (`deinit`) closes it and
 ///   ends the stream. The read handler does not retain `self`, so the socket can be released. The send block retains it
@@ -38,8 +39,8 @@ import Synchronization
 /// `localPort` below. The kernel API requires pointers to C structs and treats `sockaddr_in` as `sockaddr`. Each
 /// pointer is used only for the lifetime of one call.
 ///
-/// - `shortcut:` IPv6 and dual-stack sockets are omitted. When to add them is when an M5 real device encounters an
-///   IPv6-only network. At that point, bind both sockets to the same port (contract “Exclusions”).
+/// - `shortcut:` Supports only IPv4. Add IPv6 and bind both sockets to the same port when M5 encounters an
+///   IPv6-only network on a real device (contract “Exclusions”).
 package final class DatagramSocket: Sendable {
     /// The maximum size of one read, the theoretical UDP datagram maximum (65,535). The kernel truncates anything larger.
     private static let maximumDatagramSize = 65_535
@@ -49,8 +50,9 @@ package final class DatagramSocket: Sendable {
     /// dropped first on overflow.
     ///
     /// A count limit alone would allow a worst case of 65,535 bytes per datagram × 256 datagrams = 16MiB. That is one
-    /// third of the iOS packet tunnel extension limit (about 50MiB), so three buffers would exceed the limit
-    /// (`docs/contracts/SwiftailTunnel.md` behavior M). 1MiB is one sixteenth of that worst case. This proposed value
+    /// third of the reported iOS packet tunnel extension limit (about 50MiB). Three such buffers could hold about
+    /// 48MiB before accounting for any other memory (`docs/contracts/SwiftailTunnel.md` behavior M). A 1MiB buffer
+    /// holds about one sixteenth of the 16MiB worst case. This proposed value
     /// rests on that calculation alone. Adjust it if real-device throughput measurements show drops. A single datagram
     /// (65,535 bytes) fits, so no datagram exceeds the limit on its own.
     static let queuedByteLimit = 1 << 20

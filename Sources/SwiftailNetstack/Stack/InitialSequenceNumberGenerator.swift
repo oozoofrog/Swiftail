@@ -5,9 +5,7 @@ import SwiftailBase
 ///
 /// `ISN = M + F(localip, localport, remoteip, remoteport, secretkey)`. M is the clock component, increasing by 1 every
 /// 4 microseconds from stack creation (MUST-8). F is the first 32 bits of
-/// `HMAC-SHA256(secret, local address ‖ local port ‖ remote address ‖ remote port)` (contract behavior S7). An outsider
-/// must be unable to compute F without the
-/// secret (RFC 6528 §3, MUST-9). ISNs for the same 4-tuple increase over time, and ISNs for different 4-tuples cannot
+/// `HMAC-SHA256(secret, local address ‖ local port ‖ remote address ‖ remote port)` (contract behavior S7). F must be infeasible to compute without the secret (RFC 6528 §3, MUST-9). ISNs for the same 4-tuple increase over time, and ISNs for different 4-tuples cannot
 /// be inferred from one another.
 ///
 /// The secret is omitted from `description` and `dump` (contract behavior K1).

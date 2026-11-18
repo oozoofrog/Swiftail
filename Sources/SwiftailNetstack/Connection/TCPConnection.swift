@@ -8,7 +8,7 @@ import SwiftailBase
 /// invokes `advance(to:)` at `nextDeadline`, and time must never decrease between calls.
 ///
 /// Creates an active open with `connect(from:to:initialSequenceNumber:at:)` and a passive open with
-/// `accept(_:initialSequenceNumber:at:)` using the SYN received by the stack. LISTEN is outside this type (contract
+/// `accept(_:initialSequenceNumber:receiveWindowLimit:at:)` using the SYN received by the stack. LISTEN is outside this type (contract
 /// behavior S3).
 ///
 /// Schedules ACKs by deadline. In-order data is due in 40ms or immediately when 2×MSS accumulates. Out-of-order data,
@@ -47,13 +47,14 @@ package struct TCPConnection: Sendable {
 
     /// State machine output. Process in emission order (contract behavior S10).
     package enum Output: Sendable, Equatable {
-        /// A segment to send to the peer. Emitted in sequence order.
+        /// A segment to send to the peer. Each send pass emits segments in sequence order, and retransmissions can
+    /// revisit earlier sequence numbers.
         case segment(TCPSegment)
         /// An event to report to the application or stack.
         case event(Event)
     }
 
-    /// An event to report to the application or stack (contract “Structure,” item 1).
+    /// An event to report to the application or stack (contract “Architecture,” item 1).
     package enum Event: Sendable, Equatable {
         /// The three-way handshake completed. For a passive open, the stack puts the connection in the accept queue.
         case established
@@ -100,7 +101,9 @@ package struct TCPConnection: Sendable {
 
     /// The tailnet MTU (contract decision D9).
     static let maximumTransmissionUnit = 1280
-    /// The local Window Scale shift (contract behavior F2, the smallest value that satisfies `65535 << 3 >= 262144`).
+    /// The local Window Scale shift (contract behavior F2).
+    ///
+    /// This is the smallest shift for which the scaled 16-bit window covers 262,144 bytes (`65535 << 3 >= 262144`).
     static let ownWindowShift = 3
     /// The cap on the peer's shift (RFC 7323 §2.3).
     static let maximumWindowShift = 14
@@ -111,7 +114,7 @@ package struct TCPConnection: Sendable {
     /// buffer grows to cover what was written, so a fully open window would let a peer allocate 256KiB per connection
     /// before acceptance. 16KiB is the smallest power of 2 that accommodates the peer's first window (10×MSS per RFC
     /// 6928, 12,400 bytes at MSS 1240), fits directly in the unscaled SYN-ACK window field, and is a multiple of the
-    /// local shift (3) (contract behavior M).
+    /// window scaling unit (`1 << 3` bytes) (contract behavior M).
     static let unacceptedReceiveWindow = 16 * 1024
     /// Rejects establishment if the peer advertised an MSS below this value (contract behavior X9).
     static let minimumPeerSegmentSize = 64
@@ -200,8 +203,8 @@ package struct TCPConnection: Sendable {
     /// The receive buffer. Holds only the peer's data. FIN is tracked in `finReceived`.
     var receiveBuffer: ReceiveBuffer
     /// The receive window cap, which limits the sum of unread bytes and the advertised window. Normally the receive
-    /// buffer's capacity. Only a connection queued by the stack on a listener starts with `unacceptedReceiveWindow` and
-    /// opens when the application takes it (`openReceiveWindow(at:)`).
+    /// buffer's capacity. A passive open starts with `unacceptedReceiveWindow` and
+    /// opens to full capacity when the application accepts it from the listener queue (`openReceiveWindow(at:)`).
     var receiveWindowLimit: Int
     /// The farthest right edge advertised so far. It never moves left (SHLD-14), and bytes past it are not accepted
     /// (RFC 7323 §2.4 item 1 accepts anything inside the window of any transmitted ACK).
@@ -225,8 +228,7 @@ package struct TCPConnection: Sendable {
     var retransmissionCount = 0
     /// The ACK on the current segment triggered fast retransmit (three duplicate ACKs or a partial ACK). Retransmit
     /// after placing even this segment's data in the receive buffer, because the retransmitted segment's first SACK
-    /// block must represent the just-received data range
-    /// (RFC 2018 4).
+    /// block must represent the just-received data range (RFC 2018 §4).
     var isFastRetransmitPending = false
     /// Received an acceptable ACK after the latest retransmission timer expiration. Determines whether to count that
     /// expiration toward the limit when the window shrinks to 0 (under contract behavior F8).
@@ -248,7 +250,7 @@ package struct TCPConnection: Sendable {
     /// (`maximumTimeWaitLifetime`) is measured from this time.
     var timeWaitEnteredAt: ContinuousClock.Instant?
     /// The number of zero-window probes sent without an ACK. On an application-released connection (`readClosed`),
-    /// replies without progress (an ACK of new data or an open window) do not reduce it (contract behavior F8).
+    /// replies that neither ACK new data nor open the window do not reduce it (contract behavior F8).
     var zeroWindowProbeCount = 0
     /// The interval until the next zero-window probe. Doubles per probe, up to 60 seconds.
     var zeroWindowProbeInterval = Duration.zero

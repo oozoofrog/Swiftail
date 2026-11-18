@@ -15,9 +15,9 @@ extension TailnetNode {
     ///
     /// Reads the owner from the node's owner table (`addressOwners`). The engine builds it when it installs peers, and
     /// the stack's ownership check changes at the same time to use the same table. For a live connection, the answer
-    /// for its remote address therefore identifies the peer that established the connection (behavior W6). The answer
-    /// does not depend on when it is queried. If key expiration changes an address's owner, the table and connection
-    /// change together when the engine handles it.
+    /// for its remote address therefore identifies the peer on the other end when the connection was established (behavior W6). A lookup made while the
+    /// connection is live keeps that meaning. If key expiration changes an address's owner, the table changes and
+    /// the connection ends together when the engine handles the expiration.
     public func whoIs(_ address: IPAddress) -> PeerIdentity? {
         lastNetmap.flatMap { PeerIdentity(address: address, owners: addressOwners, in: $0) }
     }

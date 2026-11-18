@@ -27,8 +27,8 @@ struct DefaultLink: Sendable, Equatable {
 
     /// Returns what to do on a notification that changes `previous` to `self`. Nil `previous` means no interface is bound yet.
     ///
-    /// Unlike Go, checks only the interface and addresses reported by the app, with no checks for changes in available
-    /// protocols, cost, or PAC.
+    /// Checks only the interface reported by the app and that interface's addresses. Go also checks for changes in
+    /// available protocols, cost, and PAC.
     ///
     /// - Parameter tunnelName: This node's utun name. Nil for an in-memory device.
     func change(from previous: DefaultLink?, tunnelName: String?) -> Change {

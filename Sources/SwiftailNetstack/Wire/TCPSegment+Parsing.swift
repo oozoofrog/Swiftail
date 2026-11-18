@@ -7,14 +7,15 @@ extension TCPSegment {
     /// Discards bytes after the declared length, such as link-layer padding. Runs the following checks in order and
     /// stops at the first failure.
     ///
-    /// 1. If the IP header's length, version, or header length is invalid, returns `malformed`.
-    /// 2. If the protocol (IPv4 protocol or IPv6 next header) is not 6, returns `notTCP`.
-    /// 3. If IPv4 is fragmented (MF or a fragment offset), returns `malformed`. Without reassembly, the fragment's TCP
-    ///    header cannot be trusted.
-    /// 4. If the IPv4 header checksum is incorrect, returns `badChecksum`.
-    /// 5. If the TCP header is shorter than 20 bytes or its data offset is less than 5 or points outside the segment, returns `malformed`.
-    /// 6. If the TCP checksum, including the pseudo-header, is incorrect, returns `badChecksum`.
-    /// 7. If an option length is invalid, returns `malformed`.
+    /// 1. Throws `malformed` for an invalid packet length, IP version, or IP header length.
+    /// 2. Throws `notTCP` if the protocol (IPv4 protocol or IPv6 next header) is other than 6.
+    /// 3. Throws `malformed` for IPv4 fragments (MF set or a nonzero fragment offset). Without reassembly,
+    ///    the fragment's TCP header cannot be trusted.
+    /// 4. Throws `badChecksum` for an incorrect IPv4 header checksum.
+    /// 5. Throws `malformed` if the segment is shorter than 20 bytes or the TCP data offset is below 5 or
+    ///    past the end of the segment.
+    /// 6. Throws `badChecksum` for an incorrect TCP checksum, including the pseudo-header.
+    /// 7. Throws `malformed` for an invalid option length.
     ///
     /// Stops parsing options at EOL and skips NOP. Records MSS (kind 2, length 4), Window Scale (kind 3, length 3), and
     /// SACK-Permitted (kind 4, length 2) only in segments with SYN set, and SACK (kind 5, length `2 + 8n`, n ≥ 1) only
@@ -41,7 +42,7 @@ extension TCPSegment {
             guard bytes.uint16(at: 6) & 0x3FFF == 0 else { throw .malformed }
             var headerChecksum = InternetChecksum()
             headerChecksum.add(bytes[..<ip.headerLength])
-            // The sum including the checksum field must be 0 (RFC 1071 §1).
+            // The complemented sum, including the checksum field, must be 0 (RFC 1071 §1).
             guard headerChecksum.value == 0 else { throw .badChecksum }
         }
 
@@ -100,7 +101,7 @@ extension TCPSegment {
         let sourceAddress: IPAddress
         let destinationAddress: IPAddress
 
-        /// IPv4 requires at least 20 bytes, IHL of at least 5, and IHL ≤ declared length ≤ buffer.
+        /// IPv4 requires at least 20 bytes, an IHL of at least 5 words, and `IHL × 4 ≤ declared length ≤ buffer length`.
         init(ipv4 bytes: [UInt8]) throws(ParseError) {
             guard bytes.count >= 20 else { throw .malformed }
             let headerLength = Int(bytes[0] & 0x0F) * 4

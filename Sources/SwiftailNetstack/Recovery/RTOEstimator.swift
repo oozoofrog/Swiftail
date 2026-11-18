@@ -10,14 +10,14 @@
 ///
 /// Uses the values in contract `docs/contracts/SwiftailNetstack.md` behavior R1. The initial value is 1 second, the
 /// lower bound is 200ms (different from the 1 second SHOULD in RFC 6298 §2.4, lead session decision N4), the upper
-/// bound is 120 seconds (§2.5 requires at least 60 seconds), and clock granularity G is 0.
+/// bound is 120 seconds (under §2.5, an upper bound, if imposed, must be at least 60 seconds), and clock granularity G is 0.
 package struct RTOEstimator: Sendable, Equatable {
     /// The RTO before any measurement (RFC 6298 §2.1).
     package static let initialTimeout = Duration.seconds(1)
     /// The RTO lower bound. RFC 6298 §2.4 says to raise it to 1 second (SHOULD), but this uses 200ms, as gVisor does
     /// (lead session decision N4).
     package static let minimumTimeout = Duration.milliseconds(200)
-    /// The RTO upper bound (RFC 6298 §2.5 requires at least 60 seconds).
+    /// The RTO upper bound (RFC 6298 §2.5 permits a cap of at least 60 seconds).
     package static let maximumTimeout = Duration.seconds(120)
     /// The minimum RTO after establishment if a SYN timer ever expired (RFC 6298 §5.7).
     package static let timeoutAfterSYNRetransmission = Duration.seconds(3)
@@ -38,9 +38,8 @@ package struct RTOEstimator: Sendable, Equatable {
     ///
     /// For the first sample R, sets `SRTT = R` and `RTTVAR = R/2`. For later samples R', first computes
     /// `RTTVAR = 3/4·RTTVAR + 1/4·|SRTT − R'|` using the old SRTT, then `SRTT = 7/8·SRTT + 1/8·R'` (α = 1/8, β = 1/4).
-    /// The RTO is
-    /// `SRTT + max(G, 4·RTTVAR)` with G equal to 0. This calculation resets the RTO increased by backoff (the
-    /// discussion below RFC 6298 §5.7).
+    /// The RTO is `SRTT + max(G, 4·RTTVAR)`, with G equal to 0. A new calculation replaces the backed-off RTO
+    /// (the discussion below RFC 6298 §5.7).
     ///
     /// Treats negative samples as 0 and samples above the upper bound as the upper bound. Neither is an actual
     /// round-trip time, and clamping prevents overflow in the subsequent `Duration` arithmetic.

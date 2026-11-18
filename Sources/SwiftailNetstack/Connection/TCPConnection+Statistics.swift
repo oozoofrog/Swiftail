@@ -1,6 +1,6 @@
 extension TCPConnection {
     /// Transmission statistics for one connection. When it ends, the stack includes these in the `.closed` event, and
-    /// the node logs them on one line (contract “Connection Closure Statistics Log”). Used to decide whether to enable
+    /// the node logs them on one line (contract “Connection close statistics log”). Used to decide whether to enable
     /// sender-side SACK recovery (M6-10b, contract M6-10b S1).
     ///
     /// Each value is counted once where the event occurs. Contains no addresses, ports, or data.
@@ -10,7 +10,7 @@ extension TCPConnection {
         /// The peer's SYN contained SACK-Permitted. The local side always sends it for an active open and sends it for
         /// a passive open only if the peer did, so this means both sides negotiated it.
         package var sackPermitted = false
-        /// Data bytes first sent, excluding SYN and FIN.
+        /// Data bytes sent for the first time, excluding SYN and FIN.
         package var sentBytes = 0
         /// Retransmitted data bytes (go-back-N after RTO, fast retransmit, partial ACK). Excludes the 1 byte of a zero-window probe.
         package var retransmittedBytes = 0

@@ -13,8 +13,9 @@ extension NetworkSocket {
     /// other spellings of `::1`. Production servers are unaffected. This needs to change when testing with a local
     /// server that uses such a name.
     ///
-    /// - Parameters: - interface: The interface to bind to. Nil leaves the connection unbound. - host: The host name or
-    ///   IP literal to connect to.
+    /// - Parameters:
+    ///   - interface: The interface to bind to. Nil leaves the connection unbound.
+    ///   - host: The hostname or IP literal to connect to.
     package static func bindableInterface(_ interface: NWInterface?, forHost host: String) -> NWInterface? {
         isLoopback(host: host) ? nil : interface
     }

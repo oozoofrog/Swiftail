@@ -4,15 +4,15 @@ import Network
 /// Support for the loopback bridge (`SwiftailLoopback.LoopbackBridge`). Contract `docs/contracts/SwiftailHost.md` behavior B and §8.
 ///
 /// The bridge forwards tailnet connections to a `127.0.0.1` listener on the same device. This requires three additions.
-/// The local port lets the listener's framer compare it with the source port of the accepted connection. A write
-/// shutdown (FIN) propagates a half-close. An abort (RST) propagates errors in a way distinguishable from a normal
+/// The bridge records its local port so the listener's framer can match it against the accepted connection's source
+/// port. A write shutdown (FIN) propagates a half-close. An abort (RST) propagates errors in a way distinguishable from a normal
 /// close.
 extension NetworkSocket {
     /// Connects to `127.0.0.1:<port>` over plaintext TCP and waits until ready.
     ///
     /// The caller sets the deadline (`withTimeout`). If nothing is listening, the connection fails immediately. Like
     /// `connect`, it treats `waiting` as a failure. It uses only IPv4 loopback because the bridge looks up entries by
-    /// (source port, listener port), so both ends must be `127.0.0.1`.
+    /// `(source port, listener port)`, so both ends must be `127.0.0.1`.
     ///
     /// This socket **keeps the connection open** if a Task waiting on `receive` or `write` is canceled. The bridge must
     /// withdraw the unconsumed token before closing (behavior B6) and choose FIN (`close()`) after normal completion or

@@ -38,7 +38,10 @@ package struct TCPStack: Sendable {
         package let rawValue: UInt64
     }
 
-    /// An output of the stack. Process in emission order. Packets for a connection are emitted in sequence order (contract behavior S10).
+    /// An output of the stack. Process in emission order (contract behavior S10).
+    ///
+    /// Within a send pass, packets for one connection follow sequence order. Retransmission can revisit earlier
+    /// sequence numbers on a later pass.
     package enum Output: Sendable, Equatable {
         /// An outgoing IP packet. The node passes it to the engine.
         case ipPacket([UInt8])
@@ -49,7 +52,7 @@ package struct TCPStack: Sendable {
         /// TCP processing has ended for a connection the application released with `close` or `abort` (it reached
         /// CLOSED or entered TIME-WAIT). Carries the reason and statistics to that point, including retransmissions
         /// after release. The node uses it solely for the `Connection ended` log and does not wake application calls
-        /// (contract “Connection Closure Statistics Log,” “Connections Released by the Application”). Emitted once per
+        /// (contract “Connection close statistics log,” “Connections released by the application”). Emitted once per
         /// connection, except for connections that already emitted `.closed` while held and those discarded by
         /// `abortAll()`.
         case releasedConnectionClosed(CloseReason, TCPConnection.Statistics)
@@ -209,9 +212,10 @@ package struct TCPStack: Sendable {
 
     /// Creates a stack.
     ///
-    /// - Parameters: - isnSecret: The ISN secret (RFC 6528 §3). On each `run()`, the node supplies 32 bytes drawn from
-    ///   system randomness. Omitted from events, errors, `description`, and `dump` (contract behavior K1). - now: The
-    ///   time at which the ISN clock component is 0.
+    /// - Parameters:
+    ///   - isnSecret: The ISN secret (RFC 6528 §3). On each `run()`, the node supplies 32 bytes drawn from system
+    ///     randomness. Omitted from events, errors, `description`, and `dump` (contract behavior K1).
+    ///   - now: The time at which the ISN clock component is 0.
     package init(isnSecret: [UInt8], now: ContinuousClock.Instant) {
         initialSequenceNumbers = InitialSequenceNumberGenerator(secret: isnSecret, origin: now)
     }
@@ -230,7 +234,7 @@ package struct TCPStack: Sendable {
     /// The earliest deadline across all connections and TIME-WAIT records. Returns `nil` when none exists.
     ///
     /// Scans the stored connection deadlines (up to 256) and compares with the earliest TIME-WAIT record deadline.
-    // shortcut: Scans connection deadlines without a heap (contract exclusions table “Finding Stack Deadlines”). Change
+    // shortcut: Scans connection deadlines without a heap (see “finding stack timeout: scans all connections” in the contract's exclusions table). Change
     // this if the connection limit increases substantially.
     package var nextDeadline: ContinuousClock.Instant? {
         var earliest = earliestTimeWaitDeadline
@@ -309,7 +313,7 @@ extension TCPStack {
 
 extension TCPStack {
     /// Groups remote addresses by peer. The node supplies them alongside local addresses whenever it applies a netmap
-    /// (contract behavior S, “One Peer's Share”).
+    /// (contract behavior S, “Per-peer share”).
     ///
     /// Limits for one remote peer (64 connections, 16 establishing connections, 16 entries in a listener queue, and 64
     /// TIME-WAIT records) count addresses in the same group together. Counting per address alone would give a peer with

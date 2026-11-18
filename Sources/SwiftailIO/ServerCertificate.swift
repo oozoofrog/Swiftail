@@ -34,13 +34,14 @@ package enum ServerCertificate {
 
     /// Verifies a `sha256-raw:` pin (Go `SetConfigExpectedCertHash`).
     ///
-    /// Exactly one certificate must remain after excluding meta certificates whose subject CN starts with `derpkey`.
+    /// After excluding all certificates whose subject CN starts with `derpkey` (meta certificates), exactly one
+    /// certificate must remain.
     /// That certificate must meet all these conditions.
     /// ⓪ It comes first in the list. ① The SHA-256 of the entire DER, in lowercase hex, exactly matches `sha256Hex`.
     /// ② It is valid for `serverName` if that name is sent as SNI (if it is not an IP literal). ③ `now` is within the
     /// validity period. The chain is not checked.
     ///
-    /// Go does not impose condition ⓪. The TLS handshake proves only the first certificate's key. If position is
+    /// Go does not impose condition ⓪. The TLS handshake proves possession of only the first certificate's key. If position is
     /// ignored, as in Go, a server can pass verification by appending the publicly retrievable pinned certificate after
     /// a `derpkey…` certificate for its own key. derper presents the server certificate first and the meta certificate
     /// afterward (`derpserver.ModifyTLSConfigToAddMetaCert`), so normal servers pass.
@@ -53,8 +54,9 @@ package enum ServerCertificate {
     // DERP reached by name, Go connects and this implementation rejects it. Checking the name and validity period
     // directly requires parsing the X.509 SAN. Add that when such a DERP must be supported.
     ///
-    /// - Parameters: - certificates: The DER certificates in the order presented by the server. - serverName: The TLS
-    ///   server name (the DERP's `hostName`).
+    /// - Parameters:
+    ///   - certificates: The DER certificates in the order presented by the server.
+    ///   - serverName: The TLS server name (the DERP node's `hostName`).
     package static func checkPinned(
         _ certificates: [[UInt8]], sha256Hex: String, serverName: String, at now: Date
     ) throws(Failure) {
@@ -84,7 +86,7 @@ package enum ServerCertificate {
     }
 
     /// Returns the name sent through SNI in the TLS ClientHello (Go `hostnameInSNI`). Returns nil for an IP literal and
-    /// strips a trailing dot.
+    /// strips trailing dots.
     ///
     /// Go's `sha256-raw:` check skips name verification when this value is empty (a connection to derper by IP).
     package static func sniHostName(_ name: String) -> String? {

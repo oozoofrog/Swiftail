@@ -22,8 +22,9 @@ import SwiftailMagicsock
 /// `EADDRINUSE`. For step 3, the `rebindUDP()` child retries after short waits. Without a socket in the meantime,
 /// outgoing UDP is dropped. It also goes over DERP or WireGuard or disco retransmits it.
 ///
-/// - `shortcut:` Reopen all DERP connections. Go keeps connections whose local address belongs to the default interface
-///   and verifies them with a 3-second Ping. The only cost is reconnecting non-home connections. Revisit if
+/// - `shortcut:` Close all DERP connections. Reopen the home connection immediately and other connections as
+///   needed. Go keeps connections whose local address belongs to the default interface and verifies them with a
+///   3-second Ping. The only extra cost is reconnecting non-home connections. Revisit if
 ///   reconnection latency becomes a problem in real-device transitions.
 /// - `shortcut:` Does not handle network loss (no satisfied path). The app reports only satisfied paths. While
 ///   disconnected, connections rely on their own retries and backoff. Revisit if retries without a network become a
@@ -39,9 +40,9 @@ extension TailnetNode {
     /// DERP, and UDP sockets to it and rebinds if it changes.
     ///
     /// May be called for every satisfied path without filtering. If the interface and addresses are unchanged, reruns
-    /// only STUN. This call is how the node can learn of an address-only change on the same Wi-Fi. Ignores the node's
-    /// own utun. Before or after `run()`, remembers only the latest value and opens on that interface when `run()`
-    /// starts.
+    /// only STUN. This call is the node's only way to learn of an address-only change on the same Wi-Fi. The node
+    /// ignores its own utun. Outside `run()`, the node only remembers the latest interface. A subsequent start of
+    /// `run()` opens sockets and connections on the remembered interface.
     public func setDefaultInterface(_ interface: NWInterface) {
         // If addresses cannot be read, decide without them. Advertise only endpoints found by STUN, with no local endpoints.
         let link = DefaultLink(interface, addresses: (try? LocalInterfaceAddresses.current()) ?? ([], []))

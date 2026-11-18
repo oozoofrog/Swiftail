@@ -38,7 +38,7 @@ public struct PeerIdentity: Sendable, Equatable {
 extension PeerIdentity {
     /// The identity of the node that owns `address` in the data plane. Returns nil when absent.
     ///
-    /// A peer address belongs to the peer whose AllowedIPs the engine assigned it to (`owners`,
+    /// A peer address belongs to the peer to whose AllowedIPs the engine added the address (`owners`,
     /// `EnginePeer.addressOwners`). Only that peer can send packets from the address, so the result for a connection's
     /// remote address identifies that connection's peer. Returns nil for addresses of nodes absent from the data plane
     /// (expired keys, unsupported peers) and uses the engine's choice (lower node ID) when multiple nodes have the same
@@ -50,9 +50,10 @@ extension PeerIdentity {
     /// Converts an IPv4-mapped IPv6 address to IPv4 before lookup. The data plane does not accept mapped peer
     /// addresses. Returns nil if the matched node's `StableID` is empty or its user profile is absent from the netmap.
     ///
-    /// - Parameters: - owners: Maps data plane addresses to their owner nodes. The node replaces this table alongside
-    ///   the engine peers (`TailnetNode.addressOwners`). - netmap: The netmap from which to read the local node, user
-    ///   profiles, and the local tailnet suffix.
+    /// - Parameters:
+    ///   - owners: Maps data plane addresses to their owner nodes. The node replaces this table when it updates the
+    ///     engine's peers (`TailnetNode.addressOwners`).
+    ///   - netmap: The netmap from which to read the local node, user profiles, and the local tailnet suffix.
     init?(address: IPAddress, owners: [IPAddress: Node], in netmap: Netmap) {
         let address = address.unmappedIPv4
         let peer = owners[address]
@@ -97,8 +98,11 @@ extension PeerIdentity {
     /// from other tailnets stay fully qualified (with the trailing dot removed). If the result is empty, uses the
     /// sanitized `hostname`, or the node public key text if that too is empty.
     ///
-    /// - Parameters: - nodeName: netmap `Node.name`. - hostname: `Hostinfo.hostname` reported by the node. - key: The
-    ///   node's public key. - magicDNSSuffix: The local tailnet suffix (`Netmap.magicDNSSuffix(ofNodeName:)`).
+    /// - Parameters:
+    ///   - nodeName: The netmap's `Node.name`.
+    ///   - hostname: The `Hostinfo.hostname` reported by the node.
+    ///   - key: The node's public key.
+    ///   - magicDNSSuffix: The local tailnet suffix (`Netmap.magicDNSSuffix(ofNodeName:)`).
     static func computedName(nodeName: String, hostname: String, key: NodePublicKey, magicDNSSuffix: String) -> String {
         let name = trimmingSuffix(magicDNSSuffix, from: nodeName)
         guard name.isEmpty else { return name }

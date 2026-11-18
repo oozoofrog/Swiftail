@@ -3,7 +3,7 @@
 /// Allows up to 10 ACKs per 5-second window. As in RFC 5961 §7, keeps only the window start and a count, with no timer.
 /// The connection uses this for challenge ACKs (RST and SYN checks) and ACKs in response to out-of-window segments
 /// without data or out-of-range ACKs (behaviors X2 and X3). Even if the peer floods it with invalid segments, this
-/// connection sends at most 10 replies per 5 seconds, preventing ACK loops.
+/// connection sends at most 10 rate-limited ACKs in each 5-second window, preventing ACK loops.
 struct ChallengeACKLimiter: Sendable, Equatable {
     /// The window duration (example in RFC 5961 §7).
     static let interval = Duration.seconds(5)

@@ -1,10 +1,14 @@
-/// A TCP port listening on this node's tailnet addresses (IPv4 and IPv6). Emits established connections in arrival
-/// order. Created by `TailnetNode.listen(port:)` and corresponds to tsnet `Listener` (`Accept`, `Close`).
+/// A listener for a TCP port on this node's tailnet addresses (IPv4 and IPv6).
 ///
-/// The stream ends when the listener closes or the node's `run()` ends. Canceling a Task waiting on the stream ends
-/// only that Task's stream and leaves the listener in place. Only one Task can run at a time. If another Task is
-/// already waiting, the later Task's stream ends immediately. Release (`deinit`) closes the listener. The next
-/// `listen(port:)` on the same port succeeds immediately before or during `run()`. During `run()`, the node promptly
+/// The listener yields established connections in arrival order. `TailnetNode.listen(port:)` creates it. It corresponds
+/// to tsnet's `Listener` (`Accept`, `Close`).
+///
+/// The stream ends when the listener closes or the node's `run()` ends. Canceling a task waiting on the stream ends
+/// only that task's stream and leaves the listener open. Only one task can wait for a connection at a time.
+/// If a task is already waiting, the later task's stream ends immediately.
+///
+/// Releasing the listener closes it in `deinit`. The next `listen(port:)` on the same port succeeds immediately
+/// before or during `run()`. During `run()`, the node promptly
 /// closes the stack listener and aborts queued connections (RST) asynchronously. If the same node calls `listen(port:)`
 /// sooner, that call closes them first. Each listener keeps up to 32 established connections that have not been
 /// accepted (contract behavior S5, decision D6).
@@ -45,7 +49,7 @@ public final class TailnetListener: AsyncSequence, Sendable {
         Iterator(listener: self)
     }
 
-    /// The listener's stream. Waits for the next connection to establish.
+    /// An iterator over established connections. It waits for the next connection if none is queued.
     public struct Iterator: AsyncIteratorProtocol {
         let listener: TailnetListener
 

@@ -21,7 +21,7 @@ extension TCPConnection {
 
     /// Takes up to `maximumLength` readable bytes from the front. The receive window opens by the amount read. A window
     /// update ACK goes out if the remaining advertised window is at most half the buffer and the SWS avoidance
-    /// threshold is exceeded (contract behavior F3, `windowUpdateIsDue`).
+    /// threshold is met (contract behavior F3, `windowUpdateIsDue`).
     package mutating func read(
         upTo maximumLength: Int, at now: ContinuousClock.Instant
     ) -> (bytes: [UInt8], outputs: [Output]) {
@@ -54,7 +54,7 @@ extension TCPConnection {
         return outputs
     }
 
-    /// Finishes sending (half-close). FIN goes out when the send buffer is empty, moving ESTABLISHED → FIN-WAIT-1 or
+    /// Finishes sending (half-close). FIN goes out after the last buffered byte has been sent, moving ESTABLISHED → FIN-WAIT-1 or
     /// CLOSE-WAIT → LAST-ACK. Reads can continue. If called before establishment, sends FIN after establishment.
     package mutating func finishWriting(at now: ContinuousClock.Instant) -> [Output] {
         guard canWrite else { return [] }

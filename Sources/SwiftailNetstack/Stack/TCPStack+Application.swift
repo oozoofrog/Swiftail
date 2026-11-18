@@ -63,13 +63,14 @@ extension TCPStack {
 
     // MARK: Connecting
 
-    /// Connects to `remote` (active open). The output contains a SYN, followed by `.established(id)` on establishment
-    /// or `.closed(id, .refused)` on refusal.
+    /// Starts an active open to `remote` and emits a SYN.
+    ///
+    /// Later processing emits `.established(id)` on establishment or `.closed(id, .refused)` on refusal.
     ///
     /// Uses the first local address in the destination's family as the source. Selects ports in order from 49152…65535,
     /// skipping 4-tuples used by connections or TIME-WAIT records (contract behavior S8).
     ///
-    /// Returns `limitReached` at 256 connections, 64 connections to that remote peer, or 1,024 TIME-WAIT records
+    /// Throws `limitReached` at 256 connections, 64 connections to that remote peer, or 1,024 TIME-WAIT records
     /// (contract behavior S6 and the text below it).
     package mutating func connect(
         to remote: IPEndpoint, at now: ContinuousClock.Instant
@@ -215,8 +216,8 @@ extension TCPStack {
 
     /// Ends all connections whose remote address is `remoteAddress` without sending anything (the stack side of contract behavior X10).
     ///
-    /// When applying a netmap, the node compares the current owner with the owner (node key) at establishment and calls
-    /// this for each address whose owner disappeared or changed. Emits `.closed(id, .peerRemoved)` for application-held
+    /// When applying a netmap or handling key expiration that recomputes peers, the node compares the current owner
+    /// (node key) with the previous owner and calls this for each address whose owner disappeared or changed. Emits `.closed(id, .peerRemoved)` for application-held
     /// connections, and removes establishing and queued connections without reporting them. Keeps TIME-WAIT records
     /// until their deadlines. A record responds with a challenge ACK to a SYN using its 4-tuple from the new owner.
     package mutating func removeConnections(toRemoteAddress remoteAddress: IPAddress) -> [Output] {

@@ -4,8 +4,8 @@ import Synchronization
 /// A table of state directories for nodes running in the same process. Prevents two nodes from sharing an identity file.
 ///
 /// Claims the directory at the start of `run()`, before opening files or sockets, and releases it at the end. An
-/// existing claim yields `stateDirectoryInUse`. Does not exclude other processes. The first adopter has two tunnel
-/// extensions and runs only one at a time, so no lock file is left. `docs/contracts/SwiftailTunnel.md` behavior P 3.
+/// existing claim yields `stateDirectoryInUse`. Claims apply within the process. The first adopter has two tunnel
+/// extensions and runs only one at a time, so the table uses no lock file. `docs/contracts/SwiftailTunnel.md` behavior P 3.
 final class StateDirectoryClaims: Sendable {
     /// The process-wide table used by nodes.
     static let shared = StateDirectoryClaims()

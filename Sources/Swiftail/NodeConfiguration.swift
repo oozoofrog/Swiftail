@@ -1,6 +1,6 @@
 import Foundation
 
-/// The configuration needed to start a `TailnetNode`.
+/// The configuration for starting a `TailnetNode`.
 ///
 /// Contains an auth key, which is redacted in `description` and `dump`. Logging the configuration value as is does not
 /// expose the secret. `docs/contracts/SwiftailEngine.md`, “Node API,” and `docs/contracts/SwiftailTunnel.md`, “Public

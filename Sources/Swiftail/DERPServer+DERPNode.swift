@@ -8,7 +8,7 @@ import SwiftailDERP
 
 /// Converts tailcfg DERP nodes to servers for `DERPClient` to connect to. The node uses this when opening a region connection.
 ///
-/// Contract `docs/contracts/SwiftailEngine.md` node API behavior 3, `docs/protocol-notes/derp-stun.md` §4.1.
+/// Contract `docs/contracts/SwiftailEngine.md` “Node API,” behavior 3, `docs/protocol-notes/derp-stun.md` §4.1.
 extension DERPServer {
     /// Connectable servers among the region's nodes, in DERPMap order. Returns an empty list if the region is absent or has no usable nodes.
     static func servers(of region: DERPRegion?) -> [DERPServer] {

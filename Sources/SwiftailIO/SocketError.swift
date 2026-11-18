@@ -1,5 +1,7 @@
-/// A `NetworkSocket` failure. Messages contain only the Network framework's error description and omit transmitted or
-/// received bytes and secrets.
+/// A socket or tunnel I/O failure.
+///
+/// `NetworkSocket` can include the Network framework's error description. POSIX I/O uses errno names, and utun
+/// validation uses short reason names. Messages omit transmitted or received bytes and secrets.
 ///
 /// Neither `send` nor `write` reports a separate send failure. The connection enters the failed state, which the next
 /// `receive()` reports as `readFailed`.

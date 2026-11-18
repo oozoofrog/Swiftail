@@ -7,7 +7,7 @@
 /// tab, and DEL in the status line and header values. Header names accept only HTTP token characters. Leading and
 /// trailing spaces and tabs are stripped from values.
 ///
-/// `docs/protocol-notes/control-transport.md` §3.6, §4.4 step 2, 3~4 (origin: tailscale.com
+/// `docs/protocol-notes/control-transport.md` §3.6, §4.4 step 2, items 3~4 (origin: tailscale.com
 /// `control/controlhttp/client.go`).
 package struct HTTPResponseHead: Sendable {
     /// One header line. The name and value retain their original bytes. A value can contain bytes of 0x80 or higher.
@@ -125,8 +125,8 @@ extension HTTPResponseHead {
             (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
         }
 
-        /// Bytes disallowed within a line are C0 control characters other than tab and DEL (field-value in RFC 9110
-        /// §5.5 and reason-phrase in RFC 9112 §4).
+        /// Rejects DEL and all C0 control characters except tab (RFC 9110 §5.5 for field-value and RFC 9112 §4 for
+        /// reason-phrase).
         fileprivate static func isForbiddenControl(_ byte: UInt8) -> Bool {
             (byte < 0x20 && byte != 0x09) || byte == 0x7F
         }

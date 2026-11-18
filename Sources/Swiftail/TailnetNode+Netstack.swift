@@ -16,12 +16,12 @@ import SwiftailNetstack
 ///
 /// The stack is a value stored on the node actor. Exchanges between the stack, engine, and `Magicsock` complete in one
 /// actor execution without `await`. There is therefore no buffer, drop, or second timer between the node and stack
-/// (Structure, item 3).
+/// (contract “Architecture,” item 3).
 ///
 /// Work from one event runs through a queue (`Netstack.inbox`) without recursion (behavior N4). Packets the engine
 /// emits for the device (from peers, or looped back from a connection to a local address) accumulate in the queue. Pass
 /// them to the stack in order when the node's outermost processing pass ends (`settleNetstack(at:)`). When the queue is
-/// empty, call `advance(to:)` at the same time to emit delayed ACKs.
+/// empty, call `advance(to:)` with the same timestamp to emit delayed ACKs.
 ///
 /// Waiting calls suspend with `suspend(until:)` and stack events wake them. The wakeup channel carries no value. The
 /// resumed call checks state again and decides what to do. This avoids losing data or connections if cancellation races
@@ -85,7 +85,7 @@ extension TailnetNode {
         }
     }
 
-    /// Handles released handles. Runs until canceled (behavior N9).
+    /// Cleans up released connection and listener handles. Runs until canceled (behavior N9).
     func releaseHandles() async {
         for await release in handleReleaseStream {
             switch release {
@@ -118,8 +118,8 @@ extension TailnetNode {
     }
 
     /// If the stack took a step during this pass, passes queued packets to it in order. Once the queue is empty, calls
-    /// `advance(to:)` at the same time to send due ACKs. If output loops back (a connection to a local address) and
-    /// fills the queue again, repeats until done. The buffers bound the loop. Called when the node's outermost
+    /// `advance(to:)` with the same timestamp to send due ACKs. If output loops back (a connection to a local address) and
+    /// fills the queue again, repeats until done. The stack's buffering limits ensure that the loop terminates. Called when the node's outermost
     /// processing pass ends (`endProcessing(at:)`). A whole group of received UDP datagrams concludes with one
     /// `advance`.
     func settleNetstack(at now: ContinuousClock.Instant) {
@@ -183,7 +183,7 @@ extension TailnetNode {
         }
     }
 
-    /// Logs one `Connection ended` line (contract “Connection Closure Statistics Log”). Contains only numbers and Booleans.
+    /// Logs one `Connection ended` line (contract “Connection close statistics log”). Contains only numbers and Booleans.
     private func logClose(
         _ reason: TCPStack.CloseReason, _ statistics: TCPConnection.Statistics, afterRelease: Bool,
         at now: ContinuousClock.Instant
@@ -235,7 +235,7 @@ extension TailnetNode {
     /// Called whenever the engine recomputes peers, both when applying a netmap and after handling key expiration
     /// (which changes address ownership without a new netmap). Replaces the owner table with the one the engine built
     /// alongside its peers and passes it to the stack. Since `whoIs` and the stack see the same table from the same
-    /// instant, `whoIs` on a live connection's remote address identifies the peer that established the connection (host
+    /// instant, `whoIs` on a live connection's remote address identifies the peer on the other end when the connection was established (host
     /// contract behavior W6).
     ///
     /// Without an engine (before registration), there is no data plane. Performs the same calculation directly from the netmap.
@@ -248,7 +248,7 @@ extension TailnetNode {
     /// each data plane peer address's owner (node key). Ends connections for addresses whose owner disappeared or
     /// changed (`peerRemoved`, sends nothing). Prevents a different node inheriting an address from continuing the
     /// previous node's connection (contract lead session decision N8). Also passes per-peer address groups from the
-    /// same table so the stack counts one peer's share across its IPv4 and IPv6 addresses.
+    /// same table so connections across a peer's IPv4 and IPv6 addresses count toward the same per-peer limit.
     ///
     /// Peer packets have their source checked against that peer's AllowedIPs (engine contract M3 behaviors 2 and 5), so
     /// all connections for an address were established with its owner at the time. Compare owners per address without
@@ -322,7 +322,7 @@ struct ConnectionRecord: Sendable {
     var hasWriteEvent = false
     /// The three-way handshake completed. True from the start on an accepted connection.
     var isEstablished = false
-    /// The application called `finishWriting`. Later `write` calls return `closed`.
+    /// The application called `finishWriting`. Later `write` calls throw `closed`.
     var hasFinishedWriting = false
     /// The closure reason reported by the stack. For `finished`, returns nil after remaining data is read.
     var closeReason: TCPStack.CloseReason?
@@ -411,8 +411,8 @@ extension TCPStack.CloseReason {
 }
 
 extension TCPConnection.Statistics {
-    /// The line to log when the connection ends. It contains only numbers and Booleans. The contract's “Connection
-    /// Closure Statistics Log” describes each value. If the connection ended after the app released it, appends
+    /// The line to log when the connection ends. It contains only numbers and Booleans. The contract's “Connection close
+    /// statistics log” describes each value. If the connection ended after the app released it, appends
     /// `, ended after release`.
     func closeLogLine(
         reason: TCPStack.CloseReason, closedAt now: ContinuousClock.Instant, afterRelease: Bool

@@ -2,7 +2,7 @@ import Dispatch
 
 /// The error `withTimeout` throws when a deadline expires.
 package struct TimeoutError: Error, Sendable, Equatable {
-    /// The duration that elapsed.
+    /// The timeout duration.
     package let duration: Duration
 }
 
@@ -10,7 +10,7 @@ package struct TimeoutError: Error, Sendable, Equatable {
 ///
 /// Races the operation and timer as two children in a single TaskGroup. The first to finish supplies the result and the
 /// other is canceled. If the operation ignores cancellation, this waits until it finishes, so use it only for
-/// operations that close on cancellation, such as socket operations.
+/// operations that respond to cancellation, such as socket operations that close on cancellation.
 ///
 /// The timer uses a cancelable dispatch timer in place of `Task.sleep`. A canceled `Task.sleep` returns immediately, but its Task and timer remain
 /// until the original deadline. In measurements on the Swift 6.4 runtime, applying a 5-second deadline to operations

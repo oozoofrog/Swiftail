@@ -117,7 +117,7 @@ extension TailnetNode {
     }
 
     /// Installs the netmap in the engine and `Magicsock`. Closes connections to regions removed from the DERPMap or
-    /// whose server definitions changed. Finally, takes ownership of the owner table the engine built with the peers
+    /// whose server definitions changed. Finally, retains the address owner table the engine built with the peers
     /// and passes it to the stack (`updateAddressOwners(for:)`).
     ///
     /// When a peer leaves, `Magicsock` emits a path event (nil) for it. Use the name from before the table update for that event (N6).
@@ -125,8 +125,8 @@ extension TailnetNode {
         let now = ContinuousClock.now
         let wallClock = Date()
         let regions = netmap.derpMap?.regions ?? [:]
-        // A connection reconnects using only the server list it was created with, so close regions whose definitions
-        // changed to use new servers (`derp-region-redefined` in Go `derp.go`). Reopen the home region immediately and
+        // A connection reconnects using only the server list it was created with, so close connections to regions whose definitions
+        // changed so that subsequent connections use the new servers (`derp-region-redefined` in Go `derp.go`). Reopen the home region immediately and
         // the others on the next send.
         for (region, link) in derpLinks where DERPServer.servers(of: regions[region]) != link.servers {
             closeDERPLink(to: region)

@@ -1,9 +1,10 @@
-/// Fixed-capacity circular byte storage shared by the send and receive buffers.
+/// Fixed-capacity circular byte storage used by both buffer types.
 ///
 /// Reuses the same storage throughout the connection, avoiding a new allocation per segment or read. All positions are
 /// offsets from the front (`head`). The caller is responsible for keeping offsets within `capacity`.
 ///
-/// Storage grows only as it is written (contract behavior M: idle connections do not hold buffers). Unwritten slots are never read.
+/// Storage grows only as it is written, so a connection that has never buffered data holds no byte storage
+/// (contract behavior M). Unwritten slots are never read.
 struct ByteRing: Sendable {
     /// The minimum initial allocation, so small connections always start at about 4KiB.
     private static let minimumAllocation = 4096
