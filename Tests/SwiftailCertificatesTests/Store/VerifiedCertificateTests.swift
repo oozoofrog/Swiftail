@@ -204,4 +204,17 @@ struct VerifiedCertificateTests {
             #expect(text.contains("notAfter"))
         }
     }
+
+    @Test("인증서의 문자열 표현과 덤프에서 tailnet 도메인을 가린다(동작 K2)")
+    func tailnetCertificateRedactsDomain() throws {
+        let verified = try pki.verify(pemChain([pki.leaf(), pki.intermediate.certificate]))
+        let certificate = TailnetCertificate(verified)
+        #expect(certificate.domain == TestPKI.domainName)
+
+        var dumped = ""
+        dump(certificate, to: &dumped)
+        #expect(!String(describing: certificate).contains(TestPKI.domainName))
+        #expect(!String(reflecting: certificate).contains(TestPKI.domainName))
+        #expect(!dumped.contains(TestPKI.domainName))
+    }
 }

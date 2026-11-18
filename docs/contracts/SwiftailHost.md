@@ -517,6 +517,7 @@ iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge �
 
 1. 비밀은 ACME 계정 키, 인증서 개인 키, (가져올 때) Go 상태의 machine·node 키다. 파일은 0600이고 메모리에서는 CryptoKit의 키 타입으로만 든다. `TailnetCertificate`·`CertificateManager`의 `description`과 `dump`에 키가 나오지 않는다(`CustomReflectable`).
 2. 로그(`os.Logger(subsystem: "Swiftail")`)에 남기는 것: 발급의 시작과 끝, 실패의 종류, 다음 시도까지의 간격, 인증서의 만료 날짜, 다리가 이은 연결 수. 남기지 않는 것: 키, JWS 본문, nonce, token과 키 인가, 계정 URL, ACME 문제 문서의 `detail`(식별자가 들어 있을 수 있다. `status`로만 낸다), tailnet 이름이 든 도메인 전체, 주소 전체, 로그인 이름.
+   `TailnetCertificate`의 문자열 표현과 `dump`에는 도메인을 가리고 유효 기간만 표시한다.
 3. 오류의 연관 문자열에는 키·경로·기술자 번호를 넣지 않는다(M5의 규칙).
 4. 이 범위에는 비밀 값을 견주는 곳이 없다. 공개 키의 비교(동작 S3 ④, X3 ③)와 포트 번호의 조회뿐이다. 비밀 비교가 생기면 `SwiftailCrypto`의 상수 시간 비교를 쓴다.
 5. **인증서는 공개된다**: Let's Encrypt가 발급한 인증서는 공개 Certificate Transparency 로그에 실리고 거기에 기기 이름과 tailnet 이름이 들어간다(Let's Encrypt의 속도 제한 문서가 발급된 인증서를 CT 로그 검색으로 찾으라고 안내한다). Go 호스트도 지금 같다. 사용자 확인 필요 U3에 적는다.

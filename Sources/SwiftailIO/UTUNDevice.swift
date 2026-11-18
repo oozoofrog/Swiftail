@@ -30,8 +30,8 @@ import Synchronization
 ///   `AsyncThrowingStream`은 오류 종류를 `any Error`로만 받으므로 흐름 자체는 던지지 않고 이유를 따로 둔다.
 /// - **쓰기는 기다리지 않고 큐도 없다.** 실패한 패킷은 `SocketError.sendFailed`로 알리고 부르는 쪽이 버린다. 쓰기 실패는 장치가 닫혔다는
 ///   뜻이 아니다. 장치의 끝은 읽기 쪽이 알린다(계약 U5).
-/// - **기술자는 한 번만 닫는다.** `close()`는 기술자를 상태에서 떼어 낸 뒤 읽기 원천을 취소하고, 실제 `close(2)`는 원천의 취소 처리기가
-///   한다. 취소 처리기는 돌고 있던 읽기 처리기가 끝난 뒤에 돌므로 읽는 중에 닫히지 않고, `close()` 뒤의 `write`는 상태가 비어 있어
+/// - **기술자는 한 번만 닫는다.** 읽기 실패와 `close()`는 기술자를 상태에서 떼어 낸 뒤 흐름을 끝내고 읽기 원천을 취소한다. 실제
+///   `close(2)`는 읽기 처리기가 끝난 뒤 취소 처리기가 한다. 닫힌 뒤의 `write`는 상태가 비어 있어
 ///   기술자를 건드리지 않는다(다른 곳이 재사용한 번호를 쓰는 일이 없다). 버리면(`deinit`) 닫힌다. `DatagramSocket`과 같다.
 /// - **구조적 동시성을 깨지 않는다.** 읽기는 Task가 아니라 디스패치 원천이 맡고, 흐름을 기다리는 Task가 취소되면 `for await`가
 ///   끝난다.
@@ -98,9 +98,11 @@ package final class UTUNDevice: Sendable {
     }
 
     /// 복제본을 `verify`로 확인한 뒤 읽기를 시작한다. 시험이 utun 대신 `socketpair`를 붙이려고 확인을 바꿔 끼운다.
+    /// `onReadEvent`는 시험에서 읽기 처리기 호출을 센다.
     init(
         duplicating descriptor: Int32,
         mtu: Int,
+        onReadEvent: (@Sendable () -> Void)? = nil,
         verifying verify: (Int32) throws(SocketError) -> Void
     ) throws(SocketError) {
         guard Self.supportedMTU.contains(mtu) else { throw .invalidDevice("mtu") }
@@ -122,13 +124,15 @@ package final class UTUNDevice: Sendable {
         self.reader = reader
         let queue = DispatchQueue(label: "Swiftail.UTUNDevice")
         let source = DispatchSource.makeReadSource(fileDescriptor: copy, queue: queue)
-        source.setEventHandler {
-            reader.buffer.withLock { Self.drain(copy, using: &$0, mtu: mtu, reader: reader, into: output) }
+        state = Mutex(Open(descriptor: copy, source: source, continuation: output))
+        source.setEventHandler { [weak self] in
+            onReadEvent?()
+            let failure = reader.buffer.withLock { Self.drain(copy, using: &$0, mtu: mtu, into: output) }
+            if let failure { self?.close(readFailure: failure) }
         }
         source.setCancelHandler {
             Darwin.close(copy)
         }
-        state = Mutex(Open(descriptor: copy, source: source, continuation: output))
         source.activate()
     }
 
@@ -152,9 +156,16 @@ package final class UTUNDevice: Sendable {
 
     /// 복제본을 닫는다. 흐름이 오류 없이 끝나고 읽기가 멈춘다. 여러 번 불러도 된다. 호출자의 기술자는 닫지 않는다.
     package func close() {
-        let opened = state.withLock { state in
-            defer { state = nil }
-            return state
+        close(readFailure: nil)
+    }
+
+    private func close(readFailure: SocketError?) {
+        let opened = state.withLock { state -> Open? in
+            guard let opened = state else { return nil }
+            // 먼저 닫는 쪽이 흐름의 종료 이유를 정한다.
+            if let readFailure { reader.failure.withLock { $0 = readFailure } }
+            state = nil
+            return opened
         }
         opened?.continuation.finish()
         opened?.source.cancel()
@@ -250,15 +261,14 @@ package final class UTUNDevice: Sendable {
 
     /// 읽을 것이 없을 때까지 읽어 흐름에 넣는다. 읽기 원천의 처리기 안에서만 부른다.
     ///
-    /// 끝(0바이트)이나 예기치 않은 오류(`EAGAIN`·`EINTR` 밖)는 장치가 닫힌 것이므로 흐름을 오류로 끝낸다. 끝난 흐름에 다시 끝내도
-    /// 아무 일이 없으므로, 처리기가 헛돌아도(커널이 계속 읽을 수 있다고 알릴 때) 소비자는 영향이 없고 `close()`가 멈춘다.
+    /// 끝(0바이트)이나 예기치 않은 오류(`EAGAIN`·`EINTR` 밖)를 돌려줘 처리기가 읽기 원천을 취소하게 한다.
+    /// EOF에서도 읽기 사건이 계속 오는 것을 막는다.
     private static func drain(
         _ descriptor: Int32,
         using buffer: inout [UInt8],
         mtu: Int,
-        reader: Reader,
         into output: AsyncStream<[UInt8]>.Continuation
-    ) {
+    ) -> SocketError? {
         while true {
             switch readOne(descriptor, into: &buffer) {
             case .frame(let count):
@@ -269,11 +279,9 @@ package final class UTUNDevice: Sendable {
             case .failed(EINTR):
                 continue
             case .failed(EAGAIN):
-                return
+                return nil
             case .failed(let code):
-                reader.failure.withLock { $0 = .readFailed(code == 0 ? "EOF" : errnoName(code)) }
-                output.finish()
-                return
+                return .readFailed(code == 0 ? "EOF" : errnoName(code))
             }
         }
     }
