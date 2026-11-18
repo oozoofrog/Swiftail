@@ -1,59 +1,59 @@
-# Swiftail 호스트 계약 (M7, 초안)
+# Swiftail Host Contract (M7, Draft)
 
-M7의 목표는 **첫 사용처(RemoteDebug)의 Mac 호스트가 Go 코어(tsnet) 없이 Swiftail만으로 지금 하는 일을 하는 것**이다(`docs/plan.md` 7절 M7). 끝에는 Go 코어 전체를 걷어낸다. M6까지 Swiftail은 프로세스 안에서 tailnet 주소로 TCP를 듣고 건다(`listen(port:)`·`connect(to:port:)`, 바이트 흐름). M7은 그 위에 Go 호스트가 Tailscale에 기대던 나머지를 더한다: 연결의 상대가 누구인지(`WhoIs`), iOS 설치기가 요구하는 유효한 HTTPS 인증서(ts.net 인증서), 그 인증서로 TLS를 끝내는 OS 리스너까지 바이트를 이어 주는 루프백 다리, 그리고 Go 상태에서 신원을 가져오는 길이다.
+The goal of M7 is for **the first adopter's (RemoteDebug's) Mac host to do what it does today using Swiftail alone, without the Go core (tsnet)** (`docs/plan.md` §7 M7). The entire Go core is ultimately removed. Through M6, Swiftail listens for and opens TCP connections on tailnet addresses in-process (`listen(port:)` and `connect(to:port:)`, byte streams). M7 adds the rest of what the Go host relied on Tailscale for: identifying the peer on a connection (`WhoIs`), a valid HTTPS certificate required by the iOS installer (a ts.net certificate), a loopback bridge that carries bytes to an OS listener that terminates TLS with that certificate, and a way to import identity from Go state.
 
-이 문서는 **초안**이다. 구현 전에 "첫 사용처 확인 필요"를 첫 사용처 세션에 보내 검토받고, "총괄 확인 필요"와 "사용자 확인 필요"를 정한 뒤 확정한다.
+This document is a **draft**. Before implementation, send "First Adopter Confirmation Required" to the first adopter session for review, resolve "Lead Session Confirmation Required" and "Owner Confirmation Required," then finalize it.
 
-프로토콜 세부는 [whois-certs-state.md](../protocol-notes/whois-certs-state.md)(아래에서 "노트". 2026-11-15 다른 세션이 Go 소스와 RFC 원문에 대조해 검증했다. 주장별 판정은 노트 9장, 이 계약과의 대조는 노트 10장이며, 그 반영은 끝의 "노트 검증 반영" 절에 적었다)와 [dns-state-node.md](../protocol-notes/dns-state-node.md)(아래에서 "DNS 노트") 3.2·4.8·4.9를 따른다. 이 문서는 범위, 타깃, 공개 API, 동작, 한도, 시험과 관문만 정한다.
+Protocol details follow [whois-certs-state.md](../protocol-notes/whois-certs-state.md) (the "notes" below. Another session verified them against the Go source and original RFCs on 2026-11-15. The verdicts for individual claims are in notes §9, the comparison against this contract is in notes §10, and the resulting changes are in "Changes from Notes Verification" at the end) and [dns-state-node.md](../protocol-notes/dns-state-node.md) (the "DNS notes" below) §§3.2, 4.8, and 4.9. This document defines only the scope, targets, public API, behavior, limits, tests, and gates.
 
-기존 계약과의 관계: [SwiftailNetstack.md](SwiftailNetstack.md)(M6)의 총괄 확인 N9(연결 위의 TLS)와 "첫 사용처 검토 결과" 1을 이 문서가 닫는다. [SwiftailTunnel.md](SwiftailTunnel.md)(M5)의 결정 D8(상태 디렉터리는 따로)과 질문 16(기존 사용자의 전환)을 이 문서가 이어받는다. 어긋나면 이 문서가 앞선다.
+Relationship to existing contracts: This document closes lead session confirmation N9 (TLS over the connection) and item 1 of "First Adopter Review Results" in [SwiftailNetstack.md](SwiftailNetstack.md) (M6). It carries forward decision D8 (separate state directories) and question 16 (migration for existing users) of [SwiftailTunnel.md](SwiftailTunnel.md) (M5). This document takes precedence in a conflict.
 
-이미 정해진 것(첫 사용처의 답, `SwiftailNetstack.md` "첫 사용처 검토 결과"): HTTP 서버는 첫 사용처가 Swift로 쓴다(HTTP/1.1). TLS는 루프백 다리로 한다(`127.0.0.1`의 `NWListener`, ALPN `http/1.1`, 최소 TLS 1.2). 리스너는 하나, 연결은 기기당 10개 안팎이다. 프록시 모드는 옮기지 않는다. iOS에서는 `.inProcess`를 쓰지 않는다.
+Already decided (the first adopter's answer, "First Adopter Review Results" in `SwiftailNetstack.md`): The first adopter writes the HTTP server in Swift (HTTP/1.1). TLS uses a loopback bridge (`NWListener` on `127.0.0.1`, ALPN `http/1.1`, minimum TLS 1.2). One listener, around 10 connections per device. Proxy mode is not migrated. iOS does not use `.inProcess`.
 
-조사한 것: 첫 사용처 저장소의 커밋 `2814b2c`(읽기만), `tailscale.com` v1.104.6, RFC 원문, macOS SDK의 머리 파일, 노트 4.6의 작은 형식 검사(키·서명의 크기, PEM 읽기·쓰기, 서명 검증. 검증 세션이 다시 실행했다). 작성 세션이 했다고 적은 CSR·TLS·키체인 실험은 기록이 없어 확인되지 않았다(노트 8장). 이 계약은 그것을 근거로 쓰지 않는다.
+Investigated: commit `2814b2c` of the first adopter's repository (read-only), `tailscale.com` v1.104.6, original RFCs, macOS SDK headers, and the small format checks in notes §4.6 (key and signature sizes, PEM reading and writing, signature verification. The verification session reran them). The CSR, TLS, and Keychain experiments reported by the authoring session are unverified because there is no record (notes §8). This contract does not rely on them.
 
-## 1. 목표와 범위
+## 1. Goals and Scope
 
-| 넣는다 | 근거 |
+| Included | Rationale |
 | --- | --- |
-| `whoIs`: tailnet 주소 → 노드와 사용자 | 첫 사용처는 모든 `/v1/*`·`/i/*` 요청에서 연결의 원격 주소로 신원을 확인하고 허용 목록(노드 `StableID`)에 견준다(RemoteDebug `docs/protocol.md` 3절, `core/internal/host/host.go:230-260`) |
-| ts.net 인증서의 발급·저장·갱신(ACME DNS-01, Let's Encrypt) | iOS 설치기는 `https` 매니페스트와 IPA만 받는다(같은 문서 4.5, 11절). Go 호스트는 `CertPair`·`GetCertificate`로 얻는다(RemoteDebug `core/internal/node/tls.go:22-51`) |
-| 제어 서버의 `set-dns` 요청 | DNS-01 레코드를 올리는 유일한 길이다(노트 3.2) |
-| 루프백 다리: Swiftail 연결 ↔ `127.0.0.1`의 OS TCP 리스너, 그 리스너가 상대의 신원을 찾는 길 | `SwiftailNetstack.md` N9. 역압과 반닫힘을 정확히 잇는 일이라 Swiftail이 낸다(총괄 확인 필요 H2) |
-| Go 상태 디렉터리에서 신원 가져오기(읽기 전용, 한 번) | plan 9절의 열린 결정. **설계만 넣고, 구현은 사용자 결정(U1) 뒤에 연다** |
-| C API 18개의 대응표, RemoteDebug e2e 시나리오의 뼈대 재현 | plan 7절 M7 |
+| `whoIs`: tailnet address → node and user | For every `/v1/*` and `/i/*` request, the first adopter verifies identity from the connection's remote address and checks the allowlist (node `StableID`) (RemoteDebug `docs/protocol.md` §3, `core/internal/host/host.go:230-260`) |
+| ts.net certificate issuance, storage, and renewal (ACME DNS-01, Let's Encrypt) | The iOS installer accepts only `https` manifests and IPAs (same document §§4.5 and 11). The Go host obtains them with `CertPair` and `GetCertificate` (RemoteDebug `core/internal/node/tls.go:22-51`) |
+| Control server `set-dns` request | The only way to publish the DNS-01 record (notes §3.2) |
+| Loopback bridge: Swiftail connection ↔ OS TCP listener on `127.0.0.1`, and a way for that listener to find the peer's identity | `SwiftailNetstack.md` N9. Swiftail provides it because it must convey backpressure and half-close correctly (lead session confirmation H2 required) |
+| Import identity from a Go state directory (read-only, once) | Open decision in plan §9. **Include only the design and start implementation after owner decision U1** |
+| Mapping for 18 C APIs, basic reproduction of the RemoteDebug e2e scenario | Plan §7 M7 |
 
-| 뺀다 | 까닭 | 필요해지는 시점 |
+| Excluded | Reason | When it becomes necessary |
 | --- | --- | --- |
-| HTTP 서버, TLS 종단 | 첫 사용처가 Network 프레임워크로 한다(정해진 것) | — |
-| Swift로 쓴 TLS, SecureTransport | `SwiftailNetstack.md` N9와 검토 결과 1에서 뺐다 | — |
-| 인증서: TLS-ALPN-01, 와일드카드, 자기 FQDN이 아닌 이름, ARI, RSA 키, 계정 연락처·EAB, 계정 키 교체, 폐기 | 첫 사용처는 자기 FQDN 하나만 쓴다. 나머지는 Funnel·Serve용이거나 Go의 Tailscale 통합도 쓰지 않는다(노트 6장) | 그런 사용처가 생길 때 |
-| `whoIs`의 capability(`CapMap`), node 키로 찾기 | 첫 사용처가 읽지 않는다(노트 4.1 7) | 앱 권한을 ACL의 grant로 나누는 사용처가 생길 때 |
-| iOS에서의 인증서·다리 | iOS 터널 확장은 서버가 아니다. 타깃은 iOS에서도 빌드되지만 관문은 macOS만 본다 | iOS에서 듣는 사용처가 생길 때 |
-| 프록시 모드(`rd_proxy_start`) | 호출하는 곳이 없고 Go와 함께 없어진다(검토 결과 2) | — |
-| 호스트의 REST·페어링·세션·게시, 같은 네트워크 직접 연결 리스너, 업데이트 페이지 | Tailscale과 무관한 첫 사용처의 로직이다(4절 대응표) | — |
-| 첫 사용처 저장소 바꾸기 | 별도 승인 뒤에 한다(plan 7절 M7) | 관문 (가) 통과 뒤 |
+| HTTP server, TLS termination | The first adopter handles these with the Network framework (decided) | — |
+| TLS written in Swift, SecureTransport | Excluded in `SwiftailNetstack.md` N9 and review result 1 | — |
+| Certificates: TLS-ALPN-01, wildcards, names other than the node's own FQDN, ARI, RSA keys, account contact and EAB, account key rollover, revocation | The first adopter only uses its own FQDN. The rest are for Funnel and Serve or are unused even by Go's Tailscale integration (notes §6) | When such a use case arises |
+| `whoIs` capabilities (`CapMap`), lookup by node key | The first adopter does not read them (notes §4.1 item 7) | When an adopter uses ACL grants to divide app permissions |
+| Certificates and bridge on iOS | The iOS tunnel extension is not a server. The targets build on iOS too, but the gate covers macOS only | When an adopter listens on iOS |
+| Proxy mode (`rd_proxy_start`) | No callers, and it goes away with Go (review result 2) | — |
+| Host REST, pairing, sessions, publishing, direct same-network listener, update page | First adopter logic unrelated to Tailscale (§4 mapping) | — |
+| Changes to the first adopter's repository | Requires separate approval (plan §7 M7) | After gate (a) passes |
 
-## 타깃과 의존 방향
+## Targets and Dependency Direction
 
-| 타깃 | 종류 | M7에서 더하는 것 |
+| Target | Kind | Added in M7 |
 | --- | --- | --- |
-| `SwiftailControl` | 기존 | `ControlClient.setDNS(name:value:)`(Noise 위의 `POST /machine/set-dns`), Go 상태 파일 읽기(`GoStateFile`, `package`) |
-| `Swiftail` | 기존 | 공개: `whoIs(_:)`, `PeerIdentity`, (U1 뒤) `GoStateImport`. `package`: 인증서 타깃이 쓰는 접점(`setDNS`, 자기 FQDN·cert 도메인·상태의 흐름, 상태 디렉터리) |
-| `SwiftailIO` | 기존(`package`) | `NetworkSocket`: 루프백 평문 연결, 자기 쪽 포트 읽기, 쓰기 끝내기(FIN) |
-| `SwiftailCertificates` | **새 제품** | ACME 메시지와 주문 절차(값 타입), JWS·JWK, DER 쓰기와 CSR, PEM, 인증서 저장과 검증, 가장자리 `CertificateManager` |
-| `SwiftailLoopback` | **새 제품** | `LoopbackBridge` |
+| `SwiftailControl` | Existing | `ControlClient.setDNS(name:value:)` (`POST /machine/set-dns` over Noise), reading Go state files (`GoStateFile`, `package`) |
+| `Swiftail` | Existing | Public: `whoIs(_:)`, `PeerIdentity`, (after U1) `GoStateImport`. `package`: interfaces used by the certificate target (`setDNS`, stream of own FQDN, cert domains and state, and state directory) |
+| `SwiftailIO` | Existing (`package`) | `NetworkSocket`: plaintext loopback connection, reading the local port, finishing writes (FIN) |
+| `SwiftailCertificates` | **New product** | ACME messages and order procedure (value types), JWS and JWK, DER writing and CSR, PEM, certificate storage and verification, edge `CertificateManager` |
+| `SwiftailLoopback` | **New product** | `LoopbackBridge` |
 
 ```
-SwiftailControl ◄─ Swiftail ◄─┬─ SwiftailCertificates   (CryptoKit, Security, Foundation의 URLSession)
+SwiftailControl ◄─ Swiftail ◄─┬─ SwiftailCertificates   (CryptoKit, Security, Foundation's URLSession)
                                └─ SwiftailLoopback       (SwiftailIO, Network)
 ```
 
-- 두 새 타깃을 `Swiftail` 밖에 두는 까닭: iOS 터널 확장은 `Swiftail`만 링크하고 50MiB 한도와 바이너리 크기를 본다. ACME·DER·다리는 서버 노릇을 하는 앱만 쓴다. 같은 패키지 안이므로 `package` 접근으로 노드의 안쪽에 닿고, `Swiftail`의 공개 표면은 `whoIs` 하나만 늘어난다(총괄 확인 필요 H1).
-- 새로 쓰는 시스템 프레임워크: Security(`SecCertificate`·`SecTrust`로 받은 사슬을 검증한다), Foundation의 `URLSession`(ACME 서버와의 HTTPS). plan 4절(c)의 "CryptoKit, Network, Foundation만"에 Security가 더해진다(총괄 확인 필요 H8). 외부 패키지와 C 코드는 없다.
-- 첫 사용처는 `import Swiftail`, `import SwiftailBase`(`IPAddress`·`IPEndpoint`), `import SwiftailCertificates`, `import SwiftailLoopback`을 쓴다.
+- Reason to keep the two new targets outside `Swiftail`: the iOS tunnel extension links only `Swiftail` and is subject to the 50MiB limit and binary size considerations. Only apps acting as servers use ACME, DER, and the bridge. Since they are in the same package, they reach the node's internals through `package` access, and `whoIs` is the only addition to `Swiftail`'s public surface (lead session confirmation H1 required).
+- Newly used system frameworks: Security (verify the received chain with `SecCertificate` and `SecTrust`), Foundation's `URLSession` (HTTPS with the ACME server). Security is added to "Only CryptoKit, Network, and Foundation" in plan §4(c) (lead session confirmation H8 required). No external packages or C code.
+- The first adopter uses `import Swiftail`, `import SwiftailBase` (`IPAddress` and `IPEndpoint`), `import SwiftailCertificates`, and `import SwiftailLoopback`.
 
-## 2. 공개 API 초안
+## 2. Draft Public API
 
 ### `Swiftail`
 
@@ -61,33 +61,33 @@ SwiftailControl ◄─ Swiftail ◄─┬─ SwiftailCertificates   (CryptoKit, 
 import SwiftailBase
 
 extension TailnetNode {
-    /// 이 tailnet 주소를 가진 노드가 누구인지 지금의 netmap에서 찾는다. tsnet `LocalClient().WhoIs(addr)`.
+    /// Looks up the node that owns this tailnet address in the current netmap. tsnet `LocalClient().WhoIs(addr)`.
     ///
-    /// 데이터면이 그 주소의 주인으로 삼은 피어(그 주소를 WireGuard AllowedIPs로 가진 피어)와 자기 노드만 찾는다. 서브넷 경로
-    /// 안의 주소, 키가 만료되는 등 데이터면에 오르지 않은 노드의 주소는 찾지 않는다. netmap이 아직 없거나, 그 주소의 노드가
-    /// 없거나, 노드를 만든 사용자의 프로필이 netmap에 없으면 nil이다. 기다리지 않는다.
+    /// Looks up only peers that the data plane treats as owners of the address (peers with that address in WireGuard AllowedIPs)
+    /// and the local node. Excludes addresses within subnet routes and addresses of nodes absent from the data plane, for example
+    /// because their keys expired. Returns nil without waiting if there is no netmap yet, no node for the address, or no profile in the netmap for the user who created the node.
     ///
-    /// 연결의 상대를 확인할 때는 `TailnetConnection.remoteEndpoint.address`를 넘긴다. 그 주소는 WireGuard가 인증한
-    /// 피어의 것이고, 주소의 주인이 바뀌면 노드가 그 연결을 끊는다(`ConnectionError.peerRemoved`).
+    /// Pass `TailnetConnection.remoteEndpoint.address` to identify a connection's peer. The address belongs to the WireGuard-authenticated
+    /// peer, and the node closes the connection if the owner of the address changes (`ConnectionError.peerRemoved`).
     public func whoIs(_ address: IPAddress) -> PeerIdentity?
 }
 
-/// tailnet 노드 하나의 신원. 제어 서버가 netmap으로 알려 준 값이다.
+/// The identity of one tailnet node, as reported by the control server in the netmap.
 public struct PeerIdentity: Sendable, Equatable {
-    /// 노드의 바뀌지 않는 ID(`tailcfg.Node.StableID`). 비어 있지 않다. 허용 목록의 키로 쓴다.
+    /// The node's stable ID (`tailcfg.Node.StableID`). Nonempty. Use as the allowlist key.
     public var stableID: String
-    /// MagicDNS 이름에서 끝의 점을 뗀 것(`rd-phone-1a2b3c4d.tail0001.ts.net`). 이름이 없으면 빈 문자열이다.
+    /// The MagicDNS name without a trailing dot (`rd-phone-1a2b3c4d.tail0001.ts.net`). Empty if there is no name.
     public var name: String
-    /// 표시용 이름. Go `Node.ComputedName`의 규칙이다(동작 W4): 자기 tailnet의 접미사가 레이블 경계에서 맞을 때만
-    /// 그것을 떼고 끝의 점을 뗀다(`rd-phone-1a2b3c4d`). 다른 tailnet에서 공유받은 노드는 접미사가 달라 끝 점 없는
-    /// FQDN이 남는다. 결과가 비면 정리한 호스트 이름, 그것도 비면 node 공개 키의 텍스트(`nodekey:` + hex).
+    /// The display name. Follows Go's `Node.ComputedName` rules (behavior W4): strip the local tailnet suffix only when it matches at a label
+    /// boundary, then remove the trailing dot (`rd-phone-1a2b3c4d`). A node shared from another tailnet has a different suffix, so its FQDN
+    /// without a trailing dot remains. If the result is empty, use the sanitized hostname, then the public node key text (`nodekey:` + hex) if that too is empty.
     public var computedName: String
-    /// 노드를 만든 사용자의 로그인 이름(`alice@example.com`). 표시용이다. 태그 노드에서는 사람을 가리키지 않는다.
+    /// The login name of the user who created the node (`alice@example.com`). For display. Does not identify a person on tagged nodes.
     public var loginName: String
 }
 ```
 
-`docs/plan.md` 6절 초안과 다른 점: 인자가 `TailnetAddress`가 아니라 `SwiftailBase`의 `IPAddress`다(M6의 `IPEndpoint.address`와 같은 타입).
+Difference from the draft in `docs/plan.md` §6: the parameter uses `SwiftailBase`'s `IPAddress` instead of `TailnetAddress` (the same type as M6's `IPEndpoint.address`).
 
 ### `SwiftailCertificates`
 
@@ -96,16 +96,16 @@ import CryptoKit
 import Foundation
 import Swiftail
 
-/// 노드의 ts.net 이름에 발급된 인증서와 그 개인 키.
+/// A certificate issued for the node's ts.net name and its private key.
 ///
-/// 개인 키를 담으므로 `description`과 `dump`에는 이름과 유효 기간만 드러낸다.
+/// Because it contains a private key, `description` and `dump` expose only the name and validity period.
 public struct TailnetCertificate: Sendable {
-    /// 인증서의 이름(`rd-mac-1a2b3c4d.tail0001.ts.net`).
+    /// The certificate name (`rd-mac-1a2b3c4d.tail0001.ts.net`).
     public let domain: String
-    /// DER 인증서. leaf가 먼저이고 중간 인증서가 뒤따른다. ACME 서버가 루트를 함께 보낼 수도 있으므로(RFC 8555 9.1),
-    /// 사슬을 검증한 뒤, 서버가 함께 보낸 신뢰 앵커(루트)를 떼어 낸 것이다(동작 S6). TLS 신원에 그대로 싣는다.
+    /// The DER certificates, with the leaf first, followed by intermediates. The ACME server may include the root (RFC 8555 9.1),
+    /// so verify the chain and then strip any trust anchor (root) sent by the server (behavior S6). Pass the result as-is to the TLS identity.
     public let chain: [[UInt8]]
-    /// leaf의 개인 키. `x963Representation`을 `SecKeyCreateWithData`에 넘겨 `SecKey`를 만들 수 있다.
+    /// The leaf's private key. Pass `x963Representation` to `SecKeyCreateWithData` to create a `SecKey`.
     public let privateKey: P256.Signing.PrivateKey
     public let notBefore: Date
     public let notAfter: Date
@@ -113,100 +113,100 @@ public struct TailnetCertificate: Sendable {
 extension TailnetCertificate: CustomStringConvertible, CustomReflectable {}
 
 public struct CertificateConfiguration: Sendable {
-    /// Let's Encrypt 운영 서버의 디렉터리.
+    /// The Let's Encrypt production server directory.
     public static let letsEncryptDirectoryURL: URL
-    /// ACME 디렉터리의 URL. `https`여야 한다. 시험과 스테이징에서 바꾼다.
+    /// The ACME directory URL. Must use `https`. Override for tests and staging.
     public var directoryURL: URL
-    /// 받은 사슬과 저장된 사슬을 검증할 때 믿을 루트(DER). nil이면 시스템 신뢰 저장소. 주면 그 루트만 믿는다.
-    /// 스테이징과 시험 서버에 쓴다(동작 X3). 빈 목록은 `invalidConfiguration`. (2026-11-15 더함: 그 전에는 공개 API로
-    /// 스테이징을 쓸 길이 없었다. 관문 (나) 1·2의 시험을 쓰다가 드러났다.)
+    /// The trusted roots (DER) for validating received and stored chains. nil uses the system trust store. If supplied, trust only these roots.
+    /// Use for staging and test servers (behavior X3). An empty list yields `invalidConfiguration`. (Added 2026-11-15: previously the public API
+    /// offered no way to use staging. This surfaced while writing the tests for gate (b) 1 and 2.)
     public var trustAnchors: [[UInt8]]?
     public init(directoryURL: URL = CertificateConfiguration.letsEncryptDirectoryURL, trustAnchors: [[UInt8]]? = nil)
 }
 
-/// 노드 자신의 ts.net 이름에 대한 인증서를 받아 두고, 만료 전에 갱신한다. tsnet `CertPair`·`GetCertificate`.
+/// Obtains a certificate for the node's own ts.net name and renews it before expiration. tsnet `CertPair` and `GetCertificate`.
 ///
-/// 저장은 노드의 상태 디렉터리 아래 `certs/`에 한다. 다시 시작하면 저장된 것을 검증해 다시 쓴다.
+/// Stores it in `certs/` under the node's state directory. On restart, validates and reuses the stored certificate.
 public actor CertificateManager {
-    /// - Throws: 디렉터리 URL이 `https`가 아니면 `invalidConfiguration`.
+    /// - Throws: `invalidConfiguration` if the directory URL does not use `https`.
     public init(node: TailnetNode, configuration: CertificateConfiguration = CertificateConfiguration()) throws(CertificateError)
 
-    /// 인증서를 받고 갱신하는 일을 한다. `node.run()`과 같은 Task 묶음에서 돌린다. 취소될 때까지 돈다.
+    /// Obtains and renews certificates. Run in the same task group as `node.run()`. Runs until canceled.
     ///
-    /// 발급의 실패는 던지지 않고 `status`에 적는다. 사용자가 tailnet 설정을 고쳐야 하는 실패(MagicDNS·HTTPS가 꺼짐,
-    /// 이름이 cert 도메인에 없음)는 netmap이 바뀌거나 `retryNow()`가 불릴 때까지 기다리고, 그 밖의 실패(ACME 서버의
-    /// 거절, 연결 끊김)는 물러났다가 다시 시도한다(동작 R4). 다시 돌려도 소용없는 실패(`CertificateError`)만 던진다.
+    /// Reports issuance failures in `status` without throwing. Failures that require the user to fix tailnet settings (MagicDNS or HTTPS
+    /// disabled, name missing from cert domains) wait for a netmap change or a call to `retryNow()`. For other failures (rejection by the ACME server,
+    /// connection loss), back off and retry (behavior R4). Throws only failures (`CertificateError`) for which running again would not help.
     public func run() async throws(CertificateError)
 
-    /// 지금 쓸 인증서와, 갱신될 때마다 새 인증서. 저장된 것이 유효하면 그것부터 낸다. 한 Task만 돌 수 있다.
-    /// 받아 가지 않은 것이 있으면 가장 새것 하나만 남는다.
+    /// The current certificate and each new certificate upon renewal. Emits the stored certificate first if valid. Only one Task may iterate.
+    /// If an item has not been consumed, only the newest is retained.
     public nonisolated var certificates: AsyncStream<TailnetCertificate> { get }
 
-    /// 지금의 모습: 쥔 인증서의 만료 시각, 마지막 실패, 다음 시도 시각.
+    /// The current certificate's expiration, the last failure, and the time of the next attempt.
     public var status: CertificateStatus { get }
 
-    /// 물러나 기다리는 중이거나 조건을 기다리는 중이면 기다림을 끝내고 곧바로 다시 본다. 사용자가 tailnet 설정을 고친 뒤
-    /// 누르는 "지금 다시 시도"다. 발급이 돌고 있거나, ACME 서버가 `Retry-After`로 알려 준 시각(속도 제한 `rateLimited`
-    /// 포함) 전이면 아무 일도 하지 않는다. 그 시각 전에는 그 서버에 요청을 보내지 않는다(동작 X5).
+    /// Ends a backoff or wait for conditions and checks again immediately. This is the "Retry now" action the user presses after
+    /// fixing tailnet settings. Does nothing during issuance or before the time given by the ACME server in `Retry-After` (including
+    /// `rateLimited`). Sends no requests to that server before that time (behavior X5).
     public func retryNow()
 }
 
 public struct CertificateStatus: Sendable, Equatable {
-    /// 인증서를 받으려는 이름. 노드의 이름을 아직 모르면 nil.
+    /// The name for which a certificate is requested. nil if the node's name is not known yet.
     public var domain: String?
-    /// 지금 쥔 인증서의 만료 시각. 없으면 nil.
+    /// The current certificate's expiration time. nil if there is none.
     public var notAfter: Date?
-    /// 마지막 시도가 실패한 까닭. 성공하면 nil로 돌아간다.
+    /// Why the last attempt failed. Returns to nil on success.
     public var lastFailure: CertificateFailure?
-    /// 다음에 발급이나 갱신을 시도할 시각. ACME 서버가 `Retry-After`로 알려 준 시각이 더 늦으면 그 시각이다(7일로 묶는다.
-    /// 동작 X5). 조건(로그인, MagicDNS, HTTPS, cert 도메인)을 기다리는 중이면 nil이다: 시간으로 다시 시도하지 않는다.
+    /// When to attempt issuance or renewal next. Uses the ACME server's `Retry-After` time if later (capped at 7 days,
+    /// behavior X5). nil while waiting for conditions (login, MagicDNS, HTTPS, cert domains), with no time-based retry.
     public var nextAttempt: Date?
 }
 
-/// 발급이 되지 않는 까닭. 앱은 종류로 사용자 문구를 고르고, 연관 문자열은 진단에만 쓴다.
+/// Why issuance did not succeed. The app selects user-facing text by case and uses associated strings only for diagnostics.
 public enum CertificateFailure: Sendable, Equatable {
-    /// 노드가 `.running`이 아니다.
+    /// The node is not `.running`.
     case nodeNotRunning
-    /// tailnet에서 MagicDNS가 꺼져 있다. 사용자가 관리 콘솔에서 켜야 한다.
+    /// MagicDNS is disabled on the tailnet. The user must enable it in the admin console.
     case magicDNSDisabled
-    /// tailnet에서 HTTPS 인증서가 꺼져 있다(netmap `DNSConfig.CertDomains`가 비었다). 사용자가 관리 콘솔에서 켜야 한다.
+    /// HTTPS certificates are disabled on the tailnet (netmap `DNSConfig.CertDomains` is empty). The user must enable them in the admin console.
     case httpsNotEnabled
-    /// 노드의 이름이 netmap의 cert 도메인에 없거나, 동작 C2의 이름 검사에 어긋난다.
+    /// The node's name is absent from the netmap's cert domains or fails the name checks in behavior C2.
     case domainNotAllowed
-    /// 제어 서버가 DNS 레코드 요청을 받지 않았다. HTTP 상태 코드.
+    /// The control server rejected the DNS record request. The associated value is the HTTP status code.
     case controlRejected(status: Int)
-    /// ACME 서버가 성공이 아닌 HTTP 응답으로 거절했다. `status`는 HTTP 상태 코드, `type`은 문제 문서의 `type` 전체
-    /// 문자열(`urn:ietf:params:acme:error:badCSR`, 서버 고유 URI, `about:blank`)이다. 문제 문서가 없거나 JSON이
-    /// 아니거나 `type`이 없으면 빈 문자열이다. 256바이트로 자른다. 문제 문서의 `detail`은 싣지 않는다(식별자가 들어
-    /// 있을 수 있다. 동작 K2).
+    /// The ACME server rejected the request with a non-success HTTP response. `status` is the HTTP status code and `type` is the full problem
+    /// document `type` string (`urn:ietf:params:acme:error:badCSR`, server-specific URI, `about:blank`). Empty if no problem document exists,
+    /// it is not JSON, or it has no `type`. Truncated to 256 bytes. Omits the problem document's `detail` because it may contain
+    /// identifiers (behavior K2).
     case acme(status: Int, type: String)
-    /// ACME 서버의 속도 제한(`type`이 `urn:ietf:params:acme:error:rateLimited`). 서버가 알려 준 다시 시도할 시각.
+    /// ACME server rate limit (`type` is `urn:ietf:params:acme:error:rateLimited`). Includes the retry time provided by the server.
     case rateLimited(retryAfter: Date?)
-    /// 인증 기관이 이름의 소유를 확인하지 못했다: authorization이 `invalid`다(DNS 레코드를 찾지 못했거나 값이 달랐다).
-    /// `type`은 그 challenge의 `error` 문제 문서의 `type`이다(`acme`와 같은 규칙).
+    /// The certificate authority could not verify ownership of the name. Authorization is `invalid` (DNS record missing or wrong value).
+    /// `type` is the `type` of that challenge's `error` problem document (same rules as `acme`).
     case validationFailed(type: String)
-    /// 주문이 `invalid`가 되었는데 authorization의 실패가 아니다(만료, CSR·발급의 거절 등), 또는 주문을 이어 갈 수 없는
-    /// authorization(`deactivated`·`expired`·`revoked`)이 있다. `type`은 주문의 `error` 문제 문서의 `type`이다.
+    /// The order became `invalid` without an authorization failure (expiration, CSR or issuance rejected, etc.), or an authorization
+    /// prevents the order from proceeding (`deactivated`, `expired`, or `revoked`). `type` is the `type` of the order's `error` problem document.
     case orderFailed(type: String)
-    /// ACME 서버의 응답이 규격이나 이 계약의 한도에 맞지 않았다(모르는 상태, 다른 이름의 authorization, 한도를 넘는
-    /// 본문, `https`가 아닌 URL 등. 동작 C5·X).
+    /// The ACME server response violated the specification or this contract's limits (unknown status, authorization for a different name,
+    /// oversized body, non-`https` URL, etc. Behaviors C5 and X).
     case unexpectedResponse
-    /// 받은 인증서가 검증을 통과하지 못했다(이름, 기간, 사슬, 키).
+    /// The received certificate failed verification (name, validity period, chain, or key).
     case invalidCertificate
-    /// ACME 서버나 제어 서버에 닿지 못했다.
+    /// The ACME or control server could not be reached.
     case network(String)
-    /// 발급이 기한 안에 끝나지 않았다.
+    /// Issuance did not finish before the deadline.
     case timedOut
 }
 
 public enum CertificateError: Error, Sendable, Equatable {
-    /// 디렉터리 URL이 잘못되었다. `run()`을 두 번 부른 것도 여기다.
+    /// The directory URL is invalid, or `run()` was called twice.
     case invalidConfiguration(String)
-    /// `certs/`를 만들거나 쓰거나 읽지 못했다. 이미 있는 `certs/`를 그룹이나 기타가 쓸 수 있는 것도 여기다(동작 S1).
-    /// 메시지에는 오류 코드만 담는다.
+    /// Could not create, write, or read `certs/`, or an existing `certs/` is writable by the group or others (behavior S1).
+    /// The message includes only the error code.
     case storage(String)
-    /// `certs/acme-account.key.pem`이 있지만 P-256 계정 키로 읽지 못했다(Go가 남긴 RSA 키, 깨진 파일, 크기 초과).
-    /// 덮어쓰지 않는다: 새 계정을 만들면 그 파일이 가리키던 계정을 잃는다(동작 C4).
+    /// `certs/acme-account.key.pem` exists but could not be read as a P-256 account key (RSA key left by Go, corrupt file, or excessive size).
+    /// Does not overwrite it because creating a new account would lose the account that file pointed to (behavior C4).
     case accountKeyUnreadable
 }
 ```
@@ -218,89 +218,89 @@ import Network
 import Swiftail
 import SwiftailBase
 
-/// tailnet에서 받은 TCP 연결을 이 기기의 루프백(`127.0.0.1`) TCP 리스너로 이어 준다.
+/// Bridges an inbound tailnet TCP connection to this device's loopback (`127.0.0.1`) TCP listener.
 ///
-/// TLS와 HTTP를 OS의 스택(`NWListener`)으로 끝내려는 앱이 쓴다. 다리는 바이트를 해석하지 않는다. 루프백 연결의 저쪽에서는
-/// 상대가 `127.0.0.1`로 보이므로, 서버는 다리가 준 프로토콜을 리스너에 넣고 받은 연결로 `origin(of:)`을 물어 tailnet의
-/// 상대를 안다. 다리는 루프백 연결마다 일회용 토큰을 TLS 바이트보다 먼저 보내고, 그 프로토콜이 토큰을 확인한 연결만
-/// 위(TLS)로 올린다. 같은 기기의 다른 프로세스가 연 연결은 서버에게 `.ready`가 되지 않는다(동작 B6).
+/// Apps use this to terminate TLS and HTTP with the OS stack (`NWListener`). The bridge does not parse bytes. At the far end of
+/// the loopback connection, the peer appears as `127.0.0.1`. The server adds the bridge's protocol to the listener and calls `origin(of:)`
+/// with the accepted connection to identify the tailnet peer. The bridge sends a single-use token on each loopback connection before
+/// the TLS bytes. The protocol only passes connections with a verified token up to TLS. Connections opened by other processes on this device do not become `.ready` for the server (behavior B6).
 public final class LoopbackBridge: Sendable {
-    /// 루프백 연결 하나의 tailnet 쪽 상대.
+    /// The tailnet peer of a loopback connection.
     public struct Origin: Sendable, Equatable {
-        /// 상대의 tailnet 주소와 포트.
+        /// The peer's tailnet address and port.
         public var remoteEndpoint: IPEndpoint
-        /// 잇기 시작할 때 확인한 상대의 신원. 연결이 사는 동안 바뀌지 않는다.
+        /// The peer's identity verified when bridging started. Does not change for the life of the connection.
         public var peer: PeerIdentity
     }
 
     public init(node: TailnetNode)
 
-    /// 서버의 루프백 리스너에 넣을 프로토콜. `NWParameters.defaultProtocolStack.applicationProtocols`의 **끝에** 더한다
-    /// (TLS 아래, TCP 바로 위). 평문 리스너에서도 같다.
+    /// Returns the protocol for the server's loopback listener. Append to the **end** of `NWParameters.defaultProtocolStack.applicationProtocols`
+    /// (below TLS, immediately above TCP). The same applies to plaintext listeners.
     public func makeListenerProtocolOptions() -> NWProtocolFramer.Options
 
-    /// 연결 하나를 `127.0.0.1:<port>`로 잇고, 두 방향이 다 끝날 때까지 바이트를 나른다. 끝나면 두 연결을 닫고 돌아온다.
+    /// Bridges one connection to `127.0.0.1:<port>` and carries bytes until both directions finish. Closes both connections before returning.
     ///
-    /// 상대의 신원을 확인한 뒤에 루프백으로 건다. 부르는 Task가 취소되면 두 연결을 끊는다. 실패하면 `connection`을
-    /// 끊고(RST) 던진다.
+    /// Verifies the peer's identity before dialing loopback. Closes both connections if the calling Task is canceled. On failure,
+    /// aborts `connection` (RST) and throws.
     public func forward(_ connection: TailnetConnection, toLoopbackPort port: UInt16) async throws(LoopbackBridgeError)
 
-    /// 서버가 받은 루프백 연결의 tailnet 쪽 상대. 기다리지 않는다. 한 연결에 한 번만 답한다(두 번째는 nil).
+    /// Returns the tailnet peer of a loopback connection accepted by the server. Does not wait. Answers only once per connection (then nil).
     ///
-    /// `connection`이 `.ready`이고 리스너의 그 프로토콜이 이 다리의 토큰을 확인했을 때만 답한다. `.ready`가 된 뒤에 물으면
-    /// 다리가 이은 연결은 반드시 답을 얻는다.
+    /// Answers only when `connection` is `.ready` and the listener's protocol verified a token from this bridge. If called after `.ready`,
+    /// a connection forwarded by the bridge always gets an answer.
     public func origin(of connection: NWConnection) -> Origin?
 }
 
 public enum LoopbackBridgeError: Error, Sendable, Equatable {
-    /// 상대 주소의 신원을 netmap에서 찾지 못했다.
+    /// The peer address's identity was not found in the netmap.
     case unknownPeer
-    /// 다리가 잇고 있는 연결이 상한(256)에 닿았다.
+    /// The bridge reached its limit of 256 forwarded connections.
     case limitReached
-    /// 루프백 포트에 걸지 못했다(듣는 쪽이 없다, 시간 초과, 토큰을 표에 적거나 보내지 못했다).
+    /// Could not dial the loopback port (no listener, timeout, or could not record or send the token).
     case loopbackUnavailable(String)
-    /// 부른 Task가 취소되었다.
+    /// The calling Task was canceled.
     case cancelled
 }
 ```
 
-### `Swiftail`(사용자 결정 U1 뒤에만)
+### `Swiftail` (Only After Owner Decision U1)
 
 ```swift
-/// Go tsnet(또는 그것을 쓴 앱)이 남긴 상태 디렉터리에서 노드 신원을 가져온다.
+/// Imports node identity from a state directory left by Go tsnet or an app that used it.
 public enum GoStateImport {
-    /// `directory`의 `tailscaled.state`에서 machine 키와 node 키를 읽어 `configuration.stateDirectory`에 Swiftail 신원으로
-    /// 저장한다. Go의 파일은 고치지 않는다. 정상 등록이 끝난 프로필 하나만 가져오고, 그 밖의 상태는 거절한다(동작 G2·G3).
-    /// 가져온 뒤에 띄운 노드는 제어 서버가 같은 노드로 받아들이면 같은 tailnet 주소와 같은 `StableID`로 뜬다. 서버가
-    /// 그렇게 받아들이는지(`NLKey`를 0으로 보내는 등록, 같은 키의 중복 세션)는 관문 전에는 확인되지 않았다(동작 G7).
+    /// Reads the machine and node keys from `tailscaled.state` in `directory` and saves them as a Swiftail identity in
+    /// `configuration.stateDirectory`. Leaves Go's files untouched. Imports only one fully registered profile and rejects other state (behaviors G2 and G3).
+    /// After import, the node starts with the same tailnet address and `StableID` if the control server accepts it as the same node. Whether
+    /// the server does so (registration with a zero `NLKey`, simultaneous sessions with the same key) is unverified before the gate (behavior G7).
     ///
-    /// 그 상태를 쓰던 Go 노드가 **멈춘 뒤에만** 부른다. 같은 node 키를 두 노드가 함께 쓰면 안 된다.
+    /// Call **only after** the Go node that used this state has stopped. Two nodes must not share the same node key.
     public static func importIdentity(
         fromGoStateDirectory directory: URL, for configuration: NodeConfiguration
     ) throws(GoStateImportError)
 }
 
 public enum GoStateImportError: Error, Sendable, Equatable {
-    /// 대상 디렉터리에 Swiftail 신원이 이미 있다. 덮어쓰지 않는다.
+    /// The destination directory already has a Swiftail identity. Does not overwrite it.
     case alreadyInitialized
-    /// `tailscaled.state`가 없다.
+    /// `tailscaled.state` is missing.
     case noGoState
-    /// 파일을 해석하지 못했다(JSON·base64·키 텍스트의 형식, 0인 machine 키 등. 동작 G2).
+    /// Could not parse the file (JSON, base64, or key text format, zero machine key, etc. Behavior G2).
     case malformed
-    /// 가져올 수 있는 등록된 신원이 없다: node 키가 없거나 0이거나 `LoggedOut`이 참이다. 0인 까닭이 로그인한 적 없음인지는
-    /// 알 수 없다.
+    /// No registered identity to import: the node key is absent or zero, or `LoggedOut` is true. A zero value does not reveal
+    /// whether the node has never logged in.
     case notLoggedIn
-    /// 해석은 되지만 이 가져오기가 다루지 않는 상태다: 프로필이 여럿, `_current-profile`이 가리키는 키가 없음, `_profiles`와
-    /// 맞지 않음, legacy 형식, 키 교체가 끝나지 않음(`OldPrivateNodeKey`가 있다). 동작 G2.
+    /// State is parseable but unsupported by this import: multiple profiles, missing key pointed to by `_current-profile`, mismatch with
+    /// `_profiles`, legacy format, or incomplete key rollover (`OldPrivateNodeKey` present). Behavior G2.
     case unsupportedState
-    /// Go 상태의 제어 서버와 `configuration.controlURL`이 같은 서버라고 볼 수 없다(동작 G3).
+    /// The control server in Go state and `configuration.controlURL` cannot be treated as the same server (behavior G3).
     case controlURLMismatch
-    /// 읽거나 쓰지 못했다. 메시지에는 오류 코드만 담는다.
+    /// Could not read or write. The message includes only the error code.
     case storage(String)
 }
 ```
 
-### 쓰는 모양(Mac 호스트)
+### Usage (Mac Host)
 
 ```swift
 let node = try TailnetNode(configuration: configuration, device: .inProcess)
@@ -312,7 +312,7 @@ try await withThrowingDiscardingTaskGroup { group in
     group.addTask { try await node.run() }
     group.addTask { try await certificates.run() }
     group.addTask {
-        // 인증서가 오거나 바뀔 때마다 TLS 리스너를 (다시) 띄운다. 첫 사용처의 코드다.
+        // Start or restart the TLS listener when a certificate arrives or changes. The first adopter owns this code.
         for await certificate in certificates.certificates { await server.restart(with: certificate) }
     }
     for await connection in listener {
@@ -323,561 +323,561 @@ try await withThrowingDiscardingTaskGroup { group in
     }
 }
 
-// 서버(첫 사용처): 리스너를 만들 때 다리의 프로토콜을 스택의 끝(TLS 아래)에 더한다
+// Server (first adopter): append the bridge protocol to the end of the stack (below TLS) when creating the listener
 parameters.defaultProtocolStack.applicationProtocols.append(bridge.makeListenerProtocolOptions())
 
-// 받은 연결이 `.ready`가 되면(TLS 핸드셰이크 끝) 한 번
+// Once when the accepted connection becomes `.ready` (TLS handshake complete)
 guard let origin = bridge.origin(of: nwConnection) else { nwConnection.cancel(); return }
-// 요청마다: origin.peer.stableID가 허용 목록에 있는가
-// 연결이 `.failed`가 되면(토큰 없는 연결은 준비 전에 여기로 온다) cancel()하고 그 NWConnection을 놓는다(동작 B7)
+// For each request: is origin.peer.stableID on the allowlist?
+// If the connection becomes `.failed` (connections without a token reach this before readiness), call cancel() and release that NWConnection (behavior B7)
 ```
 
-## 3. 동작
+## 3. Behavior
 
-번호는 시험과 검토에서 가리키는 이름이다. 값은 따로 적지 않으면 이 계약의 제안값이고 관문의 기록으로 조정한다.
+The numbers are names used by tests and reviews. Unless stated otherwise, values are proposed by this contract and adjusted based on gate records.
 
 ### W. `whoIs`
 
-1. **주소 표**: 주소의 주인은 **데이터면이 정한 대로**다(2026-11-17). 피어의 주소는 엔진이 그 주소 한 주소짜리 접두(/32, /128)를 WireGuard AllowedIPs로 준 피어의 것이다(엔진이 피어를 올릴 때 함께 만드는 표 `TailnetEngine.addressOwners`. 엔진 계약 동작 2: 한 주소짜리 tailnet 주소이거나 `Addresses`에 있는 `AllowedIPs`, 같은 접두를 여러 노드가 내세우면 node ID가 작은 쪽). 노드는 엔진이 피어를 다시 계산할 때마다(netmap 적용, 키 만료 처리) 그 표를 받아 쥐고, `whoIs`는 그것을 읽는다. 질의마다 netmap에서 다시 계산하지 않는다(W6). 서브넷 경로는 넣지 않는다. 데이터면에 오르지 않는 노드(키가 만료된 노드, 지원하지 않는 피어)의 주소는 표에 없다. 오프라인인 노드는 있다. 자기 노드는 `Addresses`의 한 주소짜리 접두다.
-   - Go와 다른 점: Go의 `WhoIs`는 netmap의 `Addresses`로 만든 표를 보고(노트 4.1 1), 만료된 노드도 찾고, 같은 주소를 가진 노드가 여럿이면 나중 것을 고른다. 그 표는 주소가 겹친 netmap에서 데이터면(그 주소에서 패킷을 보낼 수 있는 피어)과 다른 노드를 가리킨다. 그러면 앱이 연결의 상대를 다른 노드의 신원으로 본다. 겹치지 않는 netmap에서 데이터면에 오른 노드에 대한 답은 Go와 같다(관문 (가) 1).
-2. **찾기**: IPv4-mapped IPv6 주소는 IPv4로 바꾼 뒤 찾는다(노트 4.1 2). 데이터면은 mapped 주소(`::ffff:a.b.c.d/128`)를 피어의 주소로 받지 않으므로(엔진 계약 동작 2), mapped 주소를 출발지로 쓰는 연결이 그 IPv4 주소의 주인이 아닌 피어의 것일 수 없다. 표에 없으면 nil이다. `ProxyMapper`에 해당하는 길은 없다.
-3. **사용자**: 노드의 `User`로 `Netmap.userProfiles`에서 찾는다. 프로필이 없으면 nil이다(노트 4.1 3. 총괄 확인 필요 H11). `StableID`가 빈 노드도 nil이다(첫 사용처가 거절하는 경우다).
-4. **이름**: `name`은 `Node.name`에서 끝의 점 하나를 뗀 것이다. `computedName`은 Go `Node.ComputedName`의 규칙이다(노트 4.1 5, `tailcfg/tailcfg.go:660-689`): ① 자기 tailnet의 접미사를 구한다. 자기 노드 `Name`의 양 끝 점을 모두 뗀 뒤 첫 점 뒤의 나머지이고, 점이 없으면 그 이름 그대로다(`types/netmap/netmap.go:256-270`). ② 노드의 `Name`에서 그 접미사를 Go `dnsname.TrimSuffix`처럼 뗀다: 접미사가 **레이블 경계에서** 맞을 때만(`.` + 접미사로 끝날 때만) 떼고, 끝 점을 뗀다(`util/dnsname/dnsname.go:203-239`). 그래서 `rd-a.xtail0001.ts.net.`은 `tail0001.ts.net`을 떼지 않는다. **다른 tailnet에서 공유받은 노드는 접미사가 달라 끝 점 없는 FQDN이 남는다.** ③ 결과가 비면 `Hostinfo.Hostname`에서 `.local`·`.localdomain`·`.lan`을 떼고 Go `dnsname.SanitizeLabel`로 정리한 것(63자로 자르고, 처음·끝의 영숫자가 아닌 문자를 버리고, 가운데의 구분자를 `-`로 바꾸고, DNS에 쓸 수 없는 문자를 버리고, 소문자로. 결과는 그 Go 함수와 같아야 한다. `dnsname.go:162-200`), ④ 그것도 비면 node 공개 키의 텍스트(`nodekey:` + hex)다. 자기 노드와 모든 피어에 같은 규칙을 쓴다(`control/controlclient/direct.go:1419-1434`). W2·W3은 Go의 주소 조회와 같다. W1·W5는 데이터면을 따르는 데서 Go와 다르다(W1). W3의 빈 `StableID` 거절은 Go에 없는 첫 사용처의 정책이다(노트 10장).
-5. **자기 주소**: 자기 노드의 신원을 돌려준다(Go와 같다). 자기 주소로 건 연결(`SwiftailNetstack.md` 동작 N3)의 상대가 자기 자신으로 확인된다. 다만 netmap이 그 주소를 데이터면 피어에게도 주었으면(그 피어가 그 주소에서 패킷을 보낼 수 있으면) nil이다: 그 주소에서 온 연결이 자기 것인지 그 피어의 것인지 가릴 수 없다(닫힌 쪽).
-6. **일관성**: `whoIs`는 노드 actor 안에서 노드가 쥔 주인 표를 읽는다. 그 표는 엔진이 피어를 올릴 때 같은 계산에서 함께 만든 것이고, 스택의 주인 확인(`SwiftailNetstack.md` 동작 X10)도 같은 때 같은 표로 바뀐다: netmap을 적용할 때, 그리고 엔진이 키 만료를 처리해 피어를 바꿀 때(새 netmap 없이도 주소의 주인이 바뀐다. 같은 주소를 두 노드가 가진 netmap에서 주인 쪽 키가 만료되면 다른 노드가 그 주소를 갖는다). 주인이 바뀐 주소의 연결은 그때 끊긴다. 그래서 살아 있는 연결의 원격 주소에 대한 답은 그 연결을 맺은 피어의 것이고, 묻는 시각에 따라 달라지지 않는다. 이미 끊긴 연결의 주소를 뒤늦게 물으면 새 주인이 나올 수 있다(동작 B2가 이 틈을 막는다).
-7. 로그에 주소 전체와 로그인 이름을 남기지 않는다.
+1. **Address table**: The address owner is **the one selected by the data plane** (2026-11-17). A peer's address belongs to the peer that the engine assigned the single-address prefix (/32, /128) as WireGuard AllowedIPs (the `TailnetEngine.addressOwners` table, built when the engine installs peers. Engine contract behavior 2: a single-address tailnet prefix or `AllowedIPs` found in `Addresses`, with the lower node ID winning if multiple nodes claim the same prefix). The node receives and retains that table whenever the engine recomputes peers (netmap application, key expiration handling), and `whoIs` reads it. It does not recompute from the netmap for each query (W6). Exclude subnet routes. Addresses of nodes absent from the data plane (expired keys, unsupported peers) are absent from the table. Offline nodes are included. For the local node, use the single-address prefixes in `Addresses`.
+   - Difference from Go: Go's `WhoIs` consults a table built from the netmap's `Addresses` (notes §4.1 item 1), finds expired nodes too, and selects the later node when several have the same address. In a netmap with overlapping addresses, that table points to a different node than the data plane (the peer that can send packets from that address). The app then sees another node's identity as the connection's peer. In a netmap without overlaps, answers for nodes installed in the data plane match Go (gate (a) 1).
+2. **Lookup**: Convert IPv4-mapped IPv6 addresses to IPv4 before lookup (notes §4.1 item 2). Because the data plane does not accept mapped addresses (`::ffff:a.b.c.d/128`) as peer addresses (engine contract behavior 2), a connection with a mapped source address cannot belong to a peer other than the owner of that IPv4 address. Return nil if absent from the table. There is no equivalent of `ProxyMapper`.
+3. **User**: Look up the node's `User` in `Netmap.userProfiles`. If the profile is absent, return nil (notes §4.1 item 3. Lead session confirmation H11 required). Return nil for nodes with an empty `StableID` too (the first adopter rejects them).
+4. **Name**: `name` is `Node.name` with one trailing dot removed. `computedName` follows the rules of Go's `Node.ComputedName` (notes §4.1 item 5, `tailcfg/tailcfg.go:660-689`): ① Find the local tailnet suffix. Strip all leading and trailing dots from the local node's `Name` and take the part after the first dot, or use the whole name if there is no dot (`types/netmap/netmap.go:256-270`). ② Strip that suffix from the node's `Name` as in Go's `dnsname.TrimSuffix`: remove it only if it matches **at a label boundary** (ends in `.` + suffix), then remove the trailing dot (`util/dnsname/dnsname.go:203-239`). Thus `rd-a.xtail0001.ts.net.` does not lose `tail0001.ts.net`. **A node shared from another tailnet has a different suffix, so its FQDN remains without a trailing dot.** ③ If empty, strip `.local`, `.localdomain`, or `.lan` from `Hostinfo.Hostname` and sanitize it with Go's `dnsname.SanitizeLabel` (truncate to 63 characters, drop nonalphanumeric characters at the start and end, replace internal separators with `-`, discard characters not usable in DNS, and lowercase. The result must match that Go function. `dnsname.go:162-200`). ④ If that too is empty, use the public node key text (`nodekey:` + hex). Use the same rules for the local node and all peers (`control/controlclient/direct.go:1419-1434`). W2 and W3 match Go's address lookup. W1 and W5 differ from Go by following the data plane (W1). W3's rejection of an empty `StableID` is a first adopter policy absent from Go (notes §10).
+5. **Local address**: Return the local node's identity (same as Go). A connection dialed to the local address (`SwiftailNetstack.md`, behavior N3) identifies the local node as the peer. However, if the netmap also assigned that address to a data-plane peer (it can send packets from that address), return nil because a connection from that address cannot be distinguished as local or from that peer (fail closed).
+6. **Consistency**: `whoIs` reads the node's owner table inside the node actor. The engine builds that table in the same computation that installs peers, and the stack's owner check (`SwiftailNetstack.md`, behavior X10) switches to the same table at the same time: when applying a netmap and when the engine handles key expiration and changes peers (an address owner can change without a new netmap. If two nodes have the same address in a netmap, the other node gets it when the owner's key expires). Connections for addresses whose owner changed are closed then. The answer for a live connection's remote address therefore belongs to the peer that made the connection and does not depend on when the query is made. Querying an address from an already closed connection may return the new owner (behavior B2 closes this gap).
+7. Keep full addresses and login names out of logs.
 
-구현에서 정해진 것(M7-1, 2026-11-17에 W1을 따라 고침, 같은 날 보안 검증 2차에서 다시 고침): 노드가 주소 표(`TailnetNode.addressOwners`)를 쥔다. 엔진이 netmap을 적용하거나 키 만료를 처리해 피어를 다시 계산한 직후에 엔진의 표로 바꾸고, 같은 자리에서 스택의 주인을 견준다. 엔진이 없으면(등록 전) 같은 계산을 netmap에서 직접 한다. 전에는 질의마다 `lastNetmap`에서 질의 시각의 벽시계로 다시 계산했는데, 스택의 주인 표는 netmap을 적용할 때만 바뀌어서 주인 쪽 키가 만료되는 순간 살아 있는 연결에 대한 답이 그 연결을 맺은 피어와 달라졌다. 같은 주소를 가진 노드가 여럿이면 엔진이 그 주소를 준 쪽(node ID가 작은 쪽)이고, 그 노드가 `StableID`나 프로필이 없으면 다른 노드로 넘어가지 않고 nil이다. `whoIs`는 `TailnetNode` actor의 메서드라 밖에서는 `await`로 부른다. `PeerIdentity`의 init은 `Swiftail` 안에만 있다(값은 `whoIs`가 낸다).
+Decisions from implementation (M7-1, updated to follow W1 on 2026-11-17, updated again in the second security verification round that day): The node holds the address table (`TailnetNode.addressOwners`). Right after the engine applies a netmap or handles key expiration and recomputes peers, the node replaces the table with the engine's table and compares stack owners at the same point. If there is no engine (before registration), run the same computation directly on the netmap. Previously each query recomputed from `lastNetmap` using the wall clock at query time, but the stack's owner table changed only when applying a netmap. The instant the owner's key expired, an answer for a live connection could differ from the peer that made it. If multiple nodes have the same address, use the node that the engine assigned the address to (the lower node ID). If that node lacks a `StableID` or profile, return nil without falling back to another node. `whoIs` is a method on the `TailnetNode` actor, so call it with `await` from outside. `PeerIdentity`'s init is internal to `Swiftail` (values come from `whoIs`).
 
-### D. 제어 서버의 `set-dns`
+### D. Control Server `set-dns`
 
-1. `ControlClient.setDNS(name:value:)`는 맵 스트림과 **같은 Noise 클라이언트**(`ControlClient`)로 `POST /machine/set-dns`를 보낸다. 본문과 머리(`Content-Type`, node 키의 부하 분산 머리)는 노트 3.2다. `Version`은 선언한 CapabilityVersion(148), `NodeKey`는 지금의 node 공개 키다. 같은 Noise 클라이언트라는 것과 같은 HTTP/2 물리 연결이라는 것은 다르다: Go는 같은 Noise client를 쓰지만 같은 연결 하나를 보장하지 않는다(노트 3.2, `control/ts2021/client.go:254-290`). Swiftail의 `ControlClient`는 `run()` 동안 연결 하나를 쥐므로 그 연결 위의 새 스트림으로 보내지만, 이것은 Swiftail의 구현 선택이고 서버가 요구한다는 근거는 없다. 다른 동작이 "같은 연결"에 기대지 않는다.
-2. **Swiftail의 선택**: 제어 연결이 없으면(다시 잇는 중) 설 때까지 기다린다. 기한은 60초다. Go는 control client가 없으면 `not connected`로 곧바로 실패한다(노트 3.2, `ipn/ipnlocal/local.go:7820-7839`). 등록이 끝나지 않았으면(node 키가 없거나 0) Go처럼 곧바로 실패한다.
-3. **Swiftail의 선택**: 응답 본문은 4KiB까지 읽는다. 200이 아니면 상태 코드만 실패에 싣는다(본문은 로그에도 남기지 않는다. 서버가 무엇을 적어 보내는지 모른다). 200이면 본문이 JSON 객체여야 한다(빈 본문·`null`·배열은 실패). Go보다 좁다: Go는 Noise 응답을 1MiB까지 읽고, 200이 아니면 본문을 최대 200 code point까지 오류에 싣고, 200이면 JSON 값 하나를 받아들인다(`null`도 통과. 노트 3.2). 이 셋을 "Go와 같은 동작"으로 적지 않는다.
-4. `name`은 `_acme-challenge.` + 자기 cert 도메인만 받는다. 그 밖의 이름을 올리는 공개 API는 없다(`package` 접점이고, 부르는 곳은 `CertificateManager`뿐이다).
-5. 노트 8장: 운영 서버가 레코드를 권한 DNS에 올린 뒤에 답하는지 모른다. Go처럼 답을 받으면 곧바로 다음 단계로 간다(동작 C6).
+1. `ControlClient.setDNS(name:value:)` sends `POST /machine/set-dns` with the **same Noise client** (`ControlClient`) as the map stream. See notes §3.2 for the body and headers (`Content-Type`, node key load-balancing header). `Version` is the declared CapabilityVersion (148), and `NodeKey` is the current public node key. Sharing the Noise client and sharing the physical HTTP/2 connection are distinct: Go uses the same Noise client but does not guarantee a single connection (notes §3.2, `control/ts2021/client.go:254-290`). Swiftail's `ControlClient` holds one connection during `run()` and sends on a new stream on it, but that is Swiftail's implementation choice and there is no evidence the server requires it. No other behavior relies on "the same connection."
+2. **Swiftail's choice**: If there is no control connection (reconnecting), wait until it comes up. The deadline is 60 seconds. Go fails immediately with `not connected` if there is no control client (notes §3.2, `ipn/ipnlocal/local.go:7820-7839`). If registration is incomplete (missing or zero node key), fail immediately as Go does.
+3. **Swiftail's choice**: Read up to 4KiB of the response body. If the status is not 200, include only the status code in the failure (do not log the body either. Its contents are unknown). For 200, the body must be a JSON object (empty body, `null`, and arrays fail). This is narrower than Go: Go reads up to 1MiB of the Noise response, includes up to 200 code points of the body in the error for non-200, and accepts one JSON value for 200 (`null` passes too. Notes §3.2). Do not describe these three choices as "same behavior as Go."
+4. `name` accepts only `_acme-challenge.` + the node's own cert domain. There is no public API for publishing other names (this is a `package` interface called only by `CertificateManager`).
+5. Notes §8: It is unknown whether the production server replies after publishing the record to authoritative DNS. As in Go, proceed immediately after receiving the reply (behavior C6).
 
-구현에서 정해진 것(M7-2): 오류는 `ControlError`로 낸다. 200이 아니면 `http(status:)`(본문은 읽지 않는다), 60초 기한(연결을 기다린 시간과 응답까지 합한 것)·연결 끊김·4KiB 초과·객체 아닌 본문·등록 전은 `connection`, 빈 이름·값과 D4에 어긋나는 이름은 `invalidConfiguration`이다. "연결이 섰다"는 등록을 마친 연결이다. 노드의 `setDNS`는 `.running`이 아니면 `connection`이고, 이름이 `_acme-challenge.` + 자기 FQDN(끝 점 없음)이며 그 FQDN이 cert 도메인에 있을 때만 보낸다. `ControlClient.setDNS`는 `package`다(D4의 "공개 API 없음").
+Decisions from implementation (M7-2): Return `ControlError`. Non-200 returns `http(status:)` (the body is not read). The 60-second deadline (waiting for connection plus response), disconnect, more than 4KiB, non-object body, and preregistration return `connection`. Empty name or value and names violating D4 return `invalidConfiguration`. An "established connection" has completed registration. The node's `setDNS` returns `connection` unless `.running`, and sends only if the name is `_acme-challenge.` + the node's own FQDN (no trailing dot) and that FQDN is in cert domains. `ControlClient.setDNS` is `package` ("no public API" in D4).
 
-### C. 인증서 발급
+### C. Certificate Issuance
 
-구조: ACME의 메시지 만들기·해석과 주문 절차는 소켓도 시계도 갖지 않는 값 타입이다(plan 5절 코드 기준). 계정 키와 인증서 키는 인자로 받는다. 입력은 HTTP 응답과 시각, 출력은 "이 요청을 보내라", "이 레코드를 올려라", "이만큼 기다려라", "끝났다(사슬)", "실패했다(까닭)"다. `CertificateManager`가 `URLSession`과 노드를 붙여 그것을 돌린다. 한 가지 예외: ECDSA 서명은 CryptoKit이 안에서 난수를 뽑으므로 서명 바이트는 실행마다 다르다. 시험은 서명을 바이트로 견주지 않고 검증한다.
+Structure: ACME message creation and parsing and the order procedure are value types with no sockets or clock (plan §5, Code Standards). Pass the account key and certificate key as arguments. Inputs are HTTP responses and time. Outputs are "send this request," "publish this record," "wait this long," "finished (chain)," and "failed (reason)." `CertificateManager` drives the procedure by connecting it to `URLSession` and the node. One exception: CryptoKit draws randomness internally for ECDSA signatures, so signature bytes differ on each run. Tests verify signatures instead of comparing their bytes.
 
-1. **조건**: 이 차례로 본다. ① 노드가 `.running`이 아니면 `nodeNotRunning`. ② netmap의 MagicDNS가 꺼져 있으면(`DNSConfig.Proxied`가 거짓. Go `MagicDNSEnabled`의 출처다, `ipn/ipnlocal/local.go:1541`, DNS 노트 3절) `magicDNSDisabled`(첫 사용처가 보는 조건. 노트 4.2 9). ③ `DNSConfig.CertDomains`가 비었으면 `httpsNotEnabled`. ④ 자기 이름(끝의 점을 뗀 FQDN)이 그 목록에 **정확히** 없으면 `domainNotAllowed`(노트 4.2 9). 넷 다 `status`에 적고 시간으로 다시 시도하지 않는다(`nextAttempt`는 nil). 노드의 상태나 netmap이 바뀌거나 `retryNow()`가 불릴 때만 다시 본다(동작 R4).
-2. **이름 검사**: 이름은 파일 이름과 DNS 레코드 이름이 되기 전에 검사한다. 경로로 안전한지와 DNS 이름으로 맞는지는 다른 검사다: Go `validLookingCertDomain`은 경로 검사일 뿐 DNS 레이블 전체를 검증하지 않는다(노트 4.2 9, 10장). Swiftail은 DNS 이름 규칙으로 둘을 함께 닫는다(RFC 1034 3.1·3.5, RFC 1123 2.1, 노트 10장): 끝의 점 하나를 뗀 이름이 ① 점으로 나뉜 레이블 둘 이상이고, ② 레이블마다 1~63자이고, **처음과 끝은 영숫자**, 가운데는 영숫자와 `-`이고, ③ 끝 점 없는 전체 길이가 253자 이하이고, ④ `_acme-challenge.`를 붙인 레코드 이름도 253자 이하다(그래서 이름은 237자 이하가 된다). 영문자는 소문자만 받는다(파일 이름이 되므로 대소문자를 가리지 않는 파일 시스템에서 겹치지 않게 하는 이 계약의 좁힘이다). 어긋나는 이름으로는 발급하지 않고 `domainNotAllowed`로 적는다(netmap이 바뀔 때까지 기다린다. 총괄 확인 필요 H23). 이 규칙이면 `..`·`/`·`\`·`:`·NUL·`*`·밑줄은 저절로 빠진다(노트 6장의 와일드카드 제외). 이 문자 집합은 CSR의 `PrintableString`에 모두 들어간다(동작 C7, 노트 3.6).
-3. **저장된 것 먼저**: `certs/`의 그 이름 파일을 읽어 동작 S3으로 검증한다. 통과하고 갱신 시점(동작 R1) 전이면 발급하지 않고 그것을 낸다.
-4. **계정**: 계정 키는 **P-256만** 쓴다(노트 6장: Tailscale이 만드는 계정 키는 P-256뿐이다). `certs/acme-account.key.pem`(64KiB까지)을 PKCS#8 또는 SEC1의 P-256 키로 읽는다(Go는 SEC1로 쓰고 PKCS#1·PKCS#8·SEC1을 차례로 읽는다. 노트 3.7, S2의 두 읽기 경로는 노트 4.6에서 확인됐다). 파일이 **없을 때만** 새 키를 만들어 저장한 뒤에 쓴다. 파일이 있는데 P-256 키로 읽지 못하면(Go의 옛 RSA 계정 키, 깨진 파일, 크기 초과) 없는 것으로 보지 않고 `run()`이 `CertificateError.accountKeyUnreadable`로 끝난다. 덮어써서 Go가 쓰던 계정을 잃지 않게 한다(노트 4.8 "계정과 동시성", `feature/acme/certstore.go:361-388`). 없음 밖의 읽기 오류는 `storage`다. 계정을 찾고(`onlyReturnExisting`), `accountDoesNotExist`면 약관에 동의해 만든다. 계정의 `status`가 `valid`가 아니면 실패다(노트 4.3 3·4). 계정 URL(`kid`)은 메모리에만 둔다(시작할 때마다 다시 찾는다). 계정 키를 읽고 만들고 등록하는 일은 `CertificateManager` actor 안에서 한 번에 하나만 돈다(Go의 `accountMu`에 해당한다. 노트 4.8). 동작 C9의 한 흐름 안에서만 돌므로 actor의 재진입으로 둘이 겹치지 않는다.
-5. **주문**: 식별자는 `dns` 종류의 자기 이름 하나다(`{"identifiers":[{"type":"dns","value":"<이름>"}]}`). 응답(201, `Location`이 주문 URL)의 `identifiers`가 요청한 집합과 같아야 한다. authorization의 **개수는 강제하지 않는다**: 식별자와 authorization이 1:1이라는 보장이 없고 배열의 순서에도 기대지 않는다(RFC 8555 7.1.3·7.4, 노트 4.3 5). 개수의 상한만 둔다(8개, 한도 표). 넘거나, 주문이 `pending`인데 authorization이 없으면 `unexpectedResponse`다.
-   - **주문의 상태부터 가른다**(RFC 8555 7.1.3·7.1.6): `pending` → 아래 authorization 처리. `ready` → authorization을 건너뛰고 C7의 finalize로 간다. `valid`·`processing` → 이 주문에는 아직 CSR을 보내지 않았으므로 대응하는 개인 키가 없다. 그 인증서를 받지 않고 새 주문으로 다시 시작한다(한 시도에 한 번. 총괄 확인 필요 H17). `invalid` → `orderFailed`. 모르는 상태 → `unexpectedResponse`.
-   - **authorization마다**(모두, 차례 무관): POST-as-GET으로 읽는다. `identifier.type`이 `dns`이고, 값이 요청한 이름과 같고, `wildcard`가 참이 아니어야 한다. 어긋나면 그 시도는 `unexpectedResponse`로 끝난다. 상태별로(RFC 8555 7.1.4·7.1.6, 노트 4.3 6): `valid` → 끝난 것이다. `pending` → `type`이 `dns-01`인 첫 challenge를 고른다(없으면 `unexpectedResponse`). challenge가 `pending`이면 C6, `processing`이면 C6의 레코드만 올리고 응답은 다시 보내지 않는다, `valid`면 건너뛴다, `invalid`면 `validationFailed`. `invalid` → `validationFailed`. `deactivated`·`expired`·`revoked` → 주문을 이어 갈 수 없다(`orderFailed`). 모르는 상태 → `unexpectedResponse`. Go는 authorization과 challenge의 상태를 보지 않고 늘 dns-01에 응답한다(노트 4.2 7). Swiftail의 이 갈래는 더 닫힌 쪽이다.
-6. **레코드와 응답**: 노트 3.5의 값으로 동작 D의 `set-dns`를 보내고, 성공하면 challenge URL에 `{}`를 POST한다(200·202가 성공. 노트 4.3 7·8). TXT 레코드를 미리 찾아보지 않는다(노트 6장).
-7. **기다리기, finalize, 내려받기**(RFC 8555 7.4, 노트 4.3 9~12):
-   - **기다리기**: challenge에 응답한 뒤 주문 URL을 POST-as-GET으로 다시 읽는다(Go와 같다. RFC 8555 7.5.1의 전형은 authorization을 읽는 것이다. 노트 4.3 9). 간격은 동작 X5의 `Retry-After`이고, 없으면 1초다(1초는 Go의 선택값이지 RFC의 상수가 아니다. 노트 4.3 9). `pending` → 다시 읽는다. `ready` → finalize. `invalid` → 주문의 authorization을 한 번씩 다시 읽어 `invalid`인 것이 있으면 `validationFailed`, 없으면 `orderFailed`(주문의 `invalid`는 DNS 확인 실패만이 아니라 만료·CSR·발급의 거절일 수도 있다. 노트 10장). `valid`·`processing` → CSR을 보내기 전이므로 C5와 같이 새 주문으로 다시 시작한다(H17). 모르는 상태 → `unexpectedResponse`.
-   - **finalize**: `ready`가 되면 **새 P-256 키**(계정 키와 다른 키. RFC 8555 11.1)를 만들고 CSR(노트 3.6. 주체 CN은 Go와 같은 `PrintableString`)로 finalize한다. 이 키와 CSR은 그 주문이 끝날 때까지 쥔다. finalize 응답(200과 주문 객체)의 `status`를 곧바로 가른다: `valid` → 내려받기. `processing` → X5의 간격으로 주문을 다시 읽어 `valid`를 기다린다(그사이 `invalid`면 위와 같이 가른다). `invalid` → 위와 같이 가른다. `ready` → **같은 키·CSR**로 finalize를 한 번 더 보낸다. `pending` → 주문의 authorization을 C5로 다시 처리한 뒤 같은 키·CSR로 finalize한다. `ready`·`pending`의 되풀이는 한 주문에 한 번이고 두 번째면 `unexpectedResponse`다(H17). 모르는 상태 → `unexpectedResponse`. finalize가 403 `orderNotReady`면 주문을 다시 읽어 그 상태로 간다(노트 4.3의 오류 표). Go는 `valid`가 아니면 갈래 없이 `WaitOrder`로 기다리고 `ready`·`valid` 어느 쪽이 와도 새 키로 finalize한다(노트 4.2 6, 9장 V110). Swiftail은 그렇게 하지 않는다.
-   - **내려받기**: `certificate` URL에 POST-as-GET, `Accept: application/pem-certificate-chain`(Swiftail의 선택. Go는 `Accept`를 따로 적지 않는다. 노트 4.3 12). 해석은 동작 X3.
-8. **받은 사슬의 검사**: 동작 X3. 통과하면 키 파일, 인증서 파일 순으로 저장하고(동작 S2) `certificates`에 낸다. 통과하지 못하면 아무것도 저장하지 않는다. 저장 전에 키·이름·기간·사슬을 검증하는 것은 Go보다 강한 경계다(Go는 새로 받은 사슬을 저장 전에 직접 검증하지 않는다. 노트 4.4 5). 신뢰 앵커는 S3 ⑤와 같다: 운영은 시스템 루트만, 시험은 명시적 앵커다.
-9. **한 번에 하나**: 발급은 `run()` 안에서 차례로 돈다. 동시에 두 주문이 나가지 않는다. 계정 준비(C4)도 이 흐름 안에서만 돈다. `retryNow()`와 netmap의 변화는 기다림을 깨울 뿐 발급을 따로 시작하지 않는다. `CertificateManager`를 한 노드에 둘 만들지 않는다(같은 `certs/`를 두 관리자나 두 프로세스가 쓰는 것은 막지 못한다. Go의 잠금도 프로세스 사이의 파일 잠금은 아니다. 노트 4.8. 문서 주석에 적는다).
-10. **기한**: HTTP 요청 하나 30초, 발급 한 번 전체 5분. 넘으면 `timedOut`이고 그 주문은 버린다(다음 시도는 새 주문이다). `Retry-After`가 알려 준 시각이 이 기한을 넘으면 그때까지 기다리지 않고 곧바로 시도를 끝낸다. 그 시각은 `status.nextAttempt`로 남는다(동작 X5).
-11. **User-Agent**: `Swiftail/<버전>`이다(RFC 8555 6.1. 총괄 확인 필요 H13). Go의 `tailscaled/…`를 흉내 내지 않는다.
-12. **문제 문서**(RFC 8555 6.7, RFC 7807 3.1, 노트 4.3): 오류 응답에 문제 문서를 붙이는 것은 SHOULD일 뿐이고, `type`은 ACME URN만이 아니라 서버 고유 URI나 `about:blank`일 수 있다. 그래서 오류는 HTTP 상태와 문제 문서의 `type` 전체 문자열로 든다(`acme(status:type:)`). 본문이 JSON 객체가 아니거나 `type`이 없거나 문자열이 아니면 `type`은 빈 문자열이다(RFC 7807의 기본값 `about:blank`로 채우지 않는다). `type`은 256바이트로 자른다(UTF-8 문자 경계에서). `detail`·`title`·`instance`·`subproblems`(그 안의 `identifier`)는 해석은 하되 공개 타입에 싣지 않는다(식별자가 들어 있을 수 있다. 동작 K2). Swiftail이 따로 다루는 종류는 `type`이 `urn:ietf:params:acme:error:` + 이름과 **정확히 같을 때만** 그렇게 본다: `badNonce`(X4), `accountDoesNotExist`(C4), `rateLimited`(`CertificateFailure.rateLimited`, X5), `orderNotReady`(C7). `userActionRequired`를 포함한 그 밖의 모든 `type`은 `acme(status:type:)`다. 주문과 challenge의 `error`도 문제 문서이고 같은 규칙으로 `orderFailed`·`validationFailed`의 `type`이 된다.
+1. **Prerequisites**: Check in this order. ① If the node is not `.running`, `nodeNotRunning`. ② If MagicDNS in the netmap is off (`DNSConfig.Proxied` is false, the origin of Go's `MagicDNSEnabled`, `ipn/ipnlocal/local.go:1541`, DNS notes §3), `magicDNSDisabled` (a condition the first adopter checks. Notes §4.2 item 9). ③ If `DNSConfig.CertDomains` is empty, `httpsNotEnabled`. ④ If the node's own name (FQDN without trailing dot) is absent as an **exact** match in that list, `domainNotAllowed` (notes §4.2 item 9). Report all four in `status` without time-based retries (`nextAttempt` is nil). Recheck only when node status or the netmap changes, or when `retryNow()` is called (behavior R4).
+2. **Name validation**: Validate the name before it becomes a filename and a DNS record name. Path safety and DNS name validity are separate checks. Go's `validLookingCertDomain` checks the path only and does not validate every DNS label (notes §§4.2 item 9 and 10). Swiftail covers both with DNS name rules (RFC 1034 3.1 and 3.5, RFC 1123 2.1, notes §10). After removing one trailing dot, the name must ① contain at least two dot-separated labels, ② have 1–63 characters per label, with **alphanumeric first and last characters** and only alphanumerics and `-` inside, ③ be at most 253 characters without the trailing dot, and ④ be at most 253 characters after adding `_acme-challenge.` for the record name (so the name itself is at most 237 characters). Accept lowercase letters only (this contract narrows the accepted names to avoid collisions on case-insensitive file systems because they become filenames). Do not issue for invalid names and report `domainNotAllowed` (wait for a netmap change. Lead session confirmation H23 required). These rules exclude `..`, `/`, `\`, `:`, NUL, `*`, and underscores automatically (wildcard exclusion in notes §6). All these allowed characters fit the CSR's `PrintableString` (behavior C7, notes §3.6).
+3. **Stored certificate first**: Read the files for that name in `certs/` and verify per behavior S3. If valid and before the renewal time (behavior R1), emit it without issuance.
+4. **Account**: Use **only P-256** account keys (notes §6: Tailscale generates only P-256 account keys). Read `certs/acme-account.key.pem` (up to 64KiB) as a PKCS#8 or SEC1 P-256 key (Go writes SEC1 and tries PKCS#1, PKCS#8, then SEC1 when reading. Notes §3.7, S2's two read paths were verified in notes §4.6). Generate, save, and use a new key **only if the file is missing**. If the file exists but cannot be read as a P-256 key (an old Go RSA account key, corrupt file, or too large), do not treat it as absent. End `run()` with `CertificateError.accountKeyUnreadable`. This avoids overwriting and losing Go's account (notes §4.8 "Account and concurrency," `feature/acme/certstore.go:361-388`). Other read errors are `storage`. Look up the account (`onlyReturnExisting`), and on `accountDoesNotExist`, agree to the terms and create it. Fail unless account `status` is `valid` (notes §4.3 items 3 and 4). Keep the account URL (`kid`) only in memory (look it up each time on startup). Read, generate, and register the account key one at a time in the `CertificateManager` actor (equivalent to Go's `accountMu`. Notes §4.8). This runs only within the single flow in behavior C9, so actor reentrancy cannot cause overlap.
+5. **Order**: One identifier, the node's own name of type `dns` (`{"identifiers":[{"type":"dns","value":"<name>"}]}`). The response's `identifiers` (201, `Location` is the order URL) must match the requested set. **Do not require a specific authorization count**. Identifiers and authorizations are not guaranteed to correspond 1:1, and the array order is not relied on (RFC 8555 7.1.3 and 7.4, notes §4.3 item 5). Set only an upper bound (8, limits table). Exceeding it, or a `pending` order without authorizations, yields `unexpectedResponse`.
+   - **Branch on order status first** (RFC 8555 7.1.3 and 7.1.6): `pending` → handle authorizations below. `ready` → skip authorization and go to finalize in C7. `valid` or `processing` → no CSR has been sent for this order, so there is no corresponding private key. Start over with a new order without accepting that certificate (once per attempt. Lead session confirmation H17 required). `invalid` → `orderFailed`. Unknown status → `unexpectedResponse`.
+   - **For each authorization** (all of them, any order): Read with POST-as-GET. Require `identifier.type` to be `dns`, the value to equal the requested name, and `wildcard` to be other than true. Otherwise end the attempt with `unexpectedResponse`. By status (RFC 8555 7.1.4 and 7.1.6, notes §4.3 item 6): `valid` → already complete. `pending` → select the first challenge with `type` equal to `dns-01` (`unexpectedResponse` if absent). If the challenge is `pending`, do C6. If `processing`, publish only the C6 record and do not send the response again. If `valid`, skip it. If `invalid`, return `validationFailed`. Authorization `invalid` → `validationFailed`. `deactivated`, `expired`, or `revoked` → cannot continue the order (`orderFailed`). Unknown status → `unexpectedResponse`. Go always responds to dns-01 without checking authorization or challenge status (notes §4.2 item 7). Swiftail's branches fail closed more often.
+6. **Record and response**: Send behavior D's `set-dns` with the value from notes §3.5. On success, POST `{}` to the challenge URL (200 and 202 are success. Notes §4.3 items 7 and 8). Do not look up the TXT record in advance (notes §6).
+7. **Waiting, finalize, and download** (RFC 8555 7.4, notes §4.3 items 9–12):
+   - **Waiting**: After responding to the challenge, reread the order URL with POST-as-GET (same as Go. The typical flow in RFC 8555 7.5.1 reads the authorization. Notes §4.3 item 9). Use behavior X5's `Retry-After` or 1 second if absent (1 second is Go's choice, not an RFC constant. Notes §4.3 item 9). `pending` → reread. `ready` → finalize. `invalid` → reread each authorization for the order once and return `validationFailed` if any is `invalid`, else `orderFailed` (an `invalid` order can be caused by DNS verification failure, expiration, or rejection of the CSR or issuance. Notes §10). `valid` or `processing` → no CSR has been sent, so start over with a new order as in C5 (H17). Unknown status → `unexpectedResponse`.
+   - **Finalize**: When `ready`, generate a **new P-256 key** (distinct from the account key. RFC 8555 11.1) and finalize using a CSR (notes §3.6. The subject CN is a `PrintableString` as in Go). Retain the key and CSR until the order ends. Branch immediately on the finalize response's `status` (200 and order object): `valid` → download. `processing` → reread the order at X5 intervals until `valid` (if it becomes `invalid`, classify as above). `invalid` → classify as above. `ready` → send finalize once more with the **same key and CSR**. `pending` → handle the order's authorizations again per C5, then finalize with the same key and CSR. Repeat for `ready` or `pending` only once per order. The second time yields `unexpectedResponse` (H17). Unknown status → `unexpectedResponse`. If finalize returns 403 `orderNotReady`, reread the order and take the branch for its status (error table in notes §4.3). If not `valid`, Go waits with `WaitOrder` without branching and finalizes with a fresh key for either `ready` or `valid` (notes §4.2 item 6, §9 V110). Swiftail does not do this.
+   - **Download**: POST-as-GET to the `certificate` URL, `Accept: application/pem-certificate-chain` (Swiftail's choice. Go does not set an explicit `Accept`. Notes §4.3 item 12). Parse per behavior X3.
+8. **Verify the received chain**: Behavior X3. On success, save the key file followed by the certificate file (behavior S2) and emit on `certificates`. On failure, save nothing. Verifying key, name, validity, and chain before storage is a stronger boundary than Go's (Go does not directly verify a newly received chain before saving. Notes §4.4 item 5). Trust anchors follow S3 ⑤: system roots only in production, explicit anchors in tests.
+9. **One at a time**: Issuance runs serially inside `run()`. Two orders are never sent concurrently. Account preparation (C4) also runs only in this flow. `retryNow()` and netmap changes only wake waits and do not separately start issuance. Do not create two `CertificateManager` instances for one node (nothing prevents two managers or processes from using the same `certs/`. Go's lock is not an interprocess file lock either. Notes §4.8. Document this in a doc comment).
+10. **Deadlines**: 30 seconds per HTTP request and 5 minutes per issuance attempt. On timeout, return `timedOut` and discard the order (the next attempt uses a new order). If `Retry-After` gives a time past the deadline, end the attempt immediately without waiting for it. Keep the time in `status.nextAttempt` (behavior X5).
+11. **User-Agent**: `Swiftail/<version>` (RFC 8555 6.1. Lead session confirmation H13 required). Do not imitate Go's `tailscaled/…`.
+12. **Problem documents** (RFC 8555 6.7, RFC 7807 3.1, notes §4.3): Including a problem document in an error response is only a SHOULD, and `type` can be an ACME URN, server-specific URI, or `about:blank`. The error therefore holds the HTTP status and full problem document `type` string (`acme(status:type:)`). If the body is not a JSON object or `type` is missing or not a string, set `type` to an empty string (do not fill it with RFC 7807's default `about:blank`). Truncate `type` to 256 bytes (at a UTF-8 character boundary). Parse `detail`, `title`, `instance`, and `subproblems` (including their `identifier`) but omit them from public types (they can contain identifiers. Behavior K2). Swiftail handles special types only when `type` **exactly equals** `urn:ietf:params:acme:error:` + the name: `badNonce` (X4), `accountDoesNotExist` (C4), `rateLimited` (`CertificateFailure.rateLimited`, X5), and `orderNotReady` (C7). Every other `type`, including `userActionRequired`, is `acme(status:type:)`. The `error` of an order or challenge is also a problem document and supplies the `type` of `orderFailed` or `validationFailed` by the same rules.
 
-구현에서 정해진 것(M7-3): JWS 보호 머리는 Go `jwsEncodeJSON`과 같은 직렬화(멤버 순서 `alg`·`kid` 또는 `jwk`·`nonce`·`url`, 공백 없음, 문자열은 Go `json.Marshal`의 이스케이프 `\u003c` 등)로 적는다. 그래서 시험 6의 머리·서명 입력 바이트 일치를 Go 대조에서 요구할 수 있다. CSR의 SubjectPublicKeyInfo는 DER 쓰기로 직접 조립하며 CryptoKit `derRepresentation`과 같은 바이트임을 시험이 고정한다. 고정 키(RFC 7515 A.3)의 `certificationRequestInfo`는 Go `x509.CreateCertificateRequest`(go1.27.3)와 바이트가 같았다(구현 세션의 일회성 확인. 기준값 자료는 M7-8).
+Decisions from implementation (M7-3): Write the JWS protected header with the same serialization as Go's `jwsEncodeJSON` (member order `alg`, `kid` or `jwk`, `nonce`, `url`, no spaces, strings escaped as in Go's `json.Marshal`, e.g. `\u003c`). Test 6 can therefore require matching header and signing input bytes against Go. Assemble the CSR's SubjectPublicKeyInfo directly with DER writing, and pin byte equality with CryptoKit's `derRepresentation` in a test. The fixed key's (RFC 7515 A.3) `certificationRequestInfo` matched the bytes from Go's `x509.CreateCertificateRequest` (go1.27.3) (one-time check by the implementation session. Reference data in M7-8).
 
-구현에서 정해진 것(M7-4): 주문 절차는 값 타입 `ACMEOrderFlow`이고 출력은 `send`·`wait(until:)`·`publishTXT`·`finished`다. 인증서 키는 시도마다 입력으로 받고 CSR은 첫 finalize 때 만들어 그 시도 내내 쓴다(C5의 새 주문은 CSR 전이므로 같은 키). 계정 만들기는 약관 URL이 없어도 `termsOfServiceAgreed`를 보내고, `valid`가 아닌 계정은 `unexpectedResponse`다. finalize가 `orderNotReady`로 거절된 뒤의 `ready`·`pending`도 H17의 되풀이 한 번에 센다. 요청 하나의 기한 초과는 `timedOut`, 닿지 못함은 `network`다. `CertificateFailure`가 `Error`가 아니므로 TXT 올리기 클로저는 실패를 던지지 않고 돌려준다.
+Decisions from implementation (M7-4): The order procedure is the value type `ACMEOrderFlow`, with outputs `send`, `wait(until:)`, `publishTXT`, and `finished`. Take the certificate key as input per attempt and create the CSR at first finalize, reusing it for that attempt (C5's new order is before the CSR, so it uses the same key). Account creation sends `termsOfServiceAgreed` even without a terms URL, and a non-`valid` account is `unexpectedResponse`. `ready` and `pending` after finalize is rejected with `orderNotReady` also count toward H17's one repeat. A single request timing out is `timedOut`, and failure to reach the server is `network`. Because `CertificateFailure` is not an `Error`, the TXT publication closure returns the failure without throwing it.
 
-구현에서 정해진 것(M7-6): 발급 중에 사실이 바뀌어도(이름 변경, 노드 멈춤) 그 시도는 끊지 않고 끝까지 둔다. 바뀐 사실은 다음 판정이 보고, 그 시도의 실패가 세운 조건 기다림은 풀린다. 저장된 인증서는 이름마다 한 번 읽는다. `set-dns`의 `ControlError`는 `http(status:)` → `controlRejected`, `invalidConfiguration` → `domainNotAllowed`, 그 밖 → `network`(고정 문구)다. `run()`이 돌아오면 `certificates`도 끝나고, 노드의 사실 흐름이 끝나면 `nodeNotRunning`으로 보고 취소를 기다린다. 시험 접점은 `internal` init(사실의 흐름, `setDNS`, 상태 디렉터리, 전송, 앵커, 시계, 잠자기, 인증서 키 만들기)이다.
+Decisions from implementation (M7-6): If facts change during issuance (name change, node stops), allow the attempt to finish. The next decision sees the changed facts and clears any wait for conditions set by that attempt's failure. Read the stored certificate once per name. Map `set-dns` `ControlError` as follows: `http(status:)` → `controlRejected`, `invalidConfiguration` → `domainNotAllowed`, others → `network` (fixed message). When `run()` returns, `certificates` ends too. If the node facts stream ends, treat it as `nodeNotRunning` and wait for cancellation. The test interface is an `internal` init (facts stream, `setDNS`, state directory, transport, anchors, clock, sleep, and certificate key generation).
 
-### S. 저장
+### S. Storage
 
-1. **자리와 이름**: `<상태 디렉터리>/certs/` 아래 `<이름>.crt`(사슬, `CERTIFICATE` PEM 블록을 leaf부터), `<이름>.key`(개인 키 PEM), `acme-account.key.pem`(계정 키 PEM)이다. 자리와 이름은 Go와 같다(노트 3.7, DNS 노트 4.9 1. 총괄 확인 필요 H7). **권한**: `certs/`를 새로 만들 때는 0700이다. 이미 있는 디렉터리의 권한은 고치지 않는다(Go의 `MkdirAll`도 고치지 않는다. 생성 때의 권한은 이미 있는 항목의 검사를 대신하지 않는다. 노트 3.7·4.8). 다만 이미 있는 `certs/`를 그룹이나 기타가 쓸 수 있으면 쓰지 않고 실패한다(`run()`이 `CertificateError.storage`로 끝난다). 그런 디렉터리에서는 읽지도 않는다: 다른 사용자가 키나 계정 키를 바꿔 넣었을 수 있다(총괄 확인 필요 H20).
-2. **쓰기**: 키는 CryptoKit의 `pemRepresentation`(PKCS#8 `PRIVATE KEY`)으로 쓴다(Go가 읽는다. 노트 4.6). 새로 쓰는 파일은 **모두 0600**이다(키·계정 키·인증서). Go는 인증서를 0644로 쓰지만(노트 3.7) Swiftail은 인증서도 0600으로 둔다(Go와 다른 선택. 같은 사용자의 Go는 그대로 읽는다). 파일마다 같은 디렉터리의 임시 파일에 다 쓰고 권한을 정하고 디스크에 내린 뒤 이름을 바꾼다(Go `atomicfile`과 같은 차례. 노트 3.7). 키 파일을 먼저, 인증서 파일을 나중에 쓴다(Go와 같다). **두 파일의 쓰기는 한 트랜잭션이 아니다**(Go도 아니다. 노트 3.7): 둘 사이에 멈추면 새 키와 옛 인증서가 남는다. 그래서 읽을 때 S3 ④가 키와 인증서의 짝을 확인하고, 어긋나면 없는 것으로 본다(새 발급이 둘을 다시 쓴다).
-3. **읽기와 검증**: ① 두 파일을 읽는다(각 64KiB까지). ② 인증서 파일은 동작 X3 ①과 같이 처음부터 끝까지 검사한다: `CERTIFICATE` 블록만 있어야 하고 1~5장이다. ③ 키는 PKCS#8과 SEC1(`EC PRIVATE KEY`)의 P-256 키 둘 다 읽는다(Go가 쓴 파일. 노트 4.6에서 확인됐다). ④ leaf의 공개 키가 그 키의 공개 키와 같다(S2의 두 파일 사이에 멈춘 상태를 여기서 잡는다). ⑤ 사슬이 그 이름과 지금 시각으로 검증된다(`SecTrust`, SSL 서버 정책). 앵커는 **운영에서는 시스템 루트만**이다. Go와 다른 선택이다: Go는 시스템 루트로 실패하면 내장 Let's Encrypt 루트로 다시 검사하고, 비운영 디렉터리에서는 마지막 오류가 "모르는 인증 기관"이면 통과시킨다(노트 4.4 5, `feature/acme/certstore.go:440-477`). Swiftail은 내장 루트를 두지 않고 그 비운영 예외도 옮기지 않는다. 시험과 스테이징은 X3의 명시적 앵커를 주며, 앵커를 주면 그 앵커만 쓴다. 하나라도 실패하면 저장된 것이 없는 것으로 본다(지우지는 않는다. 새 발급이 덮어쓴다). 인증서의 손상은 새 발급으로 가지만 계정 키의 손상은 실패다(C4. 노트 4.8이 두 경우를 가른다).
-4. 이름이 바뀌면(노드 이름·tailnet 이름 변경) 새 이름으로 새로 발급한다. 옛 파일은 남는다(`shortcut:`).
-5. iOS에서 쓰게 되면 `identity.json`과 같은 보호 등급과 백업 제외가 필요하다(`SwiftailTunnel.md` 동작 P 2). M7은 넣지 않는다(제외 표).
-6. **`chain`에 넣는 것**: 사슬은 leaf부터다(RFC 8555 7.4.2). 루트는 응답에서 뺄 수 있을 뿐 반드시 없는 것은 아니므로(RFC 8555 9.1, 노트 3.7), 서버가 루트를 함께 보냈을 수 있다. 받은 사슬 전체로 S3 ⑤·X3 ④의 검증을 한 **뒤에** leaf가 아닌 인증서 가운데 평가가 고른 신뢰 앵커(`SecTrustCopyCertificateChain`의 마지막 인증서와 DER이 같은 것)를 떼어 낸 것을 `TailnetCertificate.chain`으로 낸다(처음에는 주체와 발급자가 같은 인증서를 모두 뗐는데, 키를 바꿀 때 쓰는 자기 발급 중간 인증서까지 빠져 상대가 사슬을 잇지 못했다. 검토에서 고쳤다. 2026-11-15). 파일(`<이름>.crt`)에는 받은 사슬을 그대로 쓴다(Go와 같다. 노트 3.7). 주체와 발급자를 견줄 Security API는 M7-5가 SDK 선언에서 확인한다(9절).
+1. **Location and names**: Under `<state directory>/certs/`, store `<name>.crt` (chain, `CERTIFICATE` PEM blocks starting with the leaf), `<name>.key` (private key PEM), and `acme-account.key.pem` (account key PEM). Location and names match Go (notes §3.7, DNS notes §4.9 item 1. Lead session confirmation H7 required). **Permissions**: Create `certs/` with 0700. Leave existing directory permissions as they are (Go's `MkdirAll` does too. Creation permissions do not replace checks on existing entries. Notes §§3.7 and 4.8). If existing `certs/` is writable by the group or others, fail without using it (`run()` ends with `CertificateError.storage`). Do not read from such a directory either because another user may have substituted a key or account key (lead session confirmation H20 required).
+2. **Writes**: Write keys with CryptoKit's `pemRepresentation` (PKCS#8 `PRIVATE KEY`) (Go can read it. Notes §4.6). **All newly written files use 0600** (key, account key, certificate). Go writes certificates with 0644 (notes §3.7), but Swiftail keeps certificates at 0600 too (a different choice from Go. Go running as the same user can read them as-is). For each file, write it in full to a temporary file in the same directory, set permissions, flush to disk, and rename it (same order as Go's `atomicfile`. Notes §3.7). Write the key file first and the certificate file second (same as Go). **Writing both files is not a transaction** (nor is it in Go. Notes §3.7). Stopping between them leaves a new key and an old certificate. Thus S3 ④ verifies the key and certificate match when reading, and treats a mismatch as absence (new issuance rewrites both).
+3. **Reads and verification**: ① Read both files (up to 64KiB each). ② Check the whole certificate file as in behavior X3 ①: only `CERTIFICATE` blocks, 1–5 certificates. ③ Read P-256 keys in both PKCS#8 and SEC1 (`EC PRIVATE KEY`) formats (Go-written files. Verified in notes §4.6). ④ The leaf's public key must match the key's public key (catches a stop between the two files in S2). ⑤ Verify the chain for the name and current time (`SecTrust`, SSL server policy). **Use only system roots in production**. This differs from Go: if system roots fail, Go retries with built-in Let's Encrypt roots, and for nonproduction directories accepts a final "unknown certificate authority" error (notes §4.4 item 5, `feature/acme/certstore.go:440-477`). Swiftail has no built-in roots and does not adopt that nonproduction exception. Provide explicit anchors under X3 for tests and staging. When provided, use only those anchors. Treat any failure as if no stored certificate exists (leave the files in place. New issuance overwrites them). A corrupt certificate triggers new issuance, but a corrupt account key is a failure (C4. Notes §4.8 distinguishes them).
+4. If the name changes (node name or tailnet name change), issue for the new name. Leave the old files (`shortcut:`).
+5. When used on iOS, use the same protection class and backup exclusion as `identity.json` (`SwiftailTunnel.md` behavior P 2). Excluded from M7 (exclusions table).
+6. **Contents of `chain`**: The chain starts with the leaf (RFC 8555 7.4.2). The root may be omitted from the response but need not be (RFC 8555 9.1, notes §3.7), so the server may include it. **After** verifying the full received chain per S3 ⑤ and X3 ④, remove the trust anchor selected by evaluation from the non-leaf certificates (the one with the same DER as the last certificate from `SecTrustCopyCertificateChain`) and emit the result as `TailnetCertificate.chain` (originally, all certificates with equal subject and issuer were removed. That also dropped self-issued intermediates used for key rollover, so the peer could not build the chain. Fixed in review, 2026-11-15). Write the received chain as-is to the file (`<name>.crt`) (same as Go. Notes §3.7). M7-5 checks the Security API for comparing subject and issuer against the SDK declarations (§9).
 
-구현에서 정해진 것(M7-5): `certs/`는 디렉터리 기술자로 열어(`O_NOFOLLOW`) 검사하고 그 안의 파일은 `openat`·`renameatx_np`로 다룬다. 심볼릭 링크, 지금 사용자의 것이 아님(소유자 검사는 이 단위가 더한 닫힌 쪽), 그룹·기타 쓰기 가운데 하나면 `storage`다. 파일은 링크를 따라가지 않고 정규 파일만 읽는다. 없음 밖의 읽기 오류(링크, 정규 파일이 아님)는 인증서 파일도 `storage`이고, 64KiB 초과와 해석·짝·검증의 실패만 "없음"이다. 계정 키는 `RENAME_EXCL`로 써서 이미 있는 파일을 덮어쓰지 않는다. 상태 디렉터리는 만들지 않는다(없으면 쓰기는 `storage`, 읽기는 없음). S6의 자기 서명 판별은 `SecCertificateCopyNormalizedSubjectSequence`와 `…IssuerSequence`의 바이트 비교다(`SecCertificate.h`, macOS 10.12.4·iOS 10.3).
+Decisions from implementation (M7-5): Open and check `certs/` with a directory descriptor (`O_NOFOLLOW`), then use `openat` and `renameatx_np` for its files. A symbolic link, ownership by someone other than the current user (an additional fail-closed check in this unit), or group or other write permissions yields `storage`. Do not follow file links and read only regular files. Read errors other than absence (link, nonregular file) are `storage` even for certificate files. Only exceeding 64KiB or failures in parsing, matching, or verification count as "absent." Write account keys with `RENAME_EXCL` to avoid overwriting an existing file. Do not create the state directory (if missing, writes are `storage` and reads mean absence). S6's self-signature detection compares the bytes of `SecCertificateCopyNormalizedSubjectSequence` and `…IssuerSequence` (`SecCertificate.h`, macOS 10.12.4 and iOS 10.3).
 
-### R. 갱신과 재시도
+### R. Renewal and Retry
 
-판정은 값 타입 하나가 한다: 입력은 지금 시각, 노드의 모습(상태, 이름, cert 도메인), 쥔 인증서의 기간, 마지막 실패와 연속 실패 횟수이고, 출력은 "지금 발급", "이 시각까지 기다림", "조건을 기다림"이다. 시험은 시각을 넘겨 결정적으로 돌린다.
+One value type makes the decision. Inputs are the current time, the node's condition (state, name, cert domains), the certificate's validity period, the last failure, and the consecutive failure count. Outputs are "issue now," "wait until this time," and "wait for a condition." Tests pass time to run deterministically.
 
-1. **갱신 시점**: `notBefore + (notAfter − notBefore) × 2/3`가 지나면 갱신한다(노트 4.4 1. Go가 ARI 조회에 실패했을 때 쓰는 규칙이다). ARI는 쓰지 않는다(총괄 확인 필요 H6). 이 규칙은 Let's Encrypt의 속도 제한에 닿지 않는다는 보장이 **아니다**(노트 4.5, 9장 V168): 같은 식별자 집합의 새 인증서는 7일에 5장이고 ARI 없는 갱신도 이 제한에 걸린다. 모든 제한에서 빠지는 것은 ARI 갱신으로 인정된 주문뿐이고, 그러려면 `replaces`의 이전 인증서와 식별자가 하나 이상 겹치고 그 인증서가 아직 ARI로 대체되지 않았어야 한다. 인증서 수명(운영 기본이 2027-02-10부터 64일, 선택 6일), 같은 이름의 다른 발급(상태를 지우고 다시 발급하는 일, 임시 노드), authorization 실패의 제한도 함께 걸린다.
-2. **갱신 중**: 지금 인증서를 계속 쓴다. 갱신이 실패해도 만료 전에는 스트림에 아무것도 내지 않는다. 만료되면 `status.notAfter`가 지난 시각으로 남고 앱이 그것을 본다.
-3. **깨어나는 때**: `run()`의 시작, 노드의 상태·이름·cert 도메인·MagicDNS가 바뀔 때, 갱신 시점, 재시도 시각, `retryNow()`. 어느 때든 ACME 서버가 알려 준 `Retry-After`의 시각 전이면 그 서버에 요청을 보내지 않는다(동작 X5).
-4. **재시도 간격**: 사용자가 고쳐야 하는 실패는 시간으로 다시 시도하지 않고, 그 밖의 실패는 물러났다가 다시 시도한다(Let's Encrypt의 제한은 노트 4.5).
+1. **Renewal time**: Renew after `notBefore + (notAfter − notBefore) × 2/3` (notes §4.4 item 1. Go uses this rule when ARI lookup fails). Do not use ARI (lead session confirmation H6 required). This rule **does not** guarantee staying below Let's Encrypt's rate limits (notes §4.5, §9 V168): new certificates for the same identifier set are limited to 5 in 7 days, including renewals without ARI. Only orders recognized as ARI renewals are exempt from all limits. To qualify, at least one identifier must overlap with the previous certificate in `replaces`, and that certificate must not have been replaced through ARI yet. Certificate lifetime (production default of 64 days starting 2027-02-10, optional 6 days), other issuances for the same name (deleting state and reissuing, ephemeral nodes), and authorization failure limits also apply.
+2. **During renewal**: Continue using the current certificate. Even if renewal fails, emit nothing on the stream before expiration. Once expired, `status.notAfter` retains the past time and the app sees it.
+3. **Wake points**: Start of `run()`, changes in node state, name, cert domains, or MagicDNS, renewal time, retry time, and `retryNow()`. In every case, send no requests to the ACME server before the time it specified with `Retry-After` (behavior X5).
+4. **Retry interval**: Failures requiring user action have no time-based retry. Back off and retry other failures (Let's Encrypt limits are in notes §4.5).
 
-   | 실패 | 다음 시도 |
+   | Failure | Next attempt |
    | --- | --- |
-   | 사용자가 고쳐야 함(`magicDNSDisabled`, `httpsNotEnabled`, `domainNotAllowed`) | 시간으로 다시 시도하지 않는다(`nextAttempt`는 nil). netmap이 바뀌거나 `retryNow()`가 불릴 때만 다시 본다 |
-   | 노드가 서지 않음(`nodeNotRunning`) | 노드의 상태가 바뀔 때(`nextAttempt`는 nil) |
-   | 닿지 못함·기한 초과·5xx(`network`, `timedOut`, 상태가 5xx인 `acme`), `controlRejected` | 30초에서 시작해 두 배씩, 10분 상한(첫 사용처의 지금 값) |
-   | 검증 실패(`validationFailed`), `orderFailed`, `unexpectedResponse`, 그 밖의 `acme` | 15분에서 시작해 두 배씩, 6시간 상한. authorization 실패의 제한(한 시간에 5번, 12분에 하나씩 회복)에서 12분은 token bucket의 회복률이지 지킬 최소 간격이 아니다(노트 4.5, 9장 V164). 15분 시작은 그 회복률보다 느리게 잡은 선택이다. 6시간마다 끝없이 실패하면 연속 실패 제한(1,152번)에도 언젠가 닿고, 그때부터 서버가 `rateLimited`로 답한다(노트 4.5) |
-   | `rateLimited` | 서버가 준 시각(동작 X5. 7일로 묶는다). 없거나 15분보다 이르면 15분 뒤 |
-   | `invalidCertificate` | 6시간 뒤(발급 한 번을 이미 썼다. 같은 이름의 새 인증서는 7일에 5장이다) |
+   | User action required (`magicDNSDisabled`, `httpsNotEnabled`, `domainNotAllowed`) | No time-based retry (`nextAttempt` is nil). Recheck only on netmap change or a call to `retryNow()` |
+   | Node not running (`nodeNotRunning`) | When node state changes (`nextAttempt` is nil) |
+   | Unreachable, timeout, or 5xx (`network`, `timedOut`, `acme` with 5xx status), `controlRejected` | Start at 30 seconds and double each time, cap at 10 minutes (first adopter's current values) |
+   | Verification failure (`validationFailed`), `orderFailed`, `unexpectedResponse`, other `acme` | Start at 15 minutes and double each time, cap at 6 hours. In the authorization failure limit (5 per hour, refill one per 12 minutes), 12 minutes is the token bucket refill rate rather than a minimum interval (notes §4.5, §9 V164). Starting at 15 minutes is a choice to go slower than that refill rate. Failing indefinitely every 6 hours eventually reaches the consecutive failure limit (1,152), after which the server replies with `rateLimited` (notes §4.5) |
+   | `rateLimited` | Time given by the server (behavior X5, capped at 7 days). If absent or sooner than 15 minutes, wait 15 minutes |
+   | `invalidCertificate` | After 6 hours (an issuance was already used. New certificates for the same name are limited to 5 in 7 days) |
 
-   어느 줄이든 X5의 `Retry-After` 시각이 표의 시각보다 늦으면 그 시각이 `nextAttempt`다. `CertificateError`(`storage`, `accountKeyUnreadable`)는 `run()`이 던지고 다시 시도하지 않는다.
-5. 성공하면 연속 실패 횟수와 `lastFailure`를 지운다.
-6. 인증서의 시각은 벽시계(`Date`)로 본다. 시계가 크게 틀린 기기에서는 검증이 실패하고 `invalidCertificate`가 된다. Go도 시계 차이를 보정하지 않는다(노트 4.4 6). 판정은 시각을 입력으로 받고, 긴 기다림(`Retry-After`, 재시도) 뒤에는 지금 시각을 새로 읽는다(노트 4.4 6).
+   For any row, if the X5 `Retry-After` time is later than the table time, it is `nextAttempt`. `run()` throws `CertificateError` (`storage`, `accountKeyUnreadable`) and does not retry.
+5. Clear the consecutive failure count and `lastFailure` on success.
+6. Use the wall clock (`Date`) for certificate times. A substantially incorrect device clock causes verification to fail with `invalidCertificate`. Go also does not compensate for clock skew (notes §4.4 item 6). Decisions take time as input and reread the current time after a long wait (`Retry-After`, retry) (notes §4.4 item 6).
 
-구현에서 정해진 것(M7-5): 두 배씩 늘리는 간격의 지수는 같은 줄의 실패가 이어진 횟수이고, 줄이 바뀌면 그 줄의 처음 간격부터다. 지터는 두지 않는다(식이 정해지지 않았고 한 노드가 혼자 보내는 요청이다). `Retry-After`의 시각은 실패 기록과 따로 들고 뒤의 조건 실패나 성공으로 지우지 않는다. 조건의 변화는 조건 기다림만 끝내고 물러남은 그대로 둔다(`retryNow()`는 둘 다 끝낸다).
+Decisions from implementation (M7-5): The exponent for doubling the interval is the consecutive failure count within the same row. When the row changes, start with the initial interval in the new row. No jitter (no formula was specified, and the requests come from one node acting alone). Retain the `Retry-After` time separately from failure history, and do not clear it on a later prerequisite failure or success. A change in prerequisites only ends a wait for prerequisites and leaves backoff intact (`retryNow()` ends both).
 
-구현에서 정해진 것(M7-6): C1·C2의 조건 실패는 `RenewalSchedule`에 적지 않고 관리자가 사실로 판정한다(물러남과 연속 실패 횟수를 지우지 않게). `status.lastFailure`는 조건 실패가 있으면 그것, 없으면 마지막 시도의 실패다. `retryNow()`는 조건을 기다리는 중에도 `Retry-After` 전이면 아무 일도 하지 않는다.
+Decisions from implementation (M7-6): Do not record unmet prerequisites from C1 and C2 in `RenewalSchedule`. The manager determines them from facts (to avoid clearing the backoff or consecutive failure count). `status.lastFailure` is the unmet prerequisite if there is one, otherwise the last attempt's failure. `retryNow()` does nothing before `Retry-After`, even while waiting for prerequisites.
 
-### X. 신뢰할 수 없는 입력
+### X. Untrusted Input
 
-ACME 서버의 응답, 제어 서버의 응답, 디스크의 파일, 루프백의 다른 프로세스는 믿지 않는다. 어떤 입력으로도 죽지 않는다.
+ACME server responses, control server responses, files on disk, and other loopback processes are untrusted. No input may cause a crash.
 
-1. **URL**: 디렉터리·주문·authorization·challenge·finalize·인증서의 URL은 `https`이고 2,048바이트 이하여야 한다. 아니면 `unexpectedResponse`다. userinfo가 있거나, `URL`로 만들 때 글자가 바뀌는 문자열(공백, 깨진 `%`)도 받지 않는다(서명한 `url`과 실제 요청이 달라진다). **요청은 디렉터리와 출처(스킴·호스트·포트)가 같은 URL로만 보낸다**: TLS로 확인한 것은 디렉터리 서버뿐이므로, 그 서버가 준 URL을 따라 다른 호스트(루프백 포함)로 계정 키로 서명한 요청을 보내지 않는다. RFC 8555는 같은 출처를 요구하지 않지만 Let's Encrypt와 pebble은 모든 자원을 디렉터리의 출처에 둔다(처음에는 제한을 두지 않았다가 검토 뒤 닫았다. 2026-11-15). 리다이렉트는 따라가지 않는다. JWS의 `url`에는 서버가 준 문자열을 다시 인코딩하지 않고 그대로 넣는다(RFC 8555 6.4, 노트 4.8). 이 제한들은 Swiftail의 것이다: Go의 ACME 경로는 `http.DefaultClient`를 써서 리다이렉트를 따르고 URL 길이를 묶지 않는다(노트 4.8).
-2. **본문과 머리**: JSON 응답은 64KiB, 인증서 사슬은 256KiB까지 읽는다. 넘으면 `unexpectedResponse`다. Go의 한도와 다르다(Go의 사슬 본문 상한은 5,401,755바이트이고 인증서 한 장마다의 크기는 따로 보지 않는다. 노트 3.7·5장, 9장 V213). 모르는 필드는 무시한다. `Replay-Nonce`는 base64url 문자만으로 된 1~512바이트일 때만 쓰고 그 밖은 무시한다(RFC 8555 6.5.1. Go는 검사하지 않는다. 노트 4.3 2). `Retry-After`는 동작 X5다. `token`은 base64url 문자만으로 된 1~512바이트여야 한다(RFC 8555 8.4).
-3. **받은 사슬**: ① 입력 전체를 처음부터 끝까지 검사한다. `-----BEGIN` 뒤에 `CERTIFICATE`가 아닌 것이 하나라도 있거나, 해석되지 않는 블록이 있거나, 블록 밖에 공백이 아닌 바이트가 있으면 전체를 버린다(RFC 8555 9.1·11.4, 노트 3.7. Go의 `pem.Decode` 루프는 해석되지 않는 곳에서 멈출 뿐 뒤를 거부하지 않는다). ② 1~5장. ③ leaf의 공개 키가 방금 만든 키의 공개 키와 같다. ④ 사슬이 그 이름과 지금 시각으로 검증된다(앵커는 S3 ⑤). ⑤ `notAfter − notBefore`가 1시간 이상이다(갱신 판정이 헛돌지 않게 한다). 시험에서는 검증의 신뢰 앵커를 `package` 초기화 인자로 준다(로컬 ACME 서버·스테이징의 루트. Go의 `testRoots`와 같은 자리이고, 주면 그 앵커만 쓴다). Go의 비운영 디렉터리에서 "모르는 인증 기관" 오류를 무시하는 분기는 옮기지 않는다(노트 4.4 5). 통과하면 동작 S6으로 `chain`을 만든다. 구현에서 정해진 것(M7-5): ①~⑤는 디스크에서 읽은 사슬(S3)에도 같은 검증으로 건다. 운영 앵커는 `SecTrust`의 기본 앵커(OS 신뢰 저장소)이고, 빠진 중간 인증서를 네트워크에서 받지 않는다(`SecTrustSetNetworkFetchAllowed(false)`). 기간은 `SecCertificateCopyNotValidBeforeDate`·`…AfterDate`(macOS 15·iOS 18)로 얻는다. 구현에서 정해진 것(M7-3): 블록 안은 RFC 7468 3절의 표준 문법이되 줄 길이는 묻지 않고 공백뿐인 줄은 건너뛴다. 빈 본문과 BEGIN·END의 라벨 불일치는 해석되지 않는 블록이다. 키 파일(S3 ③, C4)은 `PRIVATE KEY`·`EC PRIVATE KEY` 블록 정확히 하나만 받는다.
-4. **`badNonce`**: `type`이 `urn:ietf:params:acme:error:badNonce`인 오류(동작 C12)면 그 오류 응답의 nonce로 같은 요청을 다시 서명해 보낸다(RFC 8555 6.5). 요청마다 3번까지다. nonce는 마지막 응답의 것 하나만 쥔다. Go는 응답의 nonce를 넣은 뒤 쥔 nonce를 모두 지우고 HEAD로 다시 얻는데, 이것은 옮기지 않는다(노트 4.3).
-5. **`Retry-After`와 끝없는 기다림**(RFC 8555 6.6·7.4, RFC 7231 7.1.3, 노트 4.3·10장): `Retry-After`는 초 단위의 음이 아닌 정수와 HTTP 날짜를 읽는다. 둘 다 아니면 없는 것으로 본다. 날짜는 벽시계로 바꾸고 지난 시각이면 기다림이 없다.
-   - 서버가 알려 준 시각 전에는 **그 ACME 서버에 새 요청을 보내지 않는다**. "그 서버"는 그 디렉터리에서 얻은 모든 URL이다(총괄 확인 필요 H21). 유효한 값을 30초·24시간 같은 상한으로 줄여 더 일찍 요청하지 않는다.
-   - 주문을 다시 읽는 간격은 `Retry-After`이고, 없으면 1초, 1초보다 짧으면 1초다(늦추기만 한다).
-   - 주문을 기다리던 중에 받은 시각이 발급 한 번의 기한(동작 C10의 5분)을 넘으면 그 시도는 기다리지 않고 `timedOut`으로 끝낸다. 오류 응답(`rateLimited`, 5xx 등)은 시각이 기한 안이어도 그 시도를 끝낸다(동작 R4). 어느 쪽이든 알려 준 시각을 `status.nextAttempt`로 보존하고(R4의 간격이 더 늦으면 그 시각), 그 전에는 `retryNow()`도 요청을 보내지 않는다.
-   - 값이 터무니없이 멀면(7일 초과) 7일로 묶는다. 묶는 것은 "다음 시도" 시각의 위쪽 끝뿐이다. 서버가 정한 7일 이하의 대기 중에 요청을 보내는 허가가 아니다. 로컬 상태(netmap, 저장된 인증서)를 다시 보는 일은 언제든 할 수 있고 그것은 요청이 아니다.
-   - `processing`·`pending`에 머무는 주문은 동작 C10의 5분 기한이 끊는다.
-6. **제어 서버**: `set-dns`의 응답은 동작 D3의 한도로 읽는다. netmap의 `CertDomains`는 제어 서버가 정한다. 제어 서버는 이미 이 노드의 이름과 피어를 정하는 위치이므로 더 넓어지는 권한은 없다.
-7. **디스크**: `certs/`의 인증서와 키 파일은 동작 S3으로 읽는다. 크기 한도를 넘거나 해석되지 않으면 없는 것으로 본다. 계정 키 파일은 동작 C4(읽지 못하면 실패), 디렉터리의 권한은 동작 S1이다. Go 상태 파일은 동작 G2다.
-8. **루프백의 다른 프로세스**: 동작 B6·B7.
+1. **URL**: Directory, order, authorization, challenge, finalize, and certificate URLs must use `https` and be at most 2,048 bytes. Otherwise return `unexpectedResponse`. Reject userinfo and strings whose characters change when converted to `URL` (spaces, invalid `%`), because the signed `url` differs from the actual request. **Send requests only to URLs with the same origin (scheme, host, port) as the directory**. TLS verified only the directory server, so do not follow a URL supplied by it to another host (including loopback) with an account-key-signed request. RFC 8555 does not require the same origin, but Let's Encrypt and pebble host all resources at the directory's origin (initially unrestricted, tightened after review, 2026-11-15). Do not follow redirects. Put the string from the server into the JWS `url` verbatim without re-encoding (RFC 8555 6.4, notes §4.8). These limits are Swiftail's: Go's ACME path uses `http.DefaultClient`, follows redirects, and does not cap URL length (notes §4.8).
+2. **Body and headers**: Read up to 64KiB for JSON responses and 256KiB for certificate chains. Excess yields `unexpectedResponse`. These limits differ from Go's (Go caps the chain body at 5,401,755 bytes and does not check per-certificate size. Notes §§3.7 and 5, §9 V213). Ignore unknown fields. Use `Replay-Nonce` only if it is 1–512 bytes of base64url characters, and ignore it otherwise (RFC 8555 6.5.1. Go does not check it. Notes §4.3 item 2). See behavior X5 for `Retry-After`. `token` must be 1–512 bytes of base64url characters only (RFC 8555 8.4).
+3. **Received chain**: ① Check the entire input from start to finish. Discard the entire chain if anything other than `CERTIFICATE` follows any `-----BEGIN`, a block cannot be parsed, or there are non-whitespace bytes outside blocks (RFC 8555 9.1 and 11.4, notes §3.7. Go's `pem.Decode` loop stops where parsing fails without rejecting what follows). ② Require 1–5 certificates. ③ The leaf's public key matches the newly generated key's public key. ④ The chain verifies for the name and current time (anchors in S3 ⑤). ⑤ `notAfter − notBefore` is at least 1 hour (prevents renewal decisions from spinning). In tests, give verification trust anchors as a `package` initializer argument (roots for the local ACME server and staging. Equivalent to Go's `testRoots`, using only those anchors if specified). Do not adopt Go's branch that ignores "unknown certificate authority" errors for nonproduction directories (notes §4.4 item 5). On success, build `chain` per behavior S6. Decisions from implementation (M7-5): apply ①–⑤ to chains read from disk (S3) with the same verification. Production uses default `SecTrust` anchors (OS trust store) and does not fetch missing intermediates over the network (`SecTrustSetNetworkFetchAllowed(false)`). Obtain the validity period from `SecCertificateCopyNotValidBeforeDate` and `…AfterDate` (macOS 15 and iOS 18). Decisions from implementation (M7-3): inside blocks, use the standard grammar in RFC 7468 §3 without enforcing line lengths, and skip whitespace-only lines. An empty body or mismatched BEGIN and END labels makes a block unparseable. Key files (S3 ③, C4) accept exactly one `PRIVATE KEY` or `EC PRIVATE KEY` block.
+4. **`badNonce`**: If the error's `type` is `urn:ietf:params:acme:error:badNonce` (behavior C12), sign the same request again with the nonce from that error response and resend it (RFC 8555 6.5). Up to 3 times per request. Hold only the nonce from the last response. Go adds the response nonce, then clears all held nonces and gets another with HEAD. Do not adopt this (notes §4.3).
+5. **`Retry-After` and indefinite waits** (RFC 8555 6.6 and 7.4, RFC 7231 7.1.3, notes §§4.3 and 10): Parse `Retry-After` as a nonnegative integer in seconds or an HTTP date. Treat other values as absent. Convert dates to wall-clock times. If in the past, do not wait.
+   - **Send no new requests to that ACME server** before the time it gives. "That server" means every URL obtained from that directory (lead session confirmation H21 required). Do not shorten valid values with caps such as 30 seconds or 24 hours to send earlier.
+   - Reread orders at the `Retry-After` interval, or 1 second if absent. If shorter than 1 second, use 1 second (only delay further).
+   - If a time received while waiting for an order exceeds the issuance attempt's deadline (5 minutes in behavior C10), end the attempt with `timedOut` without waiting. Error responses (`rateLimited`, 5xx, etc.) end the attempt even if the time is within the deadline (behavior R4). In both cases preserve the supplied time in `status.nextAttempt` (use R4's time if later). Even `retryNow()` sends no requests before then.
+   - Cap unreasonably distant values (more than 7 days) at 7 days. This caps only the upper end of the "next attempt" time. It does not permit a request within a server-imposed wait of 7 days or less. Local state (netmap, stored certificate) can be rechecked at any time and does not count as a request.
+   - Behavior C10's 5-minute deadline stops orders that remain in `processing` or `pending`.
+6. **Control server**: Read `set-dns` responses within behavior D3's limits. The control server sets the netmap's `CertDomains`. It already determines this node's name and peers, so it gains no wider authority.
+7. **Disk**: Read certificate and key files in `certs/` per behavior S3. Treat oversized or unparseable files as absent. Behavior C4 covers the account key file (fail if unreadable), behavior S1 covers directory permissions, and behavior G2 covers Go state files.
+8. **Other loopback processes**: Behaviors B6 and B7.
 
-구현에서 정해진 것(M7-4): `Retry-After`는 어느 응답에 오든 그 시각 전의 모든 요청을 막는다. HTTP 날짜는 RFC 7231 7.1.1.1의 세 형식을 모두 읽는다. 시험용 평문 `http` 길은 전송(`URLSessionACMETransport`의 시험용 초기화 인자, 루프백 호스트만)에만 있고 주문 절차는 늘 `https`만 받는다. `User-Agent`의 버전은 저장소에 버전 문자열이 없어 전송의 상수(`Swiftail/0.1.1`)다.
+Decisions from implementation (M7-4): `Retry-After` in any response blocks all requests until that time. Read all three HTTP date formats from RFC 7231 7.1.1.1. The plaintext `http` path for tests exists only in the transport (test initializer argument for `URLSessionACMETransport`, loopback hosts only), and the order procedure always accepts only `https`. The `User-Agent` version is a transport constant (`Swiftail/0.1.1`) because the repository has no version string.
 
-### B. 루프백 다리
+### B. Loopback Bridge
 
 ```
-iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge ── 127.0.0.1:P ── NWListener(TLS) ── HTTP 서버
-        (TLS는 iPhone과 NWListener 사이에서 끝난다. 다리가 나르는 것은 TLS 레코드다)
+iPhone ──tailnet(WireGuard)── TailnetConnection ── LoopbackBridge ── 127.0.0.1:P ── NWListener(TLS) ── HTTP server
+        (TLS terminates between the iPhone and NWListener. The bridge carries TLS records)
 ```
 
-1. **`forward`의 순서**: ① 잇고 있는 연결이 256개면 `limitReached`. ② `node.whoIs(connection.remoteEndpoint.address)`. nil이면 `unknownPeer`. ③ `127.0.0.1:<port>`로 평문 TCP를 건다(IPv4 루프백만. 기한 5초). 실패하면 `loopbackUnavailable`. ④ 루프백 연결의 자기 쪽 포트를 읽고, 새 일회용 토큰(32바이트, `SystemRandomNumberGenerator`)을 "기다리는 토큰" 표에 `토큰 → ((출발 포트, 리스너 포트), Origin(상대 끝점, ②의 신원))`으로 적는다. 같은 열쇠가 이미 기다리는 중이거나 서버가 가져가지 않은 허가로 남아 있으면, 또는 상한(256)이면 표가 받지 않는다. 그때는 **그 소켓을 쥔 채 ③부터 다시 한다**(쥐고 있어야 커널이 같은 출발 포트를 다시 주지 않는다. 모두 3번까지). 세 번 다 받지 않으면 `loopbackUnavailable`. 쥐었던 소켓은 토큰을 보내지 않은 채 RST로 끊는다(서버에게는 준비되지 않고 끝난 연결이다). ⑤ 토큰을 루프백 연결의 첫 바이트로 보낸다(보내지 못하면 `loopbackUnavailable`). ⑥ 그 뒤에 두 방향의 복사를 시작한다. ⑦ 끝나면 **소비되지 않은 토큰을 거둔 뒤에** 루프백 연결을 닫는다. ①~③에서는 `connection`을, ④·⑤에서는 두 연결을 RST로 끊는다.
-2. **신원은 연결에 고정된다**: ②에서 확인한 신원이 그 연결이 사는 동안의 신원이다. ②와 SYN 사이에 주소의 주인이 바뀌었으면 노드가 그 연결을 이미 끊었으므로(`peerRemoved`) 읽기가 곧바로 실패하고 아무 바이트도 건너가지 않는다. 그래서 새 주인의 신원으로 옛 주인의 바이트가 처리되는 일이 없다. 서버가 요청마다 `whoIs(주소)`를 다시 부르면 이 보장이 없다: 연결이 끊긴 뒤에도 루프백 쪽에 남은 요청이 새 주인의 이름으로 읽힐 수 있다(총괄 확인 필요 H3, 첫 사용처 확인 필요 F1).
-3. **복사**: tailnet → 루프백은 `read(upTo: 65_536)`으로 받은 덩어리를 루프백에 쓰고, **네트워크 스택이 받아 갈 때까지 기다린 뒤** 다음을 읽는다. 루프백 → tailnet은 루프백에서 받은 덩어리를 `write(_:)`가 돌아올 때까지 기다린 뒤 다음을 받는다. 다리가 쥐는 것은 방향마다 덩어리 하나(64KiB 이하)다. 느린 쪽이 빠른 쪽을 멈춘다(받는 창과 `write`의 역압이 그대로 이어진다).
-4. **반닫힘**: tailnet 쪽이 쓰기를 닫으면(`read`가 nil) 루프백에 FIN을 보내고 반대 방향은 계속 나른다. 루프백 쪽이 닫으면 `finishWriting()`을 부르고 반대 방향은 계속 나른다. 두 방향이 다 끝나면 `forward`가 돌아온다.
-5. **끊김과 취소**: 어느 쪽이든 오류(`reset`, `timedOut`, `peerRemoved`, 루프백의 실패)가 나면 두 연결을 모두 RST로 끊는다(tailnet 쪽 `abort()`, 루프백 쪽 `forceCancel()`). `forward`를 부른 Task가 취소되어도, 노드가 멈춰도(`notRunning`) 같다. 루프백 → tailnet 방향이 FIN으로 이미 끝난 뒤의 루프백 RST는 다리가 다음에 루프백에 쓸 때 안다. tailnet 쪽이 더 쓰지도 닫지도 않으면 그때까지 `forward`가 남는다(신원과는 무관하다. B6).
-6. **다리가 연 연결만 신원을 얻는다**(M7-9b): ① 리스너의 스택에서 TLS 아래(TCP 바로 위)에 놓인 다리의 프로토콜(`NWProtocolFramer`)이 연결의 첫 32바이트를 읽어 기다리는 토큰을 **모두 상수 시간으로 견주어** 찾고 소비한다. 맞은 토큰은 열쇠가 달라도 소비한다. ② 토큰이 그 연결의 `(출발 포트, 리스너 포트)`를 위한 것일 때만(두 끝이 `127.0.0.1`) 그 열쇠에 허가(`Origin`)를 적고, 이미 받아 둔 바이트를 위로 올린 뒤 지나가게 하고(`passThroughInput`·`passThroughOutput`) 연결을 준비 상태로 둔다. ③ 토큰이 없거나 틀리거나, 다른 리스너·다른 출발 포트의 것이거나, 5초 안에 32바이트가 다 오지 않으면 그 연결을 실패시킨다(다 보내기 전에 끝낸 연결도 그 기한에 끝난다. 준비 전의 framer는 상대의 끝을 알리는 호출을 받지 않는다). 위로 한 바이트도 올리지 않으므로 TLS에 닿지 못하고, 서버는 `newConnectionHandler`로 연결을 받지만 `stateUpdateHandler`에서 `.ready` 없이 `.failed`를 본다. ④ 허가는 서버의 조회가 한 번 가져가면 지워진다. 다리는 허가를 지우지 않고(연결이 끝나도), framer의 `cleanup`도 지우지 않는다. 다리는 루프백 연결을 끝낼 때 남은 허가에 "다리 쪽이 끝남"만 적는다. 지우는 것은 조회와, 가져가지 않은 허가가 256개를 넘을 때 **다리 쪽이 끝난 것 가운데** 가장 오래된 것뿐이다(그 연결의 조회는 nil, 닫힌 쪽). 다리가 잇는 연결이 256개까지이므로 살아 있는 연결의 허가는 밀려나지 않는다: `.ready`가 된 뒤에 물으면 다리가 잇고 있는 연결은 반드시 답을 얻는다. ⑤ 같은 열쇠의 허가가 남아 있는 동안 그 열쇠로 새 토큰을 적지 않는다(B1 ④). ⑥ 조회는 `.ready`인 연결에만 답한다. ⑦ 표는 잠금 하나로 지키는 동기 호출이다. 토큰은 로그·오류 문자열·`description`에 남기지 않는다.
-7. **서버가 지킬 것**(첫 사용처의 몫. 문서 주석에 적는다): 리스너를 `127.0.0.1`에만 묶고 포트는 시스템이 고르게 한다. 리스너의 `NWParameters`에 `bridge.makeListenerProtocolOptions()`를 `defaultProtocolStack.applicationProtocols`의 **끝에** 더한다(`append`. 앞에 넣으면 TLS 위에 놓여 핸드셰이크가 `bad protocol version`으로 깨진다). 리스너 하나에는 다리 하나를 쓴다. 받은 연결마다 **`.ready`가 된 뒤, 요청을 읽기 전에** `origin(of:)`을 한 번 묻고, nil이면 그 연결을 끊는다. 허가는 연결이 준비되기 전에 적히므로 평문 리스너에서도 첫 바이트를 기다리지 않는다. 답은 한 번만 나오므로 그 `Origin`을 연결이 사는 동안 쥔다. **끝난 연결은 `cancel()`하고 그 `NWConnection`의 참조를 놓는다**: 준비되지 않고 끝난 받은 연결의 소켓은 `cancel()`만으로는 닫히지 않고 객체가 풀릴 때 닫힌다(아래 "실험으로 확인한 것"). 붙잡고 있으면 토큰 없이 건 연결마다 서버의 파일 서술자가 하나씩 남고 상대는 끝을 보지 못한다.
-8. **같은 기기의 다른 프로세스가 할 수 있는 것과 없는 것**: 루프백 포트에 직접 붙을 수 있고, `SO_REUSEADDR`로 다리의 출발 포트에 묶어 다른 리스너에 붙거나, 다리의 연결이 RST로 죽어 풀린 출발 포트로 같은 리스너에 붙을 수 있다. 어느 경우든 토큰이 없어 연결이 준비되지 않는다(B6 ③). 서버가 가져가지 않은 허가가 그 4-튜플로 남아 있어도 같다: 서버는 준비된 연결에만 묻고 조회는 준비된 연결에만 답한다. 토큰은 다리와 그 리스너 포트 사이의 루프백 TCP 안에서만 오가므로 엿보려면 루프백 트래픽을 읽어야 한다(root·BPF, 범위 밖). 리스너 포트를 먼저 차지하는 것: 서버가 연 포트 번호를 `forward`에 넘기므로, 서버가 죽은 뒤 다른 프로세스가 그 포트를 열면 다리가 그쪽으로 토큰과 TLS 레코드를 보낸다. 그 토큰은 그 리스너 포트에 묶여 있어 다른 리스너에서 통하지 않고(B6 ②), 그 프로세스는 인증서의 키가 없어 핸드셰이크를 끝내지 못한다(평문 리스너에서는 내용이 보인다. 시험 전용이다). 같은 사용자 권한의 프로세스가 앱의 메모리나 상태 파일을 읽는 것은 막지 않는다(첫 사용처의 비목표와 같다, RemoteDebug `docs/protocol.md` 12절).
-9. **권한**: 루프백에서 듣는 쪽은 App Sandbox의 들어오는 연결 권한(`com.apple.security.network.server`), 다리와 노드의 소켓·`URLSession`은 나가는 연결 권한(`com.apple.security.network.client`)이 든다. 그 밖의 권한은 쓰지 않는다. Swiftail은 키체인을 쓰지 않는다(사슬과 키를 값으로 낸다). 키체인 없이 TLS 신원을 만드는 길(`SecKeyCreateWithData`·`SecIdentityCreate`)은 M7-9b의 시험이 샌드박스 밖의 macOS에서 돌렸다(자체 서명 인증서로 TLS 리스너가 핸드셰이크를 끝낸다). 샌드박스 안의 실행과 "키체인에 쓰지 않음"은 확인되지 않았다(노트 4.6·8장, 9장 V188·V189·V191). **그 뒤 확인됨(2026-11-15, 첫 사용처의 샌드박스 탐침. macOS 27.2, Swiftail `e56b8c8`, 권한은 `app-sandbox`·`network.client`·`network.server`뿐)**: ① TLS와 다리의 framer를 끝에 더한 `NWListener`가 루프백에서 준비되고, 메모리 장치 노드의 `LoopbackBridge.forward`를 거친 TLS 왕복이 통과한다. `origin(of:)`은 한 번 값을 주고 두 번째는 nil이다. 토큰 없는 직접 연결은 준비 전에 실패한다. ② `SecKeyCreateWithData` → `SecCertificateCreateWithData` → `SecIdentityCreate`로 만든 신원으로 핸드셰이크가 끝나고, 로그인 키체인의 항목 수와 메타데이터 해시가 앞뒤로 같다(다른 키체인 백엔드는 보지 않음). ③ 컨테이너 안의 저장 폴더는 0700, 파일은 0600이다(실제 발급과 `CertificateManager`의 저장·다시 읽기 경로는 아직. 파일 입출력만 봄). ④ 로컬 네트워크 권한 창은 뜨지 않았고 샌드박스 거부 로그도 없다. 남은 것은 관문 (나) 7의 운영 발급·iPhone·설치기다. 이것을 구현의 근거로 쓰지 않는다: **첫 사용처 세션이 샌드박스 판에서 확인한다**(첫 사용처 검토 결과 5. 막히면 첫 사용처가 키체인에 넣는 길로 가고 Swiftail의 API는 그대로다).
-10. **비용**: 바이트가 Swift TCP → 다리의 복사 → 커널의 루프백 TCP → TLS를 거친다. 4GiB 전송에서의 처리량과 CPU는 관문에서 잰다.
+1. **`forward` sequence**: ① If 256 connections are being bridged, return `limitReached`. ② Call `node.whoIs(connection.remoteEndpoint.address)`. Return `unknownPeer` if nil. ③ Dial plaintext TCP to `127.0.0.1:<port>` (IPv4 loopback only, 5-second deadline). On failure, `loopbackUnavailable`. ④ Read the local port of the loopback connection and record a fresh single-use token (32 bytes, `SystemRandomNumberGenerator`) in the "pending tokens" table as `token → ((source port, listener port), Origin(remote endpoint, identity from ②))`. The table refuses if the key is already pending, remains as an unclaimed grant, or the limit (256) has been reached. In that case **keep the socket open and retry from ③** (holding it prevents the kernel from giving out the same source port again, up to 3 attempts total). If all three are refused, return `loopbackUnavailable`. Reset the held sockets without sending tokens (the server sees connections end without becoming ready). ⑤ Send the token as the first bytes of the loopback connection (`loopbackUnavailable` if it cannot be sent). ⑥ Then start copying in both directions. ⑦ At the end, **remove the unconsumed token before** closing the loopback connection. Reset `connection` in ①–③ and both connections in ④ and ⑤.
+2. **Identity is fixed to the connection**: The identity verified in ② is its identity for the life of the connection. If the address owner changed between ② and SYN, the node already closed the connection (`peerRemoved`), so reads fail immediately and no bytes cross. The old owner's bytes are therefore never processed under the new owner's identity. This guarantee is lost if the server calls `whoIs(address)` again for each request: a request still buffered on the loopback side after the connection closes could be read under the new owner's name (lead session confirmation H3 required, first adopter confirmation F1 required).
+3. **Copying**: Tailnet → loopback writes the chunk from `read(upTo: 65_536)` to loopback and **waits for the network stack to take it** before reading again. Loopback → tailnet waits for `write(_:)` to return before receiving the next chunk from loopback. The bridge holds one chunk per direction (at most 64KiB). The slower side stops the faster side (receive-window and `write` backpressure carry through).
+4. **Half-close**: If the tailnet side closes writes (`read` returns nil), send FIN to loopback and keep forwarding in the opposite direction. If the loopback side closes, call `finishWriting()` and keep forwarding in the opposite direction. `forward` returns once both directions finish.
+5. **Disconnect and cancellation**: An error on either side (`reset`, `timedOut`, `peerRemoved`, loopback failure) resets both connections (tailnet `abort()`, loopback `forceCancel()`). The same applies if the Task calling `forward` is canceled or the node stops (`notRunning`). A loopback RST after loopback → tailnet has already ended with FIN is discovered on the next write to loopback. If the tailnet side neither writes again nor closes, `forward` remains pending until then (unrelated to identity. B6).
+6. **Only a bridge-opened connection gets an identity** (M7-9b): ① The bridge protocol (`NWProtocolFramer`), below TLS and directly above TCP in the listener stack, reads the first 32 bytes and finds and consumes the matching pending token by **comparing all of them in constant time**. Consume a matching token even if the key differs. ② Only if the token is for that connection's `(source port, listener port)` (both endpoints on `127.0.0.1`), record a grant (`Origin`) under that key, deliver any bytes already buffered upward, then enable pass-through (`passThroughInput`, `passThroughOutput`) and mark the connection ready. ③ Fail the connection if the token is missing, wrong, for another listener or source port, or if all 32 bytes do not arrive within 5 seconds (a connection that ends before sending all bytes also ends at that deadline. Before readiness, the framer gets no callback for the peer's end). No bytes are delivered upward, so they do not reach TLS. The server receives the connection through `newConnectionHandler` but sees `.failed` without `.ready` in `stateUpdateHandler`. ④ The grant is removed when the server's lookup claims it once. Neither the bridge (even when the connection ends) nor the framer's `cleanup` removes grants. When ending the loopback connection, the bridge only marks the remaining grant "bridge side ended." Removal happens only on lookup or when unclaimed grants exceed 256, in which case discard the oldest **among those whose bridge side ended** (lookup for that connection returns nil, fail closed). The bridge forwards up to 256 connections, so live connection grants are never evicted. A connection still being bridged always gets an answer when looked up after `.ready`. ⑤ While a grant with a given key remains, no new token is recorded for that key (B1 ④). ⑥ Lookup answers only for `.ready` connections. ⑦ The table uses synchronous calls protected by one lock. Keep tokens out of logs, error strings, and `description`.
+7. **Server requirements** (the first adopter's responsibility, documented in doc comments): Bind the listener only to `127.0.0.1` and let the system choose the port. In the listener's `NWParameters`, add `bridge.makeListenerProtocolOptions()` to the **end** of `defaultProtocolStack.applicationProtocols` (`append`. Inserting at the front puts it above TLS and breaks the handshake with `bad protocol version`). Use one bridge per listener. For every accepted connection, call `origin(of:)` once **after `.ready` and before reading requests**, and close if nil. The grant is recorded before the connection becomes ready, so even plaintext listeners do not wait for the first byte. The answer comes once, so keep that `Origin` for the connection's lifetime. **Call `cancel()` on finished connections and release the reference to the `NWConnection`**. The socket of an accepted connection that ended before readiness closes when the object is released, and `cancel()` alone does not close it (see "Experimentally Verified" below). Retaining it leaves one server file descriptor per tokenless connection and the peer does not see the end.
+8. **What other processes on the same device can and cannot do**: They can connect to the loopback port directly, bind to the bridge source port with `SO_REUSEADDR` and connect to another listener, or reuse a source port released after a bridge connection reset to connect to the same listener. In all cases, the missing token prevents readiness (B6 ③). The same holds if an unclaimed grant remains for that 4-tuple: the server asks only about ready connections and lookup answers only for ready connections. The token travels only within the loopback TCP connection between the bridge and that listener port, so observing it requires reading loopback traffic (root or BPF, out of scope). Taking over the listener port: the server passes its port number to `forward`, so if another process opens that port after the server dies, the bridge sends the token and TLS records there. That token is bound to the listener port and does not work on another listener (B6 ②), and the process cannot complete the handshake without the certificate key (contents are visible with a plaintext listener, which is for tests only). This does not prevent a process with the same user's permissions from reading the app's memory or state files (same as the first adopter's non-goals, RemoteDebug `docs/protocol.md` §12).
+9. **Entitlements**: The loopback listener needs the App Sandbox incoming connection entitlement (`com.apple.security.network.server`). The bridge and node sockets and `URLSession` need the outgoing connection entitlement (`com.apple.security.network.client`). No other entitlements are used. Swiftail does not use the Keychain (it returns the chain and key as values). The M7-9b tests exercised TLS identity creation without the Keychain (`SecKeyCreateWithData`, `SecIdentityCreate`) outside the sandbox on macOS (the TLS listener completes the handshake with a self-signed certificate). Running inside the sandbox and "no Keychain writes" were unverified (notes §§4.6 and 8, §9 V188, V189, and V191). **Subsequently verified (2026-11-15, first adopter's sandbox probe. macOS 27.2, Swiftail `e56b8c8`, only `app-sandbox`, `network.client`, and `network.server` entitlements)**: ① An `NWListener` with TLS and the bridge framer appended becomes ready on loopback, and TLS round trip through `LoopbackBridge.forward` on a memory device node passes. `origin(of:)` returns a value once, then nil. A direct connection without a token fails before readiness. ② The handshake completes with an identity created by `SecKeyCreateWithData` → `SecCertificateCreateWithData` → `SecIdentityCreate`, and the login Keychain's item count and metadata hash are unchanged (other Keychain backends were not checked). ③ The storage directory in the container is 0700, and files are 0600 (real issuance and `CertificateManager` storage and reload paths remain. Only file I/O was checked). ④ No local network permission dialog appeared and there were no sandbox denial logs. Production issuance, iPhone, and the installer in gate (b) 7 remain. Do not use this as the basis for implementation. **The first adopter session verifies it in the sandboxed version** (first adopter review result 5. If blocked, the first adopter uses the Keychain and the Swiftail API stays the same).
+10. **Cost**: Bytes traverse Swift TCP → copying by the bridge → kernel loopback TCP → TLS. Measure throughput and CPU for a 4GiB transfer at the gate.
 
-구현에서 정해진 것(M7-9): 루프백 쪽 RST는 `NWConnection.forceCancel()`이고(평문 서버의 읽기가 `ECONNRESET`으로 끝난다. `cancel()`은 FIN), 쓰기 닫기는 내용 없는 `finalMessage`다. 루프백 소켓은 Task 취소로 닫히지 않아 B1 ⑦이 취소에서도 선다. 잇기 시작한 뒤의 끊김은 던지지 않고 정리한 뒤 돌아온다(취소만 `cancelled`). 루프백을 닫는 길은 함수 하나(`endLoopback`)이고, 시험은 내부 init의 갈고리로 닫기 직전의 표를 본다.
+Decisions from implementation (M7-9): Reset loopback with `NWConnection.forceCancel()` (the plaintext server's read ends with `ECONNRESET`. `cancel()` sends FIN), and close writes with an empty `finalMessage`. Task cancellation does not close the loopback socket, so B1 ⑦ also holds on cancellation. Disconnects after bridging begins clean up and return without throwing (only cancellation throws `cancelled`). One function closes loopback (`endLoopback`), and tests inspect the table immediately before closing through a hook in the internal init.
 
-#### 검토에서 고친 것 (M7-9b)
+#### Review Fixes (M7-9b)
 
-다른 세션이 M7-9의 다리를 검토해 **출발 포트 표가 인증의 경계로 성립하지 않음**을 평문 리스너에서 재현했다(서버는 계약대로 첫 바이트 뒤에 조회).
+Another session reviewed the M7-9 bridge and reproduced **failure of the source port table as an authentication boundary** using a plaintext listener (the server looked up after the first byte per the contract).
 
-1. 표의 열쇠가 출발 포트뿐이었다. 다리가 리스너 L1에 잇는 동안(출발 포트 P) 다른 프로세스가 `SO_REUSEADDR`로 `127.0.0.1:P`에 묶어 둘째 리스너 L2에 붙으면(4-튜플이 달라 커널이 받는다) L2가 P로 L1 연결의 신원을 얻었다. 인증서를 갱신할 때 옛 리스너와 새 리스너가 함께 돈다(첫 사용처 검토 결과 3).
-2. 루프백 쪽이 RST로 죽으면 커널은 TCP가 CLOSED가 되는 순간 출발 포트를 푼다(`NWConnection`이 아직 열려 있어도). 표의 항목은 다리가 알아챌 때까지 남았다. 서버가 응답과 FIN을 보내고 닫은 뒤 tailnet 쪽이 더 보내면 다리가 다음에 쓸 때까지 알아채지 못해 창이 무기한 열렸다. 받는 중이어도 포트가 풀린 뒤 지우기까지 틈이 있었다.
-3. 서버가 먼저 FIN을 보내는 정상 종료에도 지우기가 `finishWriting()` 뒤라 같은 창이 이론상 있었다.
-4. 시험이 "지우기 전에 닫기"로 망가뜨린 구현을 잡지 못했다(`cancel`이 비동기라 늘 지우기가 이겼다).
-5. 시험 도우미(`PlainLoopbackServer.swift`, `NetworkSocketLoopbackTests.swift`의 같은 코드)의 `read()`가 마지막 바이트와 함께 온 끝을 놓쳐 다음 받기가 `ENODATA`로 실패했다(다리 결함이 아니다). 실패한 뒤 기다리는 시험은 취소를 받지 않았다.
-6. B5의 "노드가 멈추면 루프백 쪽을 닫는다"는 실제로 RST였고, B1 ⑥은 ④(표에 적지 못함)의 RST를 빠뜨렸다.
+1. The table key was only the source port. While the bridge connected to listener L1 (source port P), another process could bind to `127.0.0.1:P` with `SO_REUSEADDR` and connect to a second listener L2 (the kernel accepts it because the 4-tuple differs). L2 got the identity of the L1 connection via P. Old and new listeners run together during certificate renewal (first adopter review result 3).
+2. If loopback was reset, the kernel released the source port as soon as TCP reached CLOSED (even while `NWConnection` remained open). The table entry remained until the bridge noticed. If the server sent a response and FIN and closed, and the tailnet side then sent more, the bridge would not notice until the next write, leaving the window open indefinitely. Even while receiving, there was a gap between port release and removal.
+3. Normal termination when the server sent FIN first theoretically had the same window because removal followed `finishWriting()`.
+4. Tests did not catch an implementation deliberately broken to "close before removal" (`cancel` was asynchronous, so removal always won).
+5. The test helpers' (`PlainLoopbackServer.swift`, same code in `NetworkSocketLoopbackTests.swift`) `read()` missed an end arriving with the final bytes, so the next receive failed with `ENODATA` (not a bridge defect). The waiting test did not respond to cancellation after failure.
+6. B5's "close loopback when the node stops" actually used RST, and B1 ⑥ omitted RST in ④ (table insertion failed).
 
-핵심은 "다리가 쥔 루프백 연결의 4-튜플은 커널이 유일하게 지킨다"(옛 B6 ③)가 연결이 살아 있는 동안만 참이고, 표가 리스너를 가리지 않으며, 상대가 끊는 길에서는 커널이 먼저 포트를 푼다는 것이다. 콜백으로 지우는 방식은 일정에 달린 틈을 남긴다.
+"The kernel keeps the 4-tuple of the loopback connection held by the bridge unique" (old B6 ③) holds only while the connection lives. The table did not distinguish listeners, and on peer disconnect the kernel released the port first. Callback-based removal leaves a scheduling-dependent gap.
 
-**바꾼 설계**: 연결 안의 일회용 토큰(B1 ④⑤, B6). 출발 포트를 다시 쓰거나 다른 리스너로 같은 포트를 써도 토큰이 없어 TLS에 닿지 못하고 서버에게 `.ready`가 되지 않는다. 허가의 열쇠는 `(출발 포트, 리스너 포트)`이고, 지우는 시점에 기대지 않는다: 다리도 framer의 `cleanup`도 허가를 지우지 않는다. 남은 허가는 그 4-튜플을 실제로 쓴 다리 연결의 상대이고, 같은 열쇠의 새 허가가 그 자리에 들어가지 못하므로(B6 ⑤) 늦게 온 조회도 다른 상대를 얻지 않는다. 고친 것: 3은 닫는 순서가 신원과 무관해졌다. 4는 닫는 길을 `endLoopback` 하나로 모으고 갈고리로 닫기 직전의 표를 단언한다. 5는 두 도우미가 끝을 기억하고, 기다림이 취소되면 연결을 닫는다. 6은 B1·B5 문구다.
+**Revised design**: A single-use token inside the connection (B1 ④ and ⑤, B6). A reused source port, including use of the same port with another listener, lacks the token, so it cannot reach TLS or become `.ready` to the server. The grant key is `(source port, listener port)`, and the design does not depend on when entries are removed. Neither the bridge nor the framer's `cleanup` removes grants. A remaining grant belongs to the peer on the bridge connection that actually used that 4-tuple, and a new grant with the same key cannot replace it (B6 ⑤), so even a late lookup cannot get another peer. Fixes: In 3, close order is now independent of identity. For 4, consolidate closing in `endLoopback` and assert the table state just before close using a hook. For 5, both helpers remember the end and close the connection if waiting is canceled. For 6, update B1 and B5 wording.
 
-**실험으로 확인한 것**(macOS 27.2, Swift 6.4.2, 시험 밖의 작은 실행 프로그램과 이 타깃의 시험):
+**Experimentally Verified** (macOS 27.2, Swift 6.4.2, small standalone executables outside the tests and this target's tests):
 
-- `NWParameters(tls:tcp:)`의 `applicationProtocols`는 위(앱 쪽)부터 적힌다. framer를 `append`하면 TLS 아래에 놓인다: TLS 클라이언트의 ClientHello 첫 32바이트를 framer가 읽었다. `insert(at: 0)`이면 TLS 위에 놓여 양쪽이 `-9836 bad protocol version`으로 실패했다. 평문 리스너에서도 같은 framer가 돈다.
-- `start`가 `.willMarkReady`를 돌려주면 토큰을 확인하고 `markReady()`할 때까지 서버의 연결은 `.preparing`에 머문다. 틀린 토큰(`markFailed`)이면 서버는 `.preparing → .failed`만 보고 받기에 아무것도 오지 않는다. 토큰이 없으면(TLS 클라이언트가 바로 건 경우) ClientHello의 첫 32바이트가 토큰 자리에 와 실패한다. 10바이트 뒤 멈춘 연결은 `scheduleWakeup`의 기한에 실패한다.
-- **준비되지 않고 끝난 받은 연결은 `cancel()`·`forceCancel()`을 해도 소켓이 닫히지 않는다.** `NWConnection` 객체가 풀릴 때 닫힌다. 틀린 토큰으로 `.preparing → .failed`가 된 연결을 서버가 `cancel()`한 뒤 붙잡고 있으면 서버 쪽 소켓이 `CLOSE_WAIT`으로 남았고(20개를 걸어 서술자 20개, 17초 뒤에도 같음. `lsof`로 확인), 토큰 없이 건 TLS 클라이언트는 `.preparing`에 머물렀다. 참조를 놓으면 2초 안에 모두 닫혔다. framer 때문이 아니다: framer를 넣지 않은 TLS 리스너에서 핸드셰이크 전에 취소한 연결도 같았다. 준비된 뒤에 취소한 연결은 붙잡고 있어도 바로 닫혔다(FIN). `markFailed` 대신 `markReady()` 뒤 `markFailed`, `framer.async` 안의 `markFailed`, 아무것도 알리지 않기로 바꿔도 달라지지 않았다. 관문 (가)의 시험 서버가 받은 연결을 모두 쥐고 있어 항목 9의 직접 TLS 탐침이 끝나지 않으면서 드러났다(2026-11-15). `SwiftailLoopbackTests`의 `rejectedConnectionEndsOnceReleased`가 지킨다.
-- `passThroughInput()`은 부른 때 framer에 이미 받아 둔 바이트를 위로 올리지 않는다(토큰과 함께 온 ClientHello·평문이 사라져 TLS 핸드셰이크가 `-9816`으로 끝났다). 그 바이트를 `parseInput`으로 재고 `deliverInputNoCopy`로 올린 뒤 지나가게 하면 TLS가 끝에서 끝으로 된다.
-- framer는 `NWProtocolFramer.Options`에 실은 값(`options["table"]`)을 `init(framer:)`에서 읽는다. framer의 `remote`·`local`은 `127.0.0.1:<출발 포트>`·`127.0.0.1:<리스너 포트>`다. framer가 자기 `options`(그리고 `parameters`의 스택)에 적은 값은 서버의 `connection.parameters`에서 보이지 않고(연결마다 복사된다), `connection.metadata(definition:)`도 nil이다. framer 메시지의 메타데이터는 평문 리스너에서만 서버의 받기 문맥에 오고 TLS 리스너에서는 오지 않는다. 그래서 서버가 연결에서 바로 신원을 읽는 길은 없고, 열쇠로 표를 찾는다.
-- 상대가 RST로 끊으면 framer의 `stop`·`cleanup`이 서버가 `cancel()`하기 전에, 서버의 `.failed` 처리기보다도 먼저 돈다. 그래서 `cleanup`에서 허가를 지우면 서버의 `.ready` 처리기가 늦을 때 같은 열쇠의 새 허가가 들어갈 틈이 생긴다. 지우지 않는 까닭이다.
-- `NWProtocolFramerImplementation`은 `Sendable`을 요구하지 않아 Swift 6 엄격 동시성에서 `@unchecked Sendable` 없이 쓴다. 입력을 읽는 길은 `parseInput`이 넘기는 버퍼뿐이라 그 클로저 안에서 바이트를 복사한다.
-- 키체인 없이 만든 신원(`SecKeyCreateWithData`·`SecCertificateCreateWithData`·`SecIdentityCreate`, 시험 안에서 만든 자체 서명 인증서)으로 TLS 리스너가 핸드셰이크를 끝냈다(B9).
-- 고치기 전 코드(옛 API, 서버는 첫 바이트 뒤 조회)에서 검토 1·2의 시나리오는 신원을 얻었다(시험 실패). 받는 중의 서버 RST 직후 다른 스레드가 같은 포트로 붙는 탐침은 200번 중 0번 신원을 얻었다(옛 다리가 늘 먼저 지웠다). 고친 코드에서는 셋 다 연결이 준비되지 않는다.
+- The `applicationProtocols` of `NWParameters(tls:tcp:)` list protocols from the top (app side). Using `append` puts the framer below TLS: it read the first 32 bytes of the TLS client's ClientHello. Using `insert(at: 0)` put it above TLS and both sides failed with `-9836 bad protocol version`. The same framer runs with a plaintext listener.
+- If `start` returns `.willMarkReady`, the server's connection stays in `.preparing` until token verification and `markReady()`. On an incorrect token (`markFailed`), the server sees only `.preparing → .failed` and receives nothing. Without a token (a TLS client dialing directly), the first 32 bytes of ClientHello arrive in the token slot and fail verification. A connection that stalls after 10 bytes fails at the `scheduleWakeup` deadline.
+- **An accepted connection that ends before readiness does not close its socket on `cancel()` or `forceCancel()`.** It closes when the `NWConnection` object is released. If the server called `cancel()` and retained a connection that went from `.preparing → .failed` with an incorrect token, the server's socket stayed in `CLOSE_WAIT` (20 connections left 20 descriptors, unchanged after 17 seconds, checked with `lsof`), and the TLS client that dialed without a token stayed in `.preparing`. Releasing the references closed all sockets within 2 seconds. This also happened without the framer: a connection canceled before the handshake on a TLS listener with no framer behaved the same way. Connections canceled after readiness closed immediately (FIN) even when retained. The behavior was unchanged when replacing `markFailed` with `markReady()` followed by `markFailed`, calling `markFailed` inside `framer.async`, or not marking anything. This surfaced when the gate (a) test server held every accepted connection and item 9's direct TLS probe did not finish (2026-11-15). `rejectedConnectionEndsOnceReleased` in `SwiftailLoopbackTests` guards it.
+- `passThroughInput()` does not deliver bytes already buffered by the framer to the layer above it (ClientHello or plaintext received with the token was lost and the TLS handshake ended with `-9816`). Measuring those bytes with `parseInput` and delivering them with `deliverInputNoCopy` before enabling pass-through lets TLS work end to end.
+- The framer reads values supplied in `NWProtocolFramer.Options` (`options["table"]`) in `init(framer:)`. Its `remote` and `local` are `127.0.0.1:<source port>` and `127.0.0.1:<listener port>`. Values the framer writes to its own `options` (and its `parameters` stack) are not visible in the server's `connection.parameters` (copied per connection), and `connection.metadata(definition:)` is also nil. Framer message metadata reaches the server's receive context only on a plaintext listener. It does not arrive on a TLS listener. The server therefore cannot read identity directly from the connection and looks up the table by key.
+- When the peer disconnects with RST, the framer's `stop` and `cleanup` run before the server calls `cancel()` and even before its `.failed` handler. Removing a grant in `cleanup` would allow a new grant with the same key to appear when the server's `.ready` handler is late. This is why it is retained.
+- `NWProtocolFramerImplementation` does not require `Sendable`, so it is used under Swift 6 strict concurrency without `@unchecked Sendable`. Input can only be read through the buffer supplied to `parseInput`, so copy bytes inside that closure.
+- The TLS listener completed the handshake with a Keychain-free identity (`SecKeyCreateWithData`, `SecCertificateCreateWithData`, `SecIdentityCreate`, with a self-signed certificate generated in the test) (B9).
+- Before the fix (old API, server looked up after the first byte), review scenarios 1 and 2 obtained an identity (tests failed). A probe where another thread connected with the same port immediately after a server RST while receiving obtained an identity in 0 of 200 attempts (the old bridge always removed the entry first). In the fixed code, connections in all three cases fail to become ready.
 
-#### 독립 검토에서 고친 것 (M7-9b의 검토, 2026-11-15)
+#### Independent Review Fixes (Review of M7-9b, 2026-11-15)
 
-다른 세션이 토큰 설계를 검토했다. 다리가 잇지 않은 연결이 `origin(of:)`에서 값을 얻는 길은 찾지 못했다(표의 불변 조건, 상수 시간 비교, framer의 경계, 토큰의 노출, 다리 쪽 순서, 끝난 연결의 정리, 동시성). 가용성 결함 둘과 작은 어긋남 하나를 재현했다.
+Another session reviewed the token design. It found no way for a connection that the bridge did not forward to get a value from `origin(of:)` (table invariants, constant-time comparison, framer boundary, token exposure, bridge ordering, cleanup of finished connections, concurrency). It reproduced two availability defects and one small discrepancy.
 
-1. **남는 허가가 새 연결을 막았다.** TLS 리스너에서 framer는 핸드셰이크 전에 허가를 적는다. 핸드셰이크가 끝나지 않으면(tailnet 상대가 잇자마자 끊음, 인증서를 거절함, 미리 맺어 두기만 하고 닫음) 서버는 `.ready`를 보지 못해 묻지 않고, 허가는 밀려날 때까지 남는다. 다리가 그 출발 포트를 다시 뽑으면 표가 받지 않아 정상 연결이 `loopbackUnavailable`로 끊겼다(남은 허가 256개에 출발 포트 16,384개면 새 연결의 1.6%쯤. 추정). 고침: 표가 받지 않으면 그 소켓을 쥔 채 다른 포트로 다시 건다(B1 ④). 남은 허가는 지우지 않는다: 지우면 늦게 온 조회가 같은 열쇠의 새 허가를 얻을 수 있다(B6 ⑤는 그대로다).
-2. **남는 허가가 살아 있는 허가를 밀어냈다.** 상한에서 가장 오래된 것을 버렸으므로, tailnet 상대 하나가 1의 연결을 256번 되풀이하면(순차로 3.9초) 핸드셰이크 중인 다른 상대의 허가가 밀려나 그 연결의 조회가 nil이 되었다. 바꿔치기는 되지 않는다(서비스 거부뿐). 고침: 다리 쪽이 끝난 허가부터 버린다(B6 ④).
-3. **짧게 보내고 끝낸 연결**은 계약의 "32바이트가 오기 전에 끝나면 실패"와 달리 5초 기한에야 끝났다. `parseInput`의 최소 길이를 0으로 낮춰도 FIN 때 `handleInput`이 다시 불리지 않았다(10바이트 뒤 FIN: 호출 한 번, `isComplete`는 false. 되돌려주는 길이를 32·0·11로 바꿔도 같음). 준비 전의 framer는 끝을 알 수 없다. 고침: 돌지 않던 분기를 지우고 계약을 사실대로 적었다(B6 ③).
+1. **Leftover grants blocked new connections.** On a TLS listener the framer records the grant before the handshake. If the handshake does not finish (tailnet peer disconnects immediately, rejects the certificate, or just opens a connection in advance and closes it), the server never sees `.ready` and does not look up the grant, which remains until evicted. If the bridge picked that source port again, the table refused it and the legitimate connection ended with `loopbackUnavailable` (about 1.6% of new connections with 256 leftover grants and 16,384 source ports, estimated). Fix: If refused, keep that socket and redial with a different port (B1 ④). Keep leftover grants because removing them could let a late lookup get a new grant with the same key (B6 ⑤ still holds).
+2. **Leftover grants evicted live grants.** The oldest grant was discarded at the limit, so if one tailnet peer repeated the connection in item 1 256 times (3.9 seconds sequentially), another peer's grant could be evicted during its handshake, causing that connection's lookup to return nil. Substitution is impossible (denial of service only). Fix: Discard grants whose bridge side ended first (B6 ④).
+3. **A connection that sent a short prefix and ended** did not fail until the 5-second deadline, contrary to the contract's "fail if it ends before 32 bytes arrive." Lowering the minimum `parseInput` length to 0 did not make `handleInput` run again on FIN (FIN after 10 bytes: one call, `isComplete` false. Same when returning lengths 32, 0, and 11). A framer cannot observe the end before readiness. Fix: Remove the branch that never ran and document the actual behavior (B6 ③).
 
-남는 것(고치지 않음): 토큰을 보내지 않는 연결은 서버의 파일 서술자를 5초씩 잡는다. 같은 사용자 권한의 프로세스가 앱의 서술자 한도를 채울 수 있다(그 프로세스는 앱을 끝낼 수도 있으므로 범위 밖으로 둔다). 실제 커널이 1의 출발 포트 충돌을 얼마나 자주 일으키는지는 재지 않았다(시험은 충돌을 표에 넣어 만든다).
+Remaining (unfixed): Connections that send no token hold a server file descriptor for 5 seconds each. A process with the same user's permissions can fill the app's descriptor limit (out of scope because that process can also terminate the app). How often the real kernel causes the source-port collision in item 1 was not measured (the test injects a collision into the table).
 
-### G. Go 상태에서 가져오기(U1 뒤)
+### G. Importing Go State (After U1)
 
-1. **한 번, 읽기 전용**: Go의 디렉터리는 읽기만 한다. 대상에 `identity.json`이 이미 있으면 `alreadyInitialized`다(가져오기가 살아 있는 Swiftail 신원을 덮지 않는다).
-2. **범위와 읽기**: 가져오는 것은 **정상 등록이 끝난 프로필 하나**뿐이다(노트 4.7 3·5, 10장). `tailscaled.state`는 1MiB까지 읽는다. 바깥은 JSON 객체이고 값은 **표준 base64** 문자열이다(base64url이 아니다. 노트 4.7 5). 차례(DNS 노트 3.2, 노트 4.7 2·5): ① `_machinekey`(필수)는 `privkey:` + hex 64자다. ② `_current-profile`의 값은 `profile-<ID>`라는 **키 전체**다. ③ `_profiles`의 값은 `{프로필 ID: LoginProfile}`인 JSON 맵이다. ④ `_current-profile`이 가리키는 키의 값이 prefs JSON이다. ⑤ prefs의 `Config.PrivateNodeKey`(`privkey:` + hex 64자), `Config.OldPrivateNodeKey`, `LoggedOut`, `ControlURL`을 읽는다. `Config.NetworkLockKey`는 `nlpriv:` 머리의 다른 타입이고 읽지 않는다(노트 4.7 2, 9장 V199). 거절은 모두 닫힌 쪽이다(새 신원을 만들어 메우지 않는다. 노트 4.7 5):
-   - `malformed`: 바깥이 JSON 객체가 아님, 값이 표준 base64가 아님, 키 텍스트의 형식이 틀림, **machine 키가 0**, `_current-profile`이 `profile-` 꼴이 아님, prefs·`_profiles`의 JSON이 깨짐.
-   - `unsupportedState`: `_current-profile`이 없음(legacy 형식이거나 프로필이 없다. Go는 이때 빈 프로필을 만들거나 legacy prefs를 옮긴다), `_current-profile`이 가리키는 키가 없음, 그 ID가 `_profiles`에 없음(불일치), `_profiles`에 프로필이 둘 이상, `Config.OldPrivateNodeKey`가 있고 0이 아님(키 교체가 끝나지 않은 상태. Go는 재등록에도 그 키를 `OldNodeKey`로 싣는다. `control/controlclient/direct.go:718-720`, 노트 4.7 3, 9장 V202).
-3. **가져오지 않는 경우**: node 키가 없거나 0이거나 `LoggedOut`이 참이면 `notLoggedIn`이다. 0인 까닭이 "로그인한 적 없음"인지는 판정하지 않는다(노트 4.7 3, 9장 V201). machine 키만 가져오지 않는다(같은 노드가 되지 않는다). **제어 서버의 비교**(한 서버에 등록한 키를 다른 서버에 내밀지 않는다. 노트 10장): ① 기본 서버: prefs의 `ControlURL`이 비었거나 `https://controlplane.tailscale.com`(Go `DefaultControlURL`)이거나 `https://login.tailscale.com`이면 Go는 기본 서버로 본다(`ipn/prefs.go:42`, `:50-54`의 `IsLoginServerSynonym`, `ipn/ipnlocal/profiles.go:701-708`. 노트 4.7 3). 문자열을 그대로 견준다. 이때 `configuration.controlURL`도 그 두 문자열 가운데 하나여야 한다(Swiftail의 기본값은 `https://controlplane.tailscale.com`이다). ② 사용자 지정 서버: 양쪽 URL의 스킴·호스트·포트가 같고, **경로가 비었거나 `/`이고, query·fragment·userinfo가 없을 때만** 같은 서버로 본다. 구성 요소는 정규화하지 않고 견준다(생략한 포트와 `:443`도 다르다고 본다). 그 밖은 모두 `controlURLMismatch`다. "스킴·호스트·포트가 같음"이 "등록한 서버가 같음"을 보장하지는 않는다: Go는 `ControlURL`의 경로까지 보존해 제어 끝점을 만든다(노트 10장 G3, `control/controlclient/direct.go:810-817`). 그래서 경로가 있는 URL은 받지 않는다.
-4. **쓰기**: `NodeIdentityStore`로 저장한다(0600, 원자적, iOS의 보호 등급 그대로). `NetworkLockKey`·프로필은 옮기지 않는다(노트 4.7 3). `OldPrivateNodeKey`가 있는 상태는 G2가 이미 거절했으므로, 옮기지 않아서 Go와 달라지는 경우(키 교체 중단)는 가져오기에 들어오지 않는다.
-5. **부르는 쪽이 지킬 것**: 그 상태를 쓰는 Go 노드가 멈춰 있다. 가져온 뒤에는 Go 노드를 그 상태로 다시 띄우지 않는다. Swiftail은 다른 프로세스가 같은 키를 쓰는지 알 수 없다(노트 4.7 4).
-6. **인증서**: Go의 `certs/` 아래 인증서와 키 파일은 이름과 형식이 같으므로 첫 사용처가 그대로 복사하면 `CertificateManager`가 동작 S3으로 검증해 쓴다(Go의 SEC1 키를 CryptoKit이 읽는 것은 노트 4.6에서 확인됐다). 따로 API를 두지 않는다. 같은 이름의 새 인증서 한도(7일에 5장)를 아낀다. 계정 키(`acme-account.key.pem`)는 P-256일 때만 쓴다: Go가 읽을 수 있는 RSA 계정 키까지 호환한다고 보장하지 않으며, 그런 파일을 복사하면 동작 C4가 `accountKeyUnreadable`로 끝난다(노트 10장). 그때 첫 사용처는 계정 키 파일을 빼고 복사한다(새 계정을 만든다).
-7. **되돌리기와 확인되지 않은 것**: Swiftail이 그 뒤에 node 키를 바꾸면(만료 뒤 재인증) Go 상태의 키는 옛것이 된다. 되돌린 Go 노드는 다시 로그인해야 할 수 있다. 서버가 옛 키를 어떻게 다루는지(거절하는지, `OldNodeKey`로만 인정하는지)는 클라이언트 소스로 결론이 나지 않는다(노트 4.7 4, 9장 V211). 가져온 노드가 같은 노드로 받아들여지는지도 **관문 전에는 확인되지 않았다**: Swiftail은 등록의 `NLKey`를 0으로 보내고(Go가 `NLKey`를 실어 등록한 노드가 0으로 다시 붙을 때의 서버 동작), 같은 node 키로 두 구현이 동시에 붙을 때의 서버·DERP 동작도 모른다(노트 4.7 4, 8장). 관문 (가) 11과 (나) 8이 이것을 본다.
+1. **Once, read-only**: Read only from the Go directory. If `identity.json` already exists in the destination, return `alreadyInitialized` (import does not overwrite a live Swiftail identity).
+2. **Scope and reading**: Import **only one fully registered profile** (notes §4.7 items 3 and 5, §10). Read `tailscaled.state` up to 1MiB. The outer layer is a JSON object with **standard base64** strings as values (not base64url. Notes §4.7 item 5). Sequence (DNS notes §3.2, notes §4.7 items 2 and 5): ① `_machinekey` (required) is `privkey:` + 64 hex characters. ② The value of `_current-profile` is the **whole key** `profile-<ID>`. ③ The value of `_profiles` is a JSON map `{profile ID: LoginProfile}`. ④ The value of the key pointed to by `_current-profile` is prefs JSON. ⑤ Read prefs `Config.PrivateNodeKey` (`privkey:` + 64 hex characters), `Config.OldPrivateNodeKey`, `LoggedOut`, and `ControlURL`. `Config.NetworkLockKey` has a different type with the `nlpriv:` prefix and is not read (notes §4.7 item 2, §9 V199). All rejections fail closed (do not fill in a new identity. Notes §4.7 item 5):
+   - `malformed`: outer layer not a JSON object, nonstandard base64 value, invalid key text format, **zero machine key**, `_current-profile` not of the `profile-` form, or corrupt prefs or `_profiles` JSON.
+   - `unsupportedState`: missing `_current-profile` (legacy format or no profile. Go creates an empty profile or migrates legacy prefs in this case), missing key pointed to by `_current-profile`, its ID absent from `_profiles` (mismatch), two or more profiles in `_profiles`, or `Config.OldPrivateNodeKey` present and nonzero (incomplete key rollover. Go still sends that key as `OldNodeKey` on reregistration, `control/controlclient/direct.go:718-720`, notes §4.7 item 3, §9 V202).
+3. **When import is refused**: If the node key is absent or zero, or `LoggedOut` is true, return `notLoggedIn`. Do not infer whether zero means "never logged in" (notes §4.7 item 3, §9 V201). Do not import just the machine key (it does not make the same node). **Compare control servers** (do not present a key registered with one server to another. Notes §10): ① Default server: Go treats prefs `ControlURL` as the default if it is empty, `https://controlplane.tailscale.com` (Go `DefaultControlURL`), or `https://login.tailscale.com` (`ipn/prefs.go:42`, `:50-54`'s `IsLoginServerSynonym`, `ipn/ipnlocal/profiles.go:701-708`. Notes §4.7 item 3). Compare strings verbatim. In this case `configuration.controlURL` must also be one of those two strings (Swiftail defaults to `https://controlplane.tailscale.com`). ② Custom server: treat the URLs as the same server only if scheme, host, and port match, **the path is empty or `/`, and there is no query, fragment, or userinfo**. Compare components without normalization (an omitted port and `:443` differ). Otherwise return `controlURLMismatch`. "Same scheme, host, and port" does not guarantee "same server as registration": Go preserves the `ControlURL` path when building control endpoints (notes §10 G3, `control/controlclient/direct.go:810-817`). Therefore reject URLs with paths.
+4. **Writing**: Save with `NodeIdentityStore` (0600, atomic, same iOS protection class). Do not migrate `NetworkLockKey` or the profile (notes §4.7 item 3). G2 already rejects state with `OldPrivateNodeKey`, so the import does not encounter cases where omitting it would differ from Go (interrupted key rollover).
+5. **Caller requirements**: The Go node that uses the state must be stopped. Do not restart the Go node with that state after import. Swiftail cannot tell whether another process uses the same key (notes §4.7 item 4).
+6. **Certificates**: The certificates and key files under Go's `certs/` use the same names and formats. If the first adopter copies them as-is, `CertificateManager` validates and uses them per behavior S3 (CryptoKit's ability to read Go's SEC1 key was verified in notes §4.6). Provide no separate API. This saves against the new-certificate limit for the same name (5 in 7 days). Use the account key (`acme-account.key.pem`) only if P-256. Compatibility with the RSA account keys Go can read is not guaranteed, and copying one causes behavior C4 to end with `accountKeyUnreadable` (notes §10). In that case the first adopter copies without the account key file (a new account is created).
+7. **Rollback and unverified points**: If Swiftail later changes the node key (reauthentication after expiry), the key in the Go state is old. A rolled-back Go node may need to log in again. The client source does not establish how the server handles the old key (rejects it or accepts it only as `OldNodeKey`) (notes §4.7 item 4, §9 V211). Whether the imported node is accepted as the same node is **unverified before the gate**: Swiftail sends zero `NLKey` in registration (server behavior when a node registered by Go with an `NLKey` reconnects with zero), and server and DERP behavior when both implementations connect simultaneously with the same node key is also unknown (notes §§4.7 item 4 and 8). Gate (a) 11 and (b) 8 check this.
 
-### K. 비밀과 로그
+### K. Secrets and Logs
 
-1. 비밀은 ACME 계정 키, 인증서 개인 키, (가져올 때) Go 상태의 machine·node 키다. 파일은 0600이고 메모리에서는 CryptoKit의 키 타입으로만 든다. `TailnetCertificate`·`CertificateManager`의 `description`과 `dump`에 키가 나오지 않는다(`CustomReflectable`).
-2. 로그(`os.Logger(subsystem: "Swiftail")`)에 남기는 것: 발급의 시작과 끝, 실패의 종류, 다음 시도까지의 간격, 인증서의 만료 날짜, 다리가 이은 연결 수. 남기지 않는 것: 키, JWS 본문, nonce, token과 키 인가, 계정 URL, ACME 문제 문서의 `detail`(식별자가 들어 있을 수 있다. `status`로만 낸다), tailnet 이름이 든 도메인 전체, 주소 전체, 로그인 이름.
-   `TailnetCertificate`의 문자열 표현과 `dump`에는 도메인을 가리고 유효 기간만 표시한다.
-3. 오류의 연관 문자열에는 키·경로·기술자 번호를 넣지 않는다(M5의 규칙).
-4. 이 범위에는 비밀 값을 견주는 곳이 없다. 공개 키의 비교(동작 S3 ④, X3 ③)와 포트 번호의 조회뿐이다. 비밀 비교가 생기면 `SwiftailCrypto`의 상수 시간 비교를 쓴다.
-5. **인증서는 공개된다**: Let's Encrypt가 발급한 인증서는 공개 Certificate Transparency 로그에 실리고 거기에 기기 이름과 tailnet 이름이 들어간다(Let's Encrypt의 속도 제한 문서가 발급된 인증서를 CT 로그 검색으로 찾으라고 안내한다). Go 호스트도 지금 같다. 사용자 확인 필요 U3에 적는다.
+1. Secrets are the ACME account key, certificate private key, and (during import) Go state machine and node keys. Files use 0600 and in memory the keys are held only in CryptoKit key types. `TailnetCertificate` and `CertificateManager` do not expose keys in `description` or `dump` (`CustomReflectable`).
+2. Log (`os.Logger(subsystem: "Swiftail")`) issuance start and finish, failure type, interval until the next attempt, certificate expiration date, and number of bridged connections. Keep keys, JWS bodies, nonce, token and key authorization, account URL, ACME problem document `detail` (it can contain identifiers. Only exposed via `status`), full domains containing tailnet names, full addresses, and login names out of logs.
+   `TailnetCertificate`'s string representation and `dump` redact the domain and show only the validity period.
+3. Keep keys, paths, and descriptor numbers out of associated error strings (M5 rule).
+4. This scope has no secret comparison, only public key comparisons (behaviors S3 ④ and X3 ③) and port number lookups. Use `SwiftailCrypto` constant-time comparison if secret comparison is added.
+5. **Certificates become public**: Certificates issued by Let's Encrypt appear in public Certificate Transparency logs, where they include device and tailnet names (Let's Encrypt's rate limit documentation directs readers to find issued certificates with a CT log search). The current Go host works the same way. Document in owner confirmation U3.
 
-구현에서 정해진 것(M7-6): `CertificateManager`도 `CustomStringConvertible`·`CustomReflectable`이고 이름·키·계정 URL을 드러내지 않는다(2절 선언에 없는 공개 준수). 로그 범주는 `certificates`다.
+Decisions from implementation (M7-6): `CertificateManager` also conforms to `CustomStringConvertible` and `CustomReflectable` and does not expose names, keys, or account URLs (public conformances absent from the §2 declaration). The log category is `certificates`.
 
-### M. 한도
+### M. Limits
 
-| 항목 | 값 | 넘으면 |
+| Item | Value | On excess |
 | --- | --- | --- |
-| ACME JSON 응답 | 64KiB | 그 시도 실패(`unexpectedResponse`) |
-| 인증서 사슬 응답 | 256KiB, 5장 | 실패 |
-| 주문의 authorization 수 | 8개(동작 C5) | `unexpectedResponse` |
-| 문제 문서의 `type` | 256바이트(동작 C12) | 자른다 |
-| `set-dns` 응답 본문 | 4KiB | 실패 |
-| URL | 2,048바이트, `https` | 실패 |
-| HTTP 요청 하나 | 30초 | `timedOut` 또는 `network` |
-| 발급 한 번 | 5분 | `timedOut`(`Retry-After`가 이것을 넘어도 그때 끝낸다. 동작 X5) |
-| `set-dns` | 60초 | `network` |
-| `badNonce` 재시도 | 요청마다 3번 | 실패 |
-| 주문 다시 읽기 간격 | `Retry-After`, 없으면 1초, 1초보다 짧으면 1초 | 늦추기만 한다. 서버의 값보다 일찍 읽지 않는다 |
-| `Retry-After`로 정해지는 다음 시도 | 7일 | 7일로 묶는다(위쪽 끝만. 동작 X5) |
-| 한 시도 안에서 새 주문을 다시 만듦 | 1번(동작 C5·C7, H17) | `orderFailed` |
-| finalize 뒤 `ready`·`pending`의 되풀이 | 주문마다 1번(동작 C7, H17) | `unexpectedResponse` |
-| 다리가 잇는 연결 | 256개(노드의 연결 상한과 같다) | `limitReached` |
-| 다리가 쥐는 바이트 | 연결마다 방향당 64KiB | 읽기를 멈춘다 |
-| 루프백 연결 맺기 | 한 번에 5초. 표가 열쇠를 받지 않으면 3번까지 | `loopbackUnavailable` |
-| 다리가 기다리는 토큰 | 256개(잇는 연결의 상한과 같다) | 그 연결을 잇지 않는다 |
-| 리스너가 토큰을 기다림 | 연결마다 5초 | 그 연결은 준비되지 않고 실패한다(`ETIMEDOUT`) |
-| 서버가 가져가지 않은 허가 | 256개 | 다리 쪽이 끝난 것 가운데 가장 오래된 것을 버린다(그 연결의 `origin(of:)`은 nil) |
-| 디스크의 인증서·키 파일 | 64KiB씩 | 없는 것으로 본다 |
-| Go 상태 파일 | 1MiB | `malformed` |
+| ACME JSON response | 64KiB | Fail the attempt (`unexpectedResponse`) |
+| Certificate chain response | 256KiB, 5 certificates | Fail |
+| Order authorization count | 8 (behavior C5) | `unexpectedResponse` |
+| Problem document `type` | 256 bytes (behavior C12) | Truncate |
+| `set-dns` response body | 4KiB | Fail |
+| URL | 2,048 bytes, `https` | Fail |
+| One HTTP request | 30 seconds | `timedOut` or `network` |
+| One issuance attempt | 5 minutes | `timedOut` (end the attempt if `Retry-After` also exceeds this. Behavior X5) |
+| `set-dns` | 60 seconds | `network` |
+| `badNonce` retries | 3 per request | Fail |
+| Order poll interval | `Retry-After`, 1 second if absent, 1 second if less than 1 second | Only delay. Do not read earlier than the server's value |
+| Next attempt set by `Retry-After` | 7 days | Cap at 7 days (upper end only. Behavior X5) |
+| Create a new order again within one attempt | 1 time (behaviors C5 and C7, H17) | `orderFailed` |
+| Repeat `ready` or `pending` after finalize | 1 time per order (behavior C7, H17) | `unexpectedResponse` |
+| Bridged connections | 256 (same as the node connection limit) | `limitReached` |
+| Bytes held by the bridge | 64KiB per direction per connection | Stop reading |
+| Loopback connection establishment | 5 seconds per attempt. Up to 3 attempts if the table refuses the key | `loopbackUnavailable` |
+| Tokens pending in the bridge | 256 (same as the bridged connection limit) | Do not bridge that connection |
+| Listener waits for a token | 5 seconds per connection | Connection fails before readiness (`ETIMEDOUT`) |
+| Grants unclaimed by the server | 256 | Discard the oldest whose bridge side ended (`origin(of:)` returns nil for that connection) |
+| On-disk certificate and key files | 64KiB each | Treat as absent |
+| Go state file | 1MiB | `malformed` |
 
-## 4. C API 대응표
+## 4. C API Mapping
 
-첫 사용처의 Go 코어가 내는 C 함수는 18개다(RemoteDebug `core/capi/include/rdcore.h`). "쓰는 쪽"의 Mac은 호스트 모드, 확장은 iPhone의 패킷 터널 확장(터널 모드)이다. Swift 쪽의 호출은 모두 `Packages/RDCore/Sources/RDCoreBridge/RDCoreBridge.swift` 한 파일을 거친다.
+The first adopter's Go core exposes 18 C functions (RemoteDebug `core/capi/include/rdcore.h`). Under "Caller," Mac means host mode, and extension means the iPhone packet tunnel extension (tunnel mode). All Swift-side calls go through `Packages/RDCore/Sources/RDCoreBridge/RDCoreBridge.swift`.
 
-| # | 함수 | Go 코어가 하는 일(쓰는 tsnet·Tailscale 기능) | 쓰는 쪽 | 바뀐 뒤 |
+| # | Function | What the Go core does (tsnet and Tailscale features used) | Caller | After migration |
 | --- | --- | --- | --- | --- |
-| 1 | `rd_start` | 설정 JSON 검증, 상태 디렉터리 하나에 핸들 하나. 호스트: `tsnet.Server{Dir, Hostname, AuthKey, ControlURL, Ephemeral}.Start`, IPN 버스 구독, 상태 점검 고루틴. 터널: `LocalBackend` + utun | Mac, 확장 | **Swiftail**: `TailnetNode(configuration:device:)`와 `run()`. 호스트는 `.inProcess`, 확장은 `.utun`(M5). 중복 시작은 `NodeError.stateDirectoryInUse`. 설정 JSON과 핸들 표는 없어진다 |
-| 2 | `rd_status` | `LocalClient.Status`: 상태, 로그인 URL, 주소, cert 도메인, 자기 이름·`StableID`, 피어의 경로. 여기에 호스트의 것(`tlsReady`, `listening`, 게시·기기 수, RSS)을 더한다 | Mac, 확장 | **Swiftail**: `node.status`, `node.events`, `path(toPeerNamed:)`, `CertificateManager.status`. 나머지 필드는 첫 사용처(아래 표) |
-| 3 | `rd_stop` | 리스너·호스트·노드를 닫는다(`srv.Close`) | Mac, 확장 | **Swiftail**: `run()`을 돌리는 Task 묶음의 취소 |
-| 4 | `rd_host_publish` | IPA 검사·사본·목록. tsnet을 쓰지 않는다 | Mac | 첫 사용처 |
-| 5 | `rd_host_unpublish` | 위와 같다 | Mac | 첫 사용처 |
-| 6 | `rd_host_publish_resource` | 파일 공유 목록. tsnet을 쓰지 않는다 | Mac | 첫 사용처 |
-| 7 | `rd_host_unpublish_resource` | 위와 같다 | Mac | 첫 사용처 |
-| 8 | `rd_host_set_agent_board` | `GET /v1/agent`의 문서를 바꾼다 | Mac | 첫 사용처 |
-| 9 | `rd_update_page_set` | 루프백 HTTP 서버(Go `net/http`). 공식 Tailscale 앱의 `serve`가 그것을 내보낸다. 코어의 tsnet과 무관하고 핸들도 없다 | Mac | 첫 사용처(Swift의 루프백 HTTP 서버). Swiftail과 무관 |
-| 10 | `rd_host_set_devices` | 허용 목록을 통째로 바꾼다. 키는 노드 `StableID` | Mac | 첫 사용처. `StableID`는 `PeerIdentity.stableID` |
-| 11 | `rd_host_set_direct` | 같은 네트워크 직접 연결: OS TCP 리스너, 자체 서명 P-256 인증서의 TLS 1.3(Go `crypto/tls`·`x509`), 기기 토큰 인증. tsnet을 쓰지 않는다 | Mac | 첫 사용처(`NWListener`). 인증서를 새로 만드는 코드도 첫 사용처(F9) |
-| 12 | `rd_host_pairing_open` | 페어링 코드를 만든다 | Mac | 첫 사용처 |
-| 13 | `rd_host_pairing_decide` | 페어링 요청을 승인·거절한다. 요청에 적힌 신원은 `WhoIs`가 준 것이다 | Mac | 첫 사용처. 신원은 `LoopbackBridge.Origin.peer` |
-| 14 | `rd_proxy_start` | 루프백 CONNECT 프록시, `srv.Dial` | 호출하는 곳 없음 | **빠진다**(검토 결과 2) |
-| 15 | `rd_tunnel_set_default_interface` | 기본 인터페이스 전환을 엔진에 알린다 | 확장 | **Swiftail**: `setDefaultInterface(_:)`(M5) |
-| 16 | `rd_tunnel_set_path_peer` | 경로를 보고할 피어를 정한다 | 확장 | **Swiftail**: `path(toPeerNamed:)`와 `NodeEvent.peerPathChanged`(M4·M5). 따로 정해 둘 것이 없다 |
-| 17 | `rd_next_event` | 사건 큐에서 하나를 기다려 꺼낸다 | Mac, 확장 | **Swiftail**: `node.events`·`node.networkSettings`·`certificates`의 `for await`. 호스트의 사건은 첫 사용처 |
-| 18 | `rd_free` | C 문자열 해제 | Mac, 확장 | **빠진다** |
+| 1 | `rd_start` | Validate configuration JSON, one handle per state directory. Host: `tsnet.Server{Dir, Hostname, AuthKey, ControlURL, Ephemeral}.Start`, IPN bus subscription, status check goroutine. Tunnel: `LocalBackend` + utun | Mac, extension | **Swiftail**: `TailnetNode(configuration:device:)` and `run()`. Host uses `.inProcess`, extension uses `.utun` (M5). Duplicate starts yield `NodeError.stateDirectoryInUse`. Configuration JSON and handle table go away |
+| 2 | `rd_status` | `LocalClient.Status`: state, login URL, addresses, cert domains, own name and `StableID`, and peer paths. Adds host fields (`tlsReady`, `listening`, publication and device counts, RSS) | Mac, extension | **Swiftail**: `node.status`, `node.events`, `path(toPeerNamed:)`, `CertificateManager.status`. Remaining fields are the first adopter's (table below) |
+| 3 | `rd_stop` | Close listener, host, and node (`srv.Close`) | Mac, extension | **Swiftail**: cancel the task group running `run()` |
+| 4 | `rd_host_publish` | IPA validation, copying, and list. Does not use tsnet | Mac | First adopter |
+| 5 | `rd_host_unpublish` | Same as above | Mac | First adopter |
+| 6 | `rd_host_publish_resource` | File sharing list. Does not use tsnet | Mac | First adopter |
+| 7 | `rd_host_unpublish_resource` | Same as above | Mac | First adopter |
+| 8 | `rd_host_set_agent_board` | Change the document for `GET /v1/agent` | Mac | First adopter |
+| 9 | `rd_update_page_set` | Loopback HTTP server (Go `net/http`). The official Tailscale app's `serve` exposes it. Unrelated to the core's tsnet and has no handle | Mac | First adopter (Swift loopback HTTP server). Unrelated to Swiftail |
+| 10 | `rd_host_set_devices` | Replace the entire allowlist. Keyed by node `StableID` | Mac | First adopter. `StableID` is `PeerIdentity.stableID` |
+| 11 | `rd_host_set_direct` | Direct same-network connection: OS TCP listener, TLS 1.3 with self-signed P-256 certificate (Go `crypto/tls` and `x509`), device token authentication. Does not use tsnet | Mac | First adopter (`NWListener`). The first adopter also writes the certificate generation code (F9) |
+| 12 | `rd_host_pairing_open` | Create a pairing code | Mac | First adopter |
+| 13 | `rd_host_pairing_decide` | Approve or deny a pairing request. `WhoIs` supplied the identity in the request | Mac | First adopter. Identity comes from `LoopbackBridge.Origin.peer` |
+| 14 | `rd_proxy_start` | Loopback CONNECT proxy, `srv.Dial` | No callers | **Removed** (review result 2) |
+| 15 | `rd_tunnel_set_default_interface` | Notify engine of a default interface change | Extension | **Swiftail**: `setDefaultInterface(_:)` (M5) |
+| 16 | `rd_tunnel_set_path_peer` | Select the peer whose path is reported | Extension | **Swiftail**: `path(toPeerNamed:)` and `NodeEvent.peerPathChanged` (M4 and M5). No separate setting |
+| 17 | `rd_next_event` | Wait for and dequeue an event | Mac, extension | **Swiftail**: `for await` over `node.events`, `node.networkSettings`, and `certificates`. Host events are the first adopter's |
+| 18 | `rd_free` | Free a C string | Mac, extension | **Removed** |
 
-요약: Swiftail의 API로 바뀌는 것 6개(1·2·3·15·16·17. Mac 호스트가 쓰는 것은 그중 1·2·3·17), 첫 사용처가 Swift로 직접 쓰는 것 10개(4~13), 빠지는 것 2개(14·18).
+Summary: 6 switch to Swiftail APIs (1, 2, 3, 15, 16, and 17. The Mac host uses 1, 2, 3, and 17), 10 are written directly in Swift by the first adopter (4–13), and 2 are removed (14 and 18).
 
-함수 뒤에서 Go 코어가 쓰던 Tailscale 기능의 대응(Mac 호스트):
+Mapping of the Tailscale features that the Go core used behind these functions (Mac host):
 
-| Go 코어 | 어디서 | 바뀐 뒤 |
+| Go core | Location | After migration |
 | --- | --- | --- |
-| `srv.Listen("tcp", ":443")`, 실패 3번이면 `Error` | `node.go:780-823` | `node.listen(port: 443)`. 재시도 로직은 없앤다(검토 결과 4) |
-| `tls.NewListener(ln, GetCertificate)` + `http.Server` | `tls.go:41`, `node.go:812-818` | `LoopbackBridge.forward` + 첫 사용처의 `NWListener`(TLS)와 HTTP 서버 |
-| `CertPair`로 인증서 예열, 30초~10분 재시도, `tlsReady` | `tls.go:44-51`, `node.go:825-859` | `CertificateManager.run()`. `tlsReady`는 "`certificates`에서 하나를 받았고 TLS 리스너가 섰다" |
-| `Up`·`Status`로 MagicDNS와 cert 도메인 확인, 꺼져 있으면 오류 문구 | `tls.go:22-32` | `CertificateFailure.magicDNSDisabled`·`httpsNotEnabled`. 문구는 첫 사용처 |
-| `LocalClient.WhoIs(r.RemoteAddr)`, 5초 기한, 요청마다 | `node.go:526-546`, `host.go:230-244` | `LoopbackBridge.origin(of:)`(준비된 연결마다 한 번, 기다림 없음). 직접 부를 때는 `node.whoIs(_:)` |
-| IPN 버스의 `ErrMessage` → `Error` 상태 | `node.go:409-458` | `run()`이 던지는 `NodeError`와 `NodeEvent.stateChanged` |
-| `StartLoginInteractive`, 30초 간격 | `node.go:752-778` | M5 계약대로(`.needsLogin(URL)`, `startInteractiveLogin()`) |
-| 페어링한 기기별 경로(`peerPaths`, 키는 `StableID`) | `node.go:141-163`, `:658-670` | `path(toPeerNamed:)`. 이름은 `Origin.peer.name`에서 얻는다(F10) |
-| `NetworkLockStatus` 진단 로그 | `node.go:494-504` | `node.status.tailnetLock`과 `NodeEvent.tailnetLockChanged`(M8, `SwiftailTailnetLock.md`). M8 전에는 lock이 켜진 tailnet에서 `NodeError.control(.tailnetLockEnabled)`로 끝났다 |
-| `logtail.Disable()`, `goMemLimitMiB`, RSS | `node.go:35-38`, `:277` | 해당 없음(로그 업로드가 없다. 메모리 한도 설정이 없다). RSS는 첫 사용처 |
-| `srv.Dial` | `node.go:952` | `node.connect(to:port:)`. 시험과 진단만 쓴다 |
+| `srv.Listen("tcp", ":443")`, `Error` after 3 failures | `node.go:780-823` | `node.listen(port: 443)`. Remove retries (review result 4) |
+| `tls.NewListener(ln, GetCertificate)` + `http.Server` | `tls.go:41`, `node.go:812-818` | `LoopbackBridge.forward` + first adopter's `NWListener` (TLS) and HTTP server |
+| Preload certificate with `CertPair`, retry at 30 seconds to 10 minutes, `tlsReady` | `tls.go:44-51`, `node.go:825-859` | `CertificateManager.run()`. `tlsReady` means "received one from `certificates` and the TLS listener is up" |
+| Check MagicDNS and cert domains with `Up` and `Status`, error message if disabled | `tls.go:22-32` | `CertificateFailure.magicDNSDisabled` and `httpsNotEnabled`. First adopter supplies the message |
+| `LocalClient.WhoIs(r.RemoteAddr)`, 5-second deadline, per request | `node.go:526-546`, `host.go:230-244` | `LoopbackBridge.origin(of:)` (once per ready connection, no wait). For direct calls, `node.whoIs(_:)` |
+| IPN bus `ErrMessage` → `Error` state | `node.go:409-458` | `NodeError` thrown by `run()` and `NodeEvent.stateChanged` |
+| `StartLoginInteractive`, 30-second interval | `node.go:752-778` | Per M5 contract (`.needsLogin(URL)`, `startInteractiveLogin()`) |
+| Path per paired device (`peerPaths`, key is `StableID`) | `node.go:141-163`, `:658-670` | `path(toPeerNamed:)`. Get the name from `Origin.peer.name` (F10) |
+| `NetworkLockStatus` diagnostic logs | `node.go:494-504` | `node.status.tailnetLock` and `NodeEvent.tailnetLockChanged` (M8, `SwiftailTailnetLock.md`). Before M8, ended with `NodeError.control(.tailnetLockEnabled)` on tailnets with lock enabled |
+| `logtail.Disable()`, `goMemLimitMiB`, RSS | `node.go:35-38`, `:277` | Not applicable (no log upload, no memory limit setting). RSS is the first adopter's |
+| `srv.Dial` | `node.go:952` | `node.connect(to:port:)`. Used only by tests and diagnostics |
 
-`rd_status` 필드의 출처(호스트 모드): `backendState`·`authURL` ← `NodeState`와 `run()`의 결과, `hostname` ← 설정, `fqdn`·`tailscaleIPs`·`certDomains` ← `NodeStatus`, `tlsReady` ← 위 표, `listening`·`publishedBuilds`·`pairedDevices`·`rssMiB`·`direct` ← 첫 사용처, `peerPaths` ← 위 표.
+Origin of `rd_status` fields (host mode): `backendState` and `authURL` ← `NodeState` and result of `run()`, `hostname` ← configuration, `fqdn`, `tailscaleIPs`, and `certDomains` ← `NodeStatus`, `tlsReady` ← table above, `listening`, `publishedBuilds`, `pairedDevices`, `rssMiB`, and `direct` ← first adopter, `peerPaths` ← table above.
 
-상태 디렉터리(Go 호스트): `tailscaled.state`, 로그 설정과 로그 버퍼, `certs/`, 그리고 첫 사용처의 `direct.json`·`direct-key.pem`·`direct-cert.pem`이 있다(노트 4.7 1). Swiftail의 상태 디렉터리는 따로 둔다(`SwiftailTunnel.md` D8): `identity.json`과 `certs/`. 직접 연결의 세 파일은 첫 사용처가 옮긴다(iPhone이 그 키를 고정한다).
+State directory (Go host): `tailscaled.state`, log settings and buffers, `certs/`, and the first adopter's `direct.json`, `direct-key.pem`, and `direct-cert.pem` (notes §4.7 item 1). Swiftail keeps a separate state directory (`SwiftailTunnel.md` D8): `identity.json` and `certs/`. The first adopter migrates the three direct connection files (the iPhone pins that key).
 
-## 5. 결정
+## 5. Decisions
 
-### 총괄 확인 필요
+### Lead Session Confirmation Required
 
-| # | 무엇 | 선택지 | 권고와 까닭 |
+| # | Item | Options | Recommendation and rationale |
 | --- | --- | --- | --- |
-| H1 | 타깃 구성 | (가) 새 제품 둘: `SwiftailCertificates`, `SwiftailLoopback` / (나) 새 제품 하나(`SwiftailHost`)에 둘 다 / (다) `Swiftail` 안에 넣는다 | (가). 둘은 서로를 모른다(인증서만, 다리만 쓰는 앱이 있을 수 있다). 타깃 하나가 개념 하나다. (다)는 iOS 터널 확장의 바이너리에 ACME·DER·Security 코드가 들어간다. 대가: `Package.swift`에 타깃 넷(시험 포함) |
-| H2 | 다리를 누가 쓰는가 | (가) Swiftail의 선택 제품 / (나) 첫 사용처 | (가). 역압·반닫힘·끊김의 대응은 `TailnetConnection`의 성질(`write`의 취소가 RST가 되는 것 등)에 묶여 있고, 표의 불변 조건(동작 B6)은 보안 성질이라 한 곳에서 시험해야 한다. 다리는 공개 API만 쓴다(`package`는 `SwiftailIO`뿐) |
-| H3 | 서버에 상대의 신원을 넘기는 길 | (가) 출발 포트 표 + 잇기 시작할 때 고정한 신원(`Origin.peer`) / (나) 출발 포트 표는 주소만 주고 서버가 요청마다 `whoIs(주소)` / (다) TLS 아래에 프레이머를 끼워 연결 앞에 비밀 토큰을 싣고, 토큰을 확인한 연결의 `(출발 포트, 리스너 포트)`로 고정한 신원을 내준다 | **(다)로 바꿨다(M7-9b, 동작 B6).** (가)는 출발 포트가 연결을 가리지 못해 같은 기기의 다른 프로세스가 신원을 얻었다(동작 B의 "검토에서 고친 것" 1·2). (나)는 동작 B2의 틈이 있고 요청마다 actor를 건넌다. (다)가 TLS 아래에서 도는 것은 실험으로 확인했다. 대가: 서버가 리스너에 프로토콜 하나를 넣는다. 연결이 사는 동안 이름·로그인 이름의 변경이 반영되지 않는다(허용 목록은 `StableID`라 영향이 없다) |
-| H4 | 다리의 루프백 쪽 소켓 | (가) `NWConnection`(`SwiftailIO.NetworkSocket`). 준비된 뒤 자기 포트를 읽어 적고 그 뒤에만 보낸다 / (나) POSIX 소켓: 조회하는 순간 `TCP_CONNECTION_INFO`로 다리 소켓이 살아 있는지 확인한다 | (가) 그대로. 신원의 경계는 소켓의 종류가 아니라 토큰(H3 (다))이 맡는다. (나)의 커널 상태 확인은 "다리 소켓이 살아 있는 동안 커널이 그 4-튜플을 지킨다"에 기대는데, 서버의 조회가 그 연결이 죽고 같은 포트가 다시 쓰인 뒤에 오면 그 근거가 서지 않는다. 실험: `NWConnection`의 `currentPath.localEndpoint`가 준비 상태에서 포트를 주고, 리스너가 받은 연결의 `endpoint`와 리스너 쪽 framer의 `remote`가 그 출발 포트를 준다 |
-| H5 | 인증서 API가 내는 키 | (가) `P256.Signing.PrivateKey` + DER 사슬 / (나) 거기에 `SecIdentity`를 만들어 주는 함수 | (가). 첫 사용처가 요청한 것이 "사슬 + `SecKey`로 만들 수 있는 키"다. `SecIdentity` 만들기는 다섯 줄이고(6절의 조각. SDK 선언만 확인됐고 돌려 보지 않았다) 리스너 설정과 함께 첫 사용처에 있는 것이 읽힌다 |
-| H6 | 갱신 판정 | (가) 수명의 2/3 / (나) ARI(RFC 9773)와 `replaces` | (가). 최소 범위를 위한 정책 선택이다(노트 6장). 2/3만으로 속도 제한 회피가 **보장되지는 않는다**: 제한의 종류(같은 식별자 집합 7일 5장 등)와 ARI 갱신이 면제되는 조건은 노트 4.5에 있다(동작 R1). (나)는 요청 둘과 인증서 식별자 계산(일련번호·AKI의 DER 읽기. Go 포크의 일련번호 인코딩은 RFC 9773과 다르다, 노트 4.4 2)이 든다 |
-| H7 | 저장 형식 | (가) Go와 같은 자리·이름·PEM(`certs/`) / (나) Swiftail만의 형식 | (가). Go가 받아 둔 인증서를 복사만으로 쓴다(동작 G6). 키는 PKCS#8로 쓰지만 Go도 읽는다(노트 3.7). 되돌릴 때도 통한다 |
-| H8 | ACME의 HTTPS | (가) `URLSession`(Foundation) / (나) `NetworkSocket` 위에 HTTP/1.1 클라이언트를 직접 쓴다 | (가). Mac 호스트는 OS의 네트워크를 그대로 쓴다(터널 안이 아니다). 전송은 주입할 수 있게 해서 시험이 가짜 서버를 붙인다. 함께 정할 것: plan 4절(c)의 허용 프레임워크에 Security를 더한다 |
-| H9 | 재시도 간격과 한도의 값 | 동작 R4, M의 표 | 표의 값으로 시작하고 관문 (나)의 기록으로 조정한다. 발급 한 번의 기한(5분)은 `set-dns`가 얼마나 걸리는지 모르고 잡은 값이다 |
-| H10 | 시험용 ACME 서버 | (가) pebble과 challtestsrv를 `Tools/interop`에 넣는다(둘 다 MPL-2.0. 시험 도구에만 링크된다) / (나) Swift 시험 안의 가짜 ACME 서버만 / (다) Let's Encrypt 스테이징 | (가)와 (나)를 함께. (나)는 독립 시험(결정적, 오류 주입)에, (가)는 관문에 쓴다. 독립된 ACME 구현을 상대해야 "단위 시험 통과만으로 프로토콜 동작을 주장하지 않는다"(plan 7절)를 지킨다. (다)는 계정과 실제 tailnet이 필요해 관문 (나)에서만 쓴다. 확인할 것: 시험 도구의 MPL-2.0 의존이 괜찮은지(U2), 빌드가 되는지(9절) |
-| H11 | 프로필이 없는 노드의 `whoIs` | (가) nil(Go와 같다) / (나) 로그인 이름을 비운 신원 | (가). 닫힌 쪽이다. 첫 사용처는 nil을 `not_paired`로 답한다 |
-| H12 | Go 상태 가져오기의 모양 | (가) 읽기 전용, 한 번, 신원만(동작 G) / (나) 프로필·prefs까지 / (다) 지원하지 않는다 | U1이 "이관"이면 (가). `identity.json`에 필요한 것은 키 둘뿐이다. U1이 "재페어링"이면 (다)이고 구현 단위 M7-11을 열지 않는다 |
-| H13 | ACME의 User-Agent | `Swiftail/<버전>` / 앱이 주는 문자열을 앞에 붙인다 | `Swiftail/<버전>`. 인자를 만들지 않는다. 공식 클라이언트를 흉내 내지 않는다(plan 8절 위험 10) |
-| H14 | DER 쓰기·PEM·base64url의 자리 | (가) `SwiftailCertificates` 안(`internal`) / (나) `SwiftailBase`(`package`) | (가). 쓰는 곳이 CSR 하나다. 첫 사용처가 직접 연결 리스너의 자체 서명 인증서를 Swift로 만들 때 이 부품을 바라면(F9) 다시 본다 |
-| H15 | 관문 (가)의 e2e 범위 | (가) 시험 타깃 안의 최소 HTTP/1.1 서버로 "페어링 → 설치 세션 → IPA 전송"의 뼈대 / (나) 첫 사용처의 호스트 코드를 끌어온다 | (가). 첫 사용처 저장소는 읽기만 한다. 실제 호스트의 e2e는 그쪽 저장소에서, 별도 승인 뒤에 한다 |
-| H16 | 읽지 못한 계정 키 파일의 실패 종류(동작 C4) | (가) 새 `CertificateError.accountKeyUnreadable` / (나) 기존 `storage(String)`에 싣는다 | (가)로 적었다. 둘 다 닫힌 쪽(덮어쓰지 않고 `run()`이 끝난다)이다. 앱이 "Go가 남긴 계정 키"를 디스크 오류와 갈라 사용자에게 알릴 수 있다. 대가: 공개 case 하나 |
-| H17 | 한 시도 안의 되풀이의 상한(동작 C5·C7) | (가) CSR 전에 `valid`·`processing`인 주문은 새 주문으로 한 번만 다시, finalize 뒤 `ready`·`pending`의 되풀이도 주문마다 한 번 / (나) 5분 기한만 / (다) 되풀이하지 않고 곧바로 실패 | (가)로 적었다. (나)는 서버가 같은 상태를 되풀이하면 기한까지 주문과 finalize를 거듭 보내 새 주문 제한(노트 4.5)을 쓴다. (다)는 노트 4.3 11이 제안한 갈래(같은 키·CSR로 다시 finalize)를 버린다. 두 번째에는 실패로 끝난다 |
-| H18 | 규격·한도를 어긴 ACME 응답의 실패 종류 | (가) 새 `CertificateFailure.unexpectedResponse` / (나) `acme(status:type:)`에 빈 `type`으로 / (다) `network` | (가)로 적었다. 동작 C5·X가 "실패"라고만 적던 경우(모르는 상태, 다른 이름의 authorization, 한도 초과, `https`가 아닌 URL)에 공개 종류가 없었다. 재시도는 `acme`와 같은 15분~6시간이다(동작 R4) |
-| H19 | `validationFailed`·`orderFailed`의 연관 값 | (가) 그 challenge·주문의 `error` 문제 문서의 `type`(256바이트로 자른다) / (나) 연관 값 없음 / (다) `detail`까지 | (가)로 적었다. 결정 4와 같은 까닭으로 `detail`은 싣지 않는다(동작 K2). `type`만으로 `dns`·`unauthorized`·`badCSR` 같은 진단은 된다 |
-| H20 | 그룹·기타가 쓸 수 있는 기존 `certs/`(동작 S1) | (가) 쓰지도 읽지도 않고 `storage`로 끝난다 / (나) 쓰기만 막고 읽기는 한다 | (가)로 적었다. 총괄 결정은 "쓰지 않고 실패"까지이고 읽기는 정하지 않았다. 남이 바꿔 넣을 수 있는 디렉터리의 키를 TLS 신원으로 내면 그 사람이 트래픽을 풀 수 있으므로 읽기도 막는 쪽을 골랐다 |
-| H21 | `Retry-After`의 적용 범위와 읽지 못한 값(동작 X5) | (가) 그 디렉터리에서 얻은 모든 URL에 적용, 읽지 못한 값은 없는 것으로 / (나) 응답한 URL이나 호스트에만 / (다) 읽지 못한 값은 그 시도의 실패 | (가)로 적었다. "그 서버"를 가장 넓게 잡는 것이 닫힌 쪽이다. 읽지 못한 값은 없는 것으로 보되, 주문 읽기는 1초보다 짧아지지 않고 오류 응답은 R4의 간격으로 물러나므로 요청이 늘지 않는다 |
-| H22 | Go 상태의 거절을 두 오류로 가르는 기준(동작 G2) | (가) 형식이 틀리면 `malformed`, 해석은 되지만 다루지 않는 상태면 `unsupportedState` / (나) 모두 `malformed` | (가)로 적었다. 프로필 여럿·legacy·키 교체 중단은 파일이 깨진 것이 아니라 사용자가 Go 쪽에서 정리하면 되는 상태라 문구를 달리할 수 있다. 0인 machine 키는 Go가 시작할 때 만드는 값이라 깨진 것으로 본다 |
-| H23 | 이름 검사(동작 C2)에 어긋나는 자기 이름의 실패 종류 | (가) `domainNotAllowed`로 적고 netmap 변화를 기다린다 / (나) 새 case / (다) `run()`이 던진다 | (가)로 적었다. 이름은 제어 서버가 정하므로 netmap이 바뀌어야 풀리고, 시간으로 다시 시도해도 같다. 앱이 보이는 문구는 "이 이름으로는 인증서를 받을 수 없다"로 같다. 대가: 관리 콘솔에서 고칠 것이 없는데 사용자 조치 갈래로 보인다 |
+| H1 | Target structure | (a) Two new products: `SwiftailCertificates`, `SwiftailLoopback` / (b) Both in one new product (`SwiftailHost`) / (c) Add them to `Swiftail` | (a). The two are independent (apps may use only certificates or only the bridge). One concept per target. (c) would put ACME, DER, and Security code in the iOS tunnel extension binary. Cost: four targets in `Package.swift` (including tests) |
+| H2 | Who writes the bridge | (a) Optional Swiftail product / (b) First adopter | (a). Backpressure, half-close, and disconnect mapping depend on `TailnetConnection` semantics (e.g. canceling `write` causes RST), and the table invariants (behavior B6) are a security property that must be tested in one place. The bridge uses only public APIs (`SwiftailIO` is the only `package` dependency) |
+| H3 | How to pass peer identity to the server | (a) Source port table + identity fixed at the start of forwarding (`Origin.peer`) / (b) Source port table gives only the address, and the server calls `whoIs(address)` for every request / (c) Put a framer below TLS, prefix the connection with a secret token, and provide the fixed identity by `(source port, listener port)` for a connection whose token was verified | **Changed to (c) (M7-9b, behavior B6).** In (a), the source port did not distinguish connections, so another process on the device obtained an identity (behavior B, "Review Fixes," 1 and 2). (b) has the gap in behavior B2 and crosses the actor for every request. Experiments verified that (c) runs below TLS. Cost: the server adds one protocol to the listener. Changes to name and login name are not reflected during the connection's lifetime (the allowlist uses `StableID` and is unaffected) |
+| H4 | Bridge's loopback socket | (a) `NWConnection` (`SwiftailIO.NetworkSocket`). Read and record the local port after readiness, then send / (b) POSIX socket: at lookup time, check if the bridge socket is alive with `TCP_CONNECTION_INFO` | Keep (a). The identity boundary is the token (H3 (c)), independent of socket type. The kernel-state check in (b) relies on "the kernel protects that 4-tuple while the bridge socket is alive," which does not hold if the server looks up after the connection dies and the port is reused. Experiment: `NWConnection`'s `currentPath.localEndpoint` gives the port when ready, and the accepted connection's `endpoint` and listener-side framer's `remote` give that source port |
+| H5 | Key returned by the certificate API | (a) `P256.Signing.PrivateKey` + DER chain / (b) Also a function to build `SecIdentity` | (a). The first adopter requested "chain + key that can become a `SecKey`." Creating `SecIdentity` takes five lines (snippet in §6. Only SDK declarations were checked and it was not run), and it reads well beside listener setup in the first adopter's code |
+| H6 | Renewal decision | (a) 2/3 of lifetime / (b) ARI (RFC 9773) and `replaces` | (a). A policy choice for minimal scope (notes §6). 2/3 alone **does not guarantee** avoiding rate limits. Types of limits (same identifier set, 5 certificates in 7 days, etc.) and conditions for ARI renewal exemptions are in notes §4.5 (behavior R1). (b) takes two requests and certificate identifier computation (DER reading of the serial number and AKI. The Go fork's serial encoding differs from RFC 9773, notes §4.4 item 2) |
+| H7 | Storage format | (a) Same location, names, and PEM as Go (`certs/`) / (b) Swiftail-only format | (a). Copying is sufficient to use certificates obtained by Go (behavior G6). Keys are written as PKCS#8, which Go also reads (notes §3.7). Also works for rollback |
+| H8 | ACME HTTPS | (a) `URLSession` (Foundation) / (b) Write an HTTP/1.1 client directly on `NetworkSocket` | (a). The Mac host uses OS networking directly (outside the tunnel). Make the transport injectable so tests can attach a fake server. Also decide to add Security to the allowed frameworks in plan §4(c) |
+| H9 | Retry interval and limit values | Behavior R4 and M tables | Start with the table values and adjust based on gate (b) records. The deadline for one issuance (5 minutes) was chosen without knowing how long `set-dns` takes |
+| H10 | Test ACME server | (a) Add pebble and challtestsrv to `Tools/interop` (both MPL-2.0, linked only into test tools) / (b) Only a fake ACME server inside Swift tests / (c) Let's Encrypt staging | Both (a) and (b). Use (b) for independent tests (deterministic, failure injection) and (a) for the gate. An independent ACME implementation is needed to uphold "Passing unit tests alone does not establish protocol behavior" (plan §7). (c) requires an account and a real tailnet, so use it only for gate (b). Verify the test tool's MPL-2.0 dependency is acceptable (U2) and builds (§9) |
+| H11 | `whoIs` for a node without a profile | (a) nil (same as Go) / (b) identity with empty login name | (a). Fail closed. The first adopter answers nil with `not_paired` |
+| H12 | Shape of Go state import | (a) Read-only, once, identity only (behavior G) / (b) Include profile and prefs / (c) No support | (a) if U1 is "migrate." `identity.json` only needs two keys. If U1 is "re-pair," use (c) and do not start implementation unit M7-11 |
+| H13 | ACME User-Agent | `Swiftail/<version>` / prepend an app-supplied string | `Swiftail/<version>`. No parameter. Do not imitate the official client (plan §8 risk 10) |
+| H14 | Location of DER writing, PEM, and base64url | (a) In `SwiftailCertificates` (`internal`) / (b) `SwiftailBase` (`package`) | (a). Only the CSR uses it. Revisit if the first adopter wants these components when writing a self-signed certificate for its direct listener in Swift (F9) |
+| H15 | Gate (a) e2e scope | (a) Skeleton of "pairing → installation session → IPA transfer" with a minimal HTTP/1.1 server in the test target / (b) Bring in the first adopter's host code | (a). The first adopter's repository is read-only. Run actual host e2e in that repository after separate approval |
+| H16 | Failure type for unreadable account key file (behavior C4) | (a) New `CertificateError.accountKeyUnreadable` / (b) Use existing `storage(String)` | Documented as (a). Both fail closed (`run()` ends without overwriting). The app can distinguish "account key left by Go" from disk errors for the user. Cost: one public case |
+| H17 | Maximum repeats within an attempt (behaviors C5 and C7) | (a) Restart an order that is `valid` or `processing` before CSR only once with a new order, and repeat `ready` or `pending` after finalize once per order / (b) Only the 5-minute deadline / (c) Fail immediately without repeating | Documented as (a). In (b), if the server repeats the same state, orders and finalize are sent repeatedly until the deadline, consuming the new order limit (notes §4.5). (c) drops the branch proposed in notes §4.3 item 11 (finalize again with the same key and CSR). The second time ends in failure |
+| H18 | Failure type for ACME responses violating specification or limits | (a) New `CertificateFailure.unexpectedResponse` / (b) `acme(status:type:)` with empty `type` / (c) `network` | Documented as (a). Cases called simply "failure" in behaviors C5 and X (unknown status, authorization for another name, excess over limits, non-`https` URL) had no public case. Retries match `acme`, 15 minutes to 6 hours (behavior R4) |
+| H19 | Associated values for `validationFailed` and `orderFailed` | (a) `type` from the challenge or order `error` problem document (truncated to 256 bytes) / (b) No associated value / (c) Include `detail` | Documented as (a). Omit `detail` for the same reason as decision 4 (behavior K2). `type` alone supports diagnostics such as `dns`, `unauthorized`, and `badCSR` |
+| H20 | Existing `certs/` writable by group or others (behavior S1) | (a) End with `storage` without reading or writing / (b) Block writes only and allow reads | Documented as (a). The lead session decision covered "fail without writing" but did not decide on reading. If a key from a directory others can modify is used for TLS identity, that person can decrypt traffic, so reading was blocked too |
+| H21 | Scope of `Retry-After` and unreadable values (behavior X5) | (a) Apply to all URLs from the directory and treat unreadable values as absent / (b) Only responding URL or host / (c) Fail the attempt on an unreadable value | Documented as (a). Taking "that server" in its broadest sense fails closed. Treat unreadable values as absent. Order reads never go below 1 second and error responses back off per R4, so requests do not increase |
+| H22 | Rule for splitting Go state rejection into two errors (behavior G2) | (a) `malformed` for invalid format, `unsupportedState` for parseable but unsupported state / (b) `malformed` for all | Documented as (a). Multiple profiles, legacy state, and interrupted key rollover are states the user can clean up on the Go side rather than corrupt files, so the messages can differ. A zero machine key is treated as corrupt because Go generates it on startup |
+| H23 | Failure type for the node's own name violating validation (behavior C2) | (a) Record `domainNotAllowed` and wait for netmap change / (b) New case / (c) `run()` throws | Documented as (a). The control server sets the name, so a netmap change is required and time-based retry gives the same result. The app displays the same "Cannot obtain a certificate for this name" message. Cost: appears in the user-action branch even when there is nothing to fix in the admin console |
 
-총괄 확정(2026-11-15, 초안 단계. 첫 사용처의 답으로 바뀔 수 있다): **H1~H15는 모두 권고대로 간다.** 덧붙이는 것:
+Lead session decision (2026-11-15, draft stage. May change with the first adopter's answer): **Follow the recommendation for all of H1–H15.** Additions:
 
-- H4: (가) 그대로. POSIX 소켓을 새로 쓰지 않는다. 처음에는 "표에 적기 전에는 한 바이트도 보내지 않으므로 서버가 묻는 시점만 지키면 된다"가 근거였으나, 출발 포트 표가 경계로 성립하지 않아(M7-9b) 신원의 경계는 연결 안의 토큰이 되었다(H3 (다)). 서버가 묻는 시점에 기대지 않는다.
-- H8: plan 4절(c)에 Security와 `URLSession`을 적었다. 두 프레임워크는 `SwiftailCertificates`만 쓴다.
-- H10: 시험 도구의 MPL-2.0 의존은 `Tools/`의 Go 도구 예외 안이다. 공개할 때의 고지는 U2에서 함께 정한다.
-- H12: U1의 답이 올 때까지 M7-11(Go 상태 가져오기)을 열지 않는다.
-- 노트 `whois-certs-state.md`는 구현 전에 다른 세션이 Go 소스와 RFC 원문에 대조해 검증한다.
+- H4: Keep (a). Do not add a POSIX socket. The original reasoning was "no bytes are sent before recording in the table, so the server only needs to honor the lookup timing," but the source port table failed as a boundary (M7-9b), and the token in the connection became the identity boundary (H3 (c)). It does not depend on when the server asks.
+- H8: Added Security and `URLSession` to plan §4(c). Only `SwiftailCertificates` uses the two frameworks.
+- H10: The test tool's MPL-2.0 dependency falls under the Go tool exception for `Tools/`. Decide publication notices with U2.
+- H12: Do not start M7-11 (Go state import) until U1 is answered.
+- Before implementation, another session verifies `whois-certs-state.md` against the Go source and original RFCs.
 
-### 첫 사용처 확인 필요
+### First Adopter Confirmation Required
 
-커밋 `2814b2c`의 Go 코드와 문서(`core/internal/node/`, `core/internal/host/`, `core/internal/direct/`, `core/e2e/`, `docs/protocol.md`, `docs/protocol-addenda.md`)를 읽고 세운 가정과 질문이다.
+Assumptions and questions based on reading the Go code and documents at commit `2814b2c` (`core/internal/node/`, `core/internal/host/`, `core/internal/direct/`, `core/e2e/`, `docs/protocol.md`, `docs/protocol-addenda.md`).
 
-| # | 질문 | 초안의 가정 | 답에 따라 달라지는 것 |
+| # | Question | Draft assumption | What depends on the answer |
 | --- | --- | --- | --- |
-| F1 | 지금은 요청마다 `WhoIs`를 부른다. 바꾼 뒤에는 **연결마다 한 번** 신원을 고정하고(`Origin.peer`), 요청마다는 그 `StableID`를 허용 목록에 견주기만 해도 되는가? 주소의 주인이 바뀌면 Swiftail이 연결을 끊는다 | 된다 | H3, 동작 B2. 요청마다 다시 확인해야 한다면 서버가 `whoIs`의 `stableID`를 `Origin.peer.stableID`와 견줘 다르면 끊는 규칙을 계약에 더한다 |
-| F2 | `PeerIdentity`의 필드(`stableID`, `name`, `computedName`, `tags`, `loginName`, `displayName`)로 충분한가? `computedName`은 이름이 빈 노드의 대비인데 필요한가? 태그를 단 iPhone(페어링 링크의 1회용 키, addenda J)의 `loginName`에 무엇이 오든 괜찮은가? | 충분하다. `computedName`은 지금 코드가 쓰므로 둔다 | 공개 타입. 프로필 사진 URL이나 공유자(`Sharer`)가 필요하면 더한다 |
-| F3 | 인증서는 `certificates` 흐름(지금 것 + 갱신)과 `status`(만료 시각, 마지막 실패, 다음 시도)로 받는다. `tlsReady`와 "HTTPS가 꺼져 있습니다" 같은 `errorMessage`를 `CertificateFailure`의 종류로 만들 수 있는가? 실패를 사건으로도 받아야 하는가(지금은 2초마다 상태를 읽는다)? | 종류면 충분하고 사건은 필요 없다 | `CertificateStatus`·`CertificateFailure`. 사건이 필요하면 흐름을 하나 더 둔다 |
-| F4 | 인증서가 갱신되면 `NWListener`를 새 신원으로 다시 띄워야 한다(리스너의 신원은 만들 때 정해진다). 포트가 바뀔 수 있어서 `forward`가 포트를 호출마다 받는다. 이 모양이 서버와 맞는가? 이미 맺은 연결은 옛 리스너에서 끝까지 가는가? | 맞다 | `forward(_:toLoopbackPort:)`의 모양. 리스너를 다리가 쥐길 바라면 범위가 커진다 |
-| F5 | accept 루프는 첫 사용처가 돌고 연결마다 `forward`를 부른다. 다리의 상한은 256이다. `forward`는 연결이 끝나야 돌아온다(Task 하나가 연결 하나를 쥔다) | 맞다 | 동작 B1, 한도 |
-| F6 | 가짜 tailnet(`listenTLS=false`)에서도 같은 다리로 평문 루프백 리스너에 잇는가, 아니면 `TailnetConnection` 위에서 HTTP를 바로 읽는가? | 같은 다리(서버의 입구를 하나로 둔다) | 관문 (가)의 서버 모양. 바로 읽는다면 서버가 `TailnetConnection`용 입구를 따로 갖는다 |
-| F7 | Mac 호스트의 샌드박스: 커밋된 `Apps/Mac/RemoteDebugMac.entitlements`는 빈 사전이고 `README.ko.md`는 "App Sandbox를 쓰지 않는다"고 적는다. 받은 답은 "App Sandbox, 네트워크 서버·클라이언트 권한만"이다. 어느 빌드가 M7의 기준인가? 샌드박스 판의 상태 디렉터리는 컨테이너 안인가? | 샌드박스 판이 기준이고 권한은 그 둘뿐이다 | 동작 B9, 관문 (나) 7. 샌드박스 안의 실행 확인을 누가 하는지(권고: 첫 사용처 세션) |
-| F8 | Go가 받아 둔 인증서(`certs/`의 세 파일)를 새 상태 디렉터리로 복사하는 일은 첫 사용처가 하는가(이관을 한다면)? | 그렇다 | 동작 G6. Swiftail이 맡길 바라면 `GoStateImport`에 인자를 더한다 |
-| F9 | 직접 연결 리스너의 자체 서명 인증서: 기존 `direct-key.pem`·`direct-cert.pem`은 CryptoKit과 Security로 읽을 수 있다(노트 4.6). **새로 설치한 Mac에서 인증서를 만드는** X.509 인코딩은 첫 사용처가 쓰는가? Swiftail의 DER 쓰기 부품을 내주길 바라는가? | 첫 사용처가 쓴다. 내주지 않는다 | H14 |
-| F10 | `peerPaths`는 `StableID`가 키인데 Swiftail의 경로 조회는 이름으로 한다. 이번 실행에서 접속한 기기의 이름은 `Origin.peer.name`으로 안다(접속한 적 없는 기기는 경로도 없다). 이것으로 되는가? | 된다 | 안 되면 `whoIs`에 `StableID`로 찾는 길을 더한다 |
-| F11 | Go 코어는 tsnet의 로그를 `logPath` 파일에 쓴다. Swiftail은 `os.Logger`에만 남긴다. 파일에 Swiftail의 로그가 필요한가? | 필요 없다 | 필요하면 로그 받는 길을 따로 정한다(M5에도 걸린다) |
-| F12 | 인증서 재시도 간격이 바뀐다(동작 R4: 검증 실패는 15분부터). 인증서를 받기 전에도 tailnet 리스너는 듣고 있고 다리는 루프백 포트가 없어 연결을 끊는다. 지금의 `listening`·`tlsReady` 표시와 어긋나는가? | 어긋나지 않는다 | 동작 R4의 값 |
-| F13 | Go 코어를 걷어낸 뒤 시험 상대(가짜 iPhone)는 무엇인가? Go의 `rdtestenv peer`·`core/e2e`의 tsnet 피어를 시험 도구로 남기는가, Swiftail 노드(`connect`)로 바꾸는가? Swiftail 저장소의 관문은 Go tsnet 피어를 상대한다 | 시험 도구의 Go는 남는다 | 관문 (가) 7의 재현 범위, `Tools/interop`의 `peerHTTP` |
-| F14 | 호스트의 나머지(REST, 페어링, 세션, 게시, 직접 연결, 업데이트 페이지, 사건 큐)는 모두 첫 사용처가 Swift로 쓴다. Swiftail에 바라는 것이 4절 표 밖에 더 있는가? | 없다 | 범위 |
-| F15 | Mac 호스트를 임시(ephemeral) 노드로 띄우는 일이 시험 밖에도 있는가? 임시 노드가 같은 이름으로 다시 뜰 때마다 상태가 비어 있으면 인증서를 새로 받게 되고 7일에 5장 한도에 닿는다 | 운영에서는 없다 | 있으면 임시 노드에서 발급하지 않는 규칙을 더한다 |
-| F16 | `WhoIs`의 5초 기한은 없어진다(`origin`·`whoIs`는 기다리지 않는다). 기한에 기대는 곳이 있는가? | 없다 | — |
+| F1 | Today each request calls `WhoIs`. After migration, can the server fix identity **once per connection** (`Origin.peer`) and only check that `StableID` against the allowlist for each request? Swiftail closes the connection if the address owner changes | Yes | H3, behavior B2. If every request must reverify, add a contract rule for the server to compare `whoIs`'s `stableID` with `Origin.peer.stableID` and close on mismatch |
+| F2 | Are the `PeerIdentity` fields (`stableID`, `name`, `computedName`, `tags`, `loginName`, `displayName`) sufficient? Is `computedName` needed as a fallback for unnamed nodes? Is any `loginName` acceptable for a tagged iPhone (single-use key in the pairing link, addenda J)? | Sufficient. Keep `computedName` because the current code uses it | Public type. Add the profile picture URL or sharer (`Sharer`) if needed |
+| F3 | Certificates arrive through the `certificates` stream (current + renewals) and `status` (expiration, last failure, next attempt). Can the app derive `tlsReady` and an `errorMessage` such as "HTTPS is disabled" from the `CertificateFailure` case? Are failure events needed too (today it reads state every 2 seconds)? | The case is sufficient. No events needed | `CertificateStatus` and `CertificateFailure`. Add a stream if events are needed |
+| F4 | On renewal, restart `NWListener` with the new identity (the identity is fixed at construction). The port may change, so `forward` takes it on each call. Does this fit the server? Do existing connections run to completion on the old listener? | Yes | Shape of `forward(_:toLoopbackPort:)`. Scope grows if the bridge should own the listener |
+| F5 | The first adopter runs the accept loop and calls `forward` per connection. The bridge limit is 256. `forward` returns only when the connection ends (one Task per connection) | Yes | Behavior B1, limits |
+| F6 | On the fake tailnet (`listenTLS=false`), does the same bridge forward to a plaintext loopback listener, or does the server read HTTP directly on `TailnetConnection`? | Same bridge (one server entry point) | Shape of the gate (a) server. If it reads directly, the server has a separate entry point for `TailnetConnection` |
+| F7 | Mac host sandbox: committed `Apps/Mac/RemoteDebugMac.entitlements` is an empty dictionary and `README.ko.md` says "App Sandbox is not used." The answer received was "App Sandbox, network server and client entitlements only." Which build is the M7 baseline? Is the sandboxed version's state directory inside the container? | Sandboxed version is the baseline and those are the only two entitlements | Behavior B9, gate (b) 7. Who verifies operation in the sandbox (recommendation: first adopter session) |
+| F8 | Will the first adopter copy the certificates Go obtained (the three files in `certs/`) to the new state directory if migrating? | Yes | Behavior G6. If Swiftail should do it, add a parameter to `GoStateImport` |
+| F9 | Direct connection listener's self-signed certificate: CryptoKit and Security can read existing `direct-key.pem` and `direct-cert.pem` (notes §4.6). Does the first adopter write the X.509 encoding to **generate a certificate on a freshly installed Mac**? Should Swiftail expose the DER writer? | The first adopter writes it. Do not expose it | H14 |
+| F10 | `peerPaths` is keyed by `StableID` but Swiftail's path lookup is by name. `Origin.peer.name` identifies the devices that connected in this run (a device that never connected has no path). Is this sufficient? | Yes | If not, add lookup by `StableID` to `whoIs` |
+| F11 | The Go core writes tsnet logs to the `logPath` file. Swiftail logs only to `os.Logger`. Are Swiftail logs required in a file? | No | If needed, define a way to receive logs separately (also affects M5) |
+| F12 | Certificate retry intervals change (behavior R4: verification failure starts at 15 minutes). Before receiving a certificate, the tailnet listener is listening and the bridge closes connections because it has no loopback port. Does this conflict with the current `listening` and `tlsReady` display? | No | Behavior R4 values |
+| F13 | What is the test counterpart (fake iPhone) after removing the Go core? Keep Go's `rdtestenv peer` and the `core/e2e` tsnet peer as test tools, or switch to a Swiftail node (`connect`)? Swiftail's repository gate uses a Go tsnet peer | Keep Go in the test tools | Reproduction scope of gate (a) 7, `peerHTTP` in `Tools/interop` |
+| F14 | The first adopter writes all remaining host features (REST, pairing, session, publishing, direct connections, update page, and event queue) in Swift. Does it need anything from Swiftail beyond the §4 table? | No | Scope |
+| F15 | Does the Mac host run as an ephemeral node outside tests? If state is empty each time an ephemeral node starts again with the same name, it will obtain a new certificate and reach the limit of 5 in 7 days | No in production | If so, add a rule against issuance on ephemeral nodes |
+| F16 | The 5-second `WhoIs` deadline goes away (`origin` and `whoIs` do not wait). Does anything rely on the deadline? | No | — |
 
-### 첫 사용처 검토 결과 (2026-11-15)
+### First Adopter Review Results (2026-11-15)
 
-첫 사용처 세션이 F1~F16에 답했다(그쪽 저장소 `2814b2c` 이후의 코드 기준). 가정이 그대로 선 것: F1, F4, F5, F6, F8, F10, F11, F13, F14, F15, F16. 초안이 바뀌는 것만 적는다.
+The first adopter session answered F1–F16 (based on code after `2814b2c` in its repository). Assumptions that held: F1, F4, F5, F6, F8, F10, F11, F13, F14, F15, F16. Only changes to the draft are listed.
 
-1. **신원(F1·F2)**: 연결마다 고정한 `Origin.peer.stableID`를 요청마다 허용 목록에 견주는 것으로 지금과 같은 판정이다(허용 목록에서 지우면 다음 요청부터 막히는 것은 서버가 요청마다 목록을 보아 채운다). 호스트가 읽는 것은 `stableID`, `computedName`, `loginName`뿐이라 `PeerIdentity`에서 `tags`와 `displayName`을 뺐다. `name`은 경로 조회(`path(toPeerNamed:)`)의 열쇠라 둔다(F10: 첫 사용처가 접속한 기기의 `StableID` ↔ 이름을 기억한다. 지금 연결이 없는 기기도 이름으로 묻는다). `loginName`은 빈 문자열일 수 있다.
-2. **실패의 종류(F3)**: 사용자가 스스로 고칠 수 있는 둘(`magicDNSDisabled`, `httpsNotEnabled`)이 나머지와 갈리면 된다. 앱이 그 둘에 "DNS 설정 페이지 열기"를 붙인다. `magicDNSDisabled`를 더했다. 실패를 사건으로 낼 필요는 없다(2초마다 `status`를 읽는다).
-3. **갱신과 리스너(F4·F5)**: 갱신되면 첫 사용처가 새 `NWListener`를 띄워 그 포트로 `forward`를 부른다. 이미 맺은 연결은 옛 리스너에서 끝까지 가고, 옛 리스너는 새 연결만 받지 않다가 남은 연결이 끝나면 닫는다(큰 전송 중의 갱신이 끊기지 않는다). 그래서 다리는 **포트마다가 아니라 연결마다** 동작해야 하고, 옛 포트로 잇던 연결을 새 포트 때문에 끊지 않는다.
-4. **다시 시도(F12)**: `status`의 다음 시도 시각을 화면에 보여 준다. 사용자가 설정을 고친 뒤 누를 **`retryNow()`**를 더했다.
-5. **샌드박스(F7)**: 두 빌드가 모두 돌아야 하고 **관문의 기준은 샌드박스 판**이다. 공개 저장소의 Mac 앱은 샌드박스를 쓰지 않고(커밋된 권한 파일이 빈 것이 맞다), 스토어판이 App Sandbox(네트워크 서버·클라이언트, 사용자가 고른 파일, 북마크)를 켠다. 샌드박스 판의 상태 디렉터리는 앱 컨테이너 안이다. **샌드박스 안의 실행 확인(`SecIdentity` 만들기, 루프백 듣기, 다리)은 첫 사용처 세션이 맡는다.** 샌드박스 판에서 키체인은 쓸 수 있으므로, 키체인 없이 신원을 만드는 길이 막히면 첫 사용처가 키체인에 넣는 길로 간다(Swiftail의 API는 그대로다: 사슬과 키를 낸다).
-6. **DER 부품(F9)**: 첫 사용처는 직접 연결 리스너의 자체 서명 인증서(X.509 v3)를 Swift로 새로 써야 하고, Swiftail이 DER 쓰기 부품을 공개로 내주면 쓰겠다고 했다(급하지 않다). **지금은 내지 않는다**(H14 그대로): 쓰는 곳이 CSR 하나인 내부 부품을 공개 API로 굳히지 않는다. M7-3이 끝나 부품의 모양이 선 뒤, 첫 사용처가 직접 연결을 옮길 때 다시 본다.
-7. **끊김의 전달(API 의견)**: 서버가 루프백 연결을 닫으면 다리가 tailnet 쪽을 정리한다(동작 B4·B5 그대로). 반대로 **tailnet 쪽이 오류로 끝나면 루프백 쪽은 정상 닫기로 보이면 안 된다**(반쯤 받은 본문을 끝까지 받은 것으로 읽지 않게). TLS 리스너에서는 `close_notify` 없이 끝난 연결이라 서버의 TLS가 잘림으로 안다. 평문 리스너(`listenTLS=false`)에서는 RST로 끊겨야 한다. 동작 B5의 "루프백 쪽 취소"를 구현할 때 `NWConnection`의 어느 호출이 RST를 내는지 확인하고 시험으로 고정한다(관문 (가)에 항목을 더한다: tailnet 쪽을 `abort()`하면 평문 루프백 서버의 읽기가 오류로 끝난다).
-8. **묻는 시점**: 서버는 `NWListener`가 넘긴 연결이 `.ready`가 된 뒤(핸드셰이크 끝) 첫 수신 전에 묻는다. 검토 때의 호출은 `origin(forLoopbackSourcePort:)`였고 M7-9b에서 `origin(of:)`로 바뀌었다(묻는 시점은 같다. 동작 B7).
-9. **시험 상대(F13)**: 호스트를 옮긴 뒤 첫 사용처의 가짜 iPhone은 빠른 시험에는 Swiftail 노드(`connect`), 상호 운용에는 이 저장소 `Tools/interop`의 Go tsnet 피어를 쓴다. 그쪽 저장소에 Go 시험 도구를 새로 두지 않는다. 그래서 `Tools/interop`의 `tailnet` 도구와 README의 "Swift 노드 둘을 시험 제어 서버에 붙이기"는 첫 사용처가 쓰는 접점이다(바꿀 때 알린다).
-10. **대응표**: 사실과 다른 곳은 없다. `rd_update_page_set`은 공식 Tailscale 앱에 기대는 기능이라 샌드박스 판에서는 이미 빠져 있다.
-11. **관문 (가)의 최소 HTTP 서버에 대한 참고**(계약에는 영향이 없다): 시험 타깃의 서버도 본문 크기 상한을 둔다.
+1. **Identity (F1 and F2)**: Checking the per-connection fixed `Origin.peer.stableID` against the allowlist for every request produces the same decision as today (the server checks the list per request, so removal blocks the next request). The host reads only `stableID`, `computedName`, and `loginName`, so remove `tags` and `displayName` from `PeerIdentity`. Keep `name` because it is the key for path lookup (`path(toPeerNamed:)`) (F10: the first adopter remembers `StableID` ↔ name for a device that connected and queries by name even for devices without a current connection). `loginName` can be empty.
+2. **Failure types (F3)**: Distinguishing the two the user can fix (`magicDNSDisabled`, `httpsNotEnabled`) from the rest is sufficient. The app adds "Open DNS settings page" to those two. Added `magicDNSDisabled`. No need to emit failure events (reads `status` every 2 seconds).
+3. **Renewal and listeners (F4 and F5)**: On renewal the first adopter starts a new `NWListener` and calls `forward` with its port. Established connections finish on the old listener, which stops accepting new connections and closes when the remaining ones finish (renewal does not interrupt a large transfer). The bridge therefore operates **per connection rather than per port** and does not close connections to the old port because of the new port.
+4. **Retry (F12)**: Show the next attempt time from `status` on screen. Added **`retryNow()`** for the user to press after fixing settings.
+5. **Sandbox (F7)**: Both builds must work and **the sandboxed version is the gate baseline**. The public repository's Mac app does not use the sandbox (the committed entitlements file is indeed empty), and the store version enables App Sandbox (network server and client, user-selected files, bookmarks). The sandboxed version's state directory is in the app container. **The first adopter session verifies sandbox operation (`SecIdentity` creation, loopback listening, bridge).** The sandboxed version can use the Keychain, so if Keychain-free identity creation is blocked, the first adopter uses the Keychain (the Swiftail API stays the same: it returns a chain and key).
+6. **DER component (F9)**: The first adopter needs to generate the direct listener's self-signed certificate (X.509 v3) in Swift and would use Swiftail's DER writer if exposed publicly (not urgent). **Do not expose it now** (H14 stands). Do not freeze an internal component used only for CSR as a public API. Revisit after M7-3 defines the component's shape, when the first adopter migrates direct connections.
+7. **Propagating disconnects (API feedback)**: If the server closes the loopback connection, the bridge cleans up the tailnet side (behaviors B4 and B5 stand). Conversely, **if the tailnet side ends with an error, loopback must not look like a normal close** (so a partially received body is not read as complete). On a TLS listener, the connection ends without `close_notify` and the server's TLS recognizes truncation. On a plaintext listener (`listenTLS=false`), it must end with RST. When implementing "cancel loopback" in behavior B5, identify which `NWConnection` call sends RST and pin it with a test (add a gate (a) item: if tailnet calls `abort()`, the plaintext loopback server's read ends with an error).
+8. **Lookup timing**: The server asks after the connection delivered by `NWListener` becomes `.ready` (handshake complete) and before the first receive. The call at review time was `origin(forLoopbackSourcePort:)`, changed to `origin(of:)` in M7-9b (same timing. Behavior B7).
+9. **Test counterpart (F13)**: After migrating the host, the first adopter's fake iPhone uses a Swiftail node (`connect`) for fast tests and this repository's Go tsnet peer in `Tools/interop` for interop. Do not add new Go test tools to that repository. The `tailnet` tool in `Tools/interop` and "Connect two Swift nodes to the test control server" in the README are therefore interfaces the first adopter uses (notify them of changes).
+10. **Mapping**: No factual discrepancies. `rd_update_page_set` relies on the official Tailscale app and is already absent from the sandboxed version.
+11. **Note on the minimal HTTP server for gate (a)** (no contract impact): Cap body size in the test target's server too.
 
-### 인증서 타깃의 검토에서 고친 것 (2026-11-15)
+### Certificate Target Review Fixes (2026-11-15)
 
-다른 세션이 `SwiftailCertificates` 전체를 검토했다. 검증되지 않은 사슬이나 키가 앱으로 나가거나 저장되는 길은 찾지 못했다. 고친 것:
+Another session reviewed all of `SwiftailCertificates`. It found no path for an unverified chain or key to reach the app or be stored. Fixes:
 
-1. **다시 구독**: `certificateFacts`는 읽을 때마다 새 흐름을 내고 앞선 흐름을 끝낸다. 전에는 흐름이 노드에 하나뿐이라, 관리자의 `run()`을 취소한 뒤(읽던 Task가 취소되면 흐름이 끝난다) 같은 노드에 새 관리자를 두면 영영 `nodeNotRunning`이었다.
-2. **발급 중에 이름이 바뀜**: 그 시도는 끝까지 가서 저장하지만(동작 C의 M7-6), 끝났을 때 그 이름이 더는 발급 조건에 맞지 않으면 `certificates`로 **내지 않는다**. 지금 이름의 것이 아닌 인증서가 앱의 TLS 신원이 되지 않게 한다.
-3. **`chain`에서 떼는 것**(동작 S6): 자기 서명 판별이 아니라 평가가 고른 신뢰 앵커.
-4. **URL**(동작 X1): 다시 인코딩되는 문자열과 userinfo 거절, 같은 출처로만 요청.
-5. **이름**(동작 C2): 끝 레이블이 숫자뿐인 이름(`100.64.0.1` 꼴)은 `domainNotAllowed`다.
-6. **`set-dns` 이름의 비교**(동작 D4): 바이트로 견준다(`String`의 `==`는 유니코드 정준 동치다).
-7. **`ACMEOrderFlow.start`**는 한 번만 받는다. 전송의 시험용 앵커 길도 빠진 중간 인증서를 네트워크에서 받아 오지 않는다.
-8. **전송의 시험용 앵커가 한 번도 돌지 않았다**(관문 (가) 시험이 찾음): `URLSession.bytes(for:)`는 서버 인증서 확인을 작업 수준의 대리자 메서드로만 묻는데 세션 수준만 구현돼 있어, 시험용 루트를 준 전송이 모든 TLS 서버를 거절했다(운영 경로는 영향 없음). 작업 수준 처리기가 세션 수준 처리기를 부르게 했다. 단위 시험이 평문 루프백만 써서 놓쳤고, 이제 pebble을 상대하는 관문이 이 길을 지난다.
+1. **Resubscription**: Every read of `certificateFacts` returns a new stream and finishes the previous one. Previously the node had only one stream, so after canceling the manager's `run()` (canceling the reader Task finishes the stream), a new manager on the same node stayed at `nodeNotRunning` forever.
+2. **Name changes during issuance**: The attempt runs to completion and stores the certificate (behavior C, M7-6), but **does not emit it** on `certificates` if the name no longer meets issuance conditions at completion. This prevents a certificate for a name other than the current one from becoming the app's TLS identity.
+3. **Removal from `chain`** (behavior S6): Remove the trust anchor selected by evaluation instead of detecting self-signature.
+4. **URL** (behavior X1): Reject strings that would be re-encoded and userinfo, and send requests only to the same origin.
+5. **Name** (behavior C2): A name with an all-digit final label (of the form `100.64.0.1`) yields `domainNotAllowed`.
+6. **Compare the `set-dns` name** (behavior D4): Compare bytes (`String`'s `==` uses Unicode canonical equivalence).
+7. **`ACMEOrderFlow.start`** is accepted only once. The transport's test anchor path also does not fetch missing intermediates from the network.
+8. **The transport's test anchor path had never run** (found by a gate (a) test): `URLSession.bytes(for:)` asks for server certificate verification only through the task-level delegate method, but only the session-level method was implemented, so a transport given a test root rejected all TLS servers (production path unaffected). The task-level handler now calls the session-level handler. Unit tests missed this because they used only plaintext loopback, and the gate against pebble now exercises this path.
 
-고치지 않고 적어 두는 것:
+Recorded without fixes:
 
-- **발급 한 번의 기한(5분)은 최대 약 60초 넘을 수 있다.** 기한은 응답을 받은 뒤에 보므로, 마지막 요청 하나(30초)나 `set-dns`(60초)는 남은 기한과 무관하게 끝까지 기다린다. 한도 표의 "발급 한 번 5분"은 이 여유를 뺀 값이다.
-- **`certs/`의 검사는 모드 비트만 본다.** macOS ACL로 쓰기를 허용한 디렉터리는 가려내지 못한다. 쓰는 도중 프로세스가 죽으면 임시 파일(이름에 UUID, 0600)이 남고 치우지 않는다. 디렉터리를 fsync하지 않는다(Go와 같은 수준).
-- **시험 앵커의 "그것만 신뢰"**: Security는 앵커를 정하면 다른 앵커를 믿지 않으므로(`SecTrust.h`. 검토 세션이 실행으로 확인) `SecTrustSetAnchorCertificatesOnly(true)`를 지우는 변이는 동작이 같아 시험으로 잡히지 않는다. 위험한 것은 `false`를 넘기는 변이인데, 키 비교가 평가보다 먼저라 시스템 루트 사슬로 시험할 길이 없다. 운영 경로는 앵커를 걸지 않는다.
-- 65~237자 이름은 CSR의 CN이 64자(RFC 5280의 상한)를 넘는다. Go도 CN에 이름을 그대로 넣는다. Let's Encrypt가 이를 거절하는지는 확인하지 못했다(관문 (나)).
-- PEM 본문의 정규가 아닌 base64(`QR==`)를 받는다. 최종 판단은 DER와 `SecTrust`가 한다.
+- **An issuance attempt can exceed its 5-minute deadline by up to about 60 seconds.** The deadline is checked after receiving a response, so the last request (30 seconds) or `set-dns` (60 seconds) is allowed to finish regardless of the remaining time. "5 minutes per issuance" in the limits table excludes this allowance.
+- **The `certs/` check looks only at mode bits.** It cannot detect a directory made writable by a macOS ACL. If the process dies while writing, the temporary file (UUID in name, 0600) remains and is not cleaned up. The directory is not synced with fsync (same level as Go).
+- **"Trust only these anchors" for test anchors**: Security does not trust other anchors once anchors are set (`SecTrust.h`. Review session verified by running it), so a mutation that removes `SecTrustSetAnchorCertificatesOnly(true)` behaves the same and tests do not catch it. The dangerous mutation passes `false`, but key comparison precedes evaluation, so there is no way to test with a system-root chain. The production path sets no anchors.
+- Names of 65–237 characters exceed the CSR CN limit of 64 characters (RFC 5280). Go also puts the name into the CN verbatim. Whether Let's Encrypt rejects it is unverified (gate (b)).
+- Accept noncanonical base64 (`QR==`) in a PEM body. DER and `SecTrust` make the final decision.
 
-### 사용자 확인 필요
+### Owner Confirmation Required
 
-| # | 무엇 | 선택지와 영향 |
+| # | Item | Options and impact |
 | --- | --- | --- |
-| U1 | 기존 기기의 전환 방식 | **새 노드로 재페어링**: Swiftail로 바뀐 기기는 새 노드(새 tailnet 주소, 새 `StableID`, 이름 충돌 시 새 이름)가 된다. Mac이 바뀌면 호스트 ID와 FQDN이 바뀌어 모든 iPhone이 다시 페어링하고 인증서도 새로 받는다. iPhone이 바뀌면 Mac의 허용 목록에 다시 올린다. 옛 노드는 관리 콘솔에서 지운다. / **Go 상태 이관**: 동작 G. 같은 노드로 이어 가고 페어링과 인증서가 남는다. 대가: 같은 키를 두 구현이 쓰지 않게 하는 순서를 첫 사용처가 지켜야 하고, 되돌리기가 깔끔하지 않으며(동작 G7), `NLKey`를 0으로 다시 붙는 것의 영향을 모른다(9절). Mac과 iPhone을 따로 정할 수 있다 |
-| U2 | Swiftail의 공개 여부와 라이선스 | plan 9절. M7에서 더 걸리는 것: 시험 도구가 MPL-2.0 모듈(pebble, challtestsrv)에 의존해도 되는지(H10) |
-| U3 | 실제 tailnet 관문에 내줄 것 | 관문 (나)의 "사용자에게 받을 것". HTTPS를 켠 tailnet에서 발급하면 기기 이름과 tailnet 이름이 공개 CT 로그에 실린다(동작 K5) |
-| U4 | 비공식 클라이언트가 제어 서버의 `set-dns`와 Let's Encrypt를 쓰는 것 | plan 8절 위험 10의 연장이다. 공개 배포 전에 확인한다 |
+| U1 | How to migrate existing devices | **Re-pair as a new node**: A device that switches to Swiftail becomes a new node (new tailnet address, new `StableID`, new name on conflict). Migrating the Mac changes its host ID and FQDN, so all iPhones re-pair and a new certificate is issued. Migrating an iPhone requires adding it again to the Mac's allowlist. Delete old nodes in the admin console. / **Migrate Go state**: Behavior G. Continue as the same node and retain pairing and certificates. Cost: the first adopter must follow the sequence that prevents both implementations from using the same key. Rollback is not clean (behavior G7), and the effect of reconnecting with zero `NLKey` is unknown (§9). The Mac and iPhone can be decided separately |
+| U2 | Whether to publish Swiftail, and under what license | Plan §9. Additional consideration in M7: whether test tools may depend on MPL-2.0 modules (pebble, challtestsrv) (H10) |
+| U3 | What to provide for the real tailnet gate | "What to obtain from the owner" under gate (b). Issuance on a tailnet with HTTPS enabled puts device and tailnet names in public CT logs (behavior K5) |
+| U4 | Unofficial client use of the control server's `set-dns` and Let's Encrypt | An extension of plan §8 risk 10. Verify before public release |
 
-**사용자의 답(2026-11-15)**:
+**Owner's answers (2026-11-15)**:
 
-- U1: **새 노드로 다시 등록**한다. Go 상태 이관(동작 G, M7-11, 관문 (가) 11·(나) 8)은 만들지 않는다. `tailscaled.state` 형식의 기록(노트)은 남긴다.
-- U2: **BSD-3-Clause로 공개**한다. GitHub 저장소 생성과 push는 하기 전에 한 번 더 확인받는다. 그 전에 할 것: `LICENSE`, 시험 도구의 MPL-2.0 모듈 고지, 커밋 이력 전체에서 비밀·실제 이름·개인 경로 점검, `_context/`를 공개본에서 뺄지.
-- U3: **스테이징으로 확인한 뒤 운영 인증서를 2장까지** 발급한다(첫 발급 1 + 갱신 확인 1). CT 로그에 기기 이름과 tailnet 이름이 실리는 것을 알고 정했다. 받을 것: MagicDNS와 HTTPS를 켠 tailnet(첫 사용처가 쓰는 tailnet), 임시가 아닌 인증 키.
-- U4는 공개 전에 확인한다(그대로).
+- U1: **Register again as a new node**. Do not build Go state migration (behavior G, M7-11, gates (a) 11 and (b) 8). Retain the record of the `tailscaled.state` format (notes).
+- U2: **Publish under BSD-3-Clause**. Confirm once more before creating the GitHub repository and pushing. Before that: `LICENSE`, notice for the test tool's MPL-2.0 modules, check full commit history for secrets, real names, and personal paths, and decide whether to exclude `_context/` from the public version.
+- U3: **Verify with staging, then issue up to 2 production certificates** (1 initial issuance + 1 renewal verification). This was decided knowing device and tailnet names appear in CT logs. Obtain a tailnet with MagicDNS and HTTPS enabled (the first adopter's tailnet) and a non-ephemeral auth key.
+- U4 is to be verified before public release (unchanged).
 
-## 6. 첫 사용처가 직접 쓰는 것의 조각
+## 6. Snippet for the First Adopter's Code
 
-계약의 일부가 아니라 H5의 근거로 적은 길이다. 쓰는 함수는 SDK 선언에서 확인됐지만(노트 4.6: `SecKeyCreateWithData`의 입력 `04 ‖ X ‖ Y ‖ K` 97바이트, `SecIdentityCreate`는 키가 맞지 않으면 NULL) **이 조각은 관문 (가)의 시험용 서버(`Tests/SwiftailInteropTests/Support/MinimalHTTPServer.swift`)가 샌드박스 밖에서 돌려 확인했다**(Go 피어가 시험 루트로 TLS를 검증해 통과, ALPN `http/1.1`. 2026-11-15). 키체인에 아무것도 쓰이지 않는지는 들여다보지 않았다. 작성 세션이 적은 TLS·ALPN 협상과 "키체인에 쓰지 않음"의 실험은 확인되지 않았다(노트 8장, 9장 V188·V189). 구현의 근거로 쓰지 않는다: 샌드박스 판에서 돌리는 확인은 첫 사용처 세션이 한다(첫 사용처 검토 결과 5).
+An approach recorded as rationale for H5, outside the contract. The SDK declarations verify the functions used (notes §4.6: `SecKeyCreateWithData` input is `04 ‖ X ‖ Y ‖ K`, 97 bytes, and `SecIdentityCreate` returns NULL if the key does not match), and **the gate (a) test server (`Tests/SwiftailInteropTests/Support/MinimalHTTPServer.swift`) ran this snippet outside the sandbox** (the Go peer verified TLS with the test root, ALPN `http/1.1`, 2026-11-15). Whether anything was written to the Keychain was not inspected. The authoring session's reported experiments on TLS and ALPN negotiation and "no Keychain writes" are unverified (notes §8, §9 V188 and V189). Do not use them as the basis for implementation. The first adopter session verifies operation in the sandboxed version (first adopter review result 5).
 
 ```swift
-// TailnetCertificate → NWListener의 TLS 신원. 키체인을 쓰지 않는다.
+// TailnetCertificate → NWListener TLS identity. Does not use the Keychain.
 let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeyClass: kSecAttrKeyClassPrivate]
 let key = SecKeyCreateWithData(Data(certificate.privateKey.x963Representation) as CFData, attributes as CFDictionary, nil)
 let leaf = SecCertificateCreateWithData(nil, Data(certificate.chain[0]) as CFData)
-let identity = SecIdentityCreate(nil, leaf, key)            // SecIdentity.h, macOS 10.12·iOS 11.2부터
-// 중간 인증서는 sec_identity_create_with_certificates(identity, leaf를 뺀 나머지 사슬)로 싣는다.
-// 사슬 전체를 넘기면 leaf가 한 번 더 붙어 나간다(관문 (가) 시험이 확인했다. 2026-11-15)
+let identity = SecIdentityCreate(nil, leaf, key)            // SecIdentity.h, since macOS 10.12 and iOS 11.2
+// Include intermediates with sec_identity_create_with_certificates(identity, the rest of the chain without the leaf).
+// Passing the full chain sends the leaf a second time (verified by a gate (a) test, 2026-11-15)
 sec_protocol_options_set_local_identity(tls.securityProtocolOptions, sec_identity_create(identity))
 sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
 sec_protocol_options_add_tls_application_protocol(tls.securityProtocolOptions, "http/1.1")
 ```
 
-## 7. 시험과 관문
+## 7. Tests and Gates
 
-### 단위 시험(소켓 없음, 시각을 넘겨 결정적으로)
+### Unit Tests (No Sockets, Deterministic with Time Passed In)
 
 `Tests/SwiftailTests`:
 
-1. **`whoIs`**: 피어의 IPv4·IPv6 주소, 자기 주소, IPv4-mapped 주소, 없는 주소, netmap 전, `AllowedIPs`에만 있는 주소(서브넷), 만료된 노드(nil), 주소가 겹친 netmap(그 주소를 AllowedIPs로 가진 피어와 같은 노드), 피어가 자기 주소를 가진 netmap(nil), 프로필이 없는 노드, `StableID`가 빈 노드, 태그 노드, netmap이 바뀐 뒤의 답. `computedName`(동작 W4): 같은 tailnet의 노드(접미사를 뗌), 다른 tailnet에서 공유받은 노드(끝 점 없는 FQDN), 레이블 경계가 아닌 곳에서 접미사가 맞는 이름(`rd-a.xtail0001.ts.net.`은 떼지 않음), 점이 없는 자기 이름, 이름이 빈 노드의 호스트 이름(`.local`·`.localdomain`·`.lan`을 떼고 정리)과 node 키 텍스트. 기대값은 Go `Node.ComputedName`의 결과와 같다(관문 (가) 1).
+1. **`whoIs`**: Peer IPv4 and IPv6 addresses, local address, IPv4-mapped address, absent address, before netmap, address only in `AllowedIPs` (subnet), expired node (nil), netmap with address overlap (same node as the peer with the address in AllowedIPs), netmap where a peer owns the local address (nil), node without a profile, node with empty `StableID`, tagged node, answer after netmap changes. `computedName` (behavior W4): node on the same tailnet (strip suffix), node shared from another tailnet (FQDN without trailing dot), name with a suffix match outside a label boundary (leave the suffix on `rd-a.xtail0001.ts.net.`), local name without a dot, hostname of an unnamed node (strip `.local`, `.localdomain`, or `.lan` and sanitize), and node key text. Expected values match Go `Node.ComputedName` (gate (a) 1).
 
 `Tests/SwiftailControlTests`:
 
-2. **`set-dns`**: 요청의 경로·머리·본문(키 이름, `Version` 148, `Type` `TXT`, `Value`는 따옴표 없는 43바이트), 200과 `{}`, 200과 `null`·배열·빈 본문(실패. Go는 `null`을 받는다), 200이 아닌 응답, 4KiB를 넘는 본문, 연결이 없을 때의 기다림과 기한, 등록 전의 실패.
-3. **Go 상태 파일**(M7-11, 동작 G2·G3): 정상 파일(프로필 하나), 바깥 값이 base64url인 파일(`malformed`), 0인 machine 키, `_current-profile` 없음(legacy), 가리키는 키가 없음, `_profiles`와 불일치, 프로필 둘, `OldPrivateNodeKey`가 있음, node 키 0, `LoggedOut`, `NetworkLockKey`가 있어도 무시, 깨진 base64·JSON, 1MiB 초과, 대상에 신원이 이미 있음. 제어 서버: 빈 값·`https://controlplane.tailscale.com`·`https://login.tailscale.com`과 기본 설정(같음), 기본 설정과 사용자 지정 서버(다름), 같은 사용자 지정 서버의 경로 없음·`/`(같음), 경로·query·fragment·userinfo가 있음(다름), 포트를 생략한 것과 `:443`(다름).
+2. **`set-dns`**: Request path, headers, and body (key names, `Version` 148, `Type` `TXT`, `Value` is 43 bytes without quotes), 200 and `{}`, 200 and `null`, array, or empty body (failure. Go accepts `null`), non-200 response, body over 4KiB, waiting and deadline when disconnected, failure before registration.
+3. **Go state file** (M7-11, behaviors G2 and G3): Valid file (one profile), outer values in base64url (`malformed`), zero machine key, missing `_current-profile` (legacy), missing referenced key, mismatch with `_profiles`, two profiles, `OldPrivateNodeKey` present, zero node key, `LoggedOut`, ignore `NetworkLockKey` if present, malformed base64 or JSON, more than 1MiB, destination already has an identity. Control server: empty value, `https://controlplane.tailscale.com`, or `https://login.tailscale.com` versus default configuration (same), default configuration versus custom server (different), no path versus `/` on the same custom server (same), path, query, fragment, or userinfo present (different), omitted port versus `:443` (different).
 
-`Tests/SwiftailCertificatesTests`(새 시험 타깃):
+`Tests/SwiftailCertificatesTests` (new test target):
 
-4. **인코딩**: base64url(RFC 4648의 벡터, 채움 없음), PEM(여러 블록, 줄 길이, 모르는 종류), DER 쓰기(길이 127·128·255·256·65,535의 경계, INTEGER 0, OID).
-5. **JWK와 지문**: RFC 7638 3.1의 예는 RSA이므로 쓰지 못한다. P-256 벡터는 Go 기준값(아래)으로 본다. 지문의 입력(`{"crv":"P-256","kty":"EC","x":…,"y":…}`)은 RFC 7638이 정하므로 Go와 **바이트까지** 같아야 한다(노트 3.4). `x`·`y`가 32바이트로 채워지는지(좌표의 앞자리가 0인 키).
-6. **JWS**: 보호 머리의 필드와 순서 무관한 해석, `jwk`와 `kid`가 함께 나오지 않음, POST-as-GET의 `payload`가 `""`, 서명이 64바이트(R ‖ S)이고 공개 키로 검증됨. 보호 머리와 본문의 JSON 멤버 순서는 규격이 정하지 않으므로(RFC 7515 5.1, 노트 7장 1, 9장 V222) Go와의 대조는 복호화한 머리의 **의미**, 실제 서명 입력과 서명의 상대 검증으로 한다. 머리·서명 입력의 바이트 일치는 구현이 Go와 같은 직렬화(멤버 순서, 공백 없음)를 택했을 때만 요구한다. 이 계약은 그 직렬화를 요구하지 않는다.
-7. **CSR**: 주체·SAN·알고리즘의 구조(고정 키), 자기 서명 검증(Security의 CSR 해석 API가 없으므로 Go 기준값 도구가 검증한다). 주체 CN은 Go와 같은 `PrintableString`(tag 0x13)이다. `UTF8String`(0x0C)도 유효하지만 Go와 바이트가 달라진다(노트 3.6, 9장 V056·V178). `certificationRequestInfo`의 바이트가 Go와 같아야 하는 것은 **같은 공개 키, 같은 속성(extensionRequest의 SAN 하나), 같은 CN 태그, 같은 DER 규칙**일 때다(노트 7장 2, 9장 V224). 이 계약은 넷을 모두 Go와 같게 정하므로 고정 키로 바이트가 같아야 한다. DER 쓰기의 짧은·긴 길이와 양수 INTEGER의 선행 0x00(서명의 r·s)을 시험한다(노트 4.6).
-8. **ACME 절차**(가짜 응답을 차례로 넣는다): 노트 4.3의 열두 단계, 계정이 이미 있음·없음, 계정 키 파일이 RSA·깨짐(`accountKeyUnreadable`, 파일은 그대로), authorization이 이미 `valid`, challenge가 이미 `processing`, 주문이 처음부터 `ready`·`valid`·`processing`(새 주문을 한 번 다시, 두 번째는 `orderFailed`), `processing`을 여러 번 거침, finalize 응답의 `valid`·`processing`·`invalid`·`ready`·`pending`·모르는 상태, finalize의 `orderNotReady`, 주문 `invalid`(authorization이 `invalid`면 `validationFailed`, 아니면 `orderFailed`), authorization의 `deactivated`·`expired`·`revoked`, `badNonce` 한 번·네 번, `rateLimited`와 `Retry-After`(초·날짜·지난 날짜·읽지 못하는 값·없음·5분 기한 초과·7일 초과), `Retry-After` 시각 전의 `retryNow()`(요청이 나가지 않음), dns-01이 없는 authorization, authorization 둘(하나는 `valid`)·아홉(상한 초과), 다른 이름·`dns`가 아닌 종류·`wildcard`인 identifier, 응답의 `identifiers`가 요청과 다름, `http` URL, 2,048바이트를 넘는 URL, 64KiB를 넘는 본문, `Replay-Nonce`가 없음·잘못된 문자. 문제 문서: `application/problem+json`, JSON이 아닌 본문, `type` 없음, `about:blank`, 서버 고유 URI, 256바이트를 넘는 `type`, `subproblems`가 있음, `badNonce`를 ACME URN이 아닌 `type`의 접미사로 흉내 낸 것(따로 다루지 않음).
-9. **받은 사슬의 검사**: `PRIVATE KEY` 블록이 낀 응답, 블록 뒤나 사이의 쓰레기 바이트, 해석되지 않는 블록, 6장, 다른 키의 leaf, 다른 이름의 leaf, 만료된 leaf, 모르는 루트, 루트를 함께 보낸 사슬(검증 뒤 `chain`에서 빠지고 파일에는 남음).
-10. **갱신 판정**: 2/3 전·후, 만료 뒤, 사용자가 고쳐야 하는 실패(`magicDNSDisabled`·`httpsNotEnabled`·`domainNotAllowed`)는 시간이 지나도 시도하지 않고 `nextAttempt`가 nil이며 netmap 변화와 `retryNow()`에만 깨어남, 실패 종류별 간격과 상한, `Retry-After`가 표의 간격보다 늦을 때, 성공 뒤 초기화, 이름이 바뀜.
-11. **저장**: 쓰고 읽기, 새 `certs/`의 0700과 새 파일의 0600(인증서 포함), 그룹·기타가 쓸 수 있는 기존 `certs/`(읽지도 쓰지도 않고 `storage`), 권한을 고치지 않음, 키만 쓰이고 멈춘 상태(짝이 맞지 않아 없는 것으로 봄), Go가 쓴 SEC1 키 파일과 0644 인증서(자료), 64KiB 초과, 이름 검사(동작 C2: 처음·끝의 하이픈, 64자 레이블, 253자, `_acme-challenge.`를 붙이면 넘는 238자 이름, 대문자, 경로 문자).
-12. **비밀**: `TailnetCertificate`와 관리자의 `description`·`dump`에 키 바이트가 없다.
+4. **Encoding**: base64url (RFC 4648 vectors, unpadded), PEM (multiple blocks, line length, unknown type), DER writing (length boundaries 127, 128, 255, 256, and 65,535, INTEGER 0, OID).
+5. **JWK and thumbprint**: The RFC 7638 3.1 example is RSA, so it cannot be used. Use Go reference values (below) for the P-256 vector. RFC 7638 defines the thumbprint input (`{"crv":"P-256","kty":"EC","x":…,"y":…}`), which must match Go **byte for byte** (notes §3.4). Check that `x` and `y` are padded to 32 bytes (key with a leading zero in a coordinate).
+6. **JWS**: Protected header fields and parsing regardless of order, `jwk` and `kid` do not appear together, POST-as-GET `payload` is `""`, signature is 64 bytes (R ‖ S) and verifies with the public key. The specification does not prescribe JSON member order in the protected header or body (RFC 7515 5.1, notes §7 item 1, §9 V222), so comparison with Go uses the decoded header's **meaning**, and cross-verification of actual signing input and signature. Require matching header and signing input bytes only if the implementation chooses Go's serialization (member order, no whitespace). This contract does not require that serialization.
+7. **CSR**: Subject, SAN, and algorithm structure (fixed key), self-signature verification (Security has no CSR parsing API, so the Go reference value tool verifies it). Subject CN is `PrintableString` (tag 0x13) as in Go. `UTF8String` (0x0C) is valid too but differs from Go in bytes (notes §3.6, §9 V056 and V178). `certificationRequestInfo` bytes must match Go with the **same public key, same attributes (one SAN in extensionRequest), same CN tag, and same DER rules** (notes §7 item 2, §9 V224). The contract sets all four to match Go, so the fixed key must match byte for byte. Test DER short and long lengths and the leading 0x00 of positive INTEGERs (signature r and s) (notes §4.6).
+8. **ACME procedure** (inject fake responses in order): Twelve steps of notes §4.3, account exists or is absent, RSA or corrupt account key file (`accountKeyUnreadable`, file unchanged), authorization already `valid`, challenge already `processing`, order initially `ready`, `valid`, or `processing` (retry once with new order, second attempt is `orderFailed`), repeated `processing`, finalize response `valid`, `processing`, `invalid`, `ready`, `pending`, or unknown, finalize `orderNotReady`, order `invalid` (`validationFailed` if authorization is `invalid`, otherwise `orderFailed`), authorization `deactivated`, `expired`, or `revoked`, `badNonce` once and four times, `rateLimited` and `Retry-After` (seconds, date, past date, unreadable value, absent, beyond 5-minute deadline, beyond 7 days), `retryNow()` before `Retry-After` (no request sent), authorization without dns-01, two authorizations (one `valid`) and nine (above the limit), identifier with a different name, a type other than `dns`, or `wildcard`, response `identifiers` differ from request, `http` URL, URL over 2,048 bytes, body over 64KiB, missing `Replay-Nonce` or invalid characters. Problem documents: `application/problem+json`, non-JSON body, missing `type`, `about:blank`, server-specific URI, `type` over 256 bytes, `subproblems` present, `badNonce` imitated as a suffix of a non-ACME-URN `type` (no special handling).
+9. **Verify received chain**: Response containing a `PRIVATE KEY` block, garbage bytes after or between blocks, unparseable block, 6 certificates, leaf with different key, leaf with different name, expired leaf, unknown root, chain including root (removed from `chain` after verification and retained in file).
+10. **Renewal decision**: Before and after 2/3, after expiry, failures the user must fix (`magicDNSDisabled`, `httpsNotEnabled`, `domainNotAllowed`) do not retry over time, have nil `nextAttempt`, and wake only on netmap change or `retryNow()`, intervals and limits by failure type, `Retry-After` later than table interval, reset after success, and name change.
+11. **Storage**: Write and read, new `certs/` at 0700 and new files at 0600 (including certificate), existing `certs/` writable by group or others (no read or write, `storage`), permissions are not changed, stopped after writing only the key (mismatch treated as absent), Go-written SEC1 key file and 0644 certificate (fixture), more than 64KiB, name validation (behavior C2: leading or trailing hyphen, 64-character label, 253 characters, 238-character name that exceeds the limit when `_acme-challenge.` is added, uppercase, path characters).
+12. **Secrets**: No key bytes in `description` or `dump` of `TailnetCertificate` or the manager.
 
-`Tests/SwiftailLoopbackTests`(새 시험 타깃. 루프백 소켓을 쓴다. 자기 주소로 건 연결로 노드 하나에서 돈다):
+`Tests/SwiftailLoopbackTests` (new test target, uses loopback sockets and runs on one node using a connection to its own address):
 
-13. **다리**: 양방향 1MiB의 해시, 한쪽 반닫힘 뒤 반대 방향 데이터, 루프백 쪽이 읽지 않을 때 tailnet 쪽이 멈춤(다리가 쥔 바이트가 한도 안), tailnet 쪽 RST·`peerRemoved`에 루프백이 닫힘, 루프백 쪽 끊김에 tailnet이 RST, `forward`의 취소, 듣는 쪽이 없는 포트, 257번째 연결.
-14. **표**: 등록 전에 바이트가 건너가지 않음(서버가 첫 바이트를 받은 시점에 늘 조회됨), 끝난 뒤 조회되지 않음, 다리 밖에서 직접 건 루프백 연결의 포트가 조회되지 않음, 신원을 찾지 못한 연결은 루프백으로 걸지 않음.
+13. **Bridge**: Hash of 1MiB in both directions, opposite-direction data after one side half-closes, tailnet stalls when loopback does not read (bytes held by the bridge stay within the limit), loopback closes on tailnet RST or `peerRemoved`, tailnet resets on loopback disconnect, `forward` cancellation, port without a listener, 257th connection.
+14. **Table**: No bytes cross before registration (lookup always answers when the server receives the first byte), no lookup after ending, no lookup for the port of a direct loopback connection outside the bridge, and no loopback dial for a connection without an identified peer.
 
-### Go 기준값 대조
+### Comparison Against Go Reference Values
 
-`Tools/interop/cmd/acmefixtures`(새 도구): 고정한 P-256 키들로 Go(`tailscale.com/tempfork/acme`와 표준 라이브러리)가 만든 JWK 문자열, 지문, 키 인가, DNS-01 TXT 값, 보호 머리 JSON, CSR(`feature/acme`의 `certRequest`와 같은 인자)을 JSON으로 낸다. 반대로 Swift가 만든 JWS와 CSR을 받아 Go가 검증하는 명령도 둔다(서명은 실행마다 다르다). 자료는 `Tests/SwiftailCertificatesTests/Fixtures/`. 대조 시험은 구현한 세션과 다른 세션이 쓴다. 바이트까지 같아야 하는 것과 의미로 견주는 것은 노트 7장 1·2대로 가른다: JWK 문자열·지문·키 인가·TXT 값·CSR의 `certificationRequestInfo`(시험 7의 네 조건 아래)는 바이트, 보호 머리 JSON은 복호화한 의미(시험 6), 서명은 상대 구현의 검증이다.
+`Tools/interop/cmd/acmefixtures` (new tool): Outputs JSON for JWK string, thumbprint, key authorization, DNS-01 TXT value, protected header JSON, and CSR (same arguments as `certRequest` in `feature/acme`) generated with fixed P-256 keys by Go (`tailscale.com/tempfork/acme` and standard library). Also add commands for Go to receive and verify Swift-generated JWS and CSR (signatures differ on each run). Fixtures are in `Tests/SwiftailCertificatesTests/Fixtures/`. A session other than the implementer writes comparison tests. Byte equality and semantic comparison follow notes §7 items 1 and 2: JWK string, thumbprint, key authorization, TXT value, and CSR `certificationRequestInfo` (under the four conditions in test 7) compare bytes, protected header JSON compares decoded meaning (test 6), signatures verify with the other implementation.
 
-`tailnet` 도구에 더할 명령: `peerWhoIs`(Go 피어의 `LocalClient().WhoIs(주소)`를 JSON으로. `whoIs`의 대조), `goState`(Go tsnet 피어의 상태 디렉터리 경로. 가져오기의 자료), 그리고 아래 관문의 것.
+Commands to add to `tailnet`: `peerWhoIs` (Go peer `LocalClient().WhoIs(address)` as JSON, for `whoIs` comparison), `goState` (Go tsnet peer state directory path, fixture for import), and the commands for the gate below.
 
-### 관문 (가): 계정 없이
+### Gate (a): Without an Account
 
-`Tools/interop`의 `tailnet`(testcontrol + DERP + STUN + Go tsnet 피어)을 상대로 한다. 시험은 `Tests/SwiftailInteropTests/HostTests.swift`에 두고 `SWIFTAIL_TAILNET`이 없으면 건너뛴다.
+Use the `tailnet` tool in `Tools/interop` (testcontrol + DERP + STUN + Go tsnet peer). Put tests in `Tests/SwiftailInteropTests/HostTests.swift` and skip if `SWIFTAIL_TAILNET` is absent.
 
-도구에 더할 것: **testcontrol에 `DNSConfig`를 준다**(cert 도메인이 생기는 조건이다. testcontrol은 `DNSConfig`가 있고 `MagicDNSDomain`이 비지 않을 때만 netmap의 `CertDomains`에 `<Hostinfo.Hostname>.<MagicDNSDomain>`을 더한다. 지금 도구는 `MagicDNSDomain`만 주므로 그대로는 `CertDomains`가 생기지 않는다. 노트 7장 4, `Tools/interop/cmd/tailnet/main.go:115`. MagicDNS 켬(`Proxied`)도 함께 준다. 동작 C1 ②), `acmeStart`(같은 프로세스에 pebble과 challtestsrv의 DNS 서버를 띄우고 디렉터리 URL과 루트 인증서를 돌려준다. testcontrol의 `OnSetDNS`를 challtestsrv의 TXT 레코드로 잇는다. 노트 7장 5의 시험 설계이고, 두 모듈을 한 프로세스에 넣어 빌드·실행한 적은 아직 없다. 노트 8장), `setDNSLog`(받은 `set-dns` 요청의 목록), `setDNSFault`(다음 요청을 거절하거나 값을 바꿔 올린다), `setCertDomains`(cert 도메인을 비우거나 채운다), `peerHTTP`(Go 피어가 tsnet으로 HTTP 요청을 보내고 상태·머리·본문의 길이와 SHA-256을 돌려준다. 신뢰할 루트를 인자로 받는다).
+Tool additions: **Give testcontrol `DNSConfig`** (required to produce cert domains. testcontrol adds `<Hostinfo.Hostname>.<MagicDNSDomain>` to netmap `CertDomains` only with a `DNSConfig` and nonempty `MagicDNSDomain`. The current tool supplies only `MagicDNSDomain`, so it produces no `CertDomains` as-is. Notes §7 item 4, `Tools/interop/cmd/tailnet/main.go:115`. Also enable MagicDNS (`Proxied`). Behavior C1 ②), `acmeStart` (start pebble and the challtestsrv DNS server in the same process and return directory URL and root certificate. Connect testcontrol's `OnSetDNS` to challtestsrv's TXT record. This is the test design in notes §7 item 5, and building and running both modules in one process is unverified. Notes §8), `setDNSLog` (list of received `set-dns` requests), `setDNSFault` (reject the next request or publish a different value), `setCertDomains` (clear or populate cert domains), and `peerHTTP` (Go peer sends an HTTP request with tsnet and returns status, headers, body length and SHA-256. Takes a trusted root as an argument).
 
-| # | 확인할 것 | 통과 기준 |
+| # | Check | Pass criteria |
 | --- | --- | --- |
-| 1 | `whoIs` | Go 피어 둘의 IPv4·IPv6 주소와 자기 주소에 대해 `stableID`·`name`·`computedName`·`loginName`이 `peerWhoIs`의 값과 같다. 피어가 나간 뒤에는 nil |
-| 2 | `set-dns` | testcontrol이 요청을 받아들이고(machine 키, node 키, 이름의 검사를 통과) `setDNSLog`의 값이 Swift가 계산한 TXT 값과 같다 |
-| 3 | 발급 | pebble에서 인증서를 받는다. 사슬이 pebble 루트로 검증되고, 이름이 자기 FQDN이고, `certs/`에 세 파일이 권한대로 있다 |
-| 4 | 다시 시작 | 같은 상태 디렉터리로 다시 띄우면 ACME 요청 없이 저장된 인증서가 `certificates`에 나온다 |
-| 5 | `badNonce`와 authorization 재사용 | pebble의 nonce 거부를 켠 채 3이 통과한다. authorization 재사용을 켠 채 두 번째 발급이 통과한다 |
-| 6 | 갱신 | 시험용 시계를 2/3 뒤로 옮기면 새 키의 새 인증서가 `certificates`에 나오고 옛 연결은 그대로다 |
-| 7 | 실패 | cert 도메인이 비면 `httpsNotEnabled`, MagicDNS가 꺼져 있으면 `magicDNSDisabled`이고 요청이 나가지 않으며 `nextAttempt`가 nil이다. 되돌리면(netmap이 바뀌면) 발급한다. `set-dns` 거절이면 `controlRejected`. 틀린 TXT 값이면 `validationFailed`이고 다음 시도가 15분 뒤다 |
-| 8 | **시나리오의 뼈대**: Swift 노드가 443을 듣고, 다리가 시험용 `NWListener`(TLS, 3의 인증서, ALPN `http/1.1`)로 잇고, Go 피어가 `peerHTTP`로 ① 페어링 요청(서버가 `Origin.peer`의 `stableID`·이름을 응답에 싣는다) ② 설치 세션 만들기(그 `stableID`에 묶인 토큰) ③ 매니페스트 ④ IPA 100MB를 Range 둘로 나눠 받기를 차례로 한다 | Go 피어가 pebble 루트로 TLS를 검증한다. ①의 `stableID`가 그 Go 피어의 것이다. 다른 Go 피어가 ②의 토큰으로 ④를 요청하면 서버가 거절한다(신원이 다르다). 받은 바이트의 SHA-256이 같다. 처리량을 기록한다 |
-| 9 | 다리 밖의 접속 | 시험이 루프백 포트로 직접 TLS 연결을 걸면 핸드셰이크가 끝나지 않고(서버의 인증서도 받지 못한다) 서버 쪽 연결은 준비되지 않고 끝난다. 서버가 그 연결을 닫아 상대가 끝을 본다(M7-9b 전에는 "`origin`이 nil이고 서버가 끊는다") |
-| 10 | 주인이 바뀜 | 전송 중에 그 Go 피어를 tailnet에서 빼면 루프백 연결이 닫혀 서버의 받기가 끝난다. 그 연결의 `Origin`은 그 피어의 것이었다 |
-| 11 | (M7-11) 가져오기 | Go 피어를 멈추고 그 상태 디렉터리에서 가져와 띄운 Swift 노드가 같은 node 키이고, testcontrol이 같은 노드로 받아들여 같은 tailnet 주소·같은 `StableID`다. 이것은 이 관문이 처음 확인할 **기대값**이다(노트 4.7 끝, 7장 7, 9장 V233). testcontrol의 결과는 운영 서버의 `NLKey` 0 처리와 중복 세션의 동작을 보장하지 않는다(관문 (나) 8). Go가 받아 둔 것과 같은 형식의 `certs/`를 복사하면 발급 없이 쓴다 |
-| 12 | 전체 | `eyebuild swift <용도> -- test` 전체 통과, 경고 0 |
+| 1 | `whoIs` | `stableID`, `name`, `computedName`, and `loginName` match `peerWhoIs` for IPv4 and IPv6 addresses of two Go peers and the local address. nil after the peer leaves |
+| 2 | `set-dns` | testcontrol accepts the request (machine key, node key, and name pass validation), and `setDNSLog` matches the TXT value computed by Swift |
+| 3 | Issuance | Receive a certificate from pebble. The chain verifies with the pebble root, the name is the node's own FQDN, and all three files are present in `certs/` with the specified permissions |
+| 4 | Restart | Restart with the same state directory and get the stored certificate on `certificates` without ACME requests |
+| 5 | `badNonce` and authorization reuse | Pass item 3 with pebble nonce rejection enabled. Pass second issuance with authorization reuse enabled |
+| 6 | Renewal | Move the test clock beyond 2/3. A new certificate with a new key appears on `certificates`, and old connections continue |
+| 7 | Failure | No cert domains yields `httpsNotEnabled`, MagicDNS off yields `magicDNSDisabled`, no requests are sent, and `nextAttempt` is nil. Restoring them (netmap change) triggers issuance. `set-dns` rejection yields `controlRejected`. Wrong TXT yields `validationFailed` and a next attempt in 15 minutes |
+| 8 | **Scenario skeleton**: Swift node listens on 443 and the bridge connects to a test `NWListener` (TLS, certificate from item 3, ALPN `http/1.1`). With `peerHTTP`, a Go peer performs in order ① pairing request (server sends `Origin.peer`'s `stableID` and name in the response), ② create installation session (token bound to that `stableID`), ③ manifest, ④ download 100MB IPA in two Range requests | Go peer verifies TLS with the pebble root. The `stableID` in ① belongs to that Go peer. If another Go peer requests ④ with the token from ②, the server rejects it (different identity). Received bytes have matching SHA-256. Record throughput |
+| 9 | Connection outside the bridge | If the test dials TLS directly to the loopback port, the handshake does not complete (it does not even receive the server certificate) and the server-side connection ends before readiness. The server closes it and the peer sees the end (before M7-9b: "`origin` is nil and the server closes") |
+| 10 | Owner changes | Removing that Go peer from the tailnet during a transfer closes the loopback connection and ends the server's receive. The connection's `Origin` belonged to that peer |
+| 11 | (M7-11) Import | Stop the Go peer, import from its state directory, and start a Swift node with the same node key. testcontrol accepts it as the same node with the same tailnet address and `StableID`. This is an **expected result** that this gate first verifies (end of notes §4.7, §7 item 7, §9 V233). testcontrol's result does not guarantee production handling of zero `NLKey` and duplicate sessions (gate (b) 8). Copy `certs/` in the format Go produced and use it without issuance |
+| 12 | Full suite | All `eyebuild swift <purpose> -- test` tests pass, 0 warnings |
 
-### 관문 (나): 실제 tailnet과 실기기
+### Gate (b): Real Tailnet and Real Devices
 
-로컬에서는 할 수 없는 것만 본다. 매번 사용자에게 먼저 알린다(plan 4절(b)).
+Check only what cannot be checked locally. Notify the owner first each time (plan §4(b)).
 
-| # | 확인할 것 | 통과 기준 |
+| # | Check | Pass criteria |
 | --- | --- | --- |
-| 1 | 실제 제어 서버 | HTTPS를 켠 tailnet에 등록하면 `certDomains`에 자기 FQDN이 있다 |
-| 2 | 실제 `set-dns` + Let's Encrypt **스테이징** | 스테이징 디렉터리로 발급이 끝난다(스테이징 루트를 시험 앵커로 준다). `set-dns`에 걸린 시간과 발급 전체 시간을 기록한다 |
-| 3 | Let's Encrypt **운영** | 한 번 발급한다. 시스템 루트로 검증된다. 인증서의 수명을 기록한다. 다시 시작하면 저장된 것을 쓴다(발급은 관문 전체에서 두 번을 넘기지 않는다) |
-| 4 | iPhone에서 | M5 터널을 켠 iPhone의 Safari와 `URLSession`이 `https://<fqdn>/`을 경고 없이 연다 |
-| 5 | 설치기 | `itms-services` 링크로 매니페스트와 IPA를 받는다(첫 사용처 세션. 그쪽의 최소 HTTPS 서버나 이식한 호스트) |
-| 6 | 전송 | 100MB를 받는 시간을 Wi-Fi 직접 경로에서 재고 Go 호스트의 값(`SwiftailNetstack.md` 검토 결과 5)과 나란히 적는다 |
-| 7 | 샌드박스 | 첫 사용처의 샌드박스 판(권한: 네트워크 서버·클라이언트)에서 3~5가 된다. 키체인 없이 `SecIdentity`를 만드는 길, 루프백 듣기, 다리가 그 안에서 도는지는 이 관문 전에는 확인되지 않았고 첫 사용처 세션이 확인한다(첫 사용처 검토 결과 5, 노트 8장) |
-| 8 | (U1이 이관이면) 실제 Go 상태 | 시험용 Go 호스트 노드의 상태를 가져와 운영 제어 서버가 같은 노드로 받아들이고(같은 주소·`StableID`. `NLKey` 0으로 다시 붙는 결과를 여기서 처음 본다), 페어링한 iPhone이 다시 페어링하지 않고 접속한다 |
+| 1 | Real control server | After registering on a tailnet with HTTPS enabled, `certDomains` contains the node's own FQDN |
+| 2 | Real `set-dns` + Let's Encrypt **staging** | Issuance completes against the staging directory (supply the staging root as a test anchor). Record `set-dns` duration and total issuance time |
+| 3 | Let's Encrypt **production** | Issue once. Verify against system roots. Record certificate lifetime. Reuse the stored certificate on restart (at most two issuances across the gate) |
+| 4 | On iPhone | Safari and `URLSession` on an iPhone with the M5 tunnel enabled open `https://<fqdn>/` without warnings |
+| 5 | Installer | Fetch manifest and IPA using an `itms-services` link (first adopter session, its minimal HTTPS server or migrated host) |
+| 6 | Transfer | Measure 100MB download time on a direct Wi-Fi path and record it alongside the Go host value (`SwiftailNetstack.md` review result 5) |
+| 7 | Sandbox | Items 3–5 work in the first adopter's sandboxed version (network server and client entitlements). Keychain-free `SecIdentity` creation, loopback listening, and the bridge in that environment were unverified before this gate and the first adopter session verifies them (first adopter review result 5, notes §8) |
+| 8 | (If U1 is migration) Real Go state | Import state from a test Go host node. The production control server accepts it as the same node (same address and `StableID`. First check of reconnecting with zero `NLKey`), and a paired iPhone connects without pairing again |
 
-사용자에게 받을 것:
+What to obtain from the owner:
 
-- MagicDNS와 HTTPS 인증서를 켠 tailnet(관리 콘솔의 DNS 설정). 이름이 CT 로그에 실려도 되는지의 확인(U3).
-- 그 tailnet의 인증 키(임시가 아닌 노드. 상태를 지우지 않고 다시 쓰므로 한 번 쓰는 키면 된다). 채팅이 아닌 비밀 입력으로 받는다. 호스트 이름은 가짜 값(`rd-mac-1a2b3c4d` 꼴)으로 정해 둔다.
-- 운영 서버 발급을 해도 된다는 허락(같은 이름 7일에 5장 가운데 두 장까지 쓴다).
-- M5 터널 빌드가 깔린 iPhone과, 5·7을 맡을 첫 사용처 세션.
+- Tailnet with MagicDNS and HTTPS certificates enabled (DNS settings in the admin console). Confirmation that the names may appear in CT logs (U3).
+- Auth key for that tailnet (non-ephemeral node. A single-use key suffices because state is reused without deletion). Receive via secret input instead of chat. Use a fake hostname (of the form `rd-mac-1a2b3c4d`).
+- Permission to use production issuance (use up to two of the five certificates per name in seven days).
+- An iPhone with the M5 tunnel build installed and the first adopter session to handle 5 and 7.
 
-#### 관문 시험의 쓰는 법 (1·2)
+#### Running the Gate Tests (1 and 2)
 
-시험은 `Tests/SwiftailInteropTests/RealTailnetHostGateTests.swift`의 `RealTailnetHostGateTests`다. 흐름(`Support/HostGateFlow.swift`의 `runHostGateFlow`)은 같은 파일의 `HostGateFlowTests`가 계정 없이(testcontrol 사본 + pebble) 먼저 돌린다.
+The tests are `RealTailnetHostGateTests` in `Tests/SwiftailInteropTests/RealTailnetHostGateTests.swift`. `HostGateFlowTests` in the same file runs the flow (`runHostGateFlow` in `Support/HostGateFlow.swift`) without an account first (testcontrol copy + pebble).
 
-| 환경 변수 | 뜻 |
+| Environment variable | Meaning |
 | --- | --- |
-| `SWIFTAIL_REAL_AUTHKEY_FILE` | 인증 키가 든 파일(임시가 아닌 노드). 없으면 묶음을 건너뛴다 |
-| `SWIFTAIL_REAL_HOST_STATE_DIR` | 노드의 상태 폴더. 없으면 묶음을 건너뛴다. 처음이면 만들고(0700), **지우지 않는다**. `eyebuild dir`의 폴더는 3일 쓰지 않으면 지워지므로 두 번째 실행까지 남길 곳을 고른다 |
-| `SWIFTAIL_REAL_ACME_ROOTS` | 스테이징 루트 인증서 PEM 파일(시험 앵커). 파일의 `CERTIFICATE` 블록을 모두 앵커로 쓰므로 Let's Encrypt가 안내하는 스테이징 루트들을 한 파일에 이어 붙인다. 없으면 발급 단계를 건너뛰고 1만 본다 |
-| `SWIFTAIL_REAL_ACME_DIRECTORY` | ACME 디렉터리. 기본은 Let's Encrypt 스테이징(`https://acme-staging-v02.api.letsencrypt.org/directory`. 출처는 tailscale.com v1.104.7 `cmd/k8s-operator/sts.go:119`). 운영 디렉터리의 호스트면 시험이 거절한다 |
-| `SWIFTAIL_REAL_SIGN_WAIT_SECONDS` | 잠긴 노드의 서명을 기다리는 한도(기본 600). 묶음의 시간 제한은 이것 + 10분 |
+| `SWIFTAIL_REAL_AUTHKEY_FILE` | File containing the auth key (non-ephemeral node). Skip the suite if absent |
+| `SWIFTAIL_REAL_HOST_STATE_DIR` | Node state folder. Skip the suite if absent. Create it (0700) if new and **do not delete it**. Folders in `eyebuild dir` are deleted after 3 days without use, so choose a location that will persist until the second run |
+| `SWIFTAIL_REAL_ACME_ROOTS` | PEM file with staging root certificates (test anchors). All `CERTIFICATE` blocks are used as anchors, so concatenate the staging roots described by Let's Encrypt into one file. If absent, skip issuance and check only 1 |
+| `SWIFTAIL_REAL_ACME_DIRECTORY` | ACME directory. Defaults to Let's Encrypt staging (`https://acme-staging-v02.api.letsencrypt.org/directory`. Origin: tailscale.com v1.104.7 `cmd/k8s-operator/sts.go:119`). The test rejects the production directory host |
+| `SWIFTAIL_REAL_SIGN_WAIT_SECONDS` | Maximum wait for a locked node's signature (default 600). Suite timeout is this plus 10 minutes |
 
 ```sh
-SWIFTAIL_REAL_AUTHKEY_FILE=<키 파일> SWIFTAIL_REAL_HOST_STATE_DIR=<상태 폴더> SWIFTAIL_REAL_ACME_ROOTS=<스테이징 루트 PEM> \
+SWIFTAIL_REAL_AUTHKEY_FILE=<key file> SWIFTAIL_REAL_HOST_STATE_DIR=<state folder> SWIFTAIL_REAL_ACME_ROOTS=<staging root PEM> \
   eyebuild swift real-host-gate -- test --filter RealTailnetHostGateTests
 ```
 
-흐름: 호스트 이름 `rd-mac-1a2b3c4d`의 `.inProcess` 노드가 `.running`이 된다(`needsLogin`이면 인증 키가 받아들여지지 않은 것이므로 실패로 끝내고 URL은 찍지 않는다) → lock 모습을 기록한다 → 1의 판정(`certDomains`에 자기 FQDN) → 관리자를 띄운다(잠겨 있어도 띄운다. 잠긴 동안 발급이 되는지를 기록한다) → 잠겼으면 서명을 기다린다 → 첫 인증서 → 받은 인증서로 tailnet 443 → `LoopbackBridge` → 시험 TLS 리스너를 띄우고 같은 프로세스에서 자기 tailnet 주소로 붙어(루프백의 평문 중계를 거친 `NWConnection`) 스테이징 루트만으로 검증하고 `POST /pair`가 200이며 다리가 알린 상대가 자기 노드인지 본다.
+Flow: The `.inProcess` node with hostname `rd-mac-1a2b3c4d` becomes `.running` (if `needsLogin`, the auth key was not accepted, so fail without printing the URL) → record lock state → check item 1 (own FQDN in `certDomains`) → start the manager (even if locked. Record whether issuance works while locked) → if locked, wait for signing → first certificate → using the received certificate, start tailnet 443 → `LoopbackBridge` → test TLS listener. Connect in the same process to the node's own tailnet address (`NWConnection` through the plaintext loopback relay), verify using only the staging root, and check that `POST /pair` returns 200 and that the bridge reports the local node as the peer.
 
-서명 절차: 노드가 잠기면 표준 출력에 "서명이 필요하다. 명령은 상태 디렉터리의 sign-command.txt에 있다"만 찍는다. 그 파일(0600)에 `tailscale lock sign <nodeKey> <lockKey>` 한 줄이 있다(둘 다 공개 키). 서명 기기에서 그 줄을 그대로 실행하면 노드가 다시 시작하지 않고 풀린다. 한도 안에 풀리지 않으면 잠긴 채 다음 단계로 가고 요약에 "기한 안에 풀리지 않음"을 남긴다. 관리자는 잠긴 동안에도 돈다. 잠긴 동안 발급이 되는지 보려면 파일이 생긴 뒤 곧바로 서명하지 말고 몇 분 기다린다: 인증서보다 서명이 먼저 오면 "잠긴 동안 첫 인증서"는 판정하지 못해 `-`이고, 그때 관리자의 마지막 실패만 남는다(`controlRejected` 등이면 잠긴 노드의 `set-dns`를 서버가 거절한 것이다).
+Signing procedure: If locked, print only "A signature is required. The command is in sign-command.txt in the state directory" on standard output. That file (0600) contains one line, `tailscale lock sign <nodeKey> <lockKey>` (both public keys). Run that line verbatim on a signing device to unlock the node without restarting it. If it does not unlock within the limit, continue locked and record "did not unlock within the deadline" in the summary. The manager runs even while locked. To see whether issuance works while locked, wait a few minutes after the file appears before signing. If the signature arrives before a certificate, "first certificate while locked" is undetermined (`-`), and only the manager's last failure is recorded at that point (`controlRejected` and similar failures indicate the server rejected the locked node's `set-dns`).
 
-출력은 요약 한 덩어리다: 상태 이름, `.running`까지의 시간, 피어 수, lock의 `mode`·잠김·거른 피어 수·`issue`, 서명으로 풀리기까지의 시간과 같은 `run()` 안에서 풀렸는지, cert 도메인 수와 자기 FQDN이 있는지, 관리자 시작부터 첫 인증서까지의 시간(발급 전체), ACME 요청 수, `set-dns` 횟수와 각 왕복 시간, 인증서 수명(일), 사슬 장수, 시험 앵커로 검증되는지, 잠긴 동안 첫 인증서가 나왔는지, tailnet TLS의 결과. FQDN·tailnet 이름·주소·키·로그인 이름·해시는 찍지 않는다. `set-dns` 시간은 관리자의 `set-dns` 접점을 감싸 잰 제어 서버 왕복이다(공개 API가 아니라 `@testable`의 내부 초기화 인자로 잰다). TXT가 공개 DNS에 퍼지기까지와 인증 기관의 확인 대기는 따로 재지 못하고 발급 전체 시간 안에 들어 있다.
+Output is a single summary block: state name, time to `.running`, peer count, lock `mode`, locked status, filtered peer count and `issue`, time to unlock by signing and whether it unlocked in the same `run()`, cert domain count and whether own FQDN is present, time from manager start to first certificate (total issuance time), ACME request count, `set-dns` count and each round-trip time, certificate lifetime (days), chain length, verification with the test anchor, whether the first certificate arrived while locked, and tailnet TLS result. Do not print FQDNs, tailnet names, addresses, keys, login names, or hashes. `set-dns` time is the control server round trip measured by wrapping the manager's `set-dns` interface (through an internal initializer argument under `@testable`, outside the public API). Time for TXT to propagate to public DNS and time waiting for the certificate authority's verification were not measured separately and are included in total issuance time.
 
-두 번째 실행에서 볼 것: 같은 상태 폴더로 다시 돌리면 저장된 신원으로 붙고(`needsLogin`이 없다), 저장된 lock 상태로 처음부터 서명된 채 `.enforcing`이며, "저장된 인증서로 시작 true, 저장된 것을 새 발급 없이 씀 true(ACME 요청 0개, `set-dns` 0번)"다.
+On the second run: With the same state folder, connect with the stored identity (no `needsLogin`), start signed and `.enforcing` from the stored lock state, and report "started with stored certificate true, used the stored certificate without new issuance true (0 ACME requests, 0 `set-dns` calls)."
 
-계정 없는 결과(2026-11-15): lock 없는 tailnet에서 발급 약 1초, ACME 요청 11개, `set-dns` 1번, 수명 90일(pebble), 두 번째 실행은 요청 0개로 저장된 인증서를 썼고 tailnet TLS가 pebble 루트로 검증됐다. lock 켜진 tailnet에서는 **잠긴 동안 인증서가 나왔다**. 단, testcontrol 사본의 `set-dns` 처리기는 lock을 보지 않으므로 운영 서버의 동작은 이 관문이 처음 기록한다.
+Results without an account (2026-11-15): In a tailnet without lock, issuance took about 1 second, 11 ACME requests, 1 `set-dns`, lifetime 90 days (pebble). The second run reused the stored certificate with 0 requests, and tailnet TLS verified using the pebble root. On a tailnet with lock enabled, **the certificate arrived while locked**. The copy of testcontrol's `set-dns` handler does not check lock, so this gate is the first to record production server behavior.
 
 
-#### 관문 1·2의 결과 (2026-11-15, 총괄이 직접 실행)
+#### Results of Gates 1 and 2 (2026-11-15, Run by the Lead Session)
 
-운영 제어 서버, **Tailnet Lock이 켜진 tailnet**(HTTPS 켬), Let's Encrypt 스테이징, 임시가 아닌 노드(서명 없는 1회용 인증 키), 호스트 이름 `rd-mac-1a2b3c4d`, macOS.
+Production control server, **tailnet with Tailnet Lock enabled** (HTTPS enabled), Let's Encrypt staging, non-ephemeral node (unsigned single-use auth key), hostname `rd-mac-1a2b3c4d`, macOS.
 
-| 항목 | 첫 실행 | 두 번째 실행(같은 상태 폴더) |
+| Item | First run | Second run (same state folder) |
 | --- | --- | --- |
-| `.running`까지 | 4.6초 | 4.2초(인증 키는 이미 쓰인 것. 저장된 신원으로 다시 붙음) |
-| tailnet lock | `enforcing`, 잠김, 거른 피어 0, `issue` 없음 | `enforcing`, 잠기지 않음(저장된 상태로 첫 netmap부터) |
-| 서명 | 서명 기기에서 `tailscale lock sign`을 돌린 뒤 **다시 시작 없이 풀림**(등록 884초 뒤. 사람이 서명한 시각에 달린 값이다) | 해당 없음 |
-| 1: `certDomains`에 자기 FQDN | 있음(도메인 1개) | 있음 |
-| 2: 발급 | **잠긴 동안에 끝남.** 관리자 시작부터 40.8초, ACME 요청 12개, `set-dns` 1번(제어 서버 왕복 32.3초), 수명 64일, 사슬 4장, 스테이징 루트로 검증됨 | 새 발급 없음(ACME 요청 0, `set-dns` 0). 저장된 것을 검증해 씀 |
-| 받은 인증서로 tailnet TLS | 자기 tailnet 주소 443 → 다리 → TLS 리스너: 핸드셰이크와 검증 성공, HTTP 200, 다리가 알린 상대가 자기 노드 | 같음 |
+| Time to `.running` | 4.6 seconds | 4.2 seconds (auth key already used. Reconnected with stored identity) |
+| tailnet lock | `enforcing`, locked, 0 filtered peers, no `issue` | `enforcing`, unlocked (from the first netmap, using stored state) |
+| Signing | **Unlocked without restart** after running `tailscale lock sign` on the signing device (884 seconds after registration. This depends on when the person signed) | Not applicable |
+| 1: Own FQDN in `certDomains` | Present (1 domain) | Present |
+| 2: Issuance | **Finished while locked.** 40.8 seconds from manager start, 12 ACME requests, 1 `set-dns` (32.3-second control server round trip), lifetime 64 days, chain of 4 certificates, verified with staging root | No new issuance (0 ACME requests, 0 `set-dns`). Verified and used the stored certificate |
+| Tailnet TLS with the received certificate | Own tailnet address port 443 → bridge → TLS listener: handshake and verification succeeded, HTTP 200, bridge reported the local node as the peer | Same |
 
-알게 된 것:
+Findings:
 
-- **운영 제어 서버의 `set-dns`는 노드가 lock으로 잠겨 있어도 받는다.** 그래서 Mac 호스트는 서명을 기다리는 동안 인증서를 미리 받아 둘 수 있다.
-- `set-dns` 한 번의 왕복이 32초였다(서버가 TXT가 퍼지기를 기다렸다가 답하는 것으로 보인다. 한 번의 값). 발급 전체 시간의 대부분이다. 앱은 첫 발급에 1분쯤을 잡아야 한다.
-- 스테이징 인증서의 수명은 64일, 사슬은 leaf 포함 4장이었다(운영의 값은 3에서 본다).
-- lock이 켜진 tailnet에서 Swiftail 노드는 `tailnet-lock` capability를 받는다(`mode`가 `enforcing`. `SwiftailTailnetLock.md` U2의 재검토 조건: 받지 못하는 경우는 보지 못했다).
+- **The production control server accepts `set-dns` even when the node is locked by tailnet lock.** The Mac host can therefore obtain a certificate in advance while waiting for a signature.
+- One `set-dns` round trip took 32 seconds (the server appears to wait for TXT propagation before replying. One measurement). It accounts for most of the total issuance time. The app should allow about 1 minute for initial issuance.
+- The staging certificate lasted 64 days and the chain had 4 certificates including the leaf (check production in 3).
+- A Swiftail node on a tailnet with lock enabled gets the `tailnet-lock` capability (`mode` is `enforcing`. Reconsideration condition for `SwiftailTailnetLock.md` U2: no case without the capability was observed).
 
-이 실행이 `SwiftailTailnetLock.md` 관문 (나)의 2(서명 기기가 뒤에 서명)와 4의 앞 절반(다시 띄우면 저장된 상태로 이어 감)도 채운다. 보지 않은 것: 서명된 인증 키(`--TL`)로 등록(그 관문의 1), 서명 기기에서 키를 더했을 때 머리가 따라오는지(4의 뒤 절반), 부트스트랩과 동기화가 받은 AUM의 수(요약에 싣지 않았다).
+This run also covers `SwiftailTailnetLock.md` gate (b) item 2 (a signing device signs later) and the first half of item 4 (restart resumes with stored state). Unverified: registration with a signed auth key (`--TL`) (item 1 of that gate), whether the head follows additions of keys on a signing device (second half of 4), and the number of AUMs received in bootstrap and sync (omitted from the summary).
 
-상태 폴더(신원, lock 상태, 스테이징 인증서)는 첫 사용처가 관문 3~6에 이어 쓴다. 운영 디렉터리로 바꾸기 전에 `certs/`를 비운다.
+The first adopter reuses the state folder (identity, lock state, staging certificate) for gates 3–6. Empty `certs/` before switching to the production directory.
 
-### RemoteDebug e2e 재현의 범위
+### Scope of the RemoteDebug e2e Reproduction
 
-첫 사용처의 e2e는 셋이다: Go 시험(`core/e2e`. Go 호스트와 Go tsnet 피어, 가짜 tailnet, `listenTLS=false`, 22개. 터널 시험 3개는 `core/e2e/tunnel`에 따로 있다), Swift 패키지 시험(`Packages/MacHost/Tests/MacHostE2ETests`. 실제 Go 코어와 `rdtestenv`), 스크립트(`scripts/e2e-*.sh`). 모두 그쪽 호스트 코드를 돌린다.
+The first adopter has three kinds of e2e tests: Go tests (`core/e2e`. Go host and Go tsnet peer, fake tailnet, `listenTLS=false`, 22 tests. The 3 tunnel tests are separate in `core/e2e/tunnel`), Swift package tests (`Packages/MacHost/Tests/MacHostE2ETests`. Real Go core and `rdtestenv`), and scripts (`scripts/e2e-*.sh`). All run that repository's host code.
 
-Swiftail 저장소가 재현하는 것은 **Tailscale에 기대는 성질**뿐이다(관문 (가) 8~10): tailnet으로 들어온 연결이 TLS를 거쳐 HTTP 서버에 닿고, 서버가 상대의 `StableID`를 알고, 세션이 그 노드에 묶이고, 큰 본문이 Range로 온전히 간다. 페어링 코드의 규칙, 세션의 수명, 게시본 검사 같은 호스트의 로직은 재현하지 않는다. 그것은 첫 사용처가 호스트를 Swift로 옮긴 뒤 자기 e2e를 Swiftail 노드 위에서 돌려 확인한다(별도 승인 뒤. `SwiftailNetstack.md` 검토 결과 6의 발판을 쓴다).
+The Swiftail repository reproduces **only the properties that depend on Tailscale** (gate (a) 8–10): a tailnet connection reaches the HTTP server through TLS, the server knows the peer's `StableID`, the session is bound to that node, and a large body arrives intact through Range requests. It does not reproduce host logic such as pairing code rules, session lifetime, or published build validation. After migrating the host to Swift, the first adopter verifies those by running its e2e tests on Swiftail nodes (after separate approval, using the groundwork in `SwiftailNetstack.md` review result 6).
 
-## 8. 구현 단위
+## 8. Implementation Units
 
-소유 파일이 겹치지 않게 나눈다. 단위 사이의 접점은 2절의 선언과 아래 `package` 선언이 정하고 M7-0이 확정한다.
+Split units so owned files do not overlap. The declarations in §2 and the `package` declarations below define the interfaces between units. M7-0 finalizes them.
 
 ```swift
-// Swiftail (package). SwiftailCertificates가 쓴다.
+// Swiftail (package). Used by SwiftailCertificates.
 extension TailnetNode {
     package func setDNS(name: String, value: String) async throws(ControlError)
-    package nonisolated var certificateFacts: AsyncStream<CertificateFacts> { get }   // 상태·자기 이름·cert 도메인·MagicDNS 켬이 바뀔 때마다
+    package nonisolated var certificateFacts: AsyncStream<CertificateFacts> { get }   // On changes to state, own name, cert domains, or MagicDNS enablement
     package nonisolated var stateDirectory: URL { get }
 }
-// SwiftailIO (package). SwiftailLoopback이 쓴다.
+// SwiftailIO (package). Used by SwiftailLoopback.
 extension NetworkSocket {
     package static func connectLoopback(port: UInt16) async throws(SocketError) -> NetworkSocket
     package var localPort: UInt16? { get }
@@ -885,201 +885,201 @@ extension NetworkSocket {
 }
 ```
 
-| 단위 | 내용 | 소유 파일 | 선후 |
+| Unit | Work | Owned files | Order |
 | --- | --- | --- | --- |
-| M7-0 | 총괄: 이 계약 확정(H, F의 답, U1), 노트 검증(다른 세션), `Package.swift`에 타깃 넷 추가, 위 `package` 선언의 빈 껍데기, plan 갱신 | `docs/contracts/SwiftailHost.md`, `docs/plan.md`, `docs/protocol-notes/`, `Package.swift` | 먼저 |
-| M7-1 | `whoIs`와 `PeerIdentity`(동작 W), 주소 표, `computedName`의 Go 규칙(W4) | `Sources/Swiftail/PeerIdentity.swift`, `Sources/Swiftail/TailnetNode+WhoIs.swift`, `Tests/SwiftailTests/WhoIs*` | **병렬** |
-| M7-2 | 제어 `set-dns`(동작 D)와 노드의 `package` 접점(MagicDNS 켬 여부를 `CertificateFacts`에 싣는다. 동작 C1 ②) | `Sources/SwiftailControl/Client/ControlClient+SetDNS.swift`, `Sources/SwiftailControl/Tailcfg/SetDNSRequest.swift`, `Sources/Swiftail/TailnetNode+Certificates.swift`, `Tests/SwiftailControlTests/SetDNS*` | **병렬** |
-| M7-3 | 인코딩과 서명: base64url, PEM(입력 전체 검사), DER 쓰기(`PrintableString` 포함), JWK·지문, JWS, CSR(시험 4~7) | `Sources/SwiftailCertificates/Encoding/*`, `Sources/SwiftailCertificates/JOSE/*`, `Sources/SwiftailCertificates/CSR/*`, 같은 이름의 시험 폴더 | **병렬** |
-| M7-4 | ACME 메시지와 주문 절차의 값 타입(동작 C4~C7·C12, X1·X2·X4·X5: authorization 여럿의 상태별 처리, 주문·finalize의 다섯 상태, 문제 문서, `Retry-After`), 전송 프로토콜과 `URLSession` 구현 | `Sources/SwiftailCertificates/ACME/*`, `Tests/SwiftailCertificatesTests/ACME/*`(기본 길) | M7-3의 선언이 선 뒤. 가장 크다 |
-| M7-5 | 저장과 검증(동작 S, X3: 디렉터리 권한 검사, 0600, 키 짝, 시스템 루트만, `chain`의 자기 서명 떼기), 갱신 판정(동작 R: 사용자가 고칠 실패의 갈래, `Retry-After`의 보존과 7일) | `Sources/SwiftailCertificates/Store/*`, `Sources/SwiftailCertificates/Renewal/*`, 같은 이름의 시험 폴더 | **병렬**(M7-3의 PEM만 쓴다) |
-| M7-6 | `CertificateManager`와 공개 타입(동작 C1~C3·C8~C11, K. 계정 키의 한 흐름과 `accountKeyUnreadable`, `retryNow()`가 `Retry-After` 전에 요청하지 않음) | `Sources/SwiftailCertificates/CertificateManager.swift`, `TailnetCertificate.swift`, `CertificateStatus.swift`, `Tests/SwiftailCertificatesTests/Manager*` | M7-2·4·5 뒤 |
-| M7-7 | 독립 시험: 가짜 ACME 서버(RFC 8555의 상태 전이를 따르는 메모리 서버)와 시험 8·9의 사례. 계약과 노트만 보고 쓴다 | `Tests/SwiftailCertificatesTests/Support/*`, `Tests/SwiftailCertificatesTests/Scenarios/*` | M7-4를 쓴 세션과 **다른 세션**. 하네스는 병렬 |
-| M7-8 | Go 기준값 도구와 자료, 대조 시험 | `Tools/interop/cmd/acmefixtures/`, `Tests/SwiftailCertificatesTests/Fixtures/*`, `Tests/SwiftailCertificatesTests/GoComparisonTests.swift`, `Tools/interop/README.md`의 새 절 | 도구는 **병렬**. 대조 시험은 M7-3 뒤 다른 세션 |
-| M7-9 | 루프백 다리(동작 B)와 `NetworkSocket` 보탬 | `Sources/SwiftailLoopback/*`, `Sources/SwiftailIO/NetworkSocket+Loopback.swift`, `Tests/SwiftailLoopbackTests/*` | M7-1 뒤(신원). 소켓 보탬은 병렬 |
-| M7-10 | 관문 (가): `tailnet` 도구의 `DNSConfig`(cert 도메인·MagicDNS), `acmeStart`·`setDNSLog`·`setDNSFault`·`setCertDomains`·`peerHTTP`·`peerWhoIs`·`goState`, 시험용 최소 HTTP/1.1 서버, `HostTests.swift` | `Tools/interop/cmd/tailnet/*`, `Tools/interop/go.mod`·`go.sum`, `Tools/interop/README.md`의 `tailnet` 절, `Tests/SwiftailInteropTests/HostTests.swift`, `Tests/SwiftailInteropTests/Support/MinimalHTTPServer.swift` | 도구는 **병렬**. 시험은 M7-6·9 뒤 |
-| M7-11 | Go 상태 가져오기(동작 G: 프로필 하나의 범위, 거절 규칙과 `unsupportedState`, 제어 서버 비교). **U1이 이관일 때만 연다** | `Sources/SwiftailControl/Client/GoStateFile.swift`, `Sources/Swiftail/GoStateImport.swift`, `Tests/SwiftailControlTests/GoStateFile*`, `Tests/SwiftailTests/GoStateImport*` | 병렬 |
-| M7-12 | 관문 (나)와 첫 사용처 저장소의 교체 | 첫 사용처 세션과 함께. 별도 승인 | 다른 세션의 검토와 관문 (가) 뒤 |
+| M7-0 | Lead session: finalize this contract (H, answers to F, U1), verify notes (another session), add four targets to `Package.swift`, stub the `package` declarations above, update plan | `docs/contracts/SwiftailHost.md`, `docs/plan.md`, `docs/protocol-notes/`, `Package.swift` | First |
+| M7-1 | `whoIs` and `PeerIdentity` (behavior W), address table, Go rules for `computedName` (W4) | `Sources/Swiftail/PeerIdentity.swift`, `Sources/Swiftail/TailnetNode+WhoIs.swift`, `Tests/SwiftailTests/WhoIs*` | **Parallel** |
+| M7-2 | Control `set-dns` (behavior D) and node `package` interface (include MagicDNS enablement in `CertificateFacts`. Behavior C1 ②) | `Sources/SwiftailControl/Client/ControlClient+SetDNS.swift`, `Sources/SwiftailControl/Tailcfg/SetDNSRequest.swift`, `Sources/Swiftail/TailnetNode+Certificates.swift`, `Tests/SwiftailControlTests/SetDNS*` | **Parallel** |
+| M7-3 | Encoding and signing: base64url, PEM (check entire input), DER writing (including `PrintableString`), JWK and thumbprint, JWS, CSR (tests 4–7) | `Sources/SwiftailCertificates/Encoding/*`, `Sources/SwiftailCertificates/JOSE/*`, `Sources/SwiftailCertificates/CSR/*`, test folders with the same names | **Parallel** |
+| M7-4 | ACME messages and order procedure value types (behaviors C4–C7 and C12, X1, X2, X4, and X5: handling multiple authorizations by status, the five order and finalize states, problem documents, `Retry-After`), transport protocol and `URLSession` implementation | `Sources/SwiftailCertificates/ACME/*`, `Tests/SwiftailCertificatesTests/ACME/*` (basic path) | After M7-3 declarations are in place. Largest unit |
+| M7-5 | Storage and verification (behaviors S and X3: directory permissions check, 0600, key match, system roots only, remove self-signed certificates from `chain`), renewal decision (behavior R: branch for failures the user must fix, preserve `Retry-After` and 7 days) | `Sources/SwiftailCertificates/Store/*`, `Sources/SwiftailCertificates/Renewal/*`, test folders with the same names | **Parallel** (uses only M7-3's PEM) |
+| M7-6 | `CertificateManager` and public types (behaviors C1–C3, C8–C11, K. Single flow for the account key and `accountKeyUnreadable`, `retryNow()` sends no request before `Retry-After`) | `Sources/SwiftailCertificates/CertificateManager.swift`, `TailnetCertificate.swift`, `CertificateStatus.swift`, `Tests/SwiftailCertificatesTests/Manager*` | After M7-2, 4, and 5 |
+| M7-7 | Independent tests: fake ACME server (in-memory server that follows RFC 8555 state transitions) and scenarios from tests 8 and 9. Write from the contract and notes alone | `Tests/SwiftailCertificatesTests/Support/*`, `Tests/SwiftailCertificatesTests/Scenarios/*` | **Different session** from the one that wrote M7-4. Harness in parallel |
+| M7-8 | Go reference value tool and fixtures, comparison tests | `Tools/interop/cmd/acmefixtures/`, `Tests/SwiftailCertificatesTests/Fixtures/*`, `Tests/SwiftailCertificatesTests/GoComparisonTests.swift`, new section in `Tools/interop/README.md` | Tool in **parallel**. Comparison tests by another session after M7-3 |
+| M7-9 | Loopback bridge (behavior B) and additions to `NetworkSocket` | `Sources/SwiftailLoopback/*`, `Sources/SwiftailIO/NetworkSocket+Loopback.swift`, `Tests/SwiftailLoopbackTests/*` | After M7-1 (identity). Socket additions in parallel |
+| M7-10 | Gate (a): `tailnet` tool `DNSConfig` (cert domains and MagicDNS), `acmeStart`, `setDNSLog`, `setDNSFault`, `setCertDomains`, `peerHTTP`, `peerWhoIs`, `goState`, minimal HTTP/1.1 test server, `HostTests.swift` | `Tools/interop/cmd/tailnet/*`, `Tools/interop/go.mod` and `go.sum`, `tailnet` section in `Tools/interop/README.md`, `Tests/SwiftailInteropTests/HostTests.swift`, `Tests/SwiftailInteropTests/Support/MinimalHTTPServer.swift` | Tool in **parallel**. Tests after M7-6 and 9 |
+| M7-11 | Go state import (behavior G: one-profile scope, rejection rules and `unsupportedState`, control server comparison). **Start only if U1 is migration** | `Sources/SwiftailControl/Client/GoStateFile.swift`, `Sources/Swiftail/GoStateImport.swift`, `Tests/SwiftailControlTests/GoStateFile*`, `Tests/SwiftailTests/GoStateImport*` | Parallel |
+| M7-12 | Gate (b) and replacement in the first adopter's repository | With the first adopter session. Separate approval | After another session's review and gate (a) |
 
-순서: M7-0 → (M7-1, 2, 3, 5, 7의 하네스, 8의 도구, 9의 소켓, 10의 도구, 11) 병렬 → M7-4 → M7-6, M7-9 → M7-7·8의 시험 → M7-10의 시험 → 다른 세션의 검토 → 총괄이 관문 (가)를 다시 돌림 → 관문 (나).
+Order: M7-0 → (M7-1, 2, 3, 5, harness for 7, tool for 8, socket for 9, tool for 10, 11) in parallel → M7-4 → M7-6, M7-9 → tests for M7-7 and 8 → tests for M7-10 → review by another session → lead session reruns gate (a) → gate (b).
 
-### 예상 규모
+### Estimated Size
 
-| 덩어리 | 라이브러리(줄) | 시험(줄) |
+| Component | Library (lines) | Tests (lines) |
 | --- | --- | --- |
 | `whoIs` | 200 | 350 |
-| `set-dns`와 접점 | 200 | 250 |
-| 인코딩·JOSE·CSR | 450 | 600 |
-| ACME 절차와 전송 | 1,000 | 1,900(가짜 서버 포함) |
-| 저장·검증·갱신 판정 | 450 | 700 |
+| `set-dns` and interfaces | 200 | 250 |
+| Encoding, JOSE, CSR | 450 | 600 |
+| ACME procedure and transport | 1,000 | 1,900 (including fake server) |
+| Storage, verification, renewal decision | 450 | 700 |
 | `CertificateManager` | 350 | 450 |
-| 루프백 다리 | 300 | 500 |
-| Go 상태 가져오기 | 250 | 450 |
-| Go 도구(`acmefixtures`, `tailnet` 보탬) | — | Go 800 |
-| 관문 시험과 최소 HTTP 서버 | — | 700 |
+| Loopback bridge | 300 | 500 |
+| Go state import | 250 | 450 |
+| Go tools (`acmefixtures`, `tailnet` additions) | — | Go 800 |
+| Gate tests and minimal HTTP server | — | 700 |
 
-라이브러리 약 3,200줄, Swift 시험 약 5,900줄이다(노트 검증 반영으로 ACME 절차의 갈래, 저장의 권한 검사, Go 상태의 거절 규칙, `computedName`이 늘었다). M6(TCP 스택)보다 작고, 직접 쓰는 형식(DER 쓰기, JWS)은 좁다. 어려움은 코드의 양이 아니라 로컬에서 확인할 수 없는 부분에 있다.
+About 3,200 library lines and 5,900 Swift test lines (the notes verification added ACME procedure branches, storage permission checks, Go state rejection rules, and `computedName`). Smaller than M6 (TCP stack), with a narrow scope of handwritten formats (DER writing, JWS). The difficulty lies in the parts that cannot be verified locally, rather than the amount of code.
 
-### 가장 큰 위험
+### Largest Risks
 
-1. **실제 발급은 실제 tailnet에서만 확인된다.** 운영 제어 서버의 `set-dns`가 무엇을 요구하고 언제 답하는지는 클라이언트 소스에 없고(노트 8장), testcontrol의 처리기는 시험용이다. 틀렸을 때 되풀이할 수 있는 횟수도 Let's Encrypt의 제한(같은 이름 7일에 5장, authorization 실패 한 시간에 5번)이 묶는다. 대응: pebble로 ACME 쪽을 먼저 굳히고, 실제 tailnet에서는 스테이징으로 `set-dns`를 확인한 뒤 운영 발급을 한 번만 한다.
-2. **루프백 다리가 신원의 경계를 넘는다.** tailnet의 인증된 연결이 `127.0.0.1`의 익명 연결이 되므로, 표의 불변 조건(동작 B6)이나 서버의 규칙(B7) 가운데 하나가 어긋나면 같은 Mac의 다른 프로세스가 페어링한 기기로 보이거나 정당한 연결이 끊긴다. 서버 쪽 절반은 첫 사용처의 코드다. 대응: 신원을 연결에 고정하고(B2), 관문 9·10과 단위 시험 14로 양쪽을 본다. 검토에서 출발 포트 표가 실제로 뚫려 연결 안의 일회용 토큰으로 바꿨다(M7-9b). 덧붙여 4GiB 전송이 TCP 스택 둘과 복사를 거치는 비용은 재 보기 전에는 모른다.
-3. **Go 상태 이관은 사용자의 실제 노드를 건드리고 되돌리기 어렵다.** 같은 node 키를 두 구현이 쓰는 순간의 서버 동작, `NLKey` 0으로 다시 붙는 영향을 모른다. 대응: 사용자 결정(U1) 전에는 구현하지 않고, 하더라도 읽기 전용·한 번·신원만으로 좁히고, 시험용 노드로 관문 (나) 8을 먼저 본다.
+1. **Real issuance can only be verified on a real tailnet.** The client source does not show what the production control server's `set-dns` requires or when it replies (notes §8), and testcontrol's handler is for testing. Let's Encrypt limits how often failures can be retried (5 certificates for the same name in 7 days, 5 authorization failures in an hour). Mitigation: verify the ACME side with pebble first, then test `set-dns` on a real tailnet with staging and do only one production issuance.
+2. **The loopback bridge crosses an identity boundary.** An authenticated tailnet connection becomes an anonymous `127.0.0.1` connection, so if any table invariant (behavior B6) or server rule (B7) is violated, another process on the Mac can appear to be a paired device or a legitimate connection can be dropped. The first adopter owns the server half. Mitigation: fix identity to the connection (B2), and check both sides with gates 9 and 10 and unit test 14. Review reproduced a bypass of the source port table, so it changed to a single-use token inside the connection (M7-9b). Also, the cost of going through two TCP stacks and copying during a 4GiB transfer is unknown until measured.
+3. **Go state migration affects the owner's real nodes and is hard to roll back.** Server behavior when both implementations use the same node key, and the effect of reconnecting with zero `NLKey`, are unknown. Mitigation: do not implement before owner decision U1. If implemented, limit it to read-only, once, identity only, and run gate (b) 8 first with a test node.
 
-그 밖: App Sandbox 안에서의 동작은 이 저장소에서 돌려 보지 않았고 첫 사용처 세션이 샌드박스 판에서 확인한다(검토 결과 5, 9절). 시험 도구에 MPL-2.0 모듈이 들어온다(H10).
+Other points: This repository has not run it inside App Sandbox. The first adopter session checks it in the sandboxed version (review result 5, §9). The test tool brings in MPL-2.0 modules (H10).
 
-### `shortcut:`으로 남길 것
+### Items to Leave as `shortcut:`
 
-| 남기는 것 | 필요해지는 시점 |
+| Deferred item | When needed |
 | --- | --- |
-| ARI와 `replaces`(H6) | 인증 기관이 갱신 시점을 앞당겨 알릴 때(대량 폐기), ARI 갱신의 제한 면제(노트 4.5의 조건)가 필요할 때. 2/3 규칙은 제한 회피를 보장하지 않는다(동작 R1) |
-| 대체 사슬(`Link: rel="alternate"`) | 기본 사슬이 시스템 루트로 검증되지 않는 기기가 생길 때(노트 6장. Go의 발급 경로도 쓰지 않는다) |
-| TXT 레코드의 사전 조회 | `set-dns`의 빈도가 문제가 될 때 |
-| 계정 URL을 저장하지 않음(시작마다 찾는다) | 요청 하나를 아껴야 할 때 |
-| 옛 이름의 인증서 파일을 지우지 않음 | 이름이 자주 바뀌는 사용처 |
-| nonce 하나만 보관 | 요청을 동시에 보내게 될 때 |
-| 와일드카드, 자기 FQDN 밖의 cert 도메인, TLS-ALPN-01 | Funnel·Serve에 해당하는 기능을 넣을 때 |
-| `whoIs`의 `CapMap` | grant로 앱 권한을 나누는 사용처 |
-| 다리의 덩어리마다의 `[UInt8]` 복사 | 관문의 처리량 기록에서 병목일 때(`SwiftailNetstack.md` 검토 결과 7과 함께) |
-| 다리의 IPv6 루프백(`::1`) | 그런 리스너를 쓰는 사용처 |
-| 만료 임박을 알리는 사건 | 앱이 `status`를 읽지 않게 될 때 |
-| iOS에서의 인증서 파일 보호 등급 | iOS에서 듣는 사용처 |
+| ARI and `replaces` (H6) | When the CA gives an earlier renewal time (mass revocation), or when the ARI renewal exemption is needed (conditions in notes §4.5). The 2/3 rule does not guarantee avoiding limits (behavior R1) |
+| Alternate chain (`Link: rel="alternate"`) | When a device cannot verify the default chain with system roots (notes §6. Go's issuance path does not use this either) |
+| TXT record lookup in advance | When `set-dns` frequency becomes a problem |
+| No persistent account URL (look up at each start) | When one request needs to be saved |
+| No deletion of certificate files for old names | An adopter with frequent name changes |
+| Store only one nonce | When sending requests concurrently |
+| Wildcards, cert domains other than own FQDN, TLS-ALPN-01 | When adding features corresponding to Funnel and Serve |
+| `whoIs` `CapMap` | An adopter that uses grants to divide app permissions |
+| Per-chunk `[UInt8]` copy in the bridge | When gate throughput records show a bottleneck (with `SwiftailNetstack.md` review result 7) |
+| IPv6 loopback (`::1`) in the bridge | An adopter using such a listener |
+| Event announcing imminent expiration | When the app stops reading `status` |
+| Certificate file protection class on iOS | An adopter listening on iOS |
 
-## 9. 확인하지 못한 것
+## 9. Unverified
 
-- **App Sandbox 안의 실행**: `SecIdentityCreate`·`SecKeyCreateWithData`, 루프백의 `NWListener`와 `NWConnection`, `URLSession`이 네트워크 서버·클라이언트 권한만으로 도는지. 작성 세션이 적은 Apple 실험(CSR 검증, `NWListener`의 TLS·ALPN 협상, 키체인에 쓰지 않음)은 기록이 없어 확인되지 않았고(노트 8장, 9장 V173·V179·V188·V189·V191), 검증 세션이 다시 돌린 것은 노트 4.6의 키·서명·PEM 형식 검사뿐이다(샌드박스 밖). 이것을 구현의 근거로 쓰지 않는다: **첫 사용처 세션이 샌드박스 판에서 확인한다**(첫 사용처 검토 결과 5). 2026-11-15에 확인됐다(동작 B9의 "그 뒤 확인됨"). 첫 사용처의 커밋된 Mac 앱은 권한 파일이 비어 있다(F7). 동작 B9에 적은 권한 키의 이름도 Apple 문서와 대조하지 않았다.
-- **동작 S6의 자기 서명 판별**: 주체와 발급자를 견줄 Security API를 SDK 선언과 대조하지 않았다(M7-5가 먼저 확인한다).
-- **H4의 `NWConnection` 실험**: 다리가 읽은 자기 포트와 리스너 쪽 framer의 `remote` 포트가 같은 것은 다리의 시험이 확인한다(열쇠 `(출발 포트, 리스너 포트)`가 맞지 않으면 허가되지 않는다. M7-9b).
-- **운영 제어 서버의 `set-dns`**, 태그·공유 노드의 프로필, authorization 재사용(Go 흐름의 결과), `ts.net`의 등록 도메인 경계(공개 PSL로는 `tail0001.ts.net`. 운영 CA의 배포본·예외는 모른다), `CertDomains`가 있으면 MagicDNS가 늘 켜져 있는지, `NLKey` 0으로 다시 붙는 노드, 같은 node 키의 두 세션, 키 교체 뒤 옛 키의 서버 처리: 노트 8장.
-- **`NWConnection`의 반닫힘**: 내용 없이 마지막 메시지로 보내면 TCP FIN이 나가는지, TLS를 끝내는 `NWListener` 쪽에서 상대의 FIN이 어떻게 보이는지. M7-9가 먼저 손으로 확인한다. HTTP/1.1은 요청·응답의 경계를 길이로 알므로 반닫힘에 기대지 않는다.
-- **`NWProtocolFramer`를 TLS 아래에 두기**(H3의 (다)): 샌드박스 밖에서 확인했다(동작 B "실험으로 확인한 것", 관문 (가) 8~10). App Sandbox 안에서는 돌려 보지 않았다(첫 사용처 세션의 몫).
-- **중간 인증서를 싣는 길**(`sec_identity_create_with_certificates`)과 `SecTrust`로 하는 검증: 공개 API라는 것만 확인했다.
-- **pebble·challtestsrv**: 모듈(pebble `go 1.25.0`, challtestsrv `go 1.24`, 둘 다 MPL-2.0)을 받아 패키지와 함수 서명을 읽었다(노트 8장). `Tools/interop`에 넣어 빌드하지 않았고, `testcontrol`과 한 프로세스에서 도는지, `tailscale.com`의 고정 버전과 의존이 충돌하지 않는지 모른다.
-- **다리의 처리량**과 큰 전송의 CPU.
-- **Let's Encrypt가 지금 주는 인증서 수명**과 발급에 걸리는 시간.
-- 첫 사용처의 Swift 쪽 호출 코드(`RDCoreBridge.swift`를 부르는 곳)는 함수 이름의 사용만 세었다. 호스트 앱이 상태와 사건을 어떻게 쓰는지는 Go 쪽 문서(`docs/protocol.md` 9·10절, `docs/protocol-addenda.md` A.5)에서 읽었다.
+- **Operation inside App Sandbox**: Whether `SecIdentityCreate`, `SecKeyCreateWithData`, loopback `NWListener` and `NWConnection`, and `URLSession` work with only the network server and client entitlements. The Apple experiments reported by the authoring session (CSR verification, `NWListener` TLS and ALPN negotiation, no Keychain writes) are unverified because there is no record (notes §8, §9 V173, V179, V188, V189, and V191). The verification session reran only the key, signature, and PEM format checks in notes §4.6 (outside the sandbox). Do not use this as the basis for implementation. **The first adopter session verifies it in the sandboxed version** (first adopter review result 5). Verified on 2026-11-15 ("Subsequently verified" in behavior B9). The first adopter's committed Mac app has an empty entitlements file (F7). The entitlement key names in behavior B9 were also not checked against Apple documentation.
+- **Self-signature detection in behavior S6**: The Security API for comparing subject and issuer was not checked against SDK declarations (M7-5 checks first).
+- **H4's `NWConnection` experiment**: Bridge tests verify that the local port read by the bridge equals the listener-side framer `remote` port (the grant is refused if the `(source port, listener port)` key does not match. M7-9b).
+- **Production control server `set-dns`**, tagged and shared node profiles, authorization reuse (result of Go's flow), the registered-domain boundary for `ts.net` (public PSL says `tail0001.ts.net`. Production CA deployment and exceptions unknown), whether MagicDNS is always enabled when `CertDomains` exists, node reconnecting with zero `NLKey`, two sessions with the same node key, and server handling of the old key after rollover: notes §8.
+- **`NWConnection` half-close**: Whether sending an empty final message emits TCP FIN, and how a peer FIN appears at an `NWListener` that terminates TLS. M7-9 checks manually first. HTTP/1.1 knows request and response boundaries from lengths, so it does not rely on half-close.
+- **Putting `NWProtocolFramer` below TLS** (H3 (c)): Verified outside the sandbox (behavior B, "Experimentally Verified," gate (a) 8–10). Not run inside App Sandbox (first adopter session's responsibility).
+- **Passing intermediates** (`sec_identity_create_with_certificates`) and verification with `SecTrust`: Verified only that they are public APIs.
+- **pebble and challtestsrv**: Downloaded modules (pebble `go 1.25.0`, challtestsrv `go 1.24`, both MPL-2.0) and read packages and function signatures (notes §8). Unverified whether they build in `Tools/interop`, run in the same process as `testcontrol`, or conflict with the pinned `tailscale.com` version's dependencies.
+- **Bridge throughput** and CPU use in large transfers.
+- **Current lifetime of certificates from Let's Encrypt** and issuance duration.
+- For first adopter Swift call sites (callers of `RDCoreBridge.swift`), only uses of function names were counted. The host app's use of state and events was read from the Go-side docs (`docs/protocol.md` §§9 and 10, `docs/protocol-addenda.md` A.5).
 
-## 노트 검증 반영 (2026-11-15)
+## Changes from Notes Verification (2026-11-15)
 
-노트 10장의 대조 표와 9장에서 "틀림"으로 판정된 주장을 반영했다. 총괄 확정과 첫 사용처 검토 결과의 결정은 바꾸지 않았다. 새로 생긴 선택은 H16~H23이다.
+Incorporated the comparison table in notes §10 and claims marked "incorrect" in §9. The lead session's decisions and first adopter review decisions remain as recorded. New choices are H16–H23.
 
-| 노트 10장의 행 | 고친 곳 |
+| Row in notes §10 | Change |
 | --- | --- |
-| W4, `computedName` 주석 | 동작 W4를 Go 규칙(레이블 경계의 접미사, 공유 노드의 FQDN, 끝 점, 호스트 이름 정리, node 키)으로 다시 적고 W3의 빈 `StableID` 거절이 첫 사용처의 정책임을 적었다. `PeerIdentity.computedName` 주석, 단위 시험 1 |
-| D1~D3 | D1에 "같은 Noise 클라이언트"와 "같은 HTTP/2 연결"을 갈랐다. D2·D3을 "Swiftail의 선택"으로 적고 Go의 동작(즉시 실패, 1MiB, `null` 허용, 200 code point)을 나란히 적었다. 단위 시험 2 |
-| C2 | 경로 검사와 DNS 이름 검사를 갈랐다. 레이블의 처음·끝 영숫자, 1~63자, 253자, `_acme-challenge.`를 붙인 이름의 같은 한도, `PrintableString`과의 관계, 어긋날 때의 실패 종류(H23). 단위 시험 11 |
-| C4, S2, G6 | C4: P-256만, 파일이 없을 때만 새 키, 읽지 못하면 `accountKeyUnreadable`(새 `CertificateError` case, H16), actor 안의 한 흐름. S2·S3: PKCS#8·SEC1 읽기가 노트 4.6에서 확인됨. G6: RSA 계정 키를 호환한다고 보장하지 않음 |
-| C5 | authorization 개수를 강제하지 않고 모두 상태별로 처리, `identifier.type`·값·`wildcard` 확인, 주문의 `ready`·`valid`·`processing` 분기, 응답 `identifiers` 확인. 한도 표에 authorization 8개. 단위 시험 8 |
-| C7·R4·X2·X5·한도 표 | `Retry-After`를 줄이지 않는다. 그 시각 전에는 그 ACME 서버에 요청하지 않고, 5분 기한을 넘으면 시도를 끝내고 `nextAttempt`로 보존, 7일로 묶음(위쪽 끝만), `retryNow()`도 그 전에는 요청하지 않음(X5, C10, R3·R4, `status`·`retryNow()` 주석, H21). 1~30초·24시간의 묶음을 지웠다 |
-| finalize 상태와 `validationFailed` | C7을 기다리기·finalize·내려받기로 다시 적고 다섯 상태를 모두 갈랐다. CSR 전의 `valid`는 새 주문으로(H17). `CertificateFailure`를 `validationFailed`(authorization `invalid`)와 새 `orderFailed`로 갈랐다(H19). 규격 위반에 새 `unexpectedResponse`(H18) |
-| 문제 문서, `CertificateFailure.acme` | `acme(status:type:)`, `type` 전체 문자열·빈 문자열·256바이트, `detail`을 싣지 않음, ACME URN일 때만 따로 다루는 종류(새 동작 C12). 단위 시험 8 |
-| C8·S3 | 운영은 시스템 루트만, 시험은 명시적 앵커, Go의 내장 루트 fallback과 비운영 예외를 따르지 않음을 "Go와 다른 선택"으로 적었다(S3 ⑤, X3, C8). 저장 전 검증이 Go보다 강한 경계임을 적었다 |
-| S1~S3, `chain` 주석 | S1: 새 `certs/` 0700, 기존 디렉터리 권한은 고치지 않고 그룹·기타 쓰기면 실패(H20). S2: 새 파일 모두 0600, 두 파일이 한 트랜잭션이 아님과 S3 ④의 짝 확인. 새 동작 S6과 `chain` 주석: 루트가 올 수 있고 검증 뒤 자기 서명 인증서를 뗌. X3 ①: 입력 전체 검사 |
-| R1·R4·H6·`shortcut:` | "2/3면 제한에 닿지 않는다"를 지우고 노트 4.5의 제한과 ARI 면제 조건을 가리켰다(R1, H6의 까닭, `shortcut:` 표). R4에 사용자가 고칠 실패(시간으로 다시 시도하지 않음, `nextAttempt` nil)와 그 밖의 실패를 갈랐다. 12분은 회복률이지 최소 간격이 아님, 연속 실패 제한. C1에 `magicDNSDisabled` 조건 |
-| G2~G4 | G2: 프로필 하나의 범위, 표준 base64, `_current-profile`의 키 전체, `_profiles`, 거절 규칙(0인 machine 키, 가리키는 키 없음, 불일치, 프로필 여럿, legacy, `OldPrivateNodeKey`)을 `malformed`·새 `unsupportedState`로(H22). G4: `OldPrivateNodeKey` 생략과 Go의 차이 |
-| G3 | 기본 서버의 동의어(빈 값, `https://controlplane.tailscale.com`, `https://login.tailscale.com`), 사용자 지정 서버는 경로가 비었거나 `/`이고 query·fragment·userinfo가 없을 때만 같음 |
-| G 공개 API, G4·G7·관문 (가) 11 | `importIdentity` 주석과 G7에서 "같은 노드로 뜬다"를 "서버가 같은 노드로 받아들이면"으로 낮추고, `NLKey` 0·중복 세션·옛 키의 결과가 관문 전에는 확인되지 않았다고 적었다. 관문 (가) 11·(나) 8의 기준 |
-| 시험 절 | 단위 시험 5~7과 Go 기준값 대조에서 바이트로 견주는 것과 의미로 견주는 것을 갈랐다(CN `PrintableString`과 CSR의 네 조건, JWS 직렬화). 관문 (가)의 도구에 `DNSConfig`를 더했다. 6절·B9·9절·관문 (나) 7에서 확인되지 않은 Apple 실험을 근거로 쓰지 않고 첫 사용처 검토 결과 5를 가리켰다 |
+| W4, `computedName` comment | Rewrote behavior W4 to match Go (suffix at label boundary, FQDN for shared nodes, trailing dot, hostname sanitization, node key) and recorded W3's empty `StableID` rejection as first adopter policy. `PeerIdentity.computedName` comment, unit test 1 |
+| D1–D3 | D1 distinguishes "same Noise client" and "same HTTP/2 connection." Marked D2 and D3 "Swiftail's choice" and described Go's behavior alongside them (immediate failure, 1MiB, accepts `null`, 200 code points). Unit test 2 |
+| C2 | Distinguished path checks and DNS name checks. Alphanumeric first and last characters in labels, 1–63 characters, 253 characters, same limit after adding `_acme-challenge.`, relationship to `PrintableString`, failure type on mismatch (H23). Unit test 11 |
+| C4, S2, G6 | C4: P-256 only, new key only if file absent, `accountKeyUnreadable` if unreadable (new `CertificateError` case, H16), one flow in the actor. S2 and S3: PKCS#8 and SEC1 reads verified in notes §4.6. G6: no guarantee of RSA account key compatibility |
+| C5 | Do not require a specific authorization count and handle all by status, check `identifier.type`, value, and `wildcard`, branch on order `ready`, `valid`, and `processing`, check response `identifiers`. Limit of 8 authorizations in the limits table. Unit test 8 |
+| C7, R4, X2, X5, limits table | Do not shorten `Retry-After`. Send no requests to that ACME server before that time. If it exceeds the 5-minute deadline, end the attempt and preserve it as `nextAttempt`, capped at 7 days (upper end only). `retryNow()` also sends no requests before then (X5, C10, R3 and R4, `status` and `retryNow()` comments, H21). Removed the 1–30-second and 24-hour clamps |
+| Finalize statuses and `validationFailed` | Rewrote C7 as waiting, finalize, and download, with branches for all five statuses. `valid` before CSR starts a new order (H17). Split `CertificateFailure` into `validationFailed` (authorization `invalid`) and new `orderFailed` (H19). New `unexpectedResponse` for specification violations (H18) |
+| Problem document, `CertificateFailure.acme` | `acme(status:type:)`, full `type` string, empty string, 256 bytes, omit `detail`, special cases only for ACME URNs (new behavior C12). Unit test 8 |
+| C8, S3 | System roots only in production, explicit anchors in tests, no built-in root fallback or nonproduction exception as in Go, documented as a choice that differs from Go (S3 ⑤, X3, C8). Documented that verification before storage is a stronger boundary than Go's |
+| S1–S3, `chain` comment | S1: new `certs/` 0700, preserve existing directory permissions, and fail on group or other writes (H20). S2: all new files 0600, two files are not one transaction, and matching in S3 ④. New behavior S6 and `chain` comment: root may arrive and self-signed certificates are removed after verification. X3 ①: check entire input |
+| R1, R4, H6, `shortcut:` | Removed "2/3 stays below limits" and cited the limits and ARI exemption conditions in notes §4.5 (R1, rationale for H6, `shortcut:` table). R4 distinguishes failures the user must fix (no time-based retry, nil `nextAttempt`) and other failures. 12 minutes is a refill rate, not a minimum interval. Consecutive failure limit. Added `magicDNSDisabled` condition to C1 |
+| G2–G4 | G2: one-profile scope, standard base64, whole key in `_current-profile`, `_profiles`, classify rejections (zero machine key, missing referenced key, mismatch, multiple profiles, legacy, `OldPrivateNodeKey`) as `malformed` or new `unsupportedState` (H22). G4: difference from Go when omitting `OldPrivateNodeKey` |
+| G3 | Default server synonyms (empty value, `https://controlplane.tailscale.com`, `https://login.tailscale.com`), custom servers match only when the path is empty or `/` and there is no query, fragment, or userinfo |
+| G public API, G4, G7, gate (a) 11 | Qualified "starts as the same node" to "if the server accepts it as the same node" in the `importIdentity` comment and G7, and stated that results for zero `NLKey`, duplicate sessions, and old keys are unverified before the gate. Criteria for gate (a) 11 and (b) 8 |
+| Test section | Distinguished byte and semantic comparisons in unit tests 5–7 and Go reference comparison (CN `PrintableString` and the four CSR conditions, JWS serialization). Added `DNSConfig` to the gate (a) tool. In §6, B9, §9, and gate (b) 7, avoided relying on unverified Apple experiments and pointed to first adopter review result 5 |
 
-노트 9장의 "틀림" 18개가 이 계약에 남았던 곳:
+Where the 18 claims marked "incorrect" in notes §9 remained in this contract:
 
-- V056·V178·V224(CSR의 CN 태그, 바이트 동일의 조건): 단위 시험 7, Go 기준값 대조, 동작 C7.
-- V110(`ready` 뒤에만 새 키): 동작 C7에 Go의 실제 동작과 Swiftail의 차이를 적었다.
-- V142(문제 문서와 `type`): 동작 C12, `CertificateFailure.acme`.
-- V162·V166·V168(속도 제한 회피의 보장): 동작 R1, H6의 까닭, `shortcut:` 표.
-- V164(12분은 최소 간격): 동작 R4.
-- V199(모든 키가 `privkey:`): 동작 G2.
-- V201(node 키 0은 로그인한 적 없음): 동작 G3, `notLoggedIn` 주석.
-- V202(`OldPrivateNodeKey`는 옮길 필요 없음): 동작 G2·G4.
-- V213(인증서 한 장마다 1MiB): 동작 X2에 Go의 실제 한도를 적었다.
-- V222(JWS 바이트 동일): 단위 시험 6, Go 기준값 대조.
-- V242(두 모듈 모두 go1.25): 9절.
-- V147(지터와 10초 상한), V151(갱신 시각 캐시), V152(갱신마다 `replaces`): 이 계약에 그 주장이 없었다(Go의 HTTP 재시도와 ARI를 옮기지 않는다).
+- V056, V178, and V224 (CSR CN tag, conditions for byte equality): unit test 7, Go reference comparison, behavior C7.
+- V110 (new key only after `ready`): documented Go's actual behavior and Swiftail's difference in behavior C7.
+- V142 (problem document and `type`): behavior C12, `CertificateFailure.acme`.
+- V162, V166, and V168 (guarantee of avoiding rate limits): behavior R1, rationale for H6, `shortcut:` table.
+- V164 (12 minutes is a minimum interval): behavior R4.
+- V199 (all keys use `privkey:`): behavior G2.
+- V201 (zero node key means never logged in): behavior G3, `notLoggedIn` comment.
+- V202 (no need to migrate `OldPrivateNodeKey`): behaviors G2 and G4.
+- V213 (1MiB per certificate): documented Go's actual limit in behavior X2.
+- V222 (JWS byte equality): unit test 6, Go reference comparison.
+- V242 (both modules use go1.25): §9.
+- V147 (jitter and 10-second cap), V151 (renewal time cache), V152 (`replaces` with every renewal): the contract did not make those claims (it does not port Go's HTTP retries or ARI).
 
-그 밖에 머리말의 "노트는 아직 검증 전"과 "저장소 밖에서 돌린 작은 실험"을 고쳤고, 4절 대응표에 `magicDNSDisabled`, 8절의 `package` 선언 주석에 MagicDNS, 구현 단위 표와 예상 규모를 맞췄다.
+Also corrected "notes not yet verified" and "small experiments run outside the repository" in the introduction, added `magicDNSDisabled` to the §4 mapping and MagicDNS to the §8 `package` declaration comment, and aligned the implementation unit table and estimates.
 
-## 로그아웃 (첫 사용처 요청, 2026-11-15)
+## Logout (First Adopter Request, 2026-11-15)
 
-Mac 앱에 tailnet 로그아웃이 생겼다(공유 중지 → 상태 폴더 비우기). 폴더만 지우면 제어 서버에는 옛 노드가 그대로 남는다. Go의 `tailscale logout`은 서버에 node 키를 만료시키라고 알린다. 그 요청을 넣는다(첫 사용처의 요청). **RemoteDebug의 Go 코어에는 이 요청이 없었다**(그 로그아웃은 상태 폴더만 비운다. 2026-11-15 그쪽이 바로잡음). 그러므로 이것은 "Go 코어가 되는 것은 Swiftail도 된다"의 범위가 아니라 그 위의 보탬이다: 같은 tailnet에 다시 로그인할 때 옛 노드가 남아 이름이 겹치는 것을 줄이려는 것이고, 실제로 줄어드는지는 운영 서버에서 봐야 안다.
+The Mac app added tailnet logout (stop sharing → empty the state folder). Deleting the folder alone leaves the old node on the control server. Go's `tailscale logout` tells the server to expire the node key. Add that request (first adopter request). **RemoteDebug's Go core did not make this request** (its logout only empties the state folder. The first adopter corrected this on 2026-11-15). This is therefore an addition beyond "Whatever the Go core can do, Swiftail can do too." It aims to reduce name collisions from old nodes when logging in to the same tailnet again. Whether it actually does requires checking with the production server.
 
-근거: `control/controlclient/direct.go`의 `TryLogout`·`doLogin`(`loginOpt.Logout`), `ipn/ipnlocal`의 로그아웃 경로. 세부(요청의 각 필드, 응답의 처리, 기한)는 구현이 Go 소스로 확인해 "구현하며 정해진 것"에 적는다.
+Basis: `TryLogout` and `doLogin` (`loginOpt.Logout`) in `control/controlclient/direct.go`, and the logout path in `ipn/ipnlocal`. During implementation, confirm details (request fields, response handling, deadline) against the Go source and record them under "Decisions from Implementation."
 
 ### API
 
 ```swift
 extension TailnetNode {
-    /// 제어 서버에 이 노드의 node 키를 만료시키라고 알린다(Go `tailscale logout`의 서버 쪽).
+    /// Tells the control server to expire this node's node key (the server-side part of Go `tailscale logout`).
     public func logOut() async throws(NodeError)
 }
 ```
 
-### 동작 O
+### Behavior O
 
-1. `run()`이 돌지 않을 때만 부른다(시작 전이나 끝난 뒤). 같은 상태 디렉터리를 쓰는 `run()`이 도는 중이면 `stateDirectoryInUse`다.
-2. 저장된 신원에 node 키가 없으면(등록한 적이 없다) 아무것도 보내지 않고 돌아온다.
-3. 요청은 등록과 같은 길로 간다(Noise 위 `/machine/register`). 지금의 node 키를 그대로 쓰고 `Expiry`를 Go와 같은 먼 과거 값으로 둔다. 인증 키와 로그인 URL은 싣지 않는다. 새 node 키를 만들지 않는다.
-4. 응답: `Error`가 있으면 `control(.registrationRejected)`. 그 밖의 응답(`NodeKeyExpired` 포함)은 성공이다. `AuthURL`과 `NodeKeySignature`는 따르지 않는다(Go `TryLogout`이 버린다).
-5. 전체에 기한을 둔다(Go의 값을 확인해 따른다. 없으면 10초). 넘으면 `control(.connection)`. 다시 시도하지 않는다.
-6. **로컬 파일은 건드리지 않는다.** 신원·lock 상태·인증서를 지우는 것은 앱이다. 앱의 순서: `run()`을 취소하고 끝나기를 기다림 → `logOut()` → 상태 폴더 비우기. `logOut()`이 실패해도(망 없음) 앱은 폴더를 지울 수 있다. 그때는 옛 노드가 서버에 남는다.
-7. 비밀: 요청·응답·오류에 키를 로그로 남기지 않는다.
+1. Call only while `run()` is not running (before it starts or after it ends). If a `run()` using the same state directory is running, return `stateDirectoryInUse`.
+2. If the stored identity has no node key (never registered), return without sending anything.
+3. Use the same path as registration (`/machine/register` over Noise). Use the current node key as-is and set `Expiry` to the same far-past value as Go. Include no auth key or login URL. Do not generate a new node key.
+4. Response: If there is `Error`, return `control(.registrationRejected)`. Other responses (including `NodeKeyExpired`) are success. Do not follow `AuthURL` or `NodeKeySignature` (Go's `TryLogout` discards them).
+5. Set an overall deadline (check and follow Go's value, or use 10 seconds if none). On timeout, `control(.connection)`. Do not retry.
+6. **Leave local files untouched.** The app deletes identity, lock state, and certificates. App sequence: cancel `run()` and wait for it to finish → `logOut()` → empty the state folder. If `logOut()` fails (no network), the app can still delete the folder. The old node then remains on the server.
+7. Secrets: Do not log keys from requests, responses, or errors.
 
-### 시험과 관문
+### Tests and Gates
 
-- 단위: 요청의 모양(`Expiry`의 선 위 표기, node 키가 바뀌지 않음, 인증 없음), 신원이 없을 때 보내지 않음, `Error` 응답, 기한.
-- 상호 운용(testcontrol): 등록한 노드가 `logOut()`한 뒤 서버 쪽 그 노드의 키가 만료로 보인다. 같은 상태 폴더로 다시 `run()`하면 무슨 일이 일어나는지 기록한다(Go는 새 로그인을 요구받는다).
-- 운영 서버에서 확인할 것(관문 (나)에 더한다): 로그아웃한 노드가 관리 콘솔에서 어떻게 보이는지, 같은 이름으로 다시 로그인한 새 노드의 이름에 번호가 붙는지. Swiftail의 몫은 Go와 같은 요청을 보내는 데까지다.
+- Unit tests: request format (wire representation of `Expiry`, node key unchanged, no auth), send nothing without an identity, `Error` response, deadline.
+- Interop (testcontrol): After a registered node calls `logOut()`, its key appears expired on the server. Record what happens when calling `run()` again with the same state folder (Go is asked to log in again).
+- Check with the production server (add to gate (b)): how the logged-out node appears in the admin console and whether the new node logging in with the same name gets a numbered suffix. Swiftail is responsible for sending the same request as Go.
 
-### 구현하며 정해진 것 (2026-11-15)
+### Decisions from Implementation (2026-11-15)
 
-근거는 tailscale.com v1.104.7 `control/controlclient/direct.go`(`TryLogout` 505-516행, `doLogin` 634-903행), `control/controlclient/auto.go`(`Logout` 856-882행), `ipn/ipnlocal/local.go`(`Logout` 7253-7305행), `tailcfg/tailcfg.go`(`RegisterRequest.Expiry` 1332-1336행)다. 구현은 `Sources/SwiftailControl/Client/ControlClient+Logout.swift`(`ControlClient.logOut()`, `package`)와 `Sources/Swiftail/TailnetNode+Logout.swift`.
+Sources are tailscale.com v1.104.7 `control/controlclient/direct.go` (`TryLogout` lines 505-516, `doLogin` lines 634-903), `control/controlclient/auto.go` (`Logout` lines 856-882), `ipn/ipnlocal/local.go` (`Logout` lines 7253-7305), and `tailcfg/tailcfg.go` (`RegisterRequest.Expiry` lines 1332-1336). Implemented in `Sources/SwiftailControl/Client/ControlClient+Logout.swift` (`ControlClient.logOut()`, `package`) and `Sources/Swiftail/TailnetNode+Logout.swift`.
 
-**Go 로그아웃 요청의 필드와 Swiftail의 것.**
+**Go and Swiftail logout request fields.**
 
-| 필드 | Go(`doLogin`, `opt.Logout`) | Swiftail |
+| Field | Go (`doLogin`, `opt.Logout`) | Swiftail |
 | --- | --- | --- |
-| `NodeKey` | persist의 지금 node 키(`tryingNewKey = persist.PrivateNodeKey`). 없으면 `no nodekey to log out` 오류 | 신원 파일의 node 키. 없으면 보내지 않고 성공(동작 O2. Go `LocalBackend.Logout`의 `hasNodeKeyLocked`와 같은 결과) |
-| `OldNodeKey` | persist의 `OldPrivateNodeKey`(키를 바꾼 적이 있으면 그 옛 키, 아니면 0) | 늘 0. Swiftail은 옛 node 키를 저장하지 않는다 |
-| `NLKey` | persist의 NL 공개 키(없으면 새로 만든다) | 신원 파일의 NL 공개 키(`NodeIdentityStore.load()`. 옛 파일이면 저장하지 않은 새 키) |
-| `Expiry` | `time.Unix(123, 0)`. Go의 `time.Unix`는 로컬 시간대라 JSON은 `1970-01-01T09:02:03+09:00`처럼 프로세스의 시간대를 따른다 | `1970-01-01T00:02:03Z`(UTC). 같은 시각이다 |
-| `Auth` | 제어 클라이언트가 인증 키를 쥐면 싣는다(감싼 키면 `NodeKeySignature`도). tsnet의 `lc.Logout`은 testcontrol에서 `Auth` 없이 왔다 | 싣지 않는다(동작 O3) |
+| `NodeKey` | Current node key in persist (`tryingNewKey = persist.PrivateNodeKey`). Error `no nodekey to log out` if absent | Node key in identity file. Success without sending if absent (behavior O2. Same result as `hasNodeKeyLocked` in Go `LocalBackend.Logout`) |
+| `OldNodeKey` | `OldPrivateNodeKey` from persist (old key if the key has changed, else zero) | Always zero. Swiftail does not store the old node key |
+| `NLKey` | NL public key in persist (generate if absent) | NL public key in identity file (`NodeIdentityStore.load()`. For an old file, a new unsaved key) |
+| `Expiry` | `time.Unix(123, 0)`. Go's `time.Unix` uses local time, so JSON reflects the process time zone, for example `1970-01-01T09:02:03+09:00` | `1970-01-01T00:02:03Z` (UTC). Same instant |
+| `Auth` | Included if the control client holds an auth key (and `NodeKeySignature` if wrapped). tsnet's `lc.Logout` arrived at testcontrol without `Auth` | Omitted (behavior O3) |
 | `Followup` | `""` | `""` |
-| `Hostinfo` | 지금 Hostinfo(NetInfo 포함) | `Hostinfo.swiftail(…, netInfo: nil)` |
-| `Ephemeral` | 거짓(`Flags`가 0) | 빠짐(거짓) |
-| `NodeKeySignature` | 위의 감싼 키 경우만 | `null` |
-| `Version`, `Timestamp` | `CurrentCapabilityVersion`, 지금 시각(서명용) | 148, 없음(등록과 같다) |
+| `Hostinfo` | Current Hostinfo (including NetInfo) | `Hostinfo.swiftail(…, netInfo: nil)` |
+| `Ephemeral` | False (`Flags` is 0) | Omitted (false) |
+| `NodeKeySignature` | Only for the wrapped key case above | `null` |
+| `Version`, `Timestamp` | `CurrentCapabilityVersion`, current time (for signing) | 148, absent (same as registration) |
 
-testcontrol이 받은 두 요청(`lockRegistrations`)을 견주는 시험이 있다: `expiryUnix` 123, `auth` 거짓, `oldNodeKey` 없음, `nlKey` 있음, 서명 없음이 둘 다 같다.
+A test compares the two requests received by testcontrol (`lockRegistrations`): both have `expiryUnix` 123, `auth` false, no `oldNodeKey`, an `nlKey`, and no signature.
 
-**응답과 기한.** Go `doLogin`은 HTTP 200이 아니면(429·`Retry-After` 503 포함) 오류, 본문 해석 실패도 오류, `Error`가 있으면 오류다. 그 밖(`NodeKeySignature`·`NodeKeyExpired`·`AuthURL`)은 `mustRegen`·`newURL`로 돌아오지만 `TryLogout`이 버리고 오류만 돌려준다. `TryLogout`은 결과와 상관없이 메모리의 persist를 비운다. `LocalBackend.Logout`은 `cc.Logout`이 성공해야 프로필을 지운다. 기한: Go에는 로그아웃만의 기한이 없다. `Auto.Logout`·`LocalBackend.Logout`은 받은 context를 그대로 쓰고, CLI는 `context.Background()`, LocalAPI는 요청의 context다. 그래서 동작 O5의 10초(`ControlClient.Timeouts.logout`)를 둔다. 서버 키 받기·연결·응답을 합한 기한이다.
+**Response and deadline.** Go's `doLogin` returns errors for non-200 HTTP responses (including 429 and 503 with `Retry-After`), body parse failure, and `Error` present. The rest (`NodeKeySignature`, `NodeKeyExpired`, `AuthURL`) are returned as `mustRegen` and `newURL`, but `TryLogout` discards them and returns only the error. `TryLogout` clears persist in memory regardless of result. `LocalBackend.Logout` deletes the profile only if `cc.Logout` succeeds. Deadline: Go has no logout-specific deadline. `Auto.Logout` and `LocalBackend.Logout` use the supplied context as-is, the CLI uses `context.Background()`, and LocalAPI uses the request context. Thus use behavior O5's 10 seconds (`ControlClient.Timeouts.logout`). This deadline covers receiving the server key, connecting, and receiving the response.
 
-Swiftail의 오류: 200이 아니면 `control(.http(status:))`(429·503도 기다리지 않는다), 해석 실패·연결 실패·기한·취소는 `control(.connection)`, `Error`는 `control(.registrationRejected)`(메시지는 등록과 같이 인증 키를 가리고 200자로 자른다), 신원 파일을 읽지 못하면 `control(.storage)`. 다시 시도하지 않는다.
+Swiftail errors: non-200 yields `control(.http(status:))` (no wait for 429 or 503 either), parse failure, connection failure, deadline, and cancellation yield `control(.connection)`, `Error` yields `control(.registrationRejected)` (redact auth keys in the message and truncate at 200 characters as in registration), and an unreadable identity file yields `control(.storage)`. No retries.
 
-**시작 검사.** `logOut()`은 `run()`과 같은 `StateDirectoryClaims`로 상태 디렉터리를 차지했다가 끝나면 푼다. 같은 디렉터리의 `run()`이 도는 중이면 `stateDirectoryInUse`이고, 반대로 `logOut()`이 도는 동안 시작한 `run()`도 `stateDirectoryInUse`로 끝난다. `setDefaultInterface`로 알린 인터페이스가 있으면 그 인터페이스로 연결한다. 로그는 "로그아웃: 서버에 node 키 만료를 알림"과 "로그아웃 실패"뿐이고 키·주소를 남기지 않는다.
+**Start check.** `logOut()` claims the state directory with the same `StateDirectoryClaims` as `run()` and releases it when finished. An active `run()` for the same directory yields `stateDirectoryInUse`, and a `run()` started during `logOut()` also ends with `stateDirectoryInUse`. If an interface was reported via `setDefaultInterface`, connect through it. The only log messages are "Logout: telling the server to expire the node key" and "Logout failed." Do not log keys or addresses.
 
-**testcontrol에서 본 것**(`Tests/SwiftailInteropTests/LogoutTests.swift`, `Tools/interop/cmd/tailnet/logout_test.go`). upstream testcontrol은 `Expiry`를 읽지 않으므로 사본에 보탰다(`Tools/interop/README.md` "로그아웃 관문 명령"): 과거의 `Expiry`면 그 노드의 `KeyExpiry`를 그 값으로 두고 모든 노드에 새 맵을 보낸다. 운영 서버의 처리는 추측이다.
+**Observed in testcontrol** (`Tests/SwiftailInteropTests/LogoutTests.swift`, `Tools/interop/cmd/tailnet/logout_test.go`). Upstream testcontrol ignores `Expiry`, so the copy adds handling (`Tools/interop/README.md`, "Logout gate commands"): For an `Expiry` in the past, set the node's `KeyExpiry` to that value and send a new map to every node. Production server handling is conjecture.
 
-- 로그아웃 뒤 서버의 그 노드는 목록에 남고 `KeyExpiry`가 `1970-01-01T00:02:03Z`다. 응답은 `NodeKeyExpired: true`(사본의 원본 검사 결과)이고 둘 다 성공으로 본다.
-- 다른 피어(Go)의 netmap에는 그 노드가 남고 `KeyExpiry`만 바뀐다. Go는 이 바뀜을 델타(`PeerChange.KeyExpiry`)로 받고, 피어의 `Expired` 표시는 전체 netmap을 받을 때만 계산하므로(`ipn/ipnlocal/local.go:1895` `flagExpiredPeers`) 곧바로는 `Expired: false`, `Online: true`로 보인다. Swift 노드가 다른 피어라면 `EnginePeer`가 `keyExpiry`가 지난 피어를 곧바로 WireGuard에서 뺀다(시험하지 않았다).
-- Go 피어(tsnet)의 로그아웃: 끝난 뒤 `BackendState`는 `NeedsLogin`이고 Go는 프로필을 지운다. 같은 상태 디렉터리로 다시 띄우면 인증 키로 새 node 키를 등록해 서버에 새 노드가 생긴다(옛 노드는 만료된 채 남아 3개. testcontrol은 이름에 번호를 붙이지 않는다).
-- Swift 노드를 로컬 파일을 그대로 둔 채 같은 상태 디렉터리로 다시 `run()`하면(앱의 순서를 따르지 않은 경우): 저장된 로그아웃한 키로 등록 → `NodeKeyExpired` → 새 키로 바꿔(`OldNodeKey` = 로그아웃한 키) 등록 → testcontrol이 옛 노드를 복제해 새 키에 주는데 `KeyExpiry`(1970)까지 복사된다 → `.running`이 한 번 나온 뒤 self 노드의 만료를 보고 또 새 키로 등록 → 다시 만료 → `run()`이 `control(.nodeKeyExpired)`로 끝난다. 사건은 `stateChanged(.running)` 하나다. 이 결과는 복제가 만료 시각을 옮기는 testcontrol의 성질에 묶여 있다. 운영 서버라면 만료된 노드의 새 키 등록에 로그인을 요구할 것으로 보지만(Go가 "새 로그인을 요구받는다") 확인하지 않았다. 앱은 `logOut()` 뒤 상태 디렉터리를 비우므로 이 경로를 타지 않는다.
+- After logout, the server retains the node in its listing and its `KeyExpiry` is `1970-01-01T00:02:03Z`. The response is `NodeKeyExpired: true` (the copy's original check), and both implementations treat it as success.
+- The node remains in another peer's (Go) netmap with only `KeyExpiry` changed. Go receives this change as a delta (`PeerChange.KeyExpiry`) and computes the peer's `Expired` flag only when receiving a full netmap (`ipn/ipnlocal/local.go:1895` `flagExpiredPeers`), so it initially appears as `Expired: false`, `Online: true`. If the other peer is a Swift node, `EnginePeer` immediately removes peers whose `keyExpiry` has passed from WireGuard (untested).
+- Go peer (tsnet) logout: After completion `BackendState` is `NeedsLogin` and Go deletes the profile. Restarting with the same state directory registers a new node key with the auth key and creates a new node on the server (the old node remains expired, making 3 nodes. testcontrol does not number names).
+- If the Swift node calls `run()` again with the same state directory and local files intact (without following the app sequence): register with the stored logged-out key → `NodeKeyExpired` → switch to a new key and register (`OldNodeKey` = logged-out key) → testcontrol clones the old node for the new key, copying `KeyExpiry` (1970) too → `.running` appears once, then the node sees its own expiration and registers another new key → expired again → `run()` ends with `control(.nodeKeyExpired)`. The only event is `stateChanged(.running)`. This result depends on testcontrol copying the expiration time when cloning. The production server is expected to require login when registering a new key for an expired node (Go "is asked to log in again"), but that is unverified. The app empties the state directory after `logOut()`, so it does not take this path.
 
-**계약과 다르게 한 것.** 없다. 동작 O4의 "그 밖의 응답은 성공"에서 HTTP 200이 아닌 응답은 Go와 같이 실패(`http(status:)`)로 둔다.
+**Differences from the contract.** None. In behavior O4's "other responses are success," HTTP responses other than 200 remain failures (`http(status:)`), as in Go.
 
-### 로그아웃의 독립 검토 결과 (2026-11-15)
+### Independent Logout Review Results (2026-11-15)
 
-작성한 세션과 다른 세션이 Go 소스(`direct.go:634-790`, `tailcfg.go:1318-1369`)와 대조하고 시험 12개를 더했다(`LogoutReviewTests`, `NodeLogoutReviewTests`. 전부 통과). 치명·높음 없음. 요청은 Go의 로그아웃 요청과 서버 판정에 영향을 줄 만한 차이가 없다고 봤다(운영 서버에서는 확인하지 못함). 고친 것은 문서뿐이다.
+A session other than the author checked against the Go source (`direct.go:634-790`, `tailcfg.go:1318-1369`) and added 12 tests (`LogoutReviewTests`, `NodeLogoutReviewTests`. All passed). No critical or high findings. It found no difference from Go's logout request likely to affect the server's decision (unverified with the production server). Only documentation was fixed.
 
-- **동작 O1은 같은 프로세스 안에서만 참이다(보통)**: 상태 디렉터리의 점유 표는 프로세스 안의 것이다. 다른 프로세스(터널 확장)가 같은 폴더로 `run()`하는 중에 `logOut()`을 부르면 막히지 않고, 도는 노드는 자기 키의 만료를 보고 새 키로 다시 등록한다(재사용 인증 키가 있으면 로그아웃이 되돌려지고 서버에 새 노드가 생긴다). 앱이 그 프로세스를 먼저 멈춘다. 문서 주석에 적었다.
-- 겹친 `logOut()`과 그동안 시작한 `run()`도 `stateDirectoryInUse`다(동작은 맞았고 문서에 없었다).
-- 요청을 보낸 뒤 취소되거나 기한이 지난 `logOut()`은 `control(.connection)`이지만 서버에는 이미 적용됐을 수 있다. 실패가 "옛 노드가 남았다"를 뜻하지는 않는다.
-- NL 키가 없는 옛 신원 파일이면 저장되지 않은 새 `NLKey`가 요청에 실린다(Go도 같다). Swiftail로 등록한 노드는 등록 전에 NL 키를 저장하므로 만나기 어렵다. 운영 서버가 로그아웃 요청의 바뀐 `NLKey`를 어떻게 보는지는 모른다.
-- 로그아웃한 뒤 같은 상태 폴더로 다시 `run()`했을 때 `nodeKeyExpired`로 끝나는 것은 testcontrol 사본의 성질이다(옛 노드를 복제하면서 만료 시각이 따라간다). 운영 서버에서 일어날 법한 흐름(만료 → 새 키 등록 → 로그인 요구 → 새 키 저장)은 가짜 서버 시험으로 통과했다.
-- 근거 소스의 버전: 계약은 v1.104.7, testcontrol 사본과 그 보탬(`logout.go`)은 v1.104.6이다.
+- **Behavior O1 holds only within the same process (normally)**: The state directory claims table is in-process. If another process (the tunnel extension) is running `run()` with the same folder, calling `logOut()` is not blocked, and the running node sees its key expire and registers with a new key (with a reusable auth key this reverses logout and creates a new node on the server). The app stops that process first. Documented in the doc comment.
+- Overlapping `logOut()` calls and a `run()` started during logout also yield `stateDirectoryInUse` (the behavior was correct and undocumented).
+- A `logOut()` canceled or timed out after sending the request yields `control(.connection)`, but the server may already have applied it. Failure does not mean "the old node remains."
+- With an old identity file lacking an NL key, the request carries a new unsaved `NLKey` (same as Go). This is unlikely for a node registered by Swiftail because Swiftail saves the NL key before registration. How the production server regards a changed `NLKey` in a logout request is unknown.
+- `nodeKeyExpired` when running `run()` again with the same state folder after logout is a property of the testcontrol copy (it copies the expiration time when cloning the old node). The likely production flow (expiration → register new key → require login → store new key) passed against a fake server.
+- Reference source versions: the contract uses v1.104.7, and the testcontrol copy and its addition (`logout.go`) use v1.104.6.
 
-확인하지 못한 것: 운영 제어 서버의 처리 전부(응답의 모양, 관리 콘솔 표시, 이름에 번호가 붙는지), 등록 요청에 429·503이 올 때, DNS·TLS 단계에서 멈출 때의 기한, 터널 확장에서의 동작.
+Unverified: all production control server handling (response shape, admin console display, whether names get numbered suffixes), 429 and 503 on registration requests, deadlines when stalled in DNS or TLS, and behavior in the tunnel extension.
 
-### 첫 사용처의 다른 요청 (2026-11-15, 급하지 않음)
+### Other First Adopter Requests (2026-11-15, Not Urgent)
 
-- **안정 ID로 경로 묻기: 넣었다(2026-11-16).** `TailnetNode.path(toPeerWithStableID:)`. 뜻은 `path(toPeerNamed:)`와 같고 찾는 열쇠만 다르다. 페어링 기록에는 피어의 안정 ID와 짧은 이름만 있어서, 첫 사용처가 Go를 뺀 뒤 기기별 경로 표시를 뺐었다. 사건 `peerPathChanged`는 그대로 이름으로 알린다(표시는 상태를 주기로 읽어 한다).
-- **상태 형식의 공개 초기화: 넣었다(2026-11-16).** `NodeStatus`, `PeerIdentity`, `CertificateStatus`. 노드와 관리자는 쓰지 않고, 이 값들을 받는 쪽의 코드를 노드 없이 시험하는 데 쓴다.
-- 피어 열거는 필요 없다고 했다.
+- **Path lookup by stable ID: added (2026-11-16).** `TailnetNode.path(toPeerWithStableID:)`. Same meaning as `path(toPeerNamed:)`, with a different lookup key. Pairing records contain only the peer's stable ID and short name, so the first adopter removed per-device path display after removing Go. `peerPathChanged` events still report by name (the display polls status).
+- **Public initializers for state types: added (2026-11-16).** `NodeStatus`, `PeerIdentity`, `CertificateStatus`. The node and manager do not use them. They allow testing code that receives these values without a node.
+- The first adopter said peer enumeration was unnecessary.
