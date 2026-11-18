@@ -1,30 +1,30 @@
 import CryptoKit
 
-/// 제어 Noise가 쓰는 AEAD: ChaCha20-Poly1305 IETF(CryptoKit), nonce = 0⁴ ‖ **빅엔디언** uint64 카운터.
+/// The control Noise AEAD, ChaCha20-Poly1305 IETF (CryptoKit), with nonce = 0⁴ ‖ **big-endian** uint64 counter.
 ///
-/// Noise 규격과 WireGuard는 카운터를 리틀엔디언으로 쓰지만 Tailscale의 controlbase는 빅엔디언이다.
-/// 둘은 카운터 1부터 달라지므로 핸드셰이크(카운터 0)만으로는 차이가 드러나지 않는다.
-/// 핸드셰이크 안의 AEAD는 카운터 0과 AAD = 그 시점의 hash, 레코드는 방향별 카운터와 빈 AAD를 쓴다.
-/// 암호문 배치는 ciphertext ‖ tag(16)이다.
+/// The Noise specification and WireGuard use little-endian counters. Tailscale's controlbase uses big-endian.
+/// The representations diverge starting at counter 1, so a handshake alone (counter 0) does not reveal the difference.
+/// Handshake AEAD uses counter 0 with AAD = the current hash. Records use per-direction counters and empty AAD.
+/// The ciphertext layout is ciphertext ‖ tag(16).
 ///
-/// `docs/protocol-notes/control-transport.md` 3.4·3.5절, 4.5절 표기
-/// (출처: tailscale.com `control/controlbase/conn.go`, `handshake.go`).
+/// `docs/protocol-notes/control-transport.md` §3.4, §3.5, and §4.5 notation
+/// (origin: tailscale.com `control/controlbase/conn.go`, `handshake.go`).
 enum NoiseAEAD {
     static let tagSize = 16
 
-    /// 암호화하고 인증 태그를 붙인다.
+    /// Encrypts and appends the authentication tag.
     static func seal(_ plaintext: [UInt8], key: SymmetricKey, counter: UInt64, authenticating aad: [UInt8] = []) -> [UInt8] {
         do {
             let box = try ChaChaPoly.seal(plaintext, using: key, nonce: nonce(counter), authenticating: aad)
             return Array(box.ciphertext) + Array(box.tag)
         } catch {
-            // CryptoKit은 키가 32바이트가 아니거나 nonce가 12바이트가 아닐 때만 실패한다.
-            // 키는 HKDF 출력(32바이트)으로만 만들고 nonce는 아래에서 12바이트로 만들므로 도달하지 않는다.
-            preconditionFailure("ChaChaPoly.seal은 고정 길이 키·nonce로 실패하지 않는다: \(type(of: error))")
+            // CryptoKit fails only if the key is not 32 bytes or the nonce is not 12 bytes.
+            // Keys come only from HKDF output (32 bytes) and the nonce below is 12 bytes, so this is unreachable.
+            preconditionFailure("ChaChaPoly.seal cannot fail with a fixed-length key and nonce: \(type(of: error))")
         }
     }
 
-    /// 태그를 검증하고 복호화한다. 태그보다 짧거나 태그가 틀리면 `nil`이며 평문을 한 바이트도 내놓지 않는다.
+    /// Verifies the tag and decrypts. If the input is shorter than the tag or the tag is incorrect, returns `nil` without yielding any plaintext.
     static func open(_ sealed: ArraySlice<UInt8>, key: SymmetricKey, counter: UInt64, authenticating aad: [UInt8] = []) -> [UInt8]? {
         guard sealed.count >= tagSize,
               let box = try? ChaChaPoly.SealedBox(

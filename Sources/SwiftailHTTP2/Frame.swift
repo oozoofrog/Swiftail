@@ -1,22 +1,22 @@
-/// 받은 HTTP/2 프레임.
+/// A received HTTP/2 frame.
 ///
-/// 프레임은 9바이트 머리(길이 24비트, type 8비트, flags 8비트, 예약 1비트와 스트림 식별자 31비트)와
-/// payload로 이루어진다(RFC 9113 §4.1). 상대가 보낸 바이트는 여기서 한 번 해석해 이 타입이 되고,
-/// 이후 단계는 오프셋이나 flags를 다시 다루지 않는다. 패딩과 PRIORITY 필드는 이 단계에서 벗겨 낸다.
+/// A frame consists of a 9-byte header (24-bit length, 8-bit type, 8-bit flags, 1 reserved bit, and a 31-bit stream identifier)
+/// and a payload (RFC 9113 §4.1). The peer's bytes are parsed into this type once, so later stages avoid working with
+/// offsets or flags again. This stage strips the padding and PRIORITY fields.
 ///
-/// 해석은 프레임 한 개로 끝나는 규칙(길이, 스트림 0 여부, 패딩 범위)만 확인한다. 프레임 순서나
-/// 스트림 상태에 걸린 규칙은 연결이 확인한다.
+/// Parsing checks rules local to a single frame (length, whether the stream is 0, and padding bounds). The connection
+/// checks frame ordering and rules that depend on stream state.
 enum Frame: Equatable {
-    /// SETTINGS의 매개변수 하나(§6.5.1).
+    /// One SETTINGS parameter (§6.5.1).
     struct Setting: Equatable {
         var identifier: UInt16
         var value: UInt32
     }
 
-    /// `flowControlledLength`는 패딩을 포함한 payload 길이로, 흐름 제어 창이 줄어드는 양이다(§6.9.1).
+    /// `flowControlledLength` is the payload length including padding, equal to the decrement in the flow control window (§6.9.1).
     case data(HTTP2StreamID, [UInt8], endStream: Bool, flowControlledLength: Int)
     case headers(HTTP2StreamID, blockFragment: [UInt8], endStream: Bool, endHeaders: Bool)
-    /// 길이만 확인하고 버린다.
+    /// Checks only the length, then discards the frame.
     case priority
     case rstStream(HTTP2StreamID, code: UInt32)
     case settings([Setting])
@@ -24,14 +24,14 @@ enum Frame: Equatable {
     case pushPromise
     case ping(ack: Bool, data: [UInt8])
     case goAway(lastStreamID: HTTP2StreamID, code: UInt32)
-    /// 스트림 0이면 연결 창이다. 증가량 0의 처리는 연결이 정한다.
+    /// Stream 0 refers to the connection window. The connection decides how to handle a zero increment.
     case windowUpdate(HTTP2StreamID, increment: UInt32)
     case continuation(HTTP2StreamID, blockFragment: [UInt8], endHeaders: Bool)
-    /// 모르는 type. 규격은 무시하라고 한다(§4.1).
+    /// An unknown type. The specification requires ignoring it (§4.1).
     case unknown(type: UInt8)
 }
 
-/// 프레임 머리(§4.1).
+/// A frame header (§4.1).
 struct FrameHeader: Equatable {
     static let size = 9
 
@@ -40,7 +40,7 @@ struct FrameHeader: Equatable {
     var flags: UInt8
     var streamID: HTTP2StreamID
 
-    /// 머리 9바이트를 해석한다. 바이트가 모자라면 `nil`.
+    /// Parses the 9-byte header. Returns `nil` if there are too few bytes.
     init?(parsing bytes: ArraySlice<UInt8>) {
         var reader = ByteReader(bytes)
         guard let high = reader.uint8(), let low = reader.uint16(), let type = reader.uint8(),
@@ -49,7 +49,7 @@ struct FrameHeader: Equatable {
         payloadLength = Int(high) << 16 | Int(low)
         self.type = type
         self.flags = flags
-        // 최상위 비트는 예약이다. 받는 쪽은 무시한다.
+        // The high bit is reserved. Receivers ignore it.
         self.streamID = HTTP2StreamID(streamID & 0x7fff_ffff)
     }
 
@@ -67,7 +67,7 @@ struct FrameHeader: Equatable {
     }
 }
 
-/// 프레임 type(§6). 모르는 type은 `Frame.unknown`이 된다.
+/// The frame type (§6). An unknown type becomes `Frame.unknown`.
 enum FrameType: UInt8 {
     case data = 0x0
     case headers = 0x1
@@ -81,7 +81,7 @@ enum FrameType: UInt8 {
     case continuation = 0x9
 }
 
-/// 프레임 flags 비트(§6).
+/// The frame flags bits (§6).
 enum FrameFlag {
     static let endStream: UInt8 = 0x1
     static let acknowledgement: UInt8 = 0x1
@@ -91,7 +91,7 @@ enum FrameFlag {
 }
 
 extension Frame {
-    /// 머리와 payload로 프레임을 해석한다. 길이나 패딩이 규격과 맞지 않으면 연결 오류.
+    /// Parses a frame from its header and payload. Invalid length or padding is a connection error.
     init(header: FrameHeader, payload: ArraySlice<UInt8>) throws(HTTP2Error) {
         let stream = header.streamID
         let flags = header.flags
@@ -109,13 +109,13 @@ extension Frame {
             guard stream != .connection else { throw .connection(.protocolError) }
             let hasPriority = flags & FrameFlag.priority != 0
             let content = try Self.removingPadding(from: payload, flags: flags, prefixSize: hasPriority ? 5 : 0)
-            // 우선순위 필드(의존 스트림 4바이트, 가중치 1바이트)는 버린다.
+            // Discard the priority fields (4 bytes of stream dependency and 1 byte of weight).
             let fragment = content.dropFirst(hasPriority ? 5 : 0)
             self = .headers(stream, blockFragment: Array(fragment), endStream: flags & FrameFlag.endStream != 0, endHeaders: flags & FrameFlag.endHeaders != 0)
         case .priority:
             guard stream != .connection else { throw .connection(.protocolError) }
             guard payload.count == 5 else { throw .connection(.frameSizeError) }
-            // shortcut: 우선순위는 따르지 않는다(RFC 9113이 이미 폐기 방향), 우선순위를 요구하는 상대를 만나면 올린다.
+            // shortcut: ignores priority (RFC 9113 is already moving to deprecate it), add support when a peer requires priority.
             self = .priority
         case .rstStream:
             guard stream != .connection else { throw .connection(.protocolError) }
@@ -142,7 +142,7 @@ extension Frame {
             self = .ping(ack: flags & FrameFlag.acknowledgement != 0, data: Array(payload))
         case .goAway:
             guard stream == .connection else { throw .connection(.protocolError) }
-            // 8바이트 뒤의 디버그 데이터는 쓰지 않는다.
+            // The debug data after the first 8 bytes is unused.
             guard let last = reader.uint32(), let code = reader.uint32() else { throw .connection(.frameSizeError) }
             self = .goAway(lastStreamID: HTTP2StreamID(last & 0x7fff_ffff), code: code)
         case .windowUpdate:
@@ -154,9 +154,9 @@ extension Frame {
         }
     }
 
-    /// PADDED flag가 있으면 Pad Length를 읽고 뒤쪽 패딩을 뺀 payload를 돌려준다(§6.1, §6.2).
-    /// `prefixSize`는 패딩을 뺀 내용 앞에 반드시 있어야 하는 고정 필드(HEADERS의 우선순위)의 크기다.
-    /// 패딩이 payload를 넘으면 PROTOCOL_ERROR, 내용이 고정 필드보다 짧으면 FRAME_SIZE_ERROR인 연결 오류.
+    /// Reads Pad Length if the PADDED flag is set and returns the payload without trailing padding (§6.1, §6.2).
+    /// `prefixSize` is the size of the fixed fields that must start the unpadded content (the HEADERS priority fields).
+    /// Padding beyond the payload is a PROTOCOL_ERROR connection error. Content shorter than the fixed fields is a FRAME_SIZE_ERROR connection error.
     private static func removingPadding(
         from payload: ArraySlice<UInt8>, flags: UInt8, prefixSize: Int = 0
     ) throws(HTTP2Error) -> ArraySlice<UInt8> {

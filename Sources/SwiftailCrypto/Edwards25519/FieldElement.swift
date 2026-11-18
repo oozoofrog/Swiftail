@@ -1,11 +1,11 @@
-// GF(2^255−19)의 원소. edwards25519 점의 좌표에만 쓴다.
+// An element of GF(2^255−19), used only for coordinates of edwards25519 points.
 //
-// 출처: Go 1.27.3 표준 라이브러리 `crypto/internal/fips140/edwards25519/field`의
-// `fe.go`·`fe_generic.go`(51비트 림 다섯 개의 표현, 곱·제곱의 열 계산과 올림, 역원과 Pow22523의
-// 덧셈 사슬, SqrtRatio)를 Swift로 옮겼다. 128비트 중간값은 Go의 `uint128` 구조체 대신 `UInt128`을 쓴다.
+// Origin: ported to Swift from `fe.go` and `fe_generic.go` in the Go 1.27.3 standard library's `crypto/internal/fips140/edwards25519/field`.
+// The port includes the five 51-bit limb representation, column computations and carries for multiplication and squaring, addition chains for
+// inversion and Pow22523, and SqrtRatio. 128-bit intermediates use `UInt128` in place of Go's `uint128` struct.
 //
 // Copyright (c) 2017 The Go Authors. All rights reserved.
-// BSD-3-Clause. 원문(Go 배포본의 LICENSE):
+// BSD-3-Clause. Original text from the Go distribution's LICENSE follows.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
@@ -33,12 +33,12 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/// GF(p), p = 2^255−19의 원소.
+/// An element of GF(p), where p = 2^255−19.
 ///
-/// 값은 `l0 + l1·2^51 + l2·2^102 + l3·2^153 + l4·2^204`이고, 연산과 연산 사이에 림은 2^52보다 작다
-/// (Go `field.Element`와 같은 불변식). 표현은 하나가 아니므로 같음은 정준 바이트로 비교한다.
+/// The value is `l0 + l1·2^51 + l2·2^102 + l3·2^153 + l4·2^204`. Between operations, the limbs are less than 2^52
+/// (the same invariant as Go `field.Element`). Representations are nonunique, so equality compares canonical bytes.
 ///
-/// 이 타입은 공개 값(서명 검증의 입력)만 다룬다. 비교와 선택이 상수 시간이 아니다.
+/// This type handles only public values (signature verification inputs). Comparison and selection use variable time.
 struct FieldElement: Equatable {
     private var l0, l1, l2, l3, l4: UInt64
 
@@ -47,13 +47,13 @@ struct FieldElement: Equatable {
     static let zero = FieldElement(l0: 0, l1: 0, l2: 0, l3: 0, l4: 0)
     static let one = FieldElement(l0: 1, l1: 0, l2: 0, l3: 0, l4: 0)
 
-    /// 곡선 식의 d = −121665/121666 (RFC 8032 5.1).
+    /// The d = −121665/121666 in the curve equation (RFC 8032 §5.1).
     static let d = FieldElement(bytes: [
         0xa3, 0x78, 0x59, 0x13, 0xca, 0x4d, 0xeb, 0x75, 0xab, 0xd8, 0x41, 0x41, 0x4d, 0x0a, 0x70, 0x00,
         0x98, 0xe8, 0x79, 0x77, 0x79, 0x40, 0xc7, 0x8c, 0x73, 0xfe, 0x6f, 0x2b, 0xee, 0x6c, 0x03, 0x52,
     ])
 
-    /// 2^((p−1)/4). 제곱하면 −1이다.
+    /// The value 2^((p−1)/4), which squares to −1.
     static let sqrtMinusOne = FieldElement(
         l0: 1_718_705_420_411_056, l1: 234_908_883_556_509, l2: 2_233_514_472_574_048,
         l3: 2_117_202_627_021_982, l4: 765_476_049_583_133)
@@ -62,13 +62,13 @@ struct FieldElement: Equatable {
         self.l0 = l0; self.l1 = l1; self.l2 = l2; self.l3 = l3; self.l4 = l4
     }
 
-    /// 32바이트 리틀 엔디언 값을 읽는다. 맨 위 비트(255번)는 버리고, p 이상 2^255 미만의 값
-    /// (비정준 표현)도 그대로 받아 p로 나눈 나머지로 다룬다. RFC 8032보다 느슨하지만 Go
-    /// `field.Element.SetBytes`와 같고, 두 검증 규칙의 점 해독이 이 동작에 기댄다.
+    /// Reads a 32-byte little-endian value. Discards the high bit (bit 255) and accepts values from p up to but excluding 2^255
+    /// (noncanonical representations), treating them as remainders modulo p. This is more permissive than RFC 8032 and matches Go's
+    /// `field.Element.SetBytes`. Point decoding in both verification rules relies on this behavior.
     ///
-    /// - Precondition: `bytes.count == 32`. 호출하는 쪽이 길이를 검사한다.
+    /// - Precondition: `bytes.count == 32`. The caller checks the length.
     init(bytes: [UInt8]) {
-        precondition(bytes.count == 32, "필드 원소는 32바이트")
+        precondition(bytes.count == 32, "Field elements are 32 bytes")
         func load64(_ offset: Int) -> UInt64 {
             (0..<8).reduce(0) { $0 | UInt64(bytes[offset + $1]) << (8 * $1) }
         }
@@ -81,7 +81,7 @@ struct FieldElement: Equatable {
             l4: (load64(24) >> 12) & mask)
     }
 
-    /// 정준(0 ≤ 값 < p) 32바이트 리틀 엔디언 표현. 맨 위 비트는 0이다.
+    /// The canonical (0 ≤ value < p) 32-byte little-endian representation. The high bit is 0.
     var bytes: [UInt8] {
         var t = self
         t.reduce()
@@ -94,12 +94,12 @@ struct FieldElement: Equatable {
         return words.flatMap { word in (0..<8).map { UInt8(truncatingIfNeeded: word >> (8 * $0)) } }
     }
 
-    /// 정준 표현이 홀수이면 "음수"다(RFC 8032 5.1.2의 x의 부호 비트).
+    /// Whether the canonical representation is odd and therefore "negative" (the sign bit of x in RFC 8032 §5.1.2).
     var isNegative: Bool { bytes[0] & 1 == 1 }
 
     static func == (a: FieldElement, b: FieldElement) -> Bool { a.bytes == b.bytes }
 
-    // MARK: 더하기와 빼기
+    // MARK: Addition and subtraction
 
     static func + (a: FieldElement, b: FieldElement) -> FieldElement {
         var v = FieldElement(l0: a.l0 + b.l0, l1: a.l1 + b.l1, l2: a.l2 + b.l2, l3: a.l3 + b.l3, l4: a.l4 + b.l4)
@@ -107,7 +107,7 @@ struct FieldElement: Equatable {
         return v
     }
 
-    /// 2p를 먼저 더해 림이 음수가 되지 않게 한 뒤 뺀다(b는 2^255 + 2^13·19까지 될 수 있다).
+    /// Adds 2p before subtracting to keep the limbs nonnegative (b can be as large as 2^255 + 2^13·19).
     static func - (a: FieldElement, b: FieldElement) -> FieldElement {
         var v = FieldElement(
             l0: (a.l0 + 0xF_FFFF_FFFF_FFDA) - b.l0,
@@ -121,10 +121,10 @@ struct FieldElement: Equatable {
 
     static prefix func - (a: FieldElement) -> FieldElement { zero - a }
 
-    // MARK: 곱과 제곱
+    // MARK: Multiplication and squaring
 
-    /// 림을 종이 위 곱셈처럼 열로 곱하고, 2^255 ≡ 19로 넘치는 열을 아래로 접는다.
-    /// 가장 큰 열 r0는 2^111보다 작아 올림이 UInt64에 들어간다(Go `feMulGeneric`의 주석).
+    /// Multiplies limbs in columns like long multiplication, folding overflowing columns down using 2^255 ≡ 19.
+    /// The largest column r0 is below 2^111, so carries fit in UInt64 (see the comment on Go `feMulGeneric`).
     static func * (a: FieldElement, b: FieldElement) -> FieldElement {
         let r0 = wide(a.l0, b.l0) + wide19(a.l1, b.l4) + wide19(a.l2, b.l3) + wide19(a.l3, b.l2) + wide19(a.l4, b.l1)
         let r1 = wide(a.l0, b.l1) + wide(a.l1, b.l0) + wide19(a.l2, b.l4) + wide19(a.l3, b.l3) + wide19(a.l4, b.l2)
@@ -134,7 +134,7 @@ struct FieldElement: Equatable {
         return carried(r0, r1, r2, r3, r4)
     }
 
-    /// 곱과 같지만 대칭인 항을 묶는다.
+    /// Squares using multiplication with symmetric terms grouped together.
     func squared() -> FieldElement {
         let r0 = Self.wide(l0, l0) + Self.wide19(l1, 2 * l4) + Self.wide19(l2, 2 * l3)
         let r1 = Self.wide(2 * l0, l1) + Self.wide19(l2, 2 * l4) + Self.wide19(l3, l3)
@@ -153,10 +153,10 @@ struct FieldElement: Equatable {
 
     private static func wide(_ a: UInt64, _ b: UInt64) -> UInt128 { UInt128(a) * UInt128(b) }
 
-    /// 19·a·b. a와 b는 52비트 이하라 19·a가 UInt64에 들어간다.
+    /// Computes 19·a·b. Both a and b are at most 52 bits, so 19·a fits in UInt64.
     private static func wide19(_ a: UInt64, _ b: UInt64) -> UInt128 { UInt128(19 * a) * UInt128(b) }
 
-    /// 다섯 개의 넓은 열을 51비트 림으로 되돌린다. 맨 위 올림은 19를 곱해 맨 아래에 더한다.
+    /// Converts five wide columns back into 51-bit limbs. Multiplies the top carry by 19 and adds it to the bottom limb.
     private static func carried(_ r0: UInt128, _ r1: UInt128, _ r2: UInt128, _ r3: UInt128, _ r4: UInt128) -> FieldElement {
         let mask = maskLow51Bits
         func low(_ r: UInt128) -> UInt64 { UInt64(truncatingIfNeeded: r) & mask }
@@ -167,7 +167,7 @@ struct FieldElement: Equatable {
         let rr2 = low(r2) + carry(r1)
         let rr3 = low(r3) + carry(r2)
         let rr4 = low(r4) + carry(r3)
-        // 올림이 아직 2^51을 넘으므로 한 번 더 전파한다. 이번 올림은 림의 여유분에 들어간다.
+        // The carry still exceeds 2^51, so propagate it once more. This carry fits in the limbs' spare bits.
         return FieldElement(
             l0: rr0 & mask + 19 * (rr4 >> 51),
             l1: rr1 & mask + rr0 >> 51,
@@ -176,9 +176,9 @@ struct FieldElement: Equatable {
             l4: rr4 & mask + rr3 >> 51)
     }
 
-    // MARK: 거듭제곱
+    // MARK: Exponentiation
 
-    /// 1/self = self^(p−2). 0의 역원은 0이다. 제곱 254번과 곱 11번의 덧셈 사슬.
+    /// Computes 1/self = self^(p−2). The inverse of 0 is 0. Uses an addition chain of 254 squarings and 11 multiplications.
     func inverted() -> FieldElement {
         let z2 = squared()                         // 2
         let z9 = z2.squared(times: 2) * self       // 9
@@ -194,7 +194,7 @@ struct FieldElement: Equatable {
         return z2_250_0.squared(times: 5) * z11    // 2^255 − 21 = p − 2
     }
 
-    /// self^((p−5)/8) = self^(2^252 − 3). 제곱근 계산에 쓴다.
+    /// Computes self^((p−5)/8) = self^(2^252 − 3) for square roots.
     private func pow22523() -> FieldElement {
         let x3 = squared() * self                  // 3
         let x15 = x3.squared(times: 2) * x3        // 15
@@ -209,8 +209,8 @@ struct FieldElement: Equatable {
         return z2_250_0.squared(times: 2) * self   // 2^252 − 3
     }
 
-    /// √(u/v)의 음수가 아닌 쪽(RFC 8032 5.1.3의 3단계, Go `SqrtRatio`).
-    /// u/v가 제곱수가 아니면 `nil`이다. v = 0이면 u = 0일 때만 0을 돌려준다.
+    /// The nonnegative √(u/v) (step 3 of RFC 8032 §5.1.3, Go `SqrtRatio`).
+    /// Returns `nil` if u/v is not a square. For v = 0, returns 0 only if u = 0.
     static func squareRootOfRatio(_ u: FieldElement, _ v: FieldElement) -> FieldElement? {
         // r = (u·v^3)·(u·v^7)^((p−5)/8)
         let v3 = v.squared() * v
@@ -227,9 +227,9 @@ struct FieldElement: Equatable {
         return r.isNegative ? -r : r
     }
 
-    // MARK: 줄이기
+    // MARK: Reduction
 
-    /// 2^255 ≡ 19로 맨 위 림의 올림을 맨 아래로 접어 모든 림을 52비트 아래로 둔다.
+    /// Folds the top limb's carry into the bottom limb using 2^255 ≡ 19 to keep all limbs below 52 bits.
     private mutating func carryPropagate() {
         let mask = Self.maskLow51Bits
         let c0 = l0 >> 51, c1 = l1 >> 51, c2 = l2 >> 51, c3 = l3 >> 51, c4 = l4 >> 51
@@ -240,16 +240,16 @@ struct FieldElement: Equatable {
         l4 = l4 & mask + c3
     }
 
-    /// 값을 0 ≤ v < p로 완전히 줄인다.
+    /// Fully reduces the value to 0 ≤ v < p.
     private mutating func reduce() {
         carryPropagate()
-        // 이제 v < 2^255 + 2^13·19. v ≥ p이면 v + 19가 2^255를 넘어 맨 위 올림 c가 1이 된다.
+        // Now v < 2^255 + 2^13·19. If v ≥ p, v + 19 reaches or exceeds 2^255 and the top carry c becomes 1.
         var c = (l0 + 19) >> 51
         c = (l1 + c) >> 51
         c = (l2 + c) >> 51
         c = (l3 + c) >> 51
         c = (l4 + c) >> 51
-        // c = 1이면 v − p = v + 19 − 2^255를 계산한다(2^255 비트는 마지막 마스크로 버린다).
+        // If c = 1, compute v − p = v + 19 − 2^255 (the final mask discards the 2^255 bit).
         let mask = Self.maskLow51Bits
         l0 += 19 * c
         l1 += l0 >> 51; l0 &= mask

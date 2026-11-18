@@ -1,38 +1,38 @@
 import SwiftailBase
 
-/// `POST /machine/map`의 본문. Go `tailcfg.MapRequest`.
+/// The body of `POST /machine/map`. Go `tailcfg.MapRequest`.
 ///
-/// 두 가지로 쓴다(노트 4.2).
-/// - 맵 스트림: `stream = true`, `keepAlive = true`. 응답은 맵 프레임의 연속이다. 버전 68 이상의 서버는
-///   이 요청의 상태 필드(`hostinfo`, `endpoints` 등)를 무시한다.
-/// - 상태 갱신(lite): `stream = false`, `omitPeers = true`. 열려 있는 스트림을 끊지 않고 `hostinfo`,
-///   `discoKey`, `endpoints`를 올린다.
+/// Has two uses (notes §4.2).
+/// - Map stream: `stream = true`, `keepAlive = true`. The response is a sequence of map frames. Servers at version 68 or later
+///   ignore state fields in this request (`hostinfo`, `endpoints`, and others).
+/// - State update (lite): `stream = false`, `omitPeers = true`. Reports `hostinfo`, `discoKey`, and `endpoints`
+///   without closing the open stream.
 ///
-/// `compress`를 비워 비압축 프레임을 요청한다. zstd 해제기는 없다(계약 "프레이밍과 증분 적용").
-/// 맵 세션 재개(`MapSessionHandle`·`MapSessionSeq`)는 쓰지 않는다. Go 클라이언트도 쓰지 않는다.
-/// `docs/protocol-notes/control-map.md` 3.4, 3.5 (출처: tailscale.com `tailcfg/tailcfg.go` `MapRequest`).
+/// Leaves `compress` empty to request uncompressed frames. There is no zstd decoder (contract "Framing and Applying Deltas").
+/// Map session resumption (`MapSessionHandle` and `MapSessionSeq`) is unused. The Go client also leaves it unused.
+/// `docs/protocol-notes/control-map.md` §3.4, §3.5 (origin: `MapRequest` in tailscale.com `tailcfg/tailcfg.go`).
 public struct MapRequest: Encodable, Sendable, Equatable {
-    /// 클라이언트가 이해하는 프로토콜 의미의 수준(capability version).
+    /// The level of protocol semantics the client understands (capability version).
     public var version: Int
-    /// 응답 압축. 빈 문자열은 비압축이다.
+    /// Response compression. An empty string means uncompressed.
     public var compress: String
-    /// 서버가 주기적으로 keepalive 응답을 보내기를 요청한다.
+    /// Requests periodic keepalive responses from the server.
     public var keepAlive: Bool
-    /// 등록된 지금의 노드 키.
+    /// The current registered node key.
     public var nodeKey: NodePublicKey
-    /// 지금의 disco 키.
+    /// The current disco key.
     public var discoKey: DiscoPublicKey
-    /// 응답을 하나만 받고 끝낼지(`false`), 스트림으로 계속 받을지(`true`).
+    /// Whether to finish after one response (`false`) or continue receiving a stream (`true`).
     public var stream: Bool
-    /// 노드 정보. 없으면 `null`.
+    /// Node information, or `null` if absent.
     public var hostinfo: Hostinfo?
-    /// 직접 연결을 받을 UDP 후보 주소들.
+    /// Candidate UDP addresses for receiving direct connections.
     public var endpoints: [IPEndpoint]
-    /// `endpoints`와 같은 순서로 각 주소를 어떻게 알았는지.
+    /// How each address was discovered, in the same order as `endpoints`.
     public var endpointTypes: [EndpointType]
-    /// 응답에 피어 목록이 없어도 된다. 상태 갱신 요청에 쓴다.
+    /// Allows the response to omit the peer list. Used for state update requests.
     public var omitPeers: Bool
-    /// 로컬 tailnet lock 서명 권한 상태의 머리(base32). 상태가 없으면 빈 문자열이고 JSON에서 빠진다
+    /// The head of the local tailnet lock signing authority state (base32). When no state exists, it is an empty string and omitted from JSON
     /// (`docs/protocol-notes/tailnet-lock.md` 3.9).
     public var tkaHead: String
 
@@ -92,17 +92,17 @@ public struct MapRequest: Encodable, Sendable, Equatable {
     }
 }
 
-/// UDP 후보 주소의 출처. Go `tailcfg.EndpointType`.
+/// The origin of a candidate UDP address. Go `tailcfg.EndpointType`.
 public enum EndpointType: Int, Encodable, Sendable {
     case unknown = 0
-    /// 로컬 인터페이스의 주소.
+    /// The address of a local interface.
     case local = 1
-    /// STUN으로 알아낸 공인 주소.
+    /// A public address discovered by STUN.
     case stun = 2
-    /// 포트 매핑(UPnP 등)으로 연 주소.
+    /// An address opened by port mapping (such as UPnP).
     case portmapped = 3
-    /// STUN으로 알아낸 공인 IP에 로컬 포트를 붙인 추측.
+    /// A guess combining the public IP discovered by STUN with the local port.
     case stun4LocalPort = 4
-    /// 설정으로 지정한 주소.
+    /// An address specified in configuration.
     case explicitConfiguration = 5
 }

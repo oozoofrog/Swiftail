@@ -1,13 +1,13 @@
 import Foundation
 
-/// RFC 7693 BLAKE2s. 순차 모드만.
+/// RFC 7693 BLAKE2s in sequential mode only.
 public struct BLAKE2s: Sendable {
     private static let iv: [UInt32] = [
         0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
         0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
     ]
 
-    // RFC 7693 §2.7의 SIGMA. BLAKE2s는 10라운드라 10행을 쓴다.
+    // SIGMA from RFC 7693 §2.7. BLAKE2s uses 10 rows for its 10 rounds.
     private static let sigma: [[Int]] = [
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
@@ -22,16 +22,16 @@ public struct BLAKE2s: Sendable {
     ]
 
     private var h: [UInt32]
-    /// 아직 압축하지 않은 입력. 마지막 블록을 표시해야 하므로 가득 차도 다음 입력이 올 때까지 둔다.
+    /// Input awaiting compression. The last block must be marked, so keep a full block until more input arrives.
     private var buffer: [UInt8] = []
-    /// 압축을 마친 바이트 수.
+    /// The number of bytes already compressed.
     private var compressed: UInt64 = 0
     private let outputByteCount: Int
 
-    /// outputByteCount는 1...32, key는 0...32바이트.
+    /// Accepts outputByteCount in 1...32 and key in 0...32 bytes.
     public init(outputByteCount: Int = 32, key: [UInt8] = []) {
-        precondition((1...32).contains(outputByteCount), "BLAKE2s 출력 길이는 1...32")
-        precondition(key.count <= 32, "BLAKE2s 키는 최대 32바이트")
+        precondition((1...32).contains(outputByteCount), "BLAKE2s output length must be in 1...32")
+        precondition(key.count <= 32, "BLAKE2s keys can be at most 32 bytes")
         self.outputByteCount = outputByteCount
         h = Self.iv
         h[0] ^= 0x0101_0000 ^ (UInt32(key.count) << 8) ^ UInt32(outputByteCount)
@@ -51,7 +51,7 @@ public struct BLAKE2s: Sendable {
         }
     }
 
-    /// 지금까지의 입력에 대한 해시. 상태를 바꾸지 않으므로 이어서 update할 수 있다.
+    /// Returns the hash of the input so far. Leaves the state intact so update can continue.
     public func finalize() -> [UInt8] {
         var state = h
         let total = compressed + UInt64(buffer.count)
@@ -118,7 +118,7 @@ public struct BLAKE2s: Sendable {
     }
 }
 
-/// RFC 2104 HMAC, 해시는 BLAKE2s-256(블록 64바이트). 출력 32바이트.
+/// RFC 2104 HMAC with BLAKE2s-256 (64-byte blocks) and 32-byte output.
 public enum HMACBLAKE2s {
     public static func authenticationCode(for data: some DataProtocol, key: [UInt8]) -> [UInt8] {
         var block = key.count > 64 ? BLAKE2s.hash(key) : key
@@ -135,12 +135,12 @@ public enum HMACBLAKE2s {
     }
 }
 
-/// Noise·WireGuard의 KDFn.
+/// KDFn for Noise and WireGuard.
 /// PRK = HMAC(chainingKey, input), T1 = HMAC(PRK, 0x01), T2 = HMAC(PRK, T1 ‖ 0x02), T3 = HMAC(PRK, T2 ‖ 0x03).
 public enum HKDFBLAKE2s {
-    /// outputCount는 1...3. 각 출력은 32바이트.
+    /// Accepts outputCount in 1...3. Each output is 32 bytes.
     public static func derive(chainingKey: [UInt8], input: some DataProtocol, outputCount: Int) -> [[UInt8]] {
-        precondition((1...3).contains(outputCount), "HKDF 출력 개수는 1...3")
+        precondition((1...3).contains(outputCount), "HKDF output count must be in 1...3")
         let prk = HMACBLAKE2s.authenticationCode(for: input, key: chainingKey)
         var outputs: [[UInt8]] = []
         var previous: [UInt8] = []

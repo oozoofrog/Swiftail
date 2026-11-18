@@ -1,20 +1,20 @@
-/// 해석하지 않고 보관하는 JSON 값. Go `tailcfg.RawMessage`에 대응한다.
+/// A JSON value retained without interpretation. Corresponds to Go `tailcfg.RawMessage`.
 ///
-/// 노드 속성(`CapMap`)과 애플리케이션 권한(`CapGrant.CapMap`)의 인자는 속성마다 형식이 다르다.
-/// 이 계층은 형식을 모르므로 값 그대로 두고, 그 속성을 쓰는 쪽이 해석한다.
+/// Node capability (`CapMap`) and application grant (`CapGrant.CapMap`) arguments have a different format for each capability.
+/// This layer keeps the values as is because their format is unknown here. The consumer of the capability interprets them.
 ///
-/// 숫자는 `Int64` → `UInt64` → `Double` 순으로 담는다. 64비트 정수 범위의 정수는 그대로 보존되어
-/// `9007199254740992`와 `9007199254740993`이 다른 값이다(Go의 `RawMessage`도 구분한다).
-/// 한계: 그 범위를 넘는 정수와 `Double`이 담지 못하는 고정밀 소수는 `Double`로 반올림되어 서로 같아질 수 있다.
-/// 또 `1.0`처럼 소수 구문으로 쓴 정수는 `integer(1)`이 된다(바이트를 보존하는 Go와 다른 점).
+/// Stores numbers in `Int64` → `UInt64` → `Double` order. Integers in the 64-bit ranges are preserved exactly,
+/// so `9007199254740992` and `9007199254740993` are distinct values (as in Go's `RawMessage`).
+/// Integers outside those ranges and high-precision decimals that `Double` cannot represent can round to the same `Double`.
+/// Integers written with decimal syntax, such as `1.0`, also become `integer(1)` (Go preserves the bytes).
 public enum JSONValue: Sendable, Hashable {
     case null
     case bool(Bool)
-    /// `Int64` 범위의 정수.
+    /// An integer in the `Int64` range.
     case integer(Int64)
-    /// `Int64.max`보다 큰 `UInt64` 범위의 정수.
+    /// An integer in the `UInt64` range greater than `Int64.max`.
     case unsignedInteger(UInt64)
-    /// 그 밖의 수. 정밀도를 잃을 수 있다.
+    /// Any other number, which may lose precision.
     case number(Double)
     case string(String)
     case array([JSONValue])

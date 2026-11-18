@@ -1,13 +1,13 @@
-/// 맵 스트림을 더 읽을 수 없는 이유. 어느 경우든 이 스트림을 버리고 새 스트림으로 전체 맵부터 다시 받는다
-/// (`docs/protocol-notes/control-map.md` 3.5, 4.2의 4).
+/// The reason the map stream cannot be read further. In every case, discard this stream and receive the full map again in a new stream
+/// (`docs/protocol-notes/control-map.md` §3.5, §4.2 item 4).
 public enum MapError: Error, Sendable, Equatable {
-    /// 프레임의 길이 접두가 한도(`MapResponseFramer.maximumFrameSize`)를 넘는다.
+    /// The frame's length prefix exceeds `MapResponseFramer.maximumFrameSize`.
     case frameTooLarge
-    /// 프레임의 내용이 맵 응답 JSON이 아니거나, 중첩 깊이·값의 수가 한도
-    /// (`MapResponseFramer.maximumNestingDepth`, `maximumValueCount`)를 넘는다.
+    /// The frame is not map response JSON, or its nesting depth or value count exceeds the limits
+    /// (`MapResponseFramer.maximumNestingDepth`, `maximumValueCount`).
     case malformed
-    /// 스트림의 첫 일반(KeepAlive가 아닌) 응답에 자기 노드(`Node`)가 없다.
+    /// The first regular (non-KeepAlive) response in the stream lacks the self node (`Node`).
     case missingSelfNode
-    /// 세션이 쥐는 상태(피어, 사용자 프로필, 이름 붙은 패킷 필터)가 `MapSession`의 한도를 넘는다.
+    /// The retained session state (peers, user profiles, or named packet filters) exceeds a `MapSession` limit.
     case stateTooLarge
 }

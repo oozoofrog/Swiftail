@@ -1,14 +1,14 @@
-/// SwiftailCrypto가 던지는 오류.
+/// An error thrown by SwiftailCrypto.
 public enum CryptoError: Error, Sendable, Equatable {
-    /// 키·nonce·암호문 길이가 규격과 다르다. Argon2i의 비용 인자(병렬도·패스·메모리·출력 길이)가 범위 밖일 때도 이것이다.
+    /// The key, nonce, or ciphertext length differs from the specification. Also used when an Argon2i cost parameter (parallelism, passes, memory, or output length) is out of range.
     case invalidLength
-    /// 인증 태그가 일치하지 않는다.
+    /// The authentication tag does not match.
     case authenticationFailed
-    /// X25519 결과가 전부 0이다(저차 점).
+    /// The X25519 result is all zeros (a low-order point).
     case invalidKey
 }
 
-/// 길이가 같으면 내용과 무관한 시간에 비교한다. 길이가 다르면 `false`.
+/// Compares equal-length inputs in time independent of their contents. Returns `false` for different lengths.
 public func constantTimeEqual(_ a: [UInt8], _ b: [UInt8]) -> Bool {
     guard a.count == b.count else { return false }
     var diff: UInt8 = 0

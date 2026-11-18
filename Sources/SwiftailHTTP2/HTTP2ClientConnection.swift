@@ -1,21 +1,21 @@
-/// HTTP/2 클라이언트 연결 하나를 입출력 없는 값 타입 상태 기계로 만든 것.
+/// An HTTP/2 client connection implemented as a value-type state machine with no I/O.
 ///
-/// 소켓도 시계도 갖지 않는다. 호출하는 쪽(actor)이 상대에게서 받은 바이트를 `receive`로 넣으면
-/// 사건이 나오고, 상대에게 보낼 바이트는 `takeOutboundBytes()`로 꺼내 소켓에 쓴다. 연결 하나에 스트림 여러
-/// 개를 다중화한다. 구현은 파일마다 한 가지 일을 한다:
+/// Holds neither a socket nor a clock. The caller (an actor) feeds bytes from the peer to `receive` to produce
+/// events, then takes bytes to send with `takeOutboundBytes()` and writes them to the socket. One connection
+/// multiplexes several streams. Each implementation file covers one responsibility.
 ///
-/// - 바이트 ↔ 프레임: `FrameBuffer`, `Frame`, `FrameEncoder`
-/// - 헤더 압축: `HPACKDecoder`, `HPACKEncoder` (정수·문자열 `HPACKPrimitives`, 허프만 `HPACKHuffman`, 표 `HPACKStaticTable`·`HPACKDynamicTable`)
-/// - 흐름 제어와 스트림: `FlowControlWindow`, `PeerSettings`, `StreamState`
-/// - 프레임 처리: `HTTP2ClientConnection+Receiving`, 요청과 본문 전송: `HTTP2ClientConnection+Sending`
+/// - Bytes ↔ frames: `FrameBuffer`, `Frame`, `FrameEncoder`
+/// - Header compression: `HPACKDecoder`, `HPACKEncoder` (integers and strings in `HPACKPrimitives`, Huffman in `HPACKHuffman`, tables in `HPACKStaticTable` and `HPACKDynamicTable`)
+/// - Flow control and streams: `FlowControlWindow`, `PeerSettings`, `StreamState`
+/// - Frame handling in `HTTP2ClientConnection+Receiving`, request and body sending in `HTTP2ClientConnection+Sending`
 ///
-/// 규격: RFC 9113(HTTP/2), RFC 7541(HPACK).
+/// Specifications are RFC 9113 (HTTP/2) and RFC 7541 (HPACK).
 public struct HTTP2ClientConnection: Sendable {
     public struct Request: Sendable {
         public var method: String
         public var path: String
         public var authority: String
-        /// 의사 헤더를 뺀 나머지.
+        /// The fields excluding pseudo-headers.
         public var headers: [HeaderField]
 
         public init(method: String, path: String, authority: String, headers: [HeaderField] = []) {
@@ -29,71 +29,71 @@ public struct HTTP2ClientConnection: Sendable {
     public enum Event: Sendable, Equatable {
         case responseHead(HTTP2StreamID, status: Int, headers: [HeaderField])
         case responseData(HTTP2StreamID, [UInt8])
-        /// 스트림이 끝났다. resetCode가 nil이면 정상 종료(END_STREAM), 아니면 RST_STREAM의 오류 코드.
+        /// The stream ended. A nil resetCode indicates a normal end (END_STREAM). Otherwise, it contains the RST_STREAM error code.
         case streamClosed(HTTP2StreamID, resetCode: UInt32?)
-        /// 상대가 GOAWAY를 보냈다. lastStreamID보다 큰 스트림은 처리되지 않았다.
+        /// The peer sent GOAWAY. It left streams above lastStreamID unprocessed.
         case goAway(lastStreamID: HTTP2StreamID, code: UInt32)
     }
 
     enum Phase {
         case open
-        /// GOAWAY를 받았다. 진행 중인 스트림은 끝까지 받지만 새 요청은 시작하지 않는다.
+        /// GOAWAY was received. In-flight streams can finish, and new requests are blocked.
         case draining
-        /// 연결 오류로 끝났다.
+        /// The connection ended with a connection error.
         case failed
     }
 
-    /// 이어지는 CONTINUATION을 기다리는 헤더 블록(§4.3). 그 사이에는 다른 프레임이 끼어들 수 없다.
+    /// A header block waiting for CONTINUATION frames (§4.3). No other frame may intervene.
     struct HeaderBlockInProgress {
         var stream: HTTP2StreamID
         var bytes: [UInt8]
         var endStream: Bool
     }
 
-    /// 클라이언트 연결 프리페이스의 첫 24바이트(§3.4).
+    /// The first 24 bytes of the client connection preface (§3.4).
     static let preface = Array("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".utf8)
 
-    /// 알리는 SETTINGS 식별자(§6.5.2).
+    /// The SETTINGS identifiers to advertise (§6.5.2).
     static let enablePushIdentifier: UInt16 = 0x2
     static let maxHeaderListSizeIdentifier: UInt16 = 0x6
 
-    /// 헤더 블록(CONTINUATION을 합친 것)의 한도.
+    /// The limit on a header block, including its CONTINUATION frames.
     static let maximumHeaderBlockSize = 65_536
 
-    /// 상대가 요구해서 쌓인 제어 프레임(PING·SETTINGS ACK, RST_STREAM)의 대기 바이트 한도.
+    /// The byte limit for queued control frames required by the peer (PING and SETTINGS ACK, RST_STREAM).
     ///
-    /// 상대는 작은 프레임을 얼마든지 보낼 수 있고(PING 하나는 17바이트이고 17바이트 ACK를 낳는다), 답은
-    /// 호출하는 쪽이 `takeOutboundBytes()`로 꺼내 가야 비워진다. 소켓이 막혀 있으면 쌓이기만 하므로 상한을
-    /// 둔다. 한도는 헤더 블록 한도와 같은 64KiB다. Go의 `x/net/http2` 서버도 대기 제어 프레임을 10,000개로
-    /// 묶는다. 넘으면 ENHANCE_YOUR_CALM 연결 오류로 끝내고(§7), 그 GOAWAY(17바이트)는 한도와 상관없이
-    /// 뒤에 붙는다.
+    /// The peer can send arbitrarily many small frames (a 17-byte PING produces a 17-byte ACK). Replies stay queued
+    /// until the caller drains them via `takeOutboundBytes()`. A blocked socket can only accumulate replies,
+    /// so the queue has a cap. The limit matches the 64KiB header block limit. Go's `x/net/http2` server also caps queued
+    /// control frames at 10,000. Exceeding the limit ends the connection with ENHANCE_YOUR_CALM (§7) and appends
+    /// the 17-byte GOAWAY regardless of the limit.
     ///
-    /// WINDOW_UPDATE는 여기에 들지 않는다. 정상 서버도 작은 DATA 프레임을 많이 보낼 수 있으므로, 프레임마다
-    /// 답을 쌓지 않고 돌려줄 창의 양만 적어 둔다(`pendingConnectionWindowCredit`).
+    /// WINDOW_UPDATE is exempt. Even a well-behaved server can send many small DATA frames, so track only the
+    /// total window credit to return (`pendingConnectionWindowCredit`) and avoid queuing a reply for each frame.
     static let maximumPendingControlBytes = 65_536
 
     var phase = Phase.open
     var outbound: [UInt8]
-    /// `outbound` 가운데 상대가 요구해서 쌓인 제어 프레임의 바이트. `takeOutboundBytes()`가 비운다.
+    /// The bytes in `outbound` for queued control frames required by the peer. `takeOutboundBytes()` clears them.
     var pendingControlBytes = 0
-    /// 받은 DATA만큼 돌려줄 연결 창. `takeOutboundBytes()`가 WINDOW_UPDATE 하나로 내보낸다.
-    /// 스트림 몫은 `StreamState.pendingWindowCredit`에 있다.
+    /// The connection window credit to return for received DATA. `takeOutboundBytes()` emits it in one WINDOW_UPDATE.
+    /// The stream's share is in `StreamState.pendingWindowCredit`.
     var pendingConnectionWindowCredit = 0
     var frames = FrameBuffer()
     var decoder = HPACKDecoder()
     var peerSettings = PeerSettings()
-    /// 연결 전체의 보내는 창.
+    /// The connection-wide send window.
     var sendWindow = FlowControlWindow()
     var streams: [HTTP2StreamID: StreamState] = [:]
     var nextStreamID: UInt32 = 1
     var headerBlock: HeaderBlockInProgress?
-    /// 상대의 첫 프레임은 SETTINGS여야 한다(§3.4).
+    /// The peer's first frame must be SETTINGS (§3.4).
     var hasReceivedSettings = false
 
-    /// 연결을 시작한다. 프리페이스와 SETTINGS가 보낼 바이트로 준비된다.
+    /// Starts the connection. Queues the preface and SETTINGS for transmission.
     ///
-    /// SETTINGS로 서버 푸시를 끄고(ENABLE_PUSH=0), 받을 헤더 목록의 한도를 알린다. 흐름 제어 창과
-    /// 프레임 크기는 초깃값 그대로 둔다.
+    /// SETTINGS disables server push (ENABLE_PUSH=0) and advertises the limit on incoming header lists. The flow control window
+    /// and frame size keep their initial values.
     public init() {
         let settings = [
             Frame.Setting(identifier: Self.enablePushIdentifier, value: 0),
@@ -102,7 +102,7 @@ public struct HTTP2ClientConnection: Sendable {
         outbound = Self.preface + FrameEncoder.settings(settings)
     }
 
-    /// 상대에게 보낼 바이트를 꺼낸다. 없으면 빈 배열. `init`, `startRequest`, `cancel`, `receive` 뒤에 부른다.
+    /// Takes bytes to send to the peer, returning an empty array when there are none. Call after `init`, `startRequest`, `cancel`, or `receive`.
     public mutating func takeOutboundBytes() -> [UInt8] {
         if phase != .failed { queueWindowUpdates() }
         defer {
@@ -112,7 +112,7 @@ public struct HTTP2ClientConnection: Sendable {
         return outbound
     }
 
-    /// 적어 둔 창을 WINDOW_UPDATE로 바꾼다: 연결 하나, 그리고 스트림마다 하나(식별자 순).
+    /// Converts recorded window credit to WINDOW_UPDATE frames, one for the connection and one per stream in identifier order.
     private mutating func queueWindowUpdates() {
         outbound += Self.windowUpdates(.connection, credit: pendingConnectionWindowCredit)
         pendingConnectionWindowCredit = 0
@@ -123,7 +123,7 @@ public struct HTTP2ClientConnection: Sendable {
         }
     }
 
-    /// 한 프레임의 증가분은 2³¹−1까지다(§6.9). 그보다 크면 나눠 낸다.
+    /// One frame can increase the window by up to 2³¹−1 (§6.9). Split larger increases.
     private static func windowUpdates(_ stream: HTTP2StreamID, credit: Int) -> [UInt8] {
         var bytes: [UInt8] = []
         var remaining = credit
@@ -135,8 +135,8 @@ public struct HTTP2ClientConnection: Sendable {
         return bytes
     }
 
-    /// 상대에게서 받은 바이트를 넣는다. 프레임 경계와 무관하게 임의의 조각이어도 된다.
-    /// 오류를 던지면 연결은 끝난 것이다. 그때도 `takeOutboundBytes()`에 GOAWAY가 남아 있을 수 있다.
+    /// Accepts bytes received from the peer. Chunks may have any size and need not align with frame boundaries.
+    /// A thrown error means the connection has ended. A GOAWAY may still be pending in `takeOutboundBytes()`.
     public mutating func receive(_ bytes: [UInt8]) throws(HTTP2Error) -> [Event] {
         guard phase != .failed else { throw .connectionClosed }
         var events: [Event] = []
@@ -154,7 +154,7 @@ public struct HTTP2ClientConnection: Sendable {
         return events
     }
 
-    /// 연결 오류를 상대에게 알리고(GOAWAY) 연결을 끝낸다. 상대가 시작한 스트림은 받지 않으므로 last-stream-id는 0이다.
+    /// Reports a connection error to the peer (GOAWAY) and ends the connection. The client accepts no peer-initiated streams, so last-stream-id is 0.
     private mutating func fail(with error: HTTP2Error) {
         phase = .failed
         guard case .connectionFailed(let code) = error else { return }

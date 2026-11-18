@@ -1,17 +1,17 @@
 import Foundation
 
-/// RFC 7693 BLAKE2b. 순차 모드만.
+/// RFC 7693 BLAKE2b in sequential mode only.
 ///
-/// Argon2(RFC 9106 3.2)의 내부 해시 H^x로 쓴다. 규칙은 `BLAKE2s`와 같고 다른 것은 단어 크기(64비트),
-/// 블록(128바이트), 라운드 수(12), G의 회전 상수(32, 24, 16, 63)다(RFC 7693 2.1).
+/// Used as the internal hash H^x in Argon2 (RFC 9106 §3.2). It follows the same rules as `BLAKE2s` with a different word size (64 bits),
+/// block size (128 bytes), round count (12), and G rotation constants (32, 24, 16, 63) (RFC 7693 §2.1).
 public struct BLAKE2b: Sendable {
-    // RFC 7693 2.6, 부록 C. SHA-512의 IV와 같다.
+    // RFC 7693 §2.6 and Appendix C. This is the same as the SHA-512 IV.
     private static let iv: [UInt64] = [
         0x6A09_E667_F3BC_C908, 0xBB67_AE85_84CA_A73B, 0x3C6E_F372_FE94_F82B, 0xA54F_F53A_5F1D_36F1,
         0x510E_527F_ADE6_82D1, 0x9B05_688C_2B3E_6C1F, 0x1F83_D9AB_FB41_BD6B, 0x5BE0_CD19_137E_2179,
     ]
 
-    // RFC 7693 2.7의 SIGMA. 12라운드 가운데 10·11라운드는 0·1행을 다시 쓴다(`round % 10`).
+    // SIGMA from RFC 7693 §2.7. Of the 12 rounds, rounds 10 and 11 reuse rows 0 and 1 (`round % 10`).
     private static let sigma: [[Int]] = [
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
@@ -26,26 +26,26 @@ public struct BLAKE2b: Sendable {
     ]
 
     private var h: [UInt64]
-    /// 아직 압축하지 않은 입력. 마지막 블록을 표시해야 하므로 가득 차도 다음 입력이 올 때까지 둔다.
+    /// Input awaiting compression. The last block must be marked, so keep a full block until more input arrives.
     private var buffer: [UInt8] = []
-    /// 압축을 마친 바이트 수. 규격의 카운터는 128비트지만 2^64바이트를 넘는 입력은 없으므로 위 64비트는 늘 0이다.
+    /// The number of bytes already compressed. The specified counter is 128 bits, but input never exceeds 2^64 bytes, so the high 64 bits are always 0.
     private var compressed: UInt64 = 0
     private let outputByteCount: Int
 
-    /// outputByteCount는 1...64, key는 0...64바이트(RFC 7693 2.1). 범위 밖은 프로그래머 오류로 멈춘다.
+    /// Accepts outputByteCount in 1...64 and key in 0...64 bytes (RFC 7693 §2.1). Out-of-range values cause a trap as programmer errors.
     public init(outputByteCount: Int = 64, key: [UInt8] = []) {
-        precondition((1...64).contains(outputByteCount), "BLAKE2b 출력 길이는 1...64")
-        precondition(key.count <= 64, "BLAKE2b 키는 최대 64바이트")
+        precondition((1...64).contains(outputByteCount), "BLAKE2b output length must be in 1...64")
+        precondition(key.count <= 64, "BLAKE2b keys can be at most 64 bytes")
         self.outputByteCount = outputByteCount
         h = Self.iv
-        // 매개변수 블록 p[0](RFC 7693 3.3): 깊이 1, 팬아웃 1, 키 길이, 출력 길이.
+        // Parameter block p[0] (RFC 7693 §3.3), with depth 1, fanout 1, key length, and output length.
         h[0] ^= 0x0101_0000 ^ (UInt64(key.count) << 8) ^ UInt64(outputByteCount)
         if !key.isEmpty {
             buffer = key + [UInt8](repeating: 0, count: 128 - key.count)
         }
     }
 
-    /// 입력을 더한다. 여러 번 나누어 불러도 한 번에 넣은 것과 결과가 같다.
+    /// Adds input. Splitting the input across calls produces the same result as adding it in a single call.
     public mutating func update(_ data: some DataProtocol) {
         for byte in data {
             if buffer.count == 128 {
@@ -57,7 +57,7 @@ public struct BLAKE2b: Sendable {
         }
     }
 
-    /// 지금까지의 입력에 대한 해시. 상태를 바꾸지 않으므로 이어서 update할 수 있다.
+    /// Returns the hash of the input so far. Leaves the state intact so update can continue.
     public func finalize() -> [UInt8] {
         var state = h
         let total = compressed + UInt64(buffer.count)
@@ -73,14 +73,14 @@ public struct BLAKE2b: Sendable {
         return Array(out[0..<outputByteCount])
     }
 
-    /// 한 번에 해시한다. 인자 범위는 `init(outputByteCount:key:)`와 같다.
+    /// Hashes the input in one call. Uses the same argument ranges as `init(outputByteCount:key:)`.
     public static func hash(_ data: some DataProtocol, outputByteCount: Int = 64, key: [UInt8] = []) -> [UInt8] {
         var hasher = BLAKE2b(outputByteCount: outputByteCount, key: key)
         hasher.update(data)
         return hasher.finalize()
     }
 
-    /// 압축 함수 F(RFC 7693 3.2).
+    /// The compression function F (RFC 7693 §3.2).
     private static func compress(_ h: inout [UInt64], block: [UInt8], counter: UInt64, isLast: Bool) {
         var m = [UInt64](repeating: 0, count: 16)
         for i in 0..<16 {
@@ -90,7 +90,7 @@ public struct BLAKE2b: Sendable {
         }
         var v = h + iv
         v[12] ^= counter
-        // v[13] ^= 카운터의 위 64비트(늘 0).
+        // v[13] ^= the counter's high 64 bits (always 0).
         if isLast { v[14] = ~v[14] }
 
         func g(_ a: Int, _ b: Int, _ c: Int, _ d: Int, _ x: UInt64, _ y: UInt64) {

@@ -1,40 +1,40 @@
 import Foundation
 
-/// 설정의 서버 URL을 연결에 쓸 값으로 한 번 검증해 둔 것.
+/// The configured server URL, validated once into values used to connect.
 ///
-/// - `http://`이면 그 포트(없으면 80)로 평문 TCP, `https://`이면 그 포트(없으면 443)로 TLS를 연다.
-/// - 업그레이드 요청의 `Host`는 URL의 호스트와 (적혀 있으면) 포트다.
-/// - Noise 위 HTTP/2의 `:authority`는 포트 없는 호스트다(Go는 `"https://" + 호스트 + 경로`로 요청한다).
+/// - For `http://`, opens plaintext TCP on the given port (default 80). For `https://`, opens TLS on the given port (default 443).
+/// - The upgrade request's `Host` is the URL's host and port if specified.
+/// - The HTTP/2 `:authority` over Noise is the host without the port (Go requests `"https://" + host + path`).
 ///
-/// `shortcut:` Go는 `http://` URL이면 80과 443을 경쟁시키고(443은 500ms 늦게), ControlDialPlan과 HTTP 프록시도
-/// 따른다. Swiftail은 URL이 가리키는 하나만 시도한다. 필요해지는 시점: 443이나 80이 막힌 망이 보고될 때.
+/// `shortcut:` for an `http://` URL, Go races 80 and 443 (443 starts 500ms later) and also follows ControlDialPlan and HTTP proxies.
+/// Swiftail attempts only the endpoint named by the URL. Add support if a network is reported to block 443 or 80.
 ///
-/// `docs/protocol-notes/control-transport.md` 3.6, 4.2, 4.4, 4.7의 3.
+/// `docs/protocol-notes/control-transport.md` §3.6, §4.2, §4.4, §4.7 item 3.
 struct ControlEndpoint: Sendable, Equatable {
     var serverURL: URL
     var host: String
     var port: UInt16
     var usesTLS: Bool
-    /// 업그레이드 요청의 `Host` 값.
+    /// The `Host` value for the upgrade request.
     var hostHeader: String
-    /// HTTP/2 요청의 `:authority` 값.
+    /// The `:authority` value for HTTP/2 requests.
     var authority: String
 
     init(serverURL: URL) throws(ControlError) {
         guard let scheme = serverURL.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            throw .invalidConfiguration("서버 URL은 http:// 또는 https://여야 한다")
+            throw .invalidConfiguration("Server URL must use http:// or https://")
         }
         guard let host = serverURL.host(percentEncoded: false), !host.isEmpty,
               host.utf8.allSatisfy({ $0 > 0x20 && $0 != 0x7F && $0 != UInt8(ascii: "/") && $0 != UInt8(ascii: "@") })
-        else { throw .invalidConfiguration("서버 URL에 올바른 호스트가 없다") }
+        else { throw .invalidConfiguration("Server URL lacks a valid host") }
         guard serverURL.user == nil, serverURL.password == nil else {
-            throw .invalidConfiguration("서버 URL에 사용자 정보를 넣을 수 없다")
+            throw .invalidConfiguration("Server URL cannot contain user information")
         }
         let explicitPort = serverURL.port
         if let explicitPort, !(1...65_535).contains(explicitPort) {
-            throw .invalidConfiguration("서버 URL의 포트가 범위 밖이다")
+            throw .invalidConfiguration("Server URL port is out of range")
         }
-        // IPv6 리터럴은 Host·authority에서 대괄호로 감싼다.
+        // Enclose IPv6 literals in square brackets in Host and authority.
         let bracketed = host.contains(":") ? "[\(host)]" : host
 
         self.serverURL = serverURL
@@ -45,7 +45,7 @@ struct ControlEndpoint: Sendable, Equatable {
         authority = bracketed
     }
 
-    /// 서버 URL에 경로(와 질의)를 붙인 URL. Go처럼 문자열로 잇는다.
+    /// The server URL with a path (and query) appended. Concatenates strings as Go does.
     func url(path: String) -> URL? {
         var base = serverURL.absoluteString
         while base.hasSuffix("/") { base.removeLast() }

@@ -2,34 +2,34 @@ import Foundation
 import SwiftailHTTP2
 import SwiftailIO
 
-/// 등록 뒤의 `POST /machine/map` 두 가지와 맵 스트림 곁의 일.
+/// The two `POST /machine/map` requests after registration and operations accompanying the map stream.
 ///
-/// - 상태 올리기: `Stream=false, OmitPeers=true`. Hostinfo·NetInfo·DiscoKey·Endpoints를 올리고 응답 본문은
-///   끝까지 읽어 버린다. 스트림이 열린 뒤의 변경도 이 형태로만 보낸다. 다른 형태(`Stream=false,
-///   OmitPeers=false` 등)는 서버가 기존 스트림을 끊는다. 응답이 `timeouts.request` 안에 끝나지 않으면 연결 오류다.
-/// - 맵 스트림: `Stream=true, KeepAlive=true, Compress=""`. 본문을 `MapResponseFramer` → `MapSession`에 넣고
-///   결과를 tailnet lock 처리(`receivedLock`)에 넘긴다. netmap은 거기서 걸러진 뒤에 사건이 된다. 스트림마다 새
-///   `MapSession`으로 시작한다(세션 재개는 하지 않는다).
-/// - 두 요청 모두 `TKAHead`에 로컬 서명 권한 상태의 머리를 싣는다. 저장된 상태가 있으면 첫 요청부터다.
-/// - 감시: 맵 스트림에서 120초 동안 아무것도 오지 않으면 끊는다. 서버는 1분 안쪽 간격으로 KeepAlive를 보낸다.
-///   마지막 netmap의 self 노드 키 만료 시각에도 깨어나, 새 맵이 오지 않아도 만료를 알아챈다.
-/// - 만료: self 노드의 키가 만료되면 새 키로 다시 등록한다. 그렇게 받은 새 키도 곧바로 만료라면 `nodeKeyExpired`로
-///   끝낸다(다시 시도해도 같은 결과이고, 되풀이하면 서버를 몰아붙인다).
-/// - 핑: `Types`가 빈 `PingRequest`에는 그 URL에 HEAD로 답한다. 다른 종류는 무시한다.
+/// - State reporting: `Stream=false, OmitPeers=true`. Reports Hostinfo, NetInfo, DiscoKey, and Endpoints, then reads and discards
+///   the full response body. Also uses only this form for changes after the stream opens. Other forms (such as `Stream=false,
+///   OmitPeers=false`) make the server close the existing stream. A response that fails to finish within `timeouts.request` is a connection error.
+/// - Map stream: `Stream=true, KeepAlive=true, Compress=""`. Passes the body through `MapResponseFramer` → `MapSession` and
+///   hands off the result to tailnet lock processing (`receivedLock`). Emits the netmap as an event after filtering. Starts each stream
+///   with a new `MapSession`, without session resumption.
+/// - Both requests include the head of the local signing authority state in `TKAHead`, starting with the first request if state was stored.
+/// - Watchdog: Disconnects if nothing arrives on the map stream for 120 seconds. The server sends KeepAlive at intervals under 1 minute.
+///   Also wakes at the self node's key expiration time in the last netmap so it can detect expiration even without a new map.
+/// - Expiration: Re-registers with a fresh key when the self node key expires. If the new key also expires immediately, ends with `nodeKeyExpired`.
+///   Retrying would produce the same result, and repeated attempts would hammer the server.
+/// - Ping: Replies to a `PingRequest` with empty `Types` by sending HEAD to its URL. Ignores other types.
 ///
-/// `docs/protocol-notes/control-map.md` 3.4, 3.5, 4.2, 4.5, 5장, 6.2
-/// (출처: tailscale.com `control/controlclient/direct.go` `sendMapRequest`·`answerPing`, BSD-3-Clause).
+/// `docs/protocol-notes/control-map.md` §3.4, §3.5, §4.2, §4.5, Chapter 5, §6.2
+/// (origin: `sendMapRequest` and `answerPing` in tailscale.com `control/controlclient/direct.go`, BSD-3-Clause).
 extension ControlClient {
     static let watchdogTimeout = Duration.seconds(120)
     static let pingTimeout = Duration.seconds(15)
 
-    // MARK: 상태 올리기
+    // MARK: State reporting
 
     func uploadStatus(over connection: ControlConnection) async throws {
         let status = localStatus
         let tkaHead = lockHeadText
         guard status != uploadedStatus || tkaHead != uploadedTKAHead else { return }
-        guard let nodeKey = nodePublicKey else { throw ControlError.connection("등록 전에는 상태를 올릴 수 없다") }
+        guard let nodeKey = nodePublicKey else { throw ControlError.connection("Cannot report state before registration") }
         let request = MapRequest(
             nodeKey: nodeKey,
             discoKey: status.discoKey,
@@ -51,10 +51,10 @@ extension ControlClient {
         uploadedTKAHead = tkaHead
     }
 
-    // MARK: 맵 스트림
+    // MARK: Map stream
 
     func receiveMap(over connection: ControlConnection) async throws {
-        guard let nodeKey = nodePublicKey else { throw ControlError.connection("등록 전에는 맵을 받을 수 없다") }
+        guard let nodeKey = nodePublicKey else { throw ControlError.connection("Cannot receive the map before registration") }
         let status = localStatus
         let request = MapRequest(
             compress: "",
@@ -83,14 +83,14 @@ extension ControlClient {
             do {
                 responses = try framer.receive(chunk)
             } catch {
-                throw ControlError.connection("맵 프레임 오류: \(error)")
+                throw ControlError.connection("Map frame error: \(error)")
             }
             for response in responses {
                 let update: MapSession.Update
                 do {
                     update = try session.apply(response, receivedAt: Date())
                 } catch {
-                    throw ControlError.connection("맵 응답 적용 오류: \(error)")
+                    throw ControlError.connection("Error applying the map response: \(error)")
                 }
                 if let ping = update.pingRequest, queuedPings < Self.queuedPingLimit, let signals {
                     queuedPings += 1
@@ -99,10 +99,10 @@ extension ControlClient {
                 try receivedLock(update)
             }
         }
-        throw ControlError.connection("서버가 맵 스트림을 끝냈다")
+        throw ControlError.connection("Server ended the map stream")
     }
 
-    /// 걸러진 netmap을 사건으로 내고 self 노드의 키 만료를 본다. tailnet lock 처리(`emitNetmap`)만 부른다.
+    /// Emits the filtered netmap as an event and checks the self node's key expiration. Called only by tailnet lock processing (`emitNetmap`).
     func accept(_ netmap: Netmap) throws {
         eventContinuation.yield(.netmap(netmap))
         if netmap.selfNode.keyExpiry != selfKeyExpiry {
@@ -112,12 +112,12 @@ extension ControlClient {
         if let expiry = selfKeyExpiry, expiry <= Date() {
             try selfKeyExpired()
         }
-        // 만료된 self 노드는 성공이 아니다. 물러나기는 쓸 수 있는 netmap에서만 초기화한다.
+        // Only a usable netmap resets backoff. An expired self node does not count as success.
         renewedExpiredKey = false
         consecutiveFailures = 0
     }
 
-    /// self 노드의 키가 만료되었다. 새 키로 다시 등록하게 하고 연결을 끝낸다. 그렇게 등록한 새 키도 만료라면 끝낸다.
+    /// Handles an expired self node key by triggering registration with a fresh key and ending the connection. Stops if the newly registered key also expires.
     private func selfKeyExpired() throws {
         if renewedExpiredKey { throw ControlError.nodeKeyExpired }
         renewedExpiredKey = true
@@ -126,20 +126,20 @@ extension ControlClient {
         throw SessionInterruption.nodeKeyExpired
     }
 
-    /// 맵 스트림이 120초 동안 조용하면 던진다. 기준 시각은 `receiveMap`이 받을 때마다 옮긴다.
-    /// self 노드의 키 만료 시각이 더 이르면 그때도 깨어나 만료를 처리한다. 만료 시각이 바뀌면(첫 netmap 포함)
-    /// 곧바로 깨어나 깨어날 시각을 다시 계산한다.
+    /// Throws after 120 seconds of map stream inactivity. `receiveMap` advances the reference time whenever it receives data.
+    /// If the self node key expires sooner, wakes then to handle expiration. When the expiration time changes (including the first netmap),
+    /// wakes immediately to recalculate when to wake up.
     func watchMapActivity() async throws {
         while true {
             var deadline = lastMapActivity + Self.watchdogTimeout
             if let expiry = selfKeyExpiry {
-                // 감시 주기보다 먼 만료는 다음에 깨어날 때 다시 본다. 먼 날짜를 Duration으로 바꾸지 않는다.
+                // Check expirations beyond the watchdog interval at the next wakeup. Avoid converting a distant date to Duration.
                 let untilExpiry = expiry.timeIntervalSinceNow
                 if untilExpiry < Self.watchdogTimeout / .seconds(1) {
                     deadline = min(deadline, .now + .seconds(max(untilExpiry, 0)))
                 }
             }
-            // 바뀜 알림은 잠들 때마다 새 흐름으로 받는다. 경쟁에서 진 쪽을 취소하면 그 흐름은 끝나기 때문이다.
+            // Receive change notifications on a fresh stream for each sleep, since canceling the loser of the race closes that stream.
             let (expiryChanges, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
             selfKeyExpiryChanged = continuation
             let wake = deadline
@@ -154,19 +154,19 @@ extension ControlClient {
                 try selfKeyExpired()
             }
             if lastMapActivity + Self.watchdogTimeout <= .now {
-                throw ControlError.connection("맵 스트림에서 120초 동안 아무것도 오지 않았다")
+                throw ControlError.connection("No data arrived on the map stream for 120 seconds")
             }
         }
     }
 
-    // MARK: 신호
+    // MARK: Signals
 
-    /// 맵 스트림 밖의 일을 차례로 처리한다: 바뀐 상태 올리기, 대화형 로그인 요청, 핑 답하기.
+    /// Handles work outside the map stream in order: report changed state, request interactive login, and answer pings.
     func handle(_ signals: AsyncStream<SessionSignal>, over connection: ControlConnection) async throws {
         for await signal in signals {
             switch signal {
             case .statusChanged:
-                // 올리는 동안 또 바뀌면 신호가 다시 들어오게 먼저 푼다.
+                // Clear the flag first so another change during reporting can enqueue a new signal.
                 isStatusChangeQueued = false
                 try await uploadStatusRetrying(over: connection)
             case .loginRequested:
@@ -180,8 +180,8 @@ extension ControlClient {
         }
     }
 
-    /// 상태 올리기가 HTTP 오류로 실패하면 스트림은 그대로 두고 물러났다가 다시 올린다.
-    /// 연결 오류는 던진다(스트림도 같은 연결이므로 함께 끝난다).
+    /// If state reporting fails with an HTTP error, keeps the stream open and backs off before reporting again.
+    /// Throws connection errors because they also end the stream on that connection.
     private func uploadStatusRetrying(over connection: ControlConnection) async throws {
         var failures = 0
         while true {
@@ -197,11 +197,11 @@ extension ControlClient {
         }
     }
 
-    /// 핑 URL에 HEAD를 보낸다. `URLIsNoise`면 Noise 연결 위로, 아니면 평범한 HTTP(S)로. 실패는 무시한다
-    /// (Go도 기록만 한다).
+    /// Sends HEAD to the ping URL over the Noise connection when `URLIsNoise` is set, or over ordinary HTTP(S) otherwise. Ignores failures
+    /// (Go only logs them).
     ///
-    /// shortcut: Noise가 아닌 핑의 HEAD는 URLSession이라 `setNetworkInterface`의 인터페이스에 묶이지 않는다(`ServerKey`의
-    /// `/key`와 같은 사정이다). 필요해지는 시점: 실기기에서 이 요청이 터널로 들어가는 것이 보일 때.
+    /// shortcut: uses URLSession for non-Noise HEAD pings, so they are not bound to the interface from `setNetworkInterface` (the same as `ServerKey`'s
+    /// `/key`). Add binding if a real device shows these requests entering the tunnel.
     private func answer(_ ping: PingRequest, over connection: ControlConnection) async {
         guard let url = URL(string: ping.url), ["http", "https"].contains(url.scheme?.lowercased()) else { return }
         if ping.urlIsNoise {

@@ -1,17 +1,17 @@
 import CryptoKit
 import Foundation
 
-/// NaCl crypto_secretbox_xsalsa20poly1305. 출력 배치는 tag(16) ‖ ciphertext.
+/// NaCl crypto_secretbox_xsalsa20poly1305. The output layout is tag(16) ‖ ciphertext.
 public enum NaClSecretBox {
     public static let keyByteCount = 32
     public static let nonceByteCount = 24
     public static let overhead = 16
 
-    /// plaintext를 암호화하고 인증한다. key는 32바이트, nonce는 24바이트여야 하며 아니면 `invalidLength`.
+    /// Encrypts and authenticates plaintext. Requires a 32-byte key and 24-byte nonce, otherwise throws `invalidLength`.
     public static func seal(_ plaintext: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws(CryptoError) -> [UInt8] {
         guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw CryptoError.invalidLength }
         let message = Array(plaintext)
-        // 키스트림의 앞 32바이트는 Poly1305 키, 그 뒤가 암호화 스트림이다.
+        // The first 32 bytes of the keystream are the Poly1305 key. The rest is the encryption stream.
         let stream = Salsa20.xsalsa20Keystream(key: key, nonce: nonce, count: 32 + message.count)
         var ciphertext = [UInt8](repeating: 0, count: message.count)
         for i in 0..<message.count { ciphertext[i] = message[i] ^ stream[32 + i] }
@@ -19,8 +19,8 @@ public enum NaClSecretBox {
         return tag + ciphertext
     }
 
-    /// box(tag ‖ ciphertext)를 검증하고 복호화한다. 길이가 틀리면 `invalidLength`, 태그가 틀리면 `authenticationFailed`.
-    /// 인증에 실패하면 평문을 돌려주지 않는다.
+    /// Verifies and decrypts the box (tag ‖ ciphertext). Throws `invalidLength` for an incorrect length or `authenticationFailed` for an incorrect tag.
+    /// Returns plaintext only if authentication succeeds.
     public static func open(_ box: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws(CryptoError) -> [UInt8] {
         guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw CryptoError.invalidLength }
         let bytes = Array(box)
@@ -36,11 +36,11 @@ public enum NaClSecretBox {
     }
 }
 
-/// NaCl crypto_box_curve25519xsalsa20poly1305의 사전 계산(beforenm).
-/// 결과 키로 NaClSecretBox.seal·open을 부르면 crypto_box와 같다.
+/// Precomputation (beforenm) for NaCl crypto_box_curve25519xsalsa20poly1305.
+/// Calling NaClSecretBox.seal or NaClSecretBox.open with the resulting key is equivalent to crypto_box.
 public enum NaClBox {
-    /// HSalsa20(key: X25519(privateKey, peerPublicKey), input: 0^16). 32바이트.
-    /// 길이가 32바이트가 아니면 `invalidLength`, X25519 결과가 전부 0이면 `invalidKey`.
+    /// Returns 32 bytes from HSalsa20(key: X25519(privateKey, peerPublicKey), input: 0^16).
+    /// Throws `invalidLength` for a length other than 32 bytes or `invalidKey` for an all-zero X25519 result.
     public static func sharedKey(privateKey: [UInt8], peerPublicKey: [UInt8]) throws(CryptoError) -> [UInt8] {
         guard privateKey.count == 32, peerPublicKey.count == 32 else { throw CryptoError.invalidLength }
         let secret: [UInt8]
@@ -56,23 +56,23 @@ public enum NaClBox {
     }
 }
 
-/// draft-irtf-cfrg-xchacha-03. 출력 배치는 ciphertext ‖ tag(16).
+/// draft-irtf-cfrg-xchacha-03. The output layout is ciphertext ‖ tag(16).
 public enum XChaCha20Poly1305 {
     public static let keyByteCount = 32
     public static let nonceByteCount = 24
 
-    /// 부분 키 = HChaCha20(key, nonce[0..<16]), ChaCha20-Poly1305 nonce = 0^4 ‖ nonce[16..<24].
+    /// Subkey = HChaCha20(key, nonce[0..<16]), ChaCha20-Poly1305 nonce = 0^4 ‖ nonce[16..<24].
     private static func subkeyAndNonce(key: [UInt8], nonce: [UInt8]) throws(CryptoError) -> (SymmetricKey, ChaChaPoly.Nonce) {
         guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw .invalidLength }
         let subkey = hchacha20(key: key, input: Array(nonce[0..<16]))
-        // 12바이트이므로 실패하지 않지만 CryptoKit의 오류 타입을 밖으로 내보내지 않는다.
+        // The 12-byte nonce cannot fail, but keep CryptoKit's error type internal.
         guard let chachaNonce = try? ChaChaPoly.Nonce(data: [UInt8](repeating: 0, count: 4) + nonce[16..<24]) else {
             throw .invalidLength
         }
         return (SymmetricKey(data: subkey), chachaNonce)
     }
 
-    /// plaintext를 암호화하고 aad와 함께 인증한다. key는 32바이트, nonce는 24바이트여야 하며 아니면 `invalidLength`.
+    /// Encrypts plaintext and authenticates it with aad. Requires a 32-byte key and 24-byte nonce, otherwise throws `invalidLength`.
     public static func seal(_ plaintext: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8] {
         let (subkey, chachaNonce) = try subkeyAndNonce(key: key, nonce: nonce)
         guard let box = try? ChaChaPoly.seal(plaintext, using: subkey, nonce: chachaNonce, authenticating: aad) else {
@@ -81,7 +81,7 @@ public enum XChaCha20Poly1305 {
         return Array(box.ciphertext) + Array(box.tag)
     }
 
-    /// sealed(ciphertext ‖ tag)를 검증하고 복호화한다. 길이가 틀리면 `invalidLength`, 태그가 틀리면 `authenticationFailed`.
+    /// Verifies and decrypts sealed (ciphertext ‖ tag). Throws `invalidLength` for an incorrect length or `authenticationFailed` for an incorrect tag.
     public static func open(_ sealed: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8] {
         let (subkey, chachaNonce) = try subkeyAndNonce(key: key, nonce: nonce)
         let bytes = Array(sealed)

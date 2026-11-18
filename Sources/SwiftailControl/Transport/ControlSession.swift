@@ -1,23 +1,23 @@
 import CryptoKit
 
-/// 전송 단계: 평문 바이트 스트림 ↔ Noise 레코드.
+/// The transport phase, converting between a plaintext byte stream and Noise records.
 ///
-/// 레코드 하나는 머리 포함 4,096바이트까지이고 평문은 4,077바이트까지다. 보낼 때는 평문을 그 단위로
-/// 자르고, 받을 때는 임의의 조각으로 온 바이트에서 완성된 레코드만 열어 평문을 이어 붙인다. 레코드
-/// 경계는 위 계층(HTTP/2) 데이터의 경계와 무관하다.
+/// A record is up to 4,096 bytes including its header, with up to 4,077 bytes of plaintext. Sending splits plaintext into
+/// chunks of that size. Receiving opens only complete records from arbitrary byte chunks and concatenates their plaintext. Record
+/// boundaries are independent of higher-layer (HTTP/2) data boundaries.
 ///
-/// 방향마다 카운터가 0에서 시작해 레코드 하나마다 1씩 늘고 nonce는 빅엔디언이다. 빈 평문 레코드도
-/// 태그를 검증하고 nonce를 소비한다. 레코드에는 AAD가 없다. 종료 메시지는 없다.
+/// Each direction's counter starts at 0 and increases by 1 per record. The nonce is big-endian. Even an empty plaintext record
+/// verifies the tag and consumes a nonce. Records have no AAD. There is no termination message.
 ///
-/// 받은 레코드가 형식에 맞지 않거나 열리지 않으면 상대와 nonce가 어긋난 것이므로 키를 버리고 `closed`가
-/// 된다. Go는 인증 실패에서만 키를 지우지만, 여기서는 어떤 수신 오류 뒤에도 다시 시작하지 않는다.
+/// A malformed or unopenable received record means the nonce is out of sync with the peer, so the session discards the keys and becomes `closed`.
+/// Go clears keys only on authentication failure. This session never restarts after any receive error.
 ///
-/// `docs/protocol-notes/control-transport.md` 3.4·3.5절, 4.6절
-/// (출처: tailscale.com `control/controlbase/conn.go`).
+/// `docs/protocol-notes/control-transport.md` §3.4, §3.5, §4.6
+/// (origin: tailscale.com `control/controlbase/conn.go`).
 public struct ControlSession: Sendable {
     private var sender: RecordCipher?
     private var receiver: RecordCipher?
-    /// 아직 다 오지 않은 레코드 하나 분량(4,095바이트 이하)만 남는다.
+    /// Retains only one incomplete record's worth of bytes (at most 4,095 bytes).
     private var buffer: [UInt8] = []
 
     init(keys: TransportKeys) {
@@ -25,11 +25,11 @@ public struct ControlSession: Sendable {
         receiver = RecordCipher(key: keys.receive)
     }
 
-    /// 평문을 레코드(들)로 만든다. 한 레코드의 평문은 최대 4,077바이트다.
+    /// Converts plaintext into one or more records. The maximum plaintext per record is 4,077 bytes.
     ///
-    /// 빈 평문은 레코드를 만들지 않는다(Go의 `Write([])`와 같다).
+    /// Empty plaintext produces no record, matching Go's `Write([])`.
     ///
-    /// - Throws: 세션이 닫혔거나 송신 카운터가 고갈되면 `closed`.
+    /// - Throws: `closed` if the session is closed or the send counter is exhausted.
     public mutating func seal(_ plaintext: [UInt8]) throws(ControlTransportError) -> [UInt8] {
         guard var sender else { throw .closed }
         var records: [UInt8] = []
@@ -47,10 +47,10 @@ public struct ControlSession: Sendable {
         return records
     }
 
-    /// 받은 바이트를 넣고, 완성된 레코드들의 평문을 이어 돌려준다. 덜 온 레코드는 안에 둔다.
+    /// Accepts incoming bytes and returns concatenated plaintext from complete records. Keeps incomplete records buffered.
     ///
-    /// - Throws: type이 레코드가 아니면 `malformed`, 레코드가 4,096바이트를 넘으면 `messageTooLarge`,
-    ///   열리지 않으면 `authenticationFailed`. 어느 경우든 세션은 닫힌다. 닫힌 뒤에는 `closed`.
+    /// - Throws: `malformed` if the type is not a record, `messageTooLarge` if the record exceeds 4,096 bytes,
+    ///   or `authenticationFailed` if it cannot open the record. All cases close the session. Subsequent calls throw `closed`.
     public mutating func receive(_ bytes: [UInt8]) throws(ControlTransportError) -> [UInt8] {
         guard var receiver else { throw .closed }
         buffer += bytes
@@ -78,7 +78,7 @@ public struct ControlSession: Sendable {
         return plaintext
     }
 
-    /// 키와 받던 바이트를 버린다.
+    /// Discards keys and buffered incoming bytes.
     private mutating func close() {
         sender = nil
         receiver = nil
@@ -87,28 +87,28 @@ public struct ControlSession: Sendable {
 }
 
 extension ControlSession: CustomReflectable {
-    /// 전송 키를 쥐고 있으므로 `dump`와 `print`에 아무것도 드러내지 않는다.
+    /// Exposes nothing to `dump` or `print` because it holds transport keys.
     public var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
-/// 한 방향의 키와 카운터.
+/// The key and counter for one direction.
 private struct RecordCipher: Sendable {
     let key: SymmetricKey
-    /// 다음 레코드의 카운터. 2⁶⁴−1에 이르면 더 쓰지 못한다(Go의 `invalidNonce`).
+    /// The next record counter. It becomes unusable at 2⁶⁴−1 (Go's `invalidNonce`).
     private var counter: UInt64 = 0
 
     init(key: SymmetricKey) {
         self.key = key
     }
 
-    /// 고갈되었으면 `nil`.
+    /// Returns `nil` if exhausted.
     mutating func seal(_ plaintext: [UInt8]) -> [UInt8]? {
         guard counter != .max else { return nil }
         defer { counter += 1 }
         return NoiseAEAD.seal(plaintext, key: key, counter: counter)
     }
 
-    /// 열지 못해도 카운터는 소비한다(Go와 같다). 어차피 세션은 닫힌다.
+    /// Consume the counter even if opening fails, as in Go. The session closes anyway.
     mutating func open(_ sealed: ArraySlice<UInt8>) throws(ControlTransportError) -> [UInt8] {
         guard counter != .max else { throw .closed }
         defer { counter += 1 }

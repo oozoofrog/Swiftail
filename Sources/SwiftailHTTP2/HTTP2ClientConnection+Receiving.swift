@@ -1,14 +1,14 @@
-/// 받은 프레임의 처리: 프레임 종류마다 상태를 바꾸고, 보낼 답을 쌓고, 사건을 낸다.
+/// Handles incoming frames by updating state, queuing replies, and emitting events according to the frame type.
 ///
-/// 오류는 두 층이다. 연결 오류(규격 위반, 압축 상태 어긋남)는 던져서 연결을 끝낸다. 스트림 오류(잘못된
-/// 응답 하나)는 그 스트림만 RST_STREAM으로 끊고 `streamClosed` 사건으로 알린다(RFC 9113 §5.4).
+/// Errors have two levels. Connection errors (specification violations or divergent compression state) throw and end the connection. A stream error
+/// (a single invalid response) resets only that stream with RST_STREAM and reports a `streamClosed` event (RFC 9113 §5.4).
 extension HTTP2ClientConnection {
     mutating func handle(_ frame: Frame, events: inout [Event]) throws(HTTP2Error) {
-        // 서버의 첫 프레임은 SETTINGS여야 한다(§3.4).
+        // The server's first frame must be SETTINGS (§3.4).
         if !hasReceivedSettings {
             guard case .settings = frame else { throw .connection(.protocolError) }
         }
-        // 헤더 블록 중간에는 같은 스트림의 CONTINUATION만 올 수 있다(§6.10).
+        // Only a CONTINUATION for the same stream can arrive within a header block (§6.10).
         if headerBlock != nil {
             guard case .continuation(let stream, let fragment, let endHeaders) = frame, stream == headerBlock?.stream else {
                 throw .connection(.protocolError)
@@ -21,8 +21,8 @@ extension HTTP2ClientConnection {
         case .data(let id, let payload, let endStream, let flowControlledLength):
             try receiveData(id, payload, endStream: endStream, flowControlledLength: flowControlledLength, events: &events)
         case .headers(let id, let fragment, let endStream, let endHeaders):
-            // 요청한 적 없는 스트림(짝수 포함)의 응답은 규격 위반이다. 이미 닫힌 스트림이면 헤더 블록을
-            // 그래도 해제해야 한다: 동적 표가 상대와 어긋나지 않게 하기 위해서다.
+            // A response on a never-requested stream (including even-numbered streams) violates the specification. For an already closed stream,
+            // still decode its header block to keep the dynamic table synchronized with the peer.
             try requireNotIdle(id)
             headerBlock = HeaderBlockInProgress(stream: id, bytes: [], endStream: endStream)
             try appendToHeaderBlock(fragment, endHeaders: endHeaders, events: &events)
@@ -38,8 +38,8 @@ extension HTTP2ClientConnection {
         case .settingsAcknowledgement, .priority, .unknown:
             break
         case .pushPromise:
-            // ENABLE_PUSH=0을 알렸으므로 PUSH_PROMISE는 연결 오류다(§6.6).
-            // shortcut: 서버 푸시는 받지 않는다, 푸시를 쓰는 서버와 말해야 할 때 올린다.
+            // We advertised ENABLE_PUSH=0, so PUSH_PROMISE is a connection error (§6.6).
+            // shortcut: rejects server push, add support when interoperability with a push server is required.
             throw .connection(.protocolError)
         case .ping(let ack, let data):
             if !ack { queueControl(FrameEncoder.pingAcknowledgement(data)) }
@@ -50,14 +50,14 @@ extension HTTP2ClientConnection {
         }
     }
 
-    // MARK: 스트림 식별자
+    // MARK: Stream identifiers
 
-    /// 요청한 적 없는 스트림이면 연결 오류. 클라이언트가 연 스트림은 홀수이고 `nextStreamID` 미만이다.
+    /// A stream never requested is a connection error. Client-initiated streams have odd identifiers below `nextStreamID`.
     private func requireNotIdle(_ id: HTTP2StreamID) throws(HTTP2Error) {
         guard id.rawValue % 2 == 1, id.rawValue < nextStreamID else { throw .connection(.protocolError) }
     }
 
-    /// 상대가 요구해서 생긴 제어 프레임을 보낼 바이트에 쌓는다. 쌓인 양의 한도는 `receive`가 프레임마다 확인한다.
+    /// Queues control frames required by the peer in the outbound bytes. `receive` checks the queued size after each frame.
     private mutating func queueControl(_ frame: [UInt8]) {
         outbound += frame
         pendingControlBytes += frame.count
@@ -69,10 +69,10 @@ extension HTTP2ClientConnection {
         _ id: HTTP2StreamID, _ payload: [UInt8], endStream: Bool, flowControlledLength: Int, events: inout [Event]
     ) throws(HTTP2Error) {
         try requireNotIdle(id)
-        // 받은 만큼 창을 돌려준다. 연결 창은 스트림이 닫혔어도 이미 줄었으므로 늘 돌려준다. 프레임마다
-        // WINDOW_UPDATE를 만들지 않고 돌려줄 양만 적어 두었다가 `takeOutboundBytes()`에서 한 번에 낸다:
-        // 작은 DATA 프레임이 한꺼번에 와도 답이 프레임 수만큼 쌓이지 않는다.
-        // shortcut: 받는 쪽 역압은 없다(소비가 느려도 서버를 늦추지 못한다), 큰 응답을 스트리밍으로 소비해야 할 때 올린다.
+        // Return window credit for the amount received. The connection window has already decreased even for a closed stream, so always return its credit.
+        // Record the credit to return and emit it together in `takeOutboundBytes()`, avoiding a WINDOW_UPDATE per frame.
+        // This keeps a burst of small DATA frames from queuing one reply per frame.
+        // shortcut: no receive-side backpressure (slow consumption cannot slow the server), add it when large responses need streaming consumption.
         pendingConnectionWindowCredit += flowControlledLength
         guard let stream = streams[id] else { return }
         switch stream.receiving {
@@ -81,7 +81,7 @@ extension HTTP2ClientConnection {
         case .ended:
             resetStream(id, code: .streamClosed, events: &events)
         case .receivingBody:
-            // content-length보다 많이 오면 더 받지 않고 끊는다(§8.1.1).
+            // Reset the stream if the received length exceeds content-length and stop receiving more (§8.1.1).
             let received = stream.receivedBodyLength + payload.count
             if let declared = stream.declaredBodyLength, received > declared {
                 resetStream(id, code: .protocolError, events: &events)
@@ -94,9 +94,9 @@ extension HTTP2ClientConnection {
         }
     }
 
-    // MARK: 헤더 블록
+    // MARK: Header blocks
 
-    /// 헤더 블록 조각을 이어 붙이고, 마지막 조각이면 해제해서 스트림에 전달한다.
+    /// Appends a header block fragment. Decodes the block and delivers it to the stream on the last fragment.
     private mutating func appendToHeaderBlock(_ fragment: [UInt8], endHeaders: Bool, events: inout [Event]) throws(HTTP2Error) {
         guard var block = headerBlock else { throw .connection(.protocolError) }
         guard block.bytes.count + fragment.count <= Self.maximumHeaderBlockSize else { throw .connection(.enhanceYourCalm) }
@@ -115,7 +115,7 @@ extension HTTP2ClientConnection {
         receiveHeaders(block.stream, fields, endStream: block.endStream, events: &events)
     }
 
-    /// 해제한 헤더 필드를 스트림에 전달한다. 응답 머리, 1xx 임시 응답, 트레일러 셋 중 하나다.
+    /// Delivers decoded header fields to the stream. They are a response head, a 1xx informational response, or trailers.
     private mutating func receiveHeaders(_ id: HTTP2StreamID, _ fields: [HeaderField], endStream: Bool, events: inout [Event]) {
         guard let stream = streams[id] else { return }
         switch stream.receiving {
@@ -127,20 +127,20 @@ extension HTTP2ClientConnection {
                 return
             }
             if (100...199).contains(head.status) {
-                // 101은 HTTP/2에서 쓰지 않는다(§8.6). 그 밖의 임시 응답(100 Continue 등)은 전달하지 않고
-                // 최종 응답을 기다린다(§8.1). 임시 응답이 스트림을 끝내면 안 된다.
+                // HTTP/2 does not use 101 (§8.6). Ignore other informational responses (such as 100 Continue) and
+                // wait for the final response (§8.1). An informational response must not end the stream.
                 if endStream || head.status == 101 { resetStream(id, code: .protocolError, events: &events) }
                 return
             }
             streams[id]?.receiving = .receivingBody
-            // HEAD 응답과 204·304는 본문이 없으므로 content-length가 있어도 본문 길이와 맞춰 보지 않는다(§8.1.1).
+            // HEAD responses and 204 and 304 responses have no body, so skip the body length check even if content-length is present (§8.1.1).
             let hasNoBody = stream.isHeadRequest || head.status == 204 || head.status == 304
             streams[id]?.declaredBodyLength = hasNoBody ? nil : head.contentLength
             events.append(.responseHead(id, status: head.status, headers: head.headers))
             if endStream { finishResponse(id, events: &events) }
         case .receivingBody:
-            // shortcut: 트레일러는 검증만 하고 버린다, 트레일러가 의미를 갖는 응답을 다루게 되면 올린다.
-            // 본문 뒤의 헤더 블록은 트레일러이고 END_STREAM이 있어야 하며, 의사 헤더를 가질 수 없다(§8.1, §8.1.1).
+            // shortcut: validates and discards trailers, add support when handling responses where trailers carry meaning.
+            // A header block after the body is trailers. It must have END_STREAM and cannot contain pseudo-headers (§8.1, §8.1.1).
             guard endStream, fields.allSatisfy({ $0.name.utf8.first != UInt8(ascii: ":") && HeaderValidation.isValid($0) }) else {
                 resetStream(id, code: .protocolError, events: &events)
                 return
@@ -149,9 +149,9 @@ extension HTTP2ClientConnection {
         }
     }
 
-    // MARK: 스트림 끝
+    // MARK: Stream end
 
-    /// 응답이 END_STREAM으로 끝났다. 받은 본문이 `content-length`와 다르면 잘못된 응답이다(§8.1.1).
+    /// The response ended with END_STREAM. A received body length different from `content-length` is a malformed response (§8.1.1).
     private mutating func finishResponse(_ id: HTTP2StreamID, events: inout [Event]) {
         if let stream = streams[id], let declared = stream.declaredBodyLength, stream.receivedBodyLength != declared {
             resetStream(id, code: .protocolError, events: &events)
@@ -160,8 +160,8 @@ extension HTTP2ClientConnection {
         }
     }
 
-    /// 응답이 END_STREAM으로 끝났다. 요청을 다 보냈으면 스트림을 잊고, 아직 보낼 본문이 남았으면 서버가
-    /// 본문을 기다리지 않고 응답한 것이므로 남은 본문을 접는다(§8.1).
+    /// The response ended with END_STREAM. Forget the stream if the full request was sent. If any body remains unsent, the server
+    /// responded without waiting for the body, so abandon the rest (§8.1).
     private mutating func finishReceiving(_ id: HTTP2StreamID, events: inout [Event]) {
         events.append(.streamClosed(id, resetCode: nil))
         guard let stream = streams[id] else { return }
@@ -171,8 +171,8 @@ extension HTTP2ClientConnection {
         streams.removeValue(forKey: id)
     }
 
-    /// 스트림 오류: 그 스트림만 RST_STREAM으로 끊는다. 응답을 끝까지 받은 스트림이면 사건은 이미 났으므로
-    /// 다시 알리지 않는다.
+    /// A stream error resets only that stream with RST_STREAM. If the full response has already been received, the event has already
+    /// been emitted, so skip the duplicate notification.
     private mutating func resetStream(_ id: HTTP2StreamID, code: HTTP2ErrorCode, events: inout [Event]) {
         guard let stream = streams.removeValue(forKey: id) else { return }
         queueControl(FrameEncoder.rstStream(id, code: code))
@@ -185,8 +185,8 @@ extension HTTP2ClientConnection {
 
     private mutating func applyPeerSettings(_ settings: [Frame.Setting]) throws(HTTP2Error) {
         hasReceivedSettings = true
-        // 열린 스트림의 창은 초깃값이 바뀐 만큼 함께 바뀐다(§6.9.2). 설정은 받은 순서대로 하나씩 적용하고
-        // 매번 넘침을 확인한다: 한 프레임 안에서 창이 잠시 2^31-1을 넘었다가 돌아오는 경우도 오류다.
+        // The windows of open streams change by the same amount as the initial value (§6.9.2). Apply settings one at a time in received order
+        // and check for overflow each time. Even a window that briefly exceeds 2^31-1 within one frame and then returns is an error.
         for setting in settings {
             let windowDelta = try peerSettings.apply([setting])
             guard windowDelta != 0 else { continue }
@@ -228,8 +228,8 @@ extension HTTP2ClientConnection {
         sendBody(of: id)
     }
 
-    /// GOAWAY: `lastStreamID`보다 큰 스트림은 서버가 처리하지 않았으므로 버린다. 나머지는 끝까지 받는다.
-    /// 새 요청은 더 시작하지 않는다.
+    /// GOAWAY discards streams above `lastStreamID` because the server left them unprocessed. Receives the other streams to completion.
+    /// Blocks new requests.
     private mutating func receiveGoAway(lastStreamID: HTTP2StreamID, code: UInt32, events: inout [Event]) {
         if phase == .open { phase = .draining }
         streams = streams.filter { $0.key.rawValue <= lastStreamID.rawValue }

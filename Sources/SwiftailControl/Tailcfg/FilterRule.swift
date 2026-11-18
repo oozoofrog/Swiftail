@@ -1,24 +1,24 @@
 import SwiftailBase
 
-/// 수신 패킷 필터의 규칙 하나. Go `tailcfg.FilterRule`.
+/// One inbound packet filter rule. Go `tailcfg.FilterRule`.
 ///
-/// 맵 응답의 `PacketFilter`·`PacketFilters`로 온다. 규칙 목록은 "허용"의 합이다: 어느 규칙에도 맞지 않는
-/// 패킷은 버린다. 그래서 빈 목록은 "모두 차단"이다. 규칙의 해석과 집행은 데이터면(M5)이 맡는다.
-/// 이 계층은 서버가 보낸 표현(`srcIPs`의 `"*"`, CIDR, 범위, `"cap:"` 등)을 그대로 보관한다.
+/// Arrives in `PacketFilter` or `PacketFilters` in a map response. The rules form a union of permissions, and packets that match no rule
+/// are dropped. An empty list therefore blocks everything. The data plane (M5) interprets and enforces the rules.
+/// This layer preserves the server's representations as sent (such as `"*"`, CIDR, ranges, and `"cap:"` in `srcIPs`).
 ///
-/// `dstPorts`는 네트워크 접근 허용이고, `capGrant`는 WhoIs가 돌려줄 애플리케이션 권한이다. 둘은 한 규칙에
-/// 함께 오지 않는다.
-/// `docs/protocol-notes/control-map.md` 4.3 (출처: tailscale.com `tailcfg/tailcfg.go` `FilterRule`).
+/// `dstPorts` allows network access, and `capGrant` provides application capabilities returned by WhoIs. A rule never contains
+/// both.
+/// `docs/protocol-notes/control-map.md` §4.3 (origin: `FilterRule` in tailscale.com `tailcfg/tailcfg.go`).
 public struct FilterRule: Decodable, Sendable, Equatable {
-    /// 출발지 표현: IP, CIDR, `"a-b"` 범위, `"*"`, `"cap:…"` 가운데 하나씩.
+    /// Source expressions, each an IP, CIDR, `"a-b"` range, `"*"`, or `"cap:…"`.
     public internal(set) var srcIPs: [String]
-    /// 옛 형식: `srcIPs`의 같은 자리 IP에 붙일 접두 길이.
+    /// Legacy prefix lengths for the IPs at the corresponding positions in `srcIPs`.
     public internal(set) var srcBits: [Int]
-    /// 허용하는 목적지와 포트 범위.
+    /// The allowed destinations and port ranges.
     public internal(set) var dstPorts: [NetPortRange]
-    /// 허용하는 IP 프로토콜 번호. 비면 TCP·UDP·ICMP다.
+    /// The allowed IP protocol numbers. An empty list means TCP, UDP, and ICMP.
     public internal(set) var ipProto: [Int]
-    /// 출발지에게 주는 애플리케이션 권한.
+    /// The application capabilities granted to the source.
     public internal(set) var capGrant: [CapGrant]
 
     private enum CodingKeys: String, CodingKey {
@@ -39,13 +39,13 @@ public struct FilterRule: Decodable, Sendable, Equatable {
     }
 }
 
-/// 목적지 주소 표현과 포트 범위. Go `tailcfg.NetPortRange`.
+/// A destination address expression and port range. Go `tailcfg.NetPortRange`.
 public struct NetPortRange: Decodable, Sendable, Equatable {
-    /// 목적지 표현. `FilterRule.srcIPs`와 같은 형식이다.
+    /// The destination expression, in the same format as `FilterRule.srcIPs`.
     public internal(set) var ip: String
-    /// 옛 형식: `ip`에 붙일 접두 길이. 없으면 `nil`.
+    /// The legacy prefix length to apply to `ip`, or `nil` if absent.
     public internal(set) var bits: Int?
-    /// 허용하는 포트 범위.
+    /// The allowed port range.
     public internal(set) var ports: PortRange
 
     private enum CodingKeys: String, CodingKey {
@@ -62,10 +62,10 @@ public struct NetPortRange: Decodable, Sendable, Equatable {
     }
 }
 
-/// 양 끝을 포함하는 포트 범위. Go `tailcfg.PortRange`.
+/// An inclusive port range. Go `tailcfg.PortRange`.
 ///
-/// `ClosedRange<UInt16>`를 쓰지 않는 까닭: Go는 `first > last`(어떤 포트도 맞지 않는 범위)를 막지 않는다.
-/// 그런 규칙 하나 때문에 맵 응답 전체를 거절하지 않도록 받은 그대로 둔다.
+/// Go allows `first > last` (a range that matches no port), which is why this type avoids `ClosedRange<UInt16>`.
+/// Preserves such a range as received to avoid rejecting an entire map response for a single rule.
 public struct PortRange: Decodable, Sendable, Equatable {
     public internal(set) var first: UInt16
     public internal(set) var last: UInt16
@@ -87,13 +87,13 @@ public struct PortRange: Decodable, Sendable, Equatable {
     }
 }
 
-/// 출발지에게 주는 애플리케이션 권한. Go `tailcfg.CapGrant`.
+/// Application capabilities granted to the source. Go `tailcfg.CapGrant`.
 public struct CapGrant: Decodable, Sendable, Equatable {
-    /// 권한이 적용되는 목적지 접두.
+    /// The destination prefixes to which the grant applies.
     public internal(set) var dsts: [IPPrefix]
-    /// 옛 형식의 권한 이름 목록.
+    /// The legacy list of capability names.
     public internal(set) var caps: [String]
-    /// 권한 이름 → 인자.
+    /// Capability name → arguments.
     public internal(set) var capMap: [String: [JSONValue]]
 
     private enum CodingKeys: String, CodingKey {

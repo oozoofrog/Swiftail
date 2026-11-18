@@ -1,24 +1,24 @@
 import Foundation
 import Network
 
-/// IPv4 또는 IPv6 주소.
+/// An IPv4 or IPv6 address.
 ///
-/// 네트워크 바이트 순서의 4바이트 또는 16바이트로 저장한다. 문자열 해석은 Network 프레임워크의
-/// `IPv4Address`·`IPv6Address`에 맡기되 세 가지를 더 거절한다.
-/// - 16진 숫자, `:`, `.` 밖의 문자가 든 문자열. 범위(zone, `%en0`)가 여기에 걸린다. tailnet 주소에는 범위가 없고,
-///   범위를 무시하면 서로 다른 주소가 같은 값이 된다. Network가 무시하는 NUL 뒤의 꼬리도 여기서 걸린다.
-/// - 점 네 개 십진이 아닌 IPv4(`1.2.3`, `010.0.0.1`, `0x7f.0.0.1`). Network는 inet_aton의 옛 표기를 받아
-///   `1.2.3`을 `1.2.0.3`으로 읽는다. 같은 문자열이 도구마다 다른 주소가 되지 않게 표준 표기만 받는다.
-///   IPv6 끝에 붙은 IPv4(`::ffff:010.0.0.1`)도 같은 규칙으로 본다.
-/// - 16진 네 자리를 넘는 IPv6 묶음(`00000::1`). Network는 받지만 Go(`net.ParseIP`·`netip.ParseAddr`)는 받지 않는다.
+/// Stores 4 or 16 bytes in network byte order. String parsing uses the Network framework's
+/// `IPv4Address` and `IPv6Address` with three additional restrictions.
+/// - Strings containing characters other than hexadecimal digits, `:`, or `.` are rejected. This includes zones (zone, `%en0`). Tailnet addresses have no zones.
+///   Ignoring zones would make distinct addresses equal. This also rejects trailing text after a NUL, which Network ignores.
+/// - IPv4 outside four-part dotted-decimal notation (`1.2.3`, `010.0.0.1`, `0x7f.0.0.1`) is rejected. Network accepts legacy inet_aton notation and
+///   reads `1.2.3` as `1.2.0.3`. Accepting only standard notation keeps the same string from yielding different addresses across tools.
+///   An IPv4 suffix in IPv6 (`::ffff:010.0.0.1`) follows the same rules.
+/// - IPv6 groups longer than four hexadecimal digits (`00000::1`) are rejected. Network accepts them, while Go (`net.ParseIP` and `netip.ParseAddr`) rejects them.
 public struct IPAddress: Hashable, Sendable, LosslessStringConvertible {
-    /// 네트워크 바이트 순서의 주소. IPv4는 4바이트, IPv6는 16바이트다.
+    /// The address in network byte order. IPv4 uses 4 bytes and IPv6 uses 16 bytes.
     public let bytes: [UInt8]
 
-    /// `"100.64.0.1"`이나 `"fd7a:115c:a1e0::1"` 같은 문자열을 해석한다. 주소가 아니면 `nil`.
+    /// Parses a string such as `"100.64.0.1"` or `"fd7a:115c:a1e0::1"`. Returns `nil` if the string is invalid.
     public init?(_ description: String) {
-        // Network는 C 문자열로 해석해 NUL 뒤를 무시한다. 주소에 올 수 있는 문자만 받으면
-        // 범위(`%en0`)와 NUL 뒤의 꼬리를 함께 거른다.
+        // Network parses C strings and ignores everything after a NUL. Restricting input to valid address characters
+        // rejects both zones (`%en0`) and trailing text after a NUL.
         guard description.utf8.allSatisfy({ $0 == UInt8(ascii: ":") || $0 == UInt8(ascii: ".") || Character(UnicodeScalar($0)).isHexDigit }) else {
             return nil
         }
@@ -33,17 +33,17 @@ public struct IPAddress: Hashable, Sendable, LosslessStringConvertible {
         }
     }
 
-    /// 네트워크 바이트 순서의 4바이트(IPv4) 또는 16바이트(IPv6)로 만든다. 길이가 다르면 `nil`.
+    /// Creates an address from 4 bytes (IPv4) or 16 bytes (IPv6) in network byte order. Returns `nil` for other lengths.
     public init?(bytes: some Collection<UInt8>) {
         let bytes = Array(bytes)
         guard bytes.count == 4 || bytes.count == 16 else { return nil }
         self.bytes = bytes
     }
 
-    /// IPv4 주소인지. IPv4-mapped IPv6(`::ffff:a.b.c.d`)는 16바이트이므로 `false`다.
+    /// Whether the address is IPv4. IPv4-mapped IPv6 (`::ffff:a.b.c.d`) takes 16 bytes and returns `false`.
     public var isIPv4: Bool { bytes.count == 4 }
 
-    /// 엔진과 페어링이 쓰는 Tailscale 주소 범위. ChromeOS VM 대역을 CGNAT 안에서 가려낸다.
+    /// The Tailscale address ranges used by the engine and pairing. Distinguishes the ChromeOS VM range within CGNAT.
     package var isTailscaleAddress: Bool {
         if isIPv4 {
             let inCGNAT = bytes[0] == 100 && bytes[1] & 0xC0 == 64
@@ -53,17 +53,17 @@ public struct IPAddress: Hashable, Sendable, LosslessStringConvertible {
         return bytes.starts(with: [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0])
     }
 
-    /// IPv4는 점 네 개 십진, IPv6는 Network 프레임워크의 표기(RFC 5952 축약)다.
+    /// IPv4 uses four-part dotted decimal. IPv6 uses the Network framework's notation (RFC 5952 compression).
     public var description: String {
         if isIPv4 {
             return Self.dottedDecimal(bytes)
         }
-        // 16바이트 rawValue는 Network가 거절하지 않는다. 만에 하나를 위해 16진으로 물러선다.
+        // Network accepts the 16-byte rawValue. Fall back to hexadecimal in case it fails.
         guard let v6 = IPv6Address(Data(bytes)) else { return bytes.hex }
         return "\(v6)"
     }
 
-    /// IPv6 문자열이 IPv4 꼬리를 가지면 그 꼬리가 점 네 개 십진인지. 꼬리가 없으면 `true`.
+    /// Whether the IPv4 suffix of an IPv6 string, if present, uses four-part dotted decimal. Returns `true` if there is no suffix.
     private static func hasDottedDecimalTail(_ text: String) -> Bool {
         guard let tail = text.split(separator: ":").last, tail.contains(".") else { return true }
         return IPAddress(String(tail))?.isIPv4 == true

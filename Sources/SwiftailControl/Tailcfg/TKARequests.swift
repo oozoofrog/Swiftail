@@ -1,21 +1,21 @@
 import Foundation
 import SwiftailBase
 
-// tailnet lock(TKA) RPC 셋의 본문. Go `tailcfg`의 `TKABootstrap*`·`TKASyncOffer*`·`TKASyncSend*`.
+// The bodies of three tailnet lock (TKA) RPCs. Go `tailcfg`'s `TKABootstrap*`, `TKASyncOffer*`, and `TKASyncSend*`.
 //
-// 셋 다 Noise 채널 위의 `GET`이고 본문에 JSON을 싣는다. Go 구조체에 JSON 태그가 없어 필드 이름이 그대로 키다.
-// AUM 해시는 base32 텍스트, AUM과 끄기 비밀은 base64(`[]byte`)다. 받은 값은 여기서 문자열과 바이트까지만 읽고,
-// 해시와 AUM으로의 해석은 쓰는 쪽(`ControlClient`의 절차)이 한다.
+// All three are `GET` requests over the Noise channel and carry JSON bodies. The Go structs omit JSON tags, so the exact field names are the keys.
+// AUM hashes are base32 text. AUMs and disablement secrets are base64 (`[]byte`). This layer reads received fields as strings or bytes.
+// The consumer (the `ControlClient` procedure) interprets them as hashes and AUMs.
 //
-// `docs/protocol-notes/tailnet-lock.md` 3.10, 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 Y7
-// (출처: tailscale.com `tailcfg/tka.go`, BSD-3-Clause).
+// `docs/protocol-notes/tailnet-lock.md` §3.10, contract `docs/contracts/SwiftailTailnetLock.md` behavior Y7
+// (origin: tailscale.com `tailcfg/tka.go`, BSD-3-Clause).
 
-/// `GET /machine/tka/bootstrap`의 본문. lock을 켜거나 끄는 데 필요한 값을 달라고 한다.
+/// The body of `GET /machine/tka/bootstrap`. Requests the values needed to enable or disable the lock.
 struct TKABootstrapRequest: Encodable, Sendable {
-    /// 클라이언트의 capability version.
+    /// The client's capability version.
     var version = 148
     var nodeKey: NodePublicKey
-    /// 로컬 머리의 base32. lock 상태가 없으면 빈 문자열이고, 그때도 필드는 늘 있다.
+    /// The local head in base32. An empty string when lock state is absent. The field is always present.
     var head: String
 
     private enum CodingKeys: String, CodingKey {
@@ -25,11 +25,11 @@ struct TKABootstrapRequest: Encodable, Sendable {
     }
 }
 
-/// 부트스트랩 RPC의 응답. 둘 다 없으면 빈 값이다.
+/// The bootstrap RPC response. Empty if both values are absent.
 struct TKABootstrapResponse: Decodable, Sendable {
-    /// 서명 권한 상태를 시작할 체크포인트 AUM(CBOR).
+    /// The checkpoint AUM (CBOR) for initializing signing authority state.
     var genesisAUM: [UInt8]
-    /// lock을 끄는 비밀. 검증에 쓰고 버린다. 저장하지도 로그에 남기지도 않는다.
+    /// The secret that disables the lock. Discarded after verification, without storing or logging it.
     var disablementSecret: [UInt8]
 
     private enum CodingKeys: String, CodingKey {
@@ -44,7 +44,7 @@ struct TKABootstrapResponse: Decodable, Sendable {
     }
 }
 
-/// `GET /machine/tka/sync/offer`의 본문. 로컬 머리와 교차점을 찾을 조상들을 알린다.
+/// The body of `GET /machine/tka/sync/offer`. Reports the local head and ancestors for finding an intersection.
 struct TKASyncOfferRequest: Encodable, Sendable {
     var version = 148
     var nodeKey: NodePublicKey
@@ -59,11 +59,11 @@ struct TKASyncOfferRequest: Encodable, Sendable {
     }
 }
 
-/// sync/offer의 응답: 서버의 머리와 조상들, 그리고 서버가 보기에 이 노드에 없는 AUM들.
+/// The sync/offer response, including the server's head and ancestors and the AUMs the server believes this node is missing.
 struct TKASyncOfferResponse: Decodable, Sendable {
     var head: String
     var ancestors: [String]
-    /// AUM의 CBOR 바이트들. 받은 순서 그대로다.
+    /// The AUMs' CBOR bytes in received order.
     var missingAUMs: [[UInt8]]
 
     private enum CodingKeys: String, CodingKey {
@@ -72,10 +72,10 @@ struct TKASyncOfferResponse: Decodable, Sendable {
         case missingAUMs = "MissingAUMs"
     }
 
-    /// `MissingAUMs`의 개수 한도. 한 번에 들이는 AUM의 한도(4,096개, 계약 동작 M·결정 L16)와 같다.
+    /// The `MissingAUMs` count limit. Matches the limit on AUMs accepted at once (4,096, contract behavior M and decision L16).
     ///
-    /// 들이기도 같은 한도를 보지만, 그 전에 항목을 하나씩 base64와 AUM으로 디코딩하므로 여기서 먼저 센다(5절 TL-11b 항목 5).
-    /// 8MiB 본문은 몇 바이트짜리 항목을 백만 개 넘게 담을 수 있다.
+    /// Acceptance checks the same limit, but first each entry would be decoded from base64 and as an AUM, so count here first (§5 TL-11b item 5).
+    /// An 8MiB body can hold more than a million entries a few bytes long.
     static let maximumMissingAUMCount = 4_096
 
     init(from decoder: any Decoder) throws {
@@ -87,27 +87,27 @@ struct TKASyncOfferResponse: Decodable, Sendable {
         var items = try container.nestedUnkeyedContainer(forKey: .missingAUMs)
         guard let count = items.count, count <= Self.maximumMissingAUMCount else {
             throw DecodingError.dataCorruptedError(
-                forKey: .missingAUMs, in: container, debugDescription: "MissingAUMs가 개수 한도를 넘는다"
+                forKey: .missingAUMs, in: container, debugDescription: "MissingAUMs exceeds the count limit"
             )
         }
         missingAUMs.reserveCapacity(count)
         while !items.isAtEnd {
             guard let data = Data(base64Encoded: try items.decode(String.self)) else {
-                throw DecodingError.dataCorruptedError(forKey: .missingAUMs, in: container, debugDescription: "base64가 아니다")
+                throw DecodingError.dataCorruptedError(forKey: .missingAUMs, in: container, debugDescription: "Expected base64")
             }
             missingAUMs.append([UInt8](data))
         }
     }
 }
 
-/// `GET /machine/tka/sync/send`의 본문. 서버가 모르는 로컬 AUM과, 동기화 뒤의 로컬 머리를 알린다.
+/// The body of `GET /machine/tka/sync/send`. Reports local AUMs unknown to the server and the local head after synchronization.
 struct TKASyncSendRequest: Encodable, Sendable {
     var version = 148
     var nodeKey: NodePublicKey
     var head: String
-    /// AUM의 CBOR 바이트들. 보낼 것이 없어도 `[]`로 나간다(null이 아니다).
+    /// The AUMs' CBOR bytes. Sends `[]` even with nothing to send (never null).
     var missingAUMs: [[UInt8]]
-    /// 관리자의 대화형 조작이 아니라 자동 동기화다. 보통 노드는 늘 false다.
+    /// Automatic synchronization without interactive administrator action. Always false on ordinary nodes.
     var interactive = false
 
     private enum CodingKeys: String, CodingKey {
@@ -128,7 +128,7 @@ struct TKASyncSendRequest: Encodable, Sendable {
     }
 }
 
-/// sync/send의 응답: AUM을 받아들인 뒤의 서버 머리.
+/// The sync/send response, containing the server head after accepting the AUMs.
 struct TKASyncSendResponse: Decodable, Sendable {
     var head: String
 

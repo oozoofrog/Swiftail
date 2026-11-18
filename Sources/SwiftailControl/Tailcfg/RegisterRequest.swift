@@ -1,34 +1,34 @@
 import Foundation
 import SwiftailBase
 
-/// `POST /machine/register`의 본문. Go `tailcfg.RegisterRequest`.
+/// The body of `POST /machine/register`. Go `tailcfg.RegisterRequest`.
 ///
-/// 노드 키를 제어 서버에 등록하거나(처음, 키 교체) 로그인 완료를 기다리거나(`followup`)
-/// 로그아웃한다(`expiry`를 과거로). 등록 절차의 흐름은 노트 4.1이 다룬다.
+/// Registers a node key with the control server (initial registration or key rotation), waits for login completion (`followup`),
+/// or logs out (with `expiry` in the past). Notes §4.1 covers the registration flow.
 ///
-/// `omitempty`가 없는 필드는 비어 있어도 보낸다: 0 키는 `nodekey:000…`, 시각이 없으면
-/// `0001-01-01T00:00:00Z`, Hostinfo·서명이 없으면 `null`. 기기 인증서 서명(`SignatureType` 등)은 쓰지 않는다.
-/// `docs/protocol-notes/control-map.md` 3.1, 3.2 (출처: tailscale.com `tailcfg/tailcfg.go` `RegisterRequest`).
+/// Fields without `omitempty` are sent even when empty. A zero key is `nodekey:000…`. An absent timestamp is
+/// `0001-01-01T00:00:00Z`. Absent Hostinfo and signature are `null`. Device certificate signing (`SignatureType` and related fields) is unused.
+/// `docs/protocol-notes/control-map.md` §3.1, §3.2 (origin: `RegisterRequest` in tailscale.com `tailcfg/tailcfg.go`).
 public struct RegisterRequest: Encodable, Sendable {
-    /// 클라이언트가 이해하는 프로토콜 의미의 수준(capability version).
+    /// The level of protocol semantics the client understands (capability version).
     public var version: Int
-    /// 등록할 노드 키.
+    /// The node key to register.
     public var nodeKey: NodePublicKey
-    /// 키 교체일 때 이전 노드 키. 처음 등록이면 0 키.
+    /// The previous node key during rotation, or a zero key for initial registration.
     public var oldNodeKey: NodePublicKey
-    /// 이 노드의 NL 공개 키(tailnet lock). `ControlClient`는 늘 0이 아닌 키를 싣는다. 생략하면 0 키.
+    /// This node's NL public key (tailnet lock). `ControlClient` always includes a nonzero key. Omission means a zero key.
     public var nlKey: NLPublicKey
-    /// 인증 키 로그인일 때의 인증 수단. 없으면 JSON에서 빠진다.
+    /// The credentials for auth key login. Omitted from JSON if absent.
     public var auth: RegisterResponseAuth?
-    /// 요청하는 키 만료 시각. `nil`은 서버 정책에 맡김. 과거 시각은 로그아웃이다.
+    /// The requested key expiration time. `nil` defers to server policy. A timestamp in the past logs out.
     public var expiry: Date?
-    /// 이전 응답의 `AuthURL`. 비어 있지 않으면 사용자가 로그인을 마칠 때까지 응답을 기다린다.
+    /// The previous response's `AuthURL`. If nonempty, waits for a response until the user completes login.
     public var followup: String
-    /// 노드 정보. testcontrol은 `Hostname`을 읽으므로 채워 보낸다.
+    /// Node information. Sent populated because testcontrol reads `Hostname`.
     public var hostinfo: Hostinfo?
-    /// 오래 비활성이면 서버가 지우는 노드를 요청한다.
+    /// Requests a node that the server removes after prolonged inactivity.
     public var ephemeral: Bool
-    /// 새 노드 키에 대한 tailnet lock 서명(NKS의 정준 CBOR). 비어 있으면 `null`.
+    /// The tailnet lock signature for the new node key (canonical CBOR of the NKS). `null` if empty.
     public var nodeKeySignature: [UInt8]
 
     public init(
@@ -83,12 +83,12 @@ public struct RegisterRequest: Encodable, Sendable {
     }
 }
 
-/// 등록 요청의 인증 수단. Go `tailcfg.RegisterResponseAuth`.
+/// The credentials for a registration request. Go `tailcfg.RegisterResponseAuth`.
 ///
-/// 인증 키 로그인에서만 쓴다. 인증 키에 tailnet lock 재료(`--TL` 뒤)가 붙어 있으면 그 앞부분만 넣어야 한다
-/// (노트 4.1의 2). 구 Android 전용 `Oauth2Token`은 두지 않는다.
+/// Used only for auth key login. If the auth key has tailnet lock material after `--TL`, include only the part before it
+/// (notes §4.1, item 2). Omits the legacy Android-only `Oauth2Token`.
 public struct RegisterResponseAuth: Encodable, Sendable {
-    /// 인증 키(`tskey-auth-…`). 비밀이므로 로그에 남기지 않는다.
+    /// The auth key (`tskey-auth-…`). A secret that must stay out of logs.
     public var authKey: String
 
     public init(authKey: String) {
@@ -106,12 +106,12 @@ public struct RegisterResponseAuth: Encodable, Sendable {
 }
 
 extension RegisterResponseAuth: CustomStringConvertible, CustomReflectable {
-    /// 인증 키를 가린다. 요청 값을 그대로 로그에 찍어도 비밀이 새지 않게 하기 위해서다.
-    public var description: String { "RegisterResponseAuth(authKey: <\(authKey.count)자>)" }
+    /// Redacts the auth key so logging the request value as is does not leak the secret.
+    public var description: String { "RegisterResponseAuth(authKey: <\(authKey.count) characters>)" }
 
-    /// `dump`와 `Mirror`에도 인증 키 대신 길이만 보인다. `description`만으로는 `dump`가 저장 속성을 그대로 내보낸다.
-    /// 이 값을 품은 `RegisterRequest`를 `dump`해도 이 거울을 거친다.
+    /// `dump` and `Mirror` also show only the length in place of the auth key. With `description` alone, `dump` exposes the stored properties as is.
+    /// Dumping a `RegisterRequest` that contains this value also goes through this mirror.
     public var customMirror: Mirror {
-        Mirror(self, children: ["authKey": "<\(authKey.count)자>"])
+        Mirror(self, children: ["authKey": "<\(authKey.count) characters>"])
     }
 }

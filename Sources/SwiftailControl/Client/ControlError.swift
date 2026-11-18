@@ -1,30 +1,30 @@
-/// 제어 클라이언트의 실패.
+/// A control client failure.
 ///
-/// `ControlClient.run()`은 다시 시도하면 나아질 수 있는 실패(`connection`, `http`)를 안에서 물러났다가
-/// 다시 시도하고, 다시 시도해도 소용없는 실패만 던진다. 메시지에는 키·인증 키·파일 경로를 넣지 않는다.
+/// `ControlClient.run()` backs off and retries recoverable failures (`connection`, `http`) internally. It throws only
+/// failures that retrying cannot help. Messages omit keys, auth keys, and file paths.
 ///
-/// `docs/contracts/SwiftailControl.md` 단위 4, `docs/protocol-notes/control-map.md` 4.4.
+/// `docs/contracts/SwiftailControl.md` unit 4, `docs/protocol-notes/control-map.md` §4.4.
 public enum ControlError: Error, Sendable {
-    /// 설정이 잘못되었다(서버 URL, 호스트 이름).
+    /// The configuration is invalid (server URL or hostname).
     case invalidConfiguration(String)
-    /// 신원 파일을 읽거나 쓰지 못했다.
+    /// The identity file could not be read or written.
     case storage(String)
-    /// 연결·전송 계층의 실패. 다시 시도한다.
+    /// A connection or transport layer failure. Retries.
     case connection(String)
-    /// 200이 아닌 응답. 429와 `Retry-After`가 붙은 503의 대기는 안에서 처리한다.
+    /// A response other than 200. Handles the wait for 429 and 503 with `Retry-After` internally.
     case http(status: Int)
-    /// 인증 키를 실은 등록을 서버가 거절했다(`RegisterResponse.Error`). 키가 잘못됐거나 만료됐거나 이미 쓰였다.
-    /// 서버는 그 가운데 무엇인지를 종류로 주지 않는다. 연관 값은 진단용 서버 메시지다(사용자 문구로 쓰지 않는다).
+    /// The server rejected registration that included an auth key (`RegisterResponse.Error`). The key was invalid, expired, or previously used.
+    /// The server does not specify which as an error kind. The associated value is a server diagnostic message and is unsuitable for user-facing copy.
     case authKeyRejected(String)
-    /// 인증 키 없는 등록을 서버가 거절했다(`RegisterResponse.Error`). 관리자 정책 등이다.
-    /// 연관 값은 진단용 서버 메시지다.
+    /// The server rejected registration without an auth key (`RegisterResponse.Error`). This may be due to administrator policy or another reason.
+    /// The associated value is a server diagnostic message.
     case registrationRejected(String)
-    /// 새 node 키로 다시 등록해도 만료라고 한다.
+    /// Registration with a fresh node key still reports expiration.
     case nodeKeyExpired
 }
 
 extension ControlError {
-    /// 물러났다가 다시 시도할 실패인가.
+    /// Whether to back off and retry this failure.
     var isRetryable: Bool {
         switch self {
         case .connection, .http: true

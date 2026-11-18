@@ -1,22 +1,22 @@
 import SwiftailBase
 
-/// `POST /machine/set-dns`의 본문. Go `tailcfg.SetDNSRequest`.
+/// The body of `POST /machine/set-dns`. Go `tailcfg.SetDNSRequest`.
 ///
-/// ACME DNS-01 challenge의 TXT 레코드를 제어 서버에 올려 달라고 한다. 삭제 동작은 없다(Go 구조체에도 없다).
-/// `Version`은 Noise로 보낼 때의 CapabilityVersion이다. Go `LocalBackend.SetDNS`는 1을 넣지만 Noise로 보내기 직전에
-/// `CurrentCapabilityVersion`으로 덮어쓰므로(`control/controlclient/direct.go` `setDNSNoise`) 처음부터 148을 넣는다.
+/// Asks the control server to publish a TXT record for an ACME DNS-01 challenge. There is no delete operation, including in the Go struct.
+/// `Version` is CapabilityVersion when sent over Noise. Go `LocalBackend.SetDNS` sets 1 but overwrites it with
+/// `CurrentCapabilityVersion` just before sending over Noise (`setDNSNoise` in `control/controlclient/direct.go`), so set 148 from the start.
 ///
-/// `docs/protocol-notes/whois-certs-state.md` 3.2 (출처: tailscale.com `tailcfg/tailcfg.go` `SetDNSRequest`).
+/// `docs/protocol-notes/whois-certs-state.md` §3.2 (origin: `SetDNSRequest` in tailscale.com `tailcfg/tailcfg.go`).
 struct SetDNSRequest: Encodable, Sendable {
-    /// 클라이언트의 capability version.
+    /// The client's capability version.
     var version = 148
-    /// 지금의 node 공개 키.
+    /// The current node public key.
     var nodeKey: NodePublicKey
-    /// 레코드 이름(`_acme-challenge.<cert 도메인>`).
+    /// The record name (`_acme-challenge.<cert domain>`).
     var name: String
-    /// 레코드 종류. DNS-01에서는 늘 `TXT`다.
+    /// The record type. Always `TXT` for DNS-01.
     var type = "TXT"
-    /// 레코드 값(따옴표 없는 TXT 값).
+    /// The record value (the TXT value without quotation marks).
     var value: String
 
     private enum CodingKeys: String, CodingKey {
@@ -28,10 +28,10 @@ struct SetDNSRequest: Encodable, Sendable {
     }
 }
 
-/// `POST /machine/set-dns`의 200 응답. Go `tailcfg.SetDNSResponse`(필드 없는 구조체).
+/// The 200 response to `POST /machine/set-dns`. Go `tailcfg.SetDNSResponse` (a struct with no fields).
 ///
-/// 필드는 읽지 않고 본문이 JSON 객체인지만 본다. Go는 JSON 값 하나를 받아들이므로 `null`도 통과하지만,
-/// Swiftail은 객체만 받는다(계약 `docs/contracts/SwiftailHost.md` 동작 D3의 Swiftail의 선택).
+/// Checks only that the body is a JSON object and reads no fields. Go accepts one JSON value, so even `null` passes.
+/// Swiftail accepts only objects (Swiftail's choice in contract `docs/contracts/SwiftailHost.md`, behavior D3).
 struct SetDNSResponse: Decodable {
     private struct AnyKey: CodingKey {
         var stringValue: String
@@ -40,8 +40,8 @@ struct SetDNSResponse: Decodable {
         init?(intValue: Int) { nil }
     }
 
-    /// 객체가 아니면(`null`, 배열, 문자열, 숫자) 던진다. 합성된 `init(from:)`는 컨테이너를 열지 않아 무엇이든 받으므로
-    /// 직접 연다.
+    /// Throws for a nonobject (`null`, array, string, or number). The synthesized `init(from:)` would accept anything without opening a container,
+    /// so open the container explicitly.
     init(from decoder: any Decoder) throws {
         _ = try decoder.container(keyedBy: AnyKey.self)
     }

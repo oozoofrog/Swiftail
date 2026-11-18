@@ -1,15 +1,15 @@
-/// 헤더 필드(의사 헤더가 아닌 일반 필드) 검증. 요청을 보낼 때, 응답 머리를 받을 때, 트레일러를 받을 때
-/// 같은 규칙을 쓰도록 한 곳에 둔다.
+/// Validates regular header fields, excluding pseudo-headers. Centralizes the rules for sending requests, receiving response heads,
+/// and receiving trailers.
 ///
-/// - 이름은 비어 있지 않은 token 문자열이고 소문자여야 한다. `:`는 token 문자가 아니므로 이름의 맨 앞이든
-///   중간이든 들어갈 수 없다(RFC 9113 §8.2.1, RFC 9110 §5.6.2).
-/// - 값에는 NUL·CR·LF가 없어야 한다(§8.2.1).
-/// - 연결 전용 필드(`connection`, `keep-alive`, `proxy-connection`, `transfer-encoding`, `upgrade`)는
-///   없어야 하고, `te`는 값이 `trailers`일 때만 허용된다(§8.2.2).
+/// - A name must be a nonempty lowercase token. The `:` character is outside the token set and is forbidden anywhere in a name,
+///   including at the start (RFC 9113 §8.2.1, RFC 9110 §5.6.2).
+/// - A value must be free of NUL, CR, and LF (§8.2.1).
+/// - Connection-specific fields (`connection`, `keep-alive`, `proxy-connection`, `transfer-encoding`, `upgrade`) are
+///   forbidden, and `te` is allowed only with the value `trailers` (§8.2.2).
 ///
-/// 어긋나면 그 메시지는 잘못된 것이다(§8.1.1): 요청이면 `invalidRequest`, 응답이면 스트림 오류다.
+/// A violation makes the message malformed (§8.1.1), yielding `invalidRequest` for a request or a stream error for a response.
 enum HeaderValidation {
-    /// 의사 헤더가 아닌 필드 하나가 규격에 맞으면 `true`.
+    /// Returns `true` if the regular header field conforms to the specification.
     static func isValid(_ field: HeaderField) -> Bool {
         isValidName(field.name) && isValidValue(field.value) && !isConnectionSpecific(field)
     }
@@ -34,7 +34,7 @@ enum HeaderValidation {
         }
     }
 
-    /// RFC 9110 §5.6.2의 tchar 중 대문자를 뺀 것: 소문자, 숫자, ``!#$%&'*+-.^_`|~``.
+    /// RFC 9110 §5.6.2 tchar excluding uppercase letters (lowercase letters, digits, and ``!#$%&'*+-.^_`|~``).
     private static func isLowercaseTokenCharacter(_ byte: UInt8) -> Bool {
         switch byte {
         case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "0")...UInt8(ascii: "9"):

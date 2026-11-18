@@ -1,15 +1,15 @@
-/// HPACK 허프만 부호표.
+/// The HPACK Huffman code table.
 ///
-/// 문자열 리터럴을 줄이기 위한 정적 허프만 부호다. 기호 0~255는 바이트 값이고 256은 문자열 끝을
-/// 뜻하는 EOS다. 부호는 `bitCount`비트 정수의 낮은 자리에 맞춰 적었다.
+/// A static Huffman code for compressing string literals. Symbols 0~255 are byte values and 256 is EOS,
+/// the end-of-string symbol. Each code is right-aligned in a `bitCount`-bit integer.
 ///
-/// RFC 7541 부록 B (https://www.rfc-editor.org/rfc/rfc7541#appendix-B). 값은 원문 표에서 기계적으로
-/// 옮기며 "비트열 = 16진 값 = 길이"를 확인했고, Go `hpack/tables.go`의 256개 항목과 대조했다.
+/// RFC 7541 Appendix B (https://www.rfc-editor.org/rfc/rfc7541#appendix-B). The values were copied mechanically from the original table,
+/// verifying "bit sequence = hexadecimal value = length," and checked against the 256 entries in Go's `hpack/tables.go`.
 enum HPACKHuffmanTable {
-    /// EOS 기호. 문자열 안에 나오면 해제 오류다(§5.2).
+    /// The EOS symbol. Its occurrence within a string is a decoding error (§5.2).
     static let endOfString = 256
 
-    /// 기호 하나의 부호.
+    /// The code for one symbol.
     struct Code {
         let bits: UInt32
         let bitCount: UInt8
@@ -20,7 +20,7 @@ enum HPACKHuffmanTable {
         }
     }
 
-    /// `codes[기호]`. 257개(0~255와 EOS).
+    /// `codes[symbol]`. 257 entries (0~255 and EOS).
     static let codes: [Code] = [
         Code(0x1ff8, 13),  // 0
         Code(0x7fffd8, 23),  // 1

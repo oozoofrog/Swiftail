@@ -1,27 +1,27 @@
 import CryptoKit
 import SwiftailBase
 
-/// tailnet lock 키(NL 키)의 공개 키. 와이어(JSON)의 텍스트는 `"nlpub:" + 16진 64자리`다.
+/// The public key of a tailnet lock key (NL key). The wire (JSON) text is `"nlpub:" + 64 hexadecimal digits`.
 ///
-/// 노드는 자기 NL 키의 공개 키를 등록 요청의 `NLKey`에 늘 싣는다. 서명 기기는 이 키를 신뢰 키로 더하거나, 이 노드의 node 키
-/// 서명에 `WrappingPubkey`로 넣어 이 노드가 키를 바꿀 때 스스로 다시 서명하게 한다.
-/// `docs/protocol-notes/tailnet-lock.md` 3.8·3.9·4.6 1 (출처: tailscale.com `types/key/nl.go`, BSD-3-Clause).
+/// A node always includes its NL public key in the registration request's `NLKey`. A signing device can add it as a trusted key or
+/// include it as `WrappingPubkey` in a signature for this node's node key, enabling the node to re-sign its own key after changing it.
+/// `docs/protocol-notes/tailnet-lock.md` §3.8, §3.9, §4.6 item 1 (origin: tailscale.com `types/key/nl.go`, BSD-3-Clause).
 public enum NLKeyKind: KeyKind { public static let prefix = "nlpub:" }
 
 public typealias NLPublicKey = PrefixedKey<NLKeyKind>
 
 extension PrefixedKey where Kind == NLKeyKind {
-    /// CryptoKit의 Ed25519 공개 키를 NL 공개 키로 바꾼다.
+    /// Converts a CryptoKit Ed25519 public key to an NL public key.
     public init(_ key: Curve25519.Signing.PublicKey) {
-        // Ed25519 공개 키의 원시 표현은 늘 32바이트다. 실패하면 CryptoKit의 계약이 깨진 것이다.
+        // An Ed25519 public key's raw representation is always 32 bytes. Failure would violate CryptoKit's contract.
         guard let value = Self(rawValue: key.rawRepresentation) else {
-            preconditionFailure("Ed25519 공개 키는 32바이트다")
+            preconditionFailure("Ed25519 public keys are 32 bytes")
         }
         self = value
     }
 
-    /// 명령줄에 쓰는 텍스트 `"tlpub:" + 16진 64자리`(Go `NLPublic.CLIString`). 서명 기기의 `tailscale lock sign`이 받는다.
+    /// The command-line text `"tlpub:" + 64 hexadecimal digits` (Go `NLPublic.CLIString`). The signing device's `tailscale lock sign` accepts it.
     ///
-    /// Go는 두 접두사를 모두 읽지만, Swiftail은 NL 공개 키를 밖에서 읽는 곳이 없어 와이어의 `nlpub:`만 읽는다(`init?(_:)`).
+    /// Go reads both prefixes. Swiftail reads only the wire prefix `nlpub:` (`init?(_:)`) because it has no other input for NL public keys.
     public var commandLineDescription: String { "tlpub:" + rawValue.hex }
 }

@@ -1,7 +1,7 @@
-/// 보낼 프레임을 바이트로 만든다(RFC 9113 §4.1, §6).
+/// Encodes outgoing frames as bytes (RFC 9113 §4.1, §6).
 ///
-/// 보내는 프레임은 받는 프레임보다 단순하다. 패딩과 우선순위를 쓰지 않고, 길이가 상대의
-/// MAX_FRAME_SIZE를 넘지 않게 나누는 일은 부르는 쪽(연결)이 한다.
+/// Outgoing frames are simpler than received frames and omit padding and priority. The caller (the connection)
+/// splits frames to keep the length at or below the peer's MAX_FRAME_SIZE.
 enum FrameEncoder {
     private static func frame(_ type: FrameType, flags: UInt8 = 0, stream: HTTP2StreamID = .connection, payload: [UInt8] = []) -> [UInt8] {
         FrameHeader(payloadLength: payload.count, type: type, flags: flags, streamID: stream).bytes + payload
@@ -18,7 +18,7 @@ enum FrameEncoder {
         frame(.settings, flags: FrameFlag.acknowledgement)
     }
 
-    /// 헤더 블록을 HEADERS 하나와 이어지는 CONTINUATION들로 나눈다. `maximumPayloadLength` 이하씩 담는다.
+    /// Splits a header block into one HEADERS frame followed by CONTINUATION frames, with up to `maximumPayloadLength` bytes each.
     static func headers(_ stream: HTTP2StreamID, block: [UInt8], endStream: Bool, maximumPayloadLength: Int) -> [UInt8] {
         var output: [UInt8] = []
         var rest = block[...]

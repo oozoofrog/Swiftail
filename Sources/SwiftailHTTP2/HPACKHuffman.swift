@@ -1,13 +1,13 @@
-/// HPACK 허프만 문자열 해제.
+/// HPACK Huffman string decoding.
 ///
-/// 정적 허프만 부호표(`HPACKHuffmanTable`)로 줄인 문자열을 되돌린다. 부호는 길이가 제각각이라
-/// 비트를 하나씩 읽으며 이진 트리를 내려가고, 잎에 닿으면 기호 하나를 내놓고 뿌리로 돌아간다.
-/// 처리량보다 읽기 쉬움을 골랐다.
+/// Decodes strings compressed with the static Huffman code table (`HPACKHuffmanTable`). Since codes vary in length,
+/// the decoder walks a binary tree one bit at a time. At a leaf, it emits one symbol and returns to the root.
+/// This favors readability over throughput.
 ///
-/// 문자열 끝의 남는 비트는 EOS 부호의 앞부분(모두 1)으로 채운다. 규칙(RFC 7541 §5.2):
-/// 패딩은 7비트 이하여야 하고 모두 1이어야 하며, EOS 기호 자체가 문자열에 나오면 오류다.
+/// The remaining bits at the end of a string are padded with the prefix of the EOS code (all ones). Under RFC 7541 §5.2,
+/// padding must be at most 7 bits and all ones. The EOS symbol itself is a decoding error if it appears in the string.
 enum HPACKHuffman {
-    /// 부호표를 트리로 만든 것. 노드 0이 뿌리다.
+    /// The code table as a tree. Node 0 is the root.
     private struct Node {
         var children: [Int?] = [nil, nil]
         var symbol: Int?
@@ -35,7 +35,7 @@ enum HPACKHuffman {
     static func decode(_ input: ArraySlice<UInt8>) throws(HPACKError) -> [UInt8] {
         var output: [UInt8] = []
         var current = 0
-        // 마지막 기호 뒤에 읽은 비트 수와 그 비트가 모두 1인지.
+        // The number of bits read since the last symbol and whether they are all ones.
         var pendingBits = 0
         var pendingAreAllOnes = true
         for byte in input {

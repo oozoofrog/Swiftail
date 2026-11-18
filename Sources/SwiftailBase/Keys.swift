@@ -1,27 +1,27 @@
 import CryptoKit
 
-/// Tailscale이 텍스트로 주고받는 공개 키: 접두사 + 32바이트의 16진수.
+/// A public key in Tailscale's text format, a prefix followed by 32 bytes in hexadecimal.
 ///
-/// 키의 쓰임(machine, node, disco)마다 접두사가 다르고 바이트 형식은 같다. 쓰임을 타입 인자로 구분해
-/// node 키 자리에 machine 키를 넣는 실수를 컴파일러가 잡게 한다. `Kind`는 값으로 쓰이지 않는 표지다.
+/// Each key purpose (machine, node, disco) has a distinct prefix and shares the same byte format. The type parameter lets the compiler
+/// catch mistakes such as passing a machine key in place of a node key. `Kind` is a marker that is never used as a value.
 ///
-/// JSON에서는 이 텍스트의 문자열이다. Go는 비어 있는 키도 생략하지 않고 0으로 채워 보내므로
-/// (`nodekey:0000…`) "없음"은 `nil`이 아니라 `zero`로 나타낸다.
+/// JSON uses this text as a string. Go sends zero-filled keys for empty keys (`nodekey:0000…`),
+/// so `zero` represents absence (`nil` is not used).
 ///
-/// `docs/protocol-notes/control-transport.md` 5.1 (출처: tailscale.com `types/key`).
+/// `docs/protocol-notes/control-transport.md` §5.1 (origin: tailscale.com `types/key`).
 public struct PrefixedKey<Kind: KeyKind>: Hashable, Sendable {
     public static var byteCount: Int { 32 }
 
-    /// 키 바이트 32개.
+    /// The 32 key bytes.
     public let rawValue: [UInt8]
 
-    /// 32바이트가 아니면 `nil`.
+    /// Returns `nil` if the length differs from 32 bytes.
     public init?(rawValue: some Collection<UInt8>) {
         guard rawValue.count == Self.byteCount else { return nil }
         self.rawValue = Array(rawValue)
     }
 
-    /// 모든 바이트가 0인 키. 와이어에서 "키 없음"을 뜻한다.
+    /// A key with all bytes set to 0. Represents "no key" on the wire.
     public static var zero: Self { Self(repeating: 0) }
 
     public var isZero: Bool { rawValue.allSatisfy { $0 == 0 } }
@@ -30,18 +30,18 @@ public struct PrefixedKey<Kind: KeyKind>: Hashable, Sendable {
         rawValue = [UInt8](repeating: byte, count: Self.byteCount)
     }
 
-    /// CryptoKit 공개 키를 접두사 붙은 키로 바꾼다.
+    /// Converts a CryptoKit public key to a prefixed key.
     public init(_ key: Curve25519.KeyAgreement.PublicKey) {
-        // Curve25519 공개 키의 원시 표현은 늘 32바이트다. 실패하면 CryptoKit의 계약이 깨진 것이다.
+        // A Curve25519 public key's raw representation is always 32 bytes. Failure would violate CryptoKit's contract.
         guard let value = Self(rawValue: key.rawRepresentation) else {
-            preconditionFailure("Curve25519 공개 키는 32바이트다")
+            preconditionFailure("Curve25519 public keys are 32 bytes")
         }
         self = value
     }
 }
 
 extension PrefixedKey: LosslessStringConvertible {
-    /// `"nodekey:" + 64자리 16진수` 형태만 받는다. 접두사가 다르거나 길이가 다르면 `nil`.
+    /// Accepts only the form `"nodekey:" + 64 hexadecimal digits`. Returns `nil` for a different prefix or length.
     public init?(_ description: String) {
         guard description.hasPrefix(Kind.prefix),
               let bytes = [UInt8](hex: String(description.dropFirst(Kind.prefix.count)))
@@ -57,7 +57,7 @@ extension PrefixedKey: Codable {
         let container = try decoder.singleValueContainer()
         let text = try container.decode(String.self)
         guard let key = Self(text) else {
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "\(Kind.prefix) 키가 아니다")
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected a \(Kind.prefix) key")
         }
         self = key
     }
@@ -68,18 +68,18 @@ extension PrefixedKey: Codable {
     }
 }
 
-/// 키의 쓰임. 텍스트 접두사를 정한다.
+/// A key's purpose. Determines the text prefix.
 public protocol KeyKind: Sendable {
     static var prefix: String { get }
 }
 
-/// 기기를 가리키는 키. 제어 서버와의 Noise 연결을 인증한다.
+/// A key that identifies a device. Authenticates the Noise connection to the control server.
 public enum MachineKeyKind: KeyKind { public static let prefix = "mkey:" }
-/// 노드의 WireGuard 키. 만료되면 바뀐다.
+/// A node's WireGuard key. Changes when it expires.
 public enum NodeKeyKind: KeyKind { public static let prefix = "nodekey:" }
-/// 경로 탐색(disco) 메시지를 암호화하는 키. 시작할 때마다 새로 만든다.
+/// A key that encrypts path discovery (disco) messages. Created anew at every startup.
 public enum DiscoKeyKind: KeyKind { public static let prefix = "discokey:" }
-/// 제어 서버가 early payload로 보내는 일회용 키.
+/// A one-time key the control server sends in the early payload.
 public enum ChallengeKeyKind: KeyKind { public static let prefix = "chalpub:" }
 
 public typealias MachinePublicKey = PrefixedKey<MachineKeyKind>

@@ -1,8 +1,8 @@
 import Network
 import SwiftailIO
 
-// `SwiftailIO`의 오류를 제어 클라이언트의 오류로 옮긴다. 소켓과 타임아웃의 실패는 모두 물러났다가 다시 시도할
-// 연결 실패(`ControlError.connection`)다.
+// Maps `SwiftailIO` errors to control client errors. Socket failures and timeouts are connection failures
+// (`ControlError.connection`) that trigger backoff and retry.
 
 extension ControlError {
     init(_ error: SocketError) {
@@ -15,8 +15,8 @@ extension ControlError {
 }
 
 extension NetworkSocket {
-    /// 제어 서버에 연결한다. TLS면 시스템 인증서 검증으로 `host`를 확인한다.
-    /// `interface`가 있으면 그 인터페이스로만 나간다. 서버가 루프백이면 묶지 않는다.
+    /// Connects to the control server. With TLS, verifies `host` using system certificate validation.
+    /// If `interface` is present, connects only through that interface. Leaves loopback server connections unbound.
     static func connect(to endpoint: ControlEndpoint, interface: NWInterface?) async throws(ControlError) -> NetworkSocket {
         let tls: TLS = endpoint.usesTLS ? .system(serverName: endpoint.host) : .none
         do {
@@ -29,7 +29,7 @@ extension NetworkSocket {
         }
     }
 
-    /// 도착한 바이트를 받는다. 상대가 연결을 닫았으면 nil.
+    /// Receives available bytes, or nil if the peer closed the connection.
     func receiveBytes() async throws(ControlError) -> [UInt8]? {
         do {
             return try await receive()
@@ -39,7 +39,7 @@ extension NetworkSocket {
     }
 }
 
-/// `SwiftailIO.withTimeout`에 기한을 넘기면 `ControlError.connection`을 던지게 한 것.
+/// Wraps `SwiftailIO.withTimeout` to throw `ControlError.connection` when the deadline expires.
 func withControlTimeout<Result: Sendable>(
     _ duration: Duration,
     _ operation: @escaping @Sendable () async throws -> Result
@@ -47,6 +47,6 @@ func withControlTimeout<Result: Sendable>(
     do {
         return try await withTimeout(duration, operation)
     } catch is TimeoutError {
-        throw ControlError.connection("\(duration) 안에 끝나지 않았다")
+        throw ControlError.connection("Did not finish within \(duration)")
     }
 }

@@ -1,20 +1,20 @@
-/// HPACK 해제기: 헤더 블록 바이트를 헤더 필드 목록으로 되돌린다.
+/// An HPACK decoder that turns header block bytes back into a list of header fields.
 ///
-/// 연결 하나에 해제기 하나가 있고, 상대가 보낸 모든 헤더 블록을 도착한 순서대로 넣어야 한다. 동적
-/// 표가 블록을 넘어 이어지기 때문이다. 블록 하나는 필드 표현의 나열이며 첫 바이트의 윗비트로
-/// 종류가 갈린다(RFC 7541 §6):
+/// A connection has one decoder and must feed it every header block from the peer in arrival order because the dynamic
+/// table carries across blocks. Each block is a sequence of field representations. The high bits of the first byte
+/// indicate the type (RFC 7541 §6).
 ///
-/// - `1`: 색인된 필드(§6.1). 정적·동적 표의 항목을 그대로 쓴다.
-/// - `01`: 리터럴 필드, 동적 표에 넣는다(§6.2.1).
-/// - `001`: 동적 표 크기 갱신(§6.3). 블록의 맨 앞에서만 올 수 있다(§4.2).
-/// - `0000`, `0001`: 리터럴 필드, 표에 넣지 않는다(§6.2.2). `0001`은 중간 장치도 넣지 말라는 뜻(§6.2.3)이지만
-///   이 모듈은 중계하지 않으므로 둘을 구분하지 않는다.
+/// - `1`: Indexed field (§6.1). Uses an entry from the static or dynamic table as is.
+/// - `01`: Literal field added to the dynamic table (§6.2.1).
+/// - `001`: Dynamic table size update (§6.3). May appear only at the start of the block (§4.2).
+/// - `0000`, `0001`: Literal field without indexing (§6.2.2). `0001` also forbids intermediaries from indexing the field (§6.2.3).
+///   This module does not proxy and treats both the same.
 struct HPACKDecoder {
-    /// 알린 SETTINGS_HEADER_TABLE_SIZE의 초깃값(RFC 9113 §6.5.2). 상대는 이보다 큰 표를 요구할 수 없다.
+    /// The initial advertised SETTINGS_HEADER_TABLE_SIZE (RFC 9113 §6.5.2). The peer cannot request a larger table.
     static let defaultTableSize = 4_096
-    /// 해제한 헤더 목록의 한도. 항목마다 이름·값 바이트 수에 32를 더해 센다(RFC 9113 §6.5.2의
-    /// SETTINGS_MAX_HEADER_LIST_SIZE와 같은 방식). 압축된 블록이 작아도 동적 표 항목을 반복해 부르면
-    /// 훨씬 큰 목록이 되므로 해제 결과에도 한도가 필요하다.
+    /// The limit on the decoded header list. Counts the bytes of each entry's name and value plus 32 (the same method as
+    /// SETTINGS_MAX_HEADER_LIST_SIZE in RFC 9113 §6.5.2). Even a small compressed block can expand to a much larger
+    /// list by repeatedly indexing dynamic table entries, so the decoded result also needs a limit.
     static let defaultHeaderListSize = 65_536
 
     private var table: HPACKDynamicTable
@@ -27,7 +27,7 @@ struct HPACKDecoder {
         self.headerListSizeLimit = headerListSizeLimit
     }
 
-    /// 완성된 헤더 블록 하나를 해제한다. 오류가 나면 해제기는 더 쓸 수 없다.
+    /// Decodes one complete header block. An error leaves the decoder unusable.
     mutating func decode(_ block: [UInt8]) throws(HPACKError) -> [HeaderField] {
         var reader = ByteReader(block)
         var fields: [HeaderField] = []
@@ -40,7 +40,7 @@ struct HPACKDecoder {
                 field = try literalField(from: &reader, prefixBits: 6)
                 table.insert(field)
             } else if first & 0x20 != 0 {
-                // 크기 갱신은 필드 표현보다 앞에 와야 한다.
+                // Size updates must precede field representations.
                 guard fields.isEmpty else { throw .invalidTableSizeUpdate }
                 let newSize = try reader.hpackInteger(prefixBits: 5)
                 guard newSize <= tableSizeLimit else { throw .invalidTableSizeUpdate }
@@ -56,7 +56,7 @@ struct HPACKDecoder {
         return fields
     }
 
-    /// 색인 1~61은 정적 표, 62부터는 동적 표다(§2.3.3).
+    /// Indices 1~61 refer to the static table and indices from 62 refer to the dynamic table (§2.3.3).
     private func indexedField(_ index: Int) throws(HPACKError) -> HeaderField {
         let staticCount = HPACKStaticTable.fields.count
         if index >= 1 && index <= staticCount { return HPACKStaticTable.fields[index - 1] }
@@ -64,7 +64,7 @@ struct HPACKDecoder {
         return field
     }
 
-    /// 리터럴 표현: 이름 색인(0이면 이름이 문자열로 이어진다)과 값 문자열.
+    /// A literal representation carries a name index (0 means the name follows as a string) and a value string.
     private func literalField(from reader: inout ByteReader, prefixBits: Int) throws(HPACKError) -> HeaderField {
         let nameIndex = try reader.hpackInteger(prefixBits: prefixBits)
         let name: String

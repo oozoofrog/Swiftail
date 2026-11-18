@@ -1,15 +1,15 @@
-// edwards25519 곡선 −x² + y² = 1 + d·x²·y² 위의 점(RFC 8032 5.1).
+// A point on the edwards25519 curve −x² + y² = 1 + d·x²·y² (RFC 8032 §5.1).
 //
-// 출처: Go 1.27.3 표준 라이브러리 `crypto/internal/fips140/edwards25519/edwards25519.go`의
-// `Point.SetBytes`(느슨한 해독 규칙), `Point.Bytes`, 확장 좌표의 더하기(`projP1xP1.Add`·`projCached`)와
-// 두 배(`projP1xP1.Double`)를 Swift로 옮겼다. 같은 코드가 `filippo.io/edwards25519` v1.2.0에도 있고
-// `ed25519consensus`는 그쪽을 쓴다(`SetBytes`가 같음을 diff로 확인했다).
-// Copyright (c) 2017 The Go Authors. BSD-3-Clause(전문은 `FieldElement.swift` 머리).
+// Origin: ported to Swift from the Go 1.27.3 standard library's `crypto/internal/fips140/edwards25519/edwards25519.go`.
+// The port includes `Point.SetBytes` (relaxed decoding rules), `Point.Bytes`, and addition in extended coordinates (`projP1xP1.Add` and `projCached`)
+// and doubling (`projP1xP1.Double`). The same code is also in `filippo.io/edwards25519` v1.2.0, which
+// `ed25519consensus` uses (a diff confirmed that `SetBytes` is identical).
+// Copyright (c) 2017 The Go Authors. BSD-3-Clause (full text at the top of `FieldElement.swift`).
 
-/// 확장 좌표 (X : Y : Z : T)의 점. x = X/Z, y = Y/Z, x·y = T/Z (Hisil–Wong–Carter–Dawson 2008).
+/// A point in extended coordinates (X : Y : Z : T). x = X/Z, y = Y/Z, x·y = T/Z (Hisil–Wong–Carter–Dawson 2008).
 ///
-/// 더하기 공식은 곡선 위의 모든 점(항등원과 작은 위수의 점 포함)에 대해 완전하다. 공개 값만 다루므로
-/// 연산이 가변 시간이다.
+/// The addition formulas are complete for all points on the curve, including the identity and points of small order. Operations are variable time
+/// because they handle only public values.
 struct EdwardsPoint {
     private var x, y, z, t: FieldElement
 
@@ -17,11 +17,11 @@ struct EdwardsPoint {
 
     static let identity = EdwardsPoint(x: .zero, y: .one, z: .one, t: .zero)
 
-    /// 기준점 B: y = 4/5이고 x가 음수가 아닌 점(RFC 8032 5.1). 인코딩은 `58 66 66 … 66`.
+    /// The base point B, where y = 4/5 and x is nonnegative (RFC 8032 §5.1). Its encoding is `58 66 66 … 66`.
     static let basepoint: EdwardsPoint = {
         let y = FieldElement(bytes: [0x58] + [UInt8](repeating: 0x66, count: 31))
-        // y = 4/5에서 x² = (y² − 1)/(d·y² + 1)은 제곱수다(곡선 위의 점). 만에 하나 아니면 0을 쓰고,
-        // 그러면 기준점 시험(인코딩 왕복)이 실패한다.
+        // For y = 4/5, x² = (y² − 1)/(d·y² + 1) is a square (a point on the curve). If this ever fails, use 0,
+        // which will fail the base point test (encoding round trip).
         let x = FieldElement.squareRootOfRatio(y.squared() - .one, FieldElement.d * y.squared() + .one) ?? .zero
         return EdwardsPoint(x: x, y: y, z: .one, t: x * y)
     }()
@@ -30,14 +30,14 @@ struct EdwardsPoint {
         self.x = x; self.y = y; self.z = z; self.t = t
     }
 
-    /// 32바이트 인코딩을 해독한다(RFC 8032 5.1.3에서 Go `Point.SetBytes`가 느슨하게 한 규칙).
+    /// Decodes a 32-byte encoding using Go `Point.SetBytes`'s relaxed version of the rules in RFC 8032 §5.1.3.
     ///
-    /// RFC와 다르게 두 종류의 비정준 인코딩을 받아들인다.
-    /// 1. y ≥ p인 표현(`FieldElement(bytes:)`가 p로 줄인다).
-    /// 2. x = 0인데 부호 비트가 선 표현(−0 = 0이라 같은 점이 된다).
+    /// Accepts two kinds of noncanonical encodings beyond those allowed by the RFC.
+    /// 1. A representation with y ≥ p (`FieldElement(bytes:)` reduces it modulo p).
+    /// 2. A representation with x = 0 and the sign bit set (−0 = 0, so it denotes the same point).
     ///
-    /// x² = (y² − 1)/(d·y² + 1)이 제곱수가 아니면(곡선 위가 아니면) `nil`이다. 길이가 32가 아니어도 `nil`이다.
-    /// ZIP-215와 Go 표준 `crypto/ed25519`가 A와 R을 이 규칙으로 해독한다.
+    /// Returns `nil` if x² = (y² − 1)/(d·y² + 1) is not a square (the point is off the curve) or if the length differs from 32.
+    /// ZIP-215 and Go's standard `crypto/ed25519` decode A and R by these rules.
     init?(encoding: [UInt8]) {
         guard encoding.count == 32 else { return nil }
         let y = FieldElement(bytes: encoding)
@@ -47,7 +47,7 @@ struct EdwardsPoint {
         self.init(x: x, y: y, z: .one, t: x * y)
     }
 
-    /// 정준 인코딩(RFC 8032 5.1.2): 정준 y의 리틀 엔디언 32바이트, 맨 위 비트는 x의 부호.
+    /// The canonical encoding (RFC 8032 §5.1.2), the 32 little-endian bytes of canonical y with x's sign in the high bit.
     var encoding: [UInt8] {
         let zInverse = z.inverted()
         var bytes = (y * zInverse).bytes
@@ -55,10 +55,10 @@ struct EdwardsPoint {
         return bytes
     }
 
-    /// 항등원 (0, 1)인가. 사영 좌표에서 X = 0이고 Y = Z인 것과 같다.
+    /// Whether this is the identity (0, 1), equivalent to X = 0 and Y = Z in projective coordinates.
     var isIdentity: Bool { x == .zero && y == z }
 
-    // MARK: 군 연산
+    // MARK: Group operations
 
     static func + (p: EdwardsPoint, q: EdwardsPoint) -> EdwardsPoint {
         let pp = (p.y + p.x) * (q.y + q.x)
@@ -85,20 +85,20 @@ struct EdwardsPoint {
         return Self.completed(x: (x + y).squared() - yPlusXX, y: yPlusXX, z: yMinusXX, t: zz2 - yMinusXX)
     }
 
-    /// [8]P. 작은 위수(1·2·4·8) 성분을 없앤다.
+    /// Returns [8]P, removing small-order (1, 2, 4, 8) components.
     func multipliedByCofactor() -> EdwardsPoint { doubled().doubled().doubled() }
 
-    /// Go의 `projP1xP1`(완료 좌표 ((X : Z), (Y : T)))를 확장 좌표로 바꾼다.
+    /// Converts Go's `projP1xP1` (completed coordinates ((X : Z), (Y : T))) to extended coordinates.
     private static func completed(x: FieldElement, y: FieldElement, z: FieldElement, t: FieldElement) -> EdwardsPoint {
         EdwardsPoint(x: x * t, y: y * z, z: z * t, t: x * y)
     }
 
-    // MARK: 스칼라 곱
+    // MARK: Scalar multiplication
 
-    /// [a]A + [b]B (B는 기준점). Straus–Shamir 방식으로 두 스칼라의 비트를 위에서부터 함께 훑는다.
+    /// Computes [a]A + [b]B (B is the base point). Scans the bits of both scalars together from the top using Straus–Shamir.
     ///
-    /// 비트에 따라 더하기를 건너뛰므로 가변 시간이다. 서명 검증에서는 a = k, A = −공개 키, b = S가 모두
-    /// 공개 값이라 시간으로 새는 비밀이 없다(Go `VarTimeDoubleScalarBaseMult`도 같은 이유로 가변 시간이다).
+    /// This is variable time because it skips additions based on the bits. In signature verification a = k, A = −public key, and b = S are all
+    /// public, so timing leaks no secrets (Go's `VarTimeDoubleScalarBaseMult` is variable time for the same reason).
     static func varTimeDoubleScalarBaseMultiply(_ a: Scalar, _ point: EdwardsPoint, _ b: Scalar) -> EdwardsPoint {
         let sum = point + basepoint
         var result = identity

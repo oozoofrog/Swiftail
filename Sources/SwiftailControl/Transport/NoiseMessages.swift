@@ -1,33 +1,33 @@
-/// controlbase 메시지의 바이트 배치: initiation, response, error, record.
+/// The byte layout of controlbase messages: initiation, response, error, and record.
 ///
-/// 모든 메시지는 type 1바이트와 길이(uint16 BE)로 시작한다. initiation만 그 앞에 프로토콜 버전
-/// (uint16 BE)이 붙는다. 서버가 보낸 바이트는 여기서 한 번 해석해 검증된 타입이 된다.
+/// All messages start with a 1-byte type and length (uint16 BE). Initiation alone prefixes them with the protocol version
+/// (uint16 BE). Server bytes are parsed here once into validated types.
 ///
-/// `docs/protocol-notes/control-transport.md` 3.1~3.4절
-/// (출처: tailscale.com `control/controlbase/messages.go`, `conn.go`).
+/// `docs/protocol-notes/control-transport.md` §3.1~§3.4
+/// (origin: tailscale.com `control/controlbase/messages.go`, `conn.go`).
 enum NoiseMessageType {
     static let initiation: UInt8 = 1
     static let response: UInt8 = 2
-    /// 서버만 보낸다. 인증되지 않은 사람용 문자열이 따른다.
+    /// Sent only by the server. Followed by an unauthenticated human-readable string.
     static let error: UInt8 = 3
     static let record: UInt8 = 4
 }
 
-/// type과 길이로 된 3바이트 머리(initiation 제외).
+/// The 3-byte header containing the type and length (except in initiation).
 enum NoiseHeader {
     static let size = 3
 }
 
-/// 클라이언트 → 서버 initiation(101바이트). 업그레이드 요청 헤더에 실린다.
+/// Client → server initiation (101 bytes). Carried in the upgrade request header.
 struct HandshakeInitiation: Equatable {
     static let payloadSize = 96
 
     var protocolVersion: UInt16
-    /// 클라이언트 임시 공개 키(평문 32).
+    /// The client's ephemeral public key (32 plaintext bytes).
     var ephemeralPublicKey: [UInt8]
-    /// 클라이언트 machine 공개 키 암호문 32 + 태그 16.
+    /// The client's machine public key as 32 bytes of ciphertext + a 16-byte tag.
     var encryptedMachineKey: [UInt8]
-    /// 빈 페이로드의 태그 16.
+    /// The 16-byte tag for the empty payload.
     var tag: [UInt8]
 
     var bytes: [UInt8] {
@@ -38,20 +38,20 @@ struct HandshakeInitiation: Equatable {
     }
 }
 
-/// 서버 → 클라이언트 response(51바이트). 버전 필드는 없다.
+/// Server → client response (51 bytes). Has no version field.
 struct HandshakeResponse: Equatable {
     static let payloadSize = 48
     static let size = NoiseHeader.size + payloadSize
 
-    /// 서버 임시 공개 키(평문 32).
+    /// The server's ephemeral public key (32 plaintext bytes).
     var ephemeralPublicKey: [UInt8]
-    /// 빈 페이로드의 태그 16.
+    /// The 16-byte tag for the empty payload.
     var tag: [UInt8]
 
-    /// 받은 바이트의 앞부분에서 response를 읽는다. 판단하기에 바이트가 모자라면 `nil`.
+    /// Reads response from the start of the received bytes. Returns `nil` if too few bytes are available to decide.
     ///
-    /// - Throws: 서버의 error 메시지면 `handshakeFailed`(문자열은 인증되지 않으므로 읽지 않는다),
-    ///   모르는 type이거나 길이가 48이 아니면 `malformed`.
+    /// - Throws: `handshakeFailed` for a server error message (skips reading the unauthenticated string),
+    ///   or `malformed` for an unknown type or a length other than 48.
     init?(parsingPrefixOf bytes: [UInt8]) throws(ControlTransportError) {
         guard bytes.count >= NoiseHeader.size else { return nil }
         switch bytes[0] {
@@ -68,10 +68,10 @@ struct HandshakeResponse: Equatable {
     }
 }
 
-/// 전송 단계 레코드: type(4) ‖ 길이(uint16 BE) ‖ 암호문 + 태그.
+/// A transport-phase record with type(4) ‖ length(uint16 BE) ‖ ciphertext + tag.
 enum NoiseRecord {
-    /// 머리를 포함한 레코드 전체의 한도.
+    /// The limit on the complete record, including the header.
     static let maximumSize = 4096
-    /// 한 레코드에 담을 수 있는 평문의 최대 = 4096 − 머리 3 − 태그 16.
+    /// The maximum plaintext in one record = 4096 − 3-byte header − 16-byte tag.
     static let maximumPlaintextSize = maximumSize - NoiseHeader.size - NoiseAEAD.tagSize
 }

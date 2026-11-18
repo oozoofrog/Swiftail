@@ -3,19 +3,19 @@ import Network
 import SwiftailBase
 import SwiftailIO
 
-/// 핸드셰이크를 마친 연결: 소켓, 준비된 상태 기계, 준비와 함께 온 사건.
+/// A connection after the handshake, including the socket, ready state machine, and events that arrived with readiness.
 struct OpenedConnection: Sendable {
     let socket: NetworkSocket
     let connection: DERPConnection
-    /// 서버가 ServerKey와 같은 조각에 붙여 보낸 패킷 같은 것. `ready`를 포함한다.
+    /// Events include packets the server sent in the same chunk as ServerKey, as well as `ready`.
     let events: [DERPConnection.Event]
 }
 
 extension DERPClient {
-    /// 서버에 닿아 TLS를 맺고, 업그레이드와 핸드셰이크를 마쳐 `ready`가 될 때까지 진행한다.
+    /// Connects to the server, establishes TLS, and completes the upgrade and handshake through `ready`.
     ///
-    /// 서버 목록은 앞에서부터 TCP로 시도해(서버당 `tcpTimeout`) 처음 붙는 곳에 TLS를 맺는다. TLS 실패는 다음 서버로
-    /// 넘어가지 않고 이번 시도의 실패다(노트 4.1절 1). 서버 하나 안에서는 `targets`를 함께 건다(`dial`).
+    /// Tries servers in list order over TCP (with `tcpTimeout` per server), then establishes TLS with the first one that connects. A TLS failure
+    /// ends the attempt without advancing to the next server (notes §4.1, item 1). Within a server, `dial` tries the `targets` concurrently.
     static func open(
         servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool, plaintextForTests: Bool,
         interface: NWInterface?
@@ -38,15 +38,15 @@ extension DERPClient {
         }
     }
 
-    /// 서버 목록에서 처음 닿는 곳에 TLS 소켓을 연다. `plaintextForTests`면 TLS 없이 연다(시험의 가짜 서버용).
+    /// Opens a TLS socket to the first reachable server in the list. With `plaintextForTests`, opens without TLS (for fake test servers).
     ///
-    /// 마지막 서버는 어느 쪽 실패든 이번 시도의 실패이므로 곧바로 TLS를 맺는다. `interface`가 있으면 모든 연결이 그
-    /// 인터페이스로만 나간다(대상이 루프백이면 묶지 않는다).
-    // shortcut: `NetworkSocket.connect`는 TCP와 TLS를 한 번에 맺으므로, TCP 실패와 TLS 실패를 가르려고 마지막이 아닌
-    // 서버는 평문 TCP로 먼저 닿는지만 보고(맺자마자 닫는다) 먼저 붙은 대상에 TLS로 다시 맺는다. 서버마다 TCP 연결이
-    // 하나 더 생긴다. 마지막 서버는 대상마다 TCP와 TLS를 함께 맺어 먼저 끝나는 쪽을 쓰므로, Go(먼저 붙은 TCP에만 TLS)와
-    // 달리 한 대상의 TLS가 실패해도 다른 대상이 붙으면 쓴다. TCP 연결을 맺은 뒤 그 위에 TLS를 얹는 길이 `SwiftailIO`에
-    // 생기면 한 번만 맺는다.
+    /// Either kind of failure on the last server fails the attempt, so establish TLS immediately. If `interface` is set, all connections go through
+    /// that interface (loopback targets are unbound).
+    // shortcut: `NetworkSocket.connect` establishes TCP and TLS together. To distinguish their failures, first probe nonfinal servers
+    // with plaintext TCP (closing immediately), then reconnect with TLS to the first target that connected. This adds one TCP connection
+    // per server. For the last server, start TCP and TLS together for each target and use the first to finish. Go adds TLS only to the first TCP connection,
+    // so this approach can still use a different target if one target's TLS fails. Use a single connection once `SwiftailIO` can layer TLS
+    // over an already established TCP connection.
     private static func connect(
         to servers: [DERPServer], plaintextForTests: Bool, interface: NWInterface?
     ) async throws -> (NetworkSocket, DERPServer) {
@@ -70,12 +70,12 @@ extension DERPClient {
         throw Disconnection.noServers
     }
 
-    /// `targets`를 함께 걸어 먼저 붙는 연결과 그 대상을 돌려준다(Go `dialNode`). 진 쪽 연결은 닫는다. 모두 실패하면
-    /// 가장 먼저 온 실패를 던지고, 대상이 없으면 `Disconnection.noServers`다.
+    /// Races `targets` and returns the first successful connection and its target (Go `dialNode`). Closes the losing connections. If all fail,
+    /// throws the first failure received. If there are no targets, throws `Disconnection.noServers`.
     ///
-    /// 연결마다 TaskGroup의 자식이므로 부른 Task가 취소되면 열던 연결이 모두 닫힌다(`NetworkSocket.connect`).
-    // shortcut: Go는 IPv6를 선호하는 망에서 IPv4를 200ms 늦게 건다(`preferIPv6`). Swiftail에는 주소 체계 선호 판단이
-    // 없으므로 모두 곧바로 건다. 필요해지는 시점: IPv6가 되는 망에서 IPv4 쪽이 먼저 붙어 생기는 문제가 보일 때.
+    /// Each connection is a TaskGroup child, so canceling the calling Task closes all connections still opening (`NetworkSocket.connect`).
+    // shortcut: Go delays IPv4 by 200ms on networks that prefer IPv6 (`preferIPv6`). Swiftail has no address-family preference detection
+    // and starts all attempts immediately. Add it if IPv4 winning the race causes problems on an IPv6-capable network.
     private static func dial(
         _ targets: [DERPServer.Target], of server: DERPServer, tls: NetworkSocket.TLS, interface: NWInterface?
     ) async throws -> (socket: NetworkSocket, target: DERPServer.Target) {
@@ -95,7 +95,7 @@ extension DERPClient {
                 switch result {
                 case .success(let winner):
                     group.cancelAll()
-                    // 취소가 닿기 전에 붙은 진 쪽 연결을 닫는다.
+                    // Close losing connections that succeeded before cancellation reached them.
                     while let late = await group.nextResult() {
                         if case .success(let loser) = late { loser.socket.close() }
                     }
@@ -117,12 +117,12 @@ extension DERPClient {
         }
     }
 
-    /// `Host` 값. 포트가 443이 아니면 붙인다(Go와 같다).
+    /// The `Host` value. Includes the port if it differs from 443, as in Go.
     private static func hostHeader(for server: DERPServer) -> String {
         server.port == 443 ? server.hostName : "\(server.hostName):\(server.port)"
     }
 
-    /// ClientInfo를 봉할 nonce. 시스템 난수는 상태 기계 바깥인 여기서만 뽑는다.
+    /// The nonce for sealing ClientInfo. Draws system randomness only here, outside the state machine.
     private static func randomNonce() -> [UInt8] {
         (0..<DERPHandshake.nonceSize).map { _ in UInt8.random(in: .min ... .max) }
     }

@@ -5,38 +5,38 @@ import SwiftailBase
 import SwiftailIO
 import SwiftailTKA
 
-/// tailnet lock의 로그(계약 `docs/contracts/SwiftailTailnetLock.md` 동작 K5). 키·서명 바이트·인증 키는 남기지 않는다.
+/// Tailnet lock logging (contract `docs/contracts/SwiftailTailnetLock.md` behavior K5). Omits keys, signature bytes, and auth keys.
 private let tailnetLockLog = Logger(subsystem: "Swiftail", category: "tailnet-lock")
 
-/// 등록: `POST /machine/register`로 node 키를 제어 서버에 올린다.
+/// Registers a node key with the control server using `POST /machine/register`.
 ///
-/// 1. 저장된 node 키가 있으면 그것으로, 없거나 바꿔야 하면(대화형 로그인, 만료) 새 후보 키로 요청한다.
-///    키를 바꿀 때는 이전 키를 `OldNodeKey`에 넣는다. 인증 키는 새 node 키를 등록할 때만 `--TL` 앞부분을 보낸다:
-///    처음 등록할 때와, 키가 만료되거나 로그인을 새로 해서 키를 바꿀 때다(재사용 인증 키면 스스로 다시 인증된다).
-///    이미 등록된 저장 키로 다시 붙을 때(재시작)는 보내지 않는다. 일회용 키는 이미 쓰였고, Go tsnet도 로그인이
-///    필요한 상태에서만 인증 키를 넘긴다.
-///    요청마다 NL 공개 키(`NLKey`)를 싣고, node 키 서명(`NodeKeySignature`)은 Go의 순서로 고른다(`nodeKeySignature`).
-/// 2. 응답은 `Error` → `NodeKeySignature` → `NodeKeyExpired` → `AuthURL` 순으로 본다. `NodeKeySignature`가 오면 서버가
-///    재서명을 요청한 것이다: 새 node 키를 만들어, 받은 서명을 NL 키로 이어 서명해 다시 등록한다. 한 번의 등록에서 한 번만
-///    따르고, 거듭 오면 연결 오류로 보고 물러났다가 다시 잇는다(Go는 두 번째 요청을 버린다).
-/// 3. `AuthURL`이 오면 `loginRequired`를 내고, 같은 후보 키로 `Followup` 요청(긴 폴링)을 되풀이한다.
-///    후보 키는 인증이 끝난 뒤에만 확정하고 저장한다. 그 전에 연결이 끊기면 다시 이은 뒤 같은 후보 키와 Followup
-///    URL로 이어서 기다린다. 사용자가 보고 있는 URL은 그 후보 키에 묶여 있기 때문이다.
-/// 4. 등록하는 동안 `startInteractiveLogin()`이 불리면, 이 등록이 끝나도 그 요청은 남는다(Go `authRoutine`의
-///    `loginGoal == goal` 확인). 받은 키는 확정하지만 다음 연결에서 새 키로 다시 등록한다. 로그인을 기다리는
-///    Followup 긴 폴링은 그 자리에서 그만두고 새 키로 다시 시작한다(사용자가 새 URL을 곧바로 받는다).
+/// 1. Requests with the stored node key when available, or a fresh candidate key if none exists or rotation is required (interactive login or expiration).
+///    During rotation, includes the previous key in `OldNodeKey`. Sends the part of the auth key before `--TL` only when registering a fresh node key.
+///    This covers initial registration and rotation after expiration or a new login (a reusable auth key authenticates again automatically).
+///    Omits it when reconnecting with an already registered stored key (restart). A single-use key has already been used, and Go tsnet also
+///    passes an auth key only when login is required.
+///    Includes the NL public key (`NLKey`) in each request and chooses the node key signature (`NodeKeySignature`) in Go's order (`nodeKeySignature`).
+/// 2. Checks `Error` → `NodeKeySignature` → `NodeKeyExpired` → `AuthURL` in order. If `NodeKeySignature` arrives, the server
+///    requested re-signing. Creates a fresh node key, uses the NL key to extend the received signature chain, and registers again. Honors this only once
+///    per registration. A repeated request is a connection error followed by backoff and reconnection (Go discards the second request).
+/// 3. If `AuthURL` arrives, emits `loginRequired` and repeats `Followup` requests (long polls) with the same candidate key.
+///    Commits and stores the candidate key only after authentication. If the connection drops before then, resumes waiting after reconnecting using the same candidate
+///    key and Followup URL, because the URL the user sees is tied to that candidate key.
+/// 4. If `startInteractiveLogin()` is called during registration, the request remains pending after registration completes (Go `authRoutine`'s
+///    `loginGoal == goal` check). Commits the key it received and registers again with a fresh key on the next connection. If a Followup long poll
+///    is waiting for login, stops it immediately and starts over with a fresh key (the user gets a fresh URL immediately).
 ///
-/// `docs/protocol-notes/control-map.md` 3.2, 4.1, `docs/protocol-notes/tailnet-lock.md` 4.6, 계약
-/// `docs/contracts/SwiftailTailnetLock.md` 동작 R (출처: tailscale.com `control/controlclient/direct.go`
+/// `docs/protocol-notes/control-map.md` §3.2, §4.1, `docs/protocol-notes/tailnet-lock.md` §4.6, contract
+/// `docs/contracts/SwiftailTailnetLock.md` behavior R (origin: tailscale.com `control/controlclient/direct.go`
 /// `doLoginOrRegen`·`doLogin`, `auto.go` `authRoutine`, BSD-3-Clause).
 extension ControlClient {
-    /// 등록 응답 본문의 한도(1MiB). Go와 같다.
+    /// The registration response body limit (1MiB), matching Go.
     static let maximumRegisterResponseSize = 1 << 20
-    /// `registrationRejected`에 담는 서버 메시지의 한도(문자 수). Go가 HTTP 오류 본문을 자르는 길이와 같다.
+    /// The server message length limit (in characters) in `registrationRejected`. Matches the length at which Go truncates the HTTP error body.
     static let maximumRejectionLength = 200
 
-    /// `run()`이 첫 연결 전에 한 번 부른다. 인증 키의 `--TL` 뒤를 해석하고(어긋나면 서버에 아무것도 보내지 않고 끝난다),
-    /// 신원을 읽거나 만든다. NL 키가 없던 옛 신원이면 새 NL 키를 저장한 뒤 돌아온다(동작 R1·R3).
+    /// Called once by `run()` before the first connection. Parses the part of the auth key after `--TL` (stops without sending anything to the server if invalid)
+    /// and loads or creates the identity. For a legacy identity without an NL key, stores a fresh NL key before returning (behaviors R1 and R3).
     func prepareRegistration() throws(ControlError) {
         wrappedAuthKey = try AuthKey.wrapped(in: configuration.authKey)
         identity = try identityStore.loadOrCreate()
@@ -54,7 +54,7 @@ extension ControlClient {
         }
         var regenerated = false
         var resignRequested = false
-        /// 서버가 방금 준 옛 서명. 그 응답 다음의 요청 하나에만 쓴다(Go `loginOpt.OldNodeKeySignature`).
+        /// The old signature the server just supplied. Used only for the request immediately after that response (Go `loginOpt.OldNodeKeySignature`).
         var previousSignature: [UInt8]?
         var repeatedURLs = 0
 
@@ -91,17 +91,17 @@ extension ControlClient {
             }
             try Self.check(status: response.status, retryAfter: response.headers.first { $0.name == "retry-after" }?.value)
             guard let decoded = try? JSONDecoder().decode(RegisterResponse.self, from: Data(response.body)) else {
-                throw ControlError.connection("등록 응답을 해석하지 못했다")
+                throw ControlError.connection("Could not parse the registration response")
             }
 
             if !decoded.error.isEmpty {
                 let message = Self.rejectionMessage(decoded.error, authKey: configuration.authKey)
-                // 앱이 사용자에게 다르게 안내해야 하는 두 경우를 가른다: 실어 보낸 인증 키가 거절된 것과 그 밖의 거절.
+                // Distinguish the cases the app must explain differently to the user: rejection of the included auth key and other rejections.
                 throw request.auth == nil ? ControlError.registrationRejected(message) : ControlError.authKeyRejected(message)
             }
             if !decoded.nodeKeySignature.isEmpty {
-                // 재서명 요청(동작 R6). 옛 node 키는 저장된 지금의 키이고, 재서명의 입력은 방금 받은 바이트다.
-                guard !resignRequested else { throw ControlError.connection("서버가 재서명을 거듭 요청했다") }
+                // A re-signing request (behavior R6). The old node key is the currently stored key. Re-signing uses the bytes just received.
+                guard !resignRequested else { throw ControlError.connection("Server requested re-signing again") }
                 resignRequested = true
                 previousSignature = decoded.nodeKeySignature
                 attempt = PendingRegistration(nodeKey: .init(), oldNodeKey: identity.nodePublicKey ?? .zero, followup: "")
@@ -117,15 +117,15 @@ extension ControlClient {
             }
             if !decoded.authURL.isEmpty {
                 guard let url = URL(string: decoded.authURL), ["http", "https"].contains(url.scheme?.lowercased()) else {
-                    throw ControlError.connection("서버가 잘못된 AuthURL을 보냈다")
+                    throw ControlError.connection("Server returned an invalid AuthURL")
                 }
-                // 기다리는 동안 새 로그인을 요청받았으면 이 URL은 버리고 새 키로 다시 시작한다.
+                // If a new login was requested while waiting, discard this URL and restart with a fresh key.
                 guard loginRequests == loginRequest else { throw SessionInterruption.loginRequested }
                 if decoded.authURL == attempt.followup {
-                    // 같은 URL이 곧바로 되돌아오면 서버를 몰아붙이지 않게 물러난다.
+                    // If the same URL comes back immediately, back off to avoid hammering the server.
                     repeatedURLs += 1
                     try await Task.sleep(for: Backoff.delay(failures: repeatedURLs, maximum: RetryPolicy.maximumBackoff, jitter: .random(in: 0..<1)), clock: .continuous)
-                    // 잠든 사이에 새 로그인을 요청받았으면 지워진 이전 등록을 되살리지 않는다.
+                    // If a new login was requested while sleeping, avoid reviving the discarded prior registration.
                     guard loginRequests == loginRequest else { throw SessionInterruption.loginRequested }
                 } else {
                     repeatedURLs = 0
@@ -148,14 +148,14 @@ extension ControlClient {
         }
     }
 
-    /// 등록 요청에 실을 node 키 서명(동작 R5). Go `doLogin`의 순서 그대로다.
+    /// The node key signature for the registration request (behavior R5). Follows the exact order of Go `doLogin`.
     ///
-    /// 1. 옛 node 키가 있고 서버가 방금 옛 서명을 줬으면 그것을 NL 키로 이어 서명한다(`ResignNKS`). 옛 서명이 이 노드가 이미
-    ///    NL 키로 서명한 사슬이 아니면 재서명 함수가 던진다(계약 5절 TL-11b 항목 1: 서버가 고른 node 키에 서명하지 않는다).
-    ///    던지면 종류만 로그에 남기고 서명 없이 등록한다. 노드는 잠기고 다음 netmap의 `signingRequest`가 그것을 드러낸다.
-    /// 2. 아니고 서명된 인증 키를 실어 보내는 요청이면 감싼 키로 새 node 키에 서명한다(`SignByCredential`). 실패하면 이 등록을
-    ///    오류로 끝낸다(Go와 같이 물러났다가 다시 시도한다).
-    /// 3. 그 밖에는 서명이 없다(JSON `null`). 서명은 서명 기기가 뒤에 올린다.
+    /// 1. If an old node key exists and the server just supplied the old signature, extend that signature chain using the NL key (`ResignNKS`). If the old signature
+    ///    is outside the chain this node already signed with its NL key, re-signing throws (contract §5 TL-11b item 1 prohibits signing a server-selected node key).
+    ///    On error, logs only its kind and registers without a signature. The node is locked out, which the next netmap's `signingRequest` reveals.
+    /// 2. Otherwise, if the request includes a signed auth key, signs the new node key using the wrapped key (`SignByCredential`). Failure
+    ///    ends registration with an error (backs off and retries, as Go does).
+    /// 3. Otherwise, there is no signature (JSON `null`). The signing device uploads the signature later.
     private func nodeKeySignature(
         for nodeKey: NodePublicKey, oldNodeKey: NodePublicKey, resigning previous: [UInt8]?, sendsAuthKey: Bool
     ) throws(ControlError) -> [UInt8] {
@@ -163,8 +163,8 @@ extension ControlClient {
             do {
                 return try NodeKeySignature.resigned(previous, for: nodeKey, with: identity.lockKey)
             } catch {
-                // `TKAError`는 종류만 담는다(키·바이트가 없다).
-                tailnetLockLog.error("재서명하지 못해 서명 없이 등록한다(\(String(describing: error), privacy: .public))")
+                // `TKAError` holds only the kind, without keys or bytes.
+                tailnetLockLog.error("Could not re-sign, so registering without a signature (\(String(describing: error), privacy: .public))")
                 return []
             }
         }
@@ -172,13 +172,13 @@ extension ControlClient {
         do {
             return try wrappedAuthKey.keySignature(for: nodeKey)
         } catch {
-            throw .connection("서명된 인증 키로 node 키에 서명하지 못했다")
+            throw .connection("Could not sign the node key with the signed auth key")
         }
     }
 
-    /// 로그인을 기다리는 긴 폴링을 돌리되, 그동안 `startInteractiveLogin()`이 불리면 그만두고
-    /// `SessionInterruption.loginRequested`를 던진다. 사용자가 로그인을 다시 요청했는데 이전 URL의 응답을
-    /// 기한(10분)까지 기다리지 않게 한다.
+    /// Runs a long poll waiting for login. If `startInteractiveLogin()` is called in the meantime, stops
+    /// and throws `SessionInterruption.loginRequested`. When the user asks to log in again, this avoids waiting for the previous URL's response
+    /// until the deadline (10 minutes).
     private func untilLoginRequested(
         timeout: Duration,
         _ operation: @escaping @Sendable () async throws -> ControlConnection.Response
@@ -203,21 +203,21 @@ extension ControlClient {
         }
     }
 
-    /// 서버의 거절 메시지를 오류에 담을 형태로 만든다. 서버가 인증 키를 되풀이해도 비밀이 오류·로그에 남지 않게
-    /// 설정의 인증 키(원문과 `--TL` 앞부분)와 같은 부분을 가리고, 길이를 `maximumRejectionLength`로 자른다.
+    /// Prepares the server rejection message for an error. To keep secrets out of errors and logs even if the server echoes the auth key,
+    /// redacts occurrences of the configured auth key (the original and the portion before `--TL`) and truncates to `maximumRejectionLength`.
     static func rejectionMessage(_ message: String, authKey: String?) -> String {
         var message = message
         if let authKey {
-            // 긴 것부터 가린다. 앞부분을 먼저 가리면 원문의 나머지(`--TL…`)가 남는다.
+            // Redact longer matches first. Redacting the prefix first would leave the rest of the original text (`--TL…`).
             for secret in [authKey, AuthKey.controlValue(of: authKey)] where !secret.isEmpty {
-                message = message.replacingOccurrences(of: secret, with: "<가림>")
+                message = message.replacingOccurrences(of: secret, with: "<redacted>")
             }
         }
         guard message.count > maximumRejectionLength else { return message }
         return String(message.prefix(maximumRejectionLength)) + "…"
     }
 
-    /// 200이 아닌 상태를 오류로 바꾼다. 429와 `Retry-After`가 붙은 503은 기다릴 시간을 담는다.
+    /// Converts a status other than 200 into an error. Includes the wait time for 429 and 503 with `Retry-After`.
     static func check(status: Int, retryAfter: String?) throws {
         switch status {
         case 200:
@@ -235,7 +235,7 @@ extension ControlClient {
         do {
             return Array(try JSONEncoder().encode(value))
         } catch {
-            throw ControlError.connection("요청을 JSON으로 만들지 못했다")
+            throw ControlError.connection("Could not encode the request as JSON")
         }
     }
 }

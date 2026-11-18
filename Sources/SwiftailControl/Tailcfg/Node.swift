@@ -1,78 +1,78 @@
 import Foundation
 import SwiftailBase
 
-/// tailnet의 노드 하나. Go `tailcfg.Node`.
+/// A node in the tailnet. Go `tailcfg.Node`.
 ///
-/// 맵 응답의 `Node`(자기 자신), `Peers`, `PeersChanged`로 온다. 올 때마다 객체 전체가 바뀐다.
-/// 이전 값의 필드로 빈 필드를 메우지 않는다. 일부 필드만 바꾸는 증분은 `PeerChange`다.
+/// Arrives in `Node` (self), `Peers`, or `PeersChanged` in a map response. Each arrival replaces the entire object.
+/// Missing fields stay missing regardless of previous values. A delta that changes only some fields uses `PeerChange`.
 ///
-/// 해독하면서 Go 클라이언트의 `upgradeNode`와 같이 옛 표현을 지금의 표현으로 바꾼다(노트 4.3의 2).
-/// - `homeDERP`가 0이고 옛 `DERP` 문자열이 `"127.3.3.40:N"`이면 N을 홈 DERP로 쓴다.
-/// - `AllowedIPs`가 없거나 `null`이면 `addresses`와 같다. 빈 배열은 "경로 없음"으로 그대로 둔다.
-/// - `unsignedPeerAPIOnly` 노드의 `allowedIPs`는 자기 주소로 줄인다. tailnet lock 서명이 없는 노드에
-///   제어 서버가 경로를 열어 주지 못하게 하는 안전장치다.
+/// During decoding, upgrades old representations to current ones, like `upgradeNode` in the Go client (notes §4.3, item 2).
+/// - If `homeDERP` is 0 and the legacy `DERP` string is `"127.3.3.40:N"`, uses N as the home DERP.
+/// - A missing or `null` `AllowedIPs` matches `addresses`. An empty array is preserved as "no routes."
+/// - Restricts the `allowedIPs` of an `unsignedPeerAPIOnly` node to its own addresses. This safeguard keeps the control server
+///   from opening routes for a node without a tailnet lock signature.
 ///
-/// 데이터면·DNS·WhoIs에 쓰는 필드만 둔다. 출구 노드 DNS, 감사 로그 ID, 표시용 계산 이름은 없다.
-/// `docs/protocol-notes/control-map.md` 3.7 (출처: tailscale.com `tailcfg/tailcfg.go` `Node`,
+/// Includes only fields used by the data plane, DNS, or WhoIs. Omits exit node DNS, audit log ID, and computed display name.
+/// `docs/protocol-notes/control-map.md` §3.7 (origin: `Node` in tailscale.com `tailcfg/tailcfg.go`,
 /// `control/controlclient/map.go` `upgradeNode`, BSD-3-Clause).
 public struct Node: Decodable, Sendable, Equatable {
-    /// 증분의 키가 되는 노드 ID.
+    /// The node ID used as the key in deltas.
     public internal(set) var id: Int64
-    /// 노드를 가리키는 불투명한 안정 ID.
+    /// The opaque stable ID identifying the node.
     public internal(set) var stableID: String
-    /// MagicDNS 이름. 보통 끝에 점이 있지만 testcontrol은 없이 보내기도 한다.
+    /// The MagicDNS name. Usually ends with a dot, though testcontrol sometimes omits it.
     public internal(set) var name: String
-    /// 소유자 사용자 ID. `Netmap.userProfiles`의 키다.
+    /// The owner's user ID, a key in `Netmap.userProfiles`.
     public internal(set) var user: Int64
-    /// 이 노드를 공유해 준 사용자 ID. 공유받은 노드가 아니면 0.
+    /// The ID of the user who shared this node, or 0 if it was not shared.
     public internal(set) var sharer: Int64
-    /// WireGuard 공개 키.
+    /// The WireGuard public key.
     public internal(set) var key: NodePublicKey
-    /// 노드 키 만료 시각. `nil`은 만료 없음.
+    /// The node key expiration time. `nil` means no expiration.
     public internal(set) var keyExpiry: Date?
-    /// 노드 키에 대한 tailnet lock 서명. 없으면 빈 배열.
+    /// The tailnet lock signature for the node key, or an empty array if absent.
     public internal(set) var keySignature: [UInt8]
-    /// 기기의 machine 공개 키.
+    /// The device's machine public key.
     public internal(set) var machine: MachinePublicKey
-    /// disco 공개 키. 경로 탐색 메시지를 암호화한다.
+    /// The disco public key. Encrypts path discovery messages.
     public internal(set) var discoKey: DiscoPublicKey
-    /// 노드의 tailnet 주소(보통 IPv4 /32와 IPv6 /128).
+    /// The node's tailnet addresses (typically IPv4 /32 and IPv6 /128).
     public internal(set) var addresses: [IPPrefix]
-    /// 이 노드로 보낼 목적지 접두. WireGuard의 AllowedIPs가 된다.
+    /// Destination prefixes to send to this node. Become WireGuard AllowedIPs.
     public internal(set) var allowedIPs: [IPPrefix]
-    /// 직접 연결 UDP 후보 주소.
+    /// Candidate UDP addresses for direct connections.
     public internal(set) var endpoints: [IPEndpoint]
-    /// 노드가 받는 홈 DERP 지역. 0은 없음.
+    /// The home DERP region that serves the node. 0 means none.
     public internal(set) var homeDERP: Int64
-    /// 노드가 알린 자기 정보.
+    /// Information the node reported about itself.
     public internal(set) var hostinfo: Hostinfo
-    /// 노드의 capability version. 0은 모름.
+    /// The node's capability version. 0 means unknown.
     public internal(set) var cap: Int
-    /// ACL 태그(`"tag:server"`). 태그가 있으면 사용자 소유가 아니다.
+    /// ACL tags (`"tag:server"`). A tagged node has no user owner.
     public internal(set) var tags: [String]
-    /// 이 노드가 지금 주 라우터인 서브넷 경로.
+    /// Subnet routes for which this node is currently the primary router.
     public internal(set) var primaryRoutes: [IPPrefix]
-    /// 마지막으로 온라인이었던 시각. `nil`은 모름 또는 볼 권한 없음.
+    /// The last time the node was online. `nil` means unknown or no permission to view it.
     public internal(set) var lastSeen: Date?
-    /// 제어 서버에 연결되어 있는지. `nil`은 모름.
+    /// Whether the node is connected to the control server. `nil` means unknown.
     public internal(set) var online: Bool?
-    /// 기기가 승인되었는지. self 노드에서 의미가 있다.
+    /// Whether the device is authorized. Meaningful for the self node.
     public internal(set) var machineAuthorized: Bool
-    /// 옛 형식의 노드 속성 목록. self 노드에서는 `capMap`에 합쳐진다.
+    /// The legacy list of node capabilities. On the self node, merges into `capMap`.
     public internal(set) var capabilities: [String]
-    /// 노드 속성 → 인자. 인자가 없는 속성은 빈 배열이다.
+    /// Node capability → arguments. A capability with no arguments has an empty array.
     public internal(set) var capMap: [String: [JSONValue]]
-    /// tailnet lock 서명이 없어 peerAPI만 허용되는 노드.
+    /// A node with no tailnet lock signature, permitted to use only peerAPI.
     public internal(set) var unsignedPeerAPIOnly: Bool
-    /// 노드 키가 만료되었다.
+    /// Whether the node key has expired.
     public internal(set) var expired: Bool
-    /// 이 피어가 self를 알아보는 IPv4 주소. 피어로 나가는 패킷의 출발 주소를 바꿀 때 쓴다.
+    /// The IPv4 address by which this peer knows self. Used when rewriting the source address of a packet sent to the peer.
     public internal(set) var selfNodeV4MasqAddrForThisPeer: IPAddress?
-    /// 이 피어가 self를 알아보는 IPv6 주소.
+    /// The IPv6 address by which this peer knows self.
     public internal(set) var selfNodeV6MasqAddrForThisPeer: IPAddress?
-    /// disco·DERP 없이 WireGuard만 하는 피어. `endpoints`로만 닿는다.
+    /// A WireGuard-only peer with no disco or DERP. Reachable only through `endpoints`.
     public internal(set) var isWireGuardOnly: Bool
-    /// 이 노드는 연결을 시작할 수 없다. 이 노드로의 연결은 된다.
+    /// This node can accept connections but cannot initiate them.
     public internal(set) var isJailed: Bool
 
     private enum CodingKeys: String, CodingKey {
@@ -148,7 +148,7 @@ public struct Node: Decodable, Sendable, Equatable {
         }
     }
 
-    /// 옛 `DERP` 필드 `"127.3.3.40:N"`의 N. 다른 형식이면 `nil`.
+    /// The N in the legacy `DERP` field `"127.3.3.40:N"`. Returns `nil` for any other format.
     private static func regionID(fromLegacyDERP text: String) -> Int64? {
         let magicPrefix = "127.3.3.40:"
         guard text.hasPrefix(magicPrefix) else { return nil }

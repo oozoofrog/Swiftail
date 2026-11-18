@@ -1,24 +1,24 @@
-/// 검증을 마친 응답 머리.
+/// A validated response head.
 ///
-/// 응답의 첫 헤더 블록은 한 번 여기서 해석한다. 의사 헤더 `:status`는 정확히 하나, 세 자리 숫자여야
-/// 하고, 일반 헤더보다 앞에 와야 하며, 다른 의사 헤더는 없어야 한다(RFC 9113 §8.1.1, §8.3.2). 일반
-/// 헤더는 `HeaderValidation`의 규칙을 따라야 하고, `content-length`는 하나뿐인 십진수여야 한다(§8.1.1).
-/// 이를 어기면 스트림 오류다.
+/// Parses the response's first header block once. Exactly one `:status` pseudo-header is required, with a three-digit value
+/// before the regular headers. All other pseudo-headers are forbidden (RFC 9113 §8.1.1, §8.3.2). Regular
+/// headers must follow `HeaderValidation`, and `content-length` must be a single decimal number (§8.1.1).
+/// A violation is a stream error.
 struct ResponseHead: Equatable {
     var status: Int
-    /// 의사 헤더를 뺀 나머지.
+    /// The fields excluding pseudo-headers.
     var headers: [HeaderField]
-    /// `content-length`가 알린 본문 길이. 헤더가 없으면 `nil`.
+    /// The body length declared in `content-length`, or `nil` if the header is absent.
     var contentLength: Int?
 
-    /// 규격에 맞지 않으면 `nil`.
+    /// Returns `nil` if the fields violate the specification.
     init?(validating fields: [HeaderField]) {
         var status: Int?
         var contentLength: Int?
         var headers: [HeaderField] = []
         for field in fields {
             if field.name.utf8.first == UInt8(ascii: ":") {
-                // 의사 헤더는 `:status` 하나만, 일반 헤더 앞에서만 나온다.
+                // Only the `:status` pseudo-header is allowed, and it must precede regular headers.
                 guard field.name == ":status", status == nil, headers.isEmpty, let code = Self.statusCode(field.value) else { return nil }
                 status = code
                 continue
@@ -40,7 +40,7 @@ struct ResponseHead: Equatable {
         value.utf8.count == 3 ? decimal(value) : nil
     }
 
-    /// ASCII 숫자만으로 이뤄진 비어 있지 않은 문자열의 값. 부호·공백이 있거나 `Int`를 넘으면 `nil`.
+    /// The numeric value of a nonempty string of ASCII digits. Returns `nil` for a sign, whitespace, or a value outside `Int` range.
     private static func decimal(_ value: String) -> Int? {
         let digits = Array(value.utf8)
         guard !digits.isEmpty, digits.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }) else { return nil }
