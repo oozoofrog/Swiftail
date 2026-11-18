@@ -1,522 +1,522 @@
-# WireGuard 데이터면
+# WireGuard data plane
 
-기준은 `github.com/tailscale/wireguard-go` v0.0.0-20261106233718-9e0ab45c16ca와 `tailscale.com` v1.104.6이다. 작성 모델은 Claude Opus 5.5이다. 검증: GPT-6.1 Sol, 2026-11-14, 수정 31건.
+The reference sources are `github.com/tailscale/wireguard-go` v0.0.0-20261106233718-9e0ab45c16ca and `tailscale.com` v1.104.6. The authoring model was Claude Opus 5.5. Verified by GPT-6.1 Sol on 2026-11-14, with 31 corrections.
 
-출처 표기는 `wireguard-go/…`(위 포크의 모듈 루트)와 `tailscale.com/…`(모듈 루트)를 쓴다. 이 노트에서 "wireguard-go"는 별도 표시가 없으면 Tailscale 포크를 뜻한다.
+Source references use `wireguard-go/…` (the module root of the fork above) and `tailscale.com/…` (the module root). In this note, "wireguard-go" means the Tailscale fork unless marked otherwise.
 
-## 범위
+## Scope
 
-다루는 것:
+Covered topics follow.
 
-- 메시지 4종의 바이트 배치
-- Noise IKpsk2 핸드셰이크(초기자와 응답자)
-- mac1·mac2·cookie와 부하 상태
-- 전송 데이터의 nonce, 패딩, keepalive, 재전송 방지, AllowedIPs 검사
-- 타이머와 keypair 교체 상태 기계
-- Tailscale 포크의 확장 지점(`conn.Bind`·`conn.Endpoint`, 지연 피어 생성)과 Tailscale이 넘기는 설정
-- 재사용할 수 있는 시험과 M1 관문에 필요한 최소 구현
+- Byte layouts for all 4 message types
+- Noise IKpsk2 handshake (initiator and responder)
+- mac1, mac2, cookie, and under-load state
+- Transport data nonce, padding, keepalive, replay protection, and AllowedIPs checks
+- Timers and the keypair rotation state machine
+- Tailscale fork extension points (`conn.Bind` and `conn.Endpoint`, and lazy peer creation) and configuration supplied by Tailscale
+- Reusable tests and the minimum implementation for the M1 gate
 
-다루지 않는 것:
+The scope excludes the following.
 
-- magicsock의 경로 선택, disco, DERP 전송(`disco-magicsock.md`, `derp-stun.md`)
-- TUN·netstack 쪽 패킷 처리
-- UAPI 텍스트 프로토콜 전체
-- 성능용 배치·풀·GSO, 플랫폼별 sticky socket
+- magicsock path selection, disco, and DERP transport (`disco-magicsock.md`, `derp-stun.md`)
+- Packet processing on the TUN and netstack side
+- The full UAPI text protocol
+- Batching, pooling, and GSO for performance, and platform-specific sticky sockets
 
-## 와이어 형식
+## Wire formats
 
-모든 메시지의 첫 4바이트는 type이다. 1바이트 type 뒤에 0 세 바이트가 오며, 수신 측은 이를 little-endian `uint32`로 읽는다(`wireguard-go/device/noise-protocol.go:81`, `wireguard-go/device/receive.go:142`). 따라서 예약 바이트가 0이 아니면 알 수 없는 type으로 버려진다(`wireguard-go/device/receive.go:209`). 정수 필드(type, sender, receiver, counter)는 모두 little-endian이다(`wireguard-go/device/noise-protocol.go:128`, `wireguard-go/device/noise-protocol.go:144`, `wireguard-go/device/send.go:588`).
+The first 4 bytes of every message are its type. A 1-byte type is followed by three bytes set to 0, and the receiver reads the field as little-endian `uint32` (`wireguard-go/device/noise-protocol.go:81`, `wireguard-go/device/receive.go:142`). Reserved bytes other than 0 therefore cause the message to be dropped as an unknown type (`wireguard-go/device/receive.go:209`). All integer fields (type, sender, receiver, counter) are little-endian (`wireguard-go/device/noise-protocol.go:128`, `wireguard-go/device/noise-protocol.go:144`, `wireguard-go/device/send.go:588`).
 
-| type 값 | 메시지 | 크기 |
+| type value | Message | Size |
 | --- | --- | --- |
 | 1 | `MessageInitiationType` | 148 (`MessageInitiationSize`) |
 | 2 | `MessageResponseType` | 92 (`MessageResponseSize`) |
 | 3 | `MessageCookieReplyType` | 64 (`MessageCookieReplySize`) |
-| 4 | `MessageTransportType` | 32 이상(헤더 16 + 태그 16) |
+| 4 | `MessageTransportType` | At least 32 (16 header + 16 tag) |
 
-출처: `wireguard-go/device/noise-protocol.go:58`, `wireguard-go/device/noise-protocol.go:65`, `wireguard-go/device/noise-protocol.go:70`.
+Sources are `wireguard-go/device/noise-protocol.go:58`, `wireguard-go/device/noise-protocol.go:65`, and `wireguard-go/device/noise-protocol.go:70`.
 
-### Handshake initiation (148바이트)
+### Handshake initiation (148 bytes)
 
-| 오프셋 | 길이 | 필드 | 내용 |
+| Offset | Length | Field | Contents |
 | --- | --- | --- | --- |
 | 0 | 4 | Type | `1`, LE uint32 |
-| 4 | 4 | Sender | 초기자가 고른 로컬 index, LE uint32 |
-| 8 | 32 | Ephemeral | 초기자 임시 공개키 평문 |
-| 40 | 48 | Static | 초기자 정적 공개키 32 + Poly1305 태그 16 |
-| 88 | 28 | Timestamp | TAI64N 12 + 태그 16 |
+| 4 | 4 | Sender | Local index chosen by the initiator, LE uint32 |
+| 8 | 32 | Ephemeral | Initiator ephemeral public key, plaintext |
+| 40 | 48 | Static | Initiator static public key 32 + Poly1305 tag 16 |
+| 88 | 28 | Timestamp | TAI64N 12 + tag 16 |
 | 116 | 16 | MAC1 | keyed BLAKE2s-128 |
-| 132 | 16 | MAC2 | keyed BLAKE2s-128 또는 0 |
+| 132 | 16 | MAC2 | Keyed BLAKE2s-128 or 0 |
 
-출처: `wireguard-go/device/noise-protocol.go:87`, `wireguard-go/device/noise-protocol.go:139`.
+Sources are `wireguard-go/device/noise-protocol.go:87` and `wireguard-go/device/noise-protocol.go:139`.
 
-### Handshake response (92바이트)
+### Handshake response (92 bytes)
 
-| 오프셋 | 길이 | 필드 | 내용 |
+| Offset | Length | Field | Contents |
 | --- | --- | --- | --- |
 | 0 | 4 | Type | `2` |
-| 4 | 4 | Sender | 응답자 로컬 index |
-| 8 | 4 | Receiver | initiation의 Sender 값 |
-| 12 | 32 | Ephemeral | 응답자 임시 공개키 |
-| 44 | 16 | Empty | 빈 평문의 AEAD 태그 |
+| 4 | 4 | Sender | Responder local index |
+| 8 | 4 | Receiver | Sender value from the initiation |
+| 12 | 32 | Ephemeral | Responder ephemeral public key |
+| 44 | 16 | Empty | AEAD tag for empty plaintext |
 | 60 | 16 | MAC1 | |
 | 76 | 16 | MAC2 | |
 
-출처: `wireguard-go/device/noise-protocol.go:97`, `wireguard-go/device/noise-protocol.go:171`.
+Sources are `wireguard-go/device/noise-protocol.go:97` and `wireguard-go/device/noise-protocol.go:171`.
 
-### Cookie reply (64바이트)
+### Cookie reply (64 bytes)
 
-| 오프셋 | 길이 | 필드 | 내용 |
+| Offset | Length | Field | Contents |
 | --- | --- | --- | --- |
 | 0 | 4 | Type | `3` |
-| 4 | 4 | Receiver | 거절된 메시지의 Sender 값(오프셋 4) |
-| 8 | 24 | Nonce | 무작위 XChaCha20 nonce |
-| 32 | 32 | Cookie | 암호화된 cookie 16 + 태그 16 |
+| 4 | 4 | Receiver | Sender value of the rejected message (offset 4) |
+| 8 | 24 | Nonce | Random XChaCha20 nonce |
+| 32 | 32 | Cookie | Encrypted cookie 16 + tag 16 |
 
-출처: `wireguard-go/device/noise-protocol.go:114`, `wireguard-go/device/noise-protocol.go:200`, `wireguard-go/device/send.go:258`.
+Sources are `wireguard-go/device/noise-protocol.go:114`, `wireguard-go/device/noise-protocol.go:200`, and `wireguard-go/device/send.go:258`.
 
 ### Transport data
 
-| 오프셋 | 길이 | 필드 | 내용 |
+| Offset | Length | Field | Contents |
 | --- | --- | --- | --- |
 | 0 | 4 | Type | `4` |
-| 4 | 4 | Receiver | 상대가 핸드셰이크에서 보낸 Sender index |
-| 8 | 8 | Counter | LE uint64, nonce로도 쓰인다 |
-| 16 | n+16 | Content | 패딩된 평문 n의 ChaCha20-Poly1305 암호문 + 태그 |
+| 4 | 4 | Receiver | Sender index sent by the peer in the handshake |
+| 8 | 8 | Counter | LE uint64, also used as the nonce |
+| 16 | n+16 | Content | ChaCha20-Poly1305 ciphertext of n bytes of padded plaintext + tag |
 
-출처: `wireguard-go/device/noise-protocol.go:76`, `wireguard-go/device/send.go:588`.
+Sources are `wireguard-go/device/noise-protocol.go:76` and `wireguard-go/device/send.go:588`.
 
-- keepalive는 평문 길이가 0인 transport이며 총 32바이트다(`MessageKeepaliveSize`, `wireguard-go/device/noise-protocol.go:71`).
-- `MessageEncapsulatingTransportSize` = 8은 `conn.Bind.Send`에 넘기는 버퍼 앞의 여유 공간이고, WireGuard 와이어 바이트에 포함되지 않는다(`wireguard-go/device/noise-protocol.go:69`, `wireguard-go/device/peer.go:226`).
+- A keepalive is a transport message with plaintext length 0 and a total size of 32 bytes (`MessageKeepaliveSize`, `wireguard-go/device/noise-protocol.go:71`).
+- `MessageEncapsulatingTransportSize` = 8 is headroom before the buffer passed to `conn.Bind.Send`. It is excluded from the WireGuard wire bytes (`wireguard-go/device/noise-protocol.go:69`, `wireguard-go/device/peer.go:226`).
 
-## 절차와 상태 기계
+## Procedures and state machines
 
-### 기본 연산
+### Basic operations
 
 - **HASH(x)**: BLAKE2s-256(`wireguard-go/device/noise-protocol.go:240`).
-- **MAC(key, x)**: 출력 길이 16바이트로 초기화하는 keyed BLAKE2s-128이다. HMAC이 아니라 BLAKE2s의 key 매개변수를 쓰며, BLAKE2s-256 결과를 16바이트로 자르는 방식으로 대체하면 안 된다(`wireguard-go/device/cookie.go:79`, `:98`, `:109`).
-- **HMAC(key, x)**: HMAC 구성이며, 해시는 BLAKE2s-256이다(`wireguard-go/device/noise-helpers.go:24`).
+- **MAC(key, x)** uses keyed BLAKE2s-128 initialized for 16 bytes of output. It uses the BLAKE2s key parameter rather than HMAC. Truncating BLAKE2s-256 output to 16 bytes is not equivalent (`wireguard-go/device/cookie.go:79`, `:98`, `:109`).
+- **HMAC(key, x)** uses the HMAC construction with BLAKE2s-256 as its hash (`wireguard-go/device/noise-helpers.go:24`).
 - **KDF1/2/3(key, input)** (`wireguard-go/device/noise-helpers.go:43`):
   1. prk = HMAC(key, input)
   2. T0 = HMAC(prk, 0x01)
   3. T1 = HMAC(prk, T0 ‖ 0x02)
   4. T2 = HMAC(prk, T1 ‖ 0x03)
 
-  KDF1은 T0, KDF2는 (T0, T1), KDF3는 (T0, T1, T2)를 돌려준다. KDF1은 prk를 별도로 두지 않고 t0에 덮어쓰지만 결과는 같다(`wireguard-go/device/noise-helpers.go:44`).
+  KDF1 returns T0, KDF2 returns (T0, T1), and KDF3 returns (T0, T1, T2). KDF1 overwrites t0 instead of keeping a separate prk and yields the same result (`wireguard-go/device/noise-helpers.go:44`).
 - **mixHash(h, d)** = HASH(h ‖ d), **mixKey(ck, d)** = KDF1(ck, d)(`wireguard-go/device/noise-protocol.go:236`).
-- **AEAD**: ChaCha20-Poly1305 IETF(키 32, nonce 12, 태그 16)다. 핸드셰이크 안의 모든 AEAD는 nonce 12바이트 0(`ZeroNonce`)과 AAD = 현재 hash를 쓴다(`wireguard-go/device/noise-protocol.go:233`, `wireguard-go/device/noise-protocol.go:312`).
-- **DH(sk, pk)**: X25519다. 결과 32바이트가 모두 0이면 `errInvalidPublicKey`로 실패한다(`wireguard-go/device/noise-helpers.go:100`).
-- **비밀키 clamp**: 비밀키는 생성할 때와 `FromHex`로 읽을 때 clamp한다. `sk[0] &= 248`, `sk[31] = (sk[31] & 127) | 64`다. `FromMaybeZeroHex`는 키 제거를 나타내는 전부 0인 값을 clamp하지 않는다(`wireguard-go/device/noise-helpers.go:80`, `wireguard-go/device/noise-types.go:48`, `:54`).
-- **index**: 암호학적 난수 uint32다. 사용 중인 값과 겹치면 다시 뽑는다. 0을 제외하는 검사는 없으므로, 수신 index 0을 무조건 거부해서는 안 된다(`wireguard-go/device/indextable.go:25`, `:58`–`:90`).
+- **AEAD** uses ChaCha20-Poly1305 IETF (key 32, nonce 12, tag 16). Every AEAD operation in the handshake uses a 12-byte nonce set to 0 (`ZeroNonce`) and AAD = current hash (`wireguard-go/device/noise-protocol.go:233`, `wireguard-go/device/noise-protocol.go:312`).
+- **DH(sk, pk)** uses X25519. If all 32 result bytes are 0, it fails with `errInvalidPublicKey` (`wireguard-go/device/noise-helpers.go:100`).
+- **Private key clamping** applies at creation and when reading with `FromHex`. The operations are `sk[0] &= 248` and `sk[31] = (sk[31] & 127) | 64`. `FromMaybeZeroHex` does not clamp the value with all bytes set to 0 that denotes key removal (`wireguard-go/device/noise-helpers.go:80`, `wireguard-go/device/noise-types.go:48`, `:54`).
+- **index** is a cryptographically random uint32. Draw again if the value is already in use. There is no check excluding 0, so do not reject incoming index 0 unconditionally (`wireguard-go/device/indextable.go:25`, `:58`–`:90`).
 
-### 초기 상수
+### Initial constants
 
 - `NoiseConstruction` = `"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s"`
 - `WGIdentifier` = `"WireGuard v1 zx2c4 Jason@zx2c4.com"`
 - `WGLabelMAC1` = `"mac1----"`
 - `WGLabelCookie` = `"cookie--"`
 
-출처: `wireguard-go/device/noise-protocol.go:51`.
+Source is `wireguard-go/device/noise-protocol.go:51`.
 
 - `InitialChainKey` = HASH(`NoiseConstruction`)
 - `InitialHash` = HASH(`InitialChainKey` ‖ `WGIdentifier`)
 
-출처: `wireguard-go/device/noise-protocol.go:267`.
+Source is `wireguard-go/device/noise-protocol.go:267`.
 
-### 초기자: initiation 만들기
+### Initiator creates an initiation
 
-S_i/S_r은 정적 키, E_i/E_r은 임시 키, ck는 chaining key, h는 hash다(`wireguard-go/device/noise-protocol.go:272`).
+S_i/S_r are static keys, E_i/E_r are ephemeral keys, ck is the chaining key, and h is the hash (`wireguard-go/device/noise-protocol.go:272`).
 
-1. ck = InitialChainKey, h = InitialHash, E_i를 새로 만든다(`:282`).
+1. Set ck = InitialChainKey and h = InitialHash, and generate a fresh E_i (`:282`).
 2. h = mixHash(h, S_r.pub)(`:289`).
 3. msg.Ephemeral = E_i.pub. ck = mixKey(ck, E_i.pub), h = mixHash(h, E_i.pub)(`:296`).
 4. (ck, k) = KDF2(ck, DH(E_i, S_r.pub)). msg.Static = AEAD(k, 0, S_i.pub, AAD=h). h = mixHash(h, msg.Static)(`:300`–`:313`).
-5. precomputed DH(S_i, S_r.pub)가 0이면 `errInvalidPublicKey`로 중단한다(`:316`). 이 값은 피어를 만들 때와 비밀키를 바꿀 때 미리 계산한다(`wireguard-go/device/peer.go:155`, `wireguard-go/device/device.go:440`).
+5. If the precomputed DH(S_i, S_r.pub) is 0, stop with `errInvalidPublicKey` (`:316`). This value is precomputed at peer creation and when the private key changes (`wireguard-go/device/peer.go:155`, `wireguard-go/device/device.go:440`).
 6. (ck, k) = KDF2(ck, DH(S_i, S_r.pub)). msg.Timestamp = AEAD(k, 0, TAI64N.now, AAD=h)(`:319`–`:327`).
-7. 새 index를 msg.Sender로 정한다. 이전 handshake index는 지운다(`:330`).
-8. h = mixHash(h, msg.Timestamp). 상태는 `handshakeInitiationCreated`가 된다(`:337`).
-9. 직렬화한 뒤 mac1·mac2를 붙인다(`wireguard-go/device/send.go:198`).
+7. Choose a new index for msg.Sender. Delete the previous handshake index (`:330`).
+8. Set h = mixHash(h, msg.Timestamp). The state becomes `handshakeInitiationCreated` (`:337`).
+9. Serialize, then add mac1 and mac2 (`wireguard-go/device/send.go:198`).
 
-### 응답자: initiation 소비
+### Responder consumes the initiation
 
-출처는 `wireguard-go/device/noise-protocol.go:342`이다.
+Source is `wireguard-go/device/noise-protocol.go:342`.
 
-1. type이 1이 아니면 버린다(`:348`).
+1. Drop if type is anything other than 1 (`:348`).
 2. h = HASH(HASH(InitialHash ‖ S_r.pub) ‖ E_i.pub), ck = KDF1(InitialChainKey, E_i.pub)(`:360`).
-3. (ck, k) = KDF2(ck, DH(S_r, E_i.pub)). msg.Static을 AEAD로 연다(AAD=h). 실패하면 버린다. h = mixHash(h, msg.Static)(`:367`–`:377`).
-4. Endpoint가 `conn.InitiationAwareEndpoint`이면 복호한 공개키로 `InitiationMessagePublicKey`를 호출한다(`:381`).
-5. `LookupPeer`로 피어를 찾는다. 없거나 실행 중이 아니면 버린다(`:386`). 지연 생성은 아래 Tailscale 절에서 다룬다.
-6. precomputed static-static이 0이면 버린다. (ck, k) = KDF2(ck, DH(S_r, S_i.pub))로 Timestamp를 연다. 실패하면 버린다. h = mixHash(h, msg.Timestamp)(`:399`–`:415`).
-7. **재전송 방지**: 복호한 timestamp가 피어별 `lastTimestamp`보다 바이트 비교로 엄격히 크지 않으면 replay로 버린다(`:419`).
-8. **flood 방지**: 마지막 initiation 소비 후 `HandshakeInitationRate`(20ms) 이내이면 버린다(`:420`).
-9. h, ck, remoteIndex = msg.Sender, remoteEphemeral를 저장한다. `lastTimestamp`와 `lastInitiationConsumption`을 갱신하고, 상태는 `handshakeInitiationConsumed`가 된다(`:435`–`:446`).
+3. Compute (ck, k) = KDF2(ck, DH(S_r, E_i.pub)). Open msg.Static with AEAD (AAD=h). Drop on failure. Set h = mixHash(h, msg.Static) (`:367`–`:377`).
+4. If Endpoint is `conn.InitiationAwareEndpoint`, call `InitiationMessagePublicKey` with the decrypted public key (`:381`).
+5. Look up the peer with `LookupPeer`. Drop if it is missing or not running (`:386`). The Tailscale section below covers lazy creation.
+6. Drop if the precomputed static-static value is 0. Open Timestamp using (ck, k) = KDF2(ck, DH(S_r, S_i.pub)). Drop on failure. Set h = mixHash(h, msg.Timestamp) (`:399`–`:415`).
+7. **Replay protection.** Drop as a replay unless the decrypted timestamp is strictly greater than the per-peer `lastTimestamp` in a bytewise comparison (`:419`).
+8. **Flood protection.** Drop within `HandshakeInitationRate` (20ms) of the last consumed initiation (`:420`).
+9. Store h, ck, remoteIndex = msg.Sender, and remoteEphemeral. Update `lastTimestamp` and `lastInitiationConsumption`, and set the state to `handshakeInitiationConsumed` (`:435`–`:446`).
 
-`lastTimestamp`는 `Handshake.Clear`에서 지워지지 않는다(`wireguard-go/device/noise-protocol.go:248`). 피어 객체가 유지되면 재시작한 초기자도 상대가 마지막으로 수락한 timestamp보다 엄격히 큰 값을 보내야 한다. `TAI64N.Now`는 벽시계를 읽을 뿐 단조 증가를 보장하거나 시계 역행을 보정하지 않는다(`wireguard-go/device/noise-protocol.go:419`, `wireguard-go/tai64n/tai64n.go:22`, `:31`).
+`lastTimestamp` survives `Handshake.Clear` (`wireguard-go/device/noise-protocol.go:248`). If the peer object persists, a restarted initiator must still send a timestamp strictly greater than the last one accepted by the peer. `TAI64N.Now` only reads the wall clock. It neither guarantees monotonic increase nor compensates for the clock going backward (`wireguard-go/device/noise-protocol.go:419`, `wireguard-go/tai64n/tai64n.go:22`, `:31`).
 
-### 응답자: response 만들기
+### Responder creates a response
 
-출처는 `wireguard-go/device/noise-protocol.go:456`이다.
+Source is `wireguard-go/device/noise-protocol.go:456`.
 
-1. 상태가 `handshakeInitiationConsumed`가 아니면 오류다(`:461`).
-2. 새 index를 Sender로, remoteIndex를 Receiver로 쓴다(`:468`).
-3. E_r를 만든다. h = mixHash(h, E_r.pub), ck = mixKey(ck, E_r.pub)(`:481`).
-4. ck = mixKey(ck, DH(E_r, E_i.pub)). 이어서 ck = mixKey(ck, DH(E_r, S_i.pub))(`:489`–`:498`).
-5. (ck, τ, k) = KDF3(ck, PSK). h = mixHash(h, τ)(`:505`–`:513`). PSK를 쓰지 않으면 32바이트 0을 넣는다. "PSK 계층 꺼짐"이어도 KDF3와 τ의 mixHash를 생략하지 않는다(`wireguard-go/device/peer.go:195`, `wireguard-go/device/noise-protocol.go:505`, `:583`).
-6. msg.Empty = AEAD(k, 0, 빈 평문, AAD=h), 즉 태그 16바이트다. h = mixHash(h, msg.Empty). 상태는 `handshakeResponseCreated`가 된다(`:515`–`:519`).
+1. Return an error unless the state is `handshakeInitiationConsumed` (`:461`).
+2. Write a new index as Sender and remoteIndex as Receiver (`:468`).
+3. Generate E_r. Set h = mixHash(h, E_r.pub) and ck = mixKey(ck, E_r.pub) (`:481`).
+4. Set ck = mixKey(ck, DH(E_r, E_i.pub)). Then set ck = mixKey(ck, DH(E_r, S_i.pub)) (`:489`–`:498`).
+5. Compute (ck, τ, k) = KDF3(ck, PSK) and h = mixHash(h, τ) (`:505`–`:513`). Use 32 bytes set to 0 if there is no PSK. Even when the "PSK layer is disabled," still perform KDF3 and mixHash of τ (`wireguard-go/device/peer.go:195`, `wireguard-go/device/noise-protocol.go:505`, `:583`).
+6. Set msg.Empty = AEAD(k, 0, empty plaintext, AAD=h), which is a 16-byte tag. Set h = mixHash(h, msg.Empty). The state becomes `handshakeResponseCreated` (`:515`–`:519`).
 
-### 초기자: response 소비
+### Initiator consumes the response
 
-출처는 `wireguard-go/device/noise-protocol.go:524`이다.
+Source is `wireguard-go/device/noise-protocol.go:524`.
 
-1. type이 2인지 검사한 뒤 Receiver index로 index table을 찾는다. handshake 항목이 없으면 버린다. 그 index가 이미 keypair로 바뀌었으면 "duplicate"로 취급해 로그 없이 버린다(`:525`, `:531`, `wireguard-go/device/receive.go:390`).
-2. 상태가 `handshakeInitiationCreated`가 아니면 버린다(`:556`).
-3. h = mixHash(h, E_r.pub), ck = mixKey(ck, E_r.pub)이다. 이어서 ck = mixKey(ck, DH(E_i, E_r.pub)), ck = mixKey(ck, DH(S_i, E_r.pub))이다(`:562`–`:576`).
-4. (ck, τ, k) = KDF3(ck, PSK)이고 h = mixHash(h, τ)다. msg.Empty를 AEAD로 연다(AAD=h). 실패하면 버린다. h = mixHash(h, msg.Empty)(`:583`–`:599`).
-5. 잠금을 다시 잡은 뒤 상태가 여전히 `handshakeInitiationCreated`이고 localIndex가 Receiver와 같을 때만 반영한다. 반영하면 상태는 `handshakeResponseConsumed`, remoteIndex = msg.Sender가 된다(`:614`).
+1. Check that type is 2, then look up the Receiver index in the index table. Drop if there is no handshake entry. If the index already points to a keypair, treat it as a "duplicate" and drop it without logging (`:525`, `:531`, `wireguard-go/device/receive.go:390`).
+2. Drop unless the state is `handshakeInitiationCreated` (`:556`).
+3. Set h = mixHash(h, E_r.pub) and ck = mixKey(ck, E_r.pub). Then set ck = mixKey(ck, DH(E_i, E_r.pub)) and ck = mixKey(ck, DH(S_i, E_r.pub)) (`:562`–`:576`).
+4. Compute (ck, τ, k) = KDF3(ck, PSK) and h = mixHash(h, τ). Open msg.Empty with AEAD (AAD=h). Drop on failure. Set h = mixHash(h, msg.Empty) (`:583`–`:599`).
+5. Reacquire the lock and apply the result only if the state is still `handshakeInitiationCreated` and localIndex equals Receiver. Applying it sets the state to `handshakeResponseConsumed` and remoteIndex = msg.Sender (`:614`).
 
-### 전송 키 유도 (`BeginSymmetricSession`)
+### Transport key derivation (`BeginSymmetricSession`)
 
-출처는 `wireguard-go/device/noise-protocol.go:635`이다.
+Source is `wireguard-go/device/noise-protocol.go:635`.
 
-- 초기자(`handshakeResponseConsumed`): (sendKey, recvKey) = KDF2(ck, 빈 입력)(`:647`).
-- 응답자(`handshakeResponseCreated`): (recvKey, sendKey) = KDF2(ck, 빈 입력)(`:655`).
-- 그 밖의 상태는 오류다(`:664`).
-- ck, h, 임시 비밀키를 지우고 상태를 `handshakeZeroed`로 돌린다(`:669`).
-- 새 keypair는 sendNonce 0, 빈 replay filter, `created` = now, `isInitiator`를 가진다. localIndex·remoteIndex는 handshake 값을 그대로 쓴다(`:683`–`:687`).
-- index table의 handshake 항목은 같은 index의 keypair 항목으로 바뀐다(`:691`, `wireguard-go/device/indextable.go:44`). 즉 transport의 Receiver는 핸드셰이크 때 보낸 Sender index와 같다.
+- Initiator (`handshakeResponseConsumed`) computes (sendKey, recvKey) = KDF2(ck, empty input) (`:647`).
+- Responder (`handshakeResponseCreated`) computes (recvKey, sendKey) = KDF2(ck, empty input) (`:655`).
+- Other states are errors (`:664`).
+- Clear ck, h, and the ephemeral private key, and reset the state to `handshakeZeroed` (`:669`).
+- A new keypair has sendNonce 0, an empty replay filter, `created` = now, and `isInitiator`. Keep the localIndex and remoteIndex values from the handshake (`:683`–`:687`).
+- Replace the index table's handshake entry with a keypair entry at the same index (`:691`, `wireguard-go/device/indextable.go:44`). Thus transport Receiver equals the Sender index sent during the handshake.
 
-### keypair 교체(previous/current/next)
+### Keypair rotation (previous/current/next)
 
-`BeginSymmetricSession`의 동작(`wireguard-go/device/noise-protocol.go:704`):
+The following describes `BeginSymmetricSession` (`wireguard-go/device/noise-protocol.go:704`).
 
-| 쪽 | next가 있을 때 | next가 없을 때 |
+| Side | When next exists | When next is absent |
 | --- | --- | --- |
-| 초기자 | previous ← next, 옛 current 삭제, next ← nil | previous ← current |
-| 초기자 공통 | 옛 previous 삭제, current ← 새 keypair | |
-| 응답자 | next ← 새 keypair, 옛 next 삭제, previous ← nil(옛 previous 삭제), current는 유지 | |
+| Initiator | previous ← next, delete old current, next ← nil | previous ← current |
+| Both initiator cases | Delete old previous, current ← new keypair | |
+| Responder | next ← new keypair, delete old next, previous ← nil (delete old previous), keep current | |
 
-- **응답자의 확인**: 응답자는 새 keypair로 처음 인증된 transport를 받을 때 확정한다. 이때 `ReceivedWithKeypair`가 previous ← current, current ← next, next ← nil로 바꾸고 옛 previous를 지운다(`wireguard-go/device/noise-protocol.go:724`, `wireguard-go/device/receive.go:480`).
-- **응답자의 송신 대기**: 송신은 항상 `current`만 쓴다(`wireguard-go/device/send.go:488`). 그래서 응답자는 확인 전까지 새 keypair로 보내지 않는다.
-- **세션이 처음인 응답자**: current가 없으므로 보낼 패킷이 생기면 initiation을 시도한다. 하지만 response를 보낼 때 `lastSentHandshake`가 갱신되어 `RekeyTimeout` 동안 막힌다(`wireguard-go/device/send.go:170`, `wireguard-go/device/send.go:220`). 패킷은 staged에 남았다가 확인 시점에 나간다(`wireguard-go/device/receive.go:484`).
-- **초기자의 확인 유도**: 초기자는 response 처리 직후 `SendKeepalive`를 호출한다. staged 데이터가 있으면 그것을 보내고, 없으면 빈 transport를 보내 응답자의 next를 확정시킨다. 별도의 keepalive가 반드시 나가는 것은 아니다(`wireguard-go/device/receive.go:414`–`:417`, `wireguard-go/device/send.go:85`–`:105`).
-- **keypair 삭제의 의미**: index table 항목만 지운다(`wireguard-go/device/keypair.go:48`). 지운 index로 오는 transport는 keypair를 찾지 못해 버려진다(`wireguard-go/device/receive.go:161`).
+- **Responder confirmation.** The responder confirms on receiving the first transport message authenticated with the new keypair. `ReceivedWithKeypair` sets previous ← current, current ← next, next ← nil, and deletes the old previous (`wireguard-go/device/noise-protocol.go:724`, `wireguard-go/device/receive.go:480`).
+- **Responder send wait.** Sending always uses only `current` (`wireguard-go/device/send.go:488`). The responder therefore waits for confirmation before sending with the new keypair.
+- **Responder in its first session.** With no current keypair, the responder attempts an initiation when it has a packet to send. Sending the response updates `lastSentHandshake`, which prevents the initiation for `RekeyTimeout` (`wireguard-go/device/send.go:170`, `wireguard-go/device/send.go:220`). The packet remains staged and is sent on confirmation (`wireguard-go/device/receive.go:484`).
+- **Initiator prompts confirmation.** The initiator calls `SendKeepalive` immediately after processing the response. It sends staged data if available or an empty transport message otherwise, confirming the responder's next keypair. A separate keepalive is not necessarily sent (`wireguard-go/device/receive.go:414`–`:417`, `wireguard-go/device/send.go:85`–`:105`).
+- **Keypair deletion.** Only the index table entry is deleted (`wireguard-go/device/keypair.go:48`). Transport messages arriving for the deleted index cannot find a keypair and are dropped (`wireguard-go/device/receive.go:161`).
 
-### mac1·mac2와 cookie
+### mac1, mac2, and cookie
 
-**키**(`wireguard-go/device/cookie.go:44`, `wireguard-go/device/cookie.go:173`):
+**Keys** (`wireguard-go/device/cookie.go:44`, `wireguard-go/device/cookie.go:173`)
 
-- 수신 측(`CookieChecker`)은 자기 공개키 M으로 키를 만든다. mac1 키 = HASH(`"mac1----"` ‖ M), cookie 암호 키 = HASH(`"cookie--"` ‖ M)다. 비밀키를 바꿀 때 다시 초기화한다(`wireguard-go/device/device.go:433`).
-- 송신 측(`CookieGenerator`)은 피어마다 상대 공개키로 같은 식의 키를 만든다(`wireguard-go/device/peer.go:137`).
+- The receiver (`CookieChecker`) derives keys from its own public key M. The mac1 key is HASH(`"mac1----"` ‖ M), and the cookie encryption key is HASH(`"cookie--"` ‖ M). Reinitialize when the private key changes (`wireguard-go/device/device.go:433`).
+- The sender (`CookieGenerator`) derives the same keys for each peer using that peer's public key (`wireguard-go/device/peer.go:137`).
 
-**mac 붙이기**(`AddMacs`, `wireguard-go/device/cookie.go:215`):
+**Adding MACs** (`AddMacs`, `wireguard-go/device/cookie.go:215`)
 
-1. mac1 = MAC(mac1키, msg[0 : len−32])(`:229`).
-2. 그 mac1을 `lastMAC1`으로 기억한다(`:234`).
-3. 받은 cookie가 없거나 받은 지 `CookieRefreshTime`(120초)을 넘었으면 mac2는 건드리지 않는다. Go의 송신 버퍼는 새로 할당되어 0이 남는다. Swift가 버퍼를 재사용하면 이 분기에서도 mac2 16바이트를 명시적으로 0으로 만들어야 한다(`:239`, `wireguard-go/device/send.go:196`, `:231`).
-4. 그렇지 않으면 mac2 = MAC(cookie 16바이트, msg[0 : len−16])(`:243`).
+1. Compute mac1 = MAC(mac1 key, msg[0 : len−32]) (`:229`).
+2. Remember that mac1 as `lastMAC1` (`:234`).
+3. Leave mac2 untouched if no cookie has been received or more than `CookieRefreshTime` (120 seconds) have elapsed since it was received. Go allocates a fresh send buffer, so the bytes remain set to 0. If Swift reuses buffers, explicitly set the 16 mac2 bytes to 0 on this branch too (`:239`, `wireguard-go/device/send.go:196`, `:231`).
+4. Otherwise compute mac2 = MAC(16-byte cookie, msg[0 : len−16]) (`:243`).
 
-**검사**(`wireguard-go/device/receive.go:310`):
+**Validation** (`wireguard-go/device/receive.go:310`)
 
-- initiation과 response는 항상 mac1을 상수 시간 비교로 검사하고, 틀리면 버린다(`:314`, `wireguard-go/device/cookie.go:69`).
-- `IsUnderLoad()`일 때만 추가로 검사한다(`:321`).
-  1. mac2를 검사한다. 틀리면 cookie reply를 보내고 원 메시지를 버린다(`:325`).
-  2. mac2가 맞으면 송신 IP별 rate limiter를 통과해야 한다(`:332`).
+- Always check mac1 on initiation and response with a constant-time comparison. Drop on mismatch (`:314`, `wireguard-go/device/cookie.go:69`).
+- Perform additional checks only when `IsUnderLoad()` (`:321`).
+  1. Check mac2. If invalid, send a cookie reply and drop the original message (`:325`).
+  2. If mac2 is valid, it must pass the per-source-IP rate limiter (`:332`).
 
-**cookie 값과 비밀**(`wireguard-go/device/cookie.go:86`, `wireguard-go/device/cookie.go:117`):
+**Cookie value and secret** (`wireguard-go/device/cookie.go:86`, `wireguard-go/device/cookie.go:117`)
 
-- 수신 측 cookie = MAC(secret 32바이트, src)이다.
-- src는 `Endpoint.DstToBytes()`다. 표준 bind에서는 `netip.AddrPort`의 binary 표현이다(`wireguard-go/conn/bind_std.go:113`).
-- secret은 마지막 갱신 후 120초가 지나면 `CreateReply` 때 새 난수로 바뀐다(`:126`).
-- secret이 120초보다 오래되면 `CheckMAC2`는 무조건 실패한다(`:90`).
-- cookie는 송신 측이 그대로 되돌려주는 불투명 값이므로 src 인코딩은 상호 운용에 영향이 없다.
+- The receiver's cookie = MAC(32-byte secret, src).
+- src is `Endpoint.DstToBytes()`. In the standard bind, it is the binary representation of `netip.AddrPort` (`wireguard-go/conn/bind_std.go:113`).
+- Once 120 seconds have elapsed from the last refresh, `CreateReply` replaces the secret with fresh random bytes (`:126`).
+- `CheckMAC2` always fails if the secret is older than 120 seconds (`:90`).
+- The cookie is opaque and the sender returns it unchanged, so src encoding does not affect interop.
 
-**cookie reply 만들기**(`wireguard-go/device/cookie.go:155`, `wireguard-go/device/send.go:255`):
+**Creating a cookie reply** (`wireguard-go/device/cookie.go:155`, `wireguard-go/device/send.go:255`)
 
-- Receiver = 거절된 메시지 오프셋 4의 Sender, Nonce = 24바이트 난수다.
-- Cookie = XChaCha20-Poly1305(키 = cookie 암호 키, nonce, 평문 = cookie 16바이트, AAD = 거절된 메시지의 mac1)다.
-- 수신 Endpoint로 바로 보낸다.
+- Receiver = Sender at offset 4 of the rejected message, and Nonce = 24 random bytes.
+- Cookie = XChaCha20-Poly1305(key = cookie encryption key, nonce, plaintext = 16-byte cookie, AAD = mac1 of the rejected message).
+- Send directly to the receiving Endpoint.
 
-**cookie reply 소비**(`wireguard-go/device/receive.go:280`, `wireguard-go/device/cookie.go:194`):
+**Consuming a cookie reply** (`wireguard-go/device/receive.go:280`, `wireguard-go/device/cookie.go:194`)
 
-1. Receiver index로 피어를 찾는다. handshake 항목이든 keypair 항목이든 되지만, 피어가 없거나 실행 중이 아니면 소비하지 않는다(`wireguard-go/device/receive.go:293`–`:305`).
-2. 피어가 아직 mac1을 보낸 적이 없으면(`hasLastMAC1`이 false) 실패한다.
-3. `lastMAC1`을 AAD로 열어 cookie와 받은 시각을 저장한다.
-4. 실패해도 로그만 남긴다. 저장한 cookie는 다음 `AddMacs`부터 mac2에 쓰인다. 같은 initiation을 즉시 다시 보내지는 않는다.
+1. Look up the peer by Receiver index. Either a handshake or a keypair entry works. Do not consume the reply if the peer is missing or not running (`wireguard-go/device/receive.go:293`–`:305`).
+2. Fail if the peer has never sent mac1 (`hasLastMAC1` is false).
+3. Open using `lastMAC1` as AAD and store the cookie and receive time.
+4. On failure, only log it. A stored cookie is used in mac2 starting with the next `AddMacs`. Do not immediately resend the same initiation.
 
-**부하 상태 판정**(`wireguard-go/device/device.go:385`):
+**Detecting load** (`wireguard-go/device/device.go:385`)
 
-- 핸드셰이크 큐 길이가 max(1, `queueHandshakeSize`/8) 이상이면 부하 상태다. 이때 `underLoadUntil` = now + `UnderLoadAfterTime`(1초)으로 기록한다.
-- 그 밖에는 `underLoadUntil`이 아직 지나지 않았는지로 판정한다.
-- 기본 큐 크기 1024에서 문턱은 128이다(`wireguard-go/device/queueconstants_default.go:16`).
-- 큐가 가득 차면 핸드셰이크 패킷은 버려진다(`wireguard-go/device/receive.go:223`).
+- The device is under load when the handshake queue length is at least max(1, `queueHandshakeSize`/8). Record `underLoadUntil` = now + `UnderLoadAfterTime` (1 second).
+- Otherwise, determine whether `underLoadUntil` has yet elapsed.
+- With the default queue size of 1024, the threshold is 128 (`wireguard-go/device/queueconstants_default.go:16`).
+- Drop handshake packets when the queue is full (`wireguard-go/device/receive.go:223`).
 
 **rate limiter**(`wireguard-go/ratelimiter/ratelimiter.go:14`, `wireguard-go/ratelimiter/ratelimiter.go:99`):
 
-- 키는 `Endpoint.DstIP()`다.
-- 초당 20개, 버스트 5개다(`packetCost` = 1e9/20 ns, `maxTokens` = `packetCost`×5).
-- 새 IP는 첫 패킷을 허용하고 토큰 `maxTokens−packetCost`로 시작한다. 기존 IP는 경과 ns만큼 토큰을 보충하되 `maxTokens`로 제한하고, 토큰이 `packetCost`보다 **엄격히 클 때만** 차감·허용한다. 따라서 "burst 5"는 상수 이름의 뜻이며, 시간이 전혀 흐르지 않은 5개 연속 패킷을 모두 허용한다는 뜻은 아니다(`wireguard-go/ratelimiter/ratelimiter.go:107`–`:136`).
+- The key is `Endpoint.DstIP()`.
+- The rate is 20 per second with a burst of 5 (`packetCost` = 1e9/20 ns, `maxTokens` = `packetCost`×5).
+- Allow the first packet for a new IP, and start its tokens at `maxTokens−packetCost`. For an existing IP, replenish tokens by elapsed ns, cap them at `maxTokens`, and deduct tokens and allow the packet only when tokens are **strictly greater than** `packetCost`. Thus "burst 5" describes the constant and does not guarantee acceptance of all 5 consecutive packets with no elapsed time (`wireguard-go/ratelimiter/ratelimiter.go:107`–`:136`).
 
 ### TAI64N
 
-출처는 `wireguard-go/tai64n/tai64n.go:15`이다.
+Source is `wireguard-go/tai64n/tai64n.go:15`.
 
-- 12바이트 = big-endian uint64(`0x400000000000000a` + Unix 초) ‖ big-endian uint32(나노초 & ^`0xFFFFFF`)다.
-- 나노초 하위 24비트를 지워 해상도를 약 16.8ms로 낮춘다(`whitenerMask`).
-- 비교는 12바이트 사전식 비교다(`wireguard-go/tai64n/tai64n.go:35`).
-- 시험의 특정 시작 시각(`time.Unix(0, 123456789)`)에서는 10ms 차이가 "after"가 아니고 20ms 차이가 "after"다. 일반적으로는 16.8ms 양자화 경계를 넘으면 더 짧은 간격도 "after"가 될 수 있다(`wireguard-go/tai64n/tai64n_test.go:16`–`:28`, `wireguard-go/tai64n/tai64n.go:22`–`:27`).
+- 12 bytes = big-endian uint64(`0x400000000000000a` + Unix seconds) ‖ big-endian uint32(nanoseconds & ^`0xFFFFFF`).
+- Clear the low 24 bits of nanoseconds to reduce resolution to about 16.8ms (`whitenerMask`).
+- Compare the 12 bytes lexicographically (`wireguard-go/tai64n/tai64n.go:35`).
+- At the test's specific start time (`time.Unix(0, 123456789)`), a 10ms difference is not "after" and a 20ms difference is "after". In general, a shorter interval can be "after" if it crosses a 16.8ms quantization boundary (`wireguard-go/tai64n/tai64n_test.go:16`–`:28`, `wireguard-go/tai64n/tai64n.go:22`–`:27`).
 
-### 전송 데이터: 보내기
+### Sending transport data
 
-1. **nonce 배정**: 패킷마다 `sendNonce`를 원자적으로 1 늘리고 이전 값을 counter로 쓴다. 첫 counter는 0이다(`wireguard-go/device/send.go:501`).
-2. **nonce 한도**: counter가 `RejectAfterMessages` 이상이면 nonce를 그 값에 고정하고 패킷을 다시 staged에 넣는다(`wireguard-go/device/send.go:502`).
-3. **보낼 수 없는 경우**: 아래 중 하나면 staged 패킷을 두고 `SendHandshakeInitiation(false)`를 부른다(`wireguard-go/device/send.go:488`).
-   - current keypair가 없다.
-   - nonce가 소진됐다.
-   - `created`로부터 `RejectAfterTime`(180초) 이상 지났다.
-4. **staged 큐**: 기본 크기는 128이다(`DefaultQueueStagedSize` = `conn.IdealBatchSize`). 넘치면 가장 오래된 묶음부터 버린다(`wireguard-go/device/queueconstants_default.go:13`, `wireguard-go/conn/conn.go:19`, `wireguard-go/device/send.go:456`).
-5. **헤더**: type 4, Receiver = keypair.remoteIndex, Counter = nonce를 LE로 쓴다(`wireguard-go/device/send.go:588`).
-6. **패딩**: 0으로 채운다. `calculatePaddingSize(len, mtu)`의 규칙(`wireguard-go/device/send.go:552`, `wireguard-go/device/send.go:593`):
-   - mtu == 0이면 16의 배수로 올림한다.
-   - 아니면 len > mtu일 때 len %= mtu를 하고, 16의 배수로 올림하되 mtu를 넘지 않는다.
-   - keepalive(0바이트)는 패딩이 0이다.
-   - TUN이 MTU를 주지 못하면 `DefaultMTU` = 1420을 쓴다(`wireguard-go/device/tun.go:14`, `wireguard-go/device/device.go:468`).
-7. **암호화**: AEAD nonce 12바이트 = 0x00000000 ‖ LE uint64(counter)이고, AAD는 없다(`wireguard-go/device/send.go:599`).
-8. **크기 한도**: TUN에서 읽은 평문은 1 ≤ size ≤ `MaxContentSize`(= `MaxSegmentSize` − 32 − 8)여야 한다(`wireguard-go/device/send.go:380`, `wireguard-go/device/constants.go:32`).
-9. **경로 선택**: IP 버전(첫 nibble 4/6)과 최소 헤더 길이를 확인한다. 목적지 주소로 AllowedIPs trie를 찾는다. `PeerByIPPacketFunc`가 있으면 그 결과의 공개키로 `LookupPeer`를 부른다(`wireguard-go/device/send.go:390`, `wireguard-go/device/allowedips.go:363`).
-10. **keepalive**: staged 큐가 비어 있으면 빈 패킷 하나를 넣고 staged를 비운다. 비어 있지 않으면 대기 중인 패킷만 보낸다(`wireguard-go/device/send.go:85`).
-11. **송신 후**: 묶음을 보낸 뒤 `keepKeyFreshSending`이 아래 중 하나면 initiation을 부른다(`wireguard-go/device/send.go:275`, `wireguard-go/device/send.go:699`).
-    - `handshakeOnUserSend`가 켜져 있다.
-    - nonce > `RekeyAfterMessages`다.
-    - 초기자 keypair이고 나이 > `RekeyAfterTime`(120초)이다.
+1. **Nonce assignment.** Atomically increment `sendNonce` by 1 for each packet and use the previous value as the counter. The first counter is 0 (`wireguard-go/device/send.go:501`).
+2. **Nonce limit.** When the counter is at least `RejectAfterMessages`, pin the nonce to that value and put the packet back in staged (`wireguard-go/device/send.go:502`).
+3. **When sending is blocked.** Leave packets staged and call `SendHandshakeInitiation(false)` in any of the following cases (`wireguard-go/device/send.go:488`).
+   - There is no current keypair.
+   - The nonce is exhausted.
+   - At least `RejectAfterTime` (180 seconds) have elapsed since `created`.
+4. **Staged queue.** The default size is 128 (`DefaultQueueStagedSize` = `conn.IdealBatchSize`). On overflow, drop the oldest group first (`wireguard-go/device/queueconstants_default.go:13`, `wireguard-go/conn/conn.go:19`, `wireguard-go/device/send.go:456`).
+5. **Header.** Write type 4, Receiver = keypair.remoteIndex, and Counter = nonce in LE (`wireguard-go/device/send.go:588`).
+6. **Padding.** Fill with 0. `calculatePaddingSize(len, mtu)` follows these rules (`wireguard-go/device/send.go:552`, `wireguard-go/device/send.go:593`).
+   - If mtu == 0, round up to a multiple of 16.
+   - Otherwise, if len > mtu, apply len %= mtu, then round up to a multiple of 16 without exceeding mtu.
+   - A keepalive (0 bytes) has 0 bytes of padding.
+   - If TUN cannot supply an MTU, use `DefaultMTU` = 1420 (`wireguard-go/device/tun.go:14`, `wireguard-go/device/device.go:468`).
+7. **Encryption.** The 12-byte AEAD nonce is 0x00000000 ‖ LE uint64(counter), with no AAD (`wireguard-go/device/send.go:599`).
+8. **Size limit.** Plaintext read from TUN must satisfy 1 ≤ size ≤ `MaxContentSize` (= `MaxSegmentSize` − 32 − 8) (`wireguard-go/device/send.go:380`, `wireguard-go/device/constants.go:32`).
+9. **Path selection.** Check the IP version (first nibble 4/6) and minimum header length. Look up the destination address in the AllowedIPs trie. If `PeerByIPPacketFunc` exists, call `LookupPeer` with the resulting public key (`wireguard-go/device/send.go:390`, `wireguard-go/device/allowedips.go:363`).
+10. **Keepalive.** If the staged queue is empty, insert one empty packet and drain staged. Otherwise, send only the packets waiting in the queue (`wireguard-go/device/send.go:85`).
+11. **After sending.** After sending a group, `keepKeyFreshSending` calls for an initiation in any of the following cases (`wireguard-go/device/send.go:275`, `wireguard-go/device/send.go:699`).
+    - `handshakeOnUserSend` is enabled.
+    - nonce > `RekeyAfterMessages`.
+    - The keypair is an initiator keypair and its age > `RekeyAfterTime` (120 seconds).
 
-### 전송 데이터: 받기
+### Receiving transport data
 
-출처는 `wireguard-go/device/receive.go`이다.
+Source is `wireguard-go/device/receive.go`.
 
-1. **크기와 type**: 데이터그램이 `MinMessageSize`(32)보다 작으면 type도 보지 않고 버린다(`:135`). 핸드셰이크 3종은 정확한 크기가 아니면 버리고, 알 수 없는 type도 버린다(`:194`–`:211`).
-2. **keypair 찾기**: transport는 Receiver index로 keypair를 찾는다. 다음 경우 버린다(`:158`–`:171`).
-   - 항목이 없거나 handshake 단계 index다.
-   - keypair 나이가 `RejectAfterTime`(180초)을 넘었다.
-3. **복호**: nonce = 0x00000000 ‖ LE counter, AAD는 없다. 복호에 실패하면 조용히 버린다(`:243`–`:259`, `:469`).
-4. **재전송 방지**: 복호에 성공한 뒤 keypair별 replay filter로 counter를 검사한다(`:474`). 한도는 `RejectAfterMessages`다. 
-   - 창은 64비트 블록 128개 링이고, 크기는 `windowSize` = (128−1)×64 = 8128이다(`wireguard-go/replay/replay.go:11`).
-   - counter ≥ limit이면 거부한다.
-   - `last`보다 크면 창을 앞으로 민다. 이때 건너뛴 블록을 비우며, 최대 링 전체다.
-   - `last − counter` > 8128이면 거부한다.
-   - 그 밖에는 비트가 이미 켜져 있으면 거부하고, 아니면 켜고 허용한다(`wireguard-go/replay/replay.go:37`).
-5. **next 확정**: `ReceivedWithKeypair`로 next를 확정한다. 확정되면 핸드셰이크 완료 타이머, priority message, staged 송신이 이어진다(`:480`).
-6. **피어 통지**: Endpoint가 `conn.PeerAwareEndpoint`이면 `FromPeer(피어 공개키)`를 부른다(`:486`).
-7. **keepalive**: 평문 길이 0은 keepalive이고 TUN에 쓰지 않는다(`:491`).
-8. **IP 검사**(`:497`–`:536`):
-   - 첫 nibble이 4이면 길이 ≥ 20을 확인한다. total length(BE, 오프셋 2)가 [20, len] 안에 있어야 하며, 그 길이로 잘라 패딩을 뗀다.
-   - 6이면 길이 ≥ 40을 확인하고 payload length(BE, 오프셋 4)에 40을 더해 그 길이로 자른다. 다만 Go 소스는 이 덧셈을 `uint16`에서 수행해 큰 입력에서 wrap한다(`wireguard-go/device/receive.go:515`–`:525`). Swift에서는 넓은 정수로 변환한 뒤 합이 len 이하인지 검사해야 하며, 이 wrap을 재현하거나 UInt16 덧셈으로 trap을 일으켜서는 안 된다.
-   - 그 밖의 버전은 버린다.
-9. **AllowedIPs**: **원천 주소**가 그 피어의 AllowedIPs 안에 있어야 한다(`:510`, `:528`). 포크는 `SetAllowedIPs`가 만든 피어 전용 판정 함수를 먼저 쓰고, 없으면 공용 trie에서 원천 주소의 주인이 그 피어인지 본다(`wireguard-go/device/allowedips.go:412`).
-10. **타이머**: 묶음에 AEAD·replay 검사를 통과한 transport가 하나라도 있으면 `keepKeyFreshReceiving`, `timersAnyAuthenticatedPacketTraversal`, `timersAnyAuthenticatedPacketReceived`를 부른다. 그중 평문이 비어 있지 않은 패킷이 있으면 `timersDataReceived`도 부른다. IP 형식·AllowedIPs 검사에서 버려진 패킷도 이 타이머 조건에는 포함된다(`wireguard-go/device/receive.go:474`–`:495`, `:543`–`:549`).
-    - `keepKeyFreshReceiving`: current가 초기자 keypair이고 나이 > `RejectAfterTime − KeepaliveTimeout − RekeyTimeout`(165초)이면 initiation을 한 번 보낸다. `sentLastMinuteHandshake`가 중복을 막는다(`:63`).
+1. **Size and type.** Drop datagrams smaller than `MinMessageSize` (32) without inspecting type (`:135`). Drop any of the 3 handshake message types with an incorrect size, and drop unknown types (`:194`–`:211`).
+2. **Keypair lookup.** For transport, look up the keypair by Receiver index. Drop in either of the following cases (`:158`–`:171`).
+   - The entry is missing or the index is still in the handshake phase.
+   - The keypair age exceeds `RejectAfterTime` (180 seconds).
+3. **Decryption.** nonce = 0x00000000 ‖ LE counter, with no AAD. Silently drop on decryption failure (`:243`–`:259`, `:469`).
+4. **Replay protection.** After successful decryption, validate the counter with the per-keypair replay filter (`:474`). The limit is `RejectAfterMessages`.
+   - The window is a ring of 128 blocks of 64 bits, with size `windowSize` = (128−1)×64 = 8128 (`wireguard-go/replay/replay.go:11`).
+   - Reject if counter ≥ limit.
+   - If greater than `last`, advance the window. Clear the skipped blocks, up to the entire ring.
+   - Reject if `last − counter` > 8128.
+   - Otherwise, reject if the bit is already set. If it is clear, set it and accept (`wireguard-go/replay/replay.go:37`).
+5. **Confirming next.** Confirm next with `ReceivedWithKeypair`. On confirmation, the handshake completion timer, priority message, and staged send follow (`:480`).
+6. **Peer notification.** If Endpoint is `conn.PeerAwareEndpoint`, call `FromPeer(peer public key)` (`:486`).
+7. **Keepalive.** Plaintext of length 0 is a keepalive and is not written to TUN (`:491`).
+8. **IP validation** (`:497`–`:536`).
+   - If the first nibble is 4, check length ≥ 20. The total length (BE, offset 2) must be within [20, len]. Trim to that length to remove the padding.
+   - If it is 6, check length ≥ 40, add 40 to payload length (BE, offset 4), and trim to that length. The Go source performs this addition in `uint16`, which wraps on large inputs (`wireguard-go/device/receive.go:515`–`:525`). In Swift, convert to a wider integer and check that the sum is at most len. Avoid reproducing the wrap or trapping on UInt16 addition.
+   - Drop other versions.
+9. **AllowedIPs.** The **source address** must be within that peer's AllowedIPs (`:510`, `:528`). The fork first uses the per-peer predicate from `SetAllowedIPs`. If there is none, check whether the peer owns the source address in the shared trie (`wireguard-go/device/allowedips.go:412`).
+10. **Timers.** If any transport in the group passes AEAD and replay checks, call `keepKeyFreshReceiving`, `timersAnyAuthenticatedPacketTraversal`, and `timersAnyAuthenticatedPacketReceived`. If any of those packets has nonempty plaintext, also call `timersDataReceived`. Packets dropped by IP format or AllowedIPs checks still count for these timer conditions (`wireguard-go/device/receive.go:474`–`:495`, `:543`–`:549`).
+    - `keepKeyFreshReceiving` sends one initiation if current is an initiator keypair and age > `RejectAfterTime − KeepaliveTimeout − RekeyTimeout` (165 seconds). `sentLastMinuteHandshake` prevents duplicates (`:63`).
 
-### 엔드포인트 로밍
+### Endpoint roaming
 
-이 포크에서 피어의 endpoint 값을 바꾸는 곳은 세 군데뿐이다(`wireguard-go/device/peer.go:161`, `wireguard-go/device/device.go:571`, `wireguard-go/device/uapi.go:345`).
+This fork changes the peer's endpoint value in only three places (`wireguard-go/device/peer.go:161`, `wireguard-go/device/device.go:571`, `wireguard-go/device/uapi.go:345`).
 
-- `NewPeer`의 초기화(nil)
-- 지연 생성 시 `NewPeerConfig.Endpoint`
+- Initialization in `NewPeer` (nil)
+- `NewPeerConfig.Endpoint` during lazy creation
 - UAPI `endpoint=`
 
-수신 경로에는 받은 패킷의 출발지로 endpoint를 갱신하는 코드가 없다(`wireguard-go/device/receive.go:479`–`:489`). 그 자리에서 `PeerAwareEndpoint.FromPeer`로 Bind에 알릴 뿐이다.
+The receive path never updates the endpoint to the source of a received packet (`wireguard-go/device/receive.go:479`–`:489`). At that point it only notifies Bind through `PeerAwareEndpoint.FromPeer`.
 
-그래서 endpoint가 없는 피어에게 보내면 `"no known endpoint for peer"` 오류가 난다(`wireguard-go/device/peer.go:216`). 응답자가 response를 보낼 때도 마찬가지다. 로밍은 Bind(magicsock)의 책임이다.
+Sending to a peer with no endpoint therefore returns `"no known endpoint for peer"` (`wireguard-go/device/peer.go:216`). This also applies when a responder sends a response. Roaming is the responsibility of Bind (magicsock).
 
-`tests/netns.sh`는 endpoint 변경을 검사하지만(`wireguard-go/tests/netns.sh:196`), 이 포크 코드와 맞는지는 확인하지 못했다.
+`tests/netns.sh` checks endpoint changes (`wireguard-go/tests/netns.sh:196`), but compatibility with this fork's code is unverified.
 
-### 핸드셰이크 송신 규칙
+### Handshake send rules
 
 `SendHandshakeInitiation`(`wireguard-go/device/send.go:164`):
 
-- isRetry가 아니면 시도 횟수를 0으로 되돌린다.
-- 마지막 핸드셰이크 메시지(initiation이든 response든) 송신 후 `RekeyTimeout`(5초)이 지나지 않았으면 아무것도 하지 않는다(`wireguard-go/device/send.go:170`).
-- initiation 생성에 성공하면 UDP 송신이 실패해도 `timersHandshakeInitiated`를 부른다. 생성 자체가 실패하면 그 전에 반환한다(`wireguard-go/device/send.go:190`–`:213`).
-- 재시도는 저장한 initiation 바이트의 재전송이 아니다. `CreateMessageInitiation`을 다시 호출하여 InitialChainKey·InitialHash부터 시작하고 새 ephemeral·timestamp·Sender index와 MAC을 만든다. 같은 timestamp의 재전송은 응답자가 거부한다(`wireguard-go/device/send.go:190`, `wireguard-go/device/noise-protocol.go:282`–`:338`, `:419`).
-- 응답자는 response를 주기적으로 재전송하지 않는다. 초기자가 새 initiation으로 다시 시작하면 새 response를 만든다. rekey 중에는 유효한 current로 계속 송신하며, 새 response로 유도한 next의 확인을 기다린다(`wireguard-go/device/receive.go:358`–`:372`, `wireguard-go/device/send.go:218`–`:252`, `wireguard-go/device/noise-protocol.go:714`–`:719`).
-- `Peer.Start`는 `lastSentHandshake`를 now − 6초로 두어 첫 시도를 막지 않는다(`wireguard-go/device/peer.go:294`).
+- Reset the attempt count to 0 unless isRetry.
+- Do nothing if `RekeyTimeout` (5 seconds) have not passed since the last handshake message, whether initiation or response, was sent (`wireguard-go/device/send.go:170`).
+- If initiation creation succeeds, call `timersHandshakeInitiated` even if the UDP send fails. If creation itself fails, return before that call (`wireguard-go/device/send.go:190`–`:213`).
+- A retry creates a fresh initiation rather than resending saved bytes. Call `CreateMessageInitiation` again, start at InitialChainKey and InitialHash, and create a new ephemeral key, timestamp, Sender index, and MACs. The responder rejects retransmission with the same timestamp (`wireguard-go/device/send.go:190`, `wireguard-go/device/noise-protocol.go:282`–`:338`, `:419`).
+- The responder does not retransmit a response periodically. It creates a fresh response when the initiator restarts with a fresh initiation. During rekeying it continues sending with a valid current keypair while waiting for confirmation of next, derived from the fresh response (`wireguard-go/device/receive.go:358`–`:372`, `wireguard-go/device/send.go:218`–`:252`, `wireguard-go/device/noise-protocol.go:714`–`:719`).
+- `Peer.Start` sets `lastSentHandshake` to now − 6 seconds so the first attempt is not blocked (`wireguard-go/device/peer.go:294`).
 
-응답자는 response를 만든 즉시 keypair를 유도해 next에 둔다. 이어 `timersSessionDerived`를 부르고 response를 보낸다(`wireguard-go/device/send.go:218`).
+The responder derives a keypair immediately after creating a response and puts it in next. It then calls `timersSessionDerived` and sends the response (`wireguard-go/device/send.go:218`).
 
-### 타이머
+### Timers
 
-`Timer.Mod(d)`는 대기 중이든 아니든 d 뒤로 다시 건다. `Del`은 취소한다(`wireguard-go/device/timers.go:48`). 지터는 `fastrandn(334)`, 즉 0–333ms다(`wireguard-go/device/timers.go:159`). 이벤트에 따른 타이머 설정·취소는 주로 `timersActive`(피어 실행 중이고 장치 up)로 제한한다. 만료 콜백 자체에 일괄적인 up 검사가 있는 것은 아니며, 피어 정지 때는 여섯 타이머를 `DelSync`로 해제한다(`wireguard-go/device/timers.go:75`, `:79`–`:154`, `:243`–`:249`).
+`Timer.Mod(d)` schedules expiration d from now whether or not a timer is pending. `Del` cancels it (`wireguard-go/device/timers.go:48`). The jitter is `fastrandn(334)`, or 0–333ms (`wireguard-go/device/timers.go:159`). Event-driven timer scheduling and cancellation are mostly gated on `timersActive` (the peer is running and the device is up). Expiration callbacks have no blanket up check. When a peer stops, cancel all six timers with `DelSync` (`wireguard-go/device/timers.go:75`, `:79`–`:154`, `:243`–`:249`).
 
-| 타이머 | 거는 곳 | 푸는 곳 | 만료 동작 |
+| Timer | Scheduled when | Cleared when | Expiration behavior |
 | --- | --- | --- | --- |
-| retransmitHandshake | initiation 송신 후 `RekeyTimeout`+지터(`timers.go:189`) | 핸드셰이크 완료(`timers.go:197`) | 시도 횟수가 `MaxTimerHandshakes`(18)를 넘으면 포기한다: sendKeepalive 해제, staged 폐기, zeroKeyMaterial이 없으면 540초로 건다. 아니면 횟수+1, endpoint src 지움 표시, 재시도 initiation(`timers.go:79`). 외부에서 시도 횟수를 초기화하지 않고 생성·재시도가 계속되는 한 최초 1회+재시도 19회, 최대 20번이다(`timers.go:80`–`:106`, `wireguard-go/device/send.go:165`). |
-| sendKeepalive | 데이터 수신 시 대기 중이 아니면 `KeepaliveTimeout`(10초). 대기 중이면 `needAnotherKeepalive` 표시(`timers.go:164`) | 인증된 패킷 송신 시(`timers.go:175`), 포기 시 | keepalive 송신. 표시가 있으면 지우고 10초로 다시 건다(`timers.go:110`). |
-| newHandshake | 데이터 송신 후 대기 중이 아니면 `KeepaliveTimeout+RekeyTimeout`+지터(15초+)(`timers.go:157`) | 인증된 패킷 수신 시(`timers.go:182`) | endpoint src 지움 표시 후 새 initiation(`timers.go:120`) |
-| sessionExpired | 세션 유도 시 `RejectAfterTime`(180초)(`timers.go:213`) | 피어 정지·키 삭제(`peer.go:321`) | 포크 전용. 세션 상태 콜백에 `PeerSessionExpired`를 알린다(`timers.go:140`). |
-| zeroKeyMaterial | 세션 유도 시 `RejectAfterTime×3`(540초)(`timers.go:214`), 포기 시, 지연 생성 피어 시작 시(`peer.go:314`) | 새 세션 유도 시 갱신, 피어 정지 시 해제(`timers.go:248`) | keypair·handshake·staged 전부 삭제. 지연 생성 피어이면 장치에서 제거(`timers.go:127`, `peer.go:319`–`:345`). |
-| persistentKeepalive | 인증된 패킷 송수신 시 간격이 0보다 크면 그 간격으로 다시 건다(`timers.go:221`) | 피어 정지 시 해제(`timers.go:249`) | 간격이 0보다 크면 keepalive. 그 송신의 traversal이 다음 만료를 건다. 0으로 바뀐 뒤 남은 만료는 아무것도 하지 않는다(`timers.go:150`, `:221`, `wireguard-go/device/send.go:677`). |
+| retransmitHandshake | `RekeyTimeout`+jitter after sending an initiation (`timers.go:189`) | Handshake completion (`timers.go:197`) | Give up if the attempt count exceeds `MaxTimerHandshakes` (18). Cancel sendKeepalive, drop staged, and schedule zeroKeyMaterial for 540 seconds if it is absent. Otherwise, increment the count by 1, mark endpoint src for clearing, and send a retry initiation (`timers.go:79`). As long as creation and retries continue and no external action resets the attempt count, there is 1 initial attempt + 19 retries, at most 20 attempts (`timers.go:80`–`:106`, `wireguard-go/device/send.go:165`). |
+| sendKeepalive | On receiving data, schedule for `KeepaliveTimeout` (10 seconds) if not pending. If pending, set `needAnotherKeepalive` (`timers.go:164`) | Sending an authenticated packet (`timers.go:175`), or giving up | Send a keepalive. If the flag is set, clear it and reschedule for 10 seconds (`timers.go:110`). |
+| newHandshake | `KeepaliveTimeout+RekeyTimeout`+jitter (15 seconds+) after sending data if not pending (`timers.go:157`) | Receiving an authenticated packet (`timers.go:182`) | Mark endpoint src for clearing and send a fresh initiation (`timers.go:120`) |
+| sessionExpired | `RejectAfterTime` (180 seconds) on session derivation (`timers.go:213`) | Peer stop or key deletion (`peer.go:321`) | Fork only. Report `PeerSessionExpired` to the session state callback (`timers.go:140`). |
+| zeroKeyMaterial | `RejectAfterTime×3` (540 seconds) on session derivation (`timers.go:214`), when giving up, or when a lazily created peer starts (`peer.go:314`) | Rescheduled on fresh session derivation, canceled on peer stop (`timers.go:248`) | Delete all keypairs, handshake state, and staged packets. Remove a lazily created peer from the device (`timers.go:127`, `peer.go:319`–`:345`). |
+| persistentKeepalive | On sending or receiving an authenticated packet, reschedule for the interval if it is greater than 0 (`timers.go:221`) | Peer stop (`timers.go:249`) | Send a keepalive if the interval is greater than 0. The send's traversal schedules the next expiration. A pending expiration does nothing after the interval is set to 0 (`timers.go:150`, `:221`, `wireguard-go/device/send.go:677`). |
 
-"인증된 패킷"에는 핸드셰이크 메시지도 포함된다. initiation을 받은 응답자와 response를 받은 초기자는 traversal·received 타이머 함수를 부른다(`wireguard-go/device/receive.go:366`, `wireguard-go/device/receive.go:401`). initiation·response를 보낼 때는 traversal·sent 함수를 부른다(`wireguard-go/device/send.go:201`, `wireguard-go/device/send.go:243`).
+"Authenticated packet" includes handshake messages. A responder receiving an initiation and an initiator receiving a response call the traversal and received timer functions (`wireguard-go/device/receive.go:366`, `wireguard-go/device/receive.go:401`). Sending an initiation or response calls the traversal and sent functions (`wireguard-go/device/send.go:201`, `wireguard-go/device/send.go:243`).
 
-`timersHandshakeComplete`(`wireguard-go/device/timers.go:197`)는 다음을 한다.
+`timersHandshakeComplete` (`wireguard-go/device/timers.go:197`) does the following.
 
-- retransmit 해제
-- 시도 횟수와 `sentLastMinuteHandshake` 초기화
-- `lastHandshakeNano` 기록
+- Cancel retransmit
+- Reset the attempt count and `sentLastMinuteHandshake`
+- Record `lastHandshakeNano`
 
-이 함수를 부르는 시점은 두 가지다.
+Two points call this function.
 
-- 초기자: response 소비 직후(`wireguard-go/device/receive.go:415`)
-- 응답자: next 확정 시(`wireguard-go/device/receive.go:482`)
+- Initiator, immediately after consuming the response (`wireguard-go/device/receive.go:415`)
+- Responder, when confirming next (`wireguard-go/device/receive.go:482`)
 
-### 키 변경과 피어 정지
+### Key changes and peer stop
 
 `SetPrivateKey`(`wireguard-go/device/device.go:399`):
 
-- 키가 같으면 아무것도 하지 않는다.
-- 새 공개키와 같은 공개키를 가진 피어를 제거한다.
-- cookie checker를 다시 초기화한다.
-- 모든 피어의 precomputed static-static을 다시 계산한다.
-- `ExpireCurrentKeypairs`를 부른다. 이 함수는 handshake와 그 index를 지우고 current·next의 sendNonce를 `RejectAfterMessages`로 만든다. `lastSentHandshake`도 now − 6초로 되돌려 다음 송신의 새 initiation이 5초 억제에 막히지 않게 한다. 기존 keypair의 수신 index를 즉시 삭제하는 동작은 아니다(`wireguard-go/device/peer.go:353`–`:368`).
+- Do nothing if the keys are equal.
+- Remove the peer whose public key matches the new public key.
+- Reinitialize the cookie checker.
+- Recompute the precomputed static-static value for all peers.
+- Call `ExpireCurrentKeypairs`. It clears the handshake and its index, and sets sendNonce on current and next to `RejectAfterMessages`. It also resets `lastSentHandshake` to now − 6 seconds so the 5-second throttle does not block the next send's new initiation. It does not immediately delete the receive indexes of existing keypairs (`wireguard-go/device/peer.go:353`–`:368`).
 
-피어를 정지하면 타이머를 모두 동기 해제하고 keypair·handshake·staged를 지운다(`wireguard-go/device/peer.go:484`, `wireguard-go/device/peer.go:319`).
+Stopping a peer synchronously cancels all timers and clears its keypairs, handshake, and staged packets (`wireguard-go/device/peer.go:484`, `wireguard-go/device/peer.go:319`).
 
-## Tailscale 포크와 Tailscale의 사용 방식
+## Tailscale fork and how Tailscale uses it
 
-이 절은 포크 소스에 있는 것만 적는다. 원본 wireguard-go와의 차이로 단정하지 않는다.
+This section describes only what is in the fork's sources. It does not establish differences from upstream wireguard-go.
 
-### `conn.Bind`와 `conn.Endpoint`
+### `conn.Bind` and `conn.Endpoint`
 
 **`Bind`**(`wireguard-go/conn/conn.go:46`):
 
-| 메서드 | 동작 |
+| Method | Behavior |
 | --- | --- |
-| `Open(port)` | `ReceiveFunc` 목록과 실제 포트를 돌려준다 |
-| `Close` | 열린 수신 함수가 `net.ErrClosed`를 돌려주게 한다 |
-| `SetMark` | 소켓 mark 설정 |
-| `Send(bufs, ep, offset)` | `offset` 앞 공간은 Bind가 써도 된다 |
-| `ParseEndpoint(s)` | 문자열에서 Endpoint를 만든다 |
-| `BatchSize` | 한 번에 다루는 버퍼 수 |
+| `Open(port)` | Returns the list of `ReceiveFunc` and the actual port |
+| `Close` | Causes open receive functions to return `net.ErrClosed` |
+| `SetMark` | Sets the socket mark |
+| `Send(bufs, ep, offset)` | Bind may use the space before `offset` |
+| `ParseEndpoint(s)` | Creates an Endpoint from a string |
+| `BatchSize` | Number of buffers handled at once |
 
-- `ReceiveFunc`는 slab에 패킷을 쓰고 `ReceivedPacket{Offset, Size, Endpoint}`를 채운다(`wireguard-go/conn/conn.go:22`, `wireguard-go/conn/conn.go:40`).
-- 장치는 수신 함수마다 루프를 하나씩 돌린다(`wireguard-go/device/device.go:947`).
+- `ReceiveFunc` writes packets to the slab and fills `ReceivedPacket{Offset, Size, Endpoint}` (`wireguard-go/conn/conn.go:22`, `wireguard-go/conn/conn.go:40`).
+- The device runs one loop per receive function (`wireguard-go/device/device.go:947`).
 
 **`Endpoint`**(`wireguard-go/conn/conn.go:92`):
 
-| 메서드 | 장치 안에서의 쓰임 |
+| Method | Use in the device |
 | --- | --- |
-| `ClearSrc` | 재시도 시 송신 전에 부른다(`wireguard-go/device/peer.go:220`) |
+| `ClearSrc` | Called before sending on retry (`wireguard-go/device/peer.go:220`) |
 | `SrcToString` | |
 | `DstToString` | |
-| `DstToBytes` | mac2 cookie의 src |
-| `DstIP` | rate limiter 키 |
+| `DstToBytes` | src for the mac2 cookie |
+| `DstIP` | Rate limiter key |
 | `SrcIP` | |
 
-**선택 인터페이스**(포크에 있음):
+**Optional interfaces** (present in the fork)
 
-- `InitiationAwareEndpoint.InitiationMessagePublicKey([32]byte)`: initiation의 정적 키를 복호한 직후, 피어 조회 전에 부른다. 아직 static-static DH·Timestamp 인증·replay/flood 검사가 끝나지 않았으므로, 이 통지를 인증 완료로 취급해서는 안 된다(`wireguard-go/conn/conn.go:109`–`:113`, `wireguard-go/device/noise-protocol.go:381`–`:428`).
-- `PeerAwareEndpoint.FromPeer([32]byte)`: transport를 복호하고 replay 검사를 통과한 뒤 부른다(`wireguard-go/conn/conn.go:127`, `wireguard-go/device/receive.go:486`).
+- `InitiationAwareEndpoint.InitiationMessagePublicKey([32]byte)` is called immediately after decrypting the initiation's static key, before peer lookup. Static-static DH, Timestamp authentication, and replay and flood checks are still pending, so this notification does not indicate completed authentication (`wireguard-go/conn/conn.go:109`–`:113`, `wireguard-go/device/noise-protocol.go:381`–`:428`).
+- `PeerAwareEndpoint.FromPeer([32]byte)` is called after transport decryption and successful replay validation (`wireguard-go/conn/conn.go:127`, `wireguard-go/device/receive.go:486`).
 
-**magicsock 구현**:
+**magicsock implementation**
 
-- `connBind.Open`은 UDP 전송이 있는 빌드에서는 IPv4·IPv6·DERP 수신 함수 세 개를, 없는 빌드에서는 DERP 하나를 돌려준다. 포트 인자는 무시한다(`tailscale.com/wgengine/magicsock/magicsock.go:3543`–`:3558`).
-- `SetMark`는 아무것도 하지 않는다(`tailscale.com/wgengine/magicsock/magicsock.go:3565`).
-- `BatchSize`는 linux 128, 그 밖은 1이다(`tailscale.com/wgengine/magicsock/magicsock.go:3528`).
-- `ParseEndpoint`는 **노드 공개키 hex 문자열**을 받아 그 피어의 `*endpoint`를 돌려준다(`tailscale.com/wgengine/magicsock/magicsock.go:3946`). 즉 wireguard-go의 피어 endpoint는 피어마다 고정된 객체이고, 실제 경로는 magicsock이 고른다.
-- `*endpoint`의 메서드(`tailscale.com/wgengine/magicsock/endpoint.go:619`, `tailscale.com/wgengine/magicsock/endpoint.go:568`, `tailscale.com/wgengine/magicsock/magicsock.go:3929`):
-  - `DstToString` = 공개키 hex
-  - `DstIP` = 노드의 첫 tailnet 주소
-  - `DstToBytes` = 가짜 주소 `fakeWGAddr`를 IP 바이트 ‖ 포트 LE 2바이트로 묶은 값
-- 출발지로 피어를 정할 수 없거나 확인이 필요하면 magicsock은 `*lazyEndpoint`를 넘긴다(`tailscale.com/wgengine/magicsock/magicsock.go:1914`, `tailscale.com/wgengine/magicsock/magicsock.go:1936`). 이 Endpoint는 두 선택 인터페이스로 출발지 주소와 피어 키를 연결한다(`tailscale.com/wgengine/magicsock/magicsock.go:4487`, `tailscale.com/wgengine/magicsock/magicsock.go:4530`).
-- 부하 상태에서 cookie reply가 `*lazyEndpoint`로 나가면 출발지 UDP 주소로 직접 쓴다(`tailscale.com/wgengine/magicsock/magicsock.go:1514`).
+- `connBind.Open` returns three receive functions (IPv4, IPv6, and DERP) in builds with UDP transport, or just DERP in builds without it. It ignores the port argument (`tailscale.com/wgengine/magicsock/magicsock.go:3543`–`:3558`).
+- `SetMark` does nothing (`tailscale.com/wgengine/magicsock/magicsock.go:3565`).
+- `BatchSize` is 128 on linux and 1 elsewhere (`tailscale.com/wgengine/magicsock/magicsock.go:3528`).
+- `ParseEndpoint` takes the **node public key hex string** and returns that peer's `*endpoint` (`tailscale.com/wgengine/magicsock/magicsock.go:3946`). The wireguard-go endpoint is thus a fixed object per peer, and magicsock chooses the actual path.
+- Methods of `*endpoint` (`tailscale.com/wgengine/magicsock/endpoint.go:619`, `tailscale.com/wgengine/magicsock/endpoint.go:568`, `tailscale.com/wgengine/magicsock/magicsock.go:3929`) follow.
+  - `DstToString` = public key hex
+  - `DstIP` = the node's first tailnet address
+  - `DstToBytes` = fake address `fakeWGAddr` encoded as IP bytes ‖ 2-byte LE port
+- When it cannot determine the peer from the source or needs confirmation, magicsock passes `*lazyEndpoint` (`tailscale.com/wgengine/magicsock/magicsock.go:1914`, `tailscale.com/wgengine/magicsock/magicsock.go:1936`). This Endpoint uses the two optional interfaces to associate the source address with the peer key (`tailscale.com/wgengine/magicsock/magicsock.go:4487`, `tailscale.com/wgengine/magicsock/magicsock.go:4530`).
+- Under load, a cookie reply sent to `*lazyEndpoint` is written directly to the source UDP address (`tailscale.com/wgengine/magicsock/magicsock.go:1514`).
 
-### 지연 피어 설정
+### Lazy peer configuration
 
-**피어 생성 콜백**:
+**Peer creation callback**
 
-- `Device.SetPeerLookupFunc(f)`를 설정하면 `LookupPeer`가 모르는 공개키에 대해 f를 부른다. f가 `NewPeerConfig{AllowedIPs, PresharedKey, Endpoint}`를 돌려주면 피어를 만들어 시작한다(`wireguard-go/device/device.go:542`, `wireguard-go/device/device.go:634`).
-- 이렇게 만든 피어는 `deleteOnIdle`이고, zeroKeyMaterial 만료(540초) 때 제거된다(`wireguard-go/device/device.go:568`, `wireguard-go/device/timers.go:130`).
-- `LookupPeer`는 initiation 수신(`wireguard-go/device/noise-protocol.go:386`)과 `PeerByIPPacketFunc`를 통한 송신(`wireguard-go/device/allowedips.go:370`)에서 불린다.
-- `LookupActivePeer`는 피어를 만들지 않는다(`wireguard-go/device/device.go:585`).
+- After setting `Device.SetPeerLookupFunc(f)`, `LookupPeer` calls f for an unknown public key. If f returns `NewPeerConfig{AllowedIPs, PresharedKey, Endpoint}`, it creates and starts the peer (`wireguard-go/device/device.go:542`, `wireguard-go/device/device.go:634`).
+- A peer created this way is `deleteOnIdle` and is removed when zeroKeyMaterial expires (540 seconds) (`wireguard-go/device/device.go:568`, `wireguard-go/device/timers.go:130`).
+- `LookupPeer` is called when receiving an initiation (`wireguard-go/device/noise-protocol.go:386`) and when sending through `PeerByIPPacketFunc` (`wireguard-go/device/allowedips.go:370`).
+- `LookupActivePeer` does not create a peer (`wireguard-go/device/device.go:585`).
 
-**그 밖의 포크 API**:
+**Other fork APIs**
 
-| API | 동작 | 출처 |
+| API | Behavior | Source |
 | --- | --- | --- |
-| `SetPeerByIPPacketFunc` | 송신 경로에서 (src, dst, 패킷)으로 피어 공개키를 정한다 | `wireguard-go/device/device.go:670`, `:710` |
-| `SetSessionStateFunc` | 피어 세션 상태 None/Handshake/Established/Expired 변화를 알린다 | `wireguard-go/device/device.go:672`, `:725` |
-| `SetPriorityMessageOnEstablishmentFunc` | keypair가 확정될 때 최대 512바이트(`MaxPriorityMessageContentSize`) 메시지를 staged를 거치지 않고 보낸다 | `wireguard-go/device/device.go:738`, `wireguard-go/device/send.go:111` |
-| `ScheduleHandshakeOnUserSend` | 다음 송신 뒤 initiation을 예약한다. 키가 없는 피어에게는 효과가 없다 | `wireguard-go/device/device.go:772` |
-| `RemoveMatchingPeers` | 조건에 맞는 피어를 제거한다 | `wireguard-go/device/device.go:619` |
-| `WithMetrics` 등 `Option` | 큐 크기와 지표 | `wireguard-go/device/device.go:127`, `:193` |
+| `SetPeerByIPPacketFunc` | Determines the peer public key from (src, dst, packet) on the send path | `wireguard-go/device/device.go:670`, `:710` |
+| `SetSessionStateFunc` | Reports changes in peer session state (None/Handshake/Established/Expired) | `wireguard-go/device/device.go:672`, `:725` |
+| `SetPriorityMessageOnEstablishmentFunc` | Sends a message of at most 512 bytes (`MaxPriorityMessageContentSize`) on keypair confirmation, bypassing staged | `wireguard-go/device/device.go:738`, `wireguard-go/device/send.go:111` |
+| `ScheduleHandshakeOnUserSend` | Schedules an initiation after the next send. Has no effect on peers without keys | `wireguard-go/device/device.go:772` |
+| `RemoveMatchingPeers` | Removes peers matching a condition | `wireguard-go/device/device.go:619` |
+| `Option` such as `WithMetrics` | Queue sizes and metrics | `wireguard-go/device/device.go:127`, `:193` |
 
-### Tailscale이 넘기는 설정
+### Configuration supplied by Tailscale
 
 **`wgcfg.Config`**(`tailscale.com/wgengine/wgcfg/config.go:23`):
 
-- `PrivateKey`와 `Addresses`만 가진다.
-- 피어 목록은 설정에 없다. 피어마다 `PeerConfig{AllowedIPs, PresharedKey}`를 콜백으로 준다.
+- It has only `PrivateKey` and `Addresses`.
+- The configuration has no peer list. A callback supplies `PeerConfig{AllowedIPs, PresharedKey}` for each peer.
 
-**장치와 피어 생성**:
+**Device and peer creation**
 
-- 장치는 `wgcfg.NewDevice`로 만들고, Bind는 `magicConn.Bind()`다(`tailscale.com/wgengine/userspace.go:519`).
-- 피어 생성은 `SetPeerConfigFunc`가 설치하는 `PeerLookupFunc` 하나로 처리한다(`tailscale.com/wgengine/userspace.go:687`).
-- 그 함수는 `bind.ParseEndpoint(공개키 hex)`로 endpoint를 만들어 `NewPeerConfig`에 넣는다(`tailscale.com/wgengine/wgcfg/device.go:47`).
+- `wgcfg.NewDevice` creates the device, with `magicConn.Bind()` as Bind (`tailscale.com/wgengine/userspace.go:519`).
+- Peer creation goes through a single `PeerLookupFunc` installed by `SetPeerConfigFunc` (`tailscale.com/wgengine/userspace.go:687`).
+- That function creates an endpoint with `bind.ParseEndpoint(public key hex)` and puts it in `NewPeerConfig` (`tailscale.com/wgengine/wgcfg/device.go:47`).
 
 **PSK**:
 
-- 실제 콜백 `LocalBackend.peerConfig`는 `AllowedIPs`만 채운다(`tailscale.com/ipn/ipnlocal/resolve.go:49`). 따라서 PSK는 항상 0이고, KDF3에는 32바이트 0이 들어간다.
-- 비시험 코드에서 PSK를 0이 아닌 값으로 정하는 곳을 찾지 못했다(`PresharedKey` 검색 결과는 `tailscale.com/wgengine/userspace.go:714`, `tailscale.com/wgengine/wgcfg/device.go:60` 전달뿐).
+- The actual callback `LocalBackend.peerConfig` fills only `AllowedIPs` (`tailscale.com/ipn/ipnlocal/resolve.go:49`). PSK is therefore always 0, and KDF3 takes 32 bytes set to 0.
+- No non-test code was found that sets a PSK to a value other than 0 (searching for `PresharedKey` only found it being passed at `tailscale.com/wgengine/userspace.go:714` and `tailscale.com/wgengine/wgcfg/device.go:60`).
 
-**PersistentKeepalive**: `tailscale.com` 비시험 코드에서 `PersistentKeepalive`·`persistent_keepalive`를 찾지 못했다. 따라서 wireguard-go의 persistentKeepalive 타이머는 Tailscale에서 꺼져 있다(간격 0, `wireguard-go/device/timers.go:151`).
+**PersistentKeepalive.** A search of the `tailscale.com` non-test code found neither `PersistentKeepalive` nor `persistent_keepalive`. Tailscale therefore leaves the wireguard-go persistentKeepalive timer disabled (interval 0, `wireguard-go/device/timers.go:151`).
 
-**피어 동기화와 정리**:
+**Peer synchronization and cleanup**
 
-- netmap 변화 시 `SyncDevicePeer`가 동작한다(`tailscale.com/wgengine/userspace.go:698`).
-  - 설정이 없으면 피어를 제거한다.
-  - 이미 있는 피어면 PSK·AllowedIPs를 갱신한다.
-  - 없는 피어는 만들지 않는다.
-- 유휴 피어 정리는 위의 `deleteOnIdle`와 540초 타이머에 맡긴다.
-- 상태 조회는 `LookupActivePeer`를 써서 피어를 만들지 않는다(`tailscale.com/wgengine/userspace.go:1015`).
+- On netmap changes, `SyncDevicePeer` takes effect (`tailscale.com/wgengine/userspace.go:698`).
+  - Remove the peer if it has no configuration.
+  - Update PSK and AllowedIPs for an existing peer.
+  - Do not create a missing peer.
+- Idle peer cleanup is left to `deleteOnIdle` above and the 540-second timer.
+- Status lookup uses `LookupActivePeer` and does not create peers (`tailscale.com/wgengine/userspace.go:1015`).
 
-**그 밖의 연결**:
+**Other wiring**
 
-- 송신 경로 조회는 `SetPeerByIPPacketFunc`로 목적지 주소만 쓴다(`tailscale.com/wgengine/userspace.go:739`, `tailscale.com/ipn/ipnlocal/resolve.go:28`).
-- 세션 상태 콜백, priority message, `ScheduleHandshakeOnUserSend`를 연결한다(`tailscale.com/wgengine/userspace.go:720`, `:752`, `:769`).
-- 비밀키는 magicsock과 wireguard-go 양쪽에 넣는다(`tailscale.com/wgengine/userspace.go:891`, `:895`).
+- The send path lookup uses only the destination address through `SetPeerByIPPacketFunc` (`tailscale.com/wgengine/userspace.go:739`, `tailscale.com/ipn/ipnlocal/resolve.go:28`).
+- Wire up the session state callback, priority message, and `ScheduleHandshakeOnUserSend` (`tailscale.com/wgengine/userspace.go:720`, `:752`, `:769`).
+- Set the private key in both magicsock and wireguard-go (`tailscale.com/wgengine/userspace.go:891`, `:895`).
 
-### 메모리 관련 상수
+### Memory-related constants
 
-| 플랫폼 | staged | outbound | inbound | handshake | 미리 할당 버퍼/풀 | `MaxSegmentSize` | 출처 |
+| Platform | staged | outbound | inbound | handshake | Preallocated buffers / pool | `MaxSegmentSize` | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 기본 | 128 | 1024 | 1024 | 1024 | 0(무제한) | 65535 | `wireguard-go/device/queueconstants_default.go:12` |
+| Default | 128 | 1024 | 1024 | 1024 | 0 (unlimited) | 65535 | `wireguard-go/device/queueconstants_default.go:12` |
 | iOS | 128 | 1024 | 1024 | 1024 | 1024 | 1700 | `wireguard-go/device/queueconstants_ios.go:13` |
 | Android | 128 | 1024 | 1024 | 1024 | 4096 | 2200 | `wireguard-go/device/queueconstants_android.go:12` |
 | Windows | 128 | 1024 | 1024 | 1024 | 0 | 2016 | `wireguard-go/device/queueconstants_windows.go:8` |
 
-- **Tailscale iOS**: 다섯 값을 모두 64로 덮어쓴다(staged·outbound·inbound·handshake·미리 할당). 따라서 부하 판정 문턱은 64/8 = 8이다(`tailscale.com/wgengine/wgcfg/mem_ios.go:20`).
-- **Tailscale 그 밖의 플랫폼**: inbound·outbound만 min(1024, CPU 수×4)로 바꾼다(`tailscale.com/wgengine/wgcfg/mem_notios.go:37`).
-- **iOS의 크기 한도**: `MaxSegmentSize`는 1700이고, TUN에서 읽는 송신 평문은 `MaxContentSize` = 1700−40 = 1660바이트 이하로 검사한다(`wireguard-go/device/queueconstants_ios.go:21`, `wireguard-go/device/constants.go:32`, `wireguard-go/device/send.go:380`). 수신 루프에는 1700바이트 상한 검사가 없다. 수신 용량은 Bind에 넘긴 slab에 달리며, slab은 단일 패킷 모드에서 `MaxContentSize+128`(iOS 1788), 배치 모드에서 131070바이트다. 따라서 1700을 수신 와이어 상한으로 사용해서는 안 된다(`wireguard-go/device/receive.go:115`–`:152`, `wireguard-go/device/packetbuf.go:25`–`:31`, `wireguard-go/tun/tun.go:30`, `wireguard-go/device/pools.go:96`–`:99`).
+- **Tailscale iOS.** Overrides all five values to 64 (staged, outbound, inbound, handshake, and preallocation). The load threshold is therefore 64/8 = 8 (`tailscale.com/wgengine/wgcfg/mem_ios.go:20`).
+- **Tailscale on other platforms.** Changes only inbound and outbound to min(1024, CPU count×4) (`tailscale.com/wgengine/wgcfg/mem_notios.go:37`).
+- **iOS size limit.** `MaxSegmentSize` is 1700. Outbound plaintext read from TUN is checked against `MaxContentSize` = 1700−40 = 1660 bytes (`wireguard-go/device/queueconstants_ios.go:21`, `wireguard-go/device/constants.go:32`, `wireguard-go/device/send.go:380`). The receive loop has no 1700-byte limit check. Receive capacity depends on the slab passed to Bind, which is `MaxContentSize+128` in single-packet mode (1788 on iOS) and 131070 bytes in batch mode. Therefore, do not use 1700 as a wire receive limit (`wireguard-go/device/receive.go:115`–`:152`, `wireguard-go/device/packetbuf.go:25`–`:31`, `wireguard-go/tun/tun.go:30`, `wireguard-go/device/pools.go:96`–`:99`).
 
-## 상수와 타이머
+## Constants and timers
 
-| 이름 | 값 | 출처 |
+| Name | Value | Source |
 | --- | --- | --- |
 | `RekeyAfterMessages` | 2^60 | `wireguard-go/device/constants.go:15` |
 | `RejectAfterMessages` | 2^64 − 2^13 − 1 | `wireguard-go/device/constants.go:16` |
-| `RekeyAfterTime` | 120초 | `wireguard-go/device/constants.go:17` |
-| `RekeyAttemptTime` | 90초 (코드에서 직접 쓰지 않고 `MaxTimerHandshakes` 계산의 근거) | `wireguard-go/device/constants.go:18` |
-| `RekeyTimeout` | 5초 | `wireguard-go/device/constants.go:19` |
+| `RekeyAfterTime` | 120 seconds | `wireguard-go/device/constants.go:17` |
+| `RekeyAttemptTime` | 90 seconds (used as the basis for computing `MaxTimerHandshakes`, without direct use in code) | `wireguard-go/device/constants.go:18` |
+| `RekeyTimeout` | 5 seconds | `wireguard-go/device/constants.go:19` |
 | `MaxTimerHandshakes` | 90/5 = 18 | `wireguard-go/device/constants.go:20` |
 | `RekeyTimeoutJitterMaxMs` | 334 | `wireguard-go/device/constants.go:21` |
-| `RejectAfterTime` | 180초 | `wireguard-go/device/constants.go:22` |
-| `KeepaliveTimeout` | 10초 | `wireguard-go/device/constants.go:23` |
-| `CookieRefreshTime` | 120초 | `wireguard-go/device/constants.go:24` |
-| `HandshakeInitationRate` | 1초/50 = 20ms | `wireguard-go/device/constants.go:25` |
+| `RejectAfterTime` | 180 seconds | `wireguard-go/device/constants.go:22` |
+| `KeepaliveTimeout` | 10 seconds | `wireguard-go/device/constants.go:23` |
+| `CookieRefreshTime` | 120 seconds | `wireguard-go/device/constants.go:24` |
+| `HandshakeInitationRate` | 1 second/50 = 20ms | `wireguard-go/device/constants.go:25` |
 | `PaddingMultiple` | 16 | `wireguard-go/device/constants.go:26` |
 | `MinMessageSize` | 32 (`MessageKeepaliveSize`) | `wireguard-go/device/constants.go:30` |
 | `MaxMessageSize` | `MaxSegmentSize` | `wireguard-go/device/constants.go:31` |
 | `MaxContentSize` | `MaxSegmentSize` − 32 − 8 | `wireguard-go/device/constants.go:32` |
-| `UnderLoadAfterTime` | 1초 | `wireguard-go/device/constants.go:38` |
+| `UnderLoadAfterTime` | 1 second | `wireguard-go/device/constants.go:38` |
 | `MaxPeers` | 65536 | `wireguard-go/device/constants.go:39` |
 | `DefaultMTU` | 1420 | `wireguard-go/device/tun.go:14` |
 | replay `windowSize` | 8128 | `wireguard-go/replay/replay.go:15` |
@@ -524,87 +524,87 @@ S_i/S_r은 정적 키, E_i/E_r은 임시 키, ck는 chaining key, h는 hash다(`
 | `MaxPriorityMessageContentSize` | 512 | `wireguard-go/device/device.go:738` |
 | `conn.IdealBatchSize` | 128 | `wireguard-go/conn/conn.go:19` |
 
-`RekeyAttemptTime`은 90초이지만 재시도 중단은 경과 시간을 직접 재는 대신 시도 횟수 18 초과로 구현되어 있다. 5초마다 지터도 더하므로 90초에 정확히 중단하는 것으로 구현하지 않는다(`wireguard-go/device/constants.go:18`–`:21`, `wireguard-go/device/timers.go:80`, `:191`). 백서 원문과의 대조는 수행하지 않았다.
+`RekeyAttemptTime` is 90 seconds, but retry termination checks whether the attempt count exceeds 18 instead of directly measuring elapsed time. Jitter is also added to each 5-second interval, so do not implement an exact 90-second cutoff (`wireguard-go/device/constants.go:18`–`:21`, `wireguard-go/device/timers.go:80`, `:191`). This was not checked against the original white paper.
 
-## Swiftail에 필요한 최소 부분과 생략할 수 있는 부분
+## Minimum Swiftail requirements and optional parts
 
-M1 관문: Swift 피어와 wireguard-go 피어가 UDP 루프백으로 핸드셰이크하고, 양방향으로 패킷을 주고받으며, rekey 뒤에도 연결이 유지된다.
+For the M1 gate, a Swift peer and a wireguard-go peer handshake over UDP loopback, exchange packets in both directions, and stay connected after rekeying.
 
-### 필수
+### Required
 
-1. **암호 기본 연산**: X25519(clamp, 0 공유 비밀 거부), BLAKE2s-256, keyed BLAKE2s-128, HMAC-BLAKE2s와 KDF1/2/3, ChaCha20-Poly1305 IETF.
-2. **TAI64N**: 생성과 바이트 비교. 피어별 `lastTimestamp` 재전송 검사와 20ms flood 검사도 필요하다. Go 응답자가 같은 검사를 하므로, Swift 초기자는 단조 증가 timestamp를 내야 한다.
-3. **mac1 생성·검사**: Go 수신 측이 항상 검사한다(`wireguard-go/device/receive.go:314`). mac2는 cookie가 없으면 0으로 둔다.
-4. **메시지 4종의 직렬화**: type 예약 바이트 0, LE 정수.
-5. **초기자·응답자 상태 기계**: index table(handshake index → keypair index 교체), previous/current/next 교체, 응답자의 next 확정, 초기자의 확인용 keepalive.
-6. **transport 암복호**: 12바이트 nonce = 0⁴ ‖ LE counter, sendNonce 한도, replay filter(8128 창), keypair 나이 180초 거부.
-7. **수신 IP 처리**: 길이 검사, 패딩 제거, 원천 주소 AllowedIPs 검사. 상대 Go가 패딩을 붙여 보낸다.
-8. **rekey 유지에 필요한 타이머·규칙**:
-   - `RekeyAfterMessages`(역할과 무관하게 sendNonce > 2^60)와 `RekeyAfterTime`(초기자 송신 시)(`wireguard-go/device/send.go:275`–`:283`)
-   - `keepKeyFreshReceiving`(165초)
+1. **Cryptographic primitives.** X25519 (clamp and reject a shared secret with all bytes set to 0), BLAKE2s-256, keyed BLAKE2s-128, HMAC-BLAKE2s and KDF1/2/3, and ChaCha20-Poly1305 IETF.
+2. **TAI64N.** Generate timestamps and compare their bytes. Also implement the per-peer `lastTimestamp` replay check and 20ms flood check. The Go responder applies the same checks, so a Swift initiator must emit monotonically increasing timestamps.
+3. **mac1 generation and validation.** The Go receiver always validates it (`wireguard-go/device/receive.go:314`). Leave mac2 at 0 without a cookie.
+4. **Serialization of all 4 message types.** Reserved type bytes set to 0 and LE integers.
+5. **Initiator and responder state machines.** Index table (replace handshake index → keypair index), previous/current/next rotation, responder confirmation of next, and initiator keepalive for confirmation.
+6. **Transport encryption and decryption.** 12-byte nonce = 0⁴ ‖ LE counter, sendNonce limit, replay filter (8128 window), and rejection at a keypair age of 180 seconds.
+7. **Incoming IP processing.** Validate length, remove padding, and check source address AllowedIPs. The Go peer sends with padding.
+8. **Timers and rules needed to sustain rekeying.**
+   - `RekeyAfterMessages` (sendNonce > 2^60 independent of role) and `RekeyAfterTime` (when the initiator sends) (`wireguard-go/device/send.go:275`–`:283`)
+   - `keepKeyFreshReceiving` (165 seconds)
    - `RejectAfterTime`
-   - retransmitHandshake(5초+지터, 최대 20회)
-   - `RekeyTimeout` 송신 억제
-   - sendKeepalive(10초)
-   - newHandshake(15초+)
-   - zeroKeyMaterial(540초)
+   - retransmitHandshake (5 seconds + jitter, up to 20 attempts)
+   - `RekeyTimeout` send throttle
+   - sendKeepalive (10 seconds)
+   - newHandshake (15 seconds+)
+   - zeroKeyMaterial (540 seconds)
 
-   rekey는 양쪽 역할로 모두 시험해야 한다. Swift가 초기자인 rekey와, Go가 120초 뒤 초기자로 rekey할 때 Swift가 응답자로 next를 받아 확정하는 경우다.
-9. **송신 패딩**: Go 수신 측은 IP 길이로 패딩을 떼므로 패딩이 없어도 받는다. 다만 구현 비용이 작아 함께 넣는 것이 낫다.
+   Test both roles in rekeying. Test Swift as the rekey initiator, and test Swift receiving and confirming next as the responder when Go initiates a rekey after 120 seconds.
+9. **Outbound padding.** The Go receiver trims padding based on the IP length, so it accepts packets without padding. Including padding is preferable because the implementation cost is small.
 
-### 뒤로 미룰 수 있는 것
+### Deferrable parts
 
-| 항목 | 미룰 수 있는 근거 |
+| Item | Rationale for deferral |
 | --- | --- |
-| cookie reply 생성·소비, XChaCha20-Poly1305, 부하 판정, rate limiter | **외부 입력을 차단하고 Go 피어의 비부하 상태를 보장하는 M1 루프백 시험에만** 미룬다. 부하 문턱은 설정된 큐 크기에 따라 다르고, 직전 부하도 1초 유지된다(`wireguard-go/device/device.go:385`–`:396`). 부하가 계속되면 mac2 없는 재시도는 계속 cookie reply로 거부되므로, type 3 무시만으로 회복된다고 보장할 수 없다(`wireguard-go/device/receive.go:321`–`:334`). type 3 크기 64 검사와 무시 처리는 넣되, 부하 상태와 외부 통신을 다루기 전에는 cookie 처리를 구현한다. |
-| PSK | 이 버전의 `LocalBackend.peerConfig`는 PSK를 설정하지 않는다(`tailscale.com/ipn/ipnlocal/resolve.go:49`–`:51`). M1 Go 피어에도 PSK를 설정하지 않는 조건으로 KDF3 입력을 32바이트 0으로 고정할 수 있다. KDF3 자체는 생략하지 않는다(`wireguard-go/device/noise-protocol.go:505`–`:513`, `:583`–`:590`). |
-| persistentKeepalive | 위 Tailscale 설정 경로는 간격을 설정하지 않는다. M1 피어도 간격 0으로 둘 수 있다. 이는 데이터 수신 후 sendKeepalive(10초)와 별개다(`wireguard-go/device/peer.go:135`, `wireguard-go/device/timers.go:150`–`:170`). |
-| 엔드포인트 로밍 | 포크에도 없다. M1에서는 피어마다 고정 UDP 주소를 둔다. |
-| `PeerLookupFunc`류 지연 생성, `deleteOnIdle` 제거, `PeerByIPPacketFunc`, 세션 상태 콜백, priority message, `ScheduleHandshakeOnUserSend` | magicsock·netmap 연동(M3–M5) 기능이며 와이어 형식과 무관하다. |
-| Endpoint 선택 인터페이스(`InitiationAwareEndpoint`, `PeerAwareEndpoint`) | 두 호출 모두 인터페이스 구현 여부를 검사하므로, 고정 UDP 피어를 쓰는 M1에서는 훅 자체를 생략할 수 있다(`wireguard-go/device/noise-protocol.go:381`–`:384`, `wireguard-go/device/receive.go:486`–`:488`). |
-| 배치 수신, 다중 큐, 버퍼 풀, GSO, `SetMark`, sticky socket | 단일 패킷·단일 큐의 M1에서는 미룰 수 있다(`wireguard-go/device/packetbuf.go:23`–`:31`, `wireguard-go/tun/tun.go:63`–`:89`). 다만 큐 크기 64만으로 iOS 전체 메모리 상한을 보장할 수는 없다. Tailscale은 다섯 큐·풀 옵션을 함께 제한하고, `WaitPool`은 풀별 미반환 항목 수도 제한한다(`tailscale.com/wgengine/wgcfg/mem_ios.go:20`–`:25`, `wireguard-go/device/pools.go:28`–`:37`). |
+| Cookie reply creation and consumption, XChaCha20-Poly1305, load detection, rate limiter | Defer **only for the M1 loopback test that blocks external input and guarantees the Go peer is not under load**. The threshold depends on the configured queue size, and recent load persists for 1 second (`wireguard-go/device/device.go:385`–`:396`). Under continued load, retries without mac2 keep getting rejected with cookie replies, so ignoring type 3 alone cannot guarantee recovery (`wireguard-go/device/receive.go:321`–`:334`). Validate type 3 size 64 and ignore it for now, and implement cookie handling before handling load or external communication. |
+| PSK | `LocalBackend.peerConfig` does not configure a PSK in this version (`tailscale.com/ipn/ipnlocal/resolve.go:49`–`:51`). KDF3 input can be fixed at 32 bytes set to 0 provided the M1 Go peer also has no configured PSK. KDF3 itself remains required (`wireguard-go/device/noise-protocol.go:505`–`:513`, `:583`–`:590`). |
+| persistentKeepalive | The Tailscale configuration path above does not set an interval. M1 peers can also leave the interval at 0. This is separate from sendKeepalive (10 seconds) after receiving data (`wireguard-go/device/peer.go:135`, `wireguard-go/device/timers.go:150`–`:170`). |
+| Endpoint roaming | The fork also lacks it. M1 uses a fixed UDP address per peer. |
+| Lazy creation via APIs like `PeerLookupFunc`, `deleteOnIdle` removal, `PeerByIPPacketFunc`, session state callbacks, priority message, `ScheduleHandshakeOnUserSend` | These features integrate magicsock and netmap (M3–M5) and do not affect the wire format. |
+| Optional Endpoint interfaces (`InitiationAwareEndpoint`, `PeerAwareEndpoint`) | Both calls check whether the interface is implemented, so M1 can omit the hooks when using fixed UDP peers (`wireguard-go/device/noise-protocol.go:381`–`:384`, `wireguard-go/device/receive.go:486`–`:488`). |
+| Batch receive, multiple queues, buffer pools, GSO, `SetMark`, sticky sockets | M1 can defer these with single packets and a single queue (`wireguard-go/device/packetbuf.go:23`–`:31`, `wireguard-go/tun/tun.go:63`–`:89`). A queue size of 64 alone cannot guarantee an overall iOS memory limit. Tailscale limits all five queue and pool options together, and `WaitPool` also caps the number of outstanding entries per pool (`tailscale.com/wgengine/wgcfg/mem_ios.go:20`–`:25`, `wireguard-go/device/pools.go:28`–`:37`). |
 
-## 상호 운용 시험에서 확인할 것
+## What to verify in interop tests
 
-### 재사용할 수 있는 시험
+### Reusable tests
 
-- **KDF 시험 벡터**(`wireguard-go/device/kdf_test.go:30`): (key, input, T0, T1, T2) 세 묶음이 hex로 있다. 빈 key·빈 input 경우도 포함한다. KDF1·KDF2는 같은 벡터의 앞부분을 쓴다(`:68`, `:78`). HMAC-BLAKE2s 구현을 고정하는 유일한 고정 벡터이므로 그대로 Swift 단위 시험으로 옮긴다.
-- **replay 시험**(`wireguard-go/replay/replay_test.go:19`): 34개 고정 순서 사례와 bulk 사례 6개가 있다. 창 경계와 `RejectAfterMessages` 경계를 다룬다. 입력과 기대값이 상수이므로 그대로 옮길 수 있다.
-- **TAI64N 양자화**(`wireguard-go/tai64n/tai64n_test.go:15`–`:28`): 특정 시작 시각에서 10ms 차이는 after가 아니고 20ms 차이는 after인 사례다. 임의 시각에 대한 10ms 최소 간격 규칙으로 일반화하지 않는다.
-- **cookie 왕복**(`wireguard-go/device/cookie_test.go:12`): 무작위 키로 왕복 성질을 시험한다. mac1 생성·검사, mac2는 cookie가 없으면 실패, cookie reply 생성·소비 후 mac2 성공, 바이트 하나를 바꾸거나 src가 다르면 실패하는지 본다. 고정 벡터가 아니므로 성질 시험으로 옮긴다.
-- **핸드셰이크 왕복**(`wireguard-go/device/noise_test.go:80`): 무작위 키로 두 장치를 만든다. initiation, response, 양쪽 `BeginSymmetricSession` 뒤 양방향 Seal/Open이 되는지 보고, `InitiationAwareEndpoint` 호출 여부도 본다. 고정 벡터가 없으므로 Swift 쪽은 성질 시험으로 쓰고, 실제 상호 운용은 Go 피어와 교차해서 확인해야 한다.
-- **Go 쪽 시험 피어 재료**:
-  - `tun/tuntest`의 `NewChannelTUN`(MTU 1420)과 ICMPv4 패킷 생성 `Ping`(`wireguard-go/tun/tuntest/tuntest.go:92`, `wireguard-go/tun/tuntest/tuntest.go:17`, `wireguard-go/tun/tuntest/tuntest.go:170`)
-  - 표준 bind `conn.NewDefaultBind`와 `ip:port` 형식 `ParseEndpoint`(`wireguard-go/conn/bind_std.go:90`)
-  - 두 장치를 UAPI로 묶는 `device_test.go`의 구성(`wireguard-go/device/device_test.go:68`)
+- **KDF test vectors** (`wireguard-go/device/kdf_test.go:30`) provide three (key, input, T0, T1, T2) groups in hex, including empty key and empty input cases. KDF1 and KDF2 use the first part of the same vectors (`:68`, `:78`). These are the only fixed vectors that pin down HMAC-BLAKE2s, so port them directly to Swift unit tests.
+- **Replay tests** (`wireguard-go/replay/replay_test.go:19`) have 34 fixed sequence cases and 6 bulk cases. They cover the window boundary and the `RejectAfterMessages` boundary. Port them directly because inputs and expected values are constants.
+- **TAI64N quantization** (`wireguard-go/tai64n/tai64n_test.go:15`–`:28`) covers a specific start time where a 10ms difference is not after and a 20ms difference is after. Do not generalize this to a minimum interval of 10ms for arbitrary times.
+- **Cookie round trip** (`wireguard-go/device/cookie_test.go:12`) tests round-trip properties with random keys. It checks mac1 generation and validation, mac2 failure without a cookie, mac2 success after creating and consuming a cookie reply, and failure when one byte changes or src differs. Port it as a property test because it has no fixed vectors.
+- **Handshake round trip** (`wireguard-go/device/noise_test.go:80`) creates two devices with random keys. It checks whether Seal/Open works both ways after initiation, response, and `BeginSymmetricSession` on both sides, and whether `InitiationAwareEndpoint` is called. With no fixed vectors, use a Swift property test and verify actual interop against a Go peer.
+- **Go test peer components**
+  - `NewChannelTUN` (MTU 1420) in `tun/tuntest` and `Ping` for ICMPv4 packet creation (`wireguard-go/tun/tuntest/tuntest.go:92`, `wireguard-go/tun/tuntest/tuntest.go:17`, `wireguard-go/tun/tuntest/tuntest.go:170`)
+  - Standard bind `conn.NewDefaultBind` and `ParseEndpoint` in `ip:port` format (`wireguard-go/conn/bind_std.go:90`)
+  - `device_test.go`'s setup for connecting two devices with UAPI (`wireguard-go/device/device_test.go:68`)
 
-### M1 교차 시험 항목
+### M1 cross-implementation tests
 
-1. Go 피어에 Swift의 UDP 주소를 `endpoint=`로 반드시 넣는다. 로밍이 없으므로 넣지 않으면 Go가 응답자일 때 response를 보내지 못한다(`wireguard-go/device/peer.go:216`).
-2. Swift 초기자 → Go 응답자: Go 로그에 "Received handshake initiation"이 남는지 본다. Swift는 response 직후 keepalive를 보내고, Go가 next를 확정해 Go→Swift 데이터가 흐르는지 확인한다.
-3. Go 초기자 → Swift 응답자: Swift가 확인 전까지 새 keypair로 보내지 않는지, 확인 뒤 보내는지 확인한다.
-4. 양방향 ICMP 또는 임의 IP 패킷: Go 쪽 패딩(MTU 1420 기준)을 Swift가 IP 길이로 떼는지, keepalive(32바이트)를 데이터로 오인하지 않는지 확인한다.
-5. 재전송·flood 경계:
-   - 같은 initiation 재전송은 Go가 replay로 버린다.
-   - 20ms 안의 두 번째 initiation은 flood로 버린다.
-   - Go 쪽 `RekeyTimeout` 억제(5초) 때문에 Go는 response를 보낸 뒤 5초 안에 initiation을 보내지 않는다.
+1. Configure the Swift UDP address as `endpoint=` on the Go peer. Without roaming, Go cannot send a response as responder if this is missing (`wireguard-go/device/peer.go:216`).
+2. Swift initiator → Go responder. Check whether Go logs "Received handshake initiation". Swift sends a keepalive immediately after the response. Verify that Go confirms next and that Go→Swift data flows.
+3. Go initiator → Swift responder. Verify that Swift waits until confirmation before sending with the new keypair, and sends with it afterward.
+4. Bidirectional ICMP or arbitrary IP packets. Verify that Swift trims Go padding (based on MTU 1420) using the IP length and does not mistake a keepalive (32 bytes) for data.
+5. Replay and flood boundaries follow.
+   - Go drops a retransmission of the same initiation as a replay.
+   - Go drops a second initiation within 20ms as flooding.
+   - Because of Go's `RekeyTimeout` throttle (5 seconds), Go does not send an initiation within 5 seconds of sending a response.
 6. rekey:
-   - 120초 넘게 트래픽을 흘려 초기자 쪽 시간 기반 rekey를 확인한다.
-   - previous keypair로 온 지연 패킷이 받아지는지 확인한다.
-   - 180초 넘은 keypair의 패킷이 버려지는지 확인한다.
-   - Swift가 응답자일 때 previous/current/next 교체가 올바른지 확인한다.
-7. counter 경계: replay 창 밖(8128 초과로 뒤처진) 패킷과 중복 counter가 거부되는지 확인한다.
-8. 오류 분기: 잘못된 mac1, 크기가 틀린 핸드셰이크, 알 수 없는 type, 0이 아닌 예약 바이트를 Go가 버리는지 확인한다. 잘못된 mac1과 알 수 없는 type에는 verbose 로그가 있으므로 "로그 없음"을 기대하지 않는다(`wireguard-go/device/receive.go:194`–`:211`, `:314`–`:316`). Swift도 같은 입력에서 핸드셰이크·keypair 상태를 바꾸지 않아야 한다.
-9. 유실·지연: 첫 response 또는 확인용 transport를 버린 뒤 복구되는지, 재시도 initiation의 ephemeral·Sender·timestamp가 새 값인지, 옛 Receiver의 지연 response가 새 handshake를 덮어쓰지 않는지 확인한다(`wireguard-go/device/noise-protocol.go:282`–`:338`, `:614`–`:622`, `wireguard-go/device/timers.go:79`–`:106`).
-10. 인증 경계: 잘못된 AEAD 태그는 replay 창과 next를 갱신하지 않아야 한다. AEAD·replay를 통과한 비정상 IP 패킷은 next 확정·인증 패킷 타이머에는 반영되어도 TUN에는 전달되지 않아야 한다(`wireguard-go/device/receive.go:469`–`:549`).
+   - Send traffic for more than 120 seconds to verify time-based rekeying on the initiator side.
+   - Verify that delayed packets from the previous keypair are accepted.
+   - Verify that packets from a keypair older than 180 seconds are dropped.
+   - Verify correct previous/current/next rotation when Swift is the responder.
+7. Counter boundaries. Verify that packets outside the replay window (more than 8128 behind) and duplicate counters are rejected.
+8. Error branches. Verify that Go drops invalid mac1, incorrectly sized handshakes, unknown types, and reserved bytes other than 0. Invalid mac1 and unknown types have verbose logs, so do not expect "no log" (`wireguard-go/device/receive.go:194`–`:211`, `:314`–`:316`). The same inputs must leave Swift handshake and keypair state unchanged.
+9. Loss and delay. Verify recovery after dropping the first response or confirmation transport, fresh values for ephemeral, Sender, and timestamp in retry initiations, and that a delayed response to an old Receiver cannot overwrite a new handshake (`wireguard-go/device/noise-protocol.go:282`–`:338`, `:614`–`:622`, `wireguard-go/device/timers.go:79`–`:106`).
+10. Authentication boundary. Invalid AEAD tags must leave the replay window and next unchanged. An invalid IP packet that passes AEAD and replay checks may count toward next confirmation and authenticated-packet timers but must not be delivered to TUN (`wireguard-go/device/receive.go:469`–`:549`).
 
-## 확인하지 못한 것
+## Unverified items
 
-- **원본 wireguard-go와의 차이**: 원본(zx2c4) 소스가 참고 소스에 없어 바이트 단위로 비교하지 못했다. 위 "Tailscale 포크" 절의 API(`PeerLookupFunc`, 두 선택 Endpoint 인터페이스, 세션 상태, priority message, `ScheduleHandshakeOnUserSend`, 메트릭)와 수신 경로의 로밍 부재가 포크 고유인지는 기억에 기댄 판단이라 단정하지 않는다.
-- **`golang.org/x/crypto` 내부**: 모듈 캐시에 없어 확인하지 못했다(BLAKE2s 블록 크기와 HMAC 결합, keyed BLAKE2s의 key 처리, XChaCha20 HChaCha 단계, `curve25519.ScalarMult`의 내부 clamp). KDF는 `kdf_test.go` 벡터로 고정할 수 있지만 XChaCha20-Poly1305와 keyed BLAKE2s-128에는 이 소스 트리에 고정 벡터가 없다.
-- **`netip.AddrPort.MarshalBinary` 형식**: 표준 bind의 `DstToBytes` 형식은 Go 표준 라이브러리라 확인하지 못했다. cookie src는 수신 측 내부 값이라 상호 운용에는 영향이 없다.
-- **고정 Noise 핸드셰이크 벡터**: 소스 트리에서 찾지 못했다. 핸드셰이크 정확성은 Go 피어와의 교차 시험으로만 확인할 수 있다.
-- **`tests/netns.sh`의 로밍 검사**: endpoint 로밍 검사(`wireguard-go/tests/netns.sh:196`, `:202`)가 이 포크에서 통과하는지 확인하지 못했다.
-- **magicsock 측 keepalive·경로 유지**: magicsock이 wireguard-go persistentKeepalive 대신 자체 keepalive를 하는지는 `disco-magicsock.md` 범위로 남긴다. `receiveIP`의 `lazyEndpoint` 선택 분기는 대조했지만(`tailscale.com/wgengine/magicsock/magicsock.go:1905`–`:1939`), disco·DERP를 포함한 경로 선택 전체는 검증하지 않았다.
-- **실행 검증**: 이번 검증은 지정된 두 버전의 소스와 시험 본문을 읽어 대조했다. Go noise·cookie·replay 시험 실행, UDP 교차 시험, 타이머 실시간 동작은 확인하지 않았다. 특히 IPv6 길이 덧셈의 `uint16` wrap은 소스에서 확인한 한계이며 Swift에서 재현하지 않는다(`wireguard-go/device/receive.go:519`–`:525`).
-- **Swift 쪽 지원**: Apple 프레임워크가 BLAKE2s·XChaCha20-Poly1305를 제공하는지는 이 노트의 소스 범위 밖이라 확인하지 않았다.
+- **Differences from upstream wireguard-go.** Upstream (zx2c4) sources were absent from the reference sources, so no byte-for-byte comparison was possible. Whether the APIs in "Tailscale fork" above (`PeerLookupFunc`, the two optional Endpoint interfaces, session state, priority message, `ScheduleHandshakeOnUserSend`, and metrics) and the absence of receive-path roaming are unique to the fork is based on recollection and remains unconfirmed.
+- **Internals of `golang.org/x/crypto`.** The module was absent from the cache, so its internals were unverified (BLAKE2s block size and HMAC composition, key handling in keyed BLAKE2s, the XChaCha20 HChaCha step, and internal clamping in `curve25519.ScalarMult`). The `kdf_test.go` vectors can pin down the KDF, but the source tree has no fixed vectors for XChaCha20-Poly1305 or keyed BLAKE2s-128.
+- **`netip.AddrPort.MarshalBinary` format.** The standard bind's `DstToBytes` format is part of the Go standard library and was unverified. The cookie src is internal to the receiver and does not affect interop.
+- **Fixed Noise handshake vectors.** None were found in the source tree. Handshake correctness can only be verified by cross-testing with a Go peer.
+- **Roaming check in `tests/netns.sh`.** Whether the endpoint roaming checks (`wireguard-go/tests/netns.sh:196`, `:202`) pass in this fork is unverified.
+- **magicsock keepalive and path maintenance.** Whether magicsock does its own keepalive in place of wireguard-go persistentKeepalive remains in scope for `disco-magicsock.md`. The `lazyEndpoint` selection branch in `receiveIP` was checked (`tailscale.com/wgengine/magicsock/magicsock.go:1905`–`:1939`), but overall path selection, including disco and DERP, was unverified.
+- **Runtime verification.** This verification read and checked the sources and test bodies for the two specified versions. Go noise, cookie, and replay test execution, UDP cross-testing, and real-time timer behavior were unverified. In particular, the `uint16` wrap in the IPv6 length addition is a limitation identified from source and should not be reproduced in Swift (`wireguard-go/device/receive.go:519`–`:525`).
+- **Swift support.** Whether Apple frameworks provide BLAKE2s and XChaCha20-Poly1305 falls outside the sources for this note and was unverified.
