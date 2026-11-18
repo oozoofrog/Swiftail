@@ -11,18 +11,18 @@ Protocol details follow [protocol-notes/netmap-engine.md](../protocol-notes/netm
 
 | Target | Dependencies | Contents |
 | --- | --- | --- |
-| `SwiftailEngine` | `SwiftailBase`, `SwiftailWireGuard`, `SwiftailControl`, CryptoKit | "Engine" API below. No sockets or clock |
+| `SwiftailEngine` | `SwiftailBase`, `SwiftailWireGuard`, `SwiftailControl`, CryptoKit | [Engine API](#engine-api-swiftailengine) below. No sockets or clock |
 | `Swiftail` | `SwiftailBase`, `SwiftailEngine`, `SwiftailControl`, `SwiftailDERP`, `SwiftailIO` | `TailnetNode` |
 
 ## M3 support
 
-Supported are IPv4 and IPv6 packets between ordinary Tailscale peers (Go tsnet) and their own addresses (/32, /128), with one home DERP region.
+M3 exchanges IPv4 and IPv6 packets with ordinary Tailscale peers (Go tsnet) using their own addresses (/32, /128). It supports one home DERP region.
 
 Unsupported cases **fail closed** (exclude peers or drop packets):
 
-- Subnet routes and exit nodes (fixed at `RouteAll=false` and no exit node), WireGuard-only peers (`isWireGuardOnly`), jailed peers (`isJailed`), peers with masquerade addresses, peers without tailnet lock signatures (`unsignedPeerAPIOnly`. Go clears all packet rules if a rule overlaps with one of these peers), `cap:` source rules, and shields-up.
+- Subnet routes and exit nodes (fixed at `RouteAll=false` and no exit node), WireGuard-only peers (`isWireGuardOnly`), jailed peers (`isJailed`), peers with masquerade addresses, peers marked `unsignedPeerAPIOnly` (Go clears all packet rules if a rule overlaps with one of these peers), `cap:` source rules, and shields-up.
 - IP fragments and IPv6 extension headers are dropped (Go passes some through. M3 has no stack to reassemble them).
-- The engine consumes inbound TSMP (IP protocol 99) without passing it up. It emits nonzero disco key advertisements as `.discoKeyAdvertised` with the sending WireGuard peer. It sends neither pongs nor rejections. It sends disco key advertisements when a WireGuard session is established for each peer (2026-11-16, `SwiftailMagicsock` contract "TSMP disco key advertisement"). It drops TSMP from above (Go also drops host-generated TSMP. Added in M5-8a, `SwiftailTunnel` contract behavior L 4).
+- The engine consumes inbound TSMP (IP protocol 99) without passing it up. It emits advertisements carrying a nonzero disco key as `.discoKeyAdvertised` with the sending WireGuard peer. It sends neither pongs nor rejections. It sends disco key advertisements when a WireGuard session is established for each peer (2026-11-16, `SwiftailMagicsock` contract section [TSMP Disco Key Advertisement](SwiftailMagicsock.md#tsmp-disco-key-advertisement-2026-11-16)). It drops TSMP from above (Go also drops host-generated TSMP. Added in M5-8a, `SwiftailTunnel` contract behavior L 4).
 - If legacy rules (`SrcBits`, `DstPorts[].Bits`) are present, clear all rules. Local addresses and recorded UDP flows remain, so replies to previously sent UDP are still accepted (as in Go).
 - Direct UDP, disco, STUN, and non-home DERP regions are M4.
 
@@ -111,7 +111,7 @@ public struct TailnetEngine: Sendable {
 
     public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, now: ContinuousClock.Instant, wallClock: Date)
 
-    /// Applies the netmap by adding and removing peers and replacing the filter. Returns any outgoing output.
+    /// Applies the netmap by adding and removing peers and replacing the filter. Returns any outputs to send.
     public mutating func apply(_ netmap: Netmap, homeDERP: Int64, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
     /// Sends one IP packet from the layer above.
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]
@@ -126,7 +126,7 @@ public struct TailnetEngine: Sendable {
 
 ### Behavior
 
-1. **IP packet parsing** (notes §§3.1 and 3.2). Validate once at the boundary. IPv4 requires at least 20 bytes, IHL of at least 5, and declared length within the buffer. IPv6 requires at least 40 bytes and declared length within the buffer. TCP (20), UDP (8), SCTP (12), and ICMP require the minimum transport header length. Trim bytes after the declared length. IP protocol numbers 0 and 255 are `malformed` (Go drops both as Unknown). IPv4 with MF set or a nonzero offset and IPv6 with next-header 44 are `fragment`. IPv6 next-header 0, 43, 50, 51, 60, 135, 139, or 140 is `extensionHeader`. Go's weaker checks (no minimum IHL, reused fields) are omitted.
+1. **IP packet parsing** (notes [§3.1](../protocol-notes/netmap-engine.md#31-ip-and-transport-headers-read-by-the-filter) and [§3.2](../protocol-notes/netmap-engine.md#32-fragments-and-ipv6-extension-headers)). Validate once at the boundary. IPv4 requires at least 20 bytes, IHL of at least 5, and declared length within the buffer. IPv6 requires at least 40 bytes and declared length within the buffer. Require the minimum transport header length for TCP (20 bytes), UDP (8 bytes), SCTP (12 bytes), and ICMP. Trim bytes after the declared length. IP protocol numbers 0 and 255 are `malformed` (Go drops both as Unknown). IPv4 with MF set or a nonzero offset and IPv6 with next-header 44 are `fragment`. IPv6 next-header 0, 43, 50, 51, 60, 135, 139, or 140 is `extensionHeader`. Swiftail enforces a minimum IHL and initializes packet fields afresh. Go can retain fields from a previous decode, such as `TCPFlags` when decoding a non-TCP packet.
 2. **Peer computation** (notes §4.1, `RouteAll=false` and no exit node):
    - Exclude peers with `id` 0, `key` 0, expiration (`expired` or a nonzero `keyExpiry <= now`), both zero `discoKey` and zero `homeDERP`, or an unsupported peer type listed above.
    - AllowedIPs. Keep only the peer's single-address `allowedIPs` (IPv4 `/32`, IPv6 `/128`) that are in the Tailscale address ranges or the peer's `addresses`. The Tailscale ranges are `100.64.0.0/10` except `100.115.92.0/23`, and `fd7a:115c:a1e0::/48`. Never assign prefixes matching this node's own `addresses` to a peer. Reject IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d/128`) even if present in `addresses` (2026-11-17 security verification, second pass). `whoIs` converts mapped addresses to IPv4 when looking up identity by address. A peer that uses a mapped source without owning the IPv4 address could therefore appear as another node. Exclude the peer if nothing remains. Go's `peerViewOf` treats any prefix in `addresses` as a local address regardless of length. This implementation rejects broader prefixes (2026-11-17 security verification). `WireGuardDevice` checks sources separately for each peer and does not select the owner by longest prefix. A peer with a broad prefix could use another peer's or this node's address as a source. Revisit this rule and source checks together when supporting subnet routes.
@@ -147,7 +147,7 @@ public struct TailnetEngine: Sendable {
 
 ## Node API (`Swiftail`)
 
-These are the M3 declarations. The canonical source for current events and public API is "Public API" in `docs/contracts/SwiftailTunnel.md`. Additions on 2026-11-18 were `NodeEvent.statusChanged` (only when `status` actually changes, with no value), `TailnetNode.hasSavedIdentity(in:)` (whether a saved identity exists), and aliases for other modules' types that appear in the public API (their names require only `import Swiftail`).
+These are the M3 declarations. The canonical source for current events and public API is [Public API in `docs/contracts/SwiftailTunnel.md`](SwiftailTunnel.md#public-api-swiftail-complete-as-of-m5). Additions on 2026-11-18 were `NodeEvent.statusChanged` (only when `status` actually changes, with no value), `TailnetNode.hasSavedIdentity(in:)` (whether a saved identity exists), and aliases for other modules' types that appear in the public API (their names require only `import Swiftail`).
 
 ```swift
 public struct NodeConfiguration: Sendable {
@@ -185,7 +185,7 @@ public actor TailnetNode {
     /// The stream of IP packets sent by peers and accepted by the filter. One subscriber. Slow consumption drops the oldest packets first.
     public nonisolated var inboundPackets: AsyncStream<[UInt8]> { get }
 
-    /// Registers, receives the netmap, and maintains the data plane. Returns when the calling Task is canceled.
+    /// Registers, receives the netmap, and maintains the data plane. Does not return until the calling task is canceled.
     /// Throws failures that retrying cannot resolve. Call only once per node.
     public func run() async throws(NodeError)
 
@@ -201,7 +201,7 @@ The change from the draft in `docs/plan.md` §6 is `run()` with Task cancellatio
 
 ### Behavior
 
-1. **Startup**. Create `NodeIdentityStore` and `ControlClient`. Generate a new disco key without storing it and publish its public key as `LocalStatus.discoKey`. **Without a nonzero DiscoKey, Go peers do not make this node a peer** (derp-stun notes §6 item 7). M3 does not answer disco messages.
+1. **Startup**. Create `NodeIdentityStore` and `ControlClient`. Generate a new disco key without saving it to disk and publish its public key as `LocalStatus.discoKey`. **Go peers install this node as a peer only if its DiscoKey is nonzero** (derp-stun notes §6 item 7). M3 does not answer disco messages.
 2. **After registration**. On a `registered` event, read the node private key from the identity file and create `TailnetEngine` (recreate it if the key changes).
 3. **Home DERP** (derp-stun notes §4.8). From the first netmap's DERPMap, choose the lowest-ID region that is eligible (`noMeasureNoHome` is false) and has a usable server (not `stunOnly` and with a nonempty `hostName`. Starting in M8 ③, `certName` does not cause a skip). Publish it as `LocalStatus.netInfo.preferredDERP` (**otherwise Go peers do not know where to send**). Start a `DERPClient` for the region with `isPreferred: true`. Restart it if that region changes in DERPMap. If no usable regions remain, stop the client and exclude DERP from the count of lost connections. `shortcut:` no latency measurement, one region only (M4).
    - `DERPServer` conversion. Keep `hostName` as is. Use `ipv4` if it is an IPv4 address, DNS if empty, or apply the same rule to `ipv6` otherwise (`"none"`). Skip the server if neither works. Use 443 when `derpPort` is 0. For certificate verification, use `.pinned(remainder)` when `certName` starts with `sha256-raw:`, `.named(certName)` when it is nonempty and differs from `hostName`, or `.noneForTests` when `insecureForTests` is set in the remaining case (DERP contract "M8 ③"). Skip servers with an empty `hostName`.
@@ -215,7 +215,7 @@ The change from the draft in `docs/plan.md` §6 is `run()` with Task cancellatio
 Unit tests (`Tests/SwiftailEngineTests`, no sockets or clock. Decode tailcfg values from JSON):
 
 - `IPPacket`. Fixed IPv4 and IPv6 TCP, UDP, and ICMP packets, trimming to declared length, short headers, IHL 4, fragments (MF, offset, IPv6 44), extension headers, and arbitrary input without a crash.
-- Filter conversion and evaluation. Items 3–6 of notes §7 cover `*`, CIDR, single addresses, ranges, `cap:`, both port endpoints, empty `IPProto`, explicit protocols, out-of-range numbers, invalid CIDR, `SrcBits`, `CapGrant`-only rules, TCP SYN and non-SYN packets, ICMP address-only rules and echo replies, nonlocal destinations, and recorded UDP flows (reply to an earlier send, one differing tuple, the 513th record, and retention after rule replacement).
+- Filter conversion and evaluation. Items 3–6 of notes §7 cover `*`, CIDR, single addresses, ranges, `cap:`, both port endpoints, empty `IPProto`, explicit protocols, out-of-range numbers, invalid CIDR, `SrcBits`, `CapGrant`-only rules, TCP SYN and non-SYN packets, ICMP address-only rules and echo replies, nonlocal destinations, and recorded UDP flows (reply to an earlier send, one tuple with a single differing field, the 513th record, and retention after rule replacement).
 - **Comparison against Go**. Feed identical rules and packets to Go's actual `wgengine/filter`, save the verdicts as fixtures (`Tests/SwiftailEngineTests/Fixtures`), and compare. A tool in `Tools/interop` produces the fixtures, and a separate session from the implementer writes the comparison tests. Mark and examine intentional M3 differences separately in the fixtures (fragments, extension headers, and `cap:` sources).
 - Peer computation. Notes §7 item 7 covers expiration boundaries (`==`, `<`, `>`), no expiration, zero keys, empty AllowedIPs, removing subnets and `/0` from AllowedIPs, and unsupported peers.
 - `TailnetEngine`. Connect two engines in memory (send one engine's `.datagram` to the other's `receive`) for a UDP round trip. Test peer addition, removal, and key rotation through netmap updates, sources outside AllowedIPs, disco messages, TSMP consumption, peers in another home region, removal at key expiration, and absence of keys in `dump`.
@@ -236,9 +236,9 @@ The final gate (a real tailnet) takes place at the end of M4.
 
 ## Changes in M4
 
-This section appends the M4 changes to the preceding M3 description. This section takes precedence where they differ. Path discovery itself is in [SwiftailMagicsock.md](SwiftailMagicsock.md) (the "magicsock contract" below).
+This section records the M4 changes while retaining the M3 description above. This section takes precedence where they differ. Path discovery itself is in [SwiftailMagicsock.md](SwiftailMagicsock.md) (the "magicsock contract" below).
 
-The engine still emits only "a WireGuard datagram to send to this peer," and `Magicsock` chooses between UDP and DERP. The node holds the two value types as stored properties and passes their outputs to one another (magicsock contract Q1). This follows the same principle as the WireGuard device having no knowledge of addresses (`docs/contracts/SwiftailWireGuard.md` "Why this structure?").
+The engine still emits only "a WireGuard datagram to send to this peer," and `Magicsock` chooses between UDP and DERP. The node holds the two value types as stored properties and passes their outputs to one another (magicsock contract Q1). This follows the same principle as the WireGuard device having no knowledge of addresses ([Why this structure? in `docs/contracts/SwiftailWireGuard.md`](SwiftailWireGuard.md#why-this-structure)).
 
 ### Engine (`SwiftailEngine`)
 
@@ -285,7 +285,7 @@ public struct TailnetEngine: Sendable {
     public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]   // Unchanged
     /// Receives one datagram emitted as `.wireGuard` by `Magicsock`. Removes the sender key argument (UDP has none. WireGuard determines the peer).
-    /// `source` was added 2026-11-15. It is used only to bind cookies and count per-source rate limits when WireGuard is under load.
+    /// `source` was added 2026-11-15. It is used only to bind cookies and track usage for per-source rate limiting when WireGuard is under load.
     public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) -> [Output]
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output]   // Unchanged
     public var nextDeadline: ContinuousClock.Instant? { get }                 // Unchanged
@@ -294,10 +294,10 @@ public struct TailnetEngine: Sendable {
 
 Behavior changes (numbers refer to "Behavior" above):
 
-- **M-E1 (behavior 4, sending)**. Remove "if the peer's `homeDERP` differs from our home region, `noRouteToPeer`." Emit `.datagram(_, to:)` for every peer installed in the data plane. `Magicsock` drops a peer with nowhere to send as `noRouteToPeer`. The same applies to handshake responses, retries, and keepalive (`route` does not attach a region).
+- **M-E1 (behavior 4, sending)**. Remove "if the peer's `homeDERP` differs from our home region, `noRouteToPeer`." Any peer installed in the data plane can be the destination of a `.datagram(_, to:)` output. `Magicsock` drops the datagram with `noRouteToPeer` if it has no path to that peer. The same applies to handshake responses, retries, and keepalive (`route` does not attach a region).
 - **M-E2 (behavior 5, receiving)**. Remove disco detection. The engine receives only packets that `Magicsock` classified as WireGuard (magicsock contract behavior A). The sender key from the DERP frame was already unused in M3, so remove the argument. The rest stays the same (WireGuard → AllowedIPs source check → TSMP consumption → filter).
 - **M-E3 (behavior 2, peer computation)**. Copy `discoKey` and `endpoints` into `EnginePeer` as provided. The inclusion criteria stay the same (include a peer with a zero disco key if it has a home DERP. That peer uses only DERP).
-- **M-E4 (TSMP)**. Consume it without passing it up. Starting 2026-11-16, emit disco key advertisements (`disco-magicsock.md` §3.8) as `.discoKeyAdvertised(key, from: peer)` (the node passes them to `Magicsock.receiveDiscoKeyAdvertisement`). If the `init` `discoKey` is nonzero, set the advertisement as each peer's WireGuard priority message so it sends when the session is established (magicsock contract "TSMP disco key advertisement").
+- **M-E4 (TSMP)**. Consume it without passing it up. Starting 2026-11-16, emit disco key advertisements (`disco-magicsock.md` §3.8) as `.discoKeyAdvertised(key, from: peer)` (the node passes them to `Magicsock.receiveDiscoKeyAdvertisement`). If the `init` `discoKey` is nonzero, set the advertisement as each peer's WireGuard priority message so it is sent when the session is established (magicsock contract section [TSMP Disco Key Advertisement](SwiftailMagicsock.md#tsmp-disco-key-advertisement-2026-11-16)).
 - Tests. Only the output shape changes in the tests connecting two engines. The "peer in another home region" test now checks that a datagram is emitted. Move the disco message test from the engine to `MagicsockTests`.
 
 ### Node (`Swiftail`)
@@ -331,7 +331,7 @@ extension TailnetNode {
 }
 ```
 
-`PeerPath` is a public type in `SwiftailMagicsock` (as `IPAddress` is in `SwiftailBase`). Starting 2026-11-18, `Swiftail` exposes both under same-name aliases (`docs/contracts/SwiftailTunnel.md` "Types from other modules in the public API").
+`PeerPath` is a public type in `SwiftailMagicsock` (as `IPAddress` is in `SwiftailBase`). Starting 2026-11-18, `Swiftail` exposes both under same-name aliases ([Types from other modules in the public API in `docs/contracts/SwiftailTunnel.md`](SwiftailTunnel.md#types-from-other-modules-in-the-public-api-2026-11-18)).
 
 Behavior changes:
 
@@ -340,7 +340,7 @@ Behavior changes:
 - **N3 (DERP regions)**. Replace M3 behavior 3's "fixed home DERP choice, one client."
   - Home candidate `Magicsock.Region`. Include DERPMap regions meeting the M3 home criteria (`noMeasureNoHome` is false and a node can be converted to `DERPServer`). Build `stunServers` by examining the region's nodes in order, including `stunOnly` nodes, using magicsock contract E3 rules (`stunTestIP` → IPv4 literal, `stunPort` 0 means 3478, skip negative values). The `score` is `homeParams.regionScore[id]` (0 if absent). Call `setRegions` whenever DERPMap changes. Keep this conversion in an I/O-free function and test it in `SwiftailTests`.
   - Connections. Maintain a region ID → `DERPClient` table. Open the home region (received via `.homeRegionChanged`) with `isPreferred: true`. Open a region with `isPreferred: false` when `Magicsock` first targets it in `.derp(_, to:, region:)` (any region in DERPMap, including `noMeasureNoHome`. Drop the datagram if the region cannot be converted to servers). Keep the previous home connection open when home changes (magicsock contract E6). Close connections for regions removed from DERPMap. Also close connections whose server lists (converted to `DERPServer`) change, and immediately reopen a home connection with the new servers (Go `derp.go`'s `derp-region-redefined`. A `DERPClient` server list is fixed on creation). Reopen all connections when the node key changes. In that case first clear the old `Magicsock` peers to withdraw previously reported paths using nil (M4 review B, 2026-11-15).
-  - `shortcut:` Skip cleanup of non-home connections after 60 seconds of inactivity (DERP notes §4.9 item 5). The number of open connections is bounded by the number of DERPMap regions. Revisit during M5 memory measurements. When home changes, do not resend NotePreferred on already-open connections (used for server statistics, DERP notes §4.8 item 3).
+  - `shortcut:` Skip cleanup of non-home connections after 60 seconds of inactivity (DERP notes §4.9 item 5). The number of open connections is bounded by the number of DERPMap regions. M5 memory measurements will determine when this cleanup is needed. When home changes, do not resend NotePreferred on already-open connections (used for server statistics, DERP notes §4.8 item 3).
   - `reconnecting` reports only loss of the home region connection. Continue ignoring `peerGone` (reverse routes are unused).
   - Pass each connection's `.packet` to `magicsock.receiveDERP(_, from:, region: the connection's region)`.
   - `DERPHome.choose` is unused (`Magicsock` chooses home). Keep using `DERPServer.init(_: DERPNode)`.
@@ -349,11 +349,11 @@ Behavior changes:
   - Sending. `send(ipPacket)` → `engine.send` → `.datagram(b, to: k)` → `magicsock.send(b, to: k)`.
   - Receiving UDP. `(bytes, source)` from the socket stream → `magicsock.receiveUDP`.
   - `Magicsock` output. `.udp` → `socket.send` (discard failures. `shortcut:` rebinding on send errors is M5, see exclusions table in magicsock contract), `.derp` → that region's connection (N3), `.wireGuard(b, from: path)` → `engine.receive(b, from: path source)` → engine output reenters this flow, `.endpointsChanged` and `.homeRegionChanged` → N4, `.pathChanged` → N6, discard `.dropped`.
-  - Cookie reply (2026-11-15). Send an `engine.receive` `.cookieReply(b)` over the incoming path without calling `magicsock.send`. For UDP input feed `.udp(b, to: source)` into the flow above. For DERP input feed `.derp(b, to: sender, region: incoming region)` into it (the N8 filter still applies). The source passed to the engine is `address` (what the cookie binds to) and `host` (the rate limit unit). For UDP, as with Go's standard bind, `address` = address ‖ port (LE), `host` = address. For DERP, as in Tailscale magicsock, use one value per peer and omit the region. Both values are the 32-byte node public key (Go binds to the per-peer fake address `fakeWGAddr` and limits by the peer's tailnet address `nodeAddr`, `wgengine/magicsock/endpoint.go` `DstToBytes` and `DstIP`). The lengths differ, so they do not collide with UDP values.
-  - Netmap. After `engine.apply`, call `magicsock.setPeers(EnginePeer.peers(in: netmap, at: Date()).map { Magicsock.Peer(key: $0.key, discoKey: $0.discoKey, homeDERP: $0.homeDERP, endpoints: $0.endpoints) })`. Order is ascending node ID (disco key ownership, magicsock contract B1). After `engine.apply`, retain the engine's owner table and compare the stack's owners (host contract behavior W6, netstack contract behavior X10). `shortcut:` Peers that the engine removes in `advance` due to key expiration stay in `Magicsock` until the next netmap. The engine emits no datagrams to those peers, so heartbeat stops after 45 seconds, and the device drops incoming WireGuard. Reconcile the owner table and the stack's owners immediately at expiration (see timers below).
+  - Cookie reply (2026-11-15). Send a `.cookieReply(b)` emitted by `engine.receive` back over the incoming path without calling `magicsock.send`. For UDP input feed `.udp(b, to: source)` into the flow above. For DERP input feed `.derp(b, to: sender, region: incoming region)` into it (the N8 filter still applies). The source passed to the engine is `address` (what the cookie binds to) and `host` (the rate limit unit). For UDP, as with Go's standard bind, `address` = address ‖ port (LE), `host` = address. For DERP, as in Tailscale magicsock, use one value per peer and omit the region. Both values are the 32-byte node public key (Go binds to the per-peer fake address `fakeWGAddr` and limits by the peer's tailnet address `nodeAddr`, `wgengine/magicsock/endpoint.go` `DstToBytes` and `DstIP`). The lengths differ, so they do not collide with UDP values.
+  - Netmap. After `engine.apply`, call `magicsock.setPeers(EnginePeer.peers(in: netmap, at: Date()).map { Magicsock.Peer(key: $0.key, discoKey: $0.discoKey, homeDERP: $0.homeDERP, endpoints: $0.endpoints) })`. Order is ascending node ID (disco key ownership, magicsock contract B1). After `engine.apply`, retain the engine's address owner table and compare it with the owners tracked by the stack (host contract behavior W6, netstack contract behavior X10). `shortcut:` Peers that the engine removes in `advance` due to key expiration stay in `Magicsock` until the next netmap. The engine emits no datagrams to those peers, so heartbeat stops after 45 seconds, and the device drops incoming WireGuard. Reconcile the owner table and the stack's owners immediately at expiration (see timers below).
   - Timers. Wake at `min(engine.nextDeadline, magicsock.nextDeadline)` and call `advance` on both. If the engine's `advance` handled key expiration (`recomputesPeers(at:)`), immediately retain the new owner table and close connections to addresses whose owner changed (the same path as applying a netmap).
 - **N6 (path events and lookup)**. For each netmap the node builds a data plane peer key → name table (the name is `Node.name` with one trailing dot removed). `.pathChanged(k, p)` emits `peerPathChanged` using the name from that table. For a removed peer use its name from before the table changed. Emit no event for peers with empty names. `path(toPeerNamed:)` maps name → key (N6 comparison rules) → `magicsock.path(to:at: .now)`. The name belongs to the exact node installed by the engine (`EnginePeer.name`. If multiple nodes claim a key, looking it up again in the netmap can attach a different node's name).
-  - Report paths **only when actually known** (first adopter review, 2026-11-15). If nothing has been exchanged with a peer in the last 45 seconds (Go's idle criterion, which `Magicsock` determines using the last WireGuard send per peer), `path(toPeerNamed:)` returns nil. Emit `peerPathChanged` when the path goes idle (nil) and when traffic resumes (the path at that time). Reporting an idle peer as `.relayed` would label a connection "relayed" even though it will connect directly when traffic starts. Apply this nil rule in `Magicsock.path(to:at:)` and emit the same value in path events (`pathChanged`), adding the idle time to `nextDeadline`.
+  - Report paths **only when actually known** (first adopter review, 2026-11-15). If nothing has been exchanged with a peer in the last 45 seconds (Go's idle criterion, which `Magicsock` determines using the last WireGuard send per peer), `path(toPeerNamed:)` returns nil. Emit `peerPathChanged` when the path goes idle (nil) and when traffic resumes (the path at that time). Reporting an idle peer as `.relayed` would label a connection "relayed" even though it will connect directly when traffic starts. Apply this nil rule in `Magicsock.path(to:at:)` and emit the same value in path events (`pathChanged`), including the deadline at which the peer becomes idle in `nextDeadline`.
 - **N7 (structured concurrency)**. The TaskGroup children in `run()` change.
 
   ```
@@ -364,7 +364,7 @@ Behavior changes:
       ├ forwardLoginRequests
       ├ uploadLocalStatus()  Publishes endpoints and home region to the control server. Receives them through a channel because output handling has no await
       ├ receiveUDP()     Socket datagram → magicsock.receiveUDP. Ends when the socket closes
-      ├ maintainDERP()   Group of DERPClient instances by region (home + regions targeted by Magicsock). Each has the shape of M3's serve
+      ├ maintainDERP()   Group of DERPClient instances by region (home + regions targeted by Magicsock). Each region uses the same structure as M3's serve
       └ runTimer()       Earlier deadline of the engine and Magicsock
   ```
 
@@ -372,6 +372,6 @@ Behavior changes:
 - **N8 (UDP filter for tests)**. Check the `setBlockedUDPPorts` set only in `receiveUDP()` (immediately after receiving) and on `.udp` output (just before sending). `Magicsock` and the engine have no knowledge of the set. It defaults to empty.
 - **N9 (secrets)**. Keep the disco private key out of events, errors, `description`, and `dump`. `customMirror` still exposes only the hostname.
 
-Tests (`Tests/SwiftailTests`, no sockets) cover N3 region conversion (`noMeasureNoHome`, regions with only unusable servers, `stunTestIP`, zero or negative `stunPort`, `stunOnly`, and `regionScore`) and N6 name comparison (trailing dot, case, and two identical names). The magicsock contract's "M4 gate" covers the full node flow.
+Tests (`Tests/SwiftailTests`, no sockets) cover N3 region conversion (`noMeasureNoHome`, regions with only unusable servers, `stunTestIP`, zero or negative `stunPort`, `stunOnly`, and `regionScore`) and N6 name comparison (trailing dot, case, and two identical names). The magicsock contract's [M4 Gate](SwiftailMagicsock.md#m4-gate) covers the full node flow.
 
 The only public API additions are `NodeEvent.peerPathChanged`, `NodeError.udpUnavailable`, `TailnetNode.path(toPeerNamed:)`, and `PeerPath` (`SwiftailMagicsock`). M5 defines `setDefaultInterface` from `docs/plan.md` §6.
