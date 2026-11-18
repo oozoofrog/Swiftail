@@ -15,6 +15,17 @@ struct SocketAddressRegressionTests {
         #expect(!endpoints.isOnTailnet(localAddress: endpoints.joiner.address))
     }
 
+    @Test("Dial parameters pin the IP version and restrict no interface type, so a packet tunnel path stays eligible", arguments: [true, false])
+    func dialParametersAdmitTunnelPath(isIPv4: Bool) throws {
+        let parameters = SocketPairingTransport.parameters(isIPv4: isIPv4)
+        #expect(parameters.prohibitedInterfaceTypes?.isEmpty ?? true)
+        #expect(parameters.prohibitedInterfaces?.isEmpty ?? true)
+        #expect(parameters.requiredInterfaceType == .other)
+        #expect(parameters.requiredInterface == nil)
+        let ip = try #require(parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)
+        #expect(ip.version == (isIPv4 ? .v4 : .v6))
+    }
+
     @Test("Resolves the name with an IPv4-mapped localAddress, reaches the IPv4 listener, and checks the local endpoint", .timeLimit(.minutes(2)))
     func mappedLocalAddressDialsIPv4() async throws {
         let parameters = NWParameters.tcp

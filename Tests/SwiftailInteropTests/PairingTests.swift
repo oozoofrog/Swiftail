@@ -200,7 +200,7 @@ struct PairingSocketGateTests {
     func pairsOverLoopbackSocket() async throws {
         let host = try await LoopbackPairingHost.start()
         defer { host.close() }
-        // The loopback address acts as this device's tailnet address in the test. Disable only the address range check and interface restriction.
+        // The loopback address acts as this device's tailnet address in the test. Disable only the address range checks.
         let loopback = try #require(IPAddress("127.0.0.1"))
 
         // Approve.
@@ -251,14 +251,16 @@ struct PairingSocketGateTests {
         #expect(untouched.receivedByteCount == 0 && untouched.ending == .disconnected)
         #expect(await host.hasOpenOffer)
 
-        // The public API restricts the interface, so loopback cannot connect (traffic cannot leave over a non-tunnel path).
-        let port = try #require(NWEndpoint.Port(rawValue: host.port))
-        let barred = SocketPairingTransport(host: "127.0.0.1", port: port, isIPv4: true, tunnelOnly: true)
-        let opened = try await netstackDeadline("Dialing over a prohibited interface", seconds: 10) { await barred.open() }
-        #expect(!opened)
-        await barred.close()
-        let allowed = SocketPairingTransport(host: "127.0.0.1", port: port, isIPv4: true, tunnelOnly: false)
-        #expect(await allowed.open(), "Disabling the restriction reaches the same destination")
-        await allowed.close()
+        // The public API (range checks on) connects over loopback, since it restricts no interface, and still sends nothing off the tailnet (J2).
+        let offTailnet = await host.openOffer()
+        async let fifth = host.serveNext(approving: true)
+        let tailnetAddress = try #require(IPAddress("100.64.0.1"))
+        let rejected = await pairingFailure {
+            try await PairingJoiner.pair(with: offTailnet, deviceName: "Living Room iPad", localAddress: tailnetAddress) { _ in }
+        }
+        #expect(rejected == .notOnTailnet)
+        let silent = try await fifth
+        #expect(silent.receivedByteCount == 0 && silent.ending == .disconnected, "No hello, proof, or other bytes went to the off-tailnet peer")
+        #expect(await host.hasOpenOffer)
     }
 }
