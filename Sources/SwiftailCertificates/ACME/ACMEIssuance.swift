@@ -1,21 +1,21 @@
 import Foundation
 
-/// 주문 절차(`ACMEOrderFlow`)를 전송·시계·TXT 올리기와 함께 끝까지 돌린다. 가장자리의 구동 함수다.
+/// Drives the order flow (`ACMEOrderFlow`) to completion with transport, a clock, and TXT publication. This function drives the flow at the edge.
 ///
-/// 절차가 낸 일을 차례로 한다: 요청을 `transport`로 보내고, 기다림은 `sleep(until:)`으로 기다리고, TXT는
-/// `publishTXT`로 올린다. 시각은 입력을 넘길 때마다 `now()`로 새로 읽는다(긴 기다림 뒤의 시각. 계약 동작 R6).
-/// 새 Task를 만들지 않고 부른 Task 안에서 돈다(구조적 동시성).
+/// Performs each emitted action in order. Sends requests through `transport`, waits with `sleep(until:)`, and publishes TXT records
+/// through `publishTXT`. Reads `now()` afresh for each input (including the time after a long wait, contract behavior R6).
+/// Runs within the calling Task without creating a new Task (structured concurrency).
 ///
 /// - Parameters:
-///   - flow: 시작하지 않은 절차.
-///   - transport: ACME 서버와의 HTTP 왕복.
-///   - now: 벽시계. 기본은 `Date()`.
-///   - sleep: 그 시각까지 기다린다. 취소되면 `CancellationError`를 던진다. 기본은 `Task.sleep`.
-///   - publishTXT: `_acme-challenge.<이름>`의 TXT 레코드를 올린다(제어 서버의 `set-dns`). 올렸으면 nil, 아니면 실패의
-///     종류(`controlRejected`, `network` 등)를 돌려준다. 그 실패가 이 시도의 결과가 된다. (`CertificateFailure`는 계약의
-///     공개 선언대로 `Error`가 아니어서 던지지 않고 돌려준다.)
-/// - Returns: 발급의 결과. 실패도 결과로 돌려준다.
-/// - Throws: 부른 Task가 취소되면 `CancellationError`. 취소된 뒤에는 요청을 더 보내지 않는다.
+///   - flow: An unstarted order flow.
+///   - transport: The HTTP round trip to the ACME server.
+///   - now: The wall clock. Defaults to `Date()`.
+///   - sleep: Waits until the given time. Throws `CancellationError` on cancellation. Defaults to `Task.sleep`.
+///   - publishTXT: Publishes the TXT record for `_acme-challenge.<name>` using the control server's `set-dns`. Returns nil on success or
+///     the failure kind (`controlRejected`, `network`, etc.) on failure. That failure becomes this attempt's result. (The public contract
+///     declaration of CertificateFailure does not conform to `Error`, so the function returns it.)
+/// - Returns: The issuance result, including failures.
+/// - Throws: `CancellationError` if the calling Task is canceled. No further requests go out after cancellation.
 func issueCertificate(
     with flow: ACMEOrderFlow,
     transport: some ACMETransport,
@@ -56,7 +56,7 @@ func issueCertificate(
     }
 }
 
-/// 기본 기다림: 지금부터 그 시각까지 `Task.sleep`.
+/// Waits from now until the given time with `Task.sleep` by default.
 @Sendable
 func sleepUntil(_ date: Date) async throws(CancellationError) {
     let interval = date.timeIntervalSinceNow

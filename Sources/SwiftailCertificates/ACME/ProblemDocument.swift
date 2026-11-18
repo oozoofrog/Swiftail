@@ -1,27 +1,27 @@
 import Foundation
 
-/// ACME 오류의 문제 문서(RFC 7807 3.1, RFC 8555 6.7). 오류 응답의 본문, 주문의 `error`, challenge의 `error`가 이 형식이다.
+/// An ACME `error` problem document (RFC 7807 3.1, RFC 8555 6.7). Error response bodies and order and challenge error fields use this format.
 ///
-/// 오류 응답에 문제 문서를 붙이는 것은 SHOULD일 뿐이고(RFC 8555 6.7), `type`은 ACME URN만이 아니라 서버 고유 URI나
-/// `about:blank`일 수 있다(RFC 7807 3.1·4.2). 그래서 읽기는 실패하지 않는다: 본문이 JSON 객체가 아니거나 `type`이
-/// 없거나 문자열이 아니면 `type`은 빈 문자열이다. RFC 7807의 기본값 `about:blank`로 채우지 않는다(계약 동작 C12).
+/// Including a problem document in an error response is only a SHOULD (RFC 8555 6.7), and `type` can be an ACME URN, a server-specific URI,
+/// or `about:blank` (RFC 7807 3.1 and 4.2). Parsing therefore never fails. If the body is not a JSON object or `type` is missing or is not
+/// a string, `type` is empty. It does not substitute the RFC 7807 default of `about:blank` (contract behavior C12).
 ///
-/// `detail`·`title`·`instance`·`subproblems`는 읽지 않는다: 식별자가 들어 있을 수 있어 실패 값과 로그에 싣지 않는다
-/// (계약 동작 K2). `type`만으로 종류를 가린다.
+/// Skip `detail`, `title`, `instance`, and `subproblems` because they may contain identifiers and must stay out of failure values and logs
+/// (contract behavior K2). Classify the error using `type` alone.
 struct ProblemDocument: Sendable, Equatable, Decodable {
-    /// `type` 전체 문자열을 UTF-8 문자 경계에서 256바이트로 자른 것. 없으면 빈 문자열.
+    /// The full `type` string truncated to 256 bytes at a UTF-8 character boundary, or an empty string if absent.
     let type: String
 
-    /// 문제 문서의 `type` 한도(계약 한도 표).
+    /// The limit on the problem document's `type` (contract limits table).
     static let maximumTypeByteCount = 256
 
-    /// 따로 다루는 ACME 오류 종류(RFC 8555 6.7). `type`이 `urn:ietf:params:acme:error:` + 이름과 **정확히 같을 때만**
-    /// 그 종류로 본다. 접미사만 같은 서버 고유 URI는 일반 오류다.
+    /// The ACME error kinds handled separately (RFC 8555 6.7). A `type` identifies one of these kinds only if it exactly matches
+    /// urn:ietf:params:acme:error: plus the name. A server-specific URI that merely shares the suffix is a general error.
     enum Kind: String, Sendable {
         case badNonce, accountDoesNotExist, rateLimited, orderNotReady
     }
 
-    /// 따로 다루는 종류이면 그 종류.
+    /// The separately handled kind, if applicable.
     var kind: Kind? {
         let prefix = "urn:ietf:params:acme:error:"
         guard type.hasPrefix(prefix) else { return nil }
@@ -32,7 +32,7 @@ struct ProblemDocument: Sendable, Equatable, Decodable {
         self.type = Self.truncated(type)
     }
 
-    /// HTTP 오류 응답의 본문을 읽는다. 크기 한도를 넘거나 JSON 객체가 아니면 `type`이 빈 문서다.
+    /// Reads an HTTP error response body. Returns a document with an empty `type` if the body exceeds the size limit or is not a JSON object.
     init(responseBody body: [UInt8]) {
         guard body.count <= ACMEInputRules.maximumJSONByteCount,
               let document = try? JSONDecoder().decode(ProblemDocument.self, from: Data(body))
@@ -44,7 +44,7 @@ struct ProblemDocument: Sendable, Equatable, Decodable {
     }
 
     init(from decoder: any Decoder) throws {
-        // 객체가 아니거나 `type`이 문자열이 아니어도 실패하지 않는다(위 설명).
+        // Even a non-object body or non-string `type` does not cause parsing to fail (see above).
         let container = try? decoder.container(keyedBy: CodingKeys.self)
         let type = (try? container?.decodeIfPresent(String.self, forKey: .type)) ?? nil
         self.init(type: type ?? "")
@@ -54,7 +54,7 @@ struct ProblemDocument: Sendable, Equatable, Decodable {
         case type
     }
 
-    /// UTF-8 문자 경계에서 256바이트 이하로 자른다.
+    /// Truncates to at most 256 bytes at a UTF-8 character boundary.
     private static func truncated(_ text: String) -> String {
         guard text.utf8.count > maximumTypeByteCount else { return text }
         var result = String.UnicodeScalarView()

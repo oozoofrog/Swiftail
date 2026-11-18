@@ -2,24 +2,24 @@ import CryptoKit
 import Foundation
 import SwiftailBase
 
-/// 짝 맺기 연결 하나의 두 끝. 양쪽이 같은 네 값을 본다(tailnet 안에서는 주소가 바뀌지 않는다).
+/// The endpoints of one pairing connection. Both sides see the same four values because addresses do not change inside the tailnet.
 struct PairingEndpoints: Sendable, Equatable {
-    /// 들어오는 쪽(J)의 주소와 포트.
+    /// The joiner's (J) address and port.
     var joiner: IPEndpoint
-    /// 여는 쪽(H)의 주소와 포트.
+    /// The host's (H) address and port.
     var host: IPEndpoint
 
-    /// OS 소켓으로 건 연결이 터널을 거친 것으로 볼 수 있는가(계약 동작 J2): 이쪽 끝이 이 기기의 tailnet 주소
-    /// `localAddress`이고, 상대 끝이 엔진과 같은 tailnet 대역이다.
+    /// Checks whether an OS socket connection can be treated as having traversed the tunnel (contract behavior J2). The local endpoint must be this device's
+    /// tailnet address, `localAddress`, and the remote endpoint must be in the same tailnet ranges used by the engine.
     ///
-    /// OS 소켓으로 들어오는 쪽은 이름 풀이와 경로를 OS에 맡긴다. 대역만 보면, 터널이 꺼진 채 같은 대역을 쓰는 로컬
-    /// 네트워크(통신사 NAT, 공유기)로 나간 연결이 통과한다. 그 연결은 WireGuard가 인증한 것이 아니므로 `hello`를 보내지
-    /// 않는다. 이쪽 끝이 터널의 주소인지는 앱이 넘긴 값과 견주어 본다.
+    /// The OS socket joiner relies on the OS for name resolution and routing. A range check alone would allow connections leaving through a local
+    /// network that uses the same range (carrier NAT or router) while the tunnel is off. WireGuard did not authenticate that connection, so withhold
+    /// hello. Compare the local endpoint with the app-supplied value to determine whether it is the tunnel address.
     func isOnTailnet(localAddress: IPAddress) -> Bool {
         isLocal(localAddress) && Self.isTailnetAddress(host.address)
     }
 
-    /// 이쪽 끝의 주소가 `address`인가. IPv4와 그 IPv4-mapped IPv6는 같은 주소로 본다.
+    /// Checks whether the local endpoint is `address`. Treats IPv4 and its IPv4-mapped IPv6 form as the same address.
     func isLocal(_ address: IPAddress) -> Bool {
         joiner.address.mapped == address.mapped
     }
@@ -32,38 +32,38 @@ struct PairingEndpoints: Sendable, Equatable {
 extension IPAddress {
     fileprivate static let mappedPrefix: [UInt8] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF]
 
-    /// IPv4-mapped IPv6를 IPv4로 바꿔 같은 대역 규칙을 적용할 수 있게 한다.
+    /// Converts IPv4-mapped IPv6 to IPv4 so the same range rules apply.
     var unmappedIPv4: IPAddress {
         guard bytes.starts(with: Self.mappedPrefix) else { return self }
         return IPAddress(bytes: bytes.suffix(4)) ?? self
     }
 
-    /// 16바이트 표기. IPv4는 IPv4-mapped IPv6(`::ffff:a.b.c.d`)다. T에 이 모양으로 넣는다.
+    /// The 16-byte representation. IPv4 uses IPv4-mapped IPv6 (`::ffff:a.b.c.d`). T uses this representation.
     fileprivate var mapped: [UInt8] {
         isIPv4 ? Self.mappedPrefix + bytes : bytes
     }
 }
 
-/// `proof`가 매겨지는 전사 P: 여는 쪽의 nonce가 열리기 전에 정해지는 것 전부(계약 5절).
+/// Transcript P, to which `proof` is applied. It includes everything established before the host nonce is revealed (contract §5).
 ///
 /// ```
-/// P = commitJ ‖ commitH ‖ nonceJ ‖ SHA256(제안의 host) ‖ 제안의 port(2) ‖ SHA256(기기 이름) ‖ J의 주소(16)
-///     ‖ J의 포트(2) ‖ H의 주소(16) ‖ H의 포트(2)                                            198바이트
+/// P = commitJ ‖ commitH ‖ nonceJ ‖ SHA256(offer host) ‖ offer port(2) ‖ SHA256(device name) ‖ J address(16)
+///     ‖ J port(2) ‖ H address(16) ‖ H port(2)                                             198 bytes
 /// ```
 ///
-/// 양쪽이 본 연결의 두 끝을 묶는다. 중간에서 바이트를 넘겨주는 노드가 끼면 두 쪽이 본 끝이 달라 P가 달라지고, 한쪽이
-/// 만든 증명이 다른 쪽에서 맞지 않는다. nonceH는 들어 있지 않다: 들어오는 쪽은 그것을 모르는 채 `proof`를 낸다.
+/// Binds the endpoints as seen by both sides. A node relaying bytes in the middle makes the two sides see different endpoints and thus different P
+/// values, so one side's `proof` fails on the other. nonceH is absent because the joiner sends proof without it.
 struct PairingProofTranscript: Sendable, Equatable {
-    /// P의 길이.
+    /// The length of P.
     static let length = 198
 
     let bytes: [UInt8]
-    /// `challenge`로 받은(여는 쪽은 자기가 보낸) commitH.
+    /// The commitH from `challenge`, as received by the joiner or sent by the host.
     private let hostCommitment: [UInt8]
 
     /// - Parameters:
-    ///   - joinerNonce: 열린 nonceJ. 여는 쪽은 `hello`의 약속과 맞는지 먼저 본 값을 넣는다.
-    ///   - hostCommitment: 여는 쪽 nonce의 약속 commitH.
+    ///   - joinerNonce: The revealed nonceJ. The host first checks that the value matches the `hello` commitment.
+    ///   - hostCommitment: commitH, the commitment to the host nonce.
     init(
         joinerNonce: [UInt8], hostCommitment: [UInt8], offerHost: String, offerPort: UInt16, deviceName: [UInt8],
         endpoints: PairingEndpoints
@@ -76,65 +76,65 @@ struct PairingProofTranscript: Sendable, Equatable {
             + endpoints.host.address.mapped + endpoints.host.port.bigEndianBytes
     }
 
-    /// J→H `proof`의 HMAC: 들어오는 쪽이 비밀을 안다.
+    /// The HMAC for J→H `proof`, showing that the joiner knows the secret.
     func proof(secret: [UInt8]) -> [UInt8] {
         authenticate("swiftail-pairing-3 joiner", bytes, secret: secret)
     }
 
-    /// 여는 쪽의 nonce가 열린 뒤의 전사 T. `hostNonce`가 약속 commitH와 다르면 nil이다: `challenge`를 보낸 뒤에 고른
-    /// nonce로는 T를 만들 수 없다.
+    /// Transcript T after revealing the host nonce. Returns nil if `hostNonce` fails to match commitH, so a nonce selected after sending
+    /// challenge cannot produce T.
     func opened(with hostNonce: [UInt8]) -> PairingTranscript? {
-        // 약속과 nonce는 선 위에 나온 값이라 상수 시간으로 견줄 까닭이 없다.
+        // The commitment and nonce are on the wire, so comparison need not be constant-time.
         guard PairingTranscript.commitment(toHostNonce: hostNonce) == hostCommitment else { return nil }
         return PairingTranscript(bytes: bytes + hostNonce)
     }
 }
 
-/// 두 nonce가 모두 열린 뒤의 전사 T와, 제안의 비밀로 T에 매기는 세 값(계약 5절).
+/// Transcript T after both nonces are revealed, and the three values computed over T with the offer secret (contract §5).
 ///
 /// ```
-/// T = P ‖ nonceH                                                                            230바이트
+/// T = P ‖ nonceH                                                                            230 bytes
 /// ```
 ///
-/// 확인 숫자는 20비트 남짓이라, 상대의 nonce를 본 뒤에 자기 nonce를 고를 수 있는 쪽은 값을 갈아 원하는 숫자를 맞출 수
-/// 있다. 그래서 두 nonce는 약속으로 먼저 고정된다. 들어오는 쪽은 `hello`에 commitJ를 싣고 `proof`에서 nonceJ를 연다. 여는
-/// 쪽은 `challenge`에 commitH를 싣고, `proof`가 맞아 제안을 쓴 뒤에야 `accepted`에서 nonceH를 연다. 비밀을 아는 쪽이라도
-/// 확인 숫자를 보려면 제안을 써야 하므로, 숫자가 마음에 들 때까지 다시 걸 수 없다.
+/// The SAS is about 20 bits. A side that could choose its own nonce after seeing the peer's nonce could try values until it obtains the desired
+/// number. Commitments therefore fix both nonces first. The joiner includes commitJ in `hello` and reveals nonceJ in `proof`. The
+/// host includes commitH in `challenge` and reveals nonceH in `accepted` only after a valid `proof` uses the offer. Even someone who knows the secret
+/// must use the offer to see the SAS, so they cannot redial until they like the number.
 ///
-/// 값마다 꼬리표(`swiftail-pairing-3 …`)가 달라 서로 바꿔 쓸 수 없다. 두 약속의 꼬리표도 달라, 상대의 약속을 되비춰
-/// 자기 약속으로 낼 수 없다.
+/// Each value has a distinct tag (`swiftail-pairing-3 …`) to prevent substitution. The commitments also use distinct tags so one side cannot reflect the peer's
+/// commitment back as its own.
 struct PairingTranscript: Sendable, Equatable {
-    /// T의 길이.
+    /// The length of T.
     static let length = PairingProofTranscript.length + PairingMessage.nonceLength
 
     let bytes: [UInt8]
 
-    /// 들어오는 쪽 nonce의 약속 commitJ = SHA256("swiftail-pairing-3 commit joiner" ‖ nonceJ).
+    /// The joiner nonce commitment, commitJ = SHA256("swiftail-pairing-3 commit joiner" ‖ nonceJ).
     static func commitment(toJoinerNonce nonce: [UInt8]) -> [UInt8] {
         Array(SHA256.hash(data: Data(Array("swiftail-pairing-3 commit joiner".utf8) + nonce)))
     }
 
-    /// 여는 쪽 nonce의 약속 commitH = SHA256("swiftail-pairing-3 commit host" ‖ nonceH).
+    /// The host nonce commitment, commitH = SHA256("swiftail-pairing-3 commit host" ‖ nonceH).
     static func commitment(toHostNonce nonce: [UInt8]) -> [UInt8] {
         Array(SHA256.hash(data: Data(Array("swiftail-pairing-3 commit host".utf8) + nonce)))
     }
 
-    /// `PairingProofTranscript.opened(with:)`만 만든다. nonceH가 약속과 맞는 T만 있다.
+    /// Created only by `PairingProofTranscript.opened(with:)`. T exists only when nonceH matches its commitment.
     fileprivate init(bytes: [UInt8]) {
         self.bytes = bytes
     }
 
-    /// H→J `accepted`의 HMAC: 여는 쪽이 비밀을 안다.
+    /// The HMAC for H→J `accepted`, showing that the host knows the secret.
     func accepted(secret: [UInt8]) -> [UInt8] {
         authenticate("swiftail-pairing-3 host", bytes, secret: secret)
     }
 
-    /// `decision`의 본문 `body`에 붙이는 HMAC. 결정을 비밀을 아는 쪽이 냈음을 보인다.
+    /// The HMAC appended to `decision`'s `body`. It shows that the sender of the decision knows the secret.
     func decisionCode(for body: [UInt8], secret: [UInt8]) -> [UInt8] {
         authenticate("swiftail-pairing-3 decision", bytes + body, secret: secret)
     }
 
-    /// 양쪽 화면에 보이는 확인 숫자 6자리. 사용자가 두 화면의 숫자가 같을 때 승인한다(계약 동작 P5).
+    /// The 6-digit SAS displayed on both screens. The user approves when the numbers on both screens match (contract behavior P5).
     func confirmationCode(secret: [UInt8]) -> String {
         let code = authenticate("swiftail-pairing-3 sas", bytes, secret: secret)
         let number = code.prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) } % 1_000_000
@@ -143,12 +143,12 @@ struct PairingTranscript: Sendable, Equatable {
     }
 }
 
-/// HMAC-SHA256(비밀, 꼬리표 ‖ 메시지).
+/// HMAC-SHA256(secret, tag ‖ message).
 private func authenticate(_ label: String, _ message: [UInt8], secret: [UInt8]) -> [UInt8] {
     Array(HMAC<SHA256>.authenticationCode(for: Array(label.utf8) + message, using: SymmetricKey(data: secret)))
 }
 
 extension UInt16 {
-    /// 빅 엔디언 2바이트.
+    /// Two bytes in big-endian order.
     var bigEndianBytes: [UInt8] { [UInt8(self >> 8), UInt8(truncatingIfNeeded: self)] }
 }

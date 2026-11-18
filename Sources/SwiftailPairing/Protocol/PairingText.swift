@@ -1,10 +1,10 @@
-/// 상대가 보낸 표시용 글(기기 이름, 여는 쪽의 표시 이름)의 규칙(계약 동작 P8·J5).
+/// Rules for display text sent by the peer (device name and host display name, contract behaviors P8 and J5).
 ///
-/// 이 글은 상대가 스스로 밝힌 값이고 승인 화면에 그대로 나온다. 제어 문자(Cc)는 화면을 흐트러뜨리고, 서식 문자(Cf)에는
-/// 글의 방향을 뒤집어 다른 이름처럼 보이게 하는 것(U+202E 등)이 있다. 둘 다 받지 않는다. 서식 문자 가운데 글자를 잇는
-/// 둘(U+200C, U+200D)만은 받는다. 이은 이모지와 페르시아어·인도계 문자의 이름에 들어 있다.
+/// The peer supplies this text, and the approval screen displays it verbatim. Control characters (Cc) disrupt the screen, and some format characters (Cf)
+/// can reverse text direction to make a name look different (such as U+202E). Both categories are rejected except for two joining format characters
+/// (U+200C and U+200D) used in joined emoji and in names written in Persian and Indic scripts.
 enum PairingText {
-    /// 올바른 UTF-8이고 Cc와 (U+200C·U+200D를 뺀) Cf가 없으면 그 문자열, 아니면 nil.
+    /// Returns the string if it is valid UTF-8 with no Cc or Cf other than U+200C and U+200D, or nil otherwise.
     static func displayable(_ bytes: some Collection<UInt8>) -> String? {
         guard let text = String(validating: Array(bytes), as: UTF8.self),
               text.unicodeScalars.allSatisfy({ scalar in
@@ -19,14 +19,14 @@ enum PairingText {
     }
 }
 
-/// 검증된 기기 이름: 1~64바이트의 표시할 수 있는 글(`hello`의 이름 칸).
+/// A validated device name of 1–64 bytes of displayable text (the name field in `hello`).
 struct DeviceName: Sendable, Equatable {
-    /// 이름의 한도(바이트).
+    /// The name limit in bytes.
     static let maximumLength = 64
 
     let text: String
 
-    /// 선 위에 적는 바이트.
+    /// The bytes written on the wire.
     var bytes: [UInt8] { Array(text.utf8) }
 
     init?(_ text: String) {

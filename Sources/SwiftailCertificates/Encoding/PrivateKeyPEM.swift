@@ -1,19 +1,19 @@
 import CryptoKit
 
 extension P256.Signing.PrivateKey {
-    /// 키 파일(계정 키 `acme-account.key.pem`, 인증서 키 `<이름>.key`)의 PEM을 P-256 개인 키로 읽는다.
+    /// Reads a key file's PEM as a P-256 private key (`acme-account.key.pem` for the account key or `<name>.key` for a certificate key).
     ///
-    /// 파일 전체가 `PRIVATE KEY`(PKCS#8, Swiftail과 CryptoKit이 쓴다) 또는 `EC PRIVATE KEY`(SEC1, Go가 쓴다.
-    /// 노트 3.7) 블록 **하나**여야 한다. 블록 밖의 글, 블록 둘 이상, 다른 라벨, P-256이 아닌 키는 모두 거절한다.
-    /// 거절된 계정 키를 "없음"으로 보지 않는 것은 부르는 쪽의 몫이다(계약 동작 C4).
+    /// The entire file must be **one** `PRIVATE KEY` block (PKCS#8, used by Swiftail and CryptoKit) or `EC PRIVATE KEY` block (SEC1, used by Go,
+    /// notes §3.7). Rejects text outside the block, multiple blocks, any other label, or a key other than P-256.
+    /// The caller must distinguish a rejected account key from an absent one (contract behavior C4).
     ///
-    /// - Parameter maximumByteCount: 파일의 최대 바이트 수(계약 동작 M의 64KiB).
+    /// - Parameter maximumByteCount: The maximum file size in bytes (64KiB in contract behavior M).
     init(pemFile input: [UInt8], maximumByteCount: Int) throws(PEMError) {
         let blocks = try PEM.decode(input, maximumByteCount: maximumByteCount)
         guard blocks.count == 1, let block = blocks.first else { throw .wrongBlockCount }
         guard block.label == .privateKey || block.label == .ecPrivateKey else { throw .unexpectedLabel }
         do {
-            // CryptoKit의 DER 읽기는 PKCS#8과 SEC1을 모두 받는다(시험 `PrivateKeyPEMTests`가 둘을 고정한다).
+            // CryptoKit's DER decoder accepts both PKCS#8 and SEC1 (`PrivateKeyPEMTests` covers both).
             try self.init(derRepresentation: block.der)
         } catch {
             throw .malformed

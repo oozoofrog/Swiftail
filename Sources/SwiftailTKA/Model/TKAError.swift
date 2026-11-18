@@ -1,31 +1,31 @@
-// Tailnet Lock의 거절 까닭. 계약 `docs/contracts/SwiftailTailnetLock.md` 2절의 선언이다.
+// Tailnet Lock rejection reasons. Declared in contract `docs/contracts/SwiftailTailnetLock.md` §2.
 
-/// TKA 자료를 읽거나 검증하다 거절한 까닭. 판정이 갈린 단계를 구분하고, 키·바이트 같은 내용은 담지 않는다(동작 K5).
+/// Reasons for rejecting TKA data during reading or verification. Distinguishes the stage of rejection and omits contents such as keys or bytes (behavior K5).
 package enum TKAError: Error, Sendable, Equatable {
-    /// CBOR 항목 수준의 거절(동작 D1).
+    /// Rejection at the CBOR item level (behavior D1).
     case cbor(CBORError)
-    /// CBOR로는 읽히지만 구조에 맞지 않는다: 맨 바깥이 맵이 아님, 받지 않는 키 종류, 중복 키, 알려진 필드의 타입·범위,
-    /// 잘못된 UTF-8, 체크포인트 `State`의 null이 아닌 `LastAUMHash`(동작 D3~D8).
+    /// Valid CBOR with an invalid structure: a non-map top level, an unsupported key type, duplicate keys, known field type or range violations,
+    /// invalid UTF-8, or non-null `LastAUMHash` in checkpoint `State` (behaviors D3–D8).
     case invalidStructure
-    /// 정적 검사 실패(`StaticValidate`, 체크포인트 상태 검사. 동작 A1).
+    /// Failed a static check (`StaticValidate` or checkpoint state checks, behavior A1).
     case invalidAUM
     case emptyUpdate
     case missingParent
     case unsigned
     case untrustedSigner
     case invalidSignature
-    /// 적용 실패: 부모 해시 불일치, 이미 있는 키, 없는 키, 마지막 키 제거, StateID 불일치, 고친 키의 검사 실패.
+    /// Application failure: parent hash mismatch, an existing or missing key, removal of the last key, StateID mismatch, or failed validation of an updated key.
     case rejectedUpdate
     case notACheckpoint
-    /// 저장된 AUM이 사슬을 이루지 않는다(동작 T3).
+    /// Stored AUMs do not form a chain (behavior T3).
     case corruptStore
     case iterationLimit
     case noIntersection
-    /// node 키가 인가되지 않는다(동작 S의 어느 단계든).
+    /// The node key is not authorized (at any stage of behavior S).
     case unauthorized
-    /// `--TL` 뒤가 동작 R3에 어긋난다.
+    /// The suffix after `--TL` violates behavior R3.
     case invalidAuthKey
     case signingFailed
-    /// 이 계약의 한도(동작 M). 자료 형식에서는 디코딩 전에 보는 바이트 길이다.
+    /// A contract limit (behavior M). For data formats, the byte length is checked before decoding.
     case limitExceeded
 }

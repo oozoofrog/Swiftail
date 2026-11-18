@@ -1,13 +1,13 @@
 import Foundation
 
-// ACME 자원 객체(RFC 8555 7.1)를 응답 본문에서 읽고, 요청 본문을 만든다.
+// Read ACME resource objects (RFC 8555 7.1) from response bodies and construct request bodies.
 //
-// 읽기는 신뢰할 수 없는 입력의 경계다(계약 동작 X2): 본문이 64KiB를 넘거나, JSON이 아니거나, 필수 필드가 없거나,
-// 모르는 `status`이거나, URL이 `isAcceptableURL`을 통과하지 못하거나, authorization이 8개를 넘으면 nil이다. 주문 절차는
-// nil을 `unexpectedResponse`로 적는다. 모르는 필드는 무시한다. 읽기는 어떤 바이트로도 죽지 않는다.
+// Reading is the untrusted-input boundary (contract behavior X2). Return nil if the body exceeds 64KiB, is not JSON, omits a required field,
+// has an unknown `status`, contains a URL that fails `isAcceptableURL`, or contains more than 8 authorizations. The order flow reports
+// nil as `unexpectedResponse`. Ignore unknown fields. Reading does not crash on any input bytes.
 
-/// 디렉터리(RFC 8555 7.1.1). 발급에 필요한 세 URL만 읽는다. `newAuthz`·`revokeCert`·`keyChange`·`renewalInfo`는
-/// 쓰지 않는다(계약 1절 제외 표). Go도 `newOrder`가 없으면 실패한다(`tempfork/acme/acme.go:199-201`).
+/// An ACME directory (RFC 8555 7.1.1). Reads only the three URLs needed for issuance. It does not use `newAuthz`, `revokeCert`, `keyChange`,
+/// or renewalInfo (contract §1 exclusions table). Go also fails when `newOrder` is missing (`tempfork/acme/acme.go:199-201`).
 struct ACMEDirectory: Sendable, Equatable {
     let newNonce: String
     let newAccount: String
@@ -29,7 +29,7 @@ struct ACMEDirectory: Sendable, Equatable {
     }
 }
 
-/// 계정 객체(RFC 8555 7.1.2)의 `status`. newAccount 응답의 본문이다.
+/// The `status` of an account object (RFC 8555 7.1.2), from the newAccount response body.
 enum ACMEAccountStatus: String, Sendable, Decodable {
     case valid, deactivated, revoked
 
@@ -43,27 +43,27 @@ enum ACMEAccountStatus: String, Sendable, Decodable {
     }
 }
 
-/// 식별자(RFC 8555 7.1.3·7.1.4). 이 구현이 요청하는 것은 `dns` 하나다.
+/// An identifier (RFC 8555 7.1.3 and 7.1.4). This implementation requests a single `dns` identifier.
 struct ACMEIdentifier: Sendable, Hashable, Decodable {
     let type: String
     let value: String
 }
 
-/// 주문 객체(RFC 8555 7.1.3).
+/// An order object (RFC 8555 7.1.3).
 struct ACMEOrder: Sendable, Equatable {
-    /// RFC 8555 7.1.6의 다섯 상태.
+    /// The five statuses in RFC 8555 7.1.6.
     enum Status: String, Sendable, Decodable {
         case pending, ready, processing, valid, invalid
     }
 
     let status: Status
     let identifiers: [ACMEIdentifier]
-    /// authorization URL들. 식별자와 1:1이라는 보장도, 순서의 뜻도 없다(RFC 8555 7.1.3·7.4, 계약 동작 C5). 8개까지.
+    /// Up to 8 authorization URLs. There is no guaranteed 1:1 mapping to identifiers, and order has no meaning (RFC 8555 7.1.3 and 7.4, contract behavior C5).
     let authorizations: [String]
     let finalize: String
-    /// `valid`가 된 주문의 인증서 URL. 다른 상태에서는 없을 수 있다.
+    /// The certificate URL for a `valid` order. It may be absent in other statuses.
     let certificate: String?
-    /// 주문이 실패했으면 그 문제 문서(RFC 8555 7.1.3).
+    /// The order's problem document, if the order failed (RFC 8555 7.1.3).
     let error: ProblemDocument?
 
     init?(body: [UInt8]) {
@@ -91,16 +91,16 @@ struct ACMEOrder: Sendable, Equatable {
     }
 }
 
-/// authorization 객체(RFC 8555 7.1.4).
+/// An authorization object (RFC 8555 7.1.4).
 struct ACMEAuthorization: Sendable, Equatable {
-    /// RFC 8555 7.1.6의 여섯 상태.
+    /// The six statuses in RFC 8555 7.1.6.
     enum Status: String, Sendable, Decodable {
         case pending, valid, invalid, deactivated, expired, revoked
     }
 
     let identifier: ACMEIdentifier
     let status: Status
-    /// 와일드카드 이름의 authorization이면 참(RFC 8555 7.1.4). 없으면 거짓.
+    /// True if this authorization is for a wildcard name (RFC 8555 7.1.4). Defaults to false if absent.
     let wildcard: Bool
     let challenges: [ACMEChallenge]
 
@@ -112,7 +112,7 @@ struct ACMEAuthorization: Sendable, Equatable {
         challenges = wire.challenges
     }
 
-    /// `type`이 `dns-01`인 첫 challenge(RFC 8555 8.4). 고른 challenge만 URL·token·상태를 검사한다.
+    /// The first challenge whose `type` is `dns-01` (RFC 8555 8.4). Only the selected challenge's URL, token, and status are checked.
     var dns01Challenge: ACMEChallenge? {
         challenges.first { $0.type == "dns-01" }
     }
@@ -125,10 +125,10 @@ struct ACMEAuthorization: Sendable, Equatable {
     }
 }
 
-/// challenge 객체(RFC 8555 7.1.5, 8절). 종류마다 구조가 달라 `type` 밖의 필드는 모두 선택으로 읽고, 쓰는 challenge만
-/// `validated`로 검사한다. 쓰지 않는 종류(http-01 등)의 모양 때문에 authorization 전체를 버리지 않기 위해서다.
+/// A challenge object (RFC 8555 7.1.5 and §8). The structure varies by `type`, so read every field except type as optional and use
+/// `validated` only on challenges that will be used. This keeps the shape of unused types (such as http-01) from invalidating the entire authorization.
 struct ACMEChallenge: Sendable, Equatable, Decodable {
-    /// RFC 8555 7.1.6의 네 상태.
+    /// The four statuses in RFC 8555 7.1.6.
     enum Status: String, Sendable {
         case pending, processing, valid, invalid
     }
@@ -139,7 +139,7 @@ struct ACMEChallenge: Sendable, Equatable, Decodable {
     let token: String?
     let error: ProblemDocument?
 
-    /// 검사를 통과한 DNS-01 challenge: URL은 `https`·2,048바이트 이하, token은 base64url 1~512바이트, 상태는 넷 중 하나.
+    /// A validated DNS-01 challenge with an `https` URL of at most 2,048 bytes, a base64url token of 1–512 bytes, and one of four statuses.
     var validated: (url: String, token: String, status: Status)? {
         guard let url, ACMEInputRules.isAcceptableURL(url), let token, ACMEInputRules.isAcceptableToken(token),
               let status = status.flatMap(Status.init(rawValue:))
@@ -148,30 +148,30 @@ struct ACMEChallenge: Sendable, Equatable, Decodable {
     }
 }
 
-/// 요청 본문(JWS의 payload) JSON. 값은 모두 이 구현이 만든 것이라 이스케이프할 문자가 없다.
+/// The request body JSON (JWS payload). This implementation generates every value, so there are no characters to escape.
 enum ACMERequestBody {
-    /// 계정 찾기(RFC 8555 7.3.1).
+    /// Looks up the account (RFC 8555 7.3.1).
     static let findAccount = Array(#"{"onlyReturnExisting":true}"#.utf8)
-    /// 계정 만들기(RFC 8555 7.3). 연락처는 보내지 않는다(계약 1절 제외 표). Go는 디렉터리에 약관 URL이 있을 때만 이
-    /// 필드를 보내지만(`tempfork/acme/rfc8555.go:49-61`), 이 구현은 늘 보낸다: 약관이 없는 서버에는 뜻이 없는 필드다.
+    /// Creates an account (RFC 8555 7.3). No contact information is sent (contract §1 exclusions table). Go sends this field only when the
+    /// directory has a terms URL (`tempfork/acme/rfc8555.go:49-61`). This implementation always sends it because it has no meaning for servers without terms.
     static let createAccount = Array(#"{"termsOfServiceAgreed":true}"#.utf8)
-    /// challenge 응답(RFC 8555 7.5.1). DNS-01은 응답 필드가 없다.
+    /// A challenge response (RFC 8555 7.5.1). DNS-01 has no response fields.
     static let respondToChallenge = Array("{}".utf8)
-    /// POST-as-GET(RFC 8555 6.3): 빈 payload.
+    /// An empty payload for POST-as-GET (RFC 8555 6.3).
     static let postAsGet: [UInt8] = []
 
-    /// 주문(RFC 8555 7.4). 이름 검사를 통과한 이름은 소문자·숫자·`-`·`.`뿐이다.
+    /// An order (RFC 8555 7.4)`.` A validated name contains only lowercase letters, digits, hyphens, and periods.
     static func newOrder(_ domain: CertificateDomain) -> [UInt8] {
         Array(#"{"identifiers":[{"type":"dns","value":"\#(domain.name)"}]}"#.utf8)
     }
 
-    /// finalize(RFC 8555 7.4): CSR DER의 base64url.
+    /// A finalize payload (RFC 8555 7.4) containing the base64url-encoded CSR DER.
     static func finalize(_ csr: CertificateSigningRequest) -> [UInt8] {
         Array(#"{"csr":"\#(Base64URL.encode(csr.der))"}"#.utf8)
     }
 }
 
-/// 64KiB 이하의 JSON 본문을 읽는다. 넘거나 형식이 틀리면 nil.
+/// Reads a JSON body of up to 64KiB. Returns nil for oversized or malformed bodies.
 private func decodeJSON<T: Decodable>(_ type: T.Type, from body: [UInt8]) -> T? {
     guard body.count <= ACMEInputRules.maximumJSONByteCount else { return nil }
     return try? JSONDecoder().decode(type, from: Data(body))

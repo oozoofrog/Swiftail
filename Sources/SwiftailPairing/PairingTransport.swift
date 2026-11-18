@@ -3,19 +3,19 @@ import Network
 import Swiftail
 import SwiftailBase
 
-/// 들어오는 쪽이 짝 맺기 메시지를 주고받는 연결. 프로세스 안 노드의 연결과 OS 소켓, 두 가지가 있다.
+/// A connection the joiner uses to exchange pairing messages. It can be an in-process node connection or an OS socket.
 ///
-/// 실패를 가르지 않는다. 절차에는 "연결이 끝났다"만 뜻이 있고, 그 뜻은 상태 기계가 단계에 따라 정한다.
+/// Does not distinguish failure kinds. The protocol only cares that the connection ended, and the state machine interprets that based on its stage.
 protocol PairingTransport: Sendable {
-    /// 받은 바이트. 상대가 닫았거나, 연결이 실패했거나, 기다리던 Task가 취소되면 nil.
+    /// The received bytes. Returns nil if the peer closed, the connection failed, or the waiting Task was canceled.
     func receive() async -> [UInt8]?
-    /// 바이트를 보낸다. 실패는 다음 `receive()`가 알린다.
+    /// Sends bytes. The next `receive()` reports failure.
     func send(_ bytes: [UInt8]) async
-    /// 연결을 닫는다. 보낸 것은 먼저 나간다.
+    /// Closes the connection. Queued data goes out first.
     func close() async
 }
 
-/// 프로세스 안 노드의 tailnet 연결.
+/// A tailnet connection through an in-process node.
 struct TailnetPairingTransport: PairingTransport {
     let connection: TailnetConnection
 
@@ -32,12 +32,12 @@ struct TailnetPairingTransport: PairingTransport {
     }
 }
 
-/// OS 소켓(`NWConnection`)의 TCP 연결. 노드가 터널 확장에 있는 앱이 쓴다. 터널이 바이트를 tailnet으로 나른다.
+/// A TCP connection through an OS socket (`NWConnection`). Used by an app whose node is in a tunnel extension. The tunnel carries bytes to the tailnet.
 ///
-/// `NWConnection`은 콜백으로 알린다. 콜백마다 값 하나짜리 흐름으로 바꿔 기다린다. 기다리던 Task가 취소되면 흐름이 끝나
-/// 기다림이 풀리고, 늦게 온 콜백의 값은 버려진다(취소된 절차는 연결을 닫으므로 잃는 것이 없다). 버려지면 연결을 닫는다.
+/// `NWConnection` reports through callbacks. Converts each callback to a single-value stream and waits on it. Canceling the waiting Task ends the stream
+/// and unblocks the wait. Late callback values are discarded (the canceled protocol closes the connection, so nothing is lost). Deallocation closes the connection.
 final class SocketPairingTransport: PairingTransport {
-    /// 한 번에 읽는 양. 절차의 메시지는 모두 이보다 작다.
+    /// The amount read at a time. Every protocol message is smaller.
     private static let maximumReadLength = 4096
 
     private let connection: NWConnection
@@ -46,12 +46,12 @@ final class SocketPairingTransport: PairingTransport {
         self.connection = connection
     }
 
-    /// `host:port`로 거는 평문 TCP 연결. 이름은 OS가 푼다(터널이 연결돼 있으면 MagicDNS).
+    /// A plaintext TCP connection dialed to `host:port`. The OS resolves names (MagicDNS when the tunnel is connected).
     ///
     /// - Parameters:
-    ///   - isIPv4: 쓸 IP 판. 이 기기의 tailnet 주소와 같은 판으로만 건다(로컬 끝을 그 주소와 견줄 수 있게).
-    ///   - tunnelOnly: Wi-Fi·셀룰러·유선·루프백 인터페이스로 나가지 못하게 한다. 남는 것은 터널(utun) 같은 그 밖의
-    ///     인터페이스다. 터널이 꺼져 있으면 연결이 서지 않는다. 루프백으로 도는 시험만 끈다.
+    ///   - isIPv4: The IP version to use. Dial only with the same version as this device's tailnet address so the local endpoint can be compared with it.
+    ///   - tunnelOnly: Prevents the connection from using Wi-Fi, cellular, wired, or loopback interfaces. This leaves other interfaces
+    ///     such as the tunnel (utun). No connection is established if the tunnel is off. Only loopback tests turn this off.
     convenience init(host: String, port: NWEndpoint.Port, isIPv4: Bool, tunnelOnly: Bool) {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -69,10 +69,10 @@ final class SocketPairingTransport: PairingTransport {
         connection.cancel()
     }
 
-    /// 연결을 시작하고 준비될 때까지 기다린다. 준비됐으면 true.
+    /// Starts the connection and waits for readiness. Returns true when ready.
     ///
-    /// 거절이나 이름 풀이 실패에서 `NWConnection`은 `waiting`으로 머물며 스스로 다시 시도한다. 다시 걸기는 부르는 쪽이
-    /// 하므로(계약 동작 J1) 여기서는 실패로 본다.
+    /// On refusal or name resolution failure, `NWConnection` stays in `waiting` and retries on its own. The caller handles redialing
+    /// (contract behavior J1), so treat this as a failure here.
     func open() async -> Bool {
         let (states, continuation) = AsyncStream.makeStream(of: Bool.self)
         connection.stateUpdateHandler = { state in
@@ -92,7 +92,7 @@ final class SocketPairingTransport: PairingTransport {
         return isReady
     }
 
-    /// 준비된 연결의 두 끝(이쪽, 상대). IP 주소가 아니면 nil.
+    /// The two endpoints of the ready connection (local, remote), or nil if they are not IP addresses.
     var endpoints: (local: IPEndpoint, remote: IPEndpoint)? {
         guard let path = connection.currentPath, let local = path.localEndpoint.flatMap(Self.endpoint),
               let remote = path.remoteEndpoint.flatMap(Self.endpoint)

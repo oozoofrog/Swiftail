@@ -4,42 +4,42 @@ import Swiftail
 import SwiftailBase
 import SwiftailIO
 
-/// 짝 맺기의 들어오는 쪽. 받은 제안(`PairingOffer`)의 여는 쪽에 걸어 절차를 돌리고 짝(`PairedHost`)을 돌려준다.
+/// The pairing joiner. Dials the host in the received offer (`PairingOffer`), runs the protocol, and returns the paired host (`PairedHost`).
 ///
-/// 가장자리다. 절차의 판단은 입출력 없는 `PairingJoinerSession`이 하고, 여기서는 연결을 걸고(안 되면 다시 걸고), 기한을
-/// 재고, 취소를 본다. 분리된 Task는 없다: 호출한 Task를 취소하면 연결을 끊고 `cancelled`로 돌아온다(계약 동작 J7).
+/// This is the edge. `PairingJoinerSession` makes protocol decisions without I/O. This type dials and redials when necessary, tracks deadlines,
+/// and handles cancellation. There are no detached tasks. Canceling the calling Task closes the connection and returns `cancelled` (contract behavior J7).
 ///
-/// 방금 tailnet에 들어온 노드는 이름 풀이와 경로, 그리고 여는 쪽의 netmap에 자기가 오르는 데 시간이 걸린다. 그동안
-/// 여는 쪽은 모르는 상대의 연결을 읽지 않고 닫는다. 그래서 첫 `challenge`를 받을 때까지 60초 동안 1초 간격으로 다시
-/// 건다(J1). `challenge`를 받은 뒤에는 다시 걸지 않는다.
+/// A node that just joined the tailnet takes time to resolve names, get routes, and appear in the host's netmap. In the meantime, the
+/// host closes connections from unknown peers without reading them. Retry every 1 second for up to 60 seconds until the first
+/// `challenge` arrives (J1). Do not redial after receiving the challenge.
 ///
 /// ```swift
 /// let offer = try PairingOffer(link: scannedText)
-/// let host = try await PairingJoiner.pair(with: offer, deviceName: "거실 iPad", node: node) { code in
-///     Task { @MainActor in screen.show(confirmationCode: code) }   // 여는 쪽 화면의 숫자와 견준다
+/// let host = try await PairingJoiner.pair(with: offer, deviceName: "Living Room iPad", node: node) { code in
+///     Task { @MainActor in screen.show(confirmationCode: code) }   // Compare with the SAS on the host's screen
 /// }
 /// ```
 ///
-/// 계약 `docs/contracts/SwiftailPairing.md` 5절.
+/// See contract `docs/contracts/SwiftailPairing.md` §5.
 public enum PairingJoiner {
-    /// 첫 `challenge`를 받아야 하는 기한(J1).
+    /// The deadline for receiving the first `challenge` (J1).
     static let challengeWindow = Duration.seconds(60)
-    /// 다시 거는 간격(J1).
+    /// The redial interval (J1).
     static let redialInterval = Duration.seconds(1)
 
-    /// 프로세스 안 노드로 들어온다.
+    /// Joins using an in-process node.
     ///
-    /// 승인되면 `decision`이 알려 준 `StableID`가 연결 상대의 `whoIs`와 같은지도 본다(J6).
+    /// On approval, also checks that the `StableID` in `decision` matches `whoIs` for the connected peer (J6).
     ///
     /// - Parameters:
-    ///   - offer: 링크나 QR에서 읽은 제안.
-    ///   - deviceName: 여는 쪽의 승인 화면에 보일 이 기기의 이름. 1~64바이트이고 제어·서식 문자가 없어야 한다.
-    ///   - node: 돌고 있는 `.inProcess` 노드. 제안에 인증 키가 있었으면 그 키로 띄운 노드다.
-    ///   - awaitingApproval: 여는 쪽이 확인된 뒤 한 번 불린다. 받은 확인 숫자를 화면에 보인다.
-    /// - Throws: `PairingError`. 기기 이름이나 노드의 장치가 맞지 않으면 `invalidConfiguration`, 60초 안에 닿지 못하면
-    ///   `unreachable`, 제안이 없거나 만료됐거나 비밀이 틀리면 `rejected`, 여는 쪽을 확인하지 못하면
-    ///   `hostNotVerified`, 거절이면 `denied`, 승인이 130초 안에 오지 않으면 `timedOut`, 절차와 다른 바이트면
-    ///   `protocolViolation`, 호출한 Task가 취소되면 `cancelled`.
+    ///   - offer: The offer read from a link or QR code.
+    ///   - deviceName: This device's name as shown on the host's approval screen. Must be 1–64 bytes with no control or format characters.
+    ///   - node: A running `.inProcess` node. If the offer included an auth key, this node was started with that key.
+    ///   - awaitingApproval: Called once after the host has been verified. Display the supplied SAS on screen.
+    /// - Throws: `PairingError`. `invalidConfiguration` for an invalid device name or node device, unreachable if the host cannot be reached within 60 seconds,
+    ///   `rejected` if the offer is absent or expired or the secret is wrong, hostNotVerified if the host could not be verified,
+    ///   `denied` if approval was denied, `timedOut` if approval did not arrive within 130 seconds, protocolViolation for bytes outside the protocol,
+    ///   or `cancelled` if the calling Task was canceled.
     public static func pair(
         with offer: PairingOffer, deviceName: String, node: TailnetNode,
         awaitingApproval: @escaping @Sendable (_ confirmationCode: String) -> Void = { _ in }
@@ -51,9 +51,9 @@ public enum PairingJoiner {
                     TailnetPairingTransport(connection: connection),
                     PairingEndpoints(joiner: connection.localEndpoint, host: connection.remoteEndpoint))
             } catch {
-                // 노드가 아직 돌지 않거나 여는 쪽이 netmap에 없는 것은 기다리면 풀린다. 설정이 틀린 것은 풀리지 않는다.
+                // Waiting can resolve a node that has not started or a host absent from the netmap. An invalid configuration persists.
                 if case .invalidConfiguration = error {
-                    return .failed(.invalidConfiguration("노드로 걸 수 없다(.inProcess 장치와 0이 아닌 포트가 필요하다)"))
+                    return .failed(.invalidConfiguration("Could not dial through the node (requires an .inProcess device and a nonzero port)"))
                 }
                 return .unreachable
             }
@@ -62,18 +62,18 @@ public enum PairingJoiner {
         }
     }
 
-    /// OS 소켓으로 들어온다. 노드가 터널 확장에 있는 앱이 터널이 연결된 뒤에 부른다.
+    /// Joins using an OS socket. An app whose node is in a tunnel extension calls this after the tunnel connects.
     ///
-    /// 이름은 OS가 푼다(터널의 MagicDNS). 라이브러리는 이 연결이 터널로 나갔는지 직접 볼 수 없으므로, 앱이 넘긴 이 기기의
-    /// tailnet 주소와 견준다: 연결은 그 주소와 같은 IP 판으로, Wi-Fi·셀룰러·유선·루프백이 아닌 인터페이스로만 걸고,
-    /// 준비된 연결의 로컬 끝이 그 주소가 아니거나 원격 끝이 tailnet 대역 밖이면 아무것도 보내지 않고 `notOnTailnet`으로
-    /// 끝난다(J2). 이 길에서는 짝이 된 뒤의 연결에서 상대가 그 짝인지 라이브러리로 확인할 수 없다.
+    /// The OS resolves the name (the tunnel's MagicDNS). The library cannot directly observe whether this connection used the tunnel, so it checks this
+    /// device's tailnet address supplied by the app. It dials only using the same IP version as that address and only through interfaces other than Wi-Fi,
+    /// cellular, wired, or loopback. If the ready connection's local endpoint differs from that address or its remote endpoint falls outside the tailnet range,
+    /// it ends with notOnTailnet without sending anything (J2). The library cannot identify the paired peer on subsequent connections through this path.
     ///
-    /// - Parameter localAddress: 이 기기의 tailnet 주소(`100.64.0.1`). 터널 확장이 노드의 `status.addresses`에서 읽어
-    ///   앱에 넘긴 값이어야 한다. IPv4-mapped IPv6는 IPv4로 바꿔 쓴다. OS의 인터페이스 목록에서 짐작한 값을 넣으면
-    ///   이 검사가 뜻을 잃는다.
-    /// - Throws: 위 `pair(with:deviceName:node:awaitingApproval:)`의 것과, `localAddress`가 tailnet 대역 밖이면
-    ///   `invalidConfiguration`, 연결이 터널을 거친 것이 아니면 `notOnTailnet`.
+    /// - Parameter localAddress: This device's tailnet address (`100.64.0.1`). The tunnel extension must read it from the node's `status.addresses` and pass
+    ///   it to the app. Converts IPv4-mapped IPv6 to IPv4. Guessing the value from the OS interface list defeats
+    ///   this check.
+    /// - Throws: The errors from `pair(with:deviceName:node:awaitingApproval:)`, plus invalidConfiguration if `localAddress` is outside the tailnet range,
+    ///   or `notOnTailnet` if the connection did not traverse the tunnel.
     public static func pair(
         with offer: PairingOffer, deviceName: String, localAddress: SwiftailBase.IPAddress,
         awaitingApproval: @escaping @Sendable (_ confirmationCode: String) -> Void = { _ in }
@@ -83,8 +83,8 @@ public enum PairingJoiner {
             awaitingApproval: awaitingApproval)
     }
 
-    /// OS 소켓으로 들어온다. `requiringTunnel`은 루프백으로 도는 시험만 끈다(공개하지 않는다): 끄면 대역 검사와
-    /// 인터페이스 금지를 하지 않는다. 로컬 끝이 `localAddress`인지는 꺼도 본다.
+    /// Joins using an OS socket. Only loopback tests turn off `requiringTunnel` (which is internal). Turning it off skips the range check and
+    /// interface restrictions. The local endpoint must still match `localAddress`.
     static func pair(
         with offer: PairingOffer, deviceName: String, localAddress suppliedAddress: SwiftailBase.IPAddress,
         requiringTunnel: Bool,
@@ -92,11 +92,11 @@ public enum PairingJoiner {
     ) async throws(PairingError) -> PairedHost {
         let localAddress = suppliedAddress.unmappedIPv4
         guard !requiringTunnel || localAddress.isTailscaleAddress else {
-            throw .invalidConfiguration("localAddress는 이 기기의 tailnet 주소여야 한다")
+            throw .invalidConfiguration("localAddress must be this device's tailnet address")
         }
         return try await join(offer, deviceName: deviceName, awaitingApproval: awaitingApproval) {
             guard let port = NWEndpoint.Port(rawValue: offer.port), port.rawValue != 0 else {
-                return .failed(.invalidConfiguration("포트는 0이 아니어야 한다"))
+                return .failed(.invalidConfiguration("The port must be nonzero"))
             }
             let transport = SocketPairingTransport(
                 host: offer.host, port: port, isIPv4: localAddress.isIPv4, tunnelOnly: requiringTunnel)
@@ -114,22 +114,22 @@ public enum PairingJoiner {
         }
     }
 
-    // MARK: 절차
+    // MARK: Protocol
 
-    /// 한 번 걸어 본 결과.
+    /// The result of one dial attempt.
     enum Dialed: Sendable {
         case connected(any PairingTransport, PairingEndpoints)
-        /// 이번에는 닿지 못했다. 기한이 남았으면 다시 건다.
+        /// The peer was unreachable this time. Redial if time remains.
         case unreachable
-        /// 다시 걸어도 소용없다.
+        /// Redialing will not help.
         case failed(PairingError)
     }
 
-    /// 걸고, 닿지 못하면 기한 안에서 다시 걸고, 닿은 연결에서 절차를 끝까지 돌린다.
+    /// Dials the peer, redials before the deadline if unreachable, and runs the protocol to completion on the established connection.
     ///
     /// - Parameters:
-    ///   - dial: 연결 하나를 건다.
-    ///   - verifyHost: 승인된 `StableID`가 그 연결의 상대 것인지 본다(J6).
+    ///   - dial: Dials one connection.
+    ///   - verifyHost: Checks whether the approved `StableID` belongs to the connected peer (J6).
     static func join(
         _ offer: PairingOffer, deviceName: String,
         awaitingApproval: @escaping @Sendable (String) -> Void,
@@ -137,7 +137,7 @@ public enum PairingJoiner {
         verifyHost: @escaping @Sendable (_ stableID: String, PairingEndpoints) async -> Bool = { _, _ in true }
     ) async throws(PairingError) -> PairedHost {
         guard let deviceName = DeviceName(deviceName) else {
-            throw .invalidConfiguration("기기 이름은 1~64바이트이고 제어·서식 문자가 없어야 한다")
+            throw .invalidConfiguration("The device name must be 1–64 bytes with no control or format characters")
         }
         let challengeDeadline = ContinuousClock.now + challengeWindow
         while true {
@@ -156,14 +156,14 @@ public enum PairingJoiner {
         }
     }
 
-    /// 연결 하나로 해 본다. `challenge`를 받기 전에 끝나면 `unreachable`이다.
+    /// Attempts pairing over one connection. Returns `unreachable` if the connection ends before receiving `challenge`.
     private static func attempt(
         _ offer: PairingOffer, deviceName: DeviceName, challengeDeadline: ContinuousClock.Instant,
         awaitingApproval: @Sendable (String) -> Void,
         dial: @escaping @Sendable () async -> Dialed,
         verifyHost: @Sendable (String, PairingEndpoints) async -> Bool
     ) async throws(PairingError) -> PairingJoinerSession.Approval {
-        // 걸기도 기한 안에서만 기다린다(답 없는 SYN은 247초까지 간다).
+        // Dialing also waits only until the deadline (an unanswered SYN can take up to 247 seconds).
         let dialed = try? await withTimeout(ContinuousClock.now.duration(to: challengeDeadline), dial)
         guard case .connected(let transport, let endpoints) = dialed else {
             if Task.isCancelled { throw .cancelled }
@@ -192,7 +192,7 @@ public enum PairingJoiner {
                     throw error
                 }
             }
-            // 끝나지 않은 절차에는 늘 기한이 있다.
+            // A protocol in progress always has a deadline.
             guard !Task.isCancelled, let deadline = session.deadline else {
                 await transport.close()
                 throw .cancelled
@@ -201,7 +201,7 @@ public enum PairingJoiner {
                 let received = try await withTimeout(ContinuousClock.now.duration(to: deadline)) {
                     await transport.receive()
                 }
-                // 취소로 풀린 읽기는 끊김이 아니다. 위에서 `cancelled`로 끝낸다.
+                // A read unblocked by cancellation does not indicate a disconnect. The preceding check ends the attempt with `cancelled`.
                 actions = Task.isCancelled ? [] : received.map { session.receive($0, at: .now) }
                     ?? session.connectionEnded()
             } catch {

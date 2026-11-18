@@ -5,19 +5,19 @@ import Swiftail
 import SwiftailControl
 import Synchronization
 
-/// 노드 자신의 ts.net 이름에 대한 인증서를 받아 두고, 만료 전에 갱신한다. tsnet `CertPair`·`GetCertificate`.
+/// Obtains a certificate for the node's own ts.net name and renews it before expiration. Corresponds to tsnet `CertPair` and `GetCertificate`.
 ///
-/// 저장은 노드의 상태 디렉터리 아래 `certs/`에 한다. 다시 시작하면 저장된 것을 검증해 다시 쓴다.
+/// Stores certificates in `certs/` under the node's state directory. Verifies and reuses the stored certificate on restart.
 ///
-/// 가장자리 actor다. 판단은 값 타입이 한다: 주문 절차는 `ACMEOrderFlow`, 언제 시도할지는 `RenewalSchedule`, 사슬의
-/// 검증은 `VerifiedCertificate`. 관리자는 노드의 사실, 시계, 깨우기, 디스크, ACME 전송을 그것들에 잇는다.
+/// An actor at the edge. Value types make decisions: `ACMEOrderFlow` handles the order flow, `RenewalSchedule` determines when to attempt issuance,
+/// and `VerifiedCertificate` verifies the chain. The manager connects node facts, the clock, wakeups, disk, and ACME transport to them.
 ///
-/// 한 노드에 관리자를 둘 만들지 않는다. 같은 `certs/`를 두 관리자나 두 프로세스가 함께 쓰는 것은 막지 못한다(Go의
-/// 잠금도 프로세스 사이의 파일 잠금이 아니다. 동작 C9).
+/// Create one manager per node. Sharing the same `certs/` across two managers or processes cannot be prevented (Go's lock is also
+/// not a cross-process file lock, behavior C9).
 public actor CertificateManager {
-    /// 제어 서버에 TXT 레코드를 올린다(`TailnetNode.setDNS(name:value:)`).
+    /// Publishes a TXT record on the control server (`TailnetNode.setDNS(name:value:)`).
     typealias SetDNS = @Sendable (_ name: String, _ value: String) async throws(ControlError) -> Void
-    /// 그 시각까지 기다린다. 취소되면 `CancellationError`.
+    /// Waits until the given time. Throws `CancellationError` if canceled.
     typealias Sleep = @Sendable (_ until: Date) async throws(CancellationError) -> Void
 
     private static let log = Logger(subsystem: "Swiftail", category: "certificates")
@@ -37,27 +37,27 @@ public actor CertificateManager {
     private let wake = WakeSignal()
 
     private var hasStarted = false
-    /// 마지막으로 받은 노드의 사실. 첫 사실 전이면 nil.
+    /// The most recently received node facts, or nil before the first facts arrive.
     private var latestFacts: CertificateFacts?
-    /// 사실이 바뀐 횟수. 발급이 도는 동안 바뀌었는지를 본다.
+    /// The number of changes to the facts. Used to detect changes during issuance.
     private var factsGeneration = 0
     private var schedule = RenewalSchedule()
-    /// 지금 쥐고 낸 인증서.
+    /// The certificate currently held and emitted.
     private var held: VerifiedCertificate?
-    /// `certs/`에서 저장된 인증서를 찾아본 이름. 이름마다 한 번만 읽는다.
+    /// The name already looked up in `certs/` for a stored certificate. Reads once per name.
     private var loadedDomain: CertificateDomain?
-    /// 계정 키와 계정 URL(`kid`)은 메모리에만 둔다(동작 C4). Go도 계정 URL을 저장하지 않는다(노트 3.7).
-    // shortcut: 계정 URL을 저장하지 않으므로 `run()`마다 계정 찾기 요청 하나가 더 나간다. 요청 하나를 아껴야 할 때 다시 본다.
+    /// The account key and account URL (`kid`) stay in memory only (behavior C4). Go also does not persist the account URL (notes §3.7).
+    // shortcut: Keeping the account URL out of storage adds one account lookup request per `run()`. Revisit if that request needs to be saved.
     private var accountKey: P256.Signing.PrivateKey?
     private var accountURL: String?
     private var isIssuing = false
-    /// 동작 C1의 조건이 맞지 않는 까닭. 조건이 맞으면 nil.
+    /// The reason behavior C1's conditions are unmet, or nil when they are met.
     private var conditionFailure: CertificateFailure?
-    /// 마지막 발급 시도의 실패. 성공하면 nil.
+    /// The last issuance attempt's failure, or nil after success.
     private var attemptFailure: CertificateFailure?
     private var nextAttempt: Date?
 
-    /// - Throws: 디렉터리 URL이 `https`가 아니거나 `trustAnchors`가 빈 목록이면 `invalidConfiguration`.
+    /// - Throws: `invalidConfiguration` for a directory URL with a scheme other than `https` or an empty `trustAnchors` list.
     public init(node: TailnetNode, configuration: CertificateConfiguration = CertificateConfiguration()) throws(CertificateError) {
         try self.init(
             facts: node.certificateFacts,
@@ -68,15 +68,15 @@ public actor CertificateManager {
         )
     }
 
-    /// 노드 없이 접점을 직접 받는다. 공개 init이 노드에서 꺼낸 넷(사실의 흐름, `setDNS`, 상태 디렉터리, 운영 전송)을
-    /// 넘기고, 시험은 가짜 전송과 넘기는 시계로 돈다. 공개 옵션이 아니다.
+    /// Takes dependencies directly without a node. The public initializer passes four values from the node (the facts stream, `setDNS`, the state
+    /// directory, and production transport), and tests use a fake transport and an advancing clock. This is internal.
     ///
     /// - Parameters:
-    ///   - anchors: 받은 사슬과 저장된 사슬을 검증할 루트(동작 X3). nil이면 `configuration.trustAnchors`를 따른다
-    ///     (그것도 nil이면 `.system`).
-    ///   - now: 벽시계(동작 R6).
-    ///   - sleep: 기다림. 재시도·갱신 시각과 주문 절차의 기다림에 쓴다.
-    ///   - makeCertificateKey: 시도마다 새 인증서 키를 만든다(동작 C7, RFC 8555 11.1).
+    ///   - anchors: Roots for verifying received and stored chains (behavior X3). If nil, uses `configuration.trustAnchors`
+    ///     (or `.system` if that is also nil).
+    ///   - now: The wall clock (behavior R6).
+    ///   - sleep: Waits for retry and renewal times and during the order flow.
+    ///   - makeCertificateKey: Creates a fresh certificate key for each attempt (behavior C7, RFC 8555 11.1).
     init(
         facts: AsyncStream<CertificateFacts>,
         setDNS: @escaping SetDNS,
@@ -90,10 +90,10 @@ public actor CertificateManager {
     ) throws(CertificateError) {
         let directoryURL = configuration.directoryURL.absoluteString
         guard ACMEInputRules.isAcceptableURL(directoryURL) else {
-            throw .invalidConfiguration("ACME 디렉터리 URL은 2,048바이트 이하의 https URL이어야 한다")
+            throw .invalidConfiguration("The ACME directory URL must be an https URL of at most 2,048 bytes")
         }
         if let configured = configuration.trustAnchors, configured.isEmpty {
-            throw .invalidConfiguration("신뢰 앵커 목록이 비었다")
+            throw .invalidConfiguration("The trust anchor list is empty")
         }
         self.facts = facts
         self.setDNS = setDNS
@@ -107,22 +107,22 @@ public actor CertificateManager {
         (certificateStream, certificateContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
-    // MARK: - 공개 API
+    // MARK: - Public API
 
-    /// 인증서를 받고 갱신하는 일을 한다. `node.run()`과 같은 Task 묶음에서 돌린다. 취소될 때까지 돈다.
+    /// Obtains and renews certificates. Run it in the same Task group as `node.run()`. Runs until canceled.
     ///
-    /// 발급의 실패는 던지지 않고 `status`에 적는다. 사용자가 tailnet 설정을 고쳐야 하는 실패(MagicDNS·HTTPS가 꺼짐,
-    /// 이름이 cert 도메인에 없음)는 netmap이 바뀌거나 `retryNow()`가 불릴 때까지 기다리고, 그 밖의 실패(ACME 서버의
-    /// 거절, 연결 끊김)는 물러났다가 다시 시도한다(동작 R4). 다시 돌려도 소용없는 실패(`CertificateError`)만 던진다.
+    /// Records issuance failures in `status` without throwing. If the user must fix tailnet settings (disabled MagicDNS or HTTPS, or a name
+    /// absent from the cert domains), it waits for a netmap change or a call to `retryNow()`. For other failures (ACME server rejection or a
+    /// lost connection), it backs off and retries (behavior R4). Only failures that restarting would not resolve (`CertificateError`) are thrown.
     ///
-    /// 돌아오면(취소, 던짐) `certificates`도 끝난다.
+    /// The `certificates` stream ends when this call returns after cancellation or an error.
     public func run() async throws(CertificateError) {
-        guard !hasStarted else { throw .invalidConfiguration("run()은 한 번만 부를 수 있다") }
+        guard !hasStarted else { throw .invalidConfiguration("run() can only be called once") }
         hasStarted = true
         defer { certificateContinuation.finish() }
         let facts = self.facts
         let outcome = await withTaskGroup(of: Void.self, returning: Result<Void, CertificateError>.self) { group in
-            // 노드의 사실을 받는 일은 같은 묶음의 자식이다. `run()`을 부른 Task가 취소되면 함께 멈춘다.
+            // Receive node facts in a child of the same group, so cancellation of the Task that calls `run()` also stops reception.
             group.addTask {
                 for await value in facts {
                     await self.receive(value)
@@ -136,11 +136,11 @@ public actor CertificateManager {
         try outcome.get()
     }
 
-    /// 지금 쓸 인증서와, 갱신될 때마다 새 인증서. 저장된 것이 유효하면 그것부터 낸다. 한 Task만 돌 수 있다.
-    /// 받아 가지 않은 것이 있으면 가장 새것 하나만 남는다.
+    /// The current certificate and each new certificate upon renewal. Emits the stored certificate first if valid. Only one Task can consume the stream.
+    /// Keeps only the newest unread certificate.
     public nonisolated var certificates: AsyncStream<TailnetCertificate> { certificateStream }
 
-    /// 지금의 모습: 쥔 인증서의 만료 시각, 마지막 실패, 다음 시도 시각.
+    /// The current status, including the held certificate's expiration time, the last failure, and the next attempt time.
     public var status: CertificateStatus {
         CertificateStatus(
             domain: latestFacts?.fqdn,
@@ -150,17 +150,17 @@ public actor CertificateManager {
         )
     }
 
-    /// 물러나 기다리는 중이거나 조건을 기다리는 중이면 기다림을 끝내고 곧바로 다시 본다. 사용자가 tailnet 설정을 고친 뒤
-    /// 누르는 "지금 다시 시도"다. 발급이 돌고 있거나, ACME 서버가 `Retry-After`로 알려 준 시각(속도 제한 `rateLimited`
-    /// 포함) 전이면 아무 일도 하지 않는다. 그 시각 전에는 그 서버에 요청을 보내지 않는다(동작 X5).
+    /// Ends any backoff or wait for conditions and checks again immediately. This handles the user's "Retry Now" action after fixing tailnet settings.
+    /// Does nothing while issuance is in progress or before the ACME server's `Retry-After` time (including `rateLimited`).
+    /// No requests go to that server before that time (behavior X5).
     public func retryNow() {
         guard !isIssuing, schedule.retryNow(at: now()) else { return }
         wake.signal()
     }
 
-    // MARK: - 한 흐름(동작 C9)
+    // MARK: - Single Flow (behavior C9)
 
-    /// 판정하고, 기다리거나 발급하기를 취소될 때까지 되풀이한다. 발급은 이 흐름 안에서만 차례로 돈다.
+    /// Repeatedly decides, then waits or issues until canceled. Issuance runs sequentially within this flow alone.
     private func manage() async -> Result<Void, CertificateError> {
         while !Task.isCancelled {
             do {
@@ -171,7 +171,7 @@ public actor CertificateManager {
                     try await issue(for: domain)
                 }
             } catch {
-                Self.log.error("인증서 관리를 멈춘다: \(Self.kind(of: error), privacy: .public)")
+                Self.log.error("Stopping certificate management: \(Self.kind(of: error), privacy: .public)")
                 return .failure(error)
             }
         }
@@ -179,19 +179,19 @@ public actor CertificateManager {
     }
 
     private enum Plan {
-        /// 이 시각까지(nil이면 사실이 바뀌거나 `retryNow()`까지) 기다린다.
+        /// Waits until this time, or until facts change or `retryNow()` is called if nil.
         case wait(until: Date?)
         case issue(CertificateDomain)
     }
 
-    /// 깨어날 때마다(동작 R3) 지금의 사실·쥔 인증서·실패 기록으로 할 일을 정한다. 요청은 보내지 않는다.
+    /// Chooses an action on each wake (behavior R3) from the current facts, held certificate, and failure record. Sends no requests.
     private func plan(at now: Date) throws(CertificateError) -> Plan {
         guard let facts = latestFacts else { return .wait(until: nil) }
         let domain: CertificateDomain
         switch Self.eligibility(of: facts) {
         case .blocked(let failure):
             if failure != conditionFailure {
-                Self.log.notice("인증서 조건이 맞지 않는다: \(Self.kind(of: failure), privacy: .public). 조건이 바뀔 때까지 기다린다")
+                Self.log.notice("Certificate prerequisites are unmet: \(Self.kind(of: failure), privacy: .public). Waiting for conditions to change")
             }
             conditionFailure = failure
             nextAttempt = nil
@@ -201,12 +201,12 @@ public actor CertificateManager {
         }
         conditionFailure = nil
 
-        // 동작 C3: 이름마다 한 번 저장된 것을 읽는다.
-        // shortcut: 이름이 바뀌어도 옛 이름의 파일은 지우지 않는다(동작 S4). 이름이 자주 바뀌는 사용처가 생기면 다시 본다.
+        // Behavior C3: Read the stored certificate once per name.
+        // shortcut: Keep files for the old name after a name change (behavior S4). Revisit if an adopter changes names frequently.
         if loadedDomain != domain {
             loadedDomain = domain
             if held?.lifetime.domain != domain, let stored = try loadStoredCertificate(for: domain, at: now) {
-                Self.log.info("저장된 인증서를 쓴다. 만료 \(Self.format(stored.lifetime.notAfter), privacy: .public)")
+                Self.log.info("Using the stored certificate. Expires \(Self.format(stored.lifetime.notAfter), privacy: .public)")
                 adopt(stored)
             }
         }
@@ -223,7 +223,7 @@ public actor CertificateManager {
         }
     }
 
-    /// 사실이 바뀌거나, `retryNow()`가 불리거나, 그 시각이 될 때 가운데 먼저 오는 것까지 기다린다.
+    /// Waits until facts change, `retryNow()` is called, or the specified time arrives, whichever comes first.
     private func waitForWake(until deadline: Date?) async {
         let wake = self.wake
         let sleep = self.sleep
@@ -237,13 +237,13 @@ public actor CertificateManager {
         }
     }
 
-    /// 발급을 한 번 시도한다(동작 C4~C8). 실패는 `schedule`과 `status`에 적고 던지지 않는다.
+    /// Attempts issuance once (behaviors C4–C8). Records failures in `schedule` and `status` without throwing.
     ///
-    /// 도는 동안 사실이 바뀌어도(이름이 바뀜, 노드가 멈춤) 그 시도를 끊지 않는다. 계약이 끊으라고 정하지 않았고(동작 C9는
-    /// 사실의 변화가 기다림만 깨운다고 한다) 시도는 5분 기한(동작 C10) 안에 끝난다. 바뀐 사실은 다음 판정이 본다.
+    /// Continues the attempt even if facts change mid-flight (the name changes or the node stops). The contract calls for fact changes to wake
+    /// only a wait (behavior C9), and an attempt finishes within the 5-minute deadline (behavior C10). The next decision sees the changed facts.
     ///
-    /// - Throws: 계정 키를 읽지 못함(`accountKeyUnreadable`), `certs/`의 실패(`storage`). 취소되면 아무것도 적지 않고
-    ///   돌아온다.
+    /// - Throws: `accountKeyUnreadable` if the account key cannot be read or `storage` on a `certs/` failure. On cancellation, returns without
+    ///   recording anything.
     private func issue(for domain: CertificateDomain) async throws(CertificateError) {
         isIssuing = true
         nextAttempt = nil
@@ -256,7 +256,7 @@ public actor CertificateManager {
             certificateKey: certificateKey
         )
         let setDNS = self.setDNS
-        Self.log.info("인증서 발급을 시작한다")
+        Self.log.info("Starting certificate issuance")
         let result: ACMEIssuanceResult
         do {
             result = try await issueCertificate(with: flow, transport: transport, now: now, sleep: sleep) { name, value in
@@ -285,7 +285,7 @@ public actor CertificateManager {
                 recordFailure(.invalidCertificate, retryAfter: nil, at: finishedAt)
                 break
             }
-            // 동작 C8: 검증을 통과한 것만 저장하고, 저장한 뒤에 낸다.
+            // Behavior C8: Store only verified certificates and emit them after storing.
             do {
                 try store.save(verified)
             } catch {
@@ -293,17 +293,17 @@ public actor CertificateManager {
             }
             schedule.recordSuccess()
             attemptFailure = nil
-            // 도는 동안 이름이 바뀌었으면 받은 것은 저장만 하고 내지 않는다. 지금 이름의 것이 아닌 인증서가 앱의 TLS 신원이
-            // 되지 않게 한다. 다음 판정이 지금 이름으로 디스크를 읽거나 새로 발급한다.
+            // If the name changed during issuance, store the certificate without emitting it. This keeps a certificate for a different name from becoming
+            // the app's TLS identity. The next decision reads from disk or issues a new certificate for the current name.
             if let facts = latestFacts, Self.eligibility(of: facts) == .eligible(domain) {
                 adopt(verified)
             }
-            Self.log.info("인증서를 받았다. 만료 \(Self.format(verified.lifetime.notAfter), privacy: .public)")
+            Self.log.info("Received the certificate. Expires \(Self.format(verified.lifetime.notAfter), privacy: .public)")
         case .failed(let failure, let retryNotBefore, let url):
             if let url { accountURL = url }
             recordFailure(failure, retryAfter: retryNotBefore, at: finishedAt)
         }
-        // 도는 동안 사실이 바뀌었으면, 그 시도의 실패가 세운 조건 기다림은 이미 지난 조건에 대한 것이다.
+        // If facts changed during issuance, any wait for conditions set by that attempt's failure is for conditions that have already passed.
         if factsGeneration != generation {
             schedule.conditionsChanged()
         }
@@ -315,9 +315,9 @@ public actor CertificateManager {
         schedule.recordFailure(kind, retryAfter: [retryAfter, serverDate].compactMap { $0 }.max(), at: date)
         if let next = [schedule.backoffUntil, schedule.serverRetryAfter].compactMap({ $0 }).max(), !schedule.isAwaitingChange {
             let seconds = Int(next.timeIntervalSince(date).rounded(.up))
-            Self.log.notice("인증서 발급 실패: \(Self.kind(of: failure), privacy: .public). \(seconds)초 뒤에 다시 시도한다")
+            Self.log.notice("Certificate issuance failed: \(Self.kind(of: failure), privacy: .public). Retrying in \(seconds) seconds")
         } else {
-            Self.log.notice("인증서 발급 실패: \(Self.kind(of: failure), privacy: .public). 조건이 바뀔 때까지 기다린다")
+            Self.log.notice("Certificate issuance failed: \(Self.kind(of: failure), privacy: .public). Waiting for conditions to change")
         }
     }
 
@@ -326,9 +326,9 @@ public actor CertificateManager {
         certificateContinuation.yield(TailnetCertificate(certificate))
     }
 
-    // MARK: - 디스크
+    // MARK: - Disk
 
-    /// 계정 키(동작 C4): 파일이 없을 때만 새로 만들어 저장한 뒤에 쓴다. 이 흐름 안에서만 불리므로 둘이 겹치지 않는다.
+    /// Creates and stores a new account key only when the file is missing, then uses it (behavior C4). Calls occur only in this flow, so two cannot overlap.
     private func loadAccountKey() throws(CertificateError) -> P256.Signing.PrivateKey {
         if let accountKey { return accountKey }
         let key: P256.Signing.PrivateKey
@@ -354,7 +354,7 @@ public actor CertificateManager {
         }
     }
 
-    // MARK: - 사실과 깨우기
+    // MARK: - Facts and Wakeups
 
     private func receive(_ facts: CertificateFacts) {
         guard facts != latestFacts else { return }
@@ -364,15 +364,15 @@ public actor CertificateManager {
         wake.signal()
     }
 
-    /// 노드의 `run()`이 끝나 사실의 흐름이 끝났다. 노드가 멈춘 것으로 보고 취소를 기다린다.
+    /// The facts stream ended because the node's `run()` ended. Treat the node as stopped and wait for cancellation.
     private func factsEnded() {
         let last = latestFacts
         receive(CertificateFacts(isRunning: false, fqdn: last?.fqdn, certDomains: last?.certDomains ?? [], isMagicDNSEnabled: last?.isMagicDNSEnabled ?? false))
     }
 
-    // MARK: - 값 함수
+    // MARK: - Value Functions
 
-    /// 동작 C1의 네 조건과 C2의 이름 검사를 차례로 본 결과.
+    /// The result of checking behavior C1's four conditions and C2's name check in order.
     enum Eligibility: Equatable {
         case eligible(CertificateDomain)
         case blocked(CertificateFailure)
@@ -388,17 +388,17 @@ public actor CertificateManager {
         return .eligible(domain)
     }
 
-    /// 제어 서버의 실패(`set-dns`)를 발급 실패로 옮긴다. 연관 문자열은 고정 문구다(동작 K3).
+    /// Maps control server `set-dns` failures to issuance failures. Associated strings are fixed text (behavior K3).
     static func failure(for error: ControlError) -> CertificateFailure {
         switch error {
         case .http(let status): .controlRejected(status: status)
         case .invalidConfiguration: .domainNotAllowed
         case .connection, .storage, .authKeyRejected, .registrationRejected, .nodeKeyExpired:
-            .network("제어 서버에 닿지 못했다")
+            .network("Could not reach the control server")
         }
     }
 
-    /// 발급 실패를 동작 R4 표의 줄로 옮긴다. 속도 제한이 알려 준 시각도 함께 낸다.
+    /// Maps an issuance failure to a row of the behavior R4 table. Also returns any time supplied by the rate limit.
     static func renewalFailure(for failure: CertificateFailure) -> (RenewalFailure, retryAfter: Date?) {
         switch failure {
         case .magicDNSDisabled, .httpsNotEnabled, .domainNotAllowed: (.needsUserAction, nil)
@@ -411,7 +411,7 @@ public actor CertificateManager {
         }
     }
 
-    /// 로그에 남기는 실패의 종류. 연관 문자열(`type`의 URI, 진단 문구)은 싣지 않는다(동작 K2).
+    /// The failure kind to log. Omits associated strings (the `type` URI and diagnostic wording, behavior K2).
     static func kind(of failure: CertificateFailure) -> String {
         switch failure {
         case .nodeNotRunning: "nodeNotRunning"
@@ -443,7 +443,7 @@ public actor CertificateManager {
     }
 }
 
-/// 계정 키와 계정 URL을 쥐므로 아무것도 드러내지 않는다(동작 K1).
+/// Exposes nothing because it holds the account key and account URL (behavior K1).
 extension CertificateManager: CustomStringConvertible, CustomReflectable {
     public nonisolated var description: String { "CertificateManager" }
 
@@ -452,10 +452,10 @@ extension CertificateManager: CustomStringConvertible, CustomReflectable {
     }
 }
 
-/// 관리자의 기다림을 깨우는 신호. 기다리는 쪽이 없을 때 온 신호는 하나만 남겨 다음 기다림이 곧바로 끝나게 한다(놓치는
-/// 깨움이 없게). 기다리는 Task가 취소되면 기다림이 끝난다.
+/// A signal that wakes the manager. When nobody is waiting, retains a single signal so the next wait ends immediately and wakeups are
+/// never lost. Cancellation of the waiting Task also ends the wait.
 ///
-/// actor가 아니라 잠금으로 지킨다: 취소 처리기는 동기 함수라 actor로 건너가려면 새 Task가 필요하기 때문이다.
+/// A lock protects the signal because the cancellation handler is synchronous, so crossing into an actor would require a new Task.
 private final class WakeSignal: Sendable {
     private struct State {
         var isPending = false

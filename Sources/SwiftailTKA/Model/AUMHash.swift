@@ -1,30 +1,30 @@
-// AUM의 해시와 그 텍스트 표기. 노트 `docs/protocol-notes/tailnet-lock.md` 3.7·3.8, Go `tailscale.com/tka/aum.go:21-51`.
+// An AUM hash and its text representation. Notes `docs/protocol-notes/tailnet-lock.md` §§3.7 and 3.8, Go `tailscale.com/tka/aum.go:21-51`.
 // Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
 import SwiftailCrypto
 
-/// AUM의 해시 32바이트(Go `tka.AUMHash`): 정준 AUM 바이트의 BLAKE2s-256이다(동작 E5).
+/// A 32-byte AUM hash (Go `tka.AUMHash`), the BLAKE2s-256 of the canonical AUM bytes (behavior E5).
 ///
-/// 비교는 바이트로 한다. 텍스트는 끝 글자의 남는 4비트를 보지 않아서 글자가 달라도 같은 해시일 수 있다(노트 3.8).
+/// Compares bytes. Text decoding ignores the final character's 4 unused bits, so different text can represent the same hash (notes §3.8).
 package struct AUMHash: Sendable, Hashable {
-    /// 해시 32바이트. 생성자가 길이를 검사하므로 늘 32바이트다.
+    /// The 32-byte hash. The initializer checks length, so it is always 32 bytes.
     package let bytes: [UInt8]
 
-    /// 32바이트가 아니면 nil.
+    /// Returns nil unless the input contains 32 bytes.
     package init?(_ bytes: [UInt8]) {
         guard bytes.count == 32 else { return nil }
         self.bytes = bytes
     }
 
-    /// `content`의 BLAKE2s-256. 출력은 늘 32바이트다.
+    /// The BLAKE2s-256 of `content`. The output is always 32 bytes.
     init(hashing content: [UInt8]) {
         bytes = BLAKE2s.hash(content)
     }
 
-    /// RFC 4648 base32 표준 알파벳(대문자), 패딩 없음, 52자(Go `UnmarshalText`). 소문자·패딩·다른 길이는 nil.
+    /// The standard RFC 4648 base32 alphabet (uppercase), unpadded, 52 characters (Go `UnmarshalText`). Returns nil for lowercase, padding, or other lengths.
     ///
-    /// 마지막 글자의 아래 4비트는 버린다(Go와 같다). Go의 `base32.Encoding.Decode`는 `\r`·`\n`을 지우고 읽지만
-    /// 여기서는 알파벳 밖의 글자로 거절한다(계약 2절의 선언대로 52자의 알파벳만 받는다).
+    /// Discards the final character's low 4 bits, as Go does. Go's `base32.Encoding.Decode` strips `\r` and `\n` before decoding.
+    /// This decoder rejects them as outside the alphabet (accepts only 52 alphabet characters per the declaration in contract §2).
     package init?(text: String) {
         let characters = Array(text.utf8)
         guard characters.count == Self.textLength else { return nil }
@@ -41,11 +41,11 @@ package struct AUMHash: Sendable, Hashable {
                 result.append(UInt8(truncatingIfNeeded: buffer >> UInt32(bitCount)))
             }
         }
-        // 52 × 5 = 260비트에서 32바이트를 채우고 남은 4비트는 버린다.
+        // Fill 32 bytes from 52 × 5 = 260 bits and discard the remaining 4 bits.
         bytes = result
     }
 
-    /// base32 표준 알파벳(대문자), 패딩 없음, 52자(Go `String`·`MarshalText`).
+    /// The standard base32 alphabet (uppercase), unpadded, 52 characters (Go `String` and `MarshalText`).
     package var text: String {
         var characters: [UInt8] = []
         characters.reserveCapacity(Self.textLength)
@@ -59,7 +59,7 @@ package struct AUMHash: Sendable, Hashable {
                 characters.append(Self.alphabet[Int(buffer >> UInt32(bitCount) & 0x1f)])
             }
         }
-        // 남은 1비트를 위로 붙이고 아래를 0으로 채운다.
+        // Place the remaining 1 bit at the top and fill the low bits with zeros.
         characters.append(Self.alphabet[Int(buffer << UInt32(5 - bitCount) & 0x1f)])
         return String(decoding: characters, as: UTF8.self)
     }

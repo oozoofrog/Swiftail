@@ -1,33 +1,33 @@
-// CBOR(RFC 8949)의 자료 항목 가운데 TKA가 다루는 모양. 노트 `docs/protocol-notes/tailnet-lock.md` 3.1·6.2.
+// The CBOR (RFC 8949) data item forms TKA handles. See `docs/protocol-notes/tailnet-lock.md` §§3.1 and 6.2.
 
-/// 디코딩한 CBOR 자료 항목. TKA 구조가 쓰는 종류와, 모르는 필드를 건너뛰는 데 필요한 나머지다.
+/// A decoded CBOR data item, covering types used by TKA structures and the remaining types needed to skip unknown fields.
 ///
-/// 정수는 받은 인코딩 길이를 잊는다(`18 01`과 `01`은 같은 `.unsigned(1)`). 맵은 받은 순서와
-/// 중복을 그대로 쥔다: 중복 키를 거절할지는 그 맵이 구조의 맵인지 모르는 필드의 값인지에 달려 있어
-/// 구조를 읽는 쪽이 정한다(계약 동작 D4).
+/// Integers discard the received encoding length (`18 01` and `01` both give `.unsigned(1)`). Maps preserve received order and
+/// duplicates. The structure decoder decides whether to reject duplicate keys based on whether the map is part of the structure or
+/// the value of an unknown field (contract behavior D4).
 package enum CBORValue: Sendable, Equatable {
     case unsigned(UInt64)
-    /// 음의 정수 `-1 - n`. 모르는 필드의 키와 값으로만 나타난다.
+    /// A negative integer, `-1 - n`. Appears only as a key or value in an unknown field.
     case negative(UInt64)
     case bytes([UInt8])
-    /// 텍스트의 바이트. 여기서는 UTF-8을 검사하지 않는다(모르는 필드의 값은 잘못된 UTF-8이어도 건너뛴다. 동작 D6).
+    /// The text bytes. UTF-8 is unchecked here because unknown field values are skipped even with invalid UTF-8 (behavior D6).
     case text([UInt8])
     case array([CBORValue])
     case map([CBORPair])
-    /// null(`f6`)과 undefined(`f7`). Go 디코더는 둘을 같게 다룬다: 알려진 필드에서는 그 필드의 0 값이 되고
-    /// 모르는 필드에서는 버린다(`fxamacker/cbor` v2.9.3 `decode.go`의 `nextCBORNil`). 쓸 때는 null이다.
+    /// null (`f6`) and undefined (`f7`). The Go decoder treats them alike, producing the zero value in a known field and
+    /// discarding them in unknown fields (`nextCBORNil` in `fxamacker/cbor` v2.9.3 `decode.go`). The writer emits null.
     case null
-    /// 값이 정해지지 않은 단순값(0~19, 32~255). Go 디코더는 정수 필드에 이 값을 정수로 넣는다
-    /// (`fxamacker/cbor` v2.9.3 `decode.go`의 `parseToValue`에서 major 7의 나머지 갈래가 `fillPositiveInt`를 부른다).
+    /// Unassigned simple values (0–19, 32–255). The Go decoder writes these as integers into integer fields
+    /// (the remaining major 7 branch in `parseToValue` calls `fillPositiveInt` in `fxamacker/cbor` v2.9.3 `decode.go`).
     case simple(UInt8)
-    /// major 7의 나머지(false·true·실수). 값을 쥐지 않는다. 알려진 필드에는 올 수 없다.
+    /// Other major 7 items (false, true, and floating-point values). Their values are discarded. They cannot appear in known fields.
     case simpleOrFloat
 }
 
-/// 맵의 한 쌍.
+/// One map pair.
 package struct CBORPair: Sendable, Equatable {
-    /// 받은 그대로의 키. 구조의 맵이면 정수나 텍스트여야 한다(구조를 읽는 쪽이 본다).
+    /// The key exactly as received. In a structure map it must be an integer or text, as checked by the structure decoder.
     package var key: CBORValue
-    /// 키에 붙은 값.
+    /// The value associated with the key.
     package var value: CBORValue
 }

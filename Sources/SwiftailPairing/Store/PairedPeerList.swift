@@ -1,17 +1,17 @@
 import Foundation
 import Swiftail
 
-/// 여는 쪽의 짝 목록과 그 파일 형식(계약 동작 S1·S3·S4). 값 타입이고 파일을 만지지 않는다(`PairedPeerFile`이 한다).
+/// The host's paired peer list and its file format (contract behaviors S1, S3, and S4). This value type leaves file access to `PairedPeerFile`.
 ///
-/// 파일은 `{"version":1,"peers":[…]}`다. 항목은 `stableID`·`name`·`computedName`·`loginName`(짝을 맺을 때의
-/// `PeerIdentity`), `deviceName`, `pairedAt`(유닉스 초)이다. 모르는 필드는 넘긴다.
+/// The file is `{"version":1,"peers":[…]}`. Each entry contains `stableID`, `name`, `computedName`, and `loginName` (the PeerIdentity
+/// at pairing), `deviceName`, and `pairedAt` (Unix seconds). Ignore unknown fields.
 struct PairedPeerList: Sendable, Equatable {
-    /// 짝의 한도(S4).
+    /// The paired peer limit (S4).
     static let limit = 256
-    /// 지금의 파일 판.
+    /// The current file version.
     static let version = 1
 
-    /// 짝이 된 차례대로.
+    /// In pairing order.
     private(set) var peers: [PairedPeer] = []
 
     init() {}
@@ -20,9 +20,9 @@ struct PairedPeerList: Sendable, Equatable {
         peers.first { $0.peer.stableID == stableID }
     }
 
-    /// 짝을 넣는다. 같은 `StableID`가 있으면 그 자리의 항목을 바꾼다(S1).
+    /// Adds a paired peer. If the same `StableID` exists, replaces its entry in place (S1).
     ///
-    /// - Returns: 새 짝인데 목록이 가득 찼으면 넣지 않고 false(S4).
+    /// - Returns: false without adding if the peer is new and the list is full (S4).
     mutating func insert(_ peer: PairedPeer) -> Bool {
         if let index = peers.firstIndex(where: { $0.peer.stableID == peer.peer.stableID }) {
             peers[index] = peer
@@ -33,14 +33,14 @@ struct PairedPeerList: Sendable, Equatable {
         return true
     }
 
-    /// 짝을 지운다. 지운 것이 있으면 true.
+    /// Removes a paired peer. Returns true if an entry was removed.
     mutating func remove(stableID: String) -> Bool {
         guard let index = peers.firstIndex(where: { $0.peer.stableID == stableID }) else { return false }
         peers.remove(at: index)
         return true
     }
 
-    // MARK: 파일 형식
+    // MARK: File Format
 
     private struct File: Codable {
         var version: Int
@@ -56,8 +56,8 @@ struct PairedPeerList: Sendable, Equatable {
         var pairedAt: Date
     }
 
-    /// 파일의 내용을 읽는다. 읽지 못하면 nil이다(S3): JSON이 아님, 다른 `version`, 빈 `StableID`, 겹친 `StableID`,
-    /// 256개 초과. 읽지 못한 파일을 빈 목록으로 보면 다음 저장이 짝을 모두 지우므로, 부르는 쪽은 실패로 다룬다.
+    /// Reads the file contents. Returns nil if unreadable (S3): invalid JSON, a different `version`, empty or duplicate `StableID`,
+    /// or more than 256 entries. Treating an unreadable file as empty would erase all paired peers on the next save, so the caller treats it as a failure.
     init?(fileContents: Data) {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970
@@ -74,7 +74,7 @@ struct PairedPeerList: Sendable, Equatable {
         }
     }
 
-    /// 파일에 쓸 내용. 만들지 못하면 nil.
+    /// The contents to write to the file, or nil if they cannot be generated.
     var fileContents: Data? {
         let records = peers.map { peer in
             Record(

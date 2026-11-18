@@ -1,18 +1,18 @@
-// TKA 구조(AUM·Key·State·Signature·NKS)를 `CBORValue`에서 읽는 공통 규칙. Go는 이 구조들을 `fxamacker/cbor` v2.9.3의
-// 구조체 디코딩(`decode.go`의 `parseMapToStruct`·`parseToValue`·`fill*`)으로 읽는다. 계약 동작 D3~D7, 노트 3.1·6.2·8.1.
+// Shared rules for reading TKA structures (AUM, Key, State, Signature, and NKS) from `CBORValue`. Go reads them using the `fxamacker/cbor` v2.9.3
+// struct decoder (`parseMapToStruct`, `parseToValue`, and `fill*` in `decode.go`). Contract behaviors D3–D7, notes §§3.1, 6.2, and 8.1.
 // `fxamacker/cbor`: Copyright (c) 2019-present Faye Amacker. MIT.
 
-/// 구조 맵에서 알려진 필드의 값을 꺼낸 것.
+/// The known field values extracted from a structure map.
 ///
-/// 키의 규칙(동작 D3·D4): 양의 정수는 2^63−1까지, 음의 정수는 −2^63까지, 텍스트는 올바른 UTF-8만 받는다. 같은 키가 두 번이면
-/// 거절한다. Go는 알려진 필드를 필드 번호로, 모르는 키를 `int64`나 문자열 값으로 견주므로 비최단으로 쓴 같은 정수도 중복이다.
-/// 알려진 필드는 정수 키로만 찾는다(텍스트 `"1"`은 모르는 필드다. 동작 D5). 모르는 필드의 값은 보지 않고 버린다(동작 D6).
+/// Key rules (behaviors D3 and D4) allow positive integers through 2^63−1, negative integers down to −2^63, and valid UTF-8 text only. Duplicate keys
+/// are rejected. Go compares known fields by field number and unknown keys as `int64` or string values, so a non-shortest encoding of the same integer also duplicates it.
+/// Only integer keys identify known fields (text `"1"` is an unknown field, behavior D5). Unknown field values are discarded unread (behavior D6).
 struct StructureFields {
     private var values: [UInt64: CBORValue] = [:]
 
-    /// null(undefined 포함)은 빈 맵처럼 모든 필드가 0 값인 구조다(Go `fillNil`은 구조체를 건드리지 않는다). 맨 바깥과
-    /// 배열 원소에 해당한다. 포인터 필드(`Key`·`State`·`Nested`)의 null은 부르는 쪽이 먼저 "없음"으로 읽는다.
-    /// 그 밖의 맵이 아닌 값은 거절한다(동작 D7, 그리고 구조 자리의 타입 불일치).
+    /// Null (including undefined) behaves like an empty map: all fields are zero values (Go `fillNil` leaves structs untouched). This applies at the top level
+    /// and in array elements. The caller first reads null pointer fields (`Key`, `State`, `Nested`) as absent.
+    /// Other non-map values are rejected (behavior D7 and type mismatch at a structure position).
     init(_ value: CBORValue, knownKeys: Set<UInt64>) throws(TKAError) {
         if value == .null { return }
         guard case .map(let pairs) = value else { throw .invalidStructure }
@@ -26,10 +26,10 @@ struct StructureFields {
         }
     }
 
-    /// 알려진 필드의 값. 없으면 nil이다(null은 `.null`로 남는다).
+    /// The known field value, or nil if absent. Null is retained as `.null`.
     subscript(key: UInt64) -> CBORValue? { values[key] }
 
-    /// 같은 키인지 가리는 값.
+    /// The value used to determine whether keys match.
     private enum Key: Hashable {
         case integer(Int64)
         case text([UInt8])
@@ -49,11 +49,11 @@ struct StructureFields {
     }
 }
 
-// MARK: 알려진 필드의 값
+// MARK: Known Field Values
 
 extension CBORValue {
-    /// Go의 부호 없는 정수 필드(`uint8`·`uint`·`uint64`)에 들어가는 값: 정수와 단순값은 그 수, null은 0(`fillNil`은 정수를
-    /// 건드리지 않는다). `maximum`을 넘거나 다른 종류면 거절한다(동작 D5).
+    /// A value for Go unsigned integer fields (`uint8`, `uint`, `uint64`). Integers and simple values produce their numeric value, and null gives 0 (`fillNil` leaves integers
+    /// untouched). Rejects values above `maximum` or of another type (behavior D5).
     func unsignedField(maximum: UInt64 = .max) throws(TKAError) -> UInt64 {
         let number: UInt64
         switch self {
@@ -66,10 +66,10 @@ extension CBORValue {
         return number
     }
 
-    /// Go의 `[]byte` 필드에 들어가는 값. null은 nil이다.
+    /// A value for Go `[]byte` fields. Null gives nil.
     ///
-    /// 바이트열 말고 원소가 0~255의 정수·단순값·null(0)인 배열도 Go는 바이트로 읽는다(`parseArrayToSlice`가 원소를
-    /// `uint8`로 채운다). 다시 쓰면 바이트열이 되므로 해시는 같은 내용의 바이트열과 같다.
+    /// In addition to byte strings, Go reads arrays of integers or simple values from 0 to 255, or null (0), as bytes (`parseArrayToSlice` fills elements
+    /// as `uint8`). Writing again produces a byte string, so its hash matches a byte string with the same contents.
     func byteField() throws(TKAError) -> [UInt8]? {
         switch self {
         case .null:
@@ -88,7 +88,7 @@ extension CBORValue {
         }
     }
 
-    /// Go의 `string`에 들어가는 값(`Meta`의 키와 값): 올바른 UTF-8 텍스트, null은 빈 문자열.
+    /// A value for Go `string` fields (`Meta` keys and values). Requires valid UTF-8 text and treats null as the empty string.
     func textField() throws(TKAError) -> [UInt8] {
         switch self {
         case .null:
@@ -100,7 +100,7 @@ extension CBORValue {
         }
     }
 
-    /// Go의 슬라이스 필드에 들어가는 배열. null은 빈 배열이다(nil과 빈 슬라이스를 가리지 않는 필드에만 쓴다. 동작 E6).
+    /// An array for a Go slice field. Null gives an empty array. Used only for fields that treat nil and empty slices alike (behavior E6).
     func arrayField() throws(TKAError) -> [CBORValue] {
         switch self {
         case .null: return []
@@ -114,9 +114,9 @@ extension [UInt8] {
     var isValidUTF8: Bool { String(validating: self, as: UTF8.self) != nil }
 }
 
-// MARK: 바이트 한도
+// MARK: Byte Limit
 
-/// 디코딩 전에 바이트 길이를 보고(동작 D9·M) 항목 하나로 읽는다.
+/// Checks byte length before decoding (behaviors D9 and M) and reads a single item.
 func decodeItem(_ bytes: [UInt8], maximumByteCount: Int) throws(TKAError) -> CBORValue {
     guard bytes.count <= maximumByteCount else { throw .limitExceeded }
     do {

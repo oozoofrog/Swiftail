@@ -1,37 +1,37 @@
 import SwiftailCrypto
 
-/// 들어오는 쪽의 짝 맺기 절차, 연결 하나(계약 동작 J3~J5).
+/// The joiner's pairing protocol for a single connection (contract behaviors J3–J5).
 ///
-/// 입출력이 없다. 받은 바이트·시각이 들어가고, 할 일(`Action`)이 나온다. 연결을 걸고 다시 거는 일(J1), 대역 검사(J2),
-/// 취소(J7)는 가장자리(`PairingJoiner`)가 맡는다.
+/// Performs no I/O. Accepts received bytes and times and emits actions (`Action`). Dialing and redialing (J1), range checks (J2),
+/// and cancellation (J7) are handled at the edge (`PairingJoiner`).
 ///
 /// ```
-/// hello ─▶ challenge(계속) ─▶ proof ─▶ accepted ─▶ 확인 숫자 ─▶ decision ─▶ 끝
-///            └ 상태 1: rejected         └ 틀림: hostNotVerified   └ HMAC 틀림: hostNotVerified
+/// hello ─▶ challenge(continue) ─▶ proof ─▶ accepted ─▶ SAS ─▶ decision ─▶ end
+///            └ status 1: rejected           └ invalid: hostNotVerified  └ invalid HMAC: hostNotVerified
 /// ```
 ///
-/// `hello`에는 nonce가 아니라 그 약속을 싣고, nonce는 여는 쪽의 약속(`challenge`)을 받은 뒤 `proof`에서 연다. 여는 쪽의
-/// nonce는 `accepted`에서 오고, 그것이 `challenge`의 약속과 맞아야 한다(`PairingTranscript`).
+/// `hello` carries a commitment to the nonce. The joiner reveals the nonce in `proof` after receiving the host's commitment in `challenge`. The host's
+/// nonce arrives in `accepted` and must match the `challenge` commitment (`PairingTranscript`).
 ///
-/// 여는 쪽을 믿게 되는 곳은 `accepted`다. 그 HMAC은 제안의 비밀과, 이쪽이 본 연결의 두 끝을 넣은 T로 만든다. 그래서
-/// `accepted`가 맞기 전에는 확인 숫자를 내지 않고(계산할 수도 없다), `decision`은 HMAC이 맞은 뒤에만 내용을 읽는다.
+/// The joiner establishes trust in the host at `accepted`. Its HMAC uses the offer secret and T, which includes both endpoints as seen by the joiner.
+/// The SAS is neither emitted nor computable before `accepted` verifies. The `decision` contents are read only after its HMAC verifies.
 struct PairingJoinerSession: Sendable {
     typealias Instant = ContinuousClock.Instant
 
-    /// `proof`를 보낸 뒤 `decision`까지의 기한(J4). 여는 쪽의 승인 기한 120초보다 길다.
+    /// The deadline from sending `proof` to receiving `decision` (J4). It exceeds the host's 120-second approval deadline.
     static let decisionTimeout = Duration.seconds(130)
 
-    /// 가장자리가 할 일.
+    /// An action for the edge.
     enum Action: Sendable, Equatable {
-        /// 이 바이트를 보낸다.
+        /// Sends these bytes.
         case send([UInt8])
-        /// 여는 쪽이 확인됐고 승인을 기다린다. 확인 숫자를 앱에 알린다.
+        /// The host has been verified and approval is pending. Reports the SAS to the app.
         case awaitingApproval(confirmationCode: String)
-        /// 절차가 끝났다. 연결을 닫는다. 마지막 할 일이다.
+        /// The protocol ended. Closes the connection. This is the final action.
         case finish(Result<Approval, PairingError>)
     }
 
-    /// 승인된 결과: 여는 쪽이 `decision`에 실은 자기 신원.
+    /// An approved result containing the host's identity from `decision`.
     struct Approval: Sendable, Equatable {
         var stableID: String
         var name: String
@@ -44,13 +44,13 @@ struct PairingJoinerSession: Sendable {
         case finished
     }
 
-    /// 연결하자마자 보낼 `hello`.
+    /// The `hello` to send upon connection.
     let hello: [UInt8]
-    /// 다음 기한. 끝났으면 nil.
+    /// The next deadline, or nil after completion.
     private(set) var deadline: Instant?
 
     private let offer: PairingOffer
-    /// 이 연결의 nonceJ. `challenge`를 받을 때까지 내보내지 않는다.
+    /// This connection's nonceJ. Withheld until `challenge` arrives.
     private let nonce: [UInt8]
     private let deviceName: DeviceName
     private let endpoints: PairingEndpoints
@@ -58,9 +58,9 @@ struct PairingJoinerSession: Sendable {
     private var buffer: [UInt8] = []
 
     /// - Parameters:
-    ///   - nonce: 이 연결에 쓸 난수 32바이트.
-    ///   - endpoints: 이쪽이 본 연결의 두 끝.
-    ///   - challengeDeadline: 첫 `challenge`를 받아야 하는 때(J1의 60초. 다시 거는 동안 함께 흐른다).
+    ///   - nonce: 32 random bytes for this connection.
+    ///   - endpoints: The connected endpoints as seen locally.
+    ///   - challengeDeadline: The deadline for the first `challenge` (J1's 60 seconds, which continue to elapse across redials).
     init(
         offer: PairingOffer, deviceName: DeviceName, nonce: [UInt8], endpoints: PairingEndpoints,
         challengeDeadline: Instant
@@ -75,7 +75,7 @@ struct PairingJoinerSession: Sendable {
         deadline = challengeDeadline
     }
 
-    /// 연결에서 받은 바이트. 메시지 하나가 다 올 때마다 다음 단계로 간다.
+    /// Processes bytes received on the connection. Advances after each complete message.
     mutating func receive(_ bytes: [UInt8], at now: Instant) -> [Action] {
         buffer += bytes
         var actions: [Action] = []
@@ -88,7 +88,7 @@ struct PairingJoinerSession: Sendable {
                 case .invalid:
                     return actions + finish(.failure(.protocolViolation))
                 case .complete(let challenge, let length):
-                    // 이쪽이 proof를 보내기 전에 온 그 뒤의 바이트는 차례 밖이다.
+                    // Any subsequent bytes received before sending proof are out of turn.
                     guard length == buffer.count else { return actions + finish(.failure(.protocolViolation)) }
                     guard challenge.status == .proceed else { return actions + finish(.failure(.rejected)) }
                     buffer = []
@@ -103,8 +103,8 @@ struct PairingJoinerSession: Sendable {
 
             case .accepted(let proofTranscript):
                 guard buffer.count >= PairingMessage.Accepted.length else { return actions }
-                // J4: 열린 nonceH가 `challenge`의 약속과 맞아야 하고(여는 쪽도 nonceJ를 본 뒤에 nonce를 고를 수 없다),
-                // 그 nonce를 넣은 T의 HMAC이 맞아야 한다.
+                // J4: The revealed nonceH must match the `challenge` commitment (the host also cannot choose a nonce after seeing nonceJ),
+                // and the HMAC of T containing that nonce must verify.
                 guard let accepted = PairingMessage.Accepted(Array(buffer.prefix(PairingMessage.Accepted.length))),
                       let transcript = proofTranscript.opened(with: accepted.nonce),
                       constantTimeEqual(accepted.code, transcript.accepted(secret: offer.secret))
@@ -142,11 +142,11 @@ struct PairingJoinerSession: Sendable {
         }
     }
 
-    /// 연결이 끝났다(EOF, 오류).
+    /// Handles EOF or a read error.
     ///
-    /// `challenge` 전이면 닿지 못한 것이다(여는 쪽이 이 노드를 아직 모르면 읽지 않고 닫는다. 가장자리가 다시 건다).
-    /// `proof`를 보낸 뒤 `accepted` 없이 닫혔으면 받아 주지 않은 것이다(J3). 결정을 기다리던 중이면 약속된 메시지 없이
-    /// 끝난 것이다.
+    /// Before `challenge` this means unreachable (if the host does not yet know this node, it closes without reading, and the edge redials).
+    /// A closure after `proof` without `accepted` means rejected (J3). While waiting for a decision, it means the connection ended without the
+    /// expected message.
     mutating func connectionEnded() -> [Action] {
         switch phase {
         case .challenge: finish(.failure(.unreachable))
@@ -156,7 +156,7 @@ struct PairingJoinerSession: Sendable {
         }
     }
 
-    /// 시각이 흘렀다. 기한이 지났으면 `challenge` 전에는 `unreachable`, 그 뒤에는 `timedOut`으로 끝난다.
+    /// Handles elapsed time. If the deadline passed, finishes with `unreachable` before `challenge` or `timedOut` afterward.
     mutating func advance(to now: Instant) -> [Action] {
         guard let deadline, now >= deadline else { return [] }
         if case .challenge = phase { return finish(.failure(.unreachable)) }
