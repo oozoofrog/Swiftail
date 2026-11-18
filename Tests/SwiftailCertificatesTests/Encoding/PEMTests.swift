@@ -51,8 +51,8 @@ struct PEMTests {
     }
 
     @Test("Non-whitespace bytes outside blocks cause rejection of the entire input", arguments: [
-        "앞의 설명\n%@",
-        "%@뒤의 쓰레기",
+        "Leading text\n%@",
+        "%@trailing junk",
         "%@x\n%@",
         "%@\u{0}",
         " %@",          // A boundary starts at the beginning of a line

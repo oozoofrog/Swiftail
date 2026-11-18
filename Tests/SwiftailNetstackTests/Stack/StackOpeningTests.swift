@@ -73,7 +73,7 @@ struct StackOpeningTests {
         #expect(!described.contains("195"))  // 0xC3
         #expect(!described.lowercased().contains("c3"))
         #expect(!described.contains("SymmetricKey"))
-        #expect(described.contains("비밀 숨김"))
+        #expect(described.contains("secret redacted"))
     }
 
     @Test("Outbound ports are selected in order starting at 49152, and 49152 follows 65535")

@@ -41,7 +41,7 @@ struct CertificateBoundaryScenarios {
         #expect(await scenario.server.records.last?.endpoint == .newOrder)
         #expect(await scenario.server.records.filter { $0.endpoint == .newOrder }.count == 1)
         let reflected = String(reflecting: result)
-        #expect(!reflected.contains("진단에 노출하지 않는 시험 식별자"))
+        #expect(!reflected.contains("test identifier omitted from diagnostics"))
         #expect(!reflected.contains("subproblems"))
     }
 

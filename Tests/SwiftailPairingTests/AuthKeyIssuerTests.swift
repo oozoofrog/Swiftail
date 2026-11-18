@@ -171,7 +171,7 @@ struct AuthKeyIssuerTests {
         (Example.response(200, "[]"), .invalidResponse),
         (Example.response(200, #"{"expires":"2026-01-01T00:10:00Z"}"#), .invalidResponse),
         (Example.response(200, #"{"key":"tskey-api-EXAMPLE","expires":"2026-01-01T00:10:00Z"}"#), .invalidResponse),
-        (Example.response(200, #"{"key":"tskey-auth-EXAMPLE","expires":"내일"}"#), .invalidResponse),
+        (Example.response(200, #"{"key":"tskey-auth-EXAMPLE","expires":"tomorrow"}"#), .invalidResponse),
         (Example.response(200, #"{"key":"tskey-auth-EXAMPLE"}"#), .invalidResponse),
         (Example.response(200, #"{"key":"tskey-auth-EX AMPLE","expires":"2026-01-01T00:10:00Z"}"#), .invalidResponse),
         (.failure(.network), .network),
@@ -272,7 +272,7 @@ struct AuthKeyIssuerTests {
             dump(value, to: &dumped)
             for text in [String(describing: value), String(reflecting: value), dumped] {
                 #expect(!text.contains("EXAMPLE-token") && !text.contains(Example.secret) && !text.contains(Example.key), "\(text)")
-                #expect(text.contains("<가림>"))
+                #expect(text.contains("<redacted>"))
             }
         }
         #expect(String(describing: Example.client).contains(Example.clientID))

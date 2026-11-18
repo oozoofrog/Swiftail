@@ -60,9 +60,9 @@ struct RegistrationValuesTests {
     }
 
     @Test("Redacts the auth key (the original and the part before --TL) in rejection messages", arguments: [
-        ("invalid authkey: tskey-auth-fake--TLc2ln-cHJpdg", "invalid authkey: <가림>"),
-        ("invalid authkey: tskey-auth-fake", "invalid authkey: <가림>"),
-        ("tskey-auth-fake and tskey-auth-fake", "<가림> and <가림>"),
+        ("invalid authkey: tskey-auth-fake--TLc2ln-cHJpdg", "invalid authkey: <redacted>"),
+        ("invalid authkey: tskey-auth-fake", "invalid authkey: <redacted>"),
+        ("tskey-auth-fake and tskey-auth-fake", "<redacted> and <redacted>"),
         ("invalid authkey", "invalid authkey"),
     ])
     func rejectionHidesAuthKey(message: String, expected: String) {
@@ -73,7 +73,7 @@ struct RegistrationValuesTests {
     func rejectionLength() {
         #expect(ControlClient.rejectionMessage("invalid authkey", authKey: nil) == "invalid authkey")
         #expect(ControlClient.rejectionMessage("invalid authkey", authKey: "") == "invalid authkey")
-        #expect(ControlClient.rejectionMessage("--TL", authKey: "--TL") == "<가림>")
+        #expect(ControlClient.rejectionMessage("--TL", authKey: "--TL") == "<redacted>")
         let long = String(repeating: "가", count: 10_000)
         let shortened = ControlClient.rejectionMessage(long, authKey: nil)
         #expect(shortened.count == ControlClient.maximumRejectionLength + 1)

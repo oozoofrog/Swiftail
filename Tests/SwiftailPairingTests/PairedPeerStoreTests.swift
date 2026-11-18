@@ -50,7 +50,7 @@ struct PairedPeerStoreTests {
     @Test("Pairing again with the same StableID replaces the existing entry in place")
     func replacesSameStableID() {
         var list = PairedPeerList()
-        let again = Self.peer("nA", deviceName: "새 이름", pairedAt: 1_900_000_500)
+        let again = Self.peer("nA", deviceName: "New Name", pairedAt: 1_900_000_500)
         let inserted = [list.insert(Self.peer("nA")), list.insert(Self.peer("nB")), list.insert(again)]
         #expect(inserted == [true, true, true])
         #expect(list.peers == [again, Self.peer("nB")])
@@ -67,8 +67,8 @@ struct PairedPeerStoreTests {
         let overflow = list.insert(Self.peer("nNew"))
         #expect(!overflow)
         #expect(list.peers.count == 256 && list.peer(withStableID: "nNew") == nil)
-        let replaced = list.insert(Self.peer("n7", deviceName: "바뀐 이름"))
-        #expect(replaced && list.peer(withStableID: "n7")?.deviceName == "바뀐 이름")
+        let replaced = list.insert(Self.peer("n7", deviceName: "Renamed Device"))
+        #expect(replaced && list.peer(withStableID: "n7")?.deviceName == "Renamed Device")
         let removed = [list.remove(stableID: "n0"), list.remove(stableID: "n0")]
         #expect(removed == [true, false])
         let afterRemoval = list.insert(Self.peer("nNew"))

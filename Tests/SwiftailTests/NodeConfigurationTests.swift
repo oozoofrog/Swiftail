@@ -21,7 +21,7 @@ struct NodeConfigurationTests {
     func description() throws {
         let text = String(describing: try Self.configuration())
         #expect(!text.contains(Self.authKey))
-        #expect(text.contains("<가림>"))
+        #expect(text.contains("<redacted>"))
     }
 
     @Test("dump omits the auth key")

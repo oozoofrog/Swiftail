@@ -16,7 +16,7 @@ struct NetstackListenerTests {
             let listener = try await node.listen(port: 9_000)
             #expect(listener.port == 9_000)
             #expect(await Support.error { try await node.listen(port: 9_000) } == .addressInUse)
-            #expect(await Support.error { try await node.listen(port: 0) } == .invalidConfiguration("포트는 0이 아니어야 한다"))
+            #expect(await Support.error { try await node.listen(port: 0) } == .invalidConfiguration("Port must be nonzero"))
 
             let run = Task { try await node.run() }
             try await Support.waitUntil("run() started") { await node.isRunning }

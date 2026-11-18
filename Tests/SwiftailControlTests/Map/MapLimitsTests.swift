@@ -225,7 +225,7 @@ struct MapLimitsTests {
             _ = try session.apply(mapResponse(#"{"UserProfiles":[\#(profiles)]}"#), receivedAt: receivedAt)
         }
         // Updating an existing profile does not increase the count.
-        _ = try session.apply(mapResponse(#"{"UserProfiles":[{"ID":1000,"DisplayName":"갱신"}]}"#), receivedAt: receivedAt)
+        _ = try session.apply(mapResponse(#"{"UserProfiles":[{"ID":1000,"DisplayName":"Updated"}]}"#), receivedAt: receivedAt)
         #expect(throws: MapError.stateTooLarge) {
             try session.apply(mapResponse(#"{"UserProfiles":[{"ID":1}]}"#), receivedAt: receivedAt)
         }

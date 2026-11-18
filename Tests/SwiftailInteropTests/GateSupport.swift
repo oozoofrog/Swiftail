@@ -123,7 +123,7 @@ struct Gate: Sendable {
                 // The path queried by stable ID must match the path queried by name.
                 let stableID = try #require(await node.whoIs(try peer.address())?.stableID)
                 #expect(await node.path(toPeerWithStableID: stableID) == node.path(toPeerNamed: fqdn))
-                #expect(await node.path(toPeerWithStableID: stableID + "-없는-피어") == nil)
+                #expect(await node.path(toPeerWithStableID: stableID + "-missing-peer") == nil)
                 await tool.checkpoint("Item 9: verified direct paths on both sides before starting the M3 body")
                 return
             }

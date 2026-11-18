@@ -161,10 +161,11 @@ struct SetDNSTests {
             let start = ContinuousClock.now
             let error = await setDNSError(client)
             let elapsed = ContinuousClock.now - start
-            guard case .connection? = error else {
+            guard case .connection(let message)? = error else {
                 Issue.record("An unresponsive server did not yield connection: \(String(describing: error))")
                 return
             }
+            #expect(message == "set-dns did not finish within \(timeouts.setDNS)")
             #expect(elapsed >= .milliseconds(900) && elapsed < .seconds(5), "Unexpected deadline: \(elapsed)")
             #expect(server.setDNSRequests.count == 1)
             Self.expectNoSecrets(in: error)
@@ -199,10 +200,11 @@ struct SetDNSTests {
             let start = ContinuousClock.now
             let error = await setDNSError(client)
             let elapsed = ContinuousClock.now - start
-            guard case .connection? = error else {
+            guard case .connection(let message)? = error else {
                 Issue.record("The deadline without a connection did not yield connection")
                 return
             }
+            #expect(message == "set-dns did not finish within \(timeouts.setDNS)")
             #expect(elapsed >= .milliseconds(900) && elapsed < .seconds(5), "Unexpected deadline: \(elapsed)")
             #expect(server.setDNSRequests.isEmpty)
         }

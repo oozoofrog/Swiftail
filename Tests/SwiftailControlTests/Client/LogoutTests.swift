@@ -148,7 +148,7 @@ struct LogoutTests {
                 Issue.record("Expected connection")
                 return
             }
-            #expect(message == "로그아웃이 \(limit) 안에 끝나지 않았다")
+            #expect(message == "Logout did not finish within \(limit)")
             #expect(start.duration(to: .now) >= limit)
             #expect(server.requests.map(\.path) == ["/machine/register"], "Does not resend the request")
         }

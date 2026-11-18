@@ -121,17 +121,17 @@ struct NodeDataPlaneMappingTests {
         let first = try Self.nodeKey(0x02), second = try Self.nodeKey(0x03)
         var tally = PathEventTally()
         #expect(tally.line(for: first, path: .relayed(derpRegion: 7), downgrade: nil, at: start)
-            == "피어 1 경로: relayed(7) (첫 사건, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
+            == "Peer 1 path: relayed(7) (first event, dropped disco: unknown key 0, unopened 0, routing rule 0)")
         for drop in [Magicsock.Drop.unknownDiscoKey, .unknownDiscoKey, .malformedDisco, .misroutedDisco, .noRouteToPeer, .unexpectedSTUN] {
             tally.count(drop)
         }
         #expect(tally.line(for: second, path: .relayed(derpRegion: 20), downgrade: nil, at: start + .seconds(1))
-            == "피어 2 경로: relayed(20) (첫 사건, 버린 disco: 모르는 키 2, 열리지 않음 1, 경로 규칙 1)")
+            == "Peer 2 path: relayed(20) (first event, dropped disco: unknown key 2, unopened 1, routing rule 1)")
         // "Since previous event" measures from the previous event for the same peer, even if another peer had an event in between. Discarded disco messages are counted since the previous event for any peer.
         #expect(tally.line(for: first, path: .relayed(derpRegion: 7), downgrade: .trustExpired, at: start + .milliseconds(96_570))
-            == "피어 1 경로: relayed(7) (신뢰 만료, 앞 사건 뒤 96.5초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
+            == "Peer 1 path: relayed(7) (trust expired, 96.5s since previous event, dropped disco: unknown key 0, unopened 0, routing rule 0)")
         #expect(tally.line(for: second, path: nil, downgrade: .discoKeyChanged, at: start + .seconds(3))
-            == "피어 2 경로: none (disco 키 바뀜, 앞 사건 뒤 2.0초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
+            == "Peer 2 path: none (disco key changed, 2.0s since previous event, dropped disco: unknown key 0, unopened 0, routing rule 0)")
     }
 
     @Test("Deletes path records for peers removed from the netmap, retains the remaining peers' numbers, and never reuses old numbers")
@@ -150,13 +150,13 @@ struct NodeDataPlaneMappingTests {
 
         await node.apply(try Self.netmap(peers: [peer2, peer4]))
         let keptLine = await node.pathEventLine(for: kept, at: start + .seconds(1))
-        #expect(keptLine.hasPrefix("피어 1 경로: relayed(1) (앞 사건 뒤 1.0초,"))
+        #expect(keptLine.hasPrefix("Peer 1 path: relayed(1) (1.0s since previous event,"))
         let addedLine = await node.pathEventLine(for: added, at: start + .seconds(1))
-        #expect(addedLine.hasPrefix("피어 3 경로: relayed(1) (첫 사건,"))
+        #expect(addedLine.hasPrefix("Peer 3 path: relayed(1) (first event,"))
 
         await node.apply(try Self.netmap(peers: [peer2, peer3, peer4]))
         let returnedLine = await node.pathEventLine(for: removed, at: start + .seconds(2))
-        #expect(returnedLine.hasPrefix("피어 4 경로: relayed(1) (첫 사건,"))
+        #expect(returnedLine.hasPrefix("Peer 4 path: relayed(1) (first event,"))
     }
 }
 
