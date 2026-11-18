@@ -9,7 +9,7 @@ public struct NodeConfiguration: Sendable {
     /// The Tailscale control server (Go `ipn.DefaultControlURL`, `ipn/prefs.go`).
     public static let defaultControlURL: URL = {
         guard let url = URL(string: "https://controlplane.tailscale.com") else {
-            preconditionFailure("The fixed control server URL is valid")
+            preconditionFailure("The fixed control server URL must be valid")
         }
         return url
     }()

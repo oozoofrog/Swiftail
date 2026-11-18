@@ -40,6 +40,6 @@ extension TailnetNode {
             Self.log.error("Logout failed")
             throw NodeError(error)
         }
-        Self.log.info("Logout: notified the server of node key expiration")
+        Self.log.info("Logout completed")
     }
 }

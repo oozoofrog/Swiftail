@@ -139,7 +139,7 @@ public enum PairingJoiner {
         verifyHost: @escaping @Sendable (_ stableID: String, PairingEndpoints) async -> Bool = { _, _ in true }
     ) async throws(PairingError) -> PairedHost {
         guard let deviceName = DeviceName(deviceName) else {
-            throw .invalidConfiguration("The device name must be 1–64 bytes with no control or format characters")
+            throw .invalidConfiguration("The device name must be 1–64 UTF-8 bytes with no control or format characters except U+200C and U+200D")
         }
         let challengeDeadline = ContinuousClock.now + challengeWindow
         while true {

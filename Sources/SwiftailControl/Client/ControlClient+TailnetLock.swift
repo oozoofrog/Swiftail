@@ -133,7 +133,7 @@ extension ControlClient {
         if lock != lockSession.emitted {
             Self.lockLog.info("""
                 tailnet lock: \(String(describing: lock.mode), privacy: .public), \
-                \(lock.filteredPeerCount, privacy: .public) peers filtered, local node locked out: \(lock.isLockedOut, privacy: .public)
+                \(lock.filteredPeerCount, privacy: .public) peers removed from the netmap, local node locked out: \(lock.isLockedOut, privacy: .public)
                 """)
         }
         lockSession.isNetmapPending = false

@@ -413,7 +413,7 @@ extension TCPStack.CloseReason {
 extension TCPConnection.Statistics {
     /// The line to log when the connection ends. It contains only numbers and Booleans. The contract's “Connection close
     /// statistics log” describes each value. If the connection ended after the app released it, appends
-    /// `, ended after release`.
+    /// `, closed after release`.
     func closeLogLine(
         reason: TCPStack.CloseReason, closedAt now: ContinuousClock.Instant, afterRelease: Bool
     ) -> String {
@@ -423,7 +423,7 @@ extension TCPConnection.Statistics {
             + "partial ACK retransmits \(partialAcknowledgmentRetransmits), duplicate ACKs \(duplicateAcknowledgments), "
             + "ACKs with SACK \(acknowledgmentsWithSACK), SACK negotiated \(sackPermitted), "
             + "peak cwnd \(maximumCongestionWindow)B, ssthresh reductions \(slowStartThresholdReductions)"
-            + (afterRelease ? ", ended after release" : "")
+            + (afterRelease ? ", closed after release" : "")
     }
 }
 
