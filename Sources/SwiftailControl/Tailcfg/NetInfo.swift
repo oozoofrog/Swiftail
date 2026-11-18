@@ -1,35 +1,35 @@
-/// 노드가 측정한 네트워크 상태. Go `tailcfg.NetInfo`.
+/// Network state measured by the node. Go `tailcfg.NetInfo`.
 ///
-/// `Hostinfo.NetInfo`에 실려 제어 서버로 간다. 서버는 0이 아닌 `PreferredDERP`로 다른 노드에게
-/// 이 노드의 홈 DERP를 알린다. DERP·STUN 측정(M4) 전에는 `Hostinfo.netInfo`를 `nil`로 둔다.
+/// Sent to the control server in `Hostinfo.NetInfo`. The server reports this node's home DERP to other nodes using
+/// a nonzero `PreferredDERP`. Before DERP and STUN measurements (M4), `Hostinfo.netInfo` stays `nil`.
 ///
-/// `Bool?` 필드는 Go `opt.Bool`이다: JSON의 `true`·`false`가 측정 결과이고, `nil`(생략·`null`)은
-/// 측정하지 않음이다. 문자열 `"true"`는 오류다. 모든 필드가 `omitzero`·`omitempty`다.
-/// `docs/protocol-notes/control-map.md` 3.1, 3.3 (출처: tailscale.com `tailcfg/tailcfg.go` `NetInfo`).
+/// A `Bool?` field corresponds to Go `opt.Bool`. JSON `true` or `false` is the measurement result. A `nil` value (omitted or `null`)
+/// means unmeasured. The string `"true"` is an error. All fields are `omitzero` or `omitempty`.
+/// `docs/protocol-notes/control-map.md` §3.1, §3.3 (origin: `NetInfo` in tailscale.com `tailcfg/tailcfg.go`).
 public struct NetInfo: Codable, Sendable, Equatable {
-    /// 목적지 IP마다 NAT 매핑이 달라지는지(대칭 NAT).
+    /// Whether the NAT mapping varies with the destination IP (symmetric NAT).
     public var mappingVariesByDestIP: Bool?
-    /// 인터넷으로 IPv6가 되는지.
+    /// Whether IPv6 works over the Internet.
     public var workingIPv6: Bool?
-    /// 운영 체제가 IPv6를 지원하는지.
+    /// Whether the OS supports IPv6.
     public var osHasIPv6: Bool?
-    /// 인터넷으로 UDP가 되는지.
+    /// Whether UDP works over the Internet.
     public var workingUDP: Bool?
-    /// 인터넷으로 ICMPv4가 되는지.
+    /// Whether ICMPv4 works over the Internet.
     public var workingICMPv4: Bool?
-    /// UPnP·NAT-PMP·PCP 포트 매핑이 열려 있는지.
+    /// Whether UPnP, NAT-PMP, or PCP port mapping is open.
     public var havePortMap: Bool
-    /// LAN에 UPnP가 있는지.
+    /// Whether UPnP is present on the LAN.
     public var upnp: Bool?
-    /// LAN에 NAT-PMP가 있는지.
+    /// Whether NAT-PMP is present on the LAN.
     public var pmp: Bool?
-    /// LAN에 PCP가 있는지.
+    /// Whether PCP is present on the LAN.
     public var pcp: Bool?
-    /// 이 노드가 받는 홈 DERP 지역. 0은 아직 정하지 않음.
+    /// The home DERP region that serves this node. 0 means undecided.
     public var preferredDERP: Int64
-    /// 연결 종류(`"wired"`, `"wifi"`, `"mobile"`). 모르면 빈 문자열.
+    /// The connection type (`"wired"`, `"wifi"`, or `"mobile"`). An empty string means unknown.
     public var linkType: String
-    /// `"<지역ID>-v4"`·`"<지역ID>-v6"` → 그 DERP 지역까지의 최근 최저 지연(초).
+    /// `"<regionID>-v4"` and `"<regionID>-v6"` → recent minimum latency to that DERP region (seconds).
     public var derpLatency: [String: Double]
 
     public init(

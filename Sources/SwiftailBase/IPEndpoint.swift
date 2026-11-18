@@ -1,7 +1,7 @@
-/// IP 주소와 UDP 포트. Go `netip.AddrPort`에 대응한다.
+/// An IP address and UDP port. Corresponds to Go `netip.AddrPort`.
 ///
-/// 직접 연결을 받을 후보 주소(제어 서버에 올리는 엔드포인트, 피어가 알려 준 엔드포인트)와 UDP 목적지에 쓴다.
-/// 텍스트는 IPv4가 `"192.0.2.1:41641"`, IPv6가 `"[2001:db8::1]:41641"`이다. IPv6는 반드시 대괄호로 감싼다.
+/// Used for addresses that can receive direct connections (endpoints reported to the control server or advertised by peers) and UDP destinations.
+/// The text form is `"192.0.2.1:41641"` for IPv4 and `"[2001:db8::1]:41641"` for IPv6. IPv6 requires square brackets.
 public struct IPEndpoint: Hashable, Sendable, LosslessStringConvertible {
     public var address: IPAddress
     public var port: UInt16
@@ -11,7 +11,7 @@ public struct IPEndpoint: Hashable, Sendable, LosslessStringConvertible {
         self.port = port
     }
 
-    /// `"주소:포트"`를 읽는다. 포트는 십진수 0~65535다. 대괄호 안이 IPv4이거나, 대괄호 없는 IPv6이면 `nil`.
+    /// Parses `"address:port"`. The port is a decimal number in 0~65535. Returns `nil` for bracketed IPv4 or unbracketed IPv6.
     public init?(_ description: String) {
         guard let colon = description.lastIndex(of: ":"),
               let port = Self.parsePort(description[description.index(after: colon)...])

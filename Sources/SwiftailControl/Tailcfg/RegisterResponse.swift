@@ -1,25 +1,25 @@
 import Foundation
 
-/// `POST /machine/register`의 응답. Go `tailcfg.RegisterResponse`.
+/// The response to `POST /machine/register`. Go `tailcfg.RegisterResponse`.
 ///
-/// HTTP 200이어도 `error`가 비어 있지 않으면 실패이고 다른 필드는 보지 않는다. 그다음
-/// `nodeKeySignature` → `nodeKeyExpired` → `authURL` 순으로 분기한다(노트 4.1의 3~5).
-/// `machineAuthorized`가 `false`인 것은 실패가 아니다. 기기 승인 상태는 맵의 self `Node`를 따른다.
-/// `docs/protocol-notes/control-map.md` 3.2 (출처: tailscale.com `tailcfg/tailcfg.go` `RegisterResponse`).
+/// A nonempty `error` is a failure even with HTTP 200, and other fields are ignored. Otherwise,
+/// branches in `nodeKeySignature` → `nodeKeyExpired` → `authURL` order (notes §4.1, items 3~5).
+/// A `false` value for `machineAuthorized` is allowed. Device authorization follows the self `Node` in the map.
+/// `docs/protocol-notes/control-map.md` §3.2 (origin: `RegisterResponse` in tailscale.com `tailcfg/tailcfg.go`).
 public struct RegisterResponse: Decodable, Sendable, Equatable {
-    /// 노드를 소유한 사용자.
+    /// The user who owns the node.
     public internal(set) var user: User
-    /// 로그인에 쓴 신원.
+    /// The identity used to log in.
     public internal(set) var login: Login
-    /// 노드 키가 만료되었다. 새 키로 다시 등록해야 한다.
+    /// The node key has expired. Register again with a fresh key.
     public internal(set) var nodeKeyExpired: Bool
-    /// 기기가 승인되었는지. 등록 성공 여부가 아니다.
+    /// Whether the device is authorized. Independent of registration success.
     public internal(set) var machineAuthorized: Bool
-    /// 비어 있지 않으면 사용자가 이 URL에서 로그인을 마쳐야 한다.
+    /// A nonempty value is the URL where the user must complete login.
     public internal(set) var authURL: String
-    /// 비어 있지 않으면 tailnet lock 서명을 새 키로 다시 서명해야 한다.
+    /// A nonempty value requires re-signing the tailnet lock signature with the new key.
     public internal(set) var nodeKeySignature: [UInt8]
-    /// 비어 있지 않으면 등록이 거절된 이유.
+    /// A nonempty value explains why registration was rejected.
     public internal(set) var error: String
 
     private enum CodingKeys: String, CodingKey {
@@ -44,15 +44,15 @@ public struct RegisterResponse: Decodable, Sendable, Equatable {
     }
 }
 
-/// 노드를 소유한 사용자. Go `tailcfg.User`. 등록 응답에서만 온다.
+/// The user who owns the node. Go `tailcfg.User`. Arrives only in a registration response.
 public struct User: Decodable, Sendable, Equatable {
-    /// 사용자 ID. `Node.User`와 `UserProfile.ID`가 같은 값을 가리킨다.
+    /// The user ID. `Node.User` and `UserProfile.ID` refer to the same value.
     public internal(set) var id: Int64
-    /// 표시 이름.
+    /// The display name.
     public internal(set) var displayName: String
-    /// 프로필 사진 URL. 없으면 빈 문자열.
+    /// The profile photo URL, or an empty string if absent.
     public internal(set) var profilePicURL: String
-    /// 계정을 만든 시각. 모르면 `nil`.
+    /// The account creation time, or `nil` if unknown.
     public internal(set) var created: Date?
 
     init() {
@@ -78,17 +78,17 @@ public struct User: Decodable, Sendable, Equatable {
     }
 }
 
-/// 로그인에 쓴 신원 공급자 쪽 정보. Go `tailcfg.Login`. 등록 응답에서만 온다.
+/// Information from the identity provider used for login. Go `tailcfg.Login`. Arrives only in a registration response.
 public struct Login: Decodable, Sendable, Equatable {
-    /// 로그인 ID. 클라이언트는 쓰지 않는다.
+    /// The login ID, unused by the client.
     public internal(set) var id: Int64
-    /// 신원 공급자(`"google"`, `"github"` 등).
+    /// The identity provider (for example, `"google"` or `"github"`).
     public internal(set) var provider: String
-    /// 로그인 이름(메일 형태).
+    /// The login name (email format).
     public internal(set) var loginName: String
-    /// 신원 공급자가 준 표시 이름.
+    /// The display name supplied by the identity provider.
     public internal(set) var displayName: String
-    /// 프로필 사진 URL. 없으면 빈 문자열.
+    /// The profile photo URL, or an empty string if absent.
     public internal(set) var profilePicURL: String
 
     init() {

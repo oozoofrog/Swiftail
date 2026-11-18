@@ -1,75 +1,75 @@
 import Foundation
 import SwiftailIO
 
-/// `POST /machine/set-dns`: ACME DNS-01의 TXT 레코드를 제어 서버에 올린다.
+/// Posts an ACME DNS-01 TXT record to the control server with `POST /machine/set-dns`.
 ///
-/// 맵 스트림과 같은 `ControlClient`가 `run()` 동안 쥔 연결 위의 새 HTTP/2 스트림으로 보낸다. 같은 Noise 클라이언트라는
-/// 것은 Go와 같지만, 같은 물리 연결이라는 것은 Swiftail의 구현 선택이고 서버가 요구한다는 근거는 없다.
+/// Sends on a new HTTP/2 stream over the connection the same `ControlClient` uses for the map stream during `run()`. Sharing the Noise client
+/// matches Go. Sharing the physical connection is a Swiftail implementation choice, and there is no evidence the server requires it.
 ///
-/// Go와 다른 Swiftail의 선택(계약 `docs/contracts/SwiftailHost.md` 동작 D2·D3):
-/// - 연결이 없으면(다시 잇는 중) 설 때까지 기다린다. 기다림과 응답을 합쳐 60초다. Go는 `not connected`로 곧바로 실패한다.
-/// - 200이 아니면 상태 코드만 싣고 본문은 읽지 않는다(로그에도 남기지 않는다). Go는 본문을 200 code point까지 싣는다.
-/// - 200의 본문은 4KiB까지 읽고 JSON 객체여야 한다. Go는 1MiB까지 읽고 `null`도 받는다.
+/// Swiftail's choices that differ from Go (contract `docs/contracts/SwiftailHost.md` behaviors D2 and D3).
+/// - If disconnected (reconnecting), waits until a connection opens. Waiting and the response have a combined 60 seconds. Go fails immediately with `not connected`.
+/// - For a status other than 200, includes only the status code and skips reading or logging the body. Go includes up to 200 code points of the body.
+/// - For a 200, reads up to 4KiB and requires a JSON object. Go reads up to 1MiB and also accepts `null`.
 ///
-/// 이름과 값은 오류 문자열과 로그에 넣지 않는다(동작 K2·K3).
+/// Error messages and logs omit the name and value (behaviors K2 and K3).
 ///
-/// `docs/protocol-notes/whois-certs-state.md` 3.2 (출처: tailscale.com `control/controlclient/direct.go` `setDNSNoise`,
+/// `docs/protocol-notes/whois-certs-state.md` §3.2 (origin: `setDNSNoise` in tailscale.com `control/controlclient/direct.go`,
 /// `ipn/ipnlocal/local.go` `SetDNS`, BSD-3-Clause).
 extension ControlClient {
-    /// 200 응답 본문의 한도(계약 한도 표).
+    /// The 200 response body limit (contract limits table).
     static let maximumSetDNSResponseSize = 4 << 10
 
-    /// TXT 레코드 하나를 올려 달라고 요청하고 제어 서버의 답을 기다린다.
+    /// Requests publication of one TXT record and waits for the control server's reply.
     ///
-    /// 이름이 어떤 레코드여야 하는지(자기 cert 도메인의 `_acme-challenge.`)는 부르는 쪽(`TailnetNode.setDNS`)이 본다.
+    /// The caller (`TailnetNode.setDNS`) checks which record name is required (`_acme-challenge.` for its own cert domain).
     ///
-    /// - Throws: 이름이나 값이 비었으면 `invalidConfiguration`. 등록 전이면(node 키 없음) 곧바로 `connection`.
-    ///   60초 안에 연결이 서지 않거나 답이 없거나, 연결이 끊기거나, 200 본문이 4KiB를 넘거나 JSON 객체가 아니면
-    ///   `connection`. 200이 아니면 `http(status:)`.
+    /// - Throws: `invalidConfiguration` for an empty name or value. Throws `connection` immediately before registration (no node key).
+    ///   Throws `connection` if no connection or reply arrives within 60 seconds, the connection drops, or the 200 body exceeds 4KiB or is not a JSON object.
+    ///   Throws `http(status:)` for a status other than 200.
     package func setDNS(name: String, value: String) async throws(ControlError) {
-        guard !name.isEmpty, !value.isEmpty else { throw .invalidConfiguration("set-dns의 이름과 값은 비어 있으면 안 된다") }
-        guard nodePublicKey?.isZero == false else { throw .connection("등록 전에는 set-dns를 보낼 수 없다") }
+        guard !name.isEmpty, !value.isEmpty else { throw .invalidConfiguration("set-dns requires a nonempty name and value") }
+        guard nodePublicKey?.isZero == false else { throw .connection("Cannot send set-dns before registration") }
         let limit = timeouts.setDNS
         do {
             try await withTimeout(limit) { try await self.sendSetDNS(name: name, value: value) }
         } catch let error as ControlError {
             throw error
         } catch is TimeoutError {
-            throw .connection("set-dns가 \(limit) 안에 끝나지 않았다")
+            throw .connection("set-dns did not finish within \(limit)")
         } catch {
-            throw .connection("set-dns가 취소되었다")
+            throw .connection("set-dns was canceled")
         }
     }
 
     private func sendSetDNS(name: String, value: String) async throws(ControlError) {
         let connection = try await waitForConnection()
-        // 기다리는 동안 키가 바뀌었을 수 있으므로 보낼 때의 키를 쓴다.
-        guard let nodeKey = nodePublicKey, !nodeKey.isZero else { throw .connection("등록 전에는 set-dns를 보낼 수 없다") }
+        // Use the key at send time, since it may have changed while waiting.
+        guard let nodeKey = nodePublicKey, !nodeKey.isZero else { throw .connection("Cannot send set-dns before registration") }
         let body: [UInt8]
         do {
             body = Array(try JSONEncoder().encode(SetDNSRequest(nodeKey: nodeKey, name: name, value: value)))
         } catch {
-            throw .connection("set-dns 요청을 JSON으로 만들지 못했다")
+            throw .connection("Could not encode the set-dns request as JSON")
         }
         var reader = try await connection.responseStream(
             to: connection.jsonRequest("POST", path: "/machine/set-dns", nodeKey: nodeKey),
             body: body
         )
-        // 읽개를 버리면 스트림이 취소된다(RST_STREAM). 거절의 본문은 읽지 않는다.
+        // Dropping the reader cancels the stream (RST_STREAM). Skip reading the rejection body.
         guard reader.status == 200 else { throw .http(status: reader.status) }
         var collected: [UInt8] = []
         while let chunk = try await reader.nextChunk() {
             guard collected.count + chunk.count <= Self.maximumSetDNSResponseSize else {
-                throw .connection("set-dns 응답 본문이 한도(\(Self.maximumSetDNSResponseSize)바이트)를 넘는다")
+                throw .connection("set-dns response body exceeds the limit of \(Self.maximumSetDNSResponseSize) bytes")
             }
             collected += chunk
         }
         guard (try? JSONDecoder().decode(SetDNSResponse.self, from: Data(collected))) != nil else {
-            throw .connection("set-dns 응답이 JSON 객체가 아니다")
+            throw .connection("Expected a JSON object in the set-dns response")
         }
     }
 
-    /// 등록을 마친 연결이 설 때까지 기다린다. 기다리는 Task가 취소되면 `connection`을 던진다.
+    /// Waits for a registered connection. Throws `connection` if the waiting Task is canceled.
     private func waitForConnection() async throws(ControlError) -> ControlConnection {
         while true {
             if let activeConnection { return activeConnection }
@@ -79,7 +79,7 @@ extension ControlClient {
             connectionWaiters[id] = continuation
             for await _ in wakeups { break }
             connectionWaiters[id] = nil
-            guard !Task.isCancelled else { throw .connection("취소되었다") }
+            guard !Task.isCancelled else { throw .connection("Canceled") }
         }
     }
 }

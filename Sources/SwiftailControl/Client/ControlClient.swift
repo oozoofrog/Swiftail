@@ -5,16 +5,16 @@ import SwiftailBase
 import SwiftailIO
 import SwiftailTKA
 
-/// 제어 서버 클라이언트. 등록하고, 이 노드의 상태를 올리고, 맵 스트림으로 netmap을 받아 유지한다.
+/// A control server client that registers the node, reports its state, and maintains a netmap from the map stream.
 ///
-/// 이 패키지에서 소켓과 시계를 갖는 곳은 여기뿐이다. 프로토콜의 판단은 입출력 없는 상태 기계
-/// (`ControlHandshake`·`ControlSession`·`HTTP2ClientConnection`·`MapResponseFramer`·`MapSession`)가 하고, 이 actor는
-/// 바이트와 시각을 그것들에 넣고 결과를 사건(`events`)으로 내보낸다.
+/// This is the only place in the package with a socket and a clock. I/O-free state machines
+/// (`ControlHandshake`, `ControlSession`, `HTTP2ClientConnection`, `MapResponseFramer`, and `MapSession`) make protocol decisions. This actor
+/// feeds them bytes and times and emits the results as events (`events`).
 ///
-/// 동시성은 구조적이다. `run()`이 연결 하나의 수명 동안 읽기 루프·맵 스트림·감시·상태 올리기·tailnet lock 절차를 한
-/// TaskGroup의 자식으로 돌리므로, `run()`을 부른 Task를 취소하면 모두 멈추고 소켓이 닫힌다.
+/// Uses structured concurrency. For the lifetime of one connection, `run()` runs the read loop, map stream, watchdog, state reporting, and tailnet lock procedures as children
+/// of one TaskGroup. Canceling the Task that called `run()` stops all children and closes the socket.
 ///
-/// 사건으로 내는 netmap은 tailnet lock으로 이미 걸러져 있다(`ControlClient+TailnetLock.swift`).
+/// Emitted netmaps have already been filtered by tailnet lock (`ControlClient+TailnetLock.swift`).
 ///
 /// ```swift
 /// let client = ControlClient(configuration: .init(serverURL: url, hostname: "rd-mac-1a2b3c4d"),
@@ -23,17 +23,17 @@ import SwiftailTKA
 /// for await event in client.events { … }
 /// ```
 ///
-/// 계약 `docs/contracts/SwiftailControl.md` 단위 4. 절차는 `docs/protocol-notes/control-map.md` 4.1·4.2·4.4·4.5,
-/// `docs/protocol-notes/control-transport.md` 4장 (출처: tailscale.com `control/controlclient/direct.go`·`auto.go`).
+/// Contract `docs/contracts/SwiftailControl.md` unit 4. The procedures are in `docs/protocol-notes/control-map.md` §4.1, §4.2, §4.4, §4.5,
+/// and `docs/protocol-notes/control-transport.md` Chapter 4 (origin: tailscale.com `control/controlclient/direct.go` and `auto.go`).
 public actor ControlClient {
     public struct Configuration: Sendable {
-        /// 제어 서버 URL. `http://` 또는 `https://`.
+        /// The control server URL, using `http://` or `https://`.
         public var serverURL: URL
-        /// 노드의 호스트 이름. 서버가 노드 이름을 지을 때 쓴다.
+        /// The node's hostname. The server uses it to name the node.
         public var hostname: String
-        /// 인증 키. 첫 등록에만 쓴다. 로그에 남기지 않는다.
+        /// The auth key. Used only for initial registration and never logged.
         public var authKey: String?
-        /// 오래 비활성이면 서버가 지우는 노드로 등록한다.
+        /// Registers the node for removal by the server after prolonged inactivity.
         public var ephemeral: Bool
 
         public init(serverURL: URL, hostname: String, authKey: String? = nil, ephemeral: Bool = false) {
@@ -45,18 +45,18 @@ public actor ControlClient {
     }
 
     public enum Event: Sendable {
-        /// 사용자가 이 URL에서 로그인해야 등록이 끝난다.
+        /// The user must log in at this URL to complete registration.
         case loginRequired(URL)
-        /// 등록이 끝났다. 신원은 저장되었다.
+        /// Registration completed and the identity was saved.
         case registered(NodePublicKey)
-        /// netmap이 바뀌었다(맵 스트림의 첫 응답 포함). tailnet lock으로 걸러진 것이고 `tailnetLock`에 그 모습이 있다.
-        /// 피어는 그대로인데 lock의 모습만 바뀌어도(서명 권한 상태의 변화) 다시 낸다.
+        /// The netmap changed, including the first response in the map stream. Tailnet lock has filtered it, and `tailnetLock` shows the lock state.
+        /// Emits it again even if only the lock state changes (a change to the signing authority state) and peers stay the same.
         case netmap(Netmap)
-        /// 맵 스트림이 끊겼다. 물러났다가 다시 잇는다. 그동안 마지막 netmap은 유효하다.
+        /// The map stream disconnected. Backs off and reconnects. The last netmap remains valid in the meantime.
         case disconnected
     }
 
-    /// 지금 알려 둘 이 노드의 상태. 맵 스트림과 별개의 요청으로 올라간다.
+    /// The current state to report for this node. Sent in a request separate from the map stream.
     public struct LocalStatus: Sendable, Equatable {
         public var discoKey: DiscoPublicKey
         public var endpoints: [IPEndpoint]
@@ -76,32 +76,32 @@ public actor ControlClient {
         }
     }
 
-    /// 연결 하나가 살아 있는 동안 맵 스트림 밖에서 처리할 일.
+    /// Work to handle outside the map stream while one connection is open.
     enum SessionSignal: Sendable {
         case statusChanged
         case loginRequested
         case ping(PingRequest)
     }
 
-    /// 응답을 기다리는 요청의 기한. 넘기면 연결 오류로 보고 물러났다가 다시 잇는다.
+    /// Deadlines for requests that wait for a reply. A missed deadline is a connection error followed by backoff and reconnection.
     ///
-    /// Go는 맵 요청(스트림과 상태 갱신 모두)에만 120초 감시 타이머를 두고, 등록과 Followup에는 기한이 없다
-    /// (`direct.go` `sendMapRequest`의 `watchdogTimeout`, `doLogin`). 응답 없는 서버에 영영 묶이지 않게 등록에도
-    /// 같은 120초를 두고, 사용자의 로그인을 기다리는 Followup 긴 폴링에는 10분을 둔다. Followup을 끊어도 후보 키와
-    /// Followup URL을 유지하므로 다시 이으면 같은 로그인을 이어서 기다린다.
+    /// Go uses a 120-second watchdog timer only for map requests (both streaming and state updates) and has no deadline for registration or Followup
+    /// (`watchdogTimeout` in `direct.go`'s `sendMapRequest`, and `doLogin`). To avoid being stuck indefinitely on an unresponsive server, applies
+    /// the same 120 seconds to registration and 10 minutes to a Followup long poll waiting for the user to log in. Keeps the candidate key and
+    /// Followup URL if Followup is interrupted so reconnection resumes waiting for the same login.
     struct Timeouts: Sendable {
-        /// 등록(Followup이 아닌 것)과 상태 올리기.
+        /// Registration other than Followup, and state reporting.
         var request = Duration.seconds(120)
-        /// Followup 긴 폴링.
+        /// A Followup long poll.
         var followup = Duration.seconds(600)
-        /// `setDNS`: 연결을 기다리는 시간과 응답까지 합한 기한(계약 `docs/contracts/SwiftailHost.md` 동작 D2).
+        /// `setDNS`: Total deadline for waiting for a connection and receiving the response (contract `docs/contracts/SwiftailHost.md`, behavior D2).
         var setDNS = Duration.seconds(60)
-        /// tailnet lock의 RPC 하나(Go와 같은 1분. 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 M).
+        /// One tailnet lock RPC (1 minute, as in Go. Contract `docs/contracts/SwiftailTailnetLock.md`, behavior M).
         var tkaRequest = Duration.seconds(60)
-        /// 검증한 상태 없이 닫혀 있을 때(`.unverified`) 부트스트랩을 다시 시도하는 간격의 범위(동작 N6).
+        /// The range of bootstrap retry intervals when closed without verified state (`.unverified`) (behavior N6).
         var lockRetry = Duration.seconds(5)...Duration.seconds(300)
-        /// `logOut()`: 서버 키 받기·연결·응답까지 합한 기한. Go에는 로그아웃만의 기한이 없어(부른 쪽의 context) 계약
-        /// `docs/contracts/SwiftailHost.md` "로그아웃" 동작 O5의 10초다.
+        /// `logOut()`: Total deadline for fetching the server key, connecting, and receiving the response. Go has no logout-specific deadline (uses the caller's context).
+        /// Uses the 10 seconds in contract `docs/contracts/SwiftailHost.md`, "Logout", behavior O5.
         var logout = Duration.seconds(10)
     }
 
@@ -111,8 +111,8 @@ public actor ControlClient {
     let eventContinuation: AsyncStream<Event>.Continuation
     private let eventStream: AsyncStream<Event>
 
-    /// 확정 전의 등록: 후보 node 키와 서버가 준 Followup URL. 사용자가 그 URL에서 로그인하면 이 키로 등록이 끝나므로,
-    /// 등록이 확정되거나 새 로그인을 요청받을 때까지 재연결 너머로 쥔다. 저장하지 않는다(Go `Direct.tryingNewKey`와
+    /// Uncommitted registration holds the candidate node key and the server's Followup URL. The user's login at that URL completes registration with this key,
+    /// so keep it across reconnections until registration is committed or a new login is requested. Does not persist it (as with Go `Direct.tryingNewKey`
     /// `LoginGoal.url`).
     struct PendingRegistration {
         var nodeKey: Curve25519.KeyAgreement.PrivateKey
@@ -120,77 +120,77 @@ public actor ControlClient {
         var followup: String
     }
 
-    /// 버리지 않고 쥐는 사건 수. 구독자가 읽지 않으면 오래된 것부터 버린다.
+    /// The number of events retained before dropping any. Drops the oldest first if the subscriber does not read them.
     static let eventBufferLimit = 64
 
-    /// 지금의 신원. `run()`이 읽거나 만든다.
+    /// The current identity. `run()` loads or creates it.
     var identity = NodeIdentity()
-    /// 설정의 인증 키가 서명된 인증 키(`--TL`)면 그 해석. `run()`이 첫 연결 전에 한 번 해석한다.
+    /// The parsed configuration auth key if it is a signed auth key (`--TL`). `run()` parses it once before the first connection.
     var wrappedAuthKey: WrappedAuthKey?
     var localStatus = LocalStatus()
-    /// 지금 연결에서 마지막으로 올린 상태. 같은 상태를 다시 올리지 않는다.
+    /// The last state reported on the current connection. Skips reporting the same state again.
     var uploadedStatus: LocalStatus?
-    /// 지금 연결에서 마지막으로 올린(응답을 받은) `TKAHead`. 상태와 이것이 모두 같으면 다시 올리지 않는다.
+    /// The last `TKAHead` reported on the current connection for which a response arrived. Skips reporting when both the state and this value match.
     var uploadedTKAHead: String?
-    /// 지금 연결에서 마지막으로 보낸 `TKAHead`(응답을 기다리는 중일 수 있다). 머리 알리기는 이것과 견준다: 올리는 사이
-    /// 머리가 바뀌면 그 응답 뒤에 지금 머리를 다시 올리게 한다.
+    /// The last `TKAHead` sent on the current connection, possibly still awaiting a response. Head reporting compares against this value, so a head change
+    /// during reporting causes the current head to be sent after the response.
     var sentTKAHead: String?
     var needsRegistration = true
-    /// 다음 등록에서 새 node 키를 만든다(대화형 로그인, 만료).
+    /// Creates a fresh node key for the next registration (interactive login or expiration).
     var rotateNodeKey = false
-    /// `startInteractiveLogin()`을 부른 횟수. 등록은 시작할 때의 값과 끝날 때의 값이 같을 때만 그 요청을 채운 것으로 본다.
+    /// The number of `startInteractiveLogin()` calls. Registration satisfies that request only if this value is the same at the start and end.
     var loginRequests = 0
     var pendingRegistration: PendingRegistration?
-    /// 로그인을 기다리는 Followup 긴 폴링이 걸려 있을 때, 새 로그인 요청으로 그것을 그만두게 하는 통로.
+    /// The channel that stops a Followup long poll awaiting login when a new login is requested.
     var followupInterrupt: AsyncStream<Void>.Continuation?
-    /// 만료로 새 키를 등록했고, 아직 만료되지 않은 self 노드를 받지 못했다. 이때 또 만료면 끝낸다.
+    /// A fresh key was registered due to expiration and an unexpired self node has yet to arrive. Stops on a second expiration in this state.
     var renewedExpiredKey = false
-    /// 지금 연결에서 받은 마지막 netmap의 self 노드 키 만료 시각. 감시가 이 시각에 깨어난다.
+    /// The self node key's expiration time from the last netmap on the current connection. The watchdog wakes at that time.
     var selfKeyExpiry: Date?
-    /// `selfKeyExpiry`가 바뀌면 잠든 감시를 깨운다.
+    /// Wakes the sleeping watchdog when `selfKeyExpiry` changes.
     var selfKeyExpiryChanged: AsyncStream<Void>.Continuation?
-    /// 연속 실패 수. 전체 netmap을 받으면 0이 된다.
+    /// The consecutive failure count. Resets to 0 on receipt of a full netmap.
     var consecutiveFailures = 0
-    /// 지금 맵 스트림이 열려 있다.
+    /// Whether a map stream is currently open.
     var mapStreamOpen = false
-    /// 맵 스트림에서 마지막으로 무언가를 받은 시각. 120초 감시의 기준이다.
+    /// The latest time any data arrived on the map stream. The 120-second watchdog uses this time.
     var lastMapActivity = ContinuousClock.now
-    /// 이미 답한 핑의 URL. 서버가 같은 핑을 다시 보내도 한 번만 답한다.
+    /// The URLs of pings already answered. Replies only once even if the server resends the same ping.
     var lastPingURL: String?
-    /// 검증한 서명 권한 상태. lock이 없으면 nil. `run()`이 저장소에서 열고, 연결이 끊겨 다시 이어도 그대로 쥔다.
+    /// The verified signing authority state, or nil without lock. `run()` opens it from storage and retains it across reconnects.
     var lockAuthority: Authority?
-    /// 저장된 서명 권한 상태를 열지 못했다. 앱이 그 파일을 지우고 다시 시작할 때까지 피어를 올리지 않는다.
+    /// The stored signing authority state could not be opened. Withholds peers until the app deletes the file and restarts.
     var isLockStoreUnreadable = false
-    /// 거절한 끄기 비밀들의 BLAKE2s-256(오래된 것부터 `maximumRejectedDisablementCount`개까지)과 그때의 머리. 같은 비밀로
-    /// KDF(16MiB)를 다시 돌리지 않는다. 머리가 바뀌면 새로 쥔다. 메모리에만 쥔다.
+    /// The BLAKE2s-256 digests of rejected disablement secrets (oldest first, up to `maximumRejectedDisablementCount`) and the head at that time. These avoid
+    /// rerunning the KDF (16MiB) for the same secret. Resets on a head change. Kept only in memory.
     var rejectedDisablements: (head: AUMHash, secretDigests: [[UInt8]])?
-    /// 저장된 상태가 서버가 알린 사슬과 이어지지 않았다(동기화에서 교차를 찾지 못했다). 다음 동기화가 교차를 찾거나 lock이
-    /// 꺼지면 풀린다. 연결이 끊겨도 쥔다.
+    /// The stored state failed to connect to the chain reported by the server (synchronization found no intersection). Clears when a later sync finds an intersection or the lock is
+    /// disabled. Retained across disconnects.
     var isLockStateDiverged = false
-    /// 끄기 비밀의 KDF를 돈 횟수. 같은 비밀을 다시 계산하지 않는지 시험이 본다.
+    /// The number of times the disablement secret KDF ran. Tests verify that the same secret is not recomputed.
     var disablementDerivationCount = 0
-    /// 지금 맵 세션의 tailnet lock 처리 상태.
+    /// Tailnet lock processing state for the current map session.
     var lockSession = LockSession()
-    /// 지금 연결의 신호 통로. 연결이 없으면 nil.
+    /// The signal channel for the current connection, or nil without a connection.
     var signals: AsyncStream<SessionSignal>.Continuation?
-    /// 등록을 마친 지금 연결. 맵 스트림 밖의 요청(`setDNS`)이 이 연결 위의 새 스트림으로 나간다. 연결이 없으면 nil.
+    /// The current registered connection. Requests outside the map stream (`setDNS`) use new streams on it. Nil without a connection.
     var activeConnection: ControlConnection?
-    /// `activeConnection`이 서기를 기다리는 `setDNS`의 깨움 통로. 연결이 서면 모두 깨운다.
+    /// The wakeup channel for `setDNS` calls waiting for `activeConnection`. Wakes them all when the connection opens.
     var connectionWaiters: [Int: AsyncStream<Void>.Continuation] = [:]
     var nextConnectionWaiter = 0
-    /// 통로에 든 채 아직 처리하지 않은 신호. 처리(상태 올리기의 물러나기, 핑 답)가 막힌 동안 통로가 끝없이 자라지
-    /// 않게 한다: 상태 바뀜은 하나면 충분하고(올릴 때 마지막 값을 읽는다), 핑은 `queuedPingLimit`개까지만 넣는다.
+    /// Signals queued in the channel and not yet handled. Keeps the channel from growing unbounded while processing is blocked (state-reporting backoff or ping replies).
+    /// One state-change signal suffices because reporting reads the latest value. Queues at most `queuedPingLimit` pings.
     var isStatusChangeQueued = false
     var queuedPings = 0
     static let queuedPingLimit = 8
-    /// 연결을 묶을 인터페이스. nil이면 묶지 않는다. `run()`이 연결을 시작할 때, `logOut()`이 연결할 때 읽는다.
+    /// The interface to bind the connection to. Nil leaves it unbound. Read when `run()` starts a connection and when `logOut()` connects.
     private(set) var networkInterface: NWInterface?
-    /// `setNetworkInterface`를 부른 횟수. 연결 시도는 시작할 때의 값과 달라지면 그 시도를 버린다. 신호가 시도 사이에
-    /// 들어와도 잃지 않게 하는 기준이다(`loginRequests`와 같은 방식).
+    /// The number of `setNetworkInterface` calls. Drops a connection attempt if this value differs from its starting value. This keeps signals
+    /// received between attempts from being lost (like `loginRequests`).
     private var interfaceGeneration = 0
-    /// 지금 기다리는 쪽의 깨움 통로. 기다리는 곳이 없으면 nil.
+    /// The wakeup channel for the current waiter, or nil when nothing is waiting.
     private var interfaceChange: AsyncStream<Void>.Continuation?
-    /// 지금 쥔 제어 서버의 Noise 공개 키. 연결이 실패하면 지우고 다음에 다시 받는다.
+    /// The currently cached control server Noise public key. Clears it on connection failure and fetches it again next time.
     private var serverKey: MachinePublicKey?
     private var hasRun = false
 
@@ -198,7 +198,7 @@ public actor ControlClient {
         self.init(configuration: configuration, identityStore: identityStore, timeouts: Timeouts())
     }
 
-    /// 기한을 정해 만든다. 시험이 짧은 기한을 넣을 때 쓴다.
+    /// Creates a client with specified deadlines. Tests use it to supply short deadlines.
     init(configuration: Configuration, identityStore: NodeIdentityStore, timeouts: Timeouts) {
         self.configuration = configuration
         self.identityStore = identityStore
@@ -206,13 +206,13 @@ public actor ControlClient {
         (eventStream, eventContinuation) = AsyncStream.makeStream(of: Event.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
     }
 
-    /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 이 흐름도 끝난다.
+    /// The event stream. Supports one subscriber. Ends when `run()` ends.
     ///
-    /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. `netmap`은 늘 전체 상태이므로 마지막 것만
-    /// 읽어도 된다.
+    /// Keeps up to the newest 64 unread events and drops the oldest first. A `netmap` always contains the full state, so reading only the latest
+    /// one suffices.
     public nonisolated var events: AsyncStream<Event> { eventStream }
 
-    /// 상태를 바꾼다. 연결되어 있으면 곧 올리고, 아니면 다음 연결 때 올린다. 마지막 값만 남는다.
+    /// Updates the state. Reports it immediately when connected or on the next connection otherwise. Keeps only the latest value.
     public func setLocalStatus(_ status: LocalStatus) {
         localStatus = status
         guard !isStatusChangeQueued, let signals else { return }
@@ -220,8 +220,8 @@ public actor ControlClient {
         signals.yield(.statusChanged)
     }
 
-    /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도). 새 node 키로 다시 등록하고,
-    /// 서버가 준 URL을 `loginRequired`로 알린다.
+    /// Requests a new interactive login URL even if already registered. Re-registers with a fresh node key and
+    /// reports the server's URL in `loginRequired`.
     public func startInteractiveLogin() {
         rotateNodeKey = true
         needsRegistration = true
@@ -231,45 +231,45 @@ public actor ControlClient {
         signals?.yield(.loginRequested)
     }
 
-    /// 연결을 묶을 인터페이스를 바꾸고, 지금 연결을 끊고 새 인터페이스로 곧바로 다시 잇는다.
+    /// Changes the interface the connection is bound to, closes the current connection, and immediately reconnects on the new interface.
     ///
-    /// 물러나지 않는다. 연결 중이든, 이어진 채 맵 스트림을 받는 중이든, 실패해서 물러나는 중이든 지금 하던 것을
-    /// 버리고 곧바로 새 연결을 시작한다. 등록 상태와 마지막 netmap은 그대로다(맵 스트림은 새 연결에서 전체 맵부터
-    /// 다시 받는다). 끊긴 연결은 `disconnected`로 알린다.
+    /// Skips backoff. Whether connecting, receiving the map stream on an open connection, or backing off after a failure, abandons the current work
+    /// and immediately starts a new connection. Retains registration state and the last netmap (the map stream starts with a full map
+    /// on the new connection). Reports the closed connection as `disconnected`.
     ///
-    /// **같은 인터페이스를 다시 알려도 다시 잇는다.** 같은 Wi-Fi에서 주소만 바뀐 경우(다른 AP, DHCP 갱신) 옛 연결은
-    /// 이미 죽어 있다. 다시 이을지의 판정(인터페이스나 로컬 주소가 바뀌었는가, `docs/contracts/SwiftailTunnel.md`
-    /// 동작 N 2)은 부르는 쪽의 몫이고, 여기서는 부른 만큼 다시 잇는다. 여러 번 연달아 불러도 시도 하나를 새로 시작할
-    /// 뿐이고 가장 나중 값을 쓴다.
+    /// **Even reporting the same interface again reconnects.** On the same Wi-Fi network, an address-only change (a different AP or a DHCP renewal) leaves the old connection
+    /// dead. The caller decides whether to reconnect (whether the interface or local address changed, `docs/contracts/SwiftailTunnel.md`
+    /// behavior N §2). This method reconnects when called. Several calls in succession start only one new attempt
+    /// with the latest value.
     ///
-    /// `shortcut:` 망이 내려간 것(만족된 경로 없음)은 알리지 않는다. 그동안 연결은 `run()`의 재시도·물러남으로 버틴다.
-    /// 필요해지는 시점: 실기기에서 망이 없는 동안의 재시도가 배터리·메모리에 문제일 때
-    /// (`docs/contracts/SwiftailTunnel.md` 동작 N 5).
+    /// `shortcut:` does not report network loss (no satisfied path). The connection relies on retries and backoff in `run()` while the network is down.
+    /// Add reporting if retries while the network is unavailable cause battery or memory problems on a real device
+    /// (`docs/contracts/SwiftailTunnel.md` behavior N §5).
     ///
-    /// `run()`을 시작하기 전이나 끝난 뒤에 부르면 값만 기억한다. `nil`이면 묶지 않는다. 서버가 루프백이면 어느
-    /// 인터페이스든 묶지 않는다(`NetworkSocket.bindableInterface`).
+    /// Calling before `run()` starts or after it finishes only stores the value. A `nil` value leaves the connection unbound. Loopback servers
+    /// always use an unbound connection (`NetworkSocket.bindableInterface`).
     public func setNetworkInterface(_ interface: NWInterface?) {
         networkInterface = interface
         interfaceGeneration += 1
         interfaceChange?.yield()
     }
 
-    /// 등록하고, 상태를 올리고, 맵 스트림을 유지한다. 끊기면 물러났다가 다시 잇는다.
-    /// 호출한 Task가 취소될 때까지 돌아오지 않는다. 다시 시도해도 소용없는 실패는 던진다.
-    /// 클라이언트 하나에 한 번만 부른다. 실행 중이든 끝난 뒤든 다시 부르면 `invalidConfiguration`이다.
+    /// Registers, reports state, and maintains the map stream. Backs off and reconnects after a disconnect.
+    /// Returns only when the calling Task is canceled. Throws failures that retrying cannot help.
+    /// Call once per client. A repeated call while running or after completion throws `invalidConfiguration`.
     public func run() async throws(ControlError) {
-        guard !hasRun else { throw .invalidConfiguration("run()은 클라이언트 하나에 한 번만 부른다") }
+        guard !hasRun else { throw .invalidConfiguration("Call run() only once per client") }
         hasRun = true
         defer { eventContinuation.finish() }
 
         let endpoint = try ControlEndpoint(serverURL: configuration.serverURL)
-        guard !configuration.hostname.isEmpty else { throw .invalidConfiguration("호스트 이름이 비었다") }
+        guard !configuration.hostname.isEmpty else { throw .invalidConfiguration("Hostname is empty") }
         try prepareRegistration()
         openLockStore()
         needsRegistration = true
 
         while !Task.isCancelled {
-            // 인터페이스와 그 세대는 시도를 시작하는 순간 함께 읽는다(둘 사이에 멈추는 곳이 없다).
+            // Read the interface and its generation together at the start of the attempt, with no suspension point between them.
             let (interface, generation) = (networkInterface, interfaceGeneration)
             let delay: Duration
             do {
@@ -283,7 +283,7 @@ public actor ControlClient {
                 case SessionInterruption.loginRequested:
                     delay = .zero
                 case SessionInterruption.interfaceChanged:
-                    // 옛 망에서 쌓인 실패로 새 망의 첫 시도를 늦추지 않는다.
+                    // Failures accumulated on the old network must not delay the first attempt on the new network.
                     consecutiveFailures = 0
                     delay = .zero
                 case SessionInterruption.rateLimited(let wait):
@@ -291,7 +291,7 @@ public actor ControlClient {
                 case let error as ControlError where !error.isRetryable:
                     throw error
                 default:
-                    // 연결·HTTP 실패, 만료로 인한 재등록. 서버 키도 다시 받는다(서버가 키를 바꿨을 수 있다).
+                    // Connection or HTTP failure, or re-registration after expiration. Fetch the server key again because the server may have changed it.
                     serverKey = nil
                     consecutiveFailures += 1
                     delay = Backoff.delay(failures: consecutiveFailures, maximum: RetryPolicy.maximumBackoff, jitter: .random(in: 0..<1))
@@ -302,7 +302,7 @@ public actor ControlClient {
                 eventContinuation.yield(.disconnected)
             }
             do {
-                // 물러나는 동안에도 인터페이스가 바뀌면 기다리지 않고 곧바로 다시 잇는다.
+                // If the interface changes during backoff, reconnect immediately without waiting.
                 try await untilInterfaceChanges(since: generation) {
                     try await Task.sleep(for: delay, clock: .continuous)
                 }
@@ -314,7 +314,7 @@ public actor ControlClient {
         }
     }
 
-    /// 서버 키를 받고(아직 없으면) 연결을 맺어 `serve`를 돌린다. 던지는 것으로만 끝난다.
+    /// Fetches the server key if needed, establishes a connection, and runs `serve`. Ends only by throwing.
     private func connectAndServe(to endpoint: ControlEndpoint, interface: NWInterface?) async throws {
         let key: MachinePublicKey
         if let serverKey { key = serverKey } else { key = try await ServerKey.fetch(for: endpoint) }
@@ -324,11 +324,11 @@ public actor ControlClient {
         }
     }
 
-    /// `operation`을 돌리다가 `generation` 뒤에 인터페이스가 바뀌면 취소하고 `SessionInterruption.interfaceChanged`를
-    /// 던진다. `operation`이 먼저 끝나면 그 결과(또는 오류)를 낸다.
+    /// Runs `operation`. If the interface changes after `generation`, cancels it and throws `SessionInterruption.interfaceChanged`.
+    /// If `operation` finishes first, returns its result or throws its error.
     ///
-    /// 깨움 통로는 기다릴 때마다 새로 만든다. 경쟁에서 진 쪽을 취소하면 그 흐름은 끝나기 때문이다. 이미 바뀌어 있었으면
-    /// (`generation`이 낡았으면) 통로가 곧바로 깨어난다. 그래서 시도 사이에 들어온 변경도 잃지 않는다.
+    /// Creates a fresh wakeup channel for each wait because canceling the loser of the race closes its stream. If the interface already changed
+    /// (`generation` is stale), the channel wakes immediately. This also preserves changes that arrive between attempts.
     private func untilInterfaceChanges<Result: Sendable>(
         since generation: Int, _ operation: @escaping @Sendable () async throws -> Result
     ) async throws -> Result {
@@ -350,8 +350,8 @@ public actor ControlClient {
         }
     }
 
-    /// 연결 하나에서 할 일: 필요하면 등록, 상태 올리기, 그 뒤 맵 스트림·감시·신호 처리·tailnet lock 절차를 함께 돌린다.
-    /// 던지는 것으로만 끝난다.
+    /// Handles one connection: registers if needed, reports state, then runs the map stream, watchdog, signal handling, and tailnet lock procedures together.
+    /// Ends only by throwing.
     private func serve(_ connection: ControlConnection) async throws {
         let (signalStream, continuation) = AsyncStream.makeStream(of: SessionSignal.self)
         signals = continuation
@@ -383,14 +383,14 @@ public actor ControlClient {
             group.addTask { try await self.handle(signalStream, over: connection) }
             group.addTask { try await self.runLockProcedures(over: connection) }
             try await group.next()
-            throw ControlError.connection("맵 처리가 끝났다")
+            throw ControlError.connection("Map processing has ended")
         }
     }
 
-    /// 지금 신원으로 정한 node 공개 키. 등록 전이면 nil.
+    /// The node public key for the current identity, or nil before registration.
     var nodePublicKey: NodePublicKey? { identity.nodePublicKey }
 
-    /// 등록·상태 올리기에 보낼 Hostinfo.
+    /// The Hostinfo to send with registration and state reporting.
     var hostinfo: Hostinfo {
         Hostinfo.swiftail(
             hostname: configuration.hostname,
@@ -400,37 +400,37 @@ public actor ControlClient {
     }
 }
 
-/// 연결 하나를 끝내는 사정 가운데 `ControlError`로 드러내지 않는 것.
+/// Reasons a connection ends that are outside `ControlError`.
 enum SessionInterruption: Error {
-    /// 대화형 로그인을 요청받았다. 곧바로 다시 연결해 등록한다.
+    /// Interactive login was requested. Reconnects immediately to register.
     case loginRequested
-    /// self 노드의 키가 만료되었다(맵 응답 또는 만료 시각의 도래). 물러났다가 새 키로 다시 등록한다.
+    /// The self node key expired (a map response or the expiration time arrived). Backs off and registers again with a fresh key.
     case nodeKeyExpired
-    /// 서버가 기다리라고 했다(429, `Retry-After`가 붙은 503).
+    /// The server instructed the client to wait (429 or 503 with `Retry-After`).
     case rateLimited(Duration)
-    /// `setNetworkInterface`가 불렸다. 물러나지 않고 곧바로 새 인터페이스로 다시 잇는다.
+    /// `setNetworkInterface` was called. Reconnects immediately on the new interface without backoff.
     case interfaceChanged
 }
 
 extension ControlClient.PendingRegistration: CustomReflectable {
-    /// 후보 node 키는 공개 키만 보인다.
+    /// Exposes only the public key of the candidate node key.
     var customMirror: Mirror {
         Mirror(self, children: ["nodePublicKey": NodePublicKey(nodeKey.publicKey), "oldNodeKey": oldNodeKey, "followup": followup])
     }
 }
 
 extension ControlClient.Configuration: CustomStringConvertible, CustomReflectable {
-    /// 인증 키를 가린다. 설정 값을 그대로 로그에 찍어도 비밀이 새지 않게 한다.
+    /// Redacts the auth key so logging the configuration value as is does not leak the secret.
     public var description: String {
-        "Configuration(serverURL: \(serverURL), hostname: \(hostname), authKey: \(authKey == nil ? "없음" : "<가림>"), ephemeral: \(ephemeral))"
+        "Configuration(serverURL: \(serverURL), hostname: \(hostname), authKey: \(authKey == nil ? "none" : "<redacted>"), ephemeral: \(ephemeral))"
     }
 
-    /// `dump`는 `description`을 거치지 않으므로 여기서도 인증 키를 가린다.
+    /// Redacts the auth key here too because `dump` bypasses `description`.
     public var customMirror: Mirror {
         Mirror(self, children: [
             "serverURL": serverURL,
             "hostname": hostname,
-            "authKey": authKey == nil ? "없음" : "<가림>",
+            "authKey": authKey == nil ? "none" : "<redacted>",
             "ephemeral": ephemeral,
         ])
     }

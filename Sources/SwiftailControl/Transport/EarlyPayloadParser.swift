@@ -1,28 +1,28 @@
 import Foundation
 import SwiftailBase
 
-/// Noise 평문 스트림 맨 앞에 올 수 있는 서버의 선행 메시지(early payload)를 걸러 낸다.
+/// Separates the server's optional early payload from the start of the Noise plaintext stream.
 ///
-/// 서버가 보내는 평문의 첫 9바이트는 HTTP/2 SETTINGS 프레임 머리이거나, 매직 `ff ff ff 54 53`과 JSON 길이
-/// (uint32 BE)로 된 early payload 머리다. 매직이면 그 길이만큼의 `tailcfg.EarlyNoise` JSON을 읽어 내고,
-/// 아니면 9바이트를 포함한 모든 바이트를 그대로 HTTP/2에 넘긴다. 매직을 걸러 내지 못하면 HTTP/2 해석이
-/// 깨지므로 서버가 보내지 않더라도 이 단계를 거친다.
+/// The first 9 plaintext bytes from the server are either an HTTP/2 SETTINGS frame header or an early payload header with magic
+/// `ff ff ff 54 53` and a JSON length (uint32 BE). When the magic matches, reads that many bytes of `tailcfg.EarlyNoise` JSON.
+/// Otherwise, passes all bytes, including the first 9, unchanged to HTTP/2. Since missing the magic would break HTTP/2 parsing,
+/// this step runs even when the server sends no early payload.
 ///
-/// JSON 해석은 Go의 `json.Unmarshal`(포인터 대상)을 따른다: `null`은 payload 없음, 모르는 필드는 무시,
-/// `nodeKeyChallenge`의 접두사·길이·16진이 틀리면 실패. 빈 JSON(길이 0)도 실패다.
+/// JSON parsing follows Go's `json.Unmarshal` into a pointer. Treats `null` as no payload and ignores unknown fields.
+/// An invalid `nodeKeyChallenge` prefix, length, or hexadecimal value fails, as does empty JSON (length 0).
 ///
-/// `docs/protocol-notes/control-transport.md` 3.7절, 4.7절 8단계
-/// (출처: tailscale.com `control/ts2021/conn.go`의 `readHeader`, `tailcfg/tailcfg.go`의 `EarlyNoise`).
+/// `docs/protocol-notes/control-transport.md` §3.7, §4.7 step 8
+/// (origin: `readHeader` in tailscale.com `control/ts2021/conn.go` and `EarlyNoise` in `tailcfg/tailcfg.go`).
 public struct EarlyPayloadParser: Sendable {
-    /// 서버가 연결마다 보내는 선행 정보.
+    /// The early information sent by the server for each connection.
     public struct EarlyPayload: Sendable, Equatable {
-        /// 클라이언트가 node 개인 키를 가졌음을 증명할 때 쓰라고 주는 일회용 공개 키.
-        /// 필드가 없거나 `null`이거나 0 키면 `nil`이다.
+        /// A one-time public key used by the client to prove possession of the node private key.
+        /// A missing field, `null`, or an all-zero key yields `nil`.
         public var nodeKeyChallenge: ChallengePublicKey?
     }
 
     static let magic: [UInt8] = [0xFF, 0xFF, 0xFF, 0x54, 0x53]
-    /// HTTP/2 프레임 머리와 같은 크기다.
+    /// The same size as an HTTP/2 frame header.
     static let headerSize = 9
     static let maximumPayloadSize = 10 << 20
 
@@ -31,10 +31,10 @@ public struct EarlyPayloadParser: Sendable {
 
     public init() {}
 
-    /// 판단하기에 바이트가 모자라면 nil. 판단이 끝나면 (있었다면) 선행 메시지와 그 뒤의 바이트(HTTP/2의 것).
+    /// Returns nil until there are enough bytes to decide. Once determined, returns the early message (if present) and bytes following it (for HTTP/2).
     ///
-    /// - Throws: JSON 길이가 10MiB를 넘으면 `messageTooLarge`, JSON이 틀리면 `malformed`,
-    ///   판단을 이미 돌려줬거나 실패한 뒤면 `closed`.
+    /// - Throws: `messageTooLarge` for a JSON length over 10MiB, `malformed` for invalid JSON,
+    ///   or `closed` after returning the result or failing.
     public mutating func receive(_ plaintext: [UInt8]) throws(ControlTransportError) -> (payload: EarlyPayload?, remainder: [UInt8])? {
         guard !isDone else { throw .closed }
         buffer += plaintext
@@ -48,7 +48,7 @@ public struct EarlyPayloadParser: Sendable {
         let end = Self.headerSize + length
         guard buffer.count >= end else { return nil }
 
-        // `try?`를 쓰면 JSON `null`과 해석 실패가 똑같이 nil로 합쳐진다.
+        // Using `try?` would collapse JSON `null` and a parsing failure to the same nil.
         let decoded: EarlyNoise?
         do {
             decoded = try JSONDecoder().decode(EarlyNoise?.self, from: Data(buffer[Self.headerSize..<end]))
@@ -73,7 +73,7 @@ public struct EarlyPayloadParser: Sendable {
     }
 }
 
-/// `tailcfg.EarlyNoise`의 JSON 모양. 와이어 해석에만 쓴다.
+/// The JSON shape of `tailcfg.EarlyNoise`, used only for wire decoding.
 private struct EarlyNoise: Decodable {
     var nodeKeyChallenge: ChallengePublicKey?
 }

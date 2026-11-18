@@ -1,10 +1,10 @@
-/// HPACK 압축기: 헤더 필드를 헤더 블록 바이트로 만든다.
+/// An HPACK encoder that turns header fields into header block bytes.
 ///
-/// 가장 단순하고 규격상 유효한 표현만 쓴다. 모든 필드를 "표에 넣지 않는 리터럴, 새 이름"(RFC 7541 §6.2.2,
-/// 첫 바이트 `0x00`)으로 적고 문자열은 허프만 없이 보낸다. 동적 표를 쓰지 않으므로 압축기에는 상태가
-/// 없고, 상대의 SETTINGS_HEADER_TABLE_SIZE에 맞출 일도 없다.
+/// Uses only the simplest valid representation. Encodes every field as "literal without indexing, new name" (RFC 7541 §6.2.2,
+/// first byte `0x00`) and sends strings without Huffman coding. Omitting the dynamic table keeps the encoder stateless
+/// and independent of the peer's SETTINGS_HEADER_TABLE_SIZE.
 ///
-/// shortcut: 정적 표 색인과 동적 표를 쓰지 않는다(요청마다 헤더가 조금 길어진다), 요청이 많아 헤더 크기가 문제가 될 때 올린다.
+/// shortcut: omits static table indices and the dynamic table (slightly larger headers per request), add support if request volume makes header size a problem.
 enum HPACKEncoder {
     static func encode(_ fields: [HeaderField]) -> [UInt8] {
         var block: [UInt8] = []

@@ -1,66 +1,66 @@
 import Foundation
 
-/// 맵 스트림의 HTTP 본문을 맵 응답으로 자른다.
+/// Splits the map stream's HTTP body into map responses.
 ///
-/// 프레임은 4바이트 리틀엔디언 길이 N과 N바이트의 JSON이다. 한 본문에 프레임이 끝없이 이어지고,
-/// 프레임 경계는 HTTP/2 DATA 프레임 경계와 무관하다. 그래서 받은 바이트를 모아 두었다가 다 찬 프레임만
-/// 해독한다. 길이 접두가 한도를 넘으면 그 바이트를 모으기 전에 실패한다.
+/// A frame consists of a 4-byte little-endian length N and N bytes of JSON. Frames continue indefinitely in one body,
+/// independently of HTTP/2 DATA frame boundaries. Buffer incoming bytes and decode only complete
+/// frames. If the length prefix exceeds the limit, fail before buffering that many bytes.
 ///
-/// 해독 전에 페이로드를 한 번 훑어 중첩 깊이(`maximumNestingDepth`)와 값의 수(`maximumValueCount`)를
-/// 검사한다. 바이트 한도만으로는 재귀 해독의 스택과 해독 뒤의 메모리를 막지 못하기 때문이다.
+/// Before decoding, scans the payload once to check nesting depth (`maximumNestingDepth`) and value count (`maximumValueCount`).
+/// A byte limit alone cannot bound recursive decoding stack use or memory use after decoding.
 ///
-/// 요청의 `Compress`를 비워 두므로 페이로드는 비압축 JSON이다. `shortcut:` zstd 해제기는 없다. 운영 서버가
-/// 비압축을 받아 주지 않으면 그때 추가한다(계약 "프레이밍과 증분 적용").
+/// Leaving the request's `Compress` empty makes the payload uncompressed JSON. `shortcut:` no zstd decoder. Add one if the production
+/// server rejects uncompressed responses (contract "Framing and Applying Deltas").
 /// `docs/protocol-notes/control-map.md` 3.1, 3.5.
 public struct MapResponseFramer: Sendable {
-    /// 프레임 하나의 최대 페이로드 크기(8MiB). Go의 256MiB보다 훨씬 낮다. iOS 패킷 터널 확장의 메모리 한도(약 50MiB,
-    /// 첫 사용처의 보고치) 때문이다.
+    /// The maximum payload of one frame (8MiB), far below Go's 256MiB. This is due to the iOS packet tunnel extension's memory limit
+    /// (about 50MiB, as reported by the first adopter).
     ///
-    /// 근거는 해독의 최고치다. 프레임을 다 모은 뒤 해독하므로, 바이트 버퍼와 해독한 값이 한꺼번에 메모리에 있다. 정상
-    /// 자료로 한도를 채울 때 해독 결과는 64MiB 프레임에서 약 110MB(`maximumValueCount`의 잰 값)였고, 같은 비율로 8MiB는
-    /// 약 14MB다. 한도 50MiB 안에 들면서 유휴 상주(20MiB 이하 목표)에 얹어도 넘치지 않는 크기다. 피어 1,000개
-    /// tailnet의 비압축 전체 맵이 수 MB라는 것은 추정이며 확인하지 못했다. 이 한도를 넘는 tailnet은 맵을 받지 못하므로
-    /// 실기기 측정에서 `frameTooLarge`가 보이면 조정한다(`docs/contracts/SwiftailTunnel.md` 동작 M, 총괄 확인 필요 T5).
+    /// The limit is based on peak decoding memory. The entire frame is buffered before decoding, so its byte buffer and decoded values coexist in memory. With normal
+    /// data filling the limit, decoding a 64MiB frame used about 110MB (measured for `maximumValueCount`). At the same ratio, 8MiB uses
+    /// about 14MB. This fits within the 50MiB limit even on top of idle resident memory (target at most 20MiB). An uncompressed full map for a tailnet
+    /// with 1,000 peers is estimated to be several MB, and this is unverified. A tailnet over this limit cannot receive its map,
+    /// so adjust the limit if real device measurements show `frameTooLarge` (`docs/contracts/SwiftailTunnel.md` behavior M, requires lead session confirmation T5).
     static let maximumFrameSize = 8 << 20
 
-    /// 페이로드 JSON의 최대 중첩 깊이(최상위 객체가 1). 넘으면 `malformed`.
+    /// The maximum payload JSON nesting depth (the top-level object is 1). Exceeding it yields `malformed`.
     ///
-    /// `Decodable` 해독은 재귀라서 깊은 JSON은 스택을 다 쓰고 프로세스를 죽인다(오류로 잡을 수 없다).
-    /// - 실제 tailcfg의 깊이: Go 자료(`map-sessions.json`) 73응답의 최대는 7이다. 가장 깊은 경로는
-    ///   `PacketFilter[].CapGrant[].CapMap.<속성>[]`에 인자 JSON이 붙는 9 + 인자의 깊이다.
-    /// - 스택: 보조 스레드의 기본 스택(512KiB)에서 Debug 빌드로 `CapMap` 인자 배열 중첩을 해독하면
-    ///   깊이 210은 견디고 215에서 스택이 넘친다(1단계에 약 2.4KiB). 64단계는 약 155KiB로 그 스택의
-    ///   3분의 1이 안 되어, 호출하는 쪽이 이미 스택을 쓰고 있어도 여유가 있다.
+    /// `Decodable` decoding is recursive, so deeply nested JSON exhausts the stack and kills the process (the error cannot be caught).
+    /// - Actual tailcfg depth: The maximum across 73 responses in the Go data (`map-sessions.json`) is 7. The deepest path is
+    ///   `PacketFilter[].CapGrant[].CapMap.<capability>[]` with argument JSON appended, at depth 9 + the argument's depth.
+    /// - Stack: Decoding nested `CapMap` argument arrays in a Debug build on a secondary thread with the default stack (512KiB)
+    ///   survives depth 210 and overflows at 215 (about 2.4KiB per level). 64 levels use about 155KiB, less than a third
+    ///   of the stack, leaving room even when the caller is already using stack space.
     static let maximumNestingDepth = 64
 
-    /// 페이로드 하나에 든 값(배열 원소 + 객체 멤버)의 최대 수. 넘으면 `malformed`.
+    /// The maximum number of values (array elements + object members) per payload. Exceeding it yields `malformed`.
     ///
-    /// 해독한 값의 메모리는 JSON 바이트와 비례하지 않는다. `{}` 3바이트가 `Node` 하나(stride 392바이트)가
-    /// 되므로 프레임 한도 안에 수백만 개의 노드가 들어간다(8MiB ÷ 3 ≈ 280만). 그래서 값의 수로 해독 뒤 메모리를 묶는다.
-    /// - 정상 크기: Go 자료의 노드 하나는 값 8~29개(바이트 223~729)다. 피어 10,000명의 전체 맵은
-    ///   노드에 29 × 10,000 = 290,000, 프로필(값 약 6개)에 60,000으로 약 350,000이다. 1,000,000은
-    ///   그 약 2.9배이고, 노드 하나에 값 100개를 써도 피어 10,000명이 들어간다.
-    /// - 잰 메모리(Debug, 해독 전후 phys_footprint): Go 자료의 가장 큰 노드(값 29개) 100,000개는 노드당
-    ///   약 3.2KB(값당 약 110바이트)이고, 값 하나로 가장 크게 부풀리는 빈 `Node` `{}`(stride 392바이트)
-    ///   100,000개는 노드당 약 1.3KB다. 해독기의 중간 표현과 배열 확장이 포함된 수치다.
-    /// - 최악의 메모리: 1,000,000 × 1.3KB ≈ 1.3GB(바이트 한도만 있을 때는 8MiB ÷ 3 × 1.3KB ≈ 3.6GB).
-    ///   정상 자료로 64MiB를 채우면 약 110MB였고, 8MiB는 약 14MB다. 정상 자료는 50MB 확장 한도
-    ///   안이지만 최악은 그보다 크므로, 이 한도는 해독을 끝까지 마칠 수 있는 크기로 묶을 뿐 확장의 메모리를 보장하지
-    ///   않는다. 제어 서버는 Noise로 인증된 상대다.
+    /// Decoded values' memory is not proportional to JSON bytes. A 3-byte `{}` becomes one `Node` (392-byte stride),
+    /// so a single frame can contain millions of nodes (8MiB ÷ 3 ≈ 2.8 million). The value count bounds memory after decoding.
+    /// - Normal size: One node in the Go data has 8~29 values (223~729 bytes). A full map with 10,000 peers contains
+    ///   29 × 10,000 = 290,000 node values and 60,000 profile values (about 6 per profile), or about 350,000 values. 1,000,000 is
+    ///   about 2.9 times that and fits 10,000 peers even at 100 values per node.
+    /// - Measured memory (Debug, phys_footprint before and after decoding): 100,000 copies of the largest node in the Go data (29 values) used
+    ///   about 3.2KB per node (about 110 bytes per value). The empty `Node` `{}` (392-byte stride) has the largest expansion for one value, and
+    ///   100,000 copies used about 1.3KB per node. These measurements include the decoder's intermediate representation and array growth.
+    /// - Worst-case memory: 1,000,000 × 1.3KB ≈ 1.3GB (with only a byte limit, 8MiB ÷ 3 × 1.3KB ≈ 3.6GB).
+    ///   Normal data filling 64MiB used about 110MB, and 8MiB uses about 14MB. Normal data fits within the 50MB extension limit,
+    ///   but the worst case exceeds it. This limit bounds the size so decoding can complete without guaranteeing the extension's
+    ///   memory usage. Noise authenticates the control server.
     static let maximumValueCount = 1_000_000
 
     private static let headerSize = 4
 
-    /// 아직 다 차지 않은 프레임의 바이트.
+    /// Bytes of a frame that has yet to arrive in full.
     private var buffer: [UInt8] = []
-    /// 실패한 뒤의 오류. 있으면 바이트를 더 모으지 않고 같은 오류를 낸다.
+    /// The error after failure. If present, returns the same error without buffering more bytes.
     private var failure: MapError?
 
     public init() {}
 
-    /// 받은 바이트를 넣고 완성된 응답들을 순서대로 돌려준다. 덜 온 프레임은 안에 둔다.
-    /// 오류가 나면 스트림을 버려야 한다. 같은 호출에서 앞서 완성된 응답도 돌려주지 않지만, 새 스트림이
-    /// 전체 맵부터 다시 보내므로 잃는 상태는 없다. 실패하면 모은 바이트를 버리고, 다시 부르면 같은 오류가 난다.
+    /// Accepts incoming bytes and returns complete responses in order. Keeps incomplete frames buffered.
+    /// Discard the stream on error. An error also withholds responses completed earlier in the same call. The new stream
+    /// starts with the full map again, so no state is lost. Failure discards buffered bytes, and subsequent calls yield the same error.
     public mutating func receive(_ bytes: [UInt8]) throws(MapError) -> [MapResponse] {
         if let failure { throw failure }
         do {
@@ -94,16 +94,16 @@ public struct MapResponseFramer: Sendable {
         return responses
     }
 
-    /// 해독 전에 JSON 바이트를 한 번 훑어 중첩 깊이와 값의 수가 한도 안인지 본다.
+    /// Scans JSON bytes once before decoding to check that nesting depth and value count are within their limits.
     ///
-    /// 문법은 검사하지 않는다(해독기가 한다). 문자열 안의 괄호·쉼표는 세지 않으며, 이스케이프된 `\"`는
-    /// 문자열을 끝내지 않는다. UTF-8의 여러 바이트 문자는 0x80 이상이라 ASCII 구분자와 섞이지 않는다.
-    /// 값의 수는 컨테이너마다 "첫 값 + 쉼표 수"로 센다.
+    /// The decoder checks syntax. Brackets and commas within strings do not count, and an escaped `\"` does
+    /// not end a string. UTF-8 multibyte characters use bytes at or above 0x80, which cannot be confused with ASCII delimiters.
+    /// Counts values per container as the first value plus the number of commas.
     ///
-    /// 0 바이트가 있으면 거절한다. `JSONDecoder`는 UTF-16·UTF-32로 쓴 JSON도 받는데, 그 바이트를 UTF-8로
-    /// 훑으면 따옴표와 괄호를 다르게 읽어 이 검사가 해독기와 어긋난다. UTF-16·UTF-32의 JSON은 구분자마다
-    /// 0 바이트를 갖고, UTF-8의 JSON에는 0 바이트가 올 수 없으므로(제어 문자는 이스케이프해야 한다)
-    /// 이것으로 UTF-8만 남는다.
+    /// Rejects input containing a zero byte. `JSONDecoder` also accepts JSON in UTF-16 and UTF-32. Scanning those bytes as UTF-8
+    /// would interpret quotes and brackets differently, making this check disagree with the decoder. UTF-16 and UTF-32 JSON contain
+    /// zero bytes at every delimiter. UTF-8 JSON cannot contain zero bytes because control characters must be escaped,
+    /// so the check leaves only UTF-8.
     static func checkShape(of json: ArraySlice<UInt8>) throws(MapError) {
         var depth = 0
         var values = 0

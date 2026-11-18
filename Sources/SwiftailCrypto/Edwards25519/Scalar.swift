@@ -1,20 +1,20 @@
-/// edwards25519 기준점 위수 L = 2^252 + 27742317777372353535851937790883648493을 법으로 하는 스칼라
-/// (RFC 8032 5.1). 값은 언제나 0 ≤ 값 < L이다.
+/// A scalar modulo the edwards25519 base point order L = 2^252 + 27742317777372353535851937790883648493
+/// (RFC 8032 §5.1). The value always satisfies 0 ≤ value < L.
 ///
-/// 서명 검증의 공개 값만 다루므로 가변 시간 연산을 쓴다.
+/// Uses variable-time operations because it handles only public values in signature verification.
 struct Scalar: Equatable {
-    /// 64비트 리틀 엔디언 단어 넷.
+    /// Four 64-bit little-endian words.
     private var words: [UInt64]
 
-    /// L의 64비트 리틀 엔디언 단어.
+    /// The 64-bit little-endian words of L.
     private static let order: [UInt64] = [0x5812_631A_5CF5_D3ED, 0x14DE_F9DE_A2F7_9CD6, 0, 0x1000_0000_0000_0000]
 
     static let zero = Scalar(words: [0, 0, 0, 0])
 
     private init(words: [UInt64]) { self.words = words }
 
-    /// 32바이트 리틀 엔디언 정수가 L보다 작을 때만 만든다(RFC 8032 5.1.7의 S 검사, Go
-    /// `Scalar.SetCanonicalBytes`). 길이가 32가 아니면 `nil`이다.
+    /// Creates a scalar only when the 32-byte little-endian integer is smaller than L (the S check in RFC 8032 §5.1.7, Go
+    /// `Scalar.SetCanonicalBytes`). Returns `nil` for a length other than 32.
     init?(canonicalBytes bytes: [UInt8]) {
         guard bytes.count == 32 else { return nil }
         let words = (0..<4).map { w in (0..<8).reduce(UInt64(0)) { $0 | UInt64(bytes[8 * w + $1]) << (8 * $1) } }
@@ -22,15 +22,15 @@ struct Scalar: Equatable {
         self.init(words: words)
     }
 
-    /// 64바이트 리틀 엔디언 정수를 L로 나눈 나머지(Go `Scalar.SetUniformBytes`). SHA-512 출력에서
-    /// k를 만든다.
+    /// The remainder of a 64-byte little-endian integer modulo L (Go `Scalar.SetUniformBytes`). Derives
+    /// k from the SHA-512 output.
     ///
-    /// 가장 높은 비트부터 r ← 2r + 비트를 하고 r ≥ L이면 L을 뺀다. r < L이면 2r + 1 < 2L이므로
-    /// 한 번 빼는 것으로 충분하고, 2L < 2^254라 네 단어에 들어간다.
+    /// Starting from the highest bit, update r ← 2r + bit, then subtract L if r ≥ L. When r < L, 2r + 1 < 2L, so
+    /// one subtraction suffices. Since 2L < 2^254, it fits in four words.
     ///
     /// - Precondition: `bytes.count == 64`.
     init(reducing bytes: [UInt8]) {
-        precondition(bytes.count == 64, "환원할 입력은 64바이트")
+        precondition(bytes.count == 64, "Input to reduce must be 64 bytes")
         var r: [UInt64] = [0, 0, 0, 0]
         for bitIndex in (0..<512).reversed() {
             let bit = UInt64(bytes[bitIndex / 8] >> (bitIndex % 8) & 1)
@@ -40,10 +40,10 @@ struct Scalar: Equatable {
         self.init(words: r)
     }
 
-    /// i번째 비트(0이 가장 낮다). i는 0..<256.
+    /// The bit at index i (0 is the lowest). i is in 0..<256.
     func bit(_ i: Int) -> Bool { words[i / 64] >> (i % 64) & 1 == 1 }
 
-    /// a < b (네 단어 리틀 엔디언).
+    /// Whether a < b (four little-endian words).
     private static func isLess(_ a: [UInt64], _ b: [UInt64]) -> Bool {
         for i in (0..<4).reversed() where a[i] != b[i] { return a[i] < b[i] }
         return false

@@ -1,17 +1,17 @@
 import Foundation
 import SwiftailBase
 
-/// 제어 서버의 Noise 공개 키를 `GET <serverURL>/key?v=148`로 얻는다.
+/// Fetches the control server's Noise public key with `GET <serverURL>/key?v=148`.
 ///
-/// Noise가 아닌 평범한 HTTP(S) 요청이다. `https://`이면 URLSession의 기본 인증서 검증을 그대로 쓴다.
-/// 응답은 `{"legacyPublicKey":"mkey:…","publicKey":"mkey:…"}`이고 `publicKey`만 쓴다. 0이면 Noise를 모르는
-/// 옛 서버이므로 실패한다. 본문은 64KiB까지만 읽는다. testcontrol은 이 요청에서 Noise 키 쌍을 만들므로
-/// `/ts2021`보다 먼저 불러야 한다.
+/// Uses ordinary HTTP(S) outside Noise. For `https://`, uses URLSession's default certificate validation.
+/// The response is `{"legacyPublicKey":"mkey:…","publicKey":"mkey:…"}`. Uses only `publicKey`. A zero key indicates a
+/// legacy server without Noise and causes failure. Reads up to 64KiB of the body. testcontrol creates its Noise key pair in this request,
+/// so call it before `/ts2021`.
 ///
-/// `shortcut:` 이 요청은 `NWInterface`로 묶지 않는다. URLSession에는 요청을 인터페이스에 묶는 길이 없다. 패킷 터널
-/// 확장에서 제어 서버 주소는 터널의 경로(자기 tailnet 주소와 서비스 IP뿐)에 들지 않으므로 시스템의 기본 경로, 곧 물리
-/// 인터페이스로 나간다고 본다. 서버 키는 연결이 실패한 뒤에만 다시 받으므로 요청도 드물다. 실기기에서 이 요청이 터널로
-/// 들어가는 것이 보이면 `NetworkSocket` 위의 HTTP/1.1(`Transfer-Encoding: chunked` 해독 포함)로 바꾼다.
+/// `shortcut:` leaves this request unbound to `NWInterface`. URLSession has no way to bind a request to an interface. In the packet tunnel
+/// extension, the control server address falls outside the tunnel routes (only the local tailnet addresses and the service IP), so the request is assumed to follow the system default route over the physical
+/// interface. The server key is fetched again only after a connection failure, so requests are infrequent. If a real device shows the request entering
+/// the tunnel, switch to HTTP/1.1 over `NetworkSocket` (including `Transfer-Encoding: chunked` decoding).
 ///
 /// `docs/protocol-notes/control-transport.md` 3.8, 4.1.
 enum ServerKey {
@@ -19,7 +19,7 @@ enum ServerKey {
 
     static func fetch(for endpoint: ControlEndpoint) async throws(ControlError) -> MachinePublicKey {
         guard let url = endpoint.url(path: "/key?v=148") else {
-            throw .invalidConfiguration("서버 URL로 /key 주소를 만들지 못했다")
+            throw .invalidConfiguration("Could not construct the /key address from the server URL")
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.httpMethod = "GET"
@@ -29,27 +29,27 @@ enum ServerKey {
             let (bytes, received) = try await URLSession.shared.bytes(for: request)
             response = received
             for try await byte in bytes {
-                guard body.count < maximumBodySize else { throw ControlError.connection("/key 응답이 64KiB를 넘는다") }
+                guard body.count < maximumBodySize else { throw ControlError.connection("/key response exceeds 64KiB") }
                 body.append(byte)
             }
         } catch let error as ControlError {
             throw error
         } catch {
-            throw .connection("/key 요청 실패(코드 \((error as NSError).code))")
+            throw .connection("/key request failed (code \((error as NSError).code))")
         }
         guard let status = (response as? HTTPURLResponse)?.statusCode else {
-            throw .connection("/key 응답이 HTTP가 아니다")
+            throw .connection("/key response is not HTTP")
         }
         guard status == 200 else { throw .http(status: status) }
         return try parse(body)
     }
 
-    /// `/key` 응답 본문에서 Noise 키를 꺼낸다.
+    /// Extracts the Noise key from the `/key` response body.
     static func parse(_ body: [UInt8]) throws(ControlError) -> MachinePublicKey {
         guard let response = try? JSONDecoder().decode(Response.self, from: Data(body)) else {
-            throw .connection("/key 응답을 해석하지 못했다")
+            throw .connection("Could not parse the /key response")
         }
-        guard !response.publicKey.isZero else { throw .connection("제어 서버가 너무 오래되었다(Noise 키 없음)") }
+        guard !response.publicKey.isZero else { throw .connection("Control server is too old (missing Noise key)") }
         return response.publicKey
     }
 

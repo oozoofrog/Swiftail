@@ -1,7 +1,7 @@
-/// 상대가 알린 SETTINGS 값(RFC 9113 §6.5.2).
+/// The SETTINGS values advertised by the peer (RFC 9113 §6.5.2).
 ///
-/// 이 연결이 보내는 쪽으로서 지켜야 하는 값만 담는다. 상대의 HEADER_TABLE_SIZE는 동적 표를 쓰지 않는
-/// 압축기에 상관이 없고, ENABLE_PUSH는 서버가 1로 알릴 수 없다는 것만 확인한다.
+/// Stores only values this connection must honor as a sender. The encoder uses no dynamic table, so the peer's HEADER_TABLE_SIZE
+/// is irrelevant. For ENABLE_PUSH, it checks only that the server cannot advertise 1.
 struct PeerSettings: Equatable {
     private enum Identifier: UInt16 {
         case enablePush = 0x2
@@ -10,23 +10,23 @@ struct PeerSettings: Equatable {
         case maxFrameSize = 0x5
     }
 
-    /// 상대가 허용한 동시 스트림 수. 알리지 않으면 제한이 없다.
+    /// The concurrent stream count allowed by the peer. Unlimited if the peer omits it.
     var maxConcurrentStreams = Int.max
     var initialWindowSize = FlowControlWindow.defaultInitialSize
-    /// 상대가 받아 줄 프레임 payload의 최대 길이.
+    /// The maximum frame payload length accepted by the peer.
     var maxFrameSize = 16_384
-    // shortcut: 상대의 MAX_HEADER_LIST_SIZE는 지키지 않는다(요청 헤더는 작다), 큰 헤더를 보내게 되면 확인한다.
+    // shortcut: ignores the peer's MAX_HEADER_LIST_SIZE (request headers are small), check it when sending large headers.
 
-    /// SETTINGS를 반영한다. 값이 규격 범위 밖이면 연결 오류이고, 모르는 식별자는 무시한다.
-    /// 성공하면 INITIAL_WINDOW_SIZE가 바뀐 만큼(열린 스트림의 창에 더할 값)을 돌려준다. 한 SETTINGS 프레임의
-    /// 값은 받은 순서대로 창에 적용되어야 중간의 넘침을 놓치지 않으므로(§6.9.2) 연결은 설정 하나씩 부른다.
+    /// Applies SETTINGS. An out-of-range value is a connection error, and unknown identifiers are ignored.
+    /// On success, returns the change in INITIAL_WINDOW_SIZE to add to open stream windows. Values in one SETTINGS frame must be
+    /// applied to windows in arrival order to catch intermediate overflows (§6.9.2), so the connection calls this once per setting.
     mutating func apply(_ settings: [Frame.Setting]) throws(HTTP2Error) -> Int {
         let previousInitialWindowSize = initialWindowSize
         for setting in settings {
             let value = Int(setting.value)
             switch Identifier(rawValue: setting.identifier) {
             case .enablePush:
-                // 서버가 1을 알리는 것도, 0과 1 말고 다른 값도 PROTOCOL_ERROR다.
+                // A server advertising 1, or any value other than 0 and 1, is a PROTOCOL_ERROR.
                 guard setting.value == 0 else { throw .connection(.protocolError) }
             case .maxConcurrentStreams:
                 maxConcurrentStreams = value

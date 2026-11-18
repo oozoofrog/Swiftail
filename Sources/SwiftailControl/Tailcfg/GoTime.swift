@@ -1,27 +1,27 @@
 import Foundation
 
-/// Go `time.Time`의 JSON 텍스트(RFC 3339)와 `Date` 사이의 변환.
+/// Conversion between Go `time.Time` JSON text (RFC 3339) and `Date`.
 ///
-/// 제어 서버는 시각에 소수 초(뒤 0을 지운 1~9자리)와 UTC가 아닌 오프셋을 붙일 수 있다
-/// (`"2026-01-02T03:04:05.123456789+09:00"`). Foundation의 기본 ISO 8601 해독은 이 둘을 함께 받지
-/// 못하므로 직접 읽는다. 달력 계산은 그레고리력 날짜 ↔ 1970년부터의 일수 공식으로 한다
-/// (시간대 데이터베이스가 필요 없다).
+/// The control server can include fractional seconds (1~9 digits with trailing zeros removed) and a non-UTC offset in a timestamp
+/// (`"2026-01-02T03:04:05.123456789+09:00"`). Foundation's default ISO 8601 decoder cannot accept both together,
+/// so parse directly. Calendar calculations use a formula for Gregorian dates ↔ days since 1970
+/// (requires no time zone database).
 ///
-/// Go의 0 시각(`0001-01-01T00:00:00Z`)은 "없음"의 표지다. 생략할 수 없는 시각 필드는 값이 없어도
-/// 이 문자열로 보낸다.
+/// Go's zero time (`0001-01-01T00:00:00Z`) marks absence. A timestamp field that cannot be omitted
+/// is sent as this string even if it has no value.
 ///
 /// `docs/protocol-notes/control-map.md` 3.1.
 enum GoTime {
-    /// Go의 0 시각. 1970년 기준 −62,135,596,800초.
+    /// Go's zero time, −62,135,596,800 seconds relative to 1970.
     static let zero = Date(timeIntervalSince1970: -62_135_596_800)
 
-    /// 0 시각이면 `nil`. "0 시각 = 없음"인 필드를 Swift의 `Optional`로 옮길 때 쓴다.
+    /// Returns `nil` for the zero time. Used to map fields where zero time means absence to Swift `Optional`.
     static func nonZero(_ date: Date) -> Date? {
         date == zero ? nil : date
     }
 
-    /// RFC 3339 텍스트를 읽는다. 형식이 틀리거나 날짜·시각이 범위 밖이면 `nil`.
-    /// 소수 초는 10자리 이상이어도 받되 9자리(나노초)까지만 쓴다. Go와 같다.
+    /// Parses RFC 3339 text. Returns `nil` for an invalid format or an out-of-range date or time.
+    /// Accepts fractional seconds with 10 or more digits but uses only the first 9 (nanoseconds), matching Go.
     static func parse(_ text: String) -> Date? {
         var scanner = Scanner(Array(text.utf8))
         guard let year = scanner.digits(4), scanner.skip("-"),
@@ -58,8 +58,8 @@ enum GoTime {
         return Date(timeIntervalSince1970: Double(seconds) + Double(nanoseconds) / 1e9)
     }
 
-    /// UTC의 RFC 3339 텍스트로 쓴다. 소수 초는 뒤 0을 지우고, 0이면 생략한다(Go의 `RFC3339Nano`).
-    /// Go처럼 0~9999년 밖은 쓰지 못한다(`nil`).
+    /// Formats as RFC 3339 text in UTC. Strips trailing zeros from fractional seconds and omits the fraction if 0 (Go's `RFC3339Nano`).
+    /// Like Go, cannot write years outside 0~9999 and returns `nil` for them.
     static func format(_ date: Date) -> String? {
         let interval = date.timeIntervalSince1970
         guard interval.isFinite, abs(interval) < 1e12 else { return nil }
@@ -84,7 +84,7 @@ enum GoTime {
         return text + "Z"
     }
 
-    // MARK: 달력
+    // MARK: Calendar
 
     private static func daysIn(month: Int, year: Int) -> Int {
         switch month {
@@ -98,8 +98,8 @@ enum GoTime {
         year.isMultiple(of: 4) && (!year.isMultiple(of: 100) || year.isMultiple(of: 400))
     }
 
-    /// 그레고리력 날짜 → 1970-01-01부터의 일수.
-    /// 공식: Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms" `days_from_civil`.
+    /// Gregorian date → number of days since 1970-01-01.
+    /// Uses Howard Hinnant's `days_from_civil` from "chrono-Compatible Low-Level Date Algorithms".
     private static func daysSince1970(year: Int, month: Int, day: Int) -> Int {
         let shiftedYear = month <= 2 ? year - 1 : year
         let era = shiftedYear.floorDivided(by: 400)
@@ -109,7 +109,7 @@ enum GoTime {
         return era * 146_097 + dayOfEra - 719_468
     }
 
-    /// 1970-01-01부터의 일수 → 그레고리력 날짜. 같은 글의 `civil_from_days`.
+    /// Days since 1970-01-01 → Gregorian date. Uses `civil_from_days` from the same article.
     private static func civilDate(daysSince1970 days: Int) -> (year: Int, month: Int, day: Int) {
         let shifted = days + 719_468
         let era = shifted.floorDivided(by: 146_097)
@@ -127,7 +127,7 @@ enum GoTime {
         return String(repeating: "0", count: max(0, width - digits.count)) + digits
     }
 
-    /// 앞에서부터 한 글자씩 읽는 커서. ASCII만 다룬다.
+    /// A cursor that reads one character at a time from the start. Handles ASCII only.
     private struct Scanner {
         private let bytes: [UInt8]
         private var index = 0
@@ -142,7 +142,7 @@ enum GoTime {
             return true
         }
 
-        /// 정확히 count자리의 십진수.
+        /// A decimal number of exactly count digits.
         mutating func digits(_ count: Int) -> Int? {
             guard bytes.count - index >= count else { return nil }
             var value = 0
@@ -154,7 +154,7 @@ enum GoTime {
             return value
         }
 
-        /// 소수점 뒤 한 자리 이상의 숫자를 나노초로. 10번째 자리부터는 버린다.
+        /// Converts at least one digit after the decimal point to nanoseconds. Discards digits from the 10th onward.
         mutating func fraction() -> Int? {
             var nanoseconds = 0
             var count = 0
@@ -168,7 +168,7 @@ enum GoTime {
             return nanoseconds
         }
 
-        /// `+`는 1, `-`는 −1.
+        /// `+` is 1 and `-` is −1.
         mutating func sign() -> Int? {
             if skip("+") { return 1 }
             if skip("-") { return -1 }
@@ -182,7 +182,7 @@ enum GoTime {
 }
 
 private extension Int {
-    /// 음의 무한대 쪽으로 내림한 몫. 1970년 이전 날짜에서 `/`(0 쪽으로 버림)와 다르다.
+    /// The quotient rounded toward negative infinity. For dates before 1970, differs from `/` (which rounds toward 0).
     func floorDivided(by divisor: Int) -> Int {
         let quotient = self / divisor
         return (self % divisor != 0 && (self < 0) != (divisor < 0)) ? quotient - 1 : quotient

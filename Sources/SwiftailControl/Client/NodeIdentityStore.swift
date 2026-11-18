@@ -2,33 +2,33 @@ import CryptoKit
 import Foundation
 import SwiftailBase
 
-/// 신원을 디렉터리의 파일 하나(`identity.json`)에 둔다. 다시 시작해도 같은 노드로 뜨게 하는 유일한 상태다.
+/// Stores the identity in one file (`identity.json`) in the directory. This is the only state needed to restart as the same node.
 ///
-/// 파일은 JSON이고 키는 Go와 같은 텍스트다: machine 키와 node 키는 `privkey:` + 16진 64자리, NL 키는 `nlpriv:` + 16진
-/// 128자리(Ed25519 시드 32바이트 ‖ 공개 키 32바이트).
+/// The file is JSON, and its keys use the same text format as Go. The machine and node keys are `privkey:` + 64 hexadecimal digits. The NL key is `nlpriv:` +
+/// 128 hexadecimal digits (32-byte Ed25519 seed ‖ 32-byte public key).
 ///
 /// ```json
 /// {"MachineKey":"privkey:…","NodeKey":"privkey:…","NLKey":"nlpriv:…"}
 /// ```
 ///
-/// `NLKey`가 없는 옛 파일(tailnet lock 전)도 읽는다. 그때는 같은 machine 키·node 키에 새 NL 키를 채운다(`loadOrCreate()`가 첫
-/// 요청 전에 저장한다). `NLKey`의 뒤 32바이트가 시드로 만든 공개 키와 다르면 손상으로 본다(Go는 이것을 보지 않는다).
-/// `docs/contracts/SwiftailTailnetLock.md` 동작 R1.
+/// Also reads legacy files without `NLKey` (before tailnet lock). In that case, adds a fresh NL key to the same machine and node keys (`loadOrCreate()` saves it before the first
+/// request). Treats a mismatch between the last 32 bytes of `NLKey` and the public key derived from the seed as corruption (Go does not check this).
+/// `docs/contracts/SwiftailTailnetLock.md` behavior R1.
 ///
-/// 개인 키를 담으므로 소유자만 읽게(0600) 만들고, 같은 디렉터리의 임시 파일에 다 쓴 뒤 이름을 바꿔 원자적으로
-/// 바꾼다. 쓰다가 멈춰도 이전 신원이 남는다. 오류 메시지에는 경로와 키를 넣지 않는다.
-/// `docs/contracts/SwiftailControl.md` 단위 4 동작 7.
+/// The file contains private keys, so create it readable only by the owner (0600). Write it fully to a temporary file in the same directory and rename it to replace the file
+/// atomically. An interrupted write leaves the previous identity intact. Error messages omit paths and keys.
+/// `docs/contracts/SwiftailControl.md` unit 4 behavior 7.
 ///
-/// 읽을 때는 심볼릭 링크를 따라가지 않고, 정규 파일만, 64KiB까지만 읽는다(`StateFile`). 디렉터리의 주인과 권한은 보지
-/// 않는다. 다른 사용자가 쓸 수 없는 디렉터리를 주는 것은 앱의 몫이다(`NodeConfiguration.stateDirectory`).
+/// Reads only regular files up to 64KiB and does not follow symbolic links (`StateFile`). Skips checking directory ownership and
+/// permissions. The app must supply a directory other users cannot write to (`NodeConfiguration.stateDirectory`).
 ///
-/// iOS에서는 쓰기 전에 임시 파일에 데이터 보호 등급 `completeUntilFirstUserAuthentication`과 백업 제외를 건다. 패킷 터널
-/// 확장은 잠긴 화면에서도 뜨므로(`complete`면 시작이 실패한다) 첫 잠금 해제 뒤에 읽을 수 있어야 하고, 개인 키가 다른 기기로
-/// 복원되면 같은 머신 키를 가진 기기가 둘이 된다. 두 성질은 파일에 붙어 이름을 바꿔도 따라간다고 보았다(실기기 관문에서
-/// 확인한다). `docs/contracts/SwiftailTunnel.md` 동작 P 2.
+/// On iOS, applies the `completeUntilFirstUserAuthentication` data protection class and backup exclusion to the temporary file before writing. The packet tunnel
+/// extension starts even with the screen locked (`complete` makes startup fail), so it must be able to read after the first unlock. Restoring a private key on another device would
+/// create two devices with the same machine key. Assumes both attributes stay on the file across a rename (to be verified at the
+/// real device gate). `docs/contracts/SwiftailTunnel.md` behavior P §2.
 public struct NodeIdentityStore: Sendable {
     static let fileName = "identity.json"
-    /// 읽는 파일의 크기 한도. 신원 파일은 300바이트 남짓이다.
+    /// The input file size limit. The identity file is about 300 bytes.
     static let maximumFileSize = 64 * 1_024
     private static let keyPrefix = "privkey:"
     private static let lockKeyPrefix = "nlpriv:"
@@ -41,17 +41,17 @@ public struct NodeIdentityStore: Sendable {
 
     var fileURL: URL { directory.appending(path: Self.fileName, directoryHint: .notDirectory) }
 
-    /// 저장된 신원을 읽는다. 파일이 없으면 nil.
+    /// Reads the stored identity. Returns nil if the file is absent.
     ///
-    /// `NLKey`가 없는 옛 파일이면 새 NL 키를 채워 돌려주되 저장하지 않는다. 그 키를 등록에 쓰려면 저장해야 한다(`loadOrCreate()`).
+    /// For a legacy file without `NLKey`, adds a fresh NL key to the returned identity without saving it. Save that key before registration (`loadOrCreate()`).
     public func load() throws(ControlError) -> NodeIdentity? {
         try read()?.identity
     }
 
-    /// 제어 클라이언트가 시작할 때 쓴다. 파일이 없으면 새 신원을, `NLKey`가 없는 옛 파일이면 새 NL 키를 만들어 저장한 뒤 돌려준다.
+    /// Used when the control client starts. If the file is absent, creates, stores, and returns a fresh identity. For a legacy file without `NLKey`, creates, stores, and returns a fresh NL key in the identity.
     ///
-    /// 첫 요청 전에 저장해야 한다. 저장하지 않은 NL 키로 등록하면 다시 시작할 때 다른 키가 나간다(동작 R1). machine 키도 등록 전에
-    /// 저장한다: 다시 시작해도 같은 기기로 보여야 한다.
+    /// Save before the first request. Registering with an unsaved NL key would send a different key after restart (behavior R1). Save the machine key before registration too
+    /// so the node appears as the same device after restart.
     func loadOrCreate() throws(ControlError) -> NodeIdentity {
         guard let stored = try read() else {
             let identity = NodeIdentity()
@@ -62,25 +62,25 @@ public struct NodeIdentityStore: Sendable {
         return stored.identity
     }
 
-    /// 파일을 읽어 신원과, 파일에 NL 키가 있었는지를 돌려준다. 파일이 없으면 nil.
+    /// Reads the file and returns the identity and whether the file had an NL key. Returns nil if the file is absent.
     private func read() throws(ControlError) -> (identity: NodeIdentity, hasLockKey: Bool)? {
-        guard let data = try StateFile.read(fileURL, limit: Self.maximumFileSize, label: "신원 파일") else { return nil }
+        guard let data = try StateFile.read(fileURL, limit: Self.maximumFileSize, label: "identity file") else { return nil }
         guard let file = try? JSONDecoder().decode(IdentityFile.self, from: data),
               let machineKey = Self.privateKey(file.machineKey)
-        else { throw .storage("신원 파일이 손상되었다") }
+        else { throw .storage("Identity file is corrupted") }
         var nodeKey: Curve25519.KeyAgreement.PrivateKey?
         if let text = file.nodeKey {
-            guard let key = Self.privateKey(text) else { throw .storage("신원 파일이 손상되었다") }
+            guard let key = Self.privateKey(text) else { throw .storage("Identity file is corrupted") }
             nodeKey = key
         }
         guard let text = file.lockKey else {
             return (NodeIdentity(machineKey: machineKey, nodeKey: nodeKey), false)
         }
-        guard let lockKey = Self.lockKey(text) else { throw .storage("신원 파일의 NL 키가 손상되었다") }
+        guard let lockKey = Self.lockKey(text) else { throw .storage("NL key in the identity file is corrupted") }
         return (NodeIdentity(machineKey: machineKey, nodeKey: nodeKey, lockKey: lockKey), true)
     }
 
-    /// 신원을 원자적으로 저장한다. 디렉터리가 없으면 소유자 전용(0700)으로 만든다.
+    /// Stores the identity atomically. Creates the directory as owner-only (0700) if absent.
     public func save(_ identity: NodeIdentity) throws(ControlError) {
         let file = IdentityFile(
             machineKey: Self.text(identity.machineKey),
@@ -94,14 +94,14 @@ public struct NodeIdentityStore: Sendable {
                 at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
             )
         } catch {
-            throw .storage("신원 디렉터리를 준비하지 못했다(코드 \((error as NSError).code))")
+            throw .storage("Could not prepare the identity directory (code \((error as NSError).code))")
         }
 
         let temporary = directory.appending(path: ".\(Self.fileName).\(UUID().uuidString)", directoryHint: .notDirectory)
-        // Foundation의 파일 쓰기는 권한을 쓴 뒤에 바꾼다. 개인 키가 잠깐이라도 남에게 읽히지 않도록
-        // 처음부터 0600으로 만드는 open(2)과 이름을 원자적으로 바꾸는 rename(2)만 POSIX로 부른다.
+        // Foundation file writing changes permissions after writing. To keep private keys unreadable by others even briefly,
+        // use POSIX only for open(2), which creates the file as 0600 from the start, and rename(2), which renames it atomically.
         let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw .storage("임시 신원 파일을 만들지 못했다(errno \(errno))") }
+        guard descriptor >= 0 else { throw .storage("Could not create a temporary identity file (errno \(errno))") }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
             try Self.protect(temporary)
@@ -111,16 +111,16 @@ public struct NodeIdentityStore: Sendable {
         } catch {
             try? handle.close()
             try? FileManager.default.removeItem(at: temporary)
-            throw .storage("신원 파일을 쓰지 못했다(코드 \((error as NSError).code))")
+            throw .storage("Could not write the identity file (code \((error as NSError).code))")
         }
         guard rename(temporary.path, fileURL.path) == 0 else {
             let code = errno
             try? FileManager.default.removeItem(at: temporary)
-            throw .storage("신원 파일을 바꾸지 못했다(errno \(code))")
+            throw .storage("Could not replace the identity file (errno \(code))")
         }
     }
 
-    /// 신원 파일의 보호 등급과 백업 제외. iOS에서만 뜻이 있다(macOS의 데이터 보호는 다른 체계이고 백업 제외도 앱 몫이다).
+    /// The protection class and backup exclusion for the identity file. Meaningful only on iOS (macOS uses a different data protection system, and the app handles backup exclusion).
     private static func protect(_ file: URL) throws {
         #if os(iOS)
         try FileManager.default.setAttributes(
@@ -145,13 +145,13 @@ public struct NodeIdentityStore: Sendable {
         return try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: bytes)
     }
 
-    /// `nlpriv:` + 시드 ‖ 공개 키의 16진(Go `NLPrivate.MarshalText`).
+    /// `nlpriv:` + hexadecimal seed ‖ public key (Go `NLPrivate.MarshalText`).
     static func text(_ key: Curve25519.Signing.PrivateKey) -> String {
         lockKeyPrefix + ([UInt8](key.rawRepresentation) + [UInt8](key.publicKey.rawRepresentation)).hex
     }
 
-    /// `nlpriv:` + 16진 128자리(대소문자 모두)를 읽는다. 뒤 32바이트가 앞 32바이트(시드)로 만든 공개 키와 다르면 nil(동작 R1).
-    /// 견주는 것은 공개 값이라 상수 시간 비교가 필요 없다.
+    /// Reads `nlpriv:` + 128 hexadecimal digits (uppercase or lowercase). Returns nil if the last 32 bytes differ from the public key derived from the first 32 bytes (the seed) (behavior R1).
+    /// Compares public values, so constant-time comparison is unnecessary.
     static func lockKey(_ text: String) -> Curve25519.Signing.PrivateKey? {
         guard text.hasPrefix(lockKeyPrefix),
               let bytes = [UInt8](hex: String(text.dropFirst(lockKeyPrefix.count))),
@@ -163,11 +163,11 @@ public struct NodeIdentityStore: Sendable {
     }
 }
 
-/// 신원 파일의 JSON 모양.
+/// The JSON shape of the identity file.
 private struct IdentityFile: Codable {
     var machineKey: String
     var nodeKey: String?
-    /// 옛 파일에는 없다.
+    /// Absent from legacy files.
     var lockKey: String?
 
     enum CodingKeys: String, CodingKey {

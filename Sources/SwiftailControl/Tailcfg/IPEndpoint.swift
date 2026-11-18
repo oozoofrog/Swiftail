@@ -1,11 +1,11 @@
 import SwiftailBase
 
-// tailcfg는 `netip.AddrPort`를 텍스트(`"192.0.2.1:41641"`, `"[2001:db8::1]:41641"`)로 주고받는다.
-// SwiftailBase는 JSON을 모르므로 그 텍스트 형식의 Codable을 여기서 붙인다(`IPAddress+Codable.swift`와 같다).
+// tailcfg exchanges `netip.AddrPort` as text (`"192.0.2.1:41641"`, `"[2001:db8::1]:41641"`).
+// SwiftailBase has no JSON support, so add Codable for that text format here (as in `IPAddress+Codable.swift`).
 
 extension IPEndpoint: Codable {
     public init(from decoder: any Decoder) throws {
-        self = try decodeText(from: decoder, as: "IP:포트")
+        self = try decodeText(from: decoder, as: "IP:port")
     }
 
     public func encode(to encoder: any Encoder) throws {

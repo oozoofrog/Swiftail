@@ -1,17 +1,17 @@
-/// DERP 중계 서버의 지도. Go `tailcfg.DERPMap`. 맵 응답의 `DERPMap`으로 온다.
+/// A map of DERP relay servers. Go `tailcfg.DERPMap`. Arrives as `DERPMap` in a map response.
 ///
-/// 증분에서는 하위 필드마다 "그대로"가 있다(노트 4.3의 8, `MapSession`이 적용한다).
-/// - `regions`: `nil`(키 없음·`null`)이면 이전 지역 목록과 `omitDefaultRegions`를 그대로 둔다.
-///   빈 객체는 "지역 없음"이다. 해독할 때 값이 `null`인 지역은 버린다(Go 클라이언트도 지운다).
-/// - `homeParams`: `nil`이면 이전 것을 그대로 둔다.
+/// Deltas can leave each subfield unchanged (notes §4.3, item 8, applied by `MapSession`).
+/// - `regions`: `nil` (missing key or `null`) keeps the previous region list and `omitDefaultRegions`.
+///   An empty object means no regions. Decoding discards regions with `null` values, as the Go client does.
+/// - `homeParams`: `nil` keeps the previous value.
 ///
-/// `docs/protocol-notes/control-map.md` 3.7 (출처: tailscale.com `tailcfg/derpmap.go`).
+/// `docs/protocol-notes/control-map.md` §3.7 (origin: tailscale.com `tailcfg/derpmap.go`).
 public struct DERPMap: Decodable, Sendable, Equatable {
-    /// 홈 지역을 고를 때의 가중치. `nil`이면 이전 것을 그대로 둔다.
+    /// Weights for choosing the home region. `nil` keeps the previous value.
     public internal(set) var homeParams: DERPHomeParams?
-    /// 지역 ID → 지역. `nil`이면 이전 것을 그대로 둔다.
+    /// Region ID → region. `nil` keeps the previous value.
     public internal(set) var regions: [Int64: DERPRegion]?
-    /// 클라이언트가 내장 기본 지역을 쓰지 말아야 한다. `regions`가 있을 때만 뜻이 있다.
+    /// The client must omit built-in default regions. Only meaningful when `regions` is present.
     public internal(set) var omitDefaultRegions: Bool
 
     private enum CodingKeys: String, CodingKey {
@@ -28,10 +28,10 @@ public struct DERPMap: Decodable, Sendable, Equatable {
     }
 }
 
-/// 홈 DERP 지역 선택의 가중치. Go `tailcfg.DERPHomeParams`.
+/// Weights for choosing a home DERP region. Go `tailcfg.DERPHomeParams`.
 public struct DERPHomeParams: Decodable, Sendable, Equatable {
-    /// 지역 ID → 지연에 곱할 배수. 없는 지역은 1.0, 0 이하는 무시한다.
-    /// `nil`이면 이전 점수를 그대로 두고, 빈 객체는 점수를 모두 지운다.
+    /// Region ID → latency multiplier. Missing regions use 1.0. Values at or below 0 are ignored.
+    /// `nil` keeps the previous scores. An empty object clears all scores.
     public internal(set) var regionScore: [Int64: Double]?
 
     private enum CodingKeys: String, CodingKey {
@@ -44,17 +44,17 @@ public struct DERPHomeParams: Decodable, Sendable, Equatable {
     }
 }
 
-/// DERP 지역 하나. 같은 지역의 서버들은 서로 중계를 나눈다. Go `tailcfg.DERPRegion`.
+/// One DERP region. Servers in the same region share relay duties. Go `tailcfg.DERPRegion`.
 public struct DERPRegion: Decodable, Sendable, Equatable {
-    /// 지역 ID. `DERPMap.regions`의 키와 같다.
+    /// The region ID, matching the key in `DERPMap.regions`.
     public internal(set) var regionID: Int64
-    /// 짧은 지역 코드(`"nyc"`).
+    /// A short region code (`"nyc"`).
     public internal(set) var regionCode: String
-    /// 사람이 읽는 지역 이름.
+    /// The human-readable region name.
     public internal(set) var regionName: String
-    /// 측정하지도 홈으로 고르지도 않는다. 피어의 홈이면 연결은 한다.
+    /// Skips measurements and home selection for this region. Still connects if it is a peer's home region.
     public internal(set) var noMeasureNoHome: Bool
-    /// 지역의 서버들. 앞의 것을 먼저 쓴다.
+    /// Servers in the region, used in list order.
     public internal(set) var nodes: [DERPNode]
 
     private enum CodingKeys: String, CodingKey {
@@ -75,31 +75,31 @@ public struct DERPRegion: Decodable, Sendable, Equatable {
     }
 }
 
-/// DERP 서버(또는 STUN 서버) 하나. Go `tailcfg.DERPNode`.
+/// One DERP server (or STUN server). Go `tailcfg.DERPNode`.
 public struct DERPNode: Decodable, Sendable, Equatable {
-    /// 서버 이름. 지역 안에서 고유하다.
+    /// The server name, unique within the region.
     public internal(set) var name: String
-    /// 속한 지역 ID.
+    /// The ID of the containing region.
     public internal(set) var regionID: Int64
-    /// 접속할 호스트 이름.
+    /// The hostname to connect to.
     public internal(set) var hostName: String
-    /// TLS 인증서에서 확인할 이름. 비면 `hostName`. `"sha256-raw:"`로 시작하면 인증서 해시 고정이다.
+    /// The name to verify in the TLS certificate. Uses `hostName` if empty. A `"sha256-raw:"` prefix pins the certificate hash.
     public internal(set) var certName: String
-    /// IPv4 주소 강제 지정. 빈 문자열은 DNS로 찾음, `"none"`은 IPv4를 쓰지 않음.
+    /// An overridden IPv4 address. An empty string uses DNS, and `"none"` disables IPv4.
     public internal(set) var ipv4: String
-    /// IPv6 주소 강제 지정. 규칙은 `ipv4`와 같다.
+    /// An overridden IPv6 address. Follows the same rules as `ipv4`.
     public internal(set) var ipv6: String
-    /// STUN 포트. 0은 3478, −1은 STUN 없음.
+    /// The STUN port. 0 means 3478, and −1 disables STUN.
     public internal(set) var stunPort: Int
-    /// STUN 전용 서버(DERP가 아님).
+    /// A STUN-only server (no DERP).
     public internal(set) var stunOnly: Bool
-    /// DERP의 HTTPS 포트. 0은 443.
+    /// The DERP HTTPS port. 0 means 443.
     public internal(set) var derpPort: Int
-    /// 시험용: TLS 인증서를 검사하지 않는다.
+    /// For tests, skips TLS certificate validation.
     public internal(set) var insecureForTests: Bool
-    /// 시험용 STUN 주소.
+    /// A STUN address for tests.
     public internal(set) var stunTestIP: String
-    /// 80번 포트로 캡티브 포털 검사를 할 수 있다.
+    /// Whether port 80 can be used to check for a captive portal.
     public internal(set) var canPort80: Bool
 
     private enum CodingKeys: String, CodingKey {

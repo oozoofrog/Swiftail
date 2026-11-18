@@ -1,21 +1,21 @@
 import SwiftailTKA
 
-/// tailnet lock으로 netmap을 거른다. 입출력 없는 계산이고, 어느 것을 쓸지는 `ControlClient`가 정한다.
+/// Filters a netmap using tailnet lock, without I/O. `ControlClient` decides which filtering method to use.
 ///
-/// 받은 netmap마다 전체를 다시 거른다(증분 경로가 따로 없다). Go가 전체 netmap에서 내리는 판정과 같다.
-/// 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 P, `docs/protocol-notes/tailnet-lock.md` 4.9
-/// (출처: tailscale.com `ipn/ipnlocal/tailnet-lock.go` `tkaFilterNetmapLocked`, BSD-3-Clause).
+/// Filters each received netmap in full (there is no separate delta path). Matches Go's decisions on a full netmap.
+/// Contract `docs/contracts/SwiftailTailnetLock.md` behavior P, `docs/protocol-notes/tailnet-lock.md` §4.9
+/// (origin: `tkaFilterNetmapLocked` in tailscale.com `ipn/ipnlocal/tailnet-lock.go`, BSD-3-Clause).
 extension Netmap {
-    /// 검증한 서명 권한 상태로 거른 netmap(`.enforcing`).
+    /// Returns the netmap filtered using verified signing authority state (`.enforcing`).
     ///
-    /// 서명이 없거나 검증되지 않는 피어와 회전으로 낡은 키의 피어를 순서를 지키며 뺀다. `UnsignedPeerAPIOnly` 피어는 서명
-    /// 검사를 받지 않지만 낡은 키면 함께 빠진다. 자기 노드는 빼지 않는다: 자기 서명이 검증되지 않으면(잠김) 서명 기기에 넘길
-    /// 두 값을 `signingRequest`에 채운다.
+    /// Removes peers with absent or unverified signatures and peers with keys superseded by rotation, preserving order. `UnsignedPeerAPIOnly` peers skip signature checks
+    /// yet are removed if their keys are stale. The self node is retained. If its signature fails verification (locked out), populates `signingRequest` with
+    /// the two values to pass to the signing device.
     ///
-    /// - Parameter lockKey: 이 노드의 tailnet lock 공개 키. 서명 요청의 `tlpub:` 값이 된다.
+    /// - Parameter lockKey: This node's tailnet lock public key, used as the `tlpub:` value in the signing request.
     func filtered(by authority: Authority, lockKey: NLPublicKey) -> Netmap {
-        // shortcut: 바뀌지 않은 피어의 서명도 netmap마다 다시 검증한다(피어마다 Ed25519 검증 한 번 이상).
-        // 필요해지는 시점: 피어가 많은 tailnet에서 netmap 처리 시간이 눈에 띌 때(머리와 서명이 같으면 판정을 다시 쓴다).
+        // shortcut: verifies unchanged peer signatures again for each netmap (at least one Ed25519 verification per peer).
+        // Reuse decisions when head and signature match if netmap processing time is noticeable in a tailnet with many peers.
         let admitted = authority.state.admitted(peers.map {
             PeerCredential(nodeKey: $0.key, keySignature: $0.keySignature, unsignedPeerAPIOnly: $0.unsignedPeerAPIOnly)
         })
@@ -34,9 +34,9 @@ extension Netmap {
         return result
     }
 
-    /// 거를 근거가 없을 때의 netmap(`.unverified`): 피어를 모두 뺀다(`UnsignedPeerAPIOnly` 포함).
+    /// Returns the netmap when there is no basis for filtering (`.unverified`), removing all peers, including `UnsignedPeerAPIOnly`.
     ///
-    /// 자기 노드의 서명도 판정할 수 없으므로 `signingRequest`는 없다.
+    /// The self node's signature cannot be assessed either, so there is no `signingRequest`.
     func withholdingPeers() -> Netmap {
         var result = self
         result.peers = []

@@ -1,12 +1,12 @@
-/// HPACK 정적 표.
+/// The HPACK static table.
 ///
-/// 압축기와 해제기가 미리 합의한 61개 헤더 필드다. 색인 1~61이 이 표를 가리키고, 62부터는 동적 표다.
-/// 자주 쓰는 필드는 한 바이트 색인으로 줄여 보낼 수 있다.
+/// The encoder and decoder agree in advance on these 61 header fields. Indices 1~61 refer to this table, and indices from 62 refer to the dynamic table.
+/// Frequently used fields can be sent as single-byte indices.
 ///
-/// RFC 7541 부록 A (https://www.rfc-editor.org/rfc/rfc7541#appendix-A). 값은 원문 표에서 기계적으로
-/// 옮겼고, Go `golang.org/x/net/http2/hpack`의 `static_table.go`와 항목별로 대조했다.
+/// RFC 7541 Appendix A (https://www.rfc-editor.org/rfc/rfc7541#appendix-A). The values were copied mechanically from the original table
+/// and checked entry by entry against `static_table.go` in Go's `golang.org/x/net/http2/hpack`.
 enum HPACKStaticTable {
-    /// 색인 `i`의 필드는 `fields[i - 1]`이다.
+    /// The field at index `i` is `fields[i - 1]`.
     static let fields: [HeaderField] = [
         HeaderField(":authority", ""),  // 1
         HeaderField(":method", "GET"),  // 2

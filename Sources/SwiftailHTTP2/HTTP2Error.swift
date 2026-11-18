@@ -1,16 +1,16 @@
-/// `HTTP2ClientConnection`이 던지는 오류.
+/// An error thrown by `HTTP2ClientConnection`.
 public enum HTTP2Error: Error, Sendable, Equatable {
-    /// 상대가 규격을 어겼거나 상대가 연결 오류를 알렸다. 연결은 끝났다. code는 RFC 9113 §7의 오류 코드.
+    /// The peer violated the specification or reported a connection error. The connection has ended. code is an RFC 9113 §7 error code.
     case connectionFailed(code: UInt32)
-    /// 연결이 끝났거나 GOAWAY를 받아 새 요청을 시작할 수 없다.
+    /// The connection ended or received GOAWAY, so it cannot start new requests.
     case connectionClosed
-    /// 상대가 허용한 동시 스트림 수를 넘는다.
+    /// The peer's concurrent stream limit was exceeded.
     case tooManyStreams
-    /// 요청이 잘못됐다(빈 method·path, 대문자 헤더 이름 등).
+    /// The request is invalid (for example, an empty method or path or an uppercase header name).
     case invalidRequest
 }
 
-/// RFC 9113 §7의 오류 코드. 연결 오류(GOAWAY)와 스트림 오류(RST_STREAM)가 같은 코드를 쓴다.
+/// An error code from RFC 9113 §7. Connection errors (GOAWAY) and stream errors (RST_STREAM) share the same codes.
 enum HTTP2ErrorCode: UInt32 {
     case noError = 0x0
     case protocolError = 0x1
@@ -23,7 +23,7 @@ enum HTTP2ErrorCode: UInt32 {
 }
 
 extension HTTP2Error {
-    /// 이 코드로 연결을 끝내야 하는 오류.
+    /// An error that requires ending the connection with this code.
     static func connection(_ code: HTTP2ErrorCode) -> HTTP2Error {
         .connectionFailed(code: code.rawValue)
     }

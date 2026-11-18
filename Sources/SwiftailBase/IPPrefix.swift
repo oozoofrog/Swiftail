@@ -1,14 +1,14 @@
-/// CIDR 접두(`100.64.0.0/10`, `fd7a:115c:a1e0::/48`).
+/// A CIDR prefix (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`).
 ///
-/// 저장할 때 호스트 비트를 지운다. 그래서 `100.64.0.1/10`과 `100.64.0.0/10`은 같은 값이다.
-/// WireGuard의 AllowedIPs, 경로 표에서 쓴다.
+/// Clears host bits on storage, so `100.64.0.1/10` and `100.64.0.0/10` are the same value.
+/// Used in WireGuard AllowedIPs and routing tables.
 public struct IPPrefix: Hashable, Sendable, LosslessStringConvertible {
-    /// 호스트 비트를 지운 망 주소.
+    /// The network address with host bits cleared.
     public let address: IPAddress
-    /// 접두 길이. IPv4는 0...32, IPv6는 0...128이다.
+    /// The prefix length. IPv4 uses 0...32 and IPv6 uses 0...128.
     public let length: Int
 
-    /// 주소와 길이로 만든다. 길이가 주소 종류의 범위 밖이면 `nil`.
+    /// Creates a prefix from an address and length. Returns `nil` for a length outside the address family's range.
     public init?(address: IPAddress, length: Int) {
         guard (0...address.bytes.count * 8).contains(length),
               let masked = IPAddress(bytes: Self.mask(address.bytes, length: length))
@@ -17,8 +17,8 @@ public struct IPPrefix: Hashable, Sendable, LosslessStringConvertible {
         self.length = length
     }
 
-    /// `"100.64.0.1/32"` 같은 문자열을 해석한다.
-    /// 길이는 앞자리 0이 없는 십진수만 받는다(`/032`, `/+8`은 거절).
+    /// Parses a string such as `"100.64.0.1/32"`.
+    /// Accepts only decimal lengths without leading zeros (rejects `/032` and `/+8`).
     public init?(_ description: String) {
         let parts = description.split(separator: "/", omittingEmptySubsequences: false)
         guard parts.count == 2,
@@ -28,19 +28,19 @@ public struct IPPrefix: Hashable, Sendable, LosslessStringConvertible {
         self.init(address: address, length: length)
     }
 
-    /// 주소가 이 접두에 속하는지. 주소 종류(IPv4·IPv6)가 다르면 `false`.
+    /// Whether the address belongs to this prefix. Returns `false` when the address families (IPv4 or IPv6) differ.
     public func contains(_ other: IPAddress) -> Bool {
         other.isIPv4 == address.isIPv4 && Self.mask(other.bytes, length: length) == address.bytes
     }
 
-    /// 호스트 비트를 지운 CIDR 표기. 예: `"100.64.0.0/10"`.
+    /// The CIDR notation with host bits cleared, such as `"100.64.0.0/10"`.
     public var description: String { "\(address)/\(length)" }
 
-    /// 앞 length비트만 남기고 나머지를 0으로 만든다.
+    /// Preserves the first length bits and sets the rest to 0.
     private static func mask(_ bytes: [UInt8], length: Int) -> [UInt8] {
         bytes.enumerated().map { index, byte in
             let keptBits = min(max(length - index * 8, 0), 8)
-            // keptBits가 0이면 0xFF00 >> 0의 하위 바이트 0x00, 8이면 0xFF.
+            // When keptBits is 0, the low byte of 0xFF00 >> 0 is 0x00. When keptBits is 8, the low byte is 0xFF.
             return byte & UInt8(truncatingIfNeeded: 0xFF00 >> keptBits)
         }
     }

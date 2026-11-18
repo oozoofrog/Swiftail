@@ -1,41 +1,41 @@
-// Argon2i(RFC 9106). 알고리즘은 RFC 9106 3절을 따라 썼고, 참조 블록 색인 계산(`referenceIndex`)과
-// 주소 블록을 만드는 시점은 Go 구현과 견주어 맞췄다.
-// 출처: golang.org/x/crypto v0.58.0 `argon2/argon2.go` (`processBlocks`, `indexAlpha`, `phi`),
+// Argon2i (RFC 9106). The algorithm follows RFC 9106 §3. The reference block index calculation (`referenceIndex`) and
+// the timing of address block generation were checked against the Go implementation.
+// Origin: golang.org/x/crypto v0.58.0 `argon2/argon2.go` (`processBlocks`, `indexAlpha`, `phi`),
 // `argon2/blake2b.go` (`blake2bHash`).
-// Copyright 2017 The Go Authors. BSD-3-Clause(전문은 `Edwards25519/FieldElement.swift` 머리. golang.org/x/crypto의 LICENSE와
-// 조항이 같다).
+// Copyright 2017 The Go Authors. BSD-3-Clause (full text at the top of `Edwards25519/FieldElement.swift`. The clauses match the
+// golang.org/x/crypto LICENSE).
 
-/// Argon2i(RFC 9106, 버전 0x13). 비밀 키와 연관 자료는 받지 않는다(쓰는 곳이 없다).
+/// Argon2i (RFC 9106, version 0x13). Secret keys and associated data are unsupported because no caller uses them.
 ///
-/// Tailnet Lock의 끄기 비밀 검증이 쓴다. Go `argon2.Key(password, salt, time, memory, threads, keyLen)`와
-/// 같은 값을 낸다(`time` = `iterations`, `memory` = `memoryKiB`, `threads` = `parallelism`,
+/// Used to verify the Tailnet Lock disablement secret. Produces the same value as Go `argon2.Key(password, salt, time, memory, threads, keyLen)`
+/// (`time` = `iterations`, `memory` = `memoryKiB`, `threads` = `parallelism`,
 /// `keyLen` = `outputByteCount`).
 ///
-/// 참조 블록은 비밀이 아니라 (패스, 차선, 조각, 블록 수, 패스 수, 형식, 카운터)로 만든 주소 블록에서만 고른다
-/// (RFC 9106 3.4.1.2). 그래서 메모리 접근 순서가 `password`에 따라 달라지지 않는다.
+/// Selects reference blocks solely from address blocks made from (pass, lane, slice, block count, pass count, type, counter), independent of the secret
+/// (RFC 9106 §3.4.1.2). This makes memory access order independent of `password`.
 public enum Argon2i {
-    /// 블록 하나는 1024바이트 = 64비트 단어 128개.
+    /// One block is 1024 bytes = 128 64-bit words.
     private static let wordsPerBlock = 128
-    /// 조각(slice) 수 SL(RFC 9106 3.4).
+    /// The number of slices SL (RFC 9106 §3.4).
     private static let syncPoints = 4
     private static let version: UInt32 = 0x13
-    /// 형식 y. Argon2d = 0, Argon2i = 1, Argon2id = 2(RFC 9106 3.1).
+    /// The type y. Argon2d = 0, Argon2i = 1, Argon2id = 2 (RFC 9106 §3.1).
     private static let type: UInt32 = 1
 
-    /// 비밀에서 `outputByteCount`바이트의 태그를 유도한다.
+    /// Derives a tag of `outputByteCount` bytes from the secret.
     ///
-    /// 메모리 `memoryKiB` KiB를 한 번에 잡는다. 병렬도는 결과를 정하는 인자일 뿐이고 계산은 한 스레드에서 한다.
+    /// Allocates `memoryKiB` KiB of memory at once. Parallelism is only a parameter that determines the result, and computation runs on a single thread.
     ///
     /// - Parameters:
-    ///   - password: 비밀 P. 로그에 남기지 않는다.
-    ///   - salt: 솔트 S. RFC 9106 3.1은 길이의 하한을 두지 않는다(16바이트 권장).
-    ///   - iterations: 메모리를 훑는 패스 수 t. 1 이상.
-    ///   - memoryKiB: 메모리 크기 m, **KiB 단위**(Go `argon2.Key`의 `memory`와 같다). `8 × parallelism` 이상.
-    ///     실제 블록 수는 `4 × parallelism`의 배수로 내림한 값이고, H0에는 준 값이 그대로 들어간다(RFC 9106 3.2).
-    ///   - parallelism: 차선(lane) 수 p. 1 이상.
-    ///   - outputByteCount: 태그 길이 T, 바이트. 4 이상.
-    /// - Throws: 인자가 RFC 9106 3.1의 범위 밖이면 `CryptoError.invalidLength`(병렬도·반복·메모리·출력 길이·입력 길이 모두).
-    ///   Go는 메모리가 `8 × p`보다 작으면 조용히 올리고 출력 길이를 검사하지 않지만, 여기서는 규격대로 거절한다.
+    ///   - password: The secret P. Never logged.
+    ///   - salt: The salt S. RFC 9106 §3.1 sets no minimum length (16 bytes recommended).
+    ///   - iterations: The number of passes t over memory. At least 1.
+    ///   - memoryKiB: The memory size m, **in KiB** (same as `memory` in Go `argon2.Key`). At least `8 × parallelism`.
+    ///     The actual block count rounds down to a multiple of `4 × parallelism`, and H0 gets the supplied value unchanged (RFC 9106 §3.2).
+    ///   - parallelism: The number of lanes p. At least 1.
+    ///   - outputByteCount: The tag length T in bytes. At least 4.
+    /// - Throws: `CryptoError.invalidLength` when any argument is outside RFC 9106 §3.1's range (parallelism, iterations, memory, output length, or input length).
+    ///   Go silently raises memory below `8 × p` and skips output length checks. This implementation rejects out-of-range values as specified.
     public static func derive(
         password: [UInt8], salt: [UInt8], iterations: UInt32, memoryKiB: UInt32, parallelism: UInt8, outputByteCount: Int
     ) throws(CryptoError) -> [UInt8] {
@@ -45,12 +45,12 @@ public enum Argon2i {
         )
     }
 
-    /// 비밀 키 K와 연관 자료 X까지 받는 전체 형태. RFC 9106 5.2 벡터를 확인하는 시험만 쓴다.
+    /// Derives a tag with the full parameter set, including secret key K and associated data X. Used only by tests checking the RFC 9106 §5.2 vectors.
     static func derive(
         password: [UInt8], salt: [UInt8], secret: [UInt8], associatedData: [UInt8],
         iterations: UInt32, memoryKiB: UInt32, parallelism: UInt8, outputByteCount: Int
     ) throws(CryptoError) -> [UInt8] {
-        // RFC 9106 3.1의 범위. CryptoError에는 비용 인자용 경우가 따로 없어 길이 오류로 알린다.
+        // Ranges from RFC 9106 §3.1. CryptoError has no separate case for cost parameters, so report a length error.
         let maxLength = Int(UInt32.max)
         guard parallelism >= 1, iterations >= 1, memoryKiB >= 8 * UInt32(parallelism),
               (4...maxLength).contains(outputByteCount),
@@ -66,7 +66,7 @@ public enum Argon2i {
         )
         var memory = Memory(memoryKiB: Int(memoryKiB), lanes: lanes)
 
-        // 각 차선의 첫 두 블록(RFC 9106 3.2 3·4단계).
+        // The first two blocks of each lane (RFC 9106 §3.2, steps 3 and 4).
         for lane in 0..<lanes {
             for column in 0..<2 {
                 let seed = initial + littleEndian32(UInt32(column)) + littleEndian32(UInt32(lane))
@@ -74,9 +74,9 @@ public enum Argon2i {
             }
         }
 
-        // RFC 9106 3.2 5·6단계. 조각은 반드시 차례로 채우지만 같은 조각의 차선끼리는 서로 참조하지 않으므로
+        // RFC 9106 §3.2, steps 5 and 6. Slices must be filled in order. Lanes within the same slice do not reference one another, so
         // (3.4 "Segments of the same slice can be computed in parallel and do not reference blocks from each other")
-        // 차선을 하나씩 채워도 병렬로 채운 것과 결과가 같다.
+        // filling lanes one at a time produces the same result as filling them in parallel.
         for pass in 0..<Int(iterations) {
             for slice in 0..<syncPoints {
                 for lane in 0..<lanes {
@@ -85,7 +85,7 @@ public enum Argon2i {
             }
         }
 
-        // 마지막 열의 XOR(3.2 7단계)을 H'로 태그로 만든다(8단계).
+        // Use H' to turn the XOR of the last column (§3.2, step 7) into the tag (step 8).
         var final = [UInt64](repeating: 0, count: wordsPerBlock)
         for lane in 0..<lanes {
             let base = (lane * memory.laneLength + memory.laneLength - 1) * wordsPerBlock
@@ -96,7 +96,7 @@ public enum Argon2i {
         return variableLengthHash(bytes(of: final), outputByteCount: outputByteCount)
     }
 
-    /// H0(RFC 9106 3.2 1단계, 그림 1). 64바이트.
+    /// Computes the 64-byte H0 (RFC 9106 §3.2, step 1, Figure 1).
     static func initialHash(
         password: [UInt8], salt: [UInt8], secret: [UInt8], associatedData: [UInt8],
         iterations: UInt32, memoryKiB: UInt32, parallelism: UInt8, outputByteCount: Int
@@ -112,13 +112,13 @@ public enum Argon2i {
         return hasher.finalize()
     }
 
-    /// 가변 길이 해시 H'^T(RFC 9106 3.3, 그림 8).
+    /// The variable-length hash H'^T (RFC 9106 §3.3, Figure 8).
     static func variableLengthHash(_ input: [UInt8], outputByteCount: Int) -> [UInt8] {
         let prefixed = littleEndian32(UInt32(outputByteCount)) + input
         guard outputByteCount > 64 else {
             return BLAKE2b.hash(prefixed, outputByteCount: outputByteCount)
         }
-        // V_1..V_r은 64바이트이고 앞 32바이트(W_i)만 쓴다. 마지막 V_{r+1}은 남은 길이 전부다.
+        // V_1..V_r are 64 bytes each and use only the first 32 bytes (W_i). The final V_{r+1} covers the full remaining length.
         let r = (outputByteCount + 31) / 32 - 2
         var v = BLAKE2b.hash(prefixed)
         var out = Array(v[0..<32])
@@ -131,17 +131,17 @@ public enum Argon2i {
         return out
     }
 
-    // MARK: 메모리 채우기
+    // MARK: Filling memory
 
-    /// p개 차선 × q열의 블록 행렬 B[i][j](RFC 9106 3.2 2단계). 차선 i의 j열은 `i·q + j`번 블록이다.
+    /// A block matrix B[i][j] with p lanes × q columns (RFC 9106 §3.2, step 2). Column j of lane i is block `i·q + j`.
     private struct Memory {
-        /// 차선 수 p.
+        /// The number of lanes p.
         let lanes: Int
-        /// 차선 하나의 블록 수 q = m' / p.
+        /// The number of blocks in a lane, q = m' / p.
         let laneLength: Int
-        /// 조각 하나(segment)의 블록 수 q / SL.
+        /// The number of blocks in a segment, q / SL.
         let segmentLength: Int
-        /// 전체 블록 수 m' = 4p·⌊m / 4p⌋.
+        /// The total block count m' = 4p·⌊m / 4p⌋.
         let blockCount: Int
         var words: [UInt64]
 
@@ -165,9 +165,9 @@ public enum Argon2i {
         }
     }
 
-    /// 조각 하나를 채운다. 참조 블록의 위치는 주소 블록(3.4.1.2)에서만 정한다.
+    /// Fills one segment. Selects the reference block's position solely from the address block (§3.4.1.2).
     private static func fillSegment(_ memory: inout Memory, pass: Int, slice: Int, lane: Int, iterations: Int) {
-        // Z = (r, l, sl, m', t, y)와 카운터 i(3.4.1.2 그림 11). 나머지 968바이트는 0이다.
+        // Z = (r, l, sl, m', t, y) and counter i (§3.4.1.2, Figure 11). The remaining 968 bytes are 0.
         var input = [UInt64](repeating: 0, count: wordsPerBlock)
         input[0] = UInt64(pass)
         input[1] = UInt64(lane)
@@ -178,17 +178,17 @@ public enum Argon2i {
         var addresses: [UInt64] = []
         var scratch = [UInt64](repeating: 0, count: wordsPerBlock)
 
-        // 첫 패스의 첫 조각은 처음 두 블록이 이미 차 있다.
+        // The first two blocks are already filled in the first segment of the first pass.
         let start = pass == 0 && slice == 0 ? 2 : 0
         for index in start..<memory.segmentLength {
-            // 주소 블록 하나가 블록 128개의 참조 위치를 준다. 첫 블록을 건너뛴 조각도 카운터 1부터 쓴다.
+            // One address block provides reference positions for 128 blocks. A segment that skips the first block still starts at counter 1.
             if index == start || index % wordsPerBlock == 0 {
                 input[6] += 1
                 addresses = addressBlock(input)
             }
             let column = slice * memory.segmentLength + index
             let current = lane * memory.laneLength + column
-            // 첫 열의 앞 블록은 같은 차선의 마지막 블록이다(3.2 6단계).
+            // The block preceding the first column is the last block in the same lane (§3.2, step 6).
             let previous = column == 0 ? current + memory.laneLength - 1 : current - 1
             let reference = referenceIndex(
                 pseudoRandom: addresses[index % wordsPerBlock], memory: memory,
@@ -198,19 +198,19 @@ public enum Argon2i {
         }
     }
 
-    /// 참조 블록 B[l][z]의 번호(RFC 9106 3.4.2). J_1은 아래 32비트, J_2는 위 32비트다.
+    /// The index of reference block B[l][z] (RFC 9106 §3.4.2). J_1 is the low 32 bits and J_2 the high 32 bits.
     private static func referenceIndex(
         pseudoRandom: UInt64, memory: Memory, pass: Int, slice: Int, lane: Int, index: Int
     ) -> Int {
         let j1 = pseudoRandom & 0xFFFF_FFFF
         let j2 = pseudoRandom >> 32
-        // 첫 패스의 첫 조각은 다른 차선에 아직 아무것도 없으므로 자기 차선에서 고른다.
+        // The first segment of the first pass selects from its own lane because the other lanes have nothing yet.
         let referenceLane = pass == 0 && slice == 0 ? lane : Int(j2 % UInt64(memory.lanes))
         let sameLane = referenceLane == lane
 
-        // W는 끝난 조각들(첫 패스에서는 지금까지의 조각, 이후에는 최근 3개)이고,
-        // 같은 차선이면 지금 조각에서 이미 채운 블록(바로 앞 블록 B[i][j-1] 제외)을 더하고,
-        // 다른 차선이면 조각의 첫 블록일 때 W의 마지막 블록(B[i][j-1]과 동시에 계산될 수 있는 블록)을 뺀다.
+        // W consists of completed segments (the segments so far in the first pass, the latest 3 in later passes).
+        // For the same lane, add the already filled blocks of the current segment (excluding the immediately preceding block B[i][j-1]).
+        // For another lane, when processing the segment's first block, exclude W's last block (which can be computed at the same time as B[i][j-1]).
         let finishedSegments = pass == 0 ? slice : syncPoints - 1
         var areaSize = finishedSegments * memory.segmentLength
         if sameLane {
@@ -218,17 +218,17 @@ public enum Argon2i {
         } else if index == 0 {
             areaSize -= 1
         }
-        // W의 첫 블록. 첫 패스는 차선의 맨 앞, 이후는 지금 조각 바로 다음 조각의 맨 앞이다.
+        // The first block of W. In the first pass it is the first block of the lane. Later it is the first block of the segment immediately following the current one.
         let areaStart = pass == 0 ? 0 : (slice + 1) % syncPoints * memory.segmentLength
 
-        // 그림 13: x = J_1² / 2^32, y = |W|·x / 2^32, zz = |W| - 1 - y.
+        // Figure 13 gives x = J_1² / 2^32, y = |W|·x / 2^32, zz = |W| - 1 - y.
         let x = (j1 * j1) >> 32
         let y = (UInt64(areaSize) * x) >> 32
         let zz = areaSize - 1 - Int(y)
         return referenceLane * memory.laneLength + (areaStart + zz) % memory.laneLength
     }
 
-    /// 주소 블록 G(0, G(0, Z ‖ i ‖ 0…))(RFC 9106 3.4.1.2). G(0, X) = P(X) ⊕ X.
+    /// The address block G(0, G(0, Z ‖ i ‖ 0…)) (RFC 9106 §3.4.1.2). G(0, X) = P(X) ⊕ X.
     private static func addressBlock(_ input: [UInt64]) -> [UInt64] {
         var block = input
         for _ in 0..<2 {
@@ -241,10 +241,10 @@ public enum Argon2i {
         return block
     }
 
-    /// B[current] ⊕= G(B[previous], B[reference])(RFC 9106 3.2 5·6단계, 3.5).
+    /// Computes B[current] ⊕= G(B[previous], B[reference]) (RFC 9106 §3.2, steps 5 and 6, and §3.5).
     ///
-    /// G(X, Y) = P(R) ⊕ R, R = X ⊕ Y. 버전 0x13은 둘째 패스부터 옛 값에 XOR한다. 첫 패스의 블록은 아직 0이므로
-    /// 패스와 상관없이 XOR하면 첫 패스는 대입과 같다.
+    /// G(X, Y) = P(R) ⊕ R, R = X ⊕ Y. Version 0x13 XORs with the previous value from the second pass onward. First-pass blocks are zero,
+    /// so XOR on every pass is equivalent to assignment on the first pass.
     private static func mix(_ words: inout [UInt64], current: Int, previous: Int, reference: Int, scratch r: inout [UInt64]) {
         let out = current * wordsPerBlock
         let x = previous * wordsPerBlock
@@ -260,10 +260,10 @@ public enum Argon2i {
         }
     }
 
-    /// 블록에 P를 행마다, 그다음 열마다 적용한다(RFC 9106 3.5 그림 15).
+    /// Applies P to each row of the block, then to each column (RFC 9106 §3.5, Figure 15).
     ///
-    /// 블록은 16바이트 레지스터 8×8 행렬이다. 행 k는 단어 16k..16k+15, 열 k는 단어 (2k, 2k+1), (2k+16, 2k+17), …,
-    /// (2k+112, 2k+113)이다. 레지스터 S_i = (v_{2i+1} ‖ v_{2i})이므로 v_{2i}가 메모리에서 앞 단어다(3.6).
+    /// A block is an 8×8 matrix of 16-byte registers. Row k is words 16k..16k+15, and column k is words (2k, 2k+1), (2k+16, 2k+17), …,
+    /// (2k+112, 2k+113). Register S_i = (v_{2i+1} ‖ v_{2i}), so v_{2i} is the first word in memory (§3.6).
     private static func permute(_ block: inout [UInt64]) {
         for row in 0..<8 {
             round(&block, base: 16 * row, pairStride: 2)
@@ -273,7 +273,7 @@ public enum Argon2i {
         }
     }
 
-    /// 순열 P(RFC 9106 3.6). 단어 v_k는 `base + (k / 2)·pairStride + k % 2`에 있다.
+    /// The permutation P (RFC 9106 §3.6). Word v_k is at `base + (k / 2)·pairStride + k % 2`.
     private static func round(_ block: inout [UInt64], base: Int, pairStride: Int) {
         let i0 = base, i1 = base + pairStride, i2 = base + 2 * pairStride, i3 = base + 3 * pairStride
         let i4 = base + 4 * pairStride, i5 = base + 5 * pairStride, i6 = base + 6 * pairStride, i7 = base + 7 * pairStride
@@ -297,7 +297,7 @@ public enum Argon2i {
         block[i6] = v12; block[i6 + 1] = v13; block[i7] = v14; block[i7 + 1] = v15
     }
 
-    /// GB(a, b, c, d)(RFC 9106 3.6 그림 19). BLAKE2b의 G에서 덧셈마다 2·trunc(a)·trunc(b)를 더한다.
+    /// GB(a, b, c, d) (RFC 9106 §3.6, Figure 19). Adds 2·trunc(a)·trunc(b) to every addition in BLAKE2b's G.
     @inline(__always)
     private static func mixColumn(_ a: inout UInt64, _ b: inout UInt64, _ c: inout UInt64, _ d: inout UInt64) {
         a = multiplyAdd(a, b); d = rotateRight(d ^ a, 32)
@@ -316,7 +316,7 @@ public enum Argon2i {
         (x >> n) | (x << (64 - n))
     }
 
-    // MARK: 바이트 변환
+    // MARK: Byte conversion
 
     private static func littleEndian32(_ value: UInt32) -> [UInt8] {
         (0..<4).map { UInt8(truncatingIfNeeded: value >> UInt32(8 * $0)) }

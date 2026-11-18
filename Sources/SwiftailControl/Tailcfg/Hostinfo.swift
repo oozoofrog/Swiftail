@@ -1,31 +1,31 @@
-/// 노드가 제어 서버에 알리는 자기 정보. Go `tailcfg.Hostinfo`.
+/// Information a node reports about itself to the control server. Go `tailcfg.Hostinfo`.
 ///
-/// 등록 요청과 맵 요청에 실려 가고, 다른 노드의 것은 맵 응답의 `Node.Hostinfo`로 온다.
-/// testcontrol은 `Hostname`을 노드 이름으로 쓰고, Go 클라이언트는 빈 `BackendLogID`를 보내지 않는다.
-/// 모든 필드가 `omitzero`이므로 비어 있으면 JSON에서 빠진다.
+/// Sent in registration and map requests. Information about other nodes arrives as `Node.Hostinfo` in map responses.
+/// testcontrol uses `Hostname` for the node name. The Go client omits an empty `BackendLogID`.
+/// All fields are `omitzero`, so empty fields are omitted from JSON.
 ///
-/// Swiftail이 쓰는 필드만 둔다. 서브넷 경로, 태그 요청, 서비스 광고처럼 범위 밖 기능의 필드는 없다.
-/// `docs/protocol-notes/control-map.md` 3.3 (출처: tailscale.com `tailcfg/tailcfg.go` `Hostinfo`).
+/// Includes only fields Swiftail uses. Omits fields for features outside scope, such as subnet routes, tag requests, and service advertisements.
+/// `docs/protocol-notes/control-map.md` §3.3 (origin: `Hostinfo` in tailscale.com `tailcfg/tailcfg.go`).
 public struct Hostinfo: Codable, Sendable, Equatable {
-    /// 클라이언트 구현의 버전 문자열.
+    /// The version string of the client implementation.
     public var ipnVersion: String
-    /// 앞단(UI) 로그 ID. 없으면 빈 문자열.
+    /// The frontend (UI) log ID. An empty string means absent.
     public var frontendLogID: String
-    /// 노드의 로그 ID. 비밀이 아닌 식별자이고 비어 있으면 안 된다.
+    /// The node's log ID. A nonsecret identifier that must be nonempty.
     public var backendLogID: String
-    /// 운영 체제 이름(`"iOS"`, `"macOS"` 등).
+    /// The OS name (such as `"iOS"` or `"macOS"`).
     public var os: String
-    /// 운영 체제 버전.
+    /// The OS version.
     public var osVersion: String
-    /// 기기 이름. testcontrol은 이것으로 노드 이름을 짓는다.
+    /// The device name. testcontrol uses it to name the node.
     public var hostname: String
-    /// 노드를 품은 앱의 구분 이름(tsnet 앱 등).
+    /// A name identifying the app that embeds the node (such as a tsnet app).
     public var app: String
-    /// 사용자 공간 네트워크 스택으로 도는지. `nil`은 알리지 않음.
+    /// Whether this runs with a userspace network stack. `nil` leaves it unreported.
     public var userspace: Bool?
-    /// 서브넷 라우터가 사용자 공간으로 도는지. `nil`은 알리지 않음.
+    /// Whether the subnet router runs in userspace. `nil` leaves it unreported.
     public var userspaceRouter: Bool?
-    /// 네트워크 상태(UDP 동작, 홈 DERP 등). 아직 모르면 `nil`.
+    /// Network state (UDP behavior, home DERP, and so on). `nil` if still unknown.
     public var netInfo: NetInfo?
 
     public init(

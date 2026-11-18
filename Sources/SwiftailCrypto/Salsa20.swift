@@ -1,9 +1,9 @@
-/// Salsa20 계열 기본기(20라운드). 비밀 값에 따른 분기·표 조회 없이 32비트 덧셈·회전·XOR만 쓴다.
+/// Salsa20-family primitives (20 rounds). Uses only 32-bit addition, rotation, and XOR, with no secret-dependent branching or table lookups.
 enum Salsa20 {
     /// "expand 32-byte k"
     private static let sigma: [UInt32] = [0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574]
 
-    /// Salsa20 쿼터 라운드 한 줄.
+    /// One line of the Salsa20 quarter-round.
     private static func quarterRound(_ x: inout [UInt32], _ a: Int, _ b: Int, _ c: Int, _ d: Int) {
         x[b] ^= rotateLeft(x[a] &+ x[d], 7)
         x[c] ^= rotateLeft(x[b] &+ x[a], 9)
@@ -11,7 +11,7 @@ enum Salsa20 {
         x[a] ^= rotateLeft(x[d] &+ x[c], 18)
     }
 
-    /// 20라운드(열·행 10번씩 번갈아). 마지막 입력 덧셈은 하지 않는다.
+    /// Runs 20 rounds, alternating columns and rows 10 times each, without the final addition of the input.
     private static func rounds(_ input: [UInt32]) -> [UInt32] {
         var x = input
         for _ in 0..<10 {
@@ -27,7 +27,7 @@ enum Salsa20 {
         return x
     }
 
-    /// Salsa20 코어: 20라운드 뒤 입력을 더해 64바이트 블록을 만든다.
+    /// Runs the Salsa20 core, adding the input after 20 rounds to produce a 64-byte block.
     static func core(_ input: [UInt32]) -> [UInt8] {
         precondition(input.count == 16)
         let x = rounds(input)
@@ -37,7 +37,7 @@ enum Salsa20 {
         return out
     }
 
-    /// HSalsa20: key 32바이트, input 16바이트 → 32바이트. 입력을 더하지 않고 0·5·10·15·6·7·8·9번 워드를 낸다.
+    /// Runs HSalsa20 with a 32-byte key and 16-byte input to produce 32 bytes. Returns words 0, 5, 10, 15, 6, 7, 8, and 9 without adding the input.
     static func hsalsa20(key: [UInt8], input: [UInt8]) -> [UInt8] {
         precondition(key.count == 32 && input.count == 16)
         var state = [UInt32](repeating: 0, count: 16)
@@ -53,7 +53,7 @@ enum Salsa20 {
         return out
     }
 
-    /// Salsa20 키스트림: key 32바이트, nonce 8바이트, 블록 카운터 0부터. count바이트를 돌려준다.
+    /// Returns count bytes of the Salsa20 keystream with a 32-byte key, 8-byte nonce, and block counter starting at 0.
     static func keystream(key: [UInt8], nonce: [UInt8], count: Int) -> [UInt8] {
         precondition(key.count == 32 && nonce.count == 8)
         var state = [UInt32](repeating: 0, count: 16)
@@ -73,8 +73,8 @@ enum Salsa20 {
         return Array(out[0..<count])
     }
 
-    /// XSalsa20 키스트림: key 32바이트, nonce 24바이트.
-    /// HSalsa20(key, nonce[0..<16])을 부분 키로 삼아 Salsa20(nonce[16..<24])을 돌린다.
+    /// Produces the XSalsa20 keystream with a 32-byte key and 24-byte nonce.
+    /// Uses HSalsa20(key, nonce[0..<16]) as the subkey and runs Salsa20(nonce[16..<24]).
     static func xsalsa20Keystream(key: [UInt8], nonce: [UInt8], count: Int) -> [UInt8] {
         precondition(key.count == 32 && nonce.count == 24)
         let subkey = hsalsa20(key: key, input: Array(nonce[0..<16]))
@@ -82,7 +82,7 @@ enum Salsa20 {
     }
 }
 
-/// HChaCha20(draft-irtf-cfrg-xchacha-03 §2.2): key 32바이트, input 16바이트 → 32바이트.
+/// HChaCha20 (draft-irtf-cfrg-xchacha-03 §2.2), with a 32-byte key and 16-byte input producing 32 bytes.
 func hchacha20(key: [UInt8], input: [UInt8]) -> [UInt8] {
     precondition(key.count == 32 && input.count == 16)
     var x = [UInt32](repeating: 0, count: 16)

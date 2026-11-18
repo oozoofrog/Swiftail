@@ -1,19 +1,19 @@
 import Foundation
 
-/// 제어 서버가 정한 재시도 대기. 시계도 난수도 갖지 않는 순수 계산이다.
+/// The retry delay specified by the control server. Computes it without a clock or randomness.
 ///
-/// - 일반 물러나기: `Backoff.delay`를 30초 상한으로 쓴다. 전체 netmap을 받으면 연속 실패 수를 0으로 되돌린다.
-/// - 429와 `Retry-After`가 붙은 503: 서버가 정한 시간만큼 기다린다. 값이 없거나 0 이하·1시간 초과·해석 불가면
-///   `5s + [0, 5s)`를 쓰고, 어느 쪽이든 5분을 넘기지 않는다.
+/// - Ordinary backoff: Uses `Backoff.delay` with a 30-second cap. Resets the consecutive failure count to 0 on receipt of a full netmap.
+/// - 429 and 503 with `Retry-After`: Waits the server-specified time. If missing, at or below 0, above 1 hour, or unparseable,
+///   uses `5s + [0, 5s)`. Both cases are capped at 5 minutes.
 ///
-/// `docs/protocol-notes/control-map.md` 4.4, 5장
-/// (출처: tailscale.com `util/backoff/backoff.go`, `control/controlclient/direct.go` `parseRateLimitError`,
+/// `docs/protocol-notes/control-map.md` §4.4, Chapter 5
+/// (origin: tailscale.com `util/backoff/backoff.go`, `parseRateLimitError` in `control/controlclient/direct.go`,
 /// `control/controlclient/auto.go` `maxRetryWindow`, BSD-3-Clause).
 enum RetryPolicy {
     static let maximumBackoff = Duration.seconds(30)
     static let maximumRetryAfter = Duration.seconds(5 * 60)
 
-    /// `Retry-After` 헤더 값(정수 초 또는 HTTP-date)에 따른 대기. `jitter`는 [0, 1)의 난수다.
+    /// The delay for a `Retry-After` header value (integer seconds or HTTP-date). `jitter` is a random value in [0, 1).
     static func retryAfter(_ header: String?, now: Date, jitter: Double) -> Duration {
         let fallback = Duration.seconds(5) + Duration.seconds(5) * jitter
         let value = header?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -21,7 +21,7 @@ enum RetryPolicy {
         if let seconds = Int(value) {
             parsed = .seconds(seconds)
         } else if let date = httpDate(value) {
-            // 정수로 바꾸기 전에 범위를 본다. 먼 날짜를 그대로 바꾸면 Int64를 넘어 트랩할 수 있다.
+            // Check the range before converting to an integer. Converting a distant date directly could exceed Int64 and trap.
             let interval = date.timeIntervalSince(now)
             parsed = interval > 0 && interval <= 3_600 ? .milliseconds(Int64((interval * 1_000).rounded(.down))) : nil
         } else {
@@ -31,8 +31,8 @@ enum RetryPolicy {
         return min(parsed, maximumRetryAfter)
     }
 
-    /// RFC 9110 5.6.7의 IMF-fixdate(`Sun, 06 Nov 1994 08:49:37 GMT`). Go `http.ParseTime`이 받는
-    /// 옛 형식(RFC 850, asctime)도 받는다.
+    /// The IMF-fixdate in RFC 9110 §5.6.7 (`Sun, 06 Nov 1994 08:49:37 GMT`). Also accepts the legacy formats
+    /// Go's `http.ParseTime` accepts (RFC 850 and asctime).
     private static func httpDate(_ text: String) -> Date? {
         for format in ["EEE, dd MMM yyyy HH:mm:ss 'GMT'", "EEEE, dd-MMM-yy HH:mm:ss 'GMT'", "EEE MMM d HH:mm:ss yyyy"] {
             let formatter = DateFormatter()

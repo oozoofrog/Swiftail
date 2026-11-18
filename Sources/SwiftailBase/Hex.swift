@@ -1,6 +1,6 @@
 extension Array where Element == UInt8 {
-    /// 16진 문자열을 바이트로 바꾼다. 대소문자를 모두 받는다.
-    /// 길이가 홀수이거나 16진 숫자가 아닌 문자가 있으면 `nil`.
+    /// Converts a hexadecimal string to bytes. Accepts both uppercase and lowercase.
+    /// Returns `nil` for an odd length or a nonhexadecimal character.
     public init?(hex: String) {
         let digits = Array(hex.utf8)
         guard digits.count.isMultiple(of: 2) else { return nil }
@@ -13,7 +13,7 @@ extension Array where Element == UInt8 {
         self = bytes
     }
 
-    /// 소문자 16진 문자열.
+    /// The lowercase hexadecimal string.
     public var hex: String {
         let digits = Array("0123456789abcdef".utf8)
         var text: [UInt8] = []

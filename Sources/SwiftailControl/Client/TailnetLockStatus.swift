@@ -1,41 +1,41 @@
-/// tailnet lock의 지금 모습. `ControlClient`가 netmap마다 채워 `Netmap.tailnetLock`으로 낸다.
+/// The current tailnet lock state. `ControlClient` fills it for each netmap and emits it as `Netmap.tailnetLock`.
 ///
-/// 앱은 이 값 하나로 네 경우를 가른다: lock 없음(`.disabled`), 켜짐·이 노드 서명됨(`.enforcing`이고 `signingRequest`가 nil),
-/// 켜짐·서명을 기다림(`.enforcing`이고 `signingRequest`가 있음), 확인하지 못함(`.unverified`). 스스로 풀리지 않는 경우는
-/// `issue`가 따로 알린다.
+/// The app distinguishes four cases with this value: no lock (`.disabled`), enabled and this node is signed (`.enforcing` with nil `signingRequest`),
+/// enabled and awaiting a signature (`.enforcing` with a `signingRequest`), and unverified (`.unverified`). Cases that do not resolve on their own
+/// are reported separately by `issue`.
 ///
-/// 담는 것은 공개 키와 해시뿐이다. 개인 키와 끄기 비밀은 담지 않는다.
-/// 계약 `docs/contracts/SwiftailTailnetLock.md` 2절, 동작 N6·P.
+/// Contains only public keys and hashes. Private keys and disablement secrets are excluded.
+/// Contract `docs/contracts/SwiftailTailnetLock.md` §2, behaviors N6 and P.
 public struct TailnetLockStatus: Sendable, Equatable {
     public enum Mode: Sendable, Equatable {
-        /// lock이 없다: 로컬 서명 권한 상태가 없고, 서버가 켜졌다고 알리지 않았거나 이 노드에 `tailnet-lock` capability가 없다.
+        /// There is no lock: there is no local signing authority state, and either the server did not report it enabled or this node lacks the `tailnet-lock` capability.
         case disabled
-        /// 검증한 서명 권한 상태를 쥐고 있고, 그것으로 피어를 거른다.
+        /// Holds verified signing authority state and filters peers with it.
         case enforcing
-        /// 거를 근거가 없다: 서버는 lock이 켜졌다고 하는데 부트스트랩하지 못했거나, 저장된 상태를 열지 못했다.
-        /// 서명 없는 노드와 통신하지 않는다는 약속을 지키려고 피어를 하나도 올리지 않는다(Go는 이때 모두 받아들인다).
+        /// There is no basis for filtering: the server reports an enabled lock and bootstrap has not succeeded, or the stored state could not be opened.
+        /// Withholds all peers to honor the promise of no communication with unsigned nodes (Go accepts them all in this case).
         case unverified
     }
 
-    /// 서명 권한 상태를 검증된 채로 쥐지 못하거나 서버와 맞추지 못하는 까닭(계약 5절 TL-11b 항목 4). 앱이 사용자에게 할
-    /// 안내를 가른다.
+    /// Why signing authority state could not be held in verified form or synchronized with the server (contract §5 TL-11b item 4). Determines what
+    /// the app tells the user.
     public enum Issue: Sendable, Equatable {
-        /// 검증된 상태를 얻는 중이다: 서버는 lock이 켜졌다는데 아직 부트스트랩하지 못했다. 스스로 다시 시도한다(`.unverified`).
+        /// Obtaining verified state: the server reports an enabled lock, and bootstrap has yet to succeed. Retries automatically (`.unverified`).
         case acquiringState
-        /// 저장된 상태를 열지 못했다(깨졌거나 검증되지 않는다). 스스로 풀리지 않는다(`.unverified`).
-        /// 사용자가 고르면 `ControlClient.removeTailnetLockState(inDirectory:)`로 지우고 다시 시작한다.
+        /// The stored state could not be opened (it is corrupt or fails verification). Does not resolve on its own (`.unverified`).
+        /// If the user chooses to, delete it with `ControlClient.removeTailnetLockState(inDirectory:)` and restart.
         case unreadableStoredState
-        /// 저장된 상태가 서버가 알린 사슬과 이어지지 않는다: 동기화에서 공통 조상을 찾지 못했다(다른 tailnet의 상태가 남은
-        /// 경우 등). `mode`는 `.enforcing`이고 저장된 상태로 계속 거르며, 서명 기기가 서명해도 풀리지 않는다.
-        /// 사용자가 고르면 `ControlClient.removeTailnetLockState(inDirectory:)`로 지우고 다시 시작한다.
+        /// The stored state does not connect to the chain reported by the server. Synchronization found no common ancestor (for example, state from another
+        /// tailnet was left behind). `mode` is `.enforcing` and filtering continues with the stored state. A signature from the signing device cannot resolve it.
+        /// If the user chooses to, delete it with `ControlClient.removeTailnetLockState(inDirectory:)` and restart.
         case storedStateDiverged
     }
 
-    /// 서명 기기에서 `tailscale lock sign <nodeKey> <lockKey>`에 그대로 넣는 두 값. 둘 다 공개 키다.
+    /// The two values to pass as is to `tailscale lock sign <nodeKey> <lockKey>` on the signing device. Both are public keys.
     public struct SigningRequest: Sendable, Equatable {
-        /// 이 노드의 node 공개 키(`nodekey:` + 16진 64자리).
+        /// This node's node public key (`nodekey:` + 64 hexadecimal digits).
         public var nodeKey: String
-        /// 이 노드의 tailnet lock 공개 키(`tlpub:` + 16진 64자리). 서명의 회전 키가 된다.
+        /// This node's tailnet lock public key (`tlpub:` + 64 hexadecimal digits). Becomes the signature's rotation key.
         public var lockKey: String
 
         public init(nodeKey: String, lockKey: String) {
@@ -45,18 +45,18 @@ public struct TailnetLockStatus: Sendable, Equatable {
     }
 
     public var mode: Mode
-    /// 로컬 머리(base32 52자). `.enforcing`일 때만 있다.
+    /// The local head (52 base32 characters). Present only in `.enforcing`.
     public var head: String?
-    /// netmap에서 뺀 피어 수. `.enforcing`에서는 서명이 없거나 검증되지 않거나 회전으로 낡은 키인 피어이고,
-    /// `.unverified`에서는 서버가 알린 피어 전부다.
+    /// The number of peers removed from the netmap. In `.enforcing`, this includes peers whose signatures are absent or unverified, or whose keys were superseded by rotation.
+    /// In `.unverified`, it includes all peers reported by the server.
     public var filteredPeerCount: Int
-    /// 자기 노드의 서명이 지금 상태로 검증되지 않을 때(잠김) 서명 기기에 넘길 값. 잠기지 않았으면 nil이다.
+    /// The values to pass to the signing device when the self node's signature fails verification under current state (locked out). Nil if unlocked.
     public var signingRequest: SigningRequest?
 
-    /// 검증된 상태를 쥐지 못하거나 서버와 맞추지 못하는 까닭. 그런 까닭이 없으면 nil이다.
+    /// Why verified state could not be held or synchronized with the server. Nil when there is no such issue.
     public var issue: Issue?
 
-    /// 자기 노드가 잠겨 있다: 서명 기기가 서명할 때까지 lock을 지키는 피어와 통신하지 못한다.
+    /// Whether the self node is locked out, preventing communication with peers enforcing the lock until a signing device signs it.
     public var isLockedOut: Bool { signingRequest != nil }
 
     public init(
