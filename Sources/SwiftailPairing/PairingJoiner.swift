@@ -68,15 +68,16 @@ public enum PairingJoiner {
     /// The OS resolves the name (the tunnel's MagicDNS). The library cannot directly observe whether the connection used the tunnel, so it compares
     /// the local endpoint with the device's tailnet address supplied by the app. It dials only with the same IP version as that address. It does not
     /// restrict interface types, because Network.framework treats a path through the packet tunnel as also using the Wi-Fi or cellular interface
-    /// beneath it. If the ready connection's local endpoint differs from that address or its remote endpoint falls outside the tailnet range,
-    /// pairing ends with `notOnTailnet` before anything is sent (J2). Dial states are logged to subsystem `Swiftail`, category `pairing`.
+    /// beneath it. Once the socket is ready and both numeric endpoints are available, the library validates them before sending any pairing payload.
+    /// DNS resolution and TCP setup may already have happened (J2). Dial states are logged to subsystem `Swiftail`, category `pairing`.
     /// The library cannot identify the paired peer on subsequent connections through this path.
     ///
     /// - Parameter localAddress: This device's tailnet address (`100.64.0.1`). The tunnel extension must read it from the node's `status.addresses` and pass
     ///   it to the app. Converts IPv4-mapped IPv6 to IPv4. Guessing the value from the OS interface list defeats
     ///   this check.
-    /// - Throws: The errors from `pair(with:deviceName:node:awaitingApproval:)`, plus `invalidConfiguration` if `localAddress` is outside the tailnet range,
-    ///   or `notOnTailnet` if the connection did not traverse the tunnel.
+    /// - Throws: The errors from `pair(with:deviceName:node:awaitingApproval:)`, plus `invalidConfiguration` if `localAddress` is outside the tailnet ranges,
+    ///   or `notOnTailnet` if the ready socket's local endpoint address differs from `localAddress` or its remote endpoint is outside those ranges.
+    ///   If the dial never reaches readiness or numeric endpoints remain unavailable, pairing ends with `unreachable` after the retry window.
     public static func pair(
         with offer: PairingOffer, deviceName: String, localAddress: SwiftailBase.IPAddress,
         awaitingApproval: @escaping @Sendable (_ confirmationCode: String) -> Void = { _ in }

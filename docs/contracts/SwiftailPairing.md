@@ -329,6 +329,12 @@ Unverified: whether the token request succeeded with Basic or fell back to the b
 - Whether the OS socket joiner pairs through a real packet tunnel without the interface prohibition, on Wi-Fi and on cellular (gate 13 rerun). The diagnosis rests on the SDK documentation and the field symptom. The `waiting` state was not observed on the device.
 - When MagicDNS returns both IPv4 and IPv6 addresses for the host's name, whether a connection pinned to `localAddress`'s IP version comes up with an address of that version (gate 13).
 
+### Accepted residual risk
+
+With the tunnel down, if the active network assigns this device exactly its tailnet `localAddress` and routes to a peer in the tailnet ranges, both endpoint checks pass (J2). That peer can receive `hello` (the joiner's nonce commitment and device name) and, after a `challenge`, `proof`. The proof uses HMAC-SHA256 keyed by the offer secret over `"swiftail-pairing-3 joiner" ‖ P`. P binds both IP addresses and ports, so the proof cannot be replayed to the real host. The offer secret comes from `SystemRandomNumberGenerator` and is 32 bytes long, so the HMAC gives no practical offline guessing oracle.
+
+Binding the socket to the provider's `virtualInterface` via `NWParameters.requiredInterface` would require dialing inside the packet tunnel provider. `PairingJoiner` runs in the containing app. The earlier interface-type prohibition also excluded the tunnel itself (gate 13). [Apple's `virtualInterface` documentation](https://developer.apple.com/documentation/networkextension/nepackettunnelprovider/virtualinterface-7l3ol) · [Apple's `requiredInterface` documentation](https://developer.apple.com/documentation/network/nwparameters/requiredinterface)
+
 ## 9. Design Review Changes (2026-11-17)
 
 | Finding | Change |
