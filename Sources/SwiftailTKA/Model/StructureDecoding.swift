@@ -4,8 +4,8 @@
 
 /// The known field values extracted from a structure map.
 ///
-/// Key rules (behaviors D3 and D4) allow positive integers through 2^63−1, negative integers down to −2^63, and valid UTF-8 text only. Duplicate keys
-/// are rejected. Go compares known fields by field number and unknown keys as `int64` or string values, so a non-shortest encoding of the same integer also duplicates it.
+/// Key rules (behaviors D3 and D4) allow nonnegative integers through 2^63−1, negative integers down to −2^63, and valid UTF-8 text only. Duplicate keys
+/// are rejected. Go compares known fields by field number and unknown keys as `int64` or string values, so two encodings of the same integer count as duplicates.
 /// Only integer keys identify known fields (text `"1"` is an unknown field, behavior D5). Unknown field values are discarded unread (behavior D6).
 struct StructureFields {
     private var values: [UInt64: CBORValue] = [:]

@@ -11,7 +11,7 @@ import SwiftailBase
 package struct WrappedAuthKey: Sendable {
     /// The portion to send to the server, before the first `--TL`. It is still an auth key and therefore secret.
     package let controlValue: String
-    /// The credential NKS (A) that delegated signing authority. The recipient's `authorize` checks whether the key is trusted.
+    /// The credential NKS (A) that delegated signing authority. The recipient's `authorize` checks trust in that key. Parsing does not check it.
     let credential: NodeKeySignature
     /// The delegated Ed25519 key, the first 32 bytes of B as a seed.
     private let wrappingKey: Curve25519.Signing.PrivateKey
@@ -26,7 +26,7 @@ package struct WrappedAuthKey: Sendable {
     /// B's last 32 bytes (notes §3.8). Swiftail rejects all these cases before sending anything to the server (decisions L12 and L13).
     ///
     /// - Returns: nil without `--TL` (an ordinary auth key).
-    /// `-` Throws: `invalidAuthKey` if the string exceeds 16KiB, - is missing, A or B is not canonical unpadded standard base64, A exceeds 8KiB,
+    /// - Throws: `invalidAuthKey` if the string exceeds 16KiB, the `-` separator is missing, A or B is not canonical unpadded standard base64, A exceeds 8KiB,
     ///   A does not decode as an NKS, A is not a credential, `WrappingPubkey` is not 32 bytes, B is not 64 bytes, or the public key derived
     ///   from B's seed differs from B's last 32 bytes or A's `WrappingPubkey`. Errors omit key contents.
     package init?(parsing authKey: String) throws(TKAError) {

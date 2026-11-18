@@ -4,7 +4,7 @@
 /// use this format. The alphabet uses `-` and `_` in place of standard base64's `+` and `/` and omits trailing `=` (RFC 7515 §2).
 ///
 /// Decoding rejects `=`, spaces and line breaks, the standard alphabet's `+` and `/`, and endings with nonzero unused bits
-/// (noncanonical encoding under RFC 4648 3.5). This ensures that the same bytes cannot decode from two spellings.
+/// (noncanonical encoding under RFC 4648 3.5). This ensures that two spellings cannot decode to the same bytes.
 enum Base64URL {
     /// Encodes bytes as base64url text.
     static func encode(_ bytes: some Sequence<UInt8>) -> String {

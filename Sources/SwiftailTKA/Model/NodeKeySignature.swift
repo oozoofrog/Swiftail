@@ -13,7 +13,7 @@ package struct NodeKeySignature: Sendable, Equatable {
     package var keyID: [UInt8]
     /// The Ed25519 signature. The input is `signatureHash`.
     package var signature: [UInt8]
-    /// The Ed25519 public key for signing a signature that wraps this one.
+    /// The Ed25519 public key used to verify a signature that wraps this one.
     package var wrappingPublicKey: [UInt8]
     /// The slot for `Nested`. A value type cannot contain itself directly, so an `indirect` enum stores it.
     private var nestedLink: Link?

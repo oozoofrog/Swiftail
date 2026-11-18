@@ -23,7 +23,7 @@ extension Authority {
     static let maximumSyncIterations = 2_000
     /// The backward traversal limit from the head (Go `maxSyncHeadIntersectionIter`).
     static let maximumSyncHeadIntersectionIterations = 1_000
-    /// The maximum number of peer ancestors examined, equal to the largest offer Go emits. Go `SyncOffer` looks backward 1,000 times from the head and includes
+    /// The maximum number of peer ancestors examined, equal to the largest offer Go emits. Go `SyncOffer` takes up to 1,000 steps backward from the head and includes
     /// the checkpoints it encounters (at most one each time) and the oldest AUM at the end (`tka/sync.go:88-109`).
     static let maximumSyncAncestorCount = maximumSyncHeadIntersectionIterations + 1
 
@@ -47,7 +47,7 @@ extension Authority {
     /// Returns local AUMs the peer lacks based on its offer, with parents first (Go `MissingAUMs`, behavior Y4).
     ///
     /// Returns an empty list for identical heads. Throws `noIntersection` if there is no intersection or `iterationLimit` if the limit is reached.
-    /// On a throw, the caller ends the entire synchronization without admitting the peer's AUMs either.
+    /// If this throws, the caller ends synchronization without admitting the peer's AUMs.
     ///
     /// Deduplicates the peer's ancestors and examines only the first 1,001 (`maximumSyncAncestorCount`, TL-11a item 3). Each ancestor requires walking backward
     /// to a checkpoint and reapplying updates, so a control server that repeats AUMs from a losing branch could amplify the work in a single response. Repeated ancestors

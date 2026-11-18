@@ -19,7 +19,7 @@ public enum PairingError: Error, Sendable, Equatable {
     /// The host's `challenge` did not arrive within 60 seconds (name lookup failed, no route, or the host does not know this node yet).
     case unreachable
     /// The OS socket connection did not traverse the tunnel. Its local endpoint differs from this device's tailnet address (`localAddress`), or its remote
-    /// endpoint is outside the tailnet range. The tunnel was disconnected or the name resolved elsewhere.
+    /// endpoint is outside the tailnet range. The tunnel was not connected or the name resolved elsewhere.
     case notOnTailnet
     /// The host did not accept the joiner. There is no open offer, the offer expired or was already used, or the secret is wrong.
     case rejected

@@ -36,9 +36,9 @@ struct PairingHostMachine: Sendable {
     enum Action: Sendable {
         /// Sends these bytes.
         case send([UInt8])
-        /// Requests app approval. Supplies the answer through `decided`.
+        /// Requests app approval. Pass the app's answer to `decided`.
         case requestDecision(PairingRequest)
-        /// Adds the paired peer to the list and saves it. Supplies the result through `saved`.
+        /// Adds the paired peer to the list and saves it. Pass the save result to `saved`.
         case save(PairedPeer)
         /// Closes after sending all pending bytes and cancels the connection's decision Task. This is its final action.
         case finish(Ending)
@@ -62,13 +62,13 @@ struct PairingHostMachine: Sendable {
         case paired = "Paired"
     }
 
-    /// The open offer. The number distinguishes whether the offer seen at `hello` matches the one at `proof`.
+    /// The open offer. The number tells the state machine whether the offer seen at `hello` matches the one at `proof`.
     private struct OpenOffer: Sendable {
         let serial: UInt64
         let offer: PairingOffer
     }
 
-    /// What the connection holds after a valid `proof`. The decision continues even if the offer is closed or changed (P6).
+    /// What the connection holds after a valid `proof`. The pending approval continues even if the offer is closed or changed (P6).
     private struct Approval: Sendable {
         let transcript: PairingTranscript
         let secret: [UInt8]
@@ -108,7 +108,7 @@ struct PairingHostMachine: Sendable {
     private var nextOfferSerial: UInt64 = 0
     private var sessions: [SessionID: Session] = [:]
 
-    /// Whether a usable offer is open, without checking expiration.
+    /// Whether an offer is open, ignoring expiration.
     var hasOpenOffer: Bool { offer != nil }
     /// The open offer's expiration time, or nil if no offer is open.
     var openOfferExpiry: Date? { offer?.offer.expires }

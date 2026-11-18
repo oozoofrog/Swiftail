@@ -7,7 +7,7 @@ import Foundation
 // nil as `unexpectedResponse`. Ignore unknown fields. Reading does not crash on any input bytes.
 
 /// An ACME directory (RFC 8555 7.1.1). Reads only the three URLs needed for issuance. It does not use `newAuthz`, `revokeCert`, `keyChange`,
-/// or renewalInfo (contract §1 exclusions table). Go also fails when `newOrder` is missing (`tempfork/acme/acme.go:199-201`).
+/// or `renewalInfo` (contract §1 exclusions table). Go also fails when `newOrder` is missing (`tempfork/acme/acme.go:199-201`).
 struct ACMEDirectory: Sendable, Equatable {
     let newNonce: String
     let newAccount: String
@@ -125,7 +125,7 @@ struct ACMEAuthorization: Sendable, Equatable {
     }
 }
 
-/// A challenge object (RFC 8555 7.1.5 and §8). The structure varies by `type`, so read every field except type as optional and use
+/// A challenge object (RFC 8555 7.1.5 and §8). The structure varies by `type`, so read every field except `type` as optional and use
 /// `validated` only on challenges that will be used. This keeps the shape of unused types (such as http-01) from invalidating the entire authorization.
 struct ACMEChallenge: Sendable, Equatable, Decodable {
     /// The four statuses in RFC 8555 7.1.6.
@@ -152,15 +152,15 @@ struct ACMEChallenge: Sendable, Equatable, Decodable {
 enum ACMERequestBody {
     /// Looks up the account (RFC 8555 7.3.1).
     static let findAccount = Array(#"{"onlyReturnExisting":true}"#.utf8)
-    /// Creates an account (RFC 8555 7.3). No contact information is sent (contract §1 exclusions table). Go sends this field only when the
-    /// directory has a terms URL (`tempfork/acme/rfc8555.go:49-61`). This implementation always sends it because it has no meaning for servers without terms.
+    /// Creates an account (RFC 8555 7.3). No contact information is sent (contract §1 exclusions table). Go sends `termsOfServiceAgreed` only when the
+    /// directory has a terms URL (`tempfork/acme/rfc8555.go:49-61`). This implementation always sends the field because it has no meaning for servers without terms.
     static let createAccount = Array(#"{"termsOfServiceAgreed":true}"#.utf8)
     /// A challenge response (RFC 8555 7.5.1). DNS-01 has no response fields.
     static let respondToChallenge = Array("{}".utf8)
     /// An empty payload for POST-as-GET (RFC 8555 6.3).
     static let postAsGet: [UInt8] = []
 
-    /// An order (RFC 8555 7.4)`.` A validated name contains only lowercase letters, digits, hyphens, and periods.
+    /// An order (RFC 8555 7.4). A validated name contains only lowercase letters, digits, hyphens, and periods.
     static func newOrder(_ domain: CertificateDomain) -> [UInt8] {
         Array(#"{"identifiers":[{"type":"dns","value":"\#(domain.name)"}]}"#.utf8)
     }

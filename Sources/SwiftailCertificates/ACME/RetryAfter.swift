@@ -9,8 +9,8 @@ import Foundation
 ///
 /// Accepts all three HTTP-date formats (RFC 7231 7.1.1.1 "MUST accept all three"): IMF-fixdate
 /// (`Sun, 06 Nov 1994 08:49:37 GMT`), RFC 850(`Sunday, 06-Nov-94 08:49:37 GMT`), asctime(`Sun Nov  6 08:49:37 1994`).
-/// Treats values that are neither format as absent (contract behavior X5, H21). Go's `retryAfter` also reads integer seconds and uses
-/// http.ParseTime (the same three formats), treating everything else as 0 (`tempfork/acme/http.go:92-104`).
+/// Treats values that are neither integer seconds nor an HTTP date as absent (contract behavior X5, H21). Go's `retryAfter` also reads integer seconds and uses
+/// `http.ParseTime` (the same three formats), treating everything else as 0 (`tempfork/acme/http.go:92-104`).
 ///
 /// Caps the result at `received + 7 days` (contract behavior X5 caps only the upper end). Returns past dates unchanged so the caller
 /// can skip the wait if the date precedes the current time.

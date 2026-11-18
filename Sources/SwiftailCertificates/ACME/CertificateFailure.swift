@@ -1,4 +1,4 @@
-// Matches the declaration in contract §2 of `docs/contracts/SwiftailHost.md`. The ACME order flow (M7-4) and `CertificateManager` (M7-6)
+// Matches the declaration in §2 of the `docs/contracts/SwiftailHost.md` contract. The ACME order flow (M7-4) and `CertificateManager` (M7-6)
 // create these values and expose them to the app through `CertificateStatus.lastFailure`.
 
 import Foundation
@@ -31,7 +31,7 @@ public enum CertificateFailure: Sendable, Equatable {
     /// The ACME server's response violated the specification or the contract limits (unknown status, authorization for another name,
     /// oversized body, a URL with a scheme other than `https`, etc., behaviors C5 and X).
     case unexpectedResponse
-    /// The certificate received failed verification (name, validity period, chain, or key).
+    /// The received certificate failed verification (name, validity period, chain, or key).
     case invalidCertificate
     /// The ACME server or control server could not be reached.
     case network(String)

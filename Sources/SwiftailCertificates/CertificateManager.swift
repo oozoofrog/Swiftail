@@ -44,9 +44,9 @@ public actor CertificateManager {
     private var schedule = RenewalSchedule()
     /// The certificate currently held and emitted.
     private var held: VerifiedCertificate?
-    /// The name already looked up in `certs/` for a stored certificate. Reads once per name.
+    /// The most recent name checked for stored certificates in `certs/`. A name change allows another lookup.
     private var loadedDomain: CertificateDomain?
-    /// The account key and account URL (`kid`) stay in memory only (behavior C4). Go also does not persist the account URL (notes §3.7).
+    /// Caches the account key and account URL (`kid`) in memory. Only the key is persisted (behavior C4, notes §3.7). Go also leaves the URL out of storage.
     // shortcut: Keeping the account URL out of storage adds one account lookup request per `run()`. Revisit if that request needs to be saved.
     private var accountKey: P256.Signing.PrivateKey?
     private var accountURL: String?
@@ -57,7 +57,7 @@ public actor CertificateManager {
     private var attemptFailure: CertificateFailure?
     private var nextAttempt: Date?
 
-    /// - Throws: `invalidConfiguration` for a directory URL with a scheme other than `https` or an empty `trustAnchors` list.
+    /// - Throws: `invalidConfiguration` if the directory URL fails the `https` URL rules in behavior X1 or `trustAnchors` is empty.
     public init(node: TailnetNode, configuration: CertificateConfiguration = CertificateConfiguration()) throws(CertificateError) {
         try self.init(
             facts: node.certificateFacts,
@@ -201,8 +201,8 @@ public actor CertificateManager {
         }
         conditionFailure = nil
 
-        // Behavior C3: Read the stored certificate once per name.
-        // shortcut: Keep files for the old name after a name change (behavior S4). Revisit if an adopter changes names frequently.
+        // Behavior C3: Check for a stored certificate when the name changes, unless a certificate for that name is already held.
+        // shortcut: Keep files for the old name after a name change (behavior S4). Revisit if a use case involves frequent name changes.
         if loadedDomain != domain {
             loadedDomain = domain
             if held?.lifetime.domain != domain, let stored = try loadStoredCertificate(for: domain, at: now) {

@@ -13,7 +13,7 @@ package struct PeerCredential: Sendable {
     /// `Node.UnsignedPeerAPIOnly`. Skips signature verification but, as in Go, is removed if another peer's rotation supersedes the key.
     package var unsignedPeerAPIOnly: Bool
 
-    /// The three values used to decide one netmap `Node`. Signature decoding takes place in `AuthorityState.admitted(_:)` at decision time.
+    /// The three values used to decide whether to admit a netmap `Node`. Signature decoding takes place in `AuthorityState.admitted(_:)` at decision time.
     package init(nodeKey: NodePublicKey, keySignature: [UInt8], unsignedPeerAPIOnly: Bool) {
         self.nodeKey = nodeKey
         self.keySignature = keySignature
@@ -26,7 +26,7 @@ extension AuthorityState {
     ///
     /// Removes peers with no signature or whose signatures fail `authorize` (`UnsignedPeerAPIOnly` is exempt) and any peer whose node key was
     /// superseded by rotation (including `UnsignedPeerAPIOnly`). Superseded keys include all `previousNodeKeys` from verified rotations and
-    /// keys of rotations without the longest history in each group of rotations with a direct `initialSignature` and the same `WrappingPubkey`. If two or more
+    /// current node keys from rotations with shorter histories in each group of rotations with a direct `initialSignature` and the same `WrappingPubkey`. If two or more
     /// tie for longest, the whole group is superseded. Chains starting from credential are not grouped (multiple nodes join with a reusable auth key).
     ///
     /// Groups are considered in the order of the first peer in each group. Go has no fixed order because it iterates a map. One group's decision affects

@@ -99,7 +99,7 @@ struct PairingProofTranscript: Sendable, Equatable {
 /// The SAS is about 20 bits. A side that could choose its own nonce after seeing the peer's nonce could try values until it obtains the desired
 /// number. Commitments therefore fix both nonces first. The joiner includes commitJ in `hello` and reveals nonceJ in `proof`. The
 /// host includes commitH in `challenge` and reveals nonceH in `accepted` only after a valid `proof` uses the offer. Even someone who knows the secret
-/// must use the offer to see the SAS, so they cannot redial until they like the number.
+/// must use the offer to see the SAS, so they cannot repeatedly redial to get a number they like.
 ///
 /// Each value has a distinct tag (`swiftail-pairing-3 …`) to prevent substitution. The commitments also use distinct tags so one side cannot reflect the peer's
 /// commitment back as its own.

@@ -1,7 +1,7 @@
 // `Key.Meta` and `AUM.Meta` (Go `map[string]string`). Notes §§3.1, 3.2, and 3.4, contract behaviors E3, D4, and D5.
 // Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
-/// One `Meta` pair. Avoids converting to Swift `String` because its Unicode canonical equivalence differs from Go's byte comparison,
+/// One `Meta` pair. Avoids converting to Swift `String` because its equality uses Unicode canonical equivalence, which differs from Go's byte comparison,
 /// and that difference changes the reencoded hash (behavior E3).
 package struct MetaEntry: Sendable, Equatable {
     /// Validated UTF-8.

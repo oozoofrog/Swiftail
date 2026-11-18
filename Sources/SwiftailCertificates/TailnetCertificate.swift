@@ -8,7 +8,7 @@ public struct TailnetCertificate: Sendable {
     /// The certificate name (`rd-mac-1a2b3c4d.tail0001.ts.net`).
     public let domain: String
     /// DER certificates with the leaf first, followed by intermediates. As the ACME server may include the root (RFC 8555 9.1),
-    /// non-leaf self-signed certificates are removed after verification (behavior S6). Use the result directly in the TLS identity.
+    /// the trust anchor selected during verification is removed if present, with the leaf always retained (behavior S6). Use the result directly in the TLS identity.
     public let chain: [[UInt8]]
     /// The leaf private key. Pass `x963Representation` to `SecKeyCreateWithData` to create a `SecKey`.
     public let privateKey: P256.Signing.PrivateKey

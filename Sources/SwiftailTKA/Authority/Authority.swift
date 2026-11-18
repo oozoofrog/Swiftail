@@ -1,8 +1,8 @@
-// Signing authority state machine (Go `tka.Authority`). Notes §§4.1–4.3, contract behaviors F and M, decisions L7, L10, and L14, §5 "Changes from the independent review:
-// Pure logic (TL-11a)" items 1, 2, and 4.
+// Signing authority state machine (Go `tka.Authority`). Notes §§4.1–4.3, contract behaviors F and M, decisions L7, L10, and L14, §5
+// "Independent review fixes for pure logic (TL-11a, 2026-11-15)" items 1, 2, and 4.
 //
 // Bootstrap, admission (`Inform`) order and failure rules, fork resolution (`pickNextAUM`), fast-forward (`fastForward`), state at an AUM
-// (`computeStateAt`), and their iteration limits follow the Go implementation. The store is limited to one root, so `Open`'s ancestor selection was
+// (`computeStateAt`), and their iteration limits were ported from Go. The store is limited to one root, so `Open`'s ancestor selection was
 // omitted (behavior F6).
 // Origin: tailscale.com v1.104.7 `tka/tka.go` (`Bootstrap`, `InformIdempotent`, `pickNextAUM`, `fastForwardWithAdvancer`,
 // `computeStateAt`), `tka/limits.go`.
@@ -16,7 +16,7 @@
 package struct Authority: Sendable {
     /// The hash of the AUM reached by following the fork resolution rules (behavior F1) from the root to the end (behavior F2).
     package private(set) var head: AUMHash
-    /// The trust state after applying through the `head`. `lastAUMHash` is head.
+    /// The trust state after applying updates through `head`. `lastAUMHash` equals `head`.
     package private(set) var state: AuthorityState
     /// The hash of the bootstrapped AUM. It is the store's only root.
     package let bootstrap: AUMHash
@@ -73,10 +73,10 @@ package struct Authority: Sendable {
 
     /// Recomputes state from persisted AUMs (Go `Open`, behaviors F6 and T3).
     ///
-    /// Checks the invariants: the store is within limits, no AUM appears twice, `bootstrap` is the sole root, and every other AUM has its parent in the
-    /// store. Violations produce `corruptStore`. For AUMs below the root, recheck **only parent and signature** before applying state (TL-11a
-    /// item 2, which narrowed decision L14). Signature verification detects altered files and throws the specific failure. Static checks run only on admission. Canonical
-    /// encoding omits empty `Meta`, so even an AUM accepted on admission can fail on reopening (Go `Open` does no revalidation).
+    /// Checks the storage limits and requires unique AUMs, `bootstrap` as the sole root, and a stored parent for every other AUM.
+    /// Limit breaches produce `limitExceeded`. Violations of the other invariants produce `corruptStore`. Below the root, recheck **the parent, signatures, and last-key
+    /// removal rule** before applying state (TL-11a item 2, which narrowed decision L14). Signature verification detects changes to signed data and throws
+    /// the specific failure. Static checks run only on admission. Canonical encoding omits empty `Meta`, so even an AUM accepted on admission can fail on reopening (Go `Open` does no revalidation).
     /// The root follows bootstrap checks. Recomputing from root to head has no iteration limit (behavior F7). The storage limit bounds it.
     package init(opening stored: [AUM], bootstrap: AUMHash) throws(TKAError) {
         guard stored.count <= Self.maximumAUMCount else { throw .limitExceeded }
@@ -118,7 +118,7 @@ package struct Authority: Sendable {
     ///
     /// The sender supplies parents first since there is no sort. Skips already retained AUMs. Each AUM's parent state comes from an earlier AUM in the
     /// batch, the current head, or a backward lookup in the store (behavior F3, 2,000 iterations).
-    /// **If any AUM fails, nothing changes.** If all pass, recompute the head and reject with limitExceeded if the active chain exceeds the limits.
+    /// **If any AUM fails, nothing changes.** If all pass, recompute the head and reject with `limitExceeded` if the active chain exceeds the limits.
     /// If the retained total exceeds the limits, discard AUMs outside the active chain (TL-11a item 1).
     package mutating func inform(_ updates: [AUM]) throws(TKAError) {
         guard !updates.isEmpty else { throw .emptyUpdate }
@@ -169,7 +169,7 @@ package struct Authority: Sendable {
 
     // MARK: Chain
 
-    /// Adds a verified AUM to the store. The caller checks the limits (behavior M) first.
+    /// Adds a verified AUM to the store. The caller is responsible for enforcing the limits (behavior M).
     private mutating func append(_ aum: AUM, hash: AUMHash, byteCount count: Int) {
         let position = aums.count
         aums.append(aum)
@@ -191,7 +191,7 @@ package struct Authority: Sendable {
     /// affect decisions (synchronization intersections also come only from the active chain). The only difference comes if a later AUM has a discarded AUM as its parent,
     /// which makes it an "AUM with an unknown parent" (behavior F4).
     ///
-    /// Discarding most recently admitted first means the discarded AUM's children (always positioned after their parent) have already been discarded, so every retained AUM keeps its parent.
+    /// Discarding the most recently admitted AUMs first means the discarded AUM's children (always positioned after their parent) have already been discarded, so every retained AUM keeps its parent.
     private mutating func discardInactiveAUMs() throws(TKAError) {
         var active: Set<Int> = []
         var activeByteCount = 0

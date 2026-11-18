@@ -72,8 +72,8 @@ public actor PairingHost {
     ///   - decide: Requests approval. The Task for this call is canceled if the peer disconnects or 120 seconds elapse, so return promptly on cancellation
     ///     (the returned value is discarded). If awaiting a user's answer through a continuation, handle cancellation with `withTaskCancellationHandler`.
     ///     If this call never returns, the connection closes but `run()` cannot finish.
-    /// - Throws: `invalidConfiguration` if the node's device is not `.inProcess` or the port is zero, storeWriteFailed if directory creation fails,
-    ///   storeUnreadable if the list file cannot be read or the directory belongs to another user or is writable by the group or others,
+    /// - Throws: `invalidConfiguration` if the node's device is not `.inProcess`, the port is zero, or `storeDirectory` is not a file URL.
+    ///   Throws `storeWriteFailed` if directory creation fails, `storeUnreadable` if the list file cannot be read or the directory belongs to another user or is writable by the group or others,
     ///   or `storeInUse` if a host in this process already uses the same directory.
     public init(
         node: TailnetNode, port: UInt16, storeDirectory: URL,
@@ -114,32 +114,32 @@ public actor PairingHost {
 
     // MARK: Events
 
-    /// Changes to the paired peer list and the offer. There is one subscriber. Because the list can change outside `run()`, the stream outlives run()
+    /// Changes to the paired peer list and the offer. There is one subscriber. Because the list can change outside `run()`, the stream outlives `run()`
     /// and ends when this `PairingHost` is gone.
     ///
     /// Retains at most the 64 newest unread events and discards the oldest first. The stream grows no further even if the app never reads it.
     ///
     /// Canceling the consuming Task ends the stream and prevents resubscription. There is only one stream even across `run()` calls, so subscribe once
-    /// where the host is created instead of subscribing on every run().
+    /// where the host is created instead of subscribing on every `run()`.
     public nonisolated var events: AsyncStream<Event> { eventStream }
 
     // MARK: Offer (behavior P9)
 
     /// Opens a new offer and immediately invalidates the previous offer. Each offer can be used once.
     ///
-    /// Can be called before `run()`. Connections can arrive only once run() starts listening. The returned link and QR code are secrets.
+    /// Can be called before `run()`. Connections can arrive only once `run()` starts listening. Treat the offer's link and QR code as secrets.
     ///
     /// **The auth key is independent of pairing.** Anyone who obtains the link can join the tailnet with the key while it is valid, regardless of the host's
-    /// approval (decide). Approval controls only pairing. Give the key the same short lifetime as the offer
-    /// (`AuthKeyIssuer.issue(lifetime:)`) and restrict the key's tag in tailnet policy (ACL) to the pairing and app
-    /// ports only.
+    /// approval (`decide`). Approval controls only pairing. Give the key the same short lifetime as the offer
+    /// (`AuthKeyIssuer.issue(lifetime:)`) and allow the key's tag to reach only the pairing and app
+    /// ports in the tailnet policy (ACL).
     ///
     /// - Parameters:
-    ///   - lifetime: The offer lifetime. Truncated to whole seconds and must be 1–3600 seconds. On a tailnet with lock enabled, give the joiner node
+    ///   - lifetime: The offer lifetime. Truncated to whole seconds and must be 1–3600 seconds. With tailnet lock enabled, give the joiner node
     ///     enough time to be signed.
     ///   - authKey: The single-use auth key the joiner uses to enter the tailnet. Included in the link.
-    /// - Throws: `invalidConfiguration` if the lifetime is out of range, invalidAuthKey if the key cannot be included in a link (including wrapped keys),
-    ///   or `notRunning` if the node does not yet have its own FQDN.
+    /// - Throws: `invalidConfiguration` if the lifetime is out of range, `invalidAuthKey` if the key cannot be included in a link (including wrapped keys),
+    ///   or `notRunning` if the node has no usable FQDN for the offer link.
     public func openOffer(
         lifetime: Duration = .seconds(300), authKey: String? = nil
     ) async throws(PairingError) -> PairingOffer {
@@ -167,7 +167,7 @@ public actor PairingHost {
         return offer
     }
 
-    /// Closes the open offer. Connections that already proved themselves and await approval continue (behavior P6).
+    /// Closes the open offer. Connections that already proved knowledge of the offer secret and await approval continue (behavior P6).
     public func closeOffer() {
         let wasOpen = machine.hasOpenOffer
         machine.closeOffer()
@@ -245,7 +245,7 @@ public actor PairingHost {
     /// Listens on the port and runs the protocol for each incoming connection. Waits until the calling Task is canceled. On cancellation, closes connections
     /// still in progress and returns.
     ///
-    /// - Throws: `invalidConfiguration` if the port is in use or the listener reached its limit, or notRunning if the node's `run()` has ended
+    /// - Throws: `invalidConfiguration` if the port is in use or the listener limit has been reached, or `notRunning` if the node's `run()` has ended
     ///   (including while listening).
     public func run() async throws(PairingError) {
         let listener: TailnetListener

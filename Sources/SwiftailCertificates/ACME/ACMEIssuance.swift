@@ -12,8 +12,8 @@ import Foundation
 ///   - now: The wall clock. Defaults to `Date()`.
 ///   - sleep: Waits until the given time. Throws `CancellationError` on cancellation. Defaults to `Task.sleep`.
 ///   - publishTXT: Publishes the TXT record for `_acme-challenge.<name>` using the control server's `set-dns`. Returns nil on success or
-///     the failure kind (`controlRejected`, `network`, etc.) on failure. That failure becomes this attempt's result. (The public contract
-///     declaration of CertificateFailure does not conform to `Error`, so the function returns it.)
+///     the failure kind (`controlRejected`, `network`, etc.) on failure. That failure becomes this attempt's result. (According to its public declaration in the contract,
+///     `CertificateFailure` does not conform to `Error`, so return it as a value.)
 /// - Returns: The issuance result, including failures.
 /// - Throws: `CancellationError` if the calling Task is canceled. No further requests go out after cancellation.
 func issueCertificate(

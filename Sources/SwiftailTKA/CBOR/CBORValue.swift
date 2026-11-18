@@ -7,7 +7,7 @@
 /// the value of an unknown field (contract behavior D4).
 package enum CBORValue: Sendable, Equatable {
     case unsigned(UInt64)
-    /// A negative integer, `-1 - n`. Appears only as a key or value in an unknown field.
+    /// A negative integer, `-1 - n`. Appears only as the key or value of an unknown field.
     case negative(UInt64)
     case bytes([UInt8])
     /// The text bytes. UTF-8 is unchecked here because unknown field values are skipped even with invalid UTF-8 (behavior D6).

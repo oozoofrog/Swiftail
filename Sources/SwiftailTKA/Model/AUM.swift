@@ -4,18 +4,18 @@
 /// A message that changes signing authority state (Authority Update Message).
 ///
 /// Does not retain received bytes. Hashing and signature verification use this value's reencoded canonical bytes (behavior E5). Unknown fields,
-/// non-shortest integers, and unsorted keys are accepted but do not survive in the hash.
+/// non-shortest integers, and unsorted keys are accepted. Reencoding drops unknown fields and canonicalizes integer encodings and key order before hashing.
 package struct AUM: Sendable, Equatable {
     /// The kind (`Kind`). Also accepts 0 and values at least 6 (notes §3.4).
     package var messageKind: UInt8
     /// nil means no parent and encodes as null. A zero-length byte string encodes differently and fails static checks (behaviors E4 and A1).
     package var prevAUMHash: [UInt8]?
-    /// The key added by AddKey. Static checks allow only nil for other kinds.
+    /// The key added by AddKey. Static checks require nil for RemoveKey, UpdateKey, and Checkpoint.
     package var key: TrustedKey? = nil
     /// Both nil and empty byte strings are omitted from encoding (omitempty), but static checks distinguish them. AddKey and Checkpoint accept only nil
     /// (Go `aum.go:189` and `:207`, `a.KeyID != nil`).
     package var keyID: [UInt8]? = nil
-    /// The complete state carried by Checkpoint. Static checks allow only nil for other kinds.
+    /// The complete state carried by Checkpoint. Static checks require nil for AddKey, RemoveKey, and UpdateKey.
     package var state: AuthorityState? = nil
     /// Encodes a present value even if 0 (Go `*uint`, omitempty).
     package var votes: UInt64? = nil
@@ -38,7 +38,7 @@ package struct AUM: Sendable, Equatable {
         static let checkpoint: UInt8 = 5
     }
 
-    /// Canonical CBOR (behaviors E1–E4). Hashing and signature verification use these bytes in place of the received bytes (behavior E5).
+    /// Canonical CBOR (behaviors E1–E4). `hash` uses these bytes. `signatureHash` uses canonical CBOR without `Signatures` (behavior E5).
     package func serialized() -> [UInt8] {
         var writer = CBORWriter()
         write(to: &writer, includingSignatures: true)
@@ -55,7 +55,7 @@ package struct AUM: Sendable, Equatable {
         return AUMHash(hashing: writer.bytes).bytes
     }
 
-    /// Runs Go `AUM.StaticValidate` (behavior A1). `Authority` checks signatures and parents separately (behaviors A2 and A3).
+    /// Implements Go's `AUM.StaticValidate` checks (behavior A1). `Authority` checks signatures and parents separately (behaviors A2 and A3).
     package func validate() throws(TKAError) {
         try key?.validate()
         if let prevAUMHash, prevAUMHash.isEmpty { throw .invalidAUM }
@@ -128,7 +128,7 @@ extension AUM {
         }
     }
 
-    /// Writes in key order (behavior E2). Always writes `MessageKind` and `PrevAUMHash` and writes the rest only when nonempty (behavior E4).
+    /// Writes in key order (behavior E2). Always writes `MessageKind` and `PrevAUMHash` and writes other fields only when present (`Key`, `State`, `Votes`) or nonempty (`KeyID`, `Meta`, `Signatures`), subject to `includingSignatures` (behavior E4).
     private func write(to writer: inout CBORWriter, includingSignatures: Bool) {
         let keyID = keyID ?? []
         let meta = meta ?? []

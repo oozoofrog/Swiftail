@@ -1,4 +1,4 @@
-// Follows Go `encoding/json` string encoding rules (`appendString`, default `json.Marshal` with escapeHTML enabled).
+// Ports the Go `encoding/json` string encoding rules (`appendString`, default `json.Marshal` with escapeHTML enabled).
 // Origin: Go 1.27.3 `src/encoding/json/encode.go`. Copyright 2010 The Go Authors. BSD 3-Clause License.
 
 /// Encodes a JSON string literal (RFC 8259 §7) to the same bytes as Go's `json.Marshal`.

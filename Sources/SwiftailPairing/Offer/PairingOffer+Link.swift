@@ -3,7 +3,7 @@ import Foundation
 /// The offer link: `<base>#v=1&h=<host>&p=<port>&s=<secret>&e=<expiration>[&k=<auth key>]` (contract behaviors O1–O4).
 ///
 /// All values are in the fragment (after `#`). The fragment is omitted from server requests and Referer. Value characters require no URL encoding,
-/// so the reader uses the original bytes without decoding `%`. The same offer cannot be read from two different spellings.
+/// so the reader uses the original bytes without decoding `%`. This prevents alternate spellings of the same offer fragment.
 extension PairingOffer {
     /// The fragment size limit (behavior O2).
     static let maximumFragmentLength = 2048
@@ -48,8 +48,8 @@ extension PairingOffer {
 
     /// A link carrying this offer. `base` belongs to the app (`myapp://pair`, `https://example.com/pair`). Discards any fragment on base.
     ///
-    /// The result is a secret. Another app that declares the same custom scheme can receive URLs delivered by the OS, so links carrying
-    /// auth keys use an associated domain (universal link).
+    /// The result is a secret. Another app that declares the same custom scheme can receive URLs delivered by the OS. Issue links carrying
+    /// auth keys using an associated domain (universal link).
     public func url(base: URL) -> URL {
         let text = base.absoluteString
         let stem = text.firstIndex(of: "#").map { String(text[..<$0]) } ?? text

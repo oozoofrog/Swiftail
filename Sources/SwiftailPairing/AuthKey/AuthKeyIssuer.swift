@@ -3,7 +3,7 @@ import Foundation
 /// Creates single-use auth keys through the Tailscale admin API using an OAuth client (contract `docs/contracts/SwiftailPairing.md` §4).
 ///
 /// Creates keys to include in pairing offers. The recipient uses the key to join the tailnet without logging in. Obtains a fresh token for each
-/// call and does not retain it (K2). Issuance is infrequent, so caching is unnecessary, and a token that is never retained cannot leak from storage.
+/// call and does not retain it (K2). Issuance is infrequent, so caching is unnecessary, and avoiding a cache removes a place where the token could leak.
 /// It also does not remember the credential method (header or body) and tries the header first on each call.
 /// Does not delete created keys. Unused keys expire on their own after `lifetime` (K8).
 ///
@@ -51,7 +51,7 @@ public struct AuthKeyIssuer: Sendable {
     /// and are not parameters.
     ///
     /// - Parameter lifetime: The key lifetime, truncated to whole seconds. Keep it short and match the offer lifetime. The server rejects
-    ///   excessive lifetimes (`.http(status:)`).
+    ///   lifetimes that exceed its limit (`.http(status:)`).
     /// - Throws: `AuthKeyIssueError`. A lifetime shorter than 1 second produces `.invalidLifetime` without sending anything. Errors contain
     ///   no secrets, tokens, or keys.
     public func issue(lifetime: Duration) async throws(AuthKeyIssueError) -> IssuedAuthKey {
@@ -62,7 +62,7 @@ public struct AuthKeyIssuer: Sendable {
     }
 
     /// Obtains a token. Like `x/oauth2` autodetection, any failure using the header method leads to one attempt with the body method, and that
-    /// result determines the classification (`RetrieveToken` in `internal/token.go`). Cancellation is the only failure that skips the retry.
+    /// result determines how the outcome is classified (`RetrieveToken` in `internal/token.go`). Cancellation is the only failure that skips the retry.
     private func accessToken() async throws(AuthKeyIssueError) -> String {
         do throws(AuthKeyIssueError) {
             let request = AuthKeyExchange.tokenRequest(baseURL: baseURL, client: client, style: .header)

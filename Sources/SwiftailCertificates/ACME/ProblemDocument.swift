@@ -15,8 +15,8 @@ struct ProblemDocument: Sendable, Equatable, Decodable {
     /// The limit on the problem document's `type` (contract limits table).
     static let maximumTypeByteCount = 256
 
-    /// The ACME error kinds handled separately (RFC 8555 6.7). A `type` identifies one of these kinds only if it exactly matches
-    /// urn:ietf:params:acme:error: plus the name. A server-specific URI that merely shares the suffix is a general error.
+    /// The ACME error kinds handled separately (RFC 8555 6.7). A `type` identifies one of these kinds only if it **exactly matches**
+    /// `urn:ietf:params:acme:error:` plus the name. A server-specific URI that merely shares the suffix is a general error.
     enum Kind: String, Sendable {
         case badNonce, accountDoesNotExist, rateLimited, orderNotReady
     }
