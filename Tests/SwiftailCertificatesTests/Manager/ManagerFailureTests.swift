@@ -304,7 +304,7 @@ struct ManagerFailureTests {
                 #expect(!text.contains(secret))
             }
         }
-        #expect(certificate.description.contains(H.name))
+        #expect(certificate.domain == H.name)
         #expect(!Self.renderings(h.manager).joined().contains(H.name))
 
         run.cancel()

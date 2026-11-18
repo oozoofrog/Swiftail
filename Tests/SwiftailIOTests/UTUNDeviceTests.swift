@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import SwiftailIO
@@ -267,17 +268,28 @@ struct UTUNDeviceTests {
         }
     }
 
-    @Test("상대가 닫히면 흐름이 readFailed(EOF)로 끝난다")
-    func peerCloseEndsStreamWithError() async throws {
+    @Test("상대가 닫히면 EOF를 알리고 읽기 처리기와 복제본을 닫는다")
+    func peerCloseStopsReaderAndClosesDuplicate() async throws {
         // 데이터그램 소켓 쌍은 상대가 닫혀도 읽기가 끝나지 않으므로 이 시험만 스트림 소켓 쌍을 쓴다.
         let pair = try SocketPair(type: SOCK_STREAM)
         defer { close(pair.caller) }  // 상대는 아래에서 이미 닫았다. 같은 번호를 두 번 닫지 않는다.
-        let device = try Self.device(on: pair.caller)
+        let readEvents = Mutex(0)
+        let device = try UTUNDevice(duplicating: pair.caller, mtu: 1280, onReadEvent: {
+            readEvents.withLock { $0 += 1 }
+        }, verifying: { _ in })
+        let copy = try #require(device.duplicateDescriptor)
         pair.closePeer()
         #expect(await Self.next(from: device) == .failed(.readFailed("EOF")))
-        // 흐름이 오류로 끝난 뒤에도 닫기는 안전하다.
-        device.close()
+        #expect(device.readFailure == .readFailed("EOF"))
+        #expect(device.duplicateDescriptor == nil)
+        try await Self.waitUntilClosed(copy, duplicateOf: pair.caller)
         #expect(throws: SocketError.sendFailed("EBADF")) { try device.write(Self.ipv4Packet) }
+        // 첫 처리기에서 EOF를 읽으므로 다시 호출될 이유가 없다.
+        #expect(readEvents.withLock { $0 } == 1)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(readEvents.withLock { $0 } == 1)
+        device.close()
+        #expect(device.readFailure == .readFailed("EOF"))
     }
 
     // MARK: 취소와 느린 소비자

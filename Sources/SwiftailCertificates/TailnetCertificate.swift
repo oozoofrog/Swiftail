@@ -3,7 +3,7 @@ import Foundation
 
 /// 노드의 ts.net 이름에 발급된 인증서와 그 개인 키.
 ///
-/// 개인 키를 담으므로 `description`과 `dump`에는 이름과 유효 기간만 드러낸다.
+/// 개인 키와 tailnet 이름이 로그에 남지 않도록 문자열 표현과 `dump`에는 유효 기간만 드러낸다(동작 K1·K2).
 public struct TailnetCertificate: Sendable {
     /// 인증서의 이름(`rd-mac-1a2b3c4d.tail0001.ts.net`).
     public let domain: String
@@ -28,11 +28,13 @@ public struct TailnetCertificate: Sendable {
 }
 
 extension TailnetCertificate: CustomStringConvertible, CustomReflectable {
+    /// 로그에 남겨도 되는 유효 기간만 표시한다.
     public var description: String {
-        "TailnetCertificate(domain: \(domain), notBefore: \(notBefore), notAfter: \(notAfter))"
+        "TailnetCertificate(notBefore: \(notBefore), notAfter: \(notAfter))"
     }
 
+    /// 반영과 덤프에서 유효 기간만 드러낸다.
     public var customMirror: Mirror {
-        Mirror(self, children: ["domain": domain, "notBefore": notBefore, "notAfter": notAfter], displayStyle: .struct)
+        Mirror(self, children: ["notBefore": notBefore, "notAfter": notAfter], displayStyle: .struct)
     }
 }
