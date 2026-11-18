@@ -5,7 +5,7 @@ import SwiftailBase
 ///
 /// The first 9 plaintext bytes from the server are either an HTTP/2 SETTINGS frame header or an early payload header with magic
 /// `ff ff ff 54 53` and a JSON length (uint32 BE). When the magic matches, reads that many bytes of `tailcfg.EarlyNoise` JSON.
-/// Otherwise, passes all bytes, including the first 9, unchanged to HTTP/2. Since missing the magic would break HTTP/2 parsing,
+/// Otherwise, passes all bytes, including the first 9, unchanged to HTTP/2. Leaving the magic in the stream would break HTTP/2 parsing, so
 /// this step runs even when the server sends no early payload.
 ///
 /// JSON parsing follows Go's `json.Unmarshal` into a pointer. Treats `null` as no payload and ignores unknown fields.
@@ -14,7 +14,7 @@ import SwiftailBase
 /// `docs/protocol-notes/control-transport.md` §3.7, §4.7 step 8
 /// (origin: `readHeader` in tailscale.com `control/ts2021/conn.go` and `EarlyNoise` in `tailcfg/tailcfg.go`).
 public struct EarlyPayloadParser: Sendable {
-    /// The early information sent by the server for each connection.
+    /// The optional early information the server can send on each connection.
     public struct EarlyPayload: Sendable, Equatable {
         /// A one-time public key used by the client to prove possession of the node private key.
         /// A missing field, `null`, or an all-zero key yields `nil`.

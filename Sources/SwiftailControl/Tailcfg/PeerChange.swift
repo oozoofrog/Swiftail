@@ -9,7 +9,7 @@ import SwiftailBase
 ///   therefore clears all candidate addresses, an empty `capMap` clears all capabilities, and `online == false` means offline.
 /// - Go's zero time (`0001-01-01T00:00:00Z`) in `keyExpiry` changes the field to no expiration. The field preserves
 ///   zero time as is because `nil` means unchanged.
-/// - `nil` in `lastSeen` leaves it unchanged. Clearing it arrives as false in `PeerSeenChange` in a map response.
+/// - A `nil` `lastSeen` leaves the value unchanged. A `false` entry in `PeerSeenChange` clears it.
 ///
 /// `docs/protocol-notes/control-map.md` §3.6, §4.3 (origin: `PeerChange` in tailscale.com `tailcfg/tailcfg.go`).
 public struct PeerChange: Decodable, Sendable, Equatable {

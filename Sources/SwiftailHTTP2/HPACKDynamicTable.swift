@@ -23,7 +23,7 @@ struct HPACKDynamicTable {
 
     mutating func insert(_ field: HeaderField) {
         let entrySize = Self.size(of: field)
-        // An entry larger than the entire table only clears the table (§4.4).
+        // An entry larger than the table's size limit clears the table without being inserted (§4.4).
         evict(toFit: maximumSize - entrySize)
         guard entrySize <= maximumSize else { return }
         entries.insert(field, at: 0)

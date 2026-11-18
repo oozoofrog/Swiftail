@@ -2,7 +2,7 @@
 ///
 /// The number of DATA bytes the peer has agreed to receive. Each DATA frame reduces it, and WINDOW_UPDATE from the peer
 /// increases it. The connection and each stream have separate windows, and both must allow a DATA frame to be sent.
-/// If the peer decreases SETTINGS_INITIAL_WINDOW_SIZE, the window can become negative (§6.9.2).
+/// If the peer decreases SETTINGS_INITIAL_WINDOW_SIZE, a stream's window can become negative (§6.9.2).
 struct FlowControlWindow: Equatable {
     /// The window cannot exceed 2^31-1 (§6.9.1).
     static let maximum = Int(Int32.max)

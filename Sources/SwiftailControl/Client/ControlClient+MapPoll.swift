@@ -11,7 +11,7 @@ import SwiftailIO
 ///   hands off the result to tailnet lock processing (`receivedLock`). Emits the netmap as an event after filtering. Starts each stream
 ///   with a new `MapSession`, without session resumption.
 /// - Both requests include the head of the local signing authority state in `TKAHead`, starting with the first request if state was stored.
-/// - Watchdog: Disconnects if nothing arrives on the map stream for 120 seconds. The server sends KeepAlive at intervals under 1 minute.
+/// - Watchdog: Disconnects if nothing arrives on the map stream for 120 seconds. The server sends KeepAlive at intervals of less than 1 minute.
 ///   Also wakes at the self node's key expiration time in the last netmap so it can detect expiration even without a new map.
 /// - Expiration: Re-registers with a fresh key when the self node key expires. If the new key also expires immediately, ends with `nodeKeyExpired`.
 ///   Retrying would produce the same result, and repeated attempts would hammer the server.
@@ -117,7 +117,7 @@ extension ControlClient {
         consecutiveFailures = 0
     }
 
-    /// Handles an expired self node key by triggering registration with a fresh key and ending the connection. Stops if the newly registered key also expires.
+    /// Ends the connection and triggers registration with a fresh key when the self node key expires. Stops if the server also reports that new key as already expired.
     private func selfKeyExpired() throws {
         if renewedExpiredKey { throw ControlError.nodeKeyExpired }
         renewedExpiredKey = true

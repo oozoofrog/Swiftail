@@ -5,7 +5,7 @@
 ///
 /// Stores numbers in `Int64` → `UInt64` → `Double` order. Integers in the 64-bit ranges are preserved exactly,
 /// so `9007199254740992` and `9007199254740993` are distinct values (as in Go's `RawMessage`).
-/// Integers outside those ranges and high-precision decimals that `Double` cannot represent can round to the same `Double`.
+/// This can lose precision for integers outside those ranges and for high-precision decimals. Distinct inputs can round to the same `Double`.
 /// Integers written with decimal syntax, such as `1.0`, also become `integer(1)` (Go preserves the bytes).
 public enum JSONValue: Sendable, Hashable {
     case null

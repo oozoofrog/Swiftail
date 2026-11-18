@@ -10,17 +10,17 @@ import Foundation
 /// A byte limit alone cannot bound recursive decoding stack use or memory use after decoding.
 ///
 /// Leaving the request's `Compress` empty makes the payload uncompressed JSON. `shortcut:` no zstd decoder. Add one if the production
-/// server rejects uncompressed responses (contract "Framing and Applying Deltas").
-/// `docs/protocol-notes/control-map.md` 3.1, 3.5.
+/// server rejects uncompressed responses (see "Framing and Delta Application" in `docs/contracts/SwiftailControl.md`).
+/// `docs/protocol-notes/control-map.md` §3.1 and §3.5.
 public struct MapResponseFramer: Sendable {
     /// The maximum payload of one frame (8MiB), far below Go's 256MiB. This is due to the iOS packet tunnel extension's memory limit
     /// (about 50MiB, as reported by the first adopter).
     ///
     /// The limit is based on peak decoding memory. The entire frame is buffered before decoding, so its byte buffer and decoded values coexist in memory. With normal
-    /// data filling the limit, decoding a 64MiB frame used about 110MB (measured for `maximumValueCount`). At the same ratio, 8MiB uses
+    /// data filling the limit, the decoded result for a 64MiB frame occupied about 110MB (the measurement for `maximumValueCount`). At the same ratio, 8MiB would use
     /// about 14MB. This fits within the 50MiB limit even on top of idle resident memory (target at most 20MiB). An uncompressed full map for a tailnet
     /// with 1,000 peers is estimated to be several MB, and this is unverified. A tailnet over this limit cannot receive its map,
-    /// so adjust the limit if real device measurements show `frameTooLarge` (`docs/contracts/SwiftailTunnel.md` behavior M, requires lead session confirmation T5).
+    /// so adjust the limit if real device measurements show `frameTooLarge` (`docs/contracts/SwiftailTunnel.md` behavior M and item T5 under "Lead session confirmation needed").
     static let maximumFrameSize = 8 << 20
 
     /// The maximum payload JSON nesting depth (the top-level object is 1). Exceeding it yields `malformed`.
@@ -35,16 +35,16 @@ public struct MapResponseFramer: Sendable {
 
     /// The maximum number of values (array elements + object members) per payload. Exceeding it yields `malformed`.
     ///
-    /// Decoded values' memory is not proportional to JSON bytes. A 3-byte `{}` becomes one `Node` (392-byte stride),
+    /// Memory occupied by decoded values is not proportional to JSON size. An empty object `{}` plus a separating comma takes 3 bytes and yields one `Node` (392-byte stride),
     /// so a single frame can contain millions of nodes (8MiB ÷ 3 ≈ 2.8 million). The value count bounds memory after decoding.
     /// - Normal size: One node in the Go data has 8~29 values (223~729 bytes). A full map with 10,000 peers contains
     ///   29 × 10,000 = 290,000 node values and 60,000 profile values (about 6 per profile), or about 350,000 values. 1,000,000 is
-    ///   about 2.9 times that and fits 10,000 peers even at 100 values per node.
+    ///   about 2.9 times that and fits 10,000 nodes at 100 values per node, before counting profile or other map values.
     /// - Measured memory (Debug, phys_footprint before and after decoding): 100,000 copies of the largest node in the Go data (29 values) used
     ///   about 3.2KB per node (about 110 bytes per value). The empty `Node` `{}` (392-byte stride) has the largest expansion for one value, and
     ///   100,000 copies used about 1.3KB per node. These measurements include the decoder's intermediate representation and array growth.
     /// - Worst-case memory: 1,000,000 × 1.3KB ≈ 1.3GB (with only a byte limit, 8MiB ÷ 3 × 1.3KB ≈ 3.6GB).
-    ///   Normal data filling 64MiB used about 110MB, and 8MiB uses about 14MB. Normal data fits within the 50MB extension limit,
+    ///   Normal data filling 64MiB occupied about 110MB, which gives an estimate of about 14MB for 8MiB. Normal data fits within the 50MB extension limit,
     ///   but the worst case exceeds it. This limit bounds the size so decoding can complete without guaranteeing the extension's
     ///   memory usage. Noise authenticates the control server.
     static let maximumValueCount = 1_000_000
@@ -96,7 +96,7 @@ public struct MapResponseFramer: Sendable {
 
     /// Scans JSON bytes once before decoding to check that nesting depth and value count are within their limits.
     ///
-    /// The decoder checks syntax. Brackets and commas within strings do not count, and an escaped `\"` does
+    /// This scan leaves syntax validation to the decoder. Brackets and commas within strings do not count, and an escaped `\"` does
     /// not end a string. UTF-8 multibyte characters use bytes at or above 0x80, which cannot be confused with ASCII delimiters.
     /// Counts values per container as the first value plus the number of commas.
     ///

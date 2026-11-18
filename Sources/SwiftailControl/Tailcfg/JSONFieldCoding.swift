@@ -1,8 +1,8 @@
 import Foundation
 
 // Helpers for reading and writing individual Go `encoding/json` fields whose representations differ from Swift `Codable` defaults.
-// Used by model `init(from:)` and `encode(to:)`. These helpers are independent of decoder or encoder settings (such as date strategies),
-// so the models behave the same with any `JSONDecoder` or `JSONEncoder`.
+// Model `init(from:)` and `encode(to:)` use these helpers to keep the listed wire formats independent of value strategies such as date encoding.
+// Decoder or encoder settings that change the JSON key names still apply.
 //
 // - Time: An RFC 3339 string (`GoTime`).
 // - Byte sequences (`[]byte`, `MarshaledSignature`): Standard base64 strings with padding.

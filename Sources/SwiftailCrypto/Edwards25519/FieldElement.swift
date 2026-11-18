@@ -167,7 +167,7 @@ struct FieldElement: Equatable {
         let rr2 = low(r2) + carry(r1)
         let rr3 = low(r3) + carry(r2)
         let rr4 = low(r4) + carry(r3)
-        // The carry still exceeds 2^51, so propagate it once more. This carry fits in the limbs' spare bits.
+        // Carries may remain above the low 51 bits of the intermediate limbs. Propagate them once more. The resulting limbs have enough spare bits.
         return FieldElement(
             l0: rr0 & mask + 19 * (rr4 >> 51),
             l1: rr1 & mask + rr0 >> 51,
@@ -229,7 +229,7 @@ struct FieldElement: Equatable {
 
     // MARK: Reduction
 
-    /// Folds the top limb's carry into the bottom limb using 2^255 ≡ 19 to keep all limbs below 52 bits.
+    /// Folds the top limb's carry into the bottom limb using 2^255 ≡ 19 to keep each limb below 2^52.
     private mutating func carryPropagate() {
         let mask = Self.maskLow51Bits
         let c0 = l0 >> 51, c1 = l1 >> 51, c2 = l2 >> 51, c3 = l3 >> 51, c4 = l4 >> 51

@@ -11,7 +11,7 @@ import SwiftailTKA
 /// | Present | Irrelevant | Enabled, different or unknown head | `synchronize` |
 /// | Present | Irrelevant | Disabled | `verifyDisablement` |
 ///
-/// "Enabled, head unknown" means `TKAInfo` arrived without `Disabled`, and `Head` is absent or unreadable (`ServerLockState`, §5 TL-11b
+/// "Enabled, head unknown" means `TKAInfo` arrived with `Disabled` false or omitted, and `Head` is absent or unreadable (`ServerLockState`, §5 TL-11b
 /// item 3).
 ///
 /// Contract `docs/contracts/SwiftailTailnetLock.md` behavior N2, `docs/protocol-notes/tailnet-lock.md` §4.7 and §4.12

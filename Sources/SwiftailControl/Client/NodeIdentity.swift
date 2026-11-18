@@ -4,7 +4,7 @@ import SwiftailBase
 /// A node's identity: the machine key identifying the device, the node key for WireGuard, and the tailnet lock key (NL key).
 ///
 /// The machine key authenticates the Noise connection to the control server and stays the same as long as the device stays the same. The node key
-/// becomes final after registration and changes when it expires or the user starts a fresh interactive login. The NL key stays the same once created. When the node rotates its node key,
+/// is committed after successful registration and changes on expiration or when the user starts a new interactive login. The NL key stays the same once created. When the node rotates its node key,
 /// it extends the old signature chain with this key. Losing it prevents communication with peers that enforce the lock until a signing device signs again.
 /// Persist all three to start as the same node after a restart (`NodeIdentityStore`).
 ///

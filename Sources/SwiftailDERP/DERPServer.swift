@@ -1,6 +1,6 @@
 import SwiftailBase
 
-/// How to reach one DERP server. The engine derives this from `tailcfg.DERPNode`.
+/// The connection details for one DERP server. The engine derives them from `tailcfg.DERPNode`.
 ///
 /// A region can have several servers. `DERPClient` tries TCP in list order and uses the first server that connects
 /// (`docs/protocol-notes/derp-stun.md` §4.1). Within a server, it races the `targets` and uses the first connection.
@@ -25,9 +25,9 @@ public struct DERPServer: Sendable, Equatable {
 
     /// How to verify the server certificate.
     public enum Verification: Sendable, Equatable {
-        /// Verifies `hostName` using the system trust store.
+        /// Verifies the server certificate for `hostName` using the system trust store.
         case system
-        /// Verifies the chain using the system trust store and uses this value as the certificate name. SNI and the HTTP `Host` still use
+        /// Verifies the certificate chain using the system trust store and validates the certificate against the name supplied here. SNI and the HTTP `Host` still use
         /// `hostName`. Used for DERPMap nodes whose `CertName` differs from `HostName`.
         case named(String)
         /// Requires exactly one server certificate after excluding meta certificates (subject CN starts with `derpkey`). The lowercase hexadecimal

@@ -3,9 +3,9 @@ import SwiftailBase
 
 /// The initiator of the control Noise handshake (Noise_IK_25519_ChaChaPoly_BLAKE2s).
 ///
-/// Calculates initiation at initialization (to place in the upgrade request header), then reads response from bytes
-/// sent by the server after the 101 response. On opening response, returns the transport-phase `ControlSession` and any bytes
-/// that followed it in the same read (usually early payload or records containing HTTP/2).
+/// Builds the Noise initiation at initialization for the upgrade request header, then reads the Noise response from bytes
+/// sent by the server after the 101 response. After authenticating the Noise response, returns the transport-phase `ControlSession` and any bytes
+/// that followed it in the same read (usually Noise records containing the early payload or HTTP/2 data).
 ///
 /// Holds no socket or clock. A connection that ends before response arrives (EOF after 101) fails the handshake. The server
 /// sometimes closes the connection without an error message on handshake failure.
@@ -24,7 +24,7 @@ public struct ControlHandshake: Sendable {
         case done
     }
 
-    /// Generates an ephemeral key using system randomness and computes initiation.
+    /// Creates an initiator and computes the initiation using an ephemeral key generated from system randomness.
     ///
     /// - Parameters:
     ///   - machineKey: This device's machine private key.
@@ -56,8 +56,8 @@ public struct ControlHandshake: Sendable {
         state = .awaitingResponse(pending)
     }
 
-    /// Accepts bytes from the server. Returns nil until response arrives in full.
-    /// When complete, returns the transport-phase session and bytes already received after response.
+    /// Accepts bytes from the server. Returns `nil` until the Noise response arrives in full.
+    /// Then returns the transport-phase session and any bytes already received after the Noise response.
     ///
     /// - Throws: `handshakeFailed` if response cannot be opened or the server sent an error message, `malformed` for an invalid type
     ///   or length, or `closed` after returning a session or failing.

@@ -7,7 +7,7 @@ import SwiftailTKA
 
 /// A control server client that registers the node, reports its state, and maintains a netmap from the map stream.
 ///
-/// This is the only place in the package with a socket and a clock. I/O-free state machines
+/// This is the only part of the control module that owns both sockets and a clock. I/O-free state machines
 /// (`ControlHandshake`, `ControlSession`, `HTTP2ClientConnection`, `MapResponseFramer`, and `MapSession`) make protocol decisions. This actor
 /// feeds them bytes and times and emits the results as events (`events`).
 ///
@@ -31,7 +31,7 @@ public actor ControlClient {
         public var serverURL: URL
         /// The node's hostname. The server uses it to name the node.
         public var hostname: String
-        /// The auth key. Used only for initial registration and never logged.
+        /// The auth key. Used only to register a fresh node key, at initial registration or during rotation. It is never logged.
         public var authKey: String?
         /// Registers the node for removal by the server after prolonged inactivity.
         public var ephemeral: Bool
@@ -98,7 +98,7 @@ public actor ControlClient {
         var setDNS = Duration.seconds(60)
         /// One tailnet lock RPC (1 minute, as in Go. Contract `docs/contracts/SwiftailTailnetLock.md`, behavior M).
         var tkaRequest = Duration.seconds(60)
-        /// The range of bootstrap retry intervals when closed without verified state (`.unverified`) (behavior N6).
+        /// The range of bootstrap retry intervals when the client fails closed without verified state (`.unverified`) (behavior N6).
         var lockRetry = Duration.seconds(5)...Duration.seconds(300)
         /// `logOut()`: Total deadline for fetching the server key, connecting, and receiving the response. Go has no logout-specific deadline (uses the caller's context).
         /// Uses the 10 seconds in contract `docs/contracts/SwiftailHost.md`, "Logout", behavior O5.
@@ -149,7 +149,7 @@ public actor ControlClient {
     var selfKeyExpiry: Date?
     /// Wakes the sleeping watchdog when `selfKeyExpiry` changes.
     var selfKeyExpiryChanged: AsyncStream<Void>.Continuation?
-    /// The consecutive failure count. Resets to 0 on receipt of a full netmap.
+    /// The consecutive failure count. Resets to 0 after a usable netmap or when the network interface changes.
     var consecutiveFailures = 0
     /// Whether a map stream is currently open.
     var mapStreamOpen = false
@@ -206,7 +206,7 @@ public actor ControlClient {
         (eventStream, eventContinuation) = AsyncStream.makeStream(of: Event.self, bufferingPolicy: .bufferingNewest(Self.eventBufferLimit))
     }
 
-    /// The event stream. Supports one subscriber. Ends when `run()` ends.
+    /// The event stream. Supports one subscriber. Finishes after `run()` ends and any buffered events are consumed.
     ///
     /// Keeps up to the newest 64 unread events and drops the oldest first. A `netmap` always contains the full state, so reading only the latest
     /// one suffices.
@@ -237,7 +237,7 @@ public actor ControlClient {
     /// and immediately starts a new connection. Retains registration state and the last netmap (the map stream starts with a full map
     /// on the new connection). Reports the closed connection as `disconnected`.
     ///
-    /// **Even reporting the same interface again reconnects.** On the same Wi-Fi network, an address-only change (a different AP or a DHCP renewal) leaves the old connection
+    /// **Reporting the same interface also triggers reconnection.** On the same Wi-Fi network, an address-only change (a different AP or a DHCP renewal) leaves the old connection
     /// dead. The caller decides whether to reconnect (whether the interface or local address changed, `docs/contracts/SwiftailTunnel.md`
     /// behavior N §2). This method reconnects when called. Several calls in succession start only one new attempt
     /// with the latest value.
@@ -255,7 +255,7 @@ public actor ControlClient {
     }
 
     /// Registers, reports state, and maintains the map stream. Backs off and reconnects after a disconnect.
-    /// Returns only when the calling Task is canceled. Throws failures that retrying cannot help.
+    /// Continues until the calling task is canceled or an error cannot be resolved by retrying. Throws that error.
     /// Call once per client. A repeated call while running or after completion throws `invalidConfiguration`.
     public func run() async throws(ControlError) {
         guard !hasRun else { throw .invalidConfiguration("Call run() only once per client") }
@@ -406,7 +406,7 @@ enum SessionInterruption: Error {
     case loginRequested
     /// The self node key expired (a map response or the expiration time arrived). Backs off and registers again with a fresh key.
     case nodeKeyExpired
-    /// The server instructed the client to wait (429 or 503 with `Retry-After`).
+    /// The server instructed the client to wait (429, or 503 with `Retry-After`).
     case rateLimited(Duration)
     /// `setNetworkInterface` was called. Reconnects immediately on the new interface without backoff.
     case interfaceChanged

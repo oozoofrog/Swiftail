@@ -13,7 +13,7 @@ import SwiftailBase
 /// interface. The server key is fetched again only after a connection failure, so requests are infrequent. If a real device shows the request entering
 /// the tunnel, switch to HTTP/1.1 over `NetworkSocket` (including `Transfer-Encoding: chunked` decoding).
 ///
-/// `docs/protocol-notes/control-transport.md` 3.8, 4.1.
+/// `docs/protocol-notes/control-transport.md` §3.8 and §4.1.
 enum ServerKey {
     static let maximumBodySize = 64 << 10
 

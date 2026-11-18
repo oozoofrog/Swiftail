@@ -15,7 +15,7 @@ import SwiftailBase
 /// request). Treats a mismatch between the last 32 bytes of `NLKey` and the public key derived from the seed as corruption (Go does not check this).
 /// `docs/contracts/SwiftailTailnetLock.md` behavior R1.
 ///
-/// The file contains private keys, so create it readable only by the owner (0600). Write it fully to a temporary file in the same directory and rename it to replace the file
+/// The file contains private keys, so create it with owner-only read and write permissions (0600). Write it fully to a temporary file in the same directory and rename it to replace the file
 /// atomically. An interrupted write leaves the previous identity intact. Error messages omit paths and keys.
 /// `docs/contracts/SwiftailControl.md` unit 4 behavior 7.
 ///
@@ -23,7 +23,7 @@ import SwiftailBase
 /// permissions. The app must supply a directory other users cannot write to (`NodeConfiguration.stateDirectory`).
 ///
 /// On iOS, applies the `completeUntilFirstUserAuthentication` data protection class and backup exclusion to the temporary file before writing. The packet tunnel
-/// extension starts even with the screen locked (`complete` makes startup fail), so it must be able to read after the first unlock. Restoring a private key on another device would
+/// extension starts even with the screen locked (`complete` makes startup fail), so it must be able to read the file once the device has been unlocked for the first time. Restoring a private key on another device would
 /// create two devices with the same machine key. Assumes both attributes stay on the file across a rename (to be verified at the
 /// real device gate). `docs/contracts/SwiftailTunnel.md` behavior P §2.
 public struct NodeIdentityStore: Sendable {
@@ -48,7 +48,7 @@ public struct NodeIdentityStore: Sendable {
         try read()?.identity
     }
 
-    /// Used when the control client starts. If the file is absent, creates, stores, and returns a fresh identity. For a legacy file without `NLKey`, creates, stores, and returns a fresh NL key in the identity.
+    /// Loads the identity at control client startup. Creates and saves a new identity if the file is absent, or generates and saves an NL key if the legacy file lacks one. Returns the identity in either case.
     ///
     /// Save before the first request. Registering with an unsaved NL key would send a different key after restart (behavior R1). Save the machine key before registration too
     /// so the node appears as the same device after restart.
@@ -145,7 +145,7 @@ public struct NodeIdentityStore: Sendable {
         return try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: bytes)
     }
 
-    /// `nlpriv:` + hexadecimal seed ‖ public key (Go `NLPrivate.MarshalText`).
+    /// `nlpriv:` followed by the hexadecimal encoding of (seed ‖ public key), as in Go `NLPrivate.MarshalText`.
     static func text(_ key: Curve25519.Signing.PrivateKey) -> String {
         lockKeyPrefix + ([UInt8](key.rawRepresentation) + [UInt8](key.publicKey.rawRepresentation)).hex
     }

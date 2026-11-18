@@ -4,7 +4,7 @@
 /// and a payload (RFC 9113 §4.1). The peer's bytes are parsed into this type once, so later stages avoid working with
 /// offsets or flags again. This stage strips the padding and PRIORITY fields.
 ///
-/// Parsing checks rules local to a single frame (length, whether the stream is 0, and padding bounds). The connection
+/// Parsing checks rules local to a single frame (length, whether stream ID 0 is valid for the frame type, and padding bounds). The connection
 /// checks frame ordering and rules that depend on stream state.
 enum Frame: Equatable {
     /// One SETTINGS parameter (§6.5.1).
@@ -16,7 +16,7 @@ enum Frame: Equatable {
     /// `flowControlledLength` is the payload length including padding, equal to the decrement in the flow control window (§6.9.1).
     case data(HTTP2StreamID, [UInt8], endStream: Bool, flowControlledLength: Int)
     case headers(HTTP2StreamID, blockFragment: [UInt8], endStream: Bool, endHeaders: Bool)
-    /// Checks only the length, then discards the frame.
+    /// Checks the stream identifier and payload length, then discards the priority information.
     case priority
     case rstStream(HTTP2StreamID, code: UInt32)
     case settings([Setting])
@@ -81,7 +81,7 @@ enum FrameType: UInt8 {
     case continuation = 0x9
 }
 
-/// The frame flags bits (§6).
+/// The frame's flag bits (§6).
 enum FrameFlag {
     static let endStream: UInt8 = 0x1
     static let acknowledgement: UInt8 = 0x1

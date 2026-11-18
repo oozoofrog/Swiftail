@@ -13,11 +13,11 @@ import SwiftailTKA
 /// verified state, emits no peers (`.unverified`). Failures never let a netmap pass unfiltered.
 /// If synchronization fails, continues filtering with the previous state. Acts on a disabled claim only after verifying the disablement secret.
 ///
-/// Decisions (`TailnetLockPlan`, `Authority`, `Netmap.filtered`) are values without I/O. This extension handles only RPCs, files, and ordering.
+/// `TailnetLockPlan`, `Authority`, and `Netmap.filtered` make decisions without I/O. This extension handles only RPCs, files, and sequencing.
 /// - The map stream (`receiveMap`) calls `receivedLock` for each response. If no action is needed, filters and emits immediately. Otherwise, holds the netmap
 ///   and wakes the procedure. Stream reads continue. Keeps only the newest netmap received in the meantime.
 /// - The procedure (`runLockProcedures`) is a child task of the connection that runs alongside the map stream. Runs one procedure at a time and filters and emits
-///   the held netmap with the current state when it ends, whether it succeeds or fails. Runs separately from signal handling to avoid state-reporting backoff.
+///   the held netmap using the state at completion, whether the procedure succeeds or fails. Runs separately from signal handling so state-reporting backoff cannot block it.
 /// - Keeps signing authority state in memory across disconnects and writes it to `TailnetLockStore` whenever it changes.
 ///
 /// Contract `docs/contracts/SwiftailTailnetLock.md` behaviors N, Y, P, O, T, and K, decisions L2 and L3, and owner response U1.
@@ -33,7 +33,7 @@ extension ControlClient {
         var netmap: Netmap?
         /// Whether `netmap` has yet to be filtered and emitted.
         var isNetmapPending = false
-        /// The lock state on the last emitted netmap. If it changed after the procedure, filters and emits the same netmap again.
+        /// The lock status on the last emitted netmap. If the status changes after the procedure, filters and emits the same netmap again.
         var emitted: TailnetLockStatus?
         /// Whether a procedure is running. Netmaps received during it are held until the procedure finishes.
         var isProcedureRunning = false
@@ -64,7 +64,7 @@ extension ControlClient {
 
     /// Opens stored signing authority state. `run()` calls this once before the first connection (behaviors N7 and T3).
     ///
-    /// Treating an open failure as absent state would let file corruption alone transfer trust to a fresh bootstrap.
+    /// An open failure leaves the state unverified. Treating it as absent would let file corruption alone transfer trust to a fresh bootstrap.
     /// Keeps the file untouched and remains in `.unverified` (behavior T4).
     func openLockStore() {
         do {
@@ -143,7 +143,7 @@ extension ControlClient {
 
     // MARK: Procedures
 
-    /// Runs one tailnet lock procedure at a time. Ends only by throwing (cancellation or key expiration in an emitted netmap).
+    /// Runs one tailnet lock procedure at a time. Exits by throwing on cancellation or key expiration in an emitted netmap.
     ///
     /// After a failed bootstrap (`.unverified`), backs off and retries without waiting for the next netmap because there are no peers
     /// in the meantime (behavior N6). Sync or disablement failure keeps filtering with previous state, so wait for the next trigger.
@@ -305,8 +305,8 @@ extension ControlClient {
     ///
     /// Verification uses Argon2i with 16MiB. To avoid running it for each netmap when the server repeatedly sends `Disabled`, keeps BLAKE2s-256 digests
     /// of rejected secrets and the associated head only in memory (disablement values belong to the state identified by the head, so matching heads yield the same decision).
-    /// Using a set lets each secret be computed once even if the server alternates among several incorrect secrets.
-    /// Computation runs on this actor without suspension, so map frame decoding cannot overlap it and their peak memory usage does not stack.
+    /// Remembering multiple rejected secrets avoids recomputing their KDFs when the server alternates among them, as long as their digests remain in the bounded cache.
+    /// Computation runs on this actor without suspension, so map frame decoding cannot overlap it and the two operations' peak memory usage cannot coincide.
     private func isValidDisablement(_ secret: [UInt8], for authority: Authority) -> Bool {
         let digest = BLAKE2s.hash(secret)
         var rejected = rejectedDisablements?.head == authority.head ? rejectedDisablements?.secretDigests ?? [] : []

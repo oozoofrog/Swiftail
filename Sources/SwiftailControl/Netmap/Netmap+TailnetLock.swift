@@ -8,8 +8,8 @@ import SwiftailTKA
 extension Netmap {
     /// Returns the netmap filtered using verified signing authority state (`.enforcing`).
     ///
-    /// Removes peers with absent or unverified signatures and peers with keys superseded by rotation, preserving order. `UnsignedPeerAPIOnly` peers skip signature checks
-    /// yet are removed if their keys are stale. The self node is retained. If its signature fails verification (locked out), populates `signingRequest` with
+    /// Removes peers with missing signatures or signatures that fail verification, along with peers whose keys were superseded by rotation, preserving order. `UnsignedPeerAPIOnly` peers skip signature checks
+    /// but are removed if rotation superseded their keys. The self node is retained. If its signature fails verification (locked out), populates `signingRequest` with
     /// the two values to pass to the signing device.
     ///
     /// - Parameter lockKey: This node's tailnet lock public key, used as the `tlpub:` value in the signing request.

@@ -1,7 +1,7 @@
 /// The reason an HPACK header block could not be decoded.
 ///
 /// Failing to decode even one header block leaves the compression state out of sync with the peer, so the connection ends
-/// with COMPRESSION_ERROR (RFC 9113 §4.3). Exceeding a limit is the sole case that uses ENHANCE_YOUR_CALM.
+/// with COMPRESSION_ERROR (RFC 9113 §4.3). Only `headerListTooLarge` maps to ENHANCE_YOUR_CALM.
 enum HPACKError: Error, Equatable {
     /// An integer or string was cut off at the end of the block.
     case truncated

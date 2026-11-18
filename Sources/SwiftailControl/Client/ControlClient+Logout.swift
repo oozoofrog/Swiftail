@@ -2,7 +2,7 @@ import Foundation
 import SwiftailBase
 import SwiftailIO
 
-/// Logs out by asking the control server to expire the current node key (the server side of Go `tailscale logout`).
+/// Asks the control server to expire the current node key, as the server-facing part of Go's `tailscale logout` does.
 ///
 /// Uses the registration path (`POST /machine/register` over Noise) with the stored node key as is and `Expiry` in the distant past. The server
 /// treats a past `Expiry` with the current node key as expiration of that key (the comment on `tailcfg.RegisterRequest.Expiry`).
@@ -12,7 +12,7 @@ import SwiftailIO
 /// discards `doLogin`'s `mustRegen` and `newURL`). Does not retry.
 ///
 /// Differences from Go (contract `docs/contracts/SwiftailHost.md` "Logout", behavior O).
-/// - Omits the auth key. When Go's control client holds an auth key, it includes `Auth` and the wrapped key's signature in the logout request too.
+/// - Omits the auth key. When Go's control client has an auth key, it also includes `Auth` and the wrapped key's signature in the logout request.
 /// - `OldNodeKey` is always a zero key because Swiftail does not store the old node key. Go includes the stored old key if it has rotated the key.
 /// - Applies a deadline (`Timeouts.logout`, 10 seconds). Go uses only the caller's context, and the CLI and LocalAPI set no deadline.
 /// - Leaves the identity file intact. Go clears the in-memory persist and deletes the profile regardless of the response. The app handles file cleanup.

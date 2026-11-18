@@ -15,7 +15,7 @@ extension ControlError {
 }
 
 extension NetworkSocket {
-    /// Connects to the control server. With TLS, verifies `host` using system certificate validation.
+    /// Connects to the control server. With TLS, uses system certificate validation to verify the server certificate for `host`.
     /// If `interface` is present, connects only through that interface. Leaves loopback server connections unbound.
     static func connect(to endpoint: ControlEndpoint, interface: NWInterface?) async throws(ControlError) -> NetworkSocket {
         let tls: TLS = endpoint.usesTLS ? .system(serverName: endpoint.host) : .none

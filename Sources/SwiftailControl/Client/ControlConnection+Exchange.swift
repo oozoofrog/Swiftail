@@ -3,9 +3,9 @@ import SwiftailBase
 import SwiftailHTTP2
 
 /// Two exchanges over the connection: sending one request and receiving the whole response, or streaming the response body.
-/// Registration, state reporting, and the map stream all use these two forms.
+/// Registration, state reporting, and the map stream use these exchange methods.
 ///
-/// A request with a body uses JSON and adds `Content-Type: application/json`. When the node key is available, adds the load-balancing hint
+/// For the JSON exchange helpers, a request body uses `Content-Type: application/json`. When the node key is nonzero, these helpers add the load-balancing hint
 /// `Ts-Lb: nodekey:…`. The response body is untrusted server input. Stop reading and discard the stream
 /// if the limit is exceeded.
 ///

@@ -1,8 +1,8 @@
 /// HPACK integer and string representations.
 ///
-/// All header field representations are built from prefix integers and string literals. A prefix integer stores its value in the low
-/// n bits of the first byte. If it cannot fit there, it continues in subsequent bytes with 7 bits each (RFC 7541 §5.1). A string has
-/// a 1-bit Huffman flag, a 7-bit prefix length, and the bytes that follow (§5.2).
+/// All header field representations are built from prefix integers and string literals. A prefix integer uses the low n bits of the
+/// first byte. Values at least 2^n − 1 also use subsequent bytes carrying 7 value bits each (RFC 7541 §5.1). A string starts with a
+/// 1-bit Huffman flag and a length encoded as an integer with a 7-bit prefix, followed by the string's bytes (§5.2).
 
 extension ByteReader {
     /// Reads an integer. `prefixBits` is the number of low bits (1~8) used for the value in the first byte.

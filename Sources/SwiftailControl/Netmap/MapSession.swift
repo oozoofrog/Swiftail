@@ -5,10 +5,10 @@ import Foundation
 /// The first regular response contains the full state, and later responses are deltas. The state belongs to this stream. After a disconnect,
 /// a new `MapSession` receives the full map again. Session resumption is unused, as in the Go client.
 ///
-/// A value with no I/O or clock. The caller supplies the response receipt time as "now" for peer seen-now
-/// deltas (`PeerSeenChange` true).
+/// A value with no I/O or clock. For a delta reporting a peer as seen now (`PeerSeenChange` true), the caller supplies the time
+/// it received the response.
 ///
-/// The netmap produced here is **before tailnet lock filtering** (`tailnetLock` has its default value). The server's reported lock state is emitted separately in
+/// Returns **unfiltered netmaps** with the default `tailnetLock` value. It reports the server's lock state separately in
 /// `Update.serverLock`. `ControlClient` verifies and filters.
 ///
 /// Applies updates in the same order and by the same rules as the Go client's `mapSession`.
@@ -19,7 +19,7 @@ public struct MapSession: Sendable {
     public struct Update: Sendable {
         /// The netmap after applying this response. Nil if nothing changed, as with KeepAlive.
         public var netmap: Netmap?
-        /// A ping the server requested a reply to. The caller handles it.
+        /// A ping that the server asks the caller to answer.
         public var pingRequest: PingRequest?
         /// The current tailnet lock state reported by the server. Included even when the netmap stays the same. A head-only response
         /// leaves the netmap unchanged and still triggers synchronization (contract `docs/contracts/SwiftailTailnetLock.md` behavior N1).
@@ -117,7 +117,7 @@ public struct MapSession: Sendable {
             failure = .stateTooLarge
             throw .stateTooLarge
         }
-        // Server time changes with every response. A netmap that differs only in server time does not count as changed.
+        // Server time can change in any response. A netmap that differs only in server time does not count as changed.
         let previous = netmap
         let current = makeNetmap(selfNode: currentSelf)
         netmap = current
@@ -213,7 +213,7 @@ public struct MapSession: Sendable {
     private func makeNetmap(selfNode: Node) -> Netmap {
         let sortedPeers = peers.values.sorted { $0.id < $1.id }
 
-        // Select profiles only for owners and sharers of self and the peers (notes §4.3, item 7). 0 denotes no user.
+        // Select profiles only for the self node's owner and for owners and sharers of peers (notes §4.3, item 7). 0 denotes no user.
         var profiles: [Int64: UserProfile] = [:]
         for id in [selfNode.user] + sortedPeers.flatMap({ [$0.user, $0.sharer] }) where id != 0 {
             profiles[id] = userProfiles[id]

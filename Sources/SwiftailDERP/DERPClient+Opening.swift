@@ -14,8 +14,8 @@ struct OpenedConnection: Sendable {
 extension DERPClient {
     /// Connects to the server, establishes TLS, and completes the upgrade and handshake through `ready`.
     ///
-    /// Tries servers in list order over TCP (with `tcpTimeout` per server), then establishes TLS with the first one that connects. A TLS failure
-    /// ends the attempt without advancing to the next server (notes §4.1, item 1). Within a server, `dial` tries the `targets` concurrently.
+    /// Probes servers in list order over TCP (up to `tcpTimeout` each) and establishes TLS with the first successful probe. If the last server is reached,
+    /// its targets race through TCP and TLS without a separate TCP probe. TLS failure ends the attempt without advancing to the next server (notes §4.1, item 1). `dial` tries a server's `targets` concurrently.
     static func open(
         servers: [DERPServer], privateKey: Curve25519.KeyAgreement.PrivateKey, isPreferred: Bool, plaintextForTests: Bool,
         interface: NWInterface?
@@ -43,8 +43,8 @@ extension DERPClient {
     /// Either kind of failure on the last server fails the attempt, so establish TLS immediately. If `interface` is set, all connections go through
     /// that interface (loopback targets are unbound).
     // shortcut: `NetworkSocket.connect` establishes TCP and TLS together. To distinguish their failures, first probe nonfinal servers
-    // with plaintext TCP (closing immediately), then reconnect with TLS to the first target that connected. This adds one TCP connection
-    // per server. For the last server, start TCP and TLS together for each target and use the first to finish. Go adds TLS only to the first TCP connection,
+    // with plaintext TCP (closing immediately), then reconnect with TLS to the first target that connected. This opens one extra TCP connection
+    // for a successful probe. For the last server, start TCP and TLS together for each target and use the first to connect. Go adds TLS only to the first TCP connection,
     // so this approach can still use a different target if one target's TLS fails. Use a single connection once `SwiftailIO` can layer TLS
     // over an already established TCP connection.
     private static func connect(

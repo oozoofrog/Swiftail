@@ -9,13 +9,13 @@ import SwiftailBase
 public struct PingRequest: Decodable, Sendable, Equatable {
     /// The URL to send the reply to.
     public internal(set) var url: String
-    /// Calls `url` over the control Noise connection in place of ordinary HTTP.
+    /// Whether to send the request to `url` over the control Noise connection instead of ordinary HTTP.
     public internal(set) var urlIsNoise: Bool
     /// Requests logging of successes as well.
     public internal(set) var log: Bool
     /// Comma-separated ping types (such as `"disco"`, `"TSMP"`, or `"c2n"`). An empty string means a HEAD request.
     public internal(set) var types: String
-    /// The target IP to ping. Used when `types` is present.
+    /// The target IP to ping. Used when `types` is nonempty.
     public internal(set) var ip: IPAddress?
     /// The HTTP request bytes for a c2n ping.
     public internal(set) var payload: [UInt8]

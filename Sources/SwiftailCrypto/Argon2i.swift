@@ -1,5 +1,5 @@
 // Argon2i (RFC 9106). The algorithm follows RFC 9106 §3. The reference block index calculation (`referenceIndex`) and
-// the timing of address block generation were checked against the Go implementation.
+// the timing of address block generation were matched to the Go implementation.
 // Origin: golang.org/x/crypto v0.58.0 `argon2/argon2.go` (`processBlocks`, `indexAlpha`, `phi`),
 // `argon2/blake2b.go` (`blake2bHash`).
 // Copyright 2017 The Go Authors. BSD-3-Clause (full text at the top of `Edwards25519/FieldElement.swift`. The clauses match the
@@ -31,7 +31,7 @@ public enum Argon2i {
     ///   - salt: The salt S. RFC 9106 §3.1 sets no minimum length (16 bytes recommended).
     ///   - iterations: The number of passes t over memory. At least 1.
     ///   - memoryKiB: The memory size m, **in KiB** (same as `memory` in Go `argon2.Key`). At least `8 × parallelism`.
-    ///     The actual block count rounds down to a multiple of `4 × parallelism`, and H0 gets the supplied value unchanged (RFC 9106 §3.2).
+    ///     The actual block count is rounded down to a multiple of `4 × parallelism`. H0 uses the supplied value unchanged (RFC 9106 §3.2).
     ///   - parallelism: The number of lanes p. At least 1.
     ///   - outputByteCount: The tag length T in bytes. At least 4.
     /// - Throws: `CryptoError.invalidLength` when any argument is outside RFC 9106 §3.1's range (parallelism, iterations, memory, output length, or input length).
@@ -74,9 +74,9 @@ public enum Argon2i {
             }
         }
 
-        // RFC 9106 §3.2, steps 5 and 6. Slices must be filled in order. Lanes within the same slice do not reference one another, so
-        // (3.4 "Segments of the same slice can be computed in parallel and do not reference blocks from each other")
-        // filling lanes one at a time produces the same result as filling them in parallel.
+        // RFC 9106 §3.2, steps 5 and 6. Fill slices in order. A segment never references another lane's segment within the same slice, so
+        // (§3.4 "Segments of the same slice can be computed in parallel and do not reference blocks from each other")
+        // filling the segments of a slice one at a time produces the same result as filling them in parallel.
         for pass in 0..<Int(iterations) {
             for slice in 0..<syncPoints {
                 for lane in 0..<lanes {
@@ -118,7 +118,7 @@ public enum Argon2i {
         guard outputByteCount > 64 else {
             return BLAKE2b.hash(prefixed, outputByteCount: outputByteCount)
         }
-        // V_1..V_r are 64 bytes each and use only the first 32 bytes (W_i). The final V_{r+1} covers the full remaining length.
+        // V_1..V_r are 64 bytes each. Use only the first 32 bytes (W_i) of each. The final V_{r+1} supplies the entire remaining length.
         let r = (outputByteCount + 31) / 32 - 2
         var v = BLAKE2b.hash(prefixed)
         var out = Array(v[0..<32])
@@ -181,7 +181,7 @@ public enum Argon2i {
         // The first two blocks are already filled in the first segment of the first pass.
         let start = pass == 0 && slice == 0 ? 2 : 0
         for index in start..<memory.segmentLength {
-            // One address block provides reference positions for 128 blocks. A segment that skips the first block still starts at counter 1.
+            // One address block provides reference positions for 128 blocks. The first segment still starts at counter 1 when it skips its two prefilled blocks.
             if index == start || index % wordsPerBlock == 0 {
                 input[6] += 1
                 addresses = addressBlock(input)

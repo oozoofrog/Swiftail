@@ -11,7 +11,7 @@ public struct DERPMap: Decodable, Sendable, Equatable {
     public internal(set) var homeParams: DERPHomeParams?
     /// Region ID → region. `nil` keeps the previous value.
     public internal(set) var regions: [Int64: DERPRegion]?
-    /// The client must omit built-in default regions. Only meaningful when `regions` is present.
+    /// Whether the client must omit its built-in default regions. Applies only when `regions` is present.
     public internal(set) var omitDefaultRegions: Bool
 
     private enum CodingKeys: String, CodingKey {

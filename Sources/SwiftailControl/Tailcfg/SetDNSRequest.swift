@@ -30,7 +30,7 @@ struct SetDNSRequest: Encodable, Sendable {
 
 /// The 200 response to `POST /machine/set-dns`. Go `tailcfg.SetDNSResponse` (a struct with no fields).
 ///
-/// Checks only that the body is a JSON object and reads no fields. Go accepts one JSON value, so even `null` passes.
+/// Checks only that the body is a JSON object and reads no fields. Go decodes one JSON value into an empty struct and also accepts `null`.
 /// Swiftail accepts only objects (Swiftail's choice in contract `docs/contracts/SwiftailHost.md`, behavior D3).
 struct SetDNSResponse: Decodable {
     private struct AnyKey: CodingKey {
@@ -40,7 +40,7 @@ struct SetDNSResponse: Decodable {
         init?(intValue: Int) { nil }
     }
 
-    /// Throws for a nonobject (`null`, array, string, or number). The synthesized `init(from:)` would accept anything without opening a container,
+    /// Throws if the body is not a JSON object (for example, `null`, an array, a string, or a number). The synthesized `init(from:)` would accept anything without opening a container,
     /// so open the container explicitly.
     init(from decoder: any Decoder) throws {
         _ = try decoder.container(keyedBy: AnyKey.self)

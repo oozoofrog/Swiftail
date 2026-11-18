@@ -2,7 +2,7 @@
 ///
 /// Sent in registration and map requests. Information about other nodes arrives as `Node.Hostinfo` in map responses.
 /// testcontrol uses `Hostname` for the node name. The Go client omits an empty `BackendLogID`.
-/// All fields are `omitzero`, so empty fields are omitted from JSON.
+/// The fields represented here use Go's `omitzero` semantics. Empty strings and absent optional values are omitted from JSON.
 ///
 /// Includes only fields Swiftail uses. Omits fields for features outside scope, such as subnet routes, tag requests, and service advertisements.
 /// `docs/protocol-notes/control-map.md` §3.3 (origin: `Hostinfo` in tailscale.com `tailcfg/tailcfg.go`).

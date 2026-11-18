@@ -15,7 +15,7 @@ public struct HTTP2ClientConnection: Sendable {
         public var method: String
         public var path: String
         public var authority: String
-        /// The fields excluding pseudo-headers.
+        /// The request's regular header fields, excluding pseudo-headers.
         public var headers: [HeaderField]
 
         public init(method: String, path: String, authority: String, headers: [HeaderField] = []) {
@@ -60,10 +60,10 @@ public struct HTTP2ClientConnection: Sendable {
     /// The limit on a header block, including its CONTINUATION frames.
     static let maximumHeaderBlockSize = 65_536
 
-    /// The byte limit for queued control frames required by the peer (PING and SETTINGS ACK, RST_STREAM).
+    /// The byte limit for queued control frames generated in response to the peer (PING ACK, SETTINGS ACK, and RST_STREAM).
     ///
     /// The peer can send arbitrarily many small frames (a 17-byte PING produces a 17-byte ACK). Replies stay queued
-    /// until the caller drains them via `takeOutboundBytes()`. A blocked socket can only accumulate replies,
+    /// until the caller drains them via `takeOutboundBytes()`. If the socket is blocked, replies only accumulate,
     /// so the queue has a cap. The limit matches the 64KiB header block limit. Go's `x/net/http2` server also caps queued
     /// control frames at 10,000. Exceeding the limit ends the connection with ENHANCE_YOUR_CALM (§7) and appends
     /// the 17-byte GOAWAY regardless of the limit.
@@ -90,7 +90,7 @@ public struct HTTP2ClientConnection: Sendable {
     /// The peer's first frame must be SETTINGS (§3.4).
     var hasReceivedSettings = false
 
-    /// Starts the connection. Queues the preface and SETTINGS for transmission.
+    /// Creates a client connection and queues the preface and SETTINGS for transmission.
     ///
     /// SETTINGS disables server push (ENABLE_PUSH=0) and advertises the limit on incoming header lists. The flow control window
     /// and frame size keep their initial values.

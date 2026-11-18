@@ -16,7 +16,7 @@ public struct FilterRule: Decodable, Sendable, Equatable {
     public internal(set) var srcBits: [Int]
     /// The allowed destinations and port ranges.
     public internal(set) var dstPorts: [NetPortRange]
-    /// The allowed IP protocol numbers. An empty list means TCP, UDP, and ICMP.
+    /// The allowed IP protocol numbers. An empty list means TCP, UDP, and ICMP (IPv4 and IPv6).
     public internal(set) var ipProto: [Int]
     /// The application capabilities granted to the source.
     public internal(set) var capGrant: [CapGrant]

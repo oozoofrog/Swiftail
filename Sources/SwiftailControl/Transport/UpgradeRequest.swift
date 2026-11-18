@@ -9,10 +9,10 @@ import Foundation
 /// `docs/protocol-notes/control-transport.md` §3.6, §4.4 step 2
 /// (origin: tailscale.com `control/controlhttp/client.go`).
 public enum UpgradeRequest {
-    /// The complete request head bytes, including the blank line.
+    /// Builds the complete request header bytes, including the terminating blank line.
     ///
     /// - Parameters:
-    ///   - host: The upgrade URL's host and port (for example, `127.0.0.1:9911`). Comes from configuration.
+    ///   - host: The upgrade URL's host and, if specified, its port (for example, `127.0.0.1:9911`). Comes from configuration.
     ///     Whitespace or control characters are a programmer error.
     ///   - initiation: `ControlHandshake.initiation`.
     public static func bytes(host: String, initiation: [UInt8]) -> [UInt8] {

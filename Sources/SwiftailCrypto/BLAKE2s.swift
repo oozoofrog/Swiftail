@@ -28,7 +28,7 @@ public struct BLAKE2s: Sendable {
     private var compressed: UInt64 = 0
     private let outputByteCount: Int
 
-    /// Accepts outputByteCount in 1...32 and key in 0...32 bytes.
+    /// Creates a BLAKE2s hasher. `outputByteCount` is 1...32 and `key` is 0...32 bytes.
     public init(outputByteCount: Int = 32, key: [UInt8] = []) {
         precondition((1...32).contains(outputByteCount), "BLAKE2s output length must be in 1...32")
         precondition(key.count <= 32, "BLAKE2s keys can be at most 32 bytes")
@@ -138,7 +138,7 @@ public enum HMACBLAKE2s {
 /// KDFn for Noise and WireGuard.
 /// PRK = HMAC(chainingKey, input), T1 = HMAC(PRK, 0x01), T2 = HMAC(PRK, T1 ‖ 0x02), T3 = HMAC(PRK, T2 ‖ 0x03).
 public enum HKDFBLAKE2s {
-    /// Accepts outputCount in 1...3. Each output is 32 bytes.
+    /// Derives `outputCount` outputs (1...3), each 32 bytes long.
     public static func derive(chainingKey: [UInt8], input: some DataProtocol, outputCount: Int) -> [[UInt8]] {
         precondition((1...3).contains(outputCount), "HKDF output count must be in 1...3")
         let prk = HMACBLAKE2s.authenticationCode(for: input, key: chainingKey)

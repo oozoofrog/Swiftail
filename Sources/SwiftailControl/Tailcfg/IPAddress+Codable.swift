@@ -2,7 +2,7 @@ import SwiftailBase
 
 // tailcfg exchanges `netip.Addr` and `netip.Prefix` as text (`"100.64.0.1"`, `"100.64.0.1/32"`).
 // SwiftailBase has no JSON support, so add Codable for that text format here.
-// `docs/protocol-notes/control-map.md` 3.1.
+// `docs/protocol-notes/control-map.md` §3.1.
 
 extension IPAddress: Codable {
     public init(from decoder: any Decoder) throws {

@@ -22,7 +22,7 @@ public struct RegisterRequest: Encodable, Sendable {
     public var auth: RegisterResponseAuth?
     /// The requested key expiration time. `nil` defers to server policy. A timestamp in the past logs out.
     public var expiry: Date?
-    /// The previous response's `AuthURL`. If nonempty, waits for a response until the user completes login.
+    /// The previous response's `AuthURL`. When nonempty, the client waits for the server's response while the user completes login.
     public var followup: String
     /// Node information. Sent populated because testcontrol reads `Hostname`.
     public var hostinfo: Hostinfo?

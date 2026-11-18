@@ -65,14 +65,14 @@ public enum XChaCha20Poly1305 {
     private static func subkeyAndNonce(key: [UInt8], nonce: [UInt8]) throws(CryptoError) -> (SymmetricKey, ChaChaPoly.Nonce) {
         guard key.count == keyByteCount, nonce.count == nonceByteCount else { throw .invalidLength }
         let subkey = hchacha20(key: key, input: Array(nonce[0..<16]))
-        // The 12-byte nonce cannot fail, but keep CryptoKit's error type internal.
+        // Constructing the nonce from 12 bytes succeeds. Keep CryptoKit's error type internal.
         guard let chachaNonce = try? ChaChaPoly.Nonce(data: [UInt8](repeating: 0, count: 4) + nonce[16..<24]) else {
             throw .invalidLength
         }
         return (SymmetricKey(data: subkey), chachaNonce)
     }
 
-    /// Encrypts plaintext and authenticates it with aad. Requires a 32-byte key and 24-byte nonce, otherwise throws `invalidLength`.
+    /// Encrypts plaintext and authenticates it along with `aad`. Requires a 32-byte key and 24-byte nonce, otherwise throws `invalidLength`.
     public static func seal(_ plaintext: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8] {
         let (subkey, chachaNonce) = try subkeyAndNonce(key: key, nonce: nonce)
         guard let box = try? ChaChaPoly.seal(plaintext, using: subkey, nonce: chachaNonce, authenticating: aad) else {

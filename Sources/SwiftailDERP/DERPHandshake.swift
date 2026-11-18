@@ -17,7 +17,7 @@ enum DERPHandshake {
     /// The client advertises protocol version 2 and the ability to answer Ping.
     private static let clientInfoJSON = Array(#"{"version":2,"CanAckPings":true}"#.utf8)
 
-    /// A `GET /derp` upgrade request. Sends no `User-Agent`, `Ideal-Node`, or fast-start.
+    /// Builds a `GET /derp` upgrade request without `User-Agent`, `Ideal-Node`, or fast-start.
     ///
     /// `host` must be a single header value. Rejects whitespace and control characters (including CR and LF) because they would corrupt the request head.
     static func upgradeRequest(host: String) throws(DERPError) -> [UInt8] {

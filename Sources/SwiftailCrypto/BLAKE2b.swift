@@ -28,11 +28,11 @@ public struct BLAKE2b: Sendable {
     private var h: [UInt64]
     /// Input awaiting compression. The last block must be marked, so keep a full block until more input arrives.
     private var buffer: [UInt8] = []
-    /// The number of bytes already compressed. The specified counter is 128 bits, but input never exceeds 2^64 bytes, so the high 64 bits are always 0.
+    /// The number of bytes already compressed. The specification uses a 128-bit counter. This implementation stores only the low 64 bits and requires the total, including any padded key block, to stay below 2^64 bytes.
     private var compressed: UInt64 = 0
     private let outputByteCount: Int
 
-    /// Accepts outputByteCount in 1...64 and key in 0...64 bytes (RFC 7693 §2.1). Out-of-range values cause a trap as programmer errors.
+    /// Creates a BLAKE2b hasher. `outputByteCount` is 1...64 and `key` is 0...64 bytes (RFC 7693 §2.1). Out-of-range values trap as programmer errors.
     public init(outputByteCount: Int = 64, key: [UInt8] = []) {
         precondition((1...64).contains(outputByteCount), "BLAKE2b output length must be in 1...64")
         precondition(key.count <= 64, "BLAKE2b keys can be at most 64 bytes")

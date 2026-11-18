@@ -48,7 +48,7 @@ struct HandshakeResponse: Equatable {
     /// The 16-byte tag for the empty payload.
     var tag: [UInt8]
 
-    /// Reads response from the start of the received bytes. Returns `nil` if too few bytes are available to decide.
+    /// Reads the Noise response from the start of the received bytes. Returns `nil` until enough bytes are available to decide.
     ///
     /// - Throws: `handshakeFailed` for a server error message (skips reading the unauthenticated string),
     ///   or `malformed` for an unknown type or a length other than 48.
