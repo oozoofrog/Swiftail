@@ -217,4 +217,19 @@ struct VerifiedCertificateTests {
         #expect(!String(reflecting: certificate).contains(TestPKI.domainName))
         #expect(!dumped.contains(TestPKI.domainName))
     }
+
+    @Test("상태의 문자열 표현과 덤프에서 tailnet 도메인을 가린다(동작 K2). 속성으로는 그대로 읽는다")
+    func certificateStatusRedactsDomain() {
+        let status = CertificateStatus(
+            domain: TestPKI.domainName, notAfter: TestPKI.leafEnd, lastFailure: .domainNotAllowed, nextAttempt: TestPKI.now
+        )
+        #expect(status.domain == TestPKI.domainName)
+
+        var dumped = ""
+        dump(status, to: &dumped)
+        for text in [String(describing: status), String(reflecting: status), dumped] {
+            #expect(!text.contains(TestPKI.domainName))
+            #expect(text.contains("domainNotAllowed"))
+        }
+    }
 }

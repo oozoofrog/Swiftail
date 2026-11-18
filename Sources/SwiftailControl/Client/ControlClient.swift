@@ -130,8 +130,11 @@ public actor ControlClient {
     var localStatus = LocalStatus()
     /// 지금 연결에서 마지막으로 올린 상태. 같은 상태를 다시 올리지 않는다.
     var uploadedStatus: LocalStatus?
-    /// 지금 연결에서 마지막으로 올린 `TKAHead`. 로컬 머리가 달라지면 상태를 한 번 더 올린다.
+    /// 지금 연결에서 마지막으로 올린(응답을 받은) `TKAHead`. 상태와 이것이 모두 같으면 다시 올리지 않는다.
     var uploadedTKAHead: String?
+    /// 지금 연결에서 마지막으로 보낸 `TKAHead`(응답을 기다리는 중일 수 있다). 머리 알리기는 이것과 견준다: 올리는 사이
+    /// 머리가 바뀌면 그 응답 뒤에 지금 머리를 다시 올리게 한다.
+    var sentTKAHead: String?
     var needsRegistration = true
     /// 다음 등록에서 새 node 키를 만든다(대화형 로그인, 만료).
     var rotateNodeKey = false
@@ -356,6 +359,7 @@ public actor ControlClient {
         queuedPings = 0
         uploadedStatus = nil
         uploadedTKAHead = nil
+        sentTKAHead = nil
         lockSession = LockSession()
         selfKeyExpiry = nil
         selfKeyExpiryChanged = nil

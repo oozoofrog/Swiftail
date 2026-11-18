@@ -489,6 +489,36 @@ extension LockDisablementTests {
         }
     }
 
+    @Test("끄기: 켜진 머리를 올리는 응답이 오기 전에 꺼지면, 그 응답 뒤에 빈 TKAHead를 다시 올린다(동작 N4)")
+    func disablementWhileHeadUploadInFlight() async throws {
+        let world = try LockWorld()
+        try await withLockClient(world, prepare: { server, _ in
+            server.updateLock {
+                $0.authority = world.authority
+                $0.faults[Server.bootstrapPath] = .hold
+            }
+            server.setMapResponse(try world.map())
+        }) { run in
+            // 첫 상태 올리기(빈 머리)는 연결을 맺을 때 끝났다. 그 뒤의 올리기만 붙든다.
+            try await eventually("부트스트랩 요청") { !run.server.requests(to: Server.bootstrapPath).isEmpty }
+            run.server.updateLock { $0.faults[Server.mapPath] = .hold }
+            run.server.release(Server.bootstrapPath)
+            _ = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
+            try await eventually("켜진 머리를 올림") { run.uploadedHeads == ["", world.head.text] }
+
+            run.server.updateLock {
+                $0.authority = nil
+                $0.disablementSecret = LockTesting.disablementSecret
+            }
+            run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled))
+            _ = try await run.latest("끈 뒤의 netmap") { $0.tailnetLock.mode == .disabled }
+            #expect(run.uploadedHeads == ["", world.head.text], "붙든 응답이 오기 전에 다음 올리기를 보냈다")
+
+            run.server.release(Server.mapPath)
+            try await eventually("빈 TKAHead를 다시 올림") { run.uploadedHeads == ["", world.head.text, ""] }
+        }
+    }
+
     @Test("끄기: 틀린 비밀·비밀 없는 Disabled로는 lock을 유지하고 동기화를 이어 간다. 같은 비밀로는 KDF를 다시 돌리지 않는다")
     func disablementWithInvalidSecret() async throws {
         let world = try LockWorld()
