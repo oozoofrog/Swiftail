@@ -34,11 +34,11 @@ Not implemented: subnet routers, exit nodes, Taildrop, Tailscale SSH, Funnel, Se
 
 ## Installation
 
-Add the package to `Package.swift`. There are no tagged releases yet, so pin a revision.
+Swiftail is pre-1.0. Minor releases may break API compatibility. Patch releases preserve it. Add the package to `Package.swift` with an up-to-next-minor requirement to receive patch updates.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/oozoofrog/Swiftail.git", revision: "<commit>")
+    .package(url: "https://github.com/oozoofrog/Swiftail.git", .upToNextMinor(from: "0.1.1"))
 ]
 ```
 
@@ -124,6 +124,8 @@ swift test --filter "SwiftailInteropTests|SwiftailWireGuardInteropTests|Swiftail
 These run a local test control server, DERP relay, and Go tsnet peers. They take several minutes of wall-clock time and never contact production servers.
 
 ## Security
+
+See the [security policy](SECURITY.md) for how to report a suspected vulnerability privately.
 
 Swiftail has **not** been audited by independent human security experts.
 

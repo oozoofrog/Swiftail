@@ -31,7 +31,7 @@ struct URLSessionACMETransportTests {
 
         let request = try #require(server.requests.first)
         #expect(request.line == "POST /new-order HTTP/1.1")
-        #expect(request.header("user-agent") == "Swiftail/0.1.0")
+        #expect(request.header("user-agent") == "Swiftail/0.1.1")
         #expect(request.header("content-type") == "application/jose+json")
         #expect(request.header("accept") == "application/pem-certificate-chain")
         #expect(request.header("cookie") == nil)

@@ -128,8 +128,7 @@ struct HostEventTests {
                     node: node, port: Sample.port, storeDirectory: directory.appending(path: "store")
                 ) { _ in
                     guard let events = stream.withLock({ $0 }) else { return false }
-                    // decide가 불린 순간 이미 쌓여 있어야 할 사건을 읽는다. 쌓여 있으면 바로 돌아온다. `used`가 아예 나오지
-                    // 않는 퇴행에서 끝없이 기다리지 않도록 5초 뒤 취소해 읽은 데까지만 본다.
+                    // decide가 돌아가기 전에 `.used`를 읽는지 확인한다. 끝없이 기다리지 않도록 5초 뒤 읽기를 취소한다.
                     let reader = Task {
                         var seen: [PairingHost.Event] = []
                         for await event in events {

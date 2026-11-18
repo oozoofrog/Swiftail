@@ -12,7 +12,7 @@ import Security
 ///   (계약 동작 C8·S3 ⑤, H10. Go의 내장 루트 fallback은 옮기지 않는다).
 final class URLSessionACMETransport: ACMETransport {
     /// `User-Agent` 머리 값. 저장소에 라이브러리 버전 문자열이 없어 여기에 둔다.
-    static let userAgent = "Swiftail/0.1.0"
+    static let userAgent = "Swiftail/0.1.1"
     /// 요청 하나의 기한.
     static let requestTimeout: TimeInterval = 30
 

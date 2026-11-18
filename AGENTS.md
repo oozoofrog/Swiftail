@@ -12,6 +12,7 @@ Swiftail은 Go의 Tailscale 내장 노드(tsnet)를 대체하려는 순수 Swift
 - 키, 인증 키, 실제 tailnet 이름, 기기 이름, 실명, 개인 메일, `/Users/...` 경로를 코드·문서·시험·로그·보고에 넣지 않는다. 예시는 `tail0001`, `rd-mac-1a2b3c4d`, `100.64.0.1` 같은 가짜 값을 쓴다.
 - 비밀 값 비교는 상수 시간으로 한다. 비밀을 로그에 남기지 않는다.
 - 맡은 파일 범위 밖은 고치지 않는다. 고쳐야 할 것이 보이면 보고에 적는다.
-- 저장소는 GitHub에 공개돼 있다. 커밋한 것은 다음 push에 공개된다고 보고 쓴다. push, 저장소 설정 변경, 태그는 하지 않는다(총괄이 사용자의 말을 받아서만 한다). 이 저장소 옆의 `../remotedebug`(첫 사용처 RemoteDebug의 저장소)는 읽기만 한다.
+- 저장소는 GitHub에 공개돼 있다. 커밋한 것은 다음 push에 공개된다고 보고 쓴다. 이 저장소 옆의 `../remotedebug`(첫 사용처 RemoteDebug의 저장소)는 읽기만 한다.
+- The lead session may tag and push PATCH releases once the [release conditions](docs/releasing.md) hold. MINOR and 1.0 releases, any action on an existing tag, other pushes, and repository settings changes require the owner's instruction and may only be performed by the lead. Other sessions never tag or push.
 - 확인하지 못한 것과 실패한 시험은 출력과 함께 그대로 보고한다.
 - `_context/` 아래 파일(인계 문서)은 만들거나 고치지 않는다. 총괄만 쓴다.
