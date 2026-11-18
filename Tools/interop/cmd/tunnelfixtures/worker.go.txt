@@ -100,11 +100,11 @@ func peer(id int, addresses ...string) node {
 	return node{ID: id, Name: fmt.Sprintf("rd-peer-%08x.%s.", id, suffix), Addresses: p, AllowedIPs: slices.Clone(p), HomeDERP: 1}
 }
 func one(name string, in input, reason string) scenario {
-	return scenario{Name: name, Steps: []step{{Name: "설정", Input: in, SwiftailDiffers: reason}}}
+	return scenario{Name: name, Steps: []step{{Name: "Settings", Input: in, SwiftailDiffers: reason}}}
 }
 func scenarios() []scenario {
 	out := []scenario{}
-	for _, family := range []string{"IPv4", "IPv6", "둘 다"} {
+	for _, family := range []string{"IPv4", "IPv6", "Dual-stack"} {
 		in := base()
 		if family == "IPv4" {
 			in.Self.Addresses = prefixes("100.64.0.1/32")
@@ -118,36 +118,36 @@ func scenarios() []scenario {
 			for i := 0; i < n; i++ {
 				in.Peers = append(in.Peers, peer(i+2, fmt.Sprintf("100.64.0.%d/32", i+2), fmt.Sprintf("fd7a:115c:a1e0::%x/128", i+2)))
 			}
-			reason := "결정 D3: 검색 도메인을 내지 않음"
+			reason := "D3: Omit search domains"
 			if family == "IPv4" {
-				reason += "; 동작 S4·S5: 자기 주소에 없는 IPv6 경로·DNS 서버를 제외"
+				reason += ". S4 and S5: Omit IPv6 routes and DNS servers when self has no IPv6 address"
 			}
 			if family == "IPv6" && n > 0 {
-				reason += "; 동작 S4: 자기 주소에 없는 IPv4 경로를 제외"
+				reason += ". S4: Omit IPv4 routes when self has no IPv4 address"
 			}
-			out = append(out, one(family+fmt.Sprintf(" 피어 %d", n), in, reason))
+			out = append(out, one(family+fmt.Sprintf(" peers %d", n), in, reason))
 		}
 	}
 	in := base()
 	in.DNS.Domains = nil
 	in.Peers = []node{peer(2, "100.64.0.2/32")}
-	out = append(out, one("검색 도메인 없는 IPv4 피어", in, ""))
+	out = append(out, one("IPv4 peers without search domains", in, ""))
 	in = base()
 	in.DNS.Domains = nil
 	in.Peers = []node{peer(2, "fd7a:115c:a1e0::2/128")}
-	out = append(out, one("ULA 한 피어의 /48 집계", in, ""))
-	s := scenario{Name: "OneCGNAT 문턱과 제어 지시", Steps: []step{}}
-	for _, mode := range []string{"없음", "true", "false"} {
+	out = append(out, one("Aggregate one ULA peer to /48", in, ""))
+	s := scenario{Name: "OneCGNAT threshold and control directive", Steps: []step{}}
+	for _, mode := range []string{"none", "true", "false"} {
 		for _, n := range []int{1, 2} {
 			in = base()
 			in.DNS.Domains = nil
-			if mode != "없음" {
+			if mode != "none" {
 				in.CapMap["one-cgnat?v="+nodecap.Cap(mode)] = nil
 			}
 			for i := 0; i < n; i++ {
 				in.Peers = append(in.Peers, peer(i+2, fmt.Sprintf("100.64.0.%d/32", i+2)))
 			}
-			s.Steps = append(s.Steps, step{Name: fmt.Sprintf("지시 %s 피어 %d", mode, n), Input: in})
+			s.Steps = append(s.Steps, step{Name: fmt.Sprintf("Directive %s, %d peers", mode, n), Input: in})
 		}
 	}
 	out = append(out, s)
@@ -157,72 +157,72 @@ func scenarios() []scenario {
 	p.Expired = true
 	p.KeyExpiry = "2026-01-01T00:00:00Z"
 	in.Peers = []node{p}
-	out = append(out, one("만료 피어는 경로에 없음", in, ""))
+	out = append(out, one("Omit routes to expired peers", in, ""))
 	in = base()
 	in.DNS.Domains = nil
 	p = peer(2, "100.64.0.2/32")
 	p.KeyExpiry = "2026-01-01T00:00:00Z"
 	in.Peers = []node{p}
-	out = append(out, one("지난 KeyExpiry와 Expired false", in, ""))
+	out = append(out, one("Past KeyExpiry with Expired false", in, ""))
 	in = base()
 	in.DNS.Domains = nil
 	p = peer(2, "100.64.0.2/32")
 	p.HomeDERP = 0
 	in.Peers = []node{p}
-	out = append(out, one("disco와 DERP 없는 피어", in, ""))
+	out = append(out, one("Peer without disco or DERP", in, ""))
 	in = base()
 	in.DNS.Domains = nil
 	p = peer(2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	p.AllowedIPs = append(p.AllowedIPs, prefixes("192.0.2.0/24", "0.0.0.0/0", "::/0")...)
 	in.Peers = []node{p}
-	out = append(out, one("서브넷·exit 광고는 받지 않음", in, ""))
+	out = append(out, one("Ignore advertised subnet and exit routes", in, ""))
 	in = base()
 	in.DNS.Proxied = false
-	out = append(out, one("MagicDNS 끔", in, "결정 D3: 검색 도메인을 내지 않음"))
+	out = append(out, one("MagicDNS disabled", in, "D3: Omit search domains"))
 	in = base()
 	in.Self.Name = ""
 	in.DNS.Domains = nil
-	out = append(out, one("MagicDNS 접미사 없음", in, ""))
+	out = append(out, one("No MagicDNS suffix", in, ""))
 	in = base()
 	in.DNS.Proxied = false
 	in.DNS.Domains = nil
 	in.DNS.Routes = map[string][]*dnstype.Resolver{"local.tail0001.ts.net": {}}
-	out = append(out, one("빈 Routes는 로컬 영역", in, "결정 D1: 노드 색인이 영역 밖에 있어도 1차 리졸버로 설정하지 않음"))
+	out = append(out, one("Empty Routes mark a local zone", in, "D1: Do not configure the primary resolver even when the node index contains out-of-zone names"))
 	in = base()
 	in.DNS.Domains = nil
 	in.DNS.Routes = map[string][]*dnstype.Resolver{"split.example.com": {{Addr: "192.0.2.53"}}}
-	out = append(out, one("사용자 지정 분할 DNS", in, "결정 D2: 리졸버가 있는 Routes·상위 전달을 무시하고 로컬 영역만 match"))
+	out = append(out, one("Custom split DNS", in, "D2: Ignore Routes with resolvers and upstream forwarding, and match only local zones"))
 	in = base()
 	in.DNS.Domains = nil
 	in.DNS.Resolvers = []*dnstype.Resolver{{Addr: "192.0.2.53"}}
-	out = append(out, one("전역 리졸버", in, "결정 D1·D2: 전역 리졸버를 무시하고 로컬 영역만 match"))
+	out = append(out, one("Global resolvers", in, "D1 and D2: Ignore global resolvers and match only local zones"))
 	in = base()
 	in.DNS.Domains = nil
 	in.DNS.Proxied = false
 	in.DNS.Resolvers = []*dnstype.Resolver{{Addr: "192.0.2.53"}}
-	out = append(out, one("전역 리졸버만 있음", in, "결정 D1·D2: 로컬 영역이 없으면 DNS 없음"))
+	out = append(out, one("Global resolvers only", in, "D1 and D2: Omit DNS when there are no local zones"))
 	in = base()
 	in.DNS.Domains = nil
 	in.DNS.ExtraRecords = []tailcfg.DNSRecord{{Name: "rd-extra.example.com", Type: "A", Value: "100.64.0.9"}}
-	out = append(out, one("덮이지 않은 ExtraRecords", in, ""))
+	out = append(out, one("ExtraRecords without overrides", in, ""))
 	in = base()
 	in.DNS.Domains = nil
 	in.DNS.ExtraRecords = []tailcfg.DNSRecord{{Name: "rd-extra.example.com", Value: "100.64.0.9"}}
 	in.DNS.Routes = map[string][]*dnstype.Resolver{"example.com": {{Addr: "192.0.2.53"}}}
-	out = append(out, one("사용자 라우트가 ExtraRecords를 덮음", in, "결정 D2: 사용자 지정 분할 DNS·상위 전달을 무시"))
+	out = append(out, one("Custom route overrides ExtraRecords", in, "D2: Ignore custom split DNS and upstream forwarding"))
 	in = base()
 	in.DNS.Domains = nil
 	in.CapMap[nodecap.ForceRegisterMagicDNSIPv4Only] = nil
-	out = append(out, one("IPv4 DNS만 등록 지시", in, ""))
+	out = append(out, one("Directive to register IPv4 DNS only", in, ""))
 	in = base()
 	in.SelfExpired = true
 	in.Self.Expired = true
 	in.Self.KeyExpiry = "2026-01-01T00:00:00Z"
-	out = append(out, one("자기 키 만료면 DNS 없음", in, ""))
+	out = append(out, one("No DNS when the self key expires", in, ""))
 	in = base()
 	in.Self.Addresses = []netip.Prefix{}
 	in.Self.AllowedIPs = []netip.Prefix{}
-	out = append(out, one("자기 주소 없음", in, "동작 S1: 자기 주소가 없으면 설정을 내지 않음"))
+	out = append(out, one("No self addresses", in, "S1: Omit settings when self has no addresses"))
 	return out
 }
 func convert(n node) *tailcfg.Node {

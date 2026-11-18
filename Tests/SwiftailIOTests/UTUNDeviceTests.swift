@@ -163,14 +163,19 @@ struct UTUNDeviceTests {
         #expect(pair.receive() == [0, 0, 0, 2] + Self.ipv4Packet)
     }
 
-    /// Before the fix, writing to a disconnected stream socket killed the test process with SIGPIPE (signal 13).
-    @Test("Writing to a socket whose peer closed yields sendFailed(EPIPE) without a fatal signal")
+    /// The write sees EPIPE if the device is still open, or EBADF if the read source sees EOF and closes it first.
+    @Test("Writing after the peer closes fails without raising SIGPIPE")
     func writeToClosedPeerDoesNotRaiseSIGPIPE() throws {
         let pair = try SocketPair(type: SOCK_STREAM)
         defer { close(pair.caller) }  // The peer is already closed below. Closing the same descriptor number twice would close a descriptor from another test running in parallel.
         let device = try Self.device(on: pair.caller)
         pair.closePeer()
-        #expect(throws: SocketError.sendFailed("EPIPE")) { try device.write(Self.ipv4Packet) }
+        do throws(SocketError) {
+            try device.write(Self.ipv4Packet)
+            Issue.record("The write succeeded after the peer closed")
+        } catch {
+            #expect(error == .sendFailed("EPIPE") || error == .sendFailed("EBADF"))
+        }
     }
 
     // MARK: File descriptor ownership

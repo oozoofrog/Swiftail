@@ -97,7 +97,7 @@ struct AUMEncodingTests {
 
     @Test("Genesis checkpoint (note §§7.1 and 8.1): rewrites to the same 558 bytes, matches Go hash and SigHash, and verifies the signature")
     func genesis() throws {
-        let input = try #require(CBORVectorFile.load().vectors.first { $0.name == "genesis 체크포인트" }).input()
+        let input = try #require(CBORVectorFile.load().vectors.first { $0.name == "Genesis checkpoint" }).input()
         #expect(input.count == 558)
         let aum = try AUM(decoding: input)
         #expect(aum.serialized() == input)

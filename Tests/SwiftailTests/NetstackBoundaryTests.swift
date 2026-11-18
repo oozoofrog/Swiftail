@@ -64,7 +64,7 @@ struct NetstackBoundaryTests {
             for length in [0, -1] {
                 #expect(
                     await Support.error { try await pair.server.read(upTo: length) }
-                        == .invalidConfiguration("읽을 길이는 1 이상이어야 한다"))
+                        == .invalidConfiguration("Read length must be at least 1"))
             }
             try await pair.client.write([5])
             #expect(try await pair.server.read(upTo: 1) == [5])

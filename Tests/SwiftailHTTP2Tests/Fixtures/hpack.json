@@ -1,6 +1,6 @@
 [
   {
-    "name": "허프만·동적 표·크기 갱신",
+    "name": "Huffman encoding, dynamic table, and size updates",
     "blocks": [
       {
         "hex": "884087f2b5254207317f8cf1e3c2e5f23a6ba0aba4a84f4086f2b169ad3ebf00",
@@ -135,7 +135,7 @@
     ]
   },
   {
-    "name": "새 연결은 표를 공유하지 않음",
+    "name": "A new connection has a separate table",
     "blocks": [
       {
         "hex": "4087f2b5254207317f8cf1e3c2e5f23a6ba0aba4a84f",

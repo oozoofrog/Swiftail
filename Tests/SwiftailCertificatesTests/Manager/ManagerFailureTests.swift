@@ -226,7 +226,7 @@ struct ManagerFailureTests {
         defer { h.scratch.remove() }
         let run = h.start(with: H.facts(running: false))
         try await eventually { await h.status().lastFailure == .nodeNotRunning }
-        await #expect(throws: CertificateError.invalidConfiguration("run()은 한 번만 부를 수 있다")) {
+        await #expect(throws: CertificateError.invalidConfiguration("run() can only be called once")) {
             try await h.manager.run()
         }
         run.cancel()

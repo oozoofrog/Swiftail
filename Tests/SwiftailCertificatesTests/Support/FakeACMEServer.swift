@@ -138,7 +138,7 @@ actor FakeACMEServer: ACMETransport {
             } else if var fault = config.responseFault, fault.endpoint == endpoint, fault.remaining > 0 {
                 fault.remaining -= 1
                 config.responseFault = fault
-                var object: [String: Any] = ["detail": "진단에 노출하지 않는 시험 식별자", "subproblems": [
+                var object: [String: Any] = ["detail": "test identifier omitted from diagnostics", "subproblems": [
                     ["type": Self.errorPrefix + "dns", "identifier": ["type": "dns", "value": Self.domain]],
                 ]]
                 if let type = fault.type { object["type"] = type }

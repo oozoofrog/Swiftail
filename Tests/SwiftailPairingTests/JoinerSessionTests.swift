@@ -151,10 +151,10 @@ struct JoinerSessionTests {
     @Test("Approval, rejection, and timeout")
     func readsDecisions() throws {
         var approved = try Self.waitingJoiner()
-        let body = Self.approvedBody(stableID: Array("nEXAMPLEHOST".utf8), name: Array("거실 Mac".utf8))
+        let body = Self.approvedBody(stableID: Array("nEXAMPLEHOST".utf8), name: Array("Living Room Mac".utf8))
         #expect(
             approved.receive(try Self.signed(body), at: .now)
-                == [.finish(.success(Approval(stableID: "nEXAMPLEHOST", name: "거실 Mac")))])
+                == [.finish(.success(Approval(stableID: "nEXAMPLEHOST", name: "Living Room Mac")))])
 
         var unnamed = try Self.waitingJoiner()
         let bare = Self.approvedBody(stableID: Array("n".utf8), name: [])

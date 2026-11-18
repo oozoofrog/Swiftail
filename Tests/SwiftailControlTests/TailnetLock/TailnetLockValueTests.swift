@@ -278,7 +278,7 @@ struct TKARequestJSONTests {
                 _ = try JSONDecoder().decode(TKASyncOfferResponse.self, from: body(items))
                 Issue.record("Accepted 4,097 entries")
             } catch DecodingError.dataCorrupted(let context) {
-                #expect(context.debugDescription.contains("개수 한도"), "\(first): \(context.debugDescription)")
+                #expect(context.debugDescription == "MissingAUMs exceeds the count limit", "\(first): \(context.debugDescription)")
             }
         }
         // An invalid base64 entry within the limit still fails.

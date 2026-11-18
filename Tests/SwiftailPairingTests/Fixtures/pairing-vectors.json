@@ -1,5 +1,5 @@
 {
-  "reference": "docs/contracts/SwiftailPairing.md 5절, Go crypto/hmac·crypto/sha256",
+  "reference": "docs/contracts/SwiftailPairing.md §5, Go crypto/hmac and crypto/sha256",
   "vectors": [
     {
       "label": "IPv4",
@@ -36,7 +36,7 @@
       }
     },
     {
-      "label": "IPv6, 한글 기기 이름, 빈 표시 이름",
+      "label": "IPv6, Hangul device name, empty display name",
       "secret": "05101b26313c47525d68737e89949faab5c0cbd6e1ecf7020d18232e39444f5a",
       "offerHost": "rd-mac-1a2b3c4d.tail0001.ts.net",
       "offerPort": 65535,
@@ -69,7 +69,7 @@
       }
     },
     {
-      "label": "가장 긴 이름들",
+      "label": "Maximum-length names",
       "secret": "04172a3d506376899cafc2d5e8fb0e2134475a6d8093a6b9ccdff205182b3e51",
       "offerHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tail0001.ts.net",
       "offerPort": 1,
@@ -103,7 +103,7 @@
       }
     },
     {
-      "label": "확인 숫자가 0으로 시작",
+      "label": "Confirmation code starts with zero",
       "secret": "01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da",
       "offerHost": "rd-mac-1a2b3c4d.tail0001.ts.net",
       "offerPort": 4747,

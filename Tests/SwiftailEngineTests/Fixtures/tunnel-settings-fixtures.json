@@ -8,10 +8,10 @@
   ],
   "scenarios": [
     {
-      "name": "IPv4 피어 0",
+      "name": "IPv4 peers 0",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -351,15 +351,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음; 동작 S4·S5: 자기 주소에 없는 IPv6 경로·DNS 서버를 제외"
+          "swiftailDiffers": "D3: Omit search domains. S4 and S5: Omit IPv6 routes and DNS servers when self has no IPv6 address"
         }
       ]
     },
     {
-      "name": "IPv4 피어 1",
+      "name": "IPv4 peers 1",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -720,15 +720,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음; 동작 S4·S5: 자기 주소에 없는 IPv6 경로·DNS 서버를 제외"
+          "swiftailDiffers": "D3: Omit search domains. S4 and S5: Omit IPv6 routes and DNS servers when self has no IPv6 address"
         }
       ]
     },
     {
-      "name": "IPv4 피어 3",
+      "name": "IPv4 peers 3",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -1123,15 +1123,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음; 동작 S4·S5: 자기 주소에 없는 IPv6 경로·DNS 서버를 제외"
+          "swiftailDiffers": "D3: Omit search domains. S4 and S5: Omit IPv6 routes and DNS servers when self has no IPv6 address"
         }
       ]
     },
     {
-      "name": "IPv6 피어 0",
+      "name": "IPv6 peers 0",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -1470,15 +1470,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음"
+          "swiftailDiffers": "D3: Omit search domains"
         }
       ]
     },
     {
-      "name": "IPv6 피어 1",
+      "name": "IPv6 peers 1",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -1838,15 +1838,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음; 동작 S4: 자기 주소에 없는 IPv4 경로를 제외"
+          "swiftailDiffers": "D3: Omit search domains. S4: Omit IPv4 routes when self has no IPv4 address"
         }
       ]
     },
     {
-      "name": "IPv6 피어 3",
+      "name": "IPv6 peers 3",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -2238,15 +2238,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음; 동작 S4: 자기 주소에 없는 IPv4 경로를 제외"
+          "swiftailDiffers": "D3: Omit search domains. S4: Omit IPv4 routes when self has no IPv4 address"
         }
       ]
     },
     {
-      "name": "둘 다 피어 0",
+      "name": "Dual-stack peers 0",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -2593,15 +2593,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음"
+          "swiftailDiffers": "D3: Omit search domains"
         }
       ]
     },
     {
-      "name": "둘 다 피어 1",
+      "name": "Dual-stack peers 1",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -2970,15 +2970,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음"
+          "swiftailDiffers": "D3: Omit search domains"
         }
       ]
     },
     {
-      "name": "둘 다 피어 3",
+      "name": "Dual-stack peers 3",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -3381,15 +3381,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음"
+          "swiftailDiffers": "D3: Omit search domains"
         }
       ]
     },
     {
-      "name": "검색 도메인 없는 IPv4 피어",
+      "name": "IPv4 peers without search domains",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -3750,10 +3750,10 @@
       ]
     },
     {
-      "name": "ULA 한 피어의 /48 집계",
+      "name": "Aggregate one ULA peer to /48",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -4114,10 +4114,10 @@
       ]
     },
     {
-      "name": "OneCGNAT 문턱과 제어 지시",
+      "name": "OneCGNAT threshold and control directive",
       "steps": [
         {
-          "name": "지시 없음 피어 1",
+          "name": "Directive none, 1 peers",
           "input": {
             "self": {
               "id": 1,
@@ -4476,7 +4476,7 @@
           }
         },
         {
-          "name": "지시 없음 피어 2",
+          "name": "Directive none, 2 peers",
           "input": {
             "self": {
               "id": 1,
@@ -4850,7 +4850,7 @@
           }
         },
         {
-          "name": "지시 true 피어 1",
+          "name": "Directive true, 1 peers",
           "input": {
             "self": {
               "id": 1,
@@ -5211,7 +5211,7 @@
           }
         },
         {
-          "name": "지시 true 피어 2",
+          "name": "Directive true, 2 peers",
           "input": {
             "self": {
               "id": 1,
@@ -5584,7 +5584,7 @@
           }
         },
         {
-          "name": "지시 false 피어 1",
+          "name": "Directive false, 1 peers",
           "input": {
             "self": {
               "id": 1,
@@ -5945,7 +5945,7 @@
           }
         },
         {
-          "name": "지시 false 피어 2",
+          "name": "Directive false, 2 peers",
           "input": {
             "self": {
               "id": 1,
@@ -6323,10 +6323,10 @@
       ]
     },
     {
-      "name": "만료 피어는 경로에 없음",
+      "name": "Omit routes to expired peers",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -6686,10 +6686,10 @@
       ]
     },
     {
-      "name": "지난 KeyExpiry와 Expired false",
+      "name": "Past KeyExpiry with Expired false",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -7051,10 +7051,10 @@
       ]
     },
     {
-      "name": "disco와 DERP 없는 피어",
+      "name": "Peer without disco or DERP",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -7411,10 +7411,10 @@
       ]
     },
     {
-      "name": "서브넷·exit 광고는 받지 않음",
+      "name": "Ignore advertised subnet and exit routes",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -7783,10 +7783,10 @@
       ]
     },
     {
-      "name": "MagicDNS 끔",
+      "name": "MagicDNS disabled",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -7858,15 +7858,15 @@
             "dnsMatchDomains": [],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D3: 검색 도메인을 내지 않음"
+          "swiftailDiffers": "D3: Omit search domains"
         }
       ]
     },
     {
-      "name": "MagicDNS 접미사 없음",
+      "name": "No MagicDNS suffix",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -7936,10 +7936,10 @@
       ]
     },
     {
-      "name": "빈 Routes는 로컬 영역",
+      "name": "Empty Routes mark a local zone",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -8019,15 +8019,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D1: 노드 색인이 영역 밖에 있어도 1차 리졸버로 설정하지 않음"
+          "swiftailDiffers": "D1: Do not configure the primary resolver even when the node index contains out-of-zone names"
         }
       ]
     },
     {
-      "name": "사용자 지정 분할 DNS",
+      "name": "Custom split DNS",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -8312,15 +8312,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D2: 리졸버가 있는 Routes·상위 전달을 무시하고 로컬 영역만 match"
+          "swiftailDiffers": "D2: Ignore Routes with resolvers and upstream forwarding, and match only local zones"
         }
       ]
     },
     {
-      "name": "전역 리졸버",
+      "name": "Global resolvers",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -8602,15 +8602,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D1·D2: 전역 리졸버를 무시하고 로컬 영역만 match"
+          "swiftailDiffers": "D1 and D2: Ignore global resolvers and match only local zones"
         }
       ]
     },
     {
-      "name": "전역 리졸버만 있음",
+      "name": "Global resolvers only",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -8687,15 +8687,15 @@
             "dnsMatchDomains": [],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D1·D2: 로컬 영역이 없으면 DNS 없음"
+          "swiftailDiffers": "D1 and D2: Omit DNS when there are no local zones"
         }
       ]
     },
     {
-      "name": "덮이지 않은 ExtraRecords",
+      "name": "ExtraRecords without overrides",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -9054,10 +9054,10 @@
       ]
     },
     {
-      "name": "사용자 라우트가 ExtraRecords를 덮음",
+      "name": "Custom route overrides ExtraRecords",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -9352,15 +9352,15 @@
             ],
             "mtu": 1280
           },
-          "swiftailDiffers": "결정 D2: 사용자 지정 분할 DNS·상위 전달을 무시"
+          "swiftailDiffers": "D2: Ignore custom split DNS and upstream forwarding"
         }
       ]
     },
     {
-      "name": "IPv4 DNS만 등록 지시",
+      "name": "Directive to register IPv4 DNS only",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -9704,10 +9704,10 @@
       ]
     },
     {
-      "name": "자기 키 만료면 DNS 없음",
+      "name": "No DNS when the self key expires",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -9781,10 +9781,10 @@
       ]
     },
     {
-      "name": "자기 주소 없음",
+      "name": "No self addresses",
       "steps": [
         {
-          "name": "설정",
+          "name": "Settings",
           "input": {
             "self": {
               "id": 1,
@@ -10037,7 +10037,7 @@
             }
           },
           "settings": null,
-          "swiftailDiffers": "동작 S1: 자기 주소가 없으면 설정을 내지 않음"
+          "swiftailDiffers": "S1: Omit settings when self has no addresses"
         }
       ]
     }

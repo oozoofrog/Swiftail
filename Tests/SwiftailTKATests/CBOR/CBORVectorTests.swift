@@ -58,7 +58,7 @@ struct CBORVectorTests {
 
     @Test("The genesis checkpoint is canonical and rewrites to the original bytes")
     func genesis() throws {
-        let vector = try #require(CBORVectorFile.load().vectors.first { $0.name == "genesis 체크포인트" })
+        let vector = try #require(CBORVectorFile.load().vectors.first { $0.name == "Genesis checkpoint" })
         let input = try vector.input()
         #expect(input.count == 558)
         #expect(CBORTesting.canonical(try CBOR.decode(input)) == input)

@@ -251,6 +251,6 @@ struct OfferLinkTests {
         }
         var withoutKey = ""
         dump(Sample.offer(), to: &withoutKey)
-        #expect(withoutKey.contains("없음"))
+        #expect(withoutKey.contains("none"))
     }
 }

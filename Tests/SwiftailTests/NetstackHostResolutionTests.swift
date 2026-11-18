@@ -77,7 +77,7 @@ struct NetstackHostResolutionTests {
             #expect(await NetstackTestSupport.error { try await node.connect(to: "100.64.0.77", port: 80) } == .unknownHost)
             #expect(await NetstackTestSupport.error { try await node.connect(to: "rd-tv-1a2b3c4d", port: 80) } == .unknownHost)
             #expect(await NetstackTestSupport.error { try await node.connect(to: "rd-pad-1a2b3c4d", port: 0) }
-                == .invalidConfiguration("포트는 0이 아니어야 한다"))
+                == .invalidConfiguration("Port must be nonzero"))
             if case .invalidConfiguration = await NetstackTestSupport.error({ try await node.connect(to: "", port: 80) }) {
             } else {
                 Issue.record("An empty host should yield invalidConfiguration")

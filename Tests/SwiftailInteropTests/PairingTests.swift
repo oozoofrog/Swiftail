@@ -39,7 +39,7 @@ struct PairingGateTests {
                 let codes = ConfirmationCodes()
                 let paired = try await netstackDeadline("Pairing") {
                     try await PairingJoiner.pair(
-                        with: try Self.throughLink(offer), deviceName: "거실 iPad", node: joinerNode.node
+                        with: try Self.throughLink(offer), deviceName: "Living Room iPad", node: joinerNode.node
                     ) { codes.record($0) }
                 }
                 #expect(paired.host == hostStatus.fqdn)
@@ -48,13 +48,13 @@ struct PairingGateTests {
 
                 let request = try #require(approver.requests.last)
                 #expect(approver.requests.count == 1)
-                #expect(request.peer.stableID == joinerStableID && request.deviceName == "거실 iPad")
+                #expect(request.peer.stableID == joinerStableID && request.deviceName == "Living Room iPad")
                 #expect(codes.all == [request.confirmationCode], "Both sides have the same SAS")
                 #expect(request.confirmationCode.count == 6)
 
                 let first = try #require(await host.pairedPeers.first)
                 #expect(await host.pairedPeers.count == 1)
-                #expect(first.peer == request.peer && first.deviceName == "거실 iPad")
+                #expect(first.peer == request.peer && first.deviceName == "Living Room iPad")
                 await gate.tool.checkpoint("M9 9 approval: 1 paired peer, SAS matches on both sides")
 
                 // For a connection after pairing, query the paired peer list using the connection's identity.
@@ -76,7 +76,7 @@ struct PairingGateTests {
 
                 // An offer can be used only once.
                 let reused = await pairingFailure {
-                    try await PairingJoiner.pair(with: offer, deviceName: "거실 iPad", node: joinerNode.node)
+                    try await PairingJoiner.pair(with: offer, deviceName: "Living Room iPad", node: joinerNode.node)
                 }
                 #expect(reused == .rejected)
 
@@ -84,7 +84,7 @@ struct PairingGateTests {
                 approver.set(.deny)
                 let refusedOffer = try await host.openOffer()
                 let denied = await pairingFailure {
-                    try await PairingJoiner.pair(with: try Self.throughLink(refusedOffer), deviceName: "다른 이름", node: joinerNode.node)
+                    try await PairingJoiner.pair(with: try Self.throughLink(refusedOffer), deviceName: "Other Device", node: joinerNode.node)
                 }
                 #expect(denied == .denied)
                 #expect(await host.pairedPeers == [first], "Denial leaves the list unchanged")
@@ -98,19 +98,19 @@ struct PairingGateTests {
                 let forged = PairingOffer(
                     host: kept.host, port: kept.port, expires: kept.expires, authKey: nil, secret: wrongSecret)
                 let wrong = await pairingFailure {
-                    try await PairingJoiner.pair(with: forged, deviceName: "거실 iPad", node: joinerNode.node)
+                    try await PairingJoiner.pair(with: forged, deviceName: "Living Room iPad", node: joinerNode.node)
                 }
                 #expect(wrong == .rejected)
                 #expect(approver.requests.count == 2, "A wrong secret does not prompt the app")
 
                 // Pair again with the same offer and replace the entry.
                 let again = try await netstackDeadline("Re-pairing") {
-                    try await PairingJoiner.pair(with: try Self.throughLink(kept), deviceName: "새 이름", node: joinerNode.node)
+                    try await PairingJoiner.pair(with: try Self.throughLink(kept), deviceName: "Renamed Device", node: joinerNode.node)
                 }
                 #expect(again.stableID == paired.stableID && again.pairedAt > paired.pairedAt)
                 let replaced = try #require(await host.pairedPeers.first)
                 #expect(await host.pairedPeers.count == 1)
-                #expect(replaced.peer.stableID == joinerStableID && replaced.deviceName == "새 이름")
+                #expect(replaced.peer.stableID == joinerStableID && replaced.deviceName == "Renamed Device")
                 #expect(replaced.pairedAt > first.pairedAt)
                 await gate.tool.checkpoint("M9 9 wrong secret: rejected, offer kept. Re-pairing replaces the entry")
 
@@ -118,7 +118,7 @@ struct PairingGateTests {
                 let brief = try await host.openOffer(lifetime: .seconds(1))
                 try await Task.sleep(for: .milliseconds(2_100))
                 let expired = await pairingFailure {
-                    try await PairingJoiner.pair(with: try Self.throughLink(brief), deviceName: "거실 iPad", node: joinerNode.node)
+                    try await PairingJoiner.pair(with: try Self.throughLink(brief), deviceName: "Living Room iPad", node: joinerNode.node)
                 }
                 #expect(expired == .rejected)
 
@@ -126,7 +126,7 @@ struct PairingGateTests {
                 let closed = try await host.openOffer()
                 await host.closeOffer()
                 let afterClose = await pairingFailure {
-                    try await PairingJoiner.pair(with: closed, deviceName: "거실 iPad", node: joinerNode.node)
+                    try await PairingJoiner.pair(with: closed, deviceName: "Living Room iPad", node: joinerNode.node)
                 }
                 #expect(afterClose == .rejected)
                 #expect(approver.requests.count == 3)
@@ -138,7 +138,7 @@ struct PairingGateTests {
                 let waitingCodes = ConfirmationCodes()
                 let pairing = Task {
                     await pairingFailure {
-                        try await PairingJoiner.pair(with: pending, deviceName: "거실 iPad", node: joinerNode.node) {
+                        try await PairingJoiner.pair(with: pending, deviceName: "Living Room iPad", node: joinerNode.node) {
                             waitingCodes.record($0)
                         }
                     }
@@ -173,7 +173,7 @@ struct PairingGateTests {
                 #expect(await joinerNode.node.status.state != .running)
                 let started = ContinuousClock.now
                 let paired = try await netstackDeadline("Joining and pairing with an auth key", seconds: 90) {
-                    try await PairingJoiner.pair(with: offer, deviceName: "거실 iPad", node: joinerNode.node)
+                    try await PairingJoiner.pair(with: offer, deviceName: "Living Room iPad", node: joinerNode.node)
                 }
                 let elapsed = started.duration(to: .now)
                 #expect(elapsed >= .seconds(1), "The first attempt cannot connect before the node runs, and it redials after 1 second")
@@ -209,21 +209,21 @@ struct PairingSocketGateTests {
         async let serving = host.serveNext(approving: true)
         let paired = try await netstackDeadline("Pairing over loopback", seconds: 20) {
             try await PairingJoiner.pair(
-                with: offer, deviceName: "거실 iPad", localAddress: loopback, requiringTunnel: false
+                with: offer, deviceName: "Living Room iPad", localAddress: loopback, requiringTunnel: false
             ) { codes.record($0) }
         }
         let served = try await serving
         #expect(paired.host == "127.0.0.1")
         #expect(paired.stableID == LoopbackPairingHost.hostIdentity.stableID)
         #expect(paired.name == LoopbackPairingHost.hostIdentity.computedName)
-        #expect(served.ending == .paired && served.saved?.deviceName == "거실 iPad")
+        #expect(served.ending == .paired && served.saved?.deviceName == "Living Room iPad")
         #expect(codes.all == [try #require(served.confirmationCode)], "Both sides see the same two connection endpoints, so their SAS matches")
 
         // Reject an offer that has already been used.
         async let second = host.serveNext(approving: true)
         let reused = await pairingFailure {
             try await PairingJoiner.pair(
-                with: offer, deviceName: "거실 iPad", localAddress: loopback, requiringTunnel: false) { _ in }
+                with: offer, deviceName: "Living Room iPad", localAddress: loopback, requiringTunnel: false) { _ in }
         }
         #expect(reused == .rejected)
         #expect(try await second.ending == .noOffer)
@@ -233,7 +233,7 @@ struct PairingSocketGateTests {
         async let third = host.serveNext(approving: false)
         let denied = await pairingFailure {
             try await PairingJoiner.pair(
-                with: refusedOffer, deviceName: "거실 iPad", localAddress: loopback, requiringTunnel: false) { _ in }
+                with: refusedOffer, deviceName: "Living Room iPad", localAddress: loopback, requiringTunnel: false) { _ in }
         }
         #expect(denied == .denied)
         #expect(try await third.ending == .denied)
@@ -244,7 +244,7 @@ struct PairingSocketGateTests {
         let elsewhere = try #require(IPAddress("127.0.0.2"))
         let outside = await pairingFailure {
             try await PairingJoiner.pair(
-                with: guarded, deviceName: "거실 iPad", localAddress: elsewhere, requiringTunnel: false) { _ in }
+                with: guarded, deviceName: "Living Room iPad", localAddress: elsewhere, requiringTunnel: false) { _ in }
         }
         #expect(outside == .notOnTailnet)
         let untouched = try await fourth

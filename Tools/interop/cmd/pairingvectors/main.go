@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-const reference = "docs/contracts/SwiftailPairing.md 5절, Go crypto/hmac·crypto/sha256"
+const reference = "docs/contracts/SwiftailPairing.md §5, Go crypto/hmac and crypto/sha256"
 
 type decision struct {
 	StableID string `json:"stableID,omitempty"`
@@ -167,20 +167,20 @@ func inputs() []input {
 		hostStableID: "nEXAMPLE1CNTRL", hostLabel: "rd-mac-1a2b3c4d",
 	}
 	ipv6 := input{
-		label: "IPv6, 한글 기기 이름, 빈 표시 이름", secret: pattern(32, 11, 5), offerHost: "rd-mac-1a2b3c4d.tail0001.ts.net",
+		label: "IPv6, Hangul device name, empty display name", secret: pattern(32, 11, 5), offerHost: "rd-mac-1a2b3c4d.tail0001.ts.net",
 		offerPort: 65535, deviceName: "거실 iPad", joinerNonce: pattern(32, 13, 7), hostNonce: pattern(32, 17, 3),
 		joiner: netip.MustParseAddrPort("[fd7a:115c:a1e0::2]:1"), host: netip.MustParseAddrPort("[fd7a:115c:a1e0::1]:65535"),
 		hostStableID: "nEXAMPLE2CNTRL", hostLabel: "",
 	}
 	longest := input{
-		label: "가장 긴 이름들", secret: pattern(32, 19, 4), offerHost: strings.Repeat("a", 63) + ".tail0001.ts.net",
+		label: "Maximum-length names", secret: pattern(32, 19, 4), offerHost: strings.Repeat("a", 63) + ".tail0001.ts.net",
 		offerPort: 1, deviceName: strings.Repeat("기", 21) + "a", joinerNonce: pattern(32, 23, 6), hostNonce: pattern(32, 29, 8),
 		joiner: netip.MustParseAddrPort("100.127.255.254:65535"), host: netip.MustParseAddrPort("100.64.0.1:1"),
 		hostStableID: strings.Repeat("n", 255), hostLabel: strings.Repeat("표", 21) + "b",
 	}
 	// For a SAS starting with 0, vary the first byte of the joiner's nonce and take the first match.
 	leadingZero := ipv4
-	leadingZero.label = "확인 숫자가 0으로 시작"
+	leadingZero.label = "Confirmation code starts with zero"
 	for first := 0; ; first++ {
 		if first > 255 {
 			panic("could not find a SAS starting with 0")

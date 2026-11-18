@@ -42,10 +42,10 @@ func TestResponsesPreserveJSON(t *testing.T) {
 			if err := json.Unmarshal([]byte(step.Response), &raw); err != nil {
 				t.Fatal(err)
 			}
-			if step.Name == "Peers 빈 배열" {
+			if step.Name == "Empty Peers array" {
 				empty = string(raw["Peers"]) == "[]"
 			}
-			if step.Name == "Peers 키 생략" {
+			if step.Name == "Peers key omitted" {
 				_, found := raw["Peers"]
 				omitted = !found
 			}
@@ -66,7 +66,7 @@ func TestRequestZeroAndStatusFields(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch fixture.Name {
-		case "zero 등록":
+		case "Zero-value registration":
 			if string(fields["Expiry"]) != `"0001-01-01T00:00:00Z"` || string(fields["Hostinfo"]) != "null" || string(fields["NodeKeySignature"]) != "null" {
 				t.Fatal("required zero field mismatch")
 			}
@@ -76,7 +76,7 @@ func TestRequestZeroAndStatusFields(t *testing.T) {
 			if _, found := fields["Auth"]; found {
 				t.Fatal("Auth must be omitted")
 			}
-		case "상태 갱신":
+		case "Status update":
 			if _, found := fields["Stream"]; found {
 				t.Fatal("false Stream must be omitted")
 			}

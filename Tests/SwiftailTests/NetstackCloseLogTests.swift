@@ -24,10 +24,10 @@ struct NetstackCloseLogTests {
             reason: .aborted, closedAt: openedAt + .milliseconds(240), afterRelease: false)
         #expect(
             held
-                == "연결이 끝남: aborted, 수명 240ms, 보냄 262144B, 다시 보냄 1200B, RTO 1, 빠른 재전송 0, "
-                + "partial ACK 재전송 0, 중복 ACK 0, SACK 실린 ACK 0, SACK 협상 true, cwnd 최대 143840B, ssthresh 줄임 0")
+                == "Connection ended: aborted, lifetime 240ms, sent 262144B, retransmitted 1200B, RTO 1, fast retransmits 0, "
+                + "partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, peak cwnd 143840B, ssthresh reductions 0")
         let released = statistics.closeLogLine(
             reason: .finished, closedAt: openedAt + .milliseconds(240), afterRelease: true)
-        #expect(released == held.replacingOccurrences(of: "aborted", with: "finished") + ", 놓은 뒤 끝남")
+        #expect(released == held.replacingOccurrences(of: "aborted", with: "finished") + ", ended after release")
     }
 }

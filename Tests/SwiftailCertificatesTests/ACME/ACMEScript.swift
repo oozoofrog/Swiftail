@@ -74,7 +74,7 @@ enum Body {
             "authorizations": authorizations, "finalize": finalize,
         ]
         if let certificate { object["certificate"] = certificate }
-        if let errorType { object["error"] = ["type": errorType, "detail": "rd-mac-1a2b3c4d.tail0001.ts.net 비밀"] }
+        if let errorType { object["error"] = ["type": errorType, "detail": "rd-mac-1a2b3c4d.tail0001.ts.net secret"] }
         return json(object)
     }
 
@@ -89,7 +89,7 @@ enum Body {
         var object: [String: Any] = [
             "type": type, "url": url ?? Fake.challengeURL(index), "status": status, "token": token ?? Fake.token(index),
         ]
-        if let errorType { object["error"] = ["type": errorType, "detail": "TXT 없음"] }
+        if let errorType { object["error"] = ["type": errorType, "detail": "Missing TXT record"] }
         return object
     }
 

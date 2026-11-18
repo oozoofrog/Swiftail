@@ -65,7 +65,7 @@ struct TailcfgJSONTests {
             #expect(!output.contains("SECRET"), "\(output)")
             #expect(!output.contains("tskey"), "\(output)")
         }
-        #expect(dumped(request).contains("authKey: \"<\(secret.count)자>\""))
+        #expect(dumped(request).contains("authKey: \"<\(secret.count) characters>\""))
         // Encoding must send the original text unchanged.
         #expect(try JSONSerialization.jsonObject(with: JSONEncoder().encode(auth)) as? [String: String] == ["AuthKey": secret])
     }

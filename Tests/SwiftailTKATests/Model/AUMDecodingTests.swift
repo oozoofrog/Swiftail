@@ -24,7 +24,7 @@ struct AUMDecodingTests {
             }
         }
         // Go decodes a 2- or 33-byte `LastAUMHash` in checkpoint state and rejects it during static validation. Swiftail rejects it during decoding.
-        #expect(deviations == ["체크포인트 상태의 2바이트 LastAUMHash", "체크포인트 상태의 33바이트 LastAUMHash"])
+        #expect(deviations == ["2-byte LastAUMHash in checkpoint state", "33-byte LastAUMHash in checkpoint state"])
     }
 
     @Test("Accepted values: null becomes the zero value, text keys are unknown fields, and unknown fields are discarded")
@@ -170,7 +170,7 @@ struct AUMDecodingTests {
 
     @Test("All prefixes and arbitrary bytes avoid a crash. Decoded values survive rewriting and decoding")
     func robustness() throws {
-        let genesis = try #require(CBORVectorFile.load().vectors.first { $0.name == "genesis 체크포인트" }).input()
+        let genesis = try #require(CBORVectorFile.load().vectors.first { $0.name == "Genesis checkpoint" }).input()
         for count in 0..<genesis.count {
             #expect(throws: TKAError.self) { try AUM(decoding: Array(genesis.prefix(count))) }
         }

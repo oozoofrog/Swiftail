@@ -90,7 +90,7 @@ struct LoopbackAdmissionReviewTests {
             defer { server.close() }
             let pair = try await Support.connectedPair(node)
             let forwarding = Support.forward(pair.server, with: bridge, toLoopbackPort: server.port)
-            #expect(await forwarding.value == .loopbackUnavailable("토큰을 표에 적지 못했다"))
+            #expect(await forwarding.value == .loopbackUnavailable("Could not record the token in the table"))
             let keys = refused.withLock { $0 }
             #expect(keys.count == 3)
             #expect(Set(keys.map(\.sourcePort)).count == 3, "The same source port is not picked again while held")

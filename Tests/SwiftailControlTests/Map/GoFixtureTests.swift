@@ -140,7 +140,7 @@ private func changeGoValueType(_ value: GoFixtureJSON, random: inout SeededRando
         values[index] = changeGoValueType(values[index], random: &random)
         return .array(values)
     case .string: return .bool(false)
-    default: return .string("잘못된 타입")
+    default: return .string("Invalid type")
     }
 }
 

@@ -123,7 +123,7 @@ struct NetworkSocketLoopbackTests {
 
     @Test("Port 0 and a port with no listener yield connectFailed")
     func connectFailures() async throws {
-        await #expect(throws: SocketError.connectFailed("포트가 잘못되었다")) {
+        await #expect(throws: SocketError.connectFailed("Invalid port")) {
             _ = try await NetworkSocket.connectLoopback(port: 0)
         }
         let closedPort = try await PlainLoopbackServer.unusedPort()
