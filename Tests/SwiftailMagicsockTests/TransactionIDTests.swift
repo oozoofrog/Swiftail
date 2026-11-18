@@ -6,7 +6,7 @@ import SwiftailBase
 
 @Suite("TransactionID")
 struct TransactionIDTests {
-    /// 같은 시드면 같은 바이트를 내는 생성기. 시험 전용이다.
+    /// Generates the same bytes from the same seed. For tests only.
     private struct CountingGenerator: RandomNumberGenerator {
         var state: UInt64
         mutating func next() -> UInt64 {
@@ -15,12 +15,12 @@ struct TransactionIDTests {
         }
     }
 
-    @Test("12바이트만 받는다", arguments: [0, 1, 11, 13, 32])
+    @Test("Accepts only 12 bytes", arguments: [0, 1, 11, 13, 32])
     func wrongLengthRejected(_ count: Int) {
         #expect(TransactionID([UInt8](repeating: 7, count: count)) == nil)
     }
 
-    @Test("12바이트는 그대로 담는다")
+    @Test("Stores the 12 bytes unchanged")
     func keepsBytes() throws {
         let bytes = Array(UInt8(1)...UInt8(12))
         let id = try #require(TransactionID(bytes))
@@ -28,7 +28,7 @@ struct TransactionIDTests {
         #expect(id == TransactionID(bytes[...]))
     }
 
-    @Test("random은 넘긴 생성기로 12바이트를 뽑는다")
+    @Test("random draws 12 bytes from the supplied generator")
     func randomUsesGenerator() {
         var first = CountingGenerator(state: 1)
         var second = CountingGenerator(state: 1)

@@ -1,9 +1,9 @@
-// TAI64N timestamp의 배치와 나노초 양자화.
+// TAI64N timestamp layout and nanosecond quantization.
 //
-// 양자화 사례의 출처: wireguard-go `tai64n/tai64n_test.go` `TestMonotonic`
+// The quantization cases originate from wireguard-go `tai64n/tai64n_test.go` `TestMonotonic`
 // (github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca).
 // SPDX-License-Identifier: MIT, Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
-// 라이선스 전문은 ReplayFilterTests.swift 머리에 있다.
+// See the header of ReplayFilterTests.swift for the full license text.
 
 import Foundation
 import Testing
@@ -12,7 +12,7 @@ import Testing
 
 @Suite("TAI64N")
 struct TAI64NTests {
-    @Test("배치: big-endian (0x400000000000000a + 초) ‖ big-endian 나노초(하위 24비트 지움)")
+    @Test("Layout is big-endian (0x400000000000000a + seconds) ‖ big-endian nanoseconds (low 24 bits cleared)")
     func layout() {
         let stamp = TAI64N(sinceUnixEpoch: .seconds(1) + .nanoseconds(0x0123_4567))
         #expect(stamp.bytes == [0x40, 0, 0, 0, 0, 0, 0, 0x0b, 0x01, 0, 0, 0])
@@ -20,7 +20,7 @@ struct TAI64NTests {
     }
 
     @Test(
-        "time.Unix(0, 123456789)에서 20ms 뒤는 after, 10ms 이하는 아니다",
+        "20 ms after time.Unix(0, 123456789) satisfies after, while 10 ms or less does not",
         arguments: [
             (Duration.nanoseconds(10), false),
             (.microseconds(10), false),
@@ -34,7 +34,7 @@ struct TAI64NTests {
         #expect((TAI64N(sinceUnixEpoch: start + offset) > TAI64N(sinceUnixEpoch: start)) == isAfter)
     }
 
-    @Test("장치의 timestamp는 벽시계 + 경과 시간이다")
+    @Test("The device timestamp is wall-clock time plus elapsed time")
     func deviceTimestamp() throws {
         let device = WireGuardDevice(privateKey: .init(), now: t0, wallClock: Date(timeIntervalSince1970: 1_800_000_000))
         #expect(device.timestamp(at: t0 + .seconds(10)) == TAI64N(sinceUnixEpoch: .seconds(1_800_000_010)))

@@ -1,14 +1,14 @@
-// 규격 문서에 실린 공개 벡터로 SwiftailCrypto의 기본기를 확인한다.
+// Tests SwiftailCrypto fundamentals with public vectors from specifications.
 //
-// 출처(벡터는 원문에서 내려받아 기계적으로 옮겼다):
-// - RFC 7693 부록 B: BLAKE2s-256("abc")
-// - BLAKE2 공식 KAT: https://github.com/BLAKE2/BLAKE2 의 testvectors/blake2s-kat.txt (키 있는 BLAKE2s-256)
-// - RFC 8439 §2.5.2, 부록 A.3: Poly1305 벡터 #1~#11 (올림·감산 처리 오류를 잡는 벡터 포함)
-// - draft-irtf-cfrg-xchacha-03 §2.2.1(HChaCha20), 부록 A.3.1(AEAD_XCHACHA20_POLY1305)
-// - "Cryptography in NaCl" (cr.yp.to/highspeed/naclcrypto-20090310.pdf) 3·4·8·10장:
-//   Alice·Bob 키, X25519 공유 비밀, HSalsa20 1·2단계 키, 4 MiB XSalsa20 스트림의 SHA-256, 131바이트 패킷의 box
-// - "교차 계산" 표시가 붙은 값은 규격 문서가 아니라 Python hashlib/hmac, Go golang.org/x/crypto의
-//   같은 연산 결과다(블록 경계를 포함한 여러 길이). 입력은 `pattern(_:_:_:)`으로 정해진 바이트열이다.
+// Origins (vectors were downloaded from the originals and transcribed mechanically).
+// - RFC 7693 Appendix B gives BLAKE2s-256("abc").
+// - Official BLAKE2 KAT, testvectors/blake2s-kat.txt at https://github.com/BLAKE2/BLAKE2 (keyed BLAKE2s-256).
+// - RFC 8439 §2.5.2 and Appendix A.3 give Poly1305 vectors #1–#11 (including vectors that catch carry and subtraction errors).
+// - draft-irtf-cfrg-xchacha-03 §2.2.1 (HChaCha20) and Appendix A.3.1 (AEAD_XCHACHA20_POLY1305).
+// - "Cryptography in NaCl" (cr.yp.to/highspeed/naclcrypto-20090310.pdf), chapters 3, 4, 8, and 10
+//   Alice and Bob keys, X25519 shared secret, HSalsa20 stage 1 and 2 keys, SHA-256 of a 4 MiB XSalsa20 stream, and the box for a 131-byte packet.
+// - Values labeled "cross-check" come from running the same operations in Python hashlib/hmac and Go golang.org/x/crypto
+//   at various lengths, including block boundaries, in place of specification vectors. `pattern(_:_:_:)` defines the input bytes.
 
 import CryptoKit
 import Foundation
@@ -18,7 +18,7 @@ import Testing
 
 private func hex(_ s: String) -> [UInt8] {
     let digits = Array(s.filter { !$0.isWhitespace })
-    precondition(digits.count % 2 == 0, "홀수 길이 헥스")
+    precondition(digits.count % 2 == 0, "Odd-length hex")
     return stride(from: 0, to: digits.count, by: 2).map { UInt8(String(digits[$0..<$0 + 2]), radix: 16)! }
 }
 
@@ -30,7 +30,7 @@ private func sha256Hex(_ bytes: [UInt8]) -> String {
     hexString(Array(SHA256.hash(data: bytes)))
 }
 
-/// 교차 계산 입력: i번째 바이트 = (i·mul + add) mod 256.
+/// Generates input for cross-checks, with byte i equal to (i·mul + add) mod 256.
 private func pattern(_ count: Int, _ mul: Int, _ add: Int) -> [UInt8] {
     (0..<count).map { UInt8(truncatingIfNeeded: $0 * mul + add) }
 }
@@ -48,17 +48,17 @@ private func flipped(_ bytes: [UInt8], at index: Int) -> [UInt8] {
     return copy
 }
 
-@Suite("규격 벡터")
+@Suite("Specification vectors")
 struct SpecVectorTests {
     // MARK: BLAKE2s
 
-    @Test("RFC 7693 부록 B: BLAKE2s-256(\"abc\")")
+    @Test("RFC 7693 Appendix B BLAKE2s-256(\"abc\")")
     func blake2sAbc() {
         let expected = hex("508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982")
         #expect(BLAKE2s.hash(Array("abc".utf8)) == expected)
     }
 
-    @Test("BLAKE2 공식 KAT: 키 있는 BLAKE2s-256, 입력 = 00 01 02 ...")
+    @Test("Official BLAKE2 KAT for keyed BLAKE2s-256, input = 00 01 02 ...")
     func blake2sKeyedKAT() {
         let key = hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
         let rows: [(Int, String)] = [
@@ -79,11 +79,11 @@ struct SpecVectorTests {
         ]
         for (length, expected) in rows {
             let input = (0..<length).map { UInt8($0) }
-            #expect(hexString(BLAKE2s.hash(input, key: key)) == expected, "입력 길이 \(length)")
+            #expect(hexString(BLAKE2s.hash(input, key: key)) == expected, "Input length \(length)")
         }
     }
 
-    @Test("BLAKE2s 교차 계산(Python hashlib): 여러 길이, 키 없음 32바이트·키 16바이트 출력 16바이트")
+    @Test("BLAKE2s cross-check (Python hashlib) at several lengths, with 32-byte unkeyed and 16-byte keyed output (16-byte key)")
     func blake2sCross() {
         let key = Array(pattern(32, 7, 3)[0..<16])
         let rows: [(Int, String, String)] = [
@@ -102,12 +102,12 @@ struct SpecVectorTests {
         ]
         for (length, plain, keyed) in rows {
             let data = pattern(length, 13, 1)
-            #expect(hexString(BLAKE2s.hash(data)) == plain, "키 없음, 길이 \(length)")
-            #expect(hexString(BLAKE2s.hash(data, outputByteCount: 16, key: key)) == keyed, "키 있음, 길이 \(length)")
+            #expect(hexString(BLAKE2s.hash(data)) == plain, "Unkeyed, length \(length)")
+            #expect(hexString(BLAKE2s.hash(data, outputByteCount: 16, key: key)) == keyed, "Keyed, length \(length)")
         }
     }
 
-    @Test("BLAKE2s: 쪼갠 update와 한 번에 넣은 결과가 같고, finalize는 상태를 바꾸지 않는다")
+    @Test("BLAKE2s chunked updates match a single update, and finalize preserves state")
     func blake2sIncremental() {
         let data = pattern(200, 13, 1)
         var hasher = BLAKE2s()
@@ -120,9 +120,9 @@ struct SpecVectorTests {
         #expect(hasher.finalize() == BLAKE2s.hash(data))
     }
 
-    // MARK: HMAC, HKDF (규격 문서 벡터가 없어 Python hmac으로 교차 계산)
+    // MARK: HMAC, HKDF (cross-checked with Python hmac because the specifications provide no vectors)
 
-    @Test("HMAC-BLAKE2s 교차 계산(Python hmac): 키 길이 0·1·32·64·65·100")
+    @Test("HMAC-BLAKE2s cross-check (Python hmac) with key lengths 0, 1, 32, 64, 65, and 100")
     func hmacCross() {
         let rows: [(Int, String)] = [
         (0, "4a18206b50f2d6e8c8ca60665a33730fb1300c890f35428a630f823b9b9588e0"),
@@ -134,11 +134,11 @@ struct SpecVectorTests {
         ]
         for (keyLength, expected) in rows {
             let mac = HMACBLAKE2s.authenticationCode(for: Array("swiftail hmac".utf8), key: pattern(keyLength, 9, 4))
-            #expect(hexString(mac) == expected, "키 길이 \(keyLength)")
+            #expect(hexString(mac) == expected, "Key length \(keyLength)")
         }
     }
 
-    @Test("HKDF-BLAKE2s 교차 계산(Python hmac): T1·T2·T3")
+    @Test("HKDF-BLAKE2s cross-check (Python hmac) for T1, T2, and T3")
     func hkdfCross() {
         let key = pattern(32, 17, 2)
         let input = Array("swiftail hkdf input".utf8)
@@ -152,13 +152,13 @@ struct SpecVectorTests {
 
     // MARK: Poly1305
 
-    @Test("RFC 8439 §2.5.2: Poly1305 예제")
+    @Test("RFC 8439 §2.5.2 Poly1305 example")
     func poly1305Section252() {
         let tag = Poly1305.authenticate(Array("Cryptographic Forum Research Group".utf8), key: hex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"))
         #expect(hexString(tag) == "a8061dc1305136c6c22b8baf0c0127a9")
     }
 
-    @Test("RFC 8439 부록 A.3: Poly1305 벡터 #1~#11")
+    @Test("RFC 8439 Appendix A.3 Poly1305 vectors #1–#11")
     func poly1305AppendixA3() {
         let vectors: [PolyVector] = [
         PolyVector(number: 1, key: "0000000000000000000000000000000000000000000000000000000000000000",
@@ -244,18 +244,18 @@ struct SpecVectorTests {
         #expect(vectors.count == 11)
         for v in vectors {
             let tag = Poly1305.authenticate(hex(v.message), key: hex(v.key))
-            #expect(hexString(tag) == v.tag, "A.3 벡터 #\(v.number)")
+            #expect(hexString(tag) == v.tag, "A.3 vector #\(v.number)")
         }
     }
 
-    // 교차 검토(GPT-6.1 Sol)가 Go x/crypto로 만든 벡터. 림이 모두 최댓값인 부분 블록.
-    @Test("Poly1305: 키 ff×32, 메시지 ff×15")
+    // The cross-review (GPT-6.1 Sol) generated this vector with Go x/crypto. The partial block has all limbs at their maximum values.
+    @Test("Poly1305 with key ff×32 and message ff×15")
     func poly1305AllOnes() {
         let tag = Poly1305.authenticate([UInt8](repeating: 0xff, count: 15), key: [UInt8](repeating: 0xff, count: 32))
         #expect(tag == hex("fbff27e6030028e6030028e6030028ee"))
     }
 
-    @Test("태그보다 짧은 암호문(0~15바이트)은 invalidLength")
+    @Test("Ciphertext shorter than the tag (0–15 bytes) yields invalidLength")
     func shortCiphertexts() {
         let key = [UInt8](repeating: 1, count: 32), nonce = [UInt8](repeating: 2, count: 24)
         for count in 0..<16 {
@@ -299,21 +299,21 @@ struct SpecVectorTests {
         #expect(opened == Self.xPlaintext)
     }
 
-    @Test("XChaCha20-Poly1305: 암호문·태그·nonce·AAD·키의 한 비트만 바뀌어도 authenticationFailed")
+    @Test("XChaCha20-Poly1305 yields authenticationFailed if even one bit of the ciphertext, tag, nonce, AAD, or key changes")
     func xchachaTamper() {
         let sealed = Self.xSealed
         for index in [0, 57, sealed.count - 17, sealed.count - 16, sealed.count - 1] {
-            #expect(throws: CryptoError.authenticationFailed, "봉인 바이트 \(index)") {
+            #expect(throws: CryptoError.authenticationFailed, "Sealed byte \(index)") {
                 try XChaCha20Poly1305.open(flipped(sealed, at: index), key: Self.xKey, nonce: Self.xIV, authenticating: Self.xAAD)
             }
         }
         for index in [0, 15, 16, 23] {
-            #expect(throws: CryptoError.authenticationFailed, "nonce 바이트 \(index)") {
+            #expect(throws: CryptoError.authenticationFailed, "Nonce byte \(index)") {
                 try XChaCha20Poly1305.open(sealed, key: Self.xKey, nonce: flipped(Self.xIV, at: index), authenticating: Self.xAAD)
             }
         }
         for index in [0, 11] {
-            #expect(throws: CryptoError.authenticationFailed, "AAD 바이트 \(index)") {
+            #expect(throws: CryptoError.authenticationFailed, "AAD byte \(index)") {
                 try XChaCha20Poly1305.open(sealed, key: Self.xKey, nonce: Self.xIV, authenticating: flipped(Self.xAAD, at: index))
             }
         }
@@ -325,7 +325,7 @@ struct SpecVectorTests {
         }
     }
 
-    @Test("XChaCha20-Poly1305: 길이 오류는 invalidLength")
+    @Test("XChaCha20-Poly1305 length errors yield invalidLength")
     func xchachaLengths() {
         #expect(throws: CryptoError.invalidLength) {
             try XChaCha20Poly1305.seal([UInt8](), key: Array(Self.xKey.dropLast()), nonce: Self.xIV, authenticating: [UInt8]())
@@ -338,7 +338,7 @@ struct SpecVectorTests {
         }
     }
 
-    @Test("XChaCha20-Poly1305 교차 계산(Go x/crypto): 암호문‖태그의 SHA-256")
+    @Test("XChaCha20-Poly1305 cross-check (Go x/crypto) for SHA-256 of ciphertext‖tag")
     func xchachaCross() throws {
         let rows: [(Int, String)] = [
         (0, "56c714edaa03b44e1826e9997fe4aae1fd31169ee3f199d7af4d5d49853dda3a"),
@@ -360,11 +360,11 @@ struct SpecVectorTests {
         for (length, digest) in rows {
             let sealed = try XChaCha20Poly1305.seal(
                 pattern(length, 13, 1), key: pattern(32, 7, 3), nonce: pattern(24, 11, 5), authenticating: pattern(21, 5, 9))
-            #expect(sha256Hex(sealed) == digest, "길이 \(length)")
+            #expect(sha256Hex(sealed) == digest, "Length \(length)")
         }
     }
 
-    // MARK: Salsa20 계열, NaCl
+    // MARK: Salsa20 family and NaCl
 
     private static let aliceSK = hex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
     private static let alicePK = hex("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
@@ -387,9 +387,9 @@ struct SpecVectorTests {
         7973f622a43d14a6599b1f654cb45a74e355a5
         """)
 
-    @Test("NaCl 문서 4·8장: X25519 공유 비밀과 HSalsa20 1단계·2단계 키")
+    @Test("NaCl chapters 4 and 8 cover the X25519 shared secret and HSalsa20 stage 1 and 2 keys")
     func naclKeyDerivation() throws {
-        // CryptoKit X25519가 문서의 공유 비밀을 내는지(입력 키 쌍이 맞는지) 먼저 확인한다.
+        // First check that CryptoKit X25519 yields the documented shared secret (that the input key pairs are correct).
         let priv = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: Self.aliceSK)
         let pub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: Self.bobPK)
         let secret = try priv.sharedSecretFromKeyAgreement(with: pub).withUnsafeBytes { Array($0) }
@@ -401,7 +401,7 @@ struct SpecVectorTests {
         #expect(second == hex("dc908dda0b9344a953629b733820778880f3ceb421bb61b91cbd4c3e66256ce4"))
     }
 
-    @Test("NaCl 문서 8장: Salsa20·XSalsa20 4 MiB 스트림의 SHA-256")
+    @Test("NaCl chapter 8 covers SHA-256 of a 4 MiB Salsa20 or XSalsa20 stream")
     func naclStreamDigest() {
         let count = 4_194_304
         let viaSalsa = Salsa20.keystream(key: hex("dc908dda0b9344a953629b733820778880f3ceb421bb61b91cbd4c3e66256ce4"), nonce: hex("8219e0036b7a0b37"), count: count)
@@ -410,7 +410,7 @@ struct SpecVectorTests {
         #expect(sha256Hex(viaXSalsa) == "662b9d0e3463029156069b12f918691a98f7dfb2ca0393c96bbfc6b1fbd630a2")
     }
 
-    @Test("NaCl 문서 10장: sharedKey, secretbox, box의 131바이트 패킷")
+    @Test("NaCl chapter 10 covers sharedKey, secretbox, and box for a 131-byte packet")
     func naclBoxVector() throws {
         #expect(try NaClBox.sharedKey(privateKey: Self.aliceSK, peerPublicKey: Self.bobPK) == Self.firstKey)
         #expect(try NaClBox.sharedKey(privateKey: Self.bobSK, peerPublicKey: Self.alicePK) == Self.firstKey)
@@ -421,16 +421,16 @@ struct SpecVectorTests {
         #expect(try NaClSecretBox.open(Self.boxed, nonce: Self.nonce, key: Self.firstKey) == Self.packet)
     }
 
-    @Test("NaCl secretbox: 태그·암호문·nonce·키의 한 비트만 바뀌어도 authenticationFailed")
+    @Test("NaCl secretbox yields authenticationFailed if even one bit of the tag, ciphertext, nonce, or key changes")
     func naclTamper() {
         let box = Self.boxed
         for index in [0, 7, 15, 16, 17, 100, box.count - 1] {
-            #expect(throws: CryptoError.authenticationFailed, "상자 바이트 \(index)") {
+            #expect(throws: CryptoError.authenticationFailed, "Box byte \(index)") {
                 try NaClSecretBox.open(flipped(box, at: index), nonce: Self.nonce, key: Self.firstKey)
             }
         }
         for index in [0, 23] {
-            #expect(throws: CryptoError.authenticationFailed, "nonce 바이트 \(index)") {
+            #expect(throws: CryptoError.authenticationFailed, "Nonce byte \(index)") {
                 try NaClSecretBox.open(box, nonce: flipped(Self.nonce, at: index), key: Self.firstKey)
             }
         }
@@ -439,7 +439,7 @@ struct SpecVectorTests {
         }
     }
 
-    @Test("NaCl: 길이 오류는 invalidLength, 저차 점은 invalidKey")
+    @Test("NaCl length errors yield invalidLength and low-order points yield invalidKey")
     func naclErrors() {
         let key = Self.firstKey
         #expect(throws: CryptoError.invalidLength) { try NaClSecretBox.seal([UInt8](), nonce: Self.nonce, key: Array(key.dropLast())) }
@@ -452,7 +452,7 @@ struct SpecVectorTests {
         }
     }
 
-    @Test("NaCl 교차 계산(Go x/crypto): secretbox 출력의 SHA-256과 box.Precompute 결과")
+    @Test("NaCl cross-check (Go x/crypto) for SHA-256 of secretbox output and the box.Precompute result")
     func naclCross() throws {
         let rows: [(Int, String)] = [
         (0, "7ad948af042e44c02b4af78f77236b42e79fae850d68206304f0e839f4792f30"),
@@ -473,7 +473,7 @@ struct SpecVectorTests {
         ]
         for (length, digest) in rows {
             let sealed = try NaClSecretBox.seal(pattern(length, 13, 1), nonce: pattern(24, 11, 5), key: pattern(32, 7, 3))
-            #expect(sha256Hex(sealed) == digest, "길이 \(length)")
+            #expect(sha256Hex(sealed) == digest, "Length \(length)")
             #expect(try NaClSecretBox.open(sealed, nonce: pattern(24, 11, 5), key: pattern(32, 7, 3)) == pattern(length, 13, 1))
         }
         let shared = try NaClBox.sharedKey(privateKey: pattern(32, 3, 1), peerPublicKey: pattern(32, 5, 2))
@@ -482,7 +482,7 @@ struct SpecVectorTests {
 
     // MARK: constantTimeEqual
 
-    @Test("constantTimeEqual: 같은 내용·다른 내용·다른 길이")
+    @Test("constantTimeEqual with equal contents, different contents, and different lengths")
     func constantTimeEqualBasics() {
         #expect(constantTimeEqual([1, 2, 3], [1, 2, 3]))
         #expect(constantTimeEqual([], []))

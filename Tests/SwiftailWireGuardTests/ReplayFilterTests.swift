@@ -1,8 +1,8 @@
-// 계약 시험 3: 재전송 방지 창.
+// Contract test 3 covers the replay protection window.
 //
-// 출처: wireguard-go `replay/replay_test.go`
-// (github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca). 원본은 Linux 커널 구현의 시험을 옮긴 것이다.
-// 34개 고정 사례와 bulk 사례 6개를 순서와 기대값 그대로 옮겼다.
+// Origin is wireguard-go `replay/replay_test.go`
+// (github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca). The original is a port of the Linux kernel implementation's test.
+// The 34 fixed cases and 6 bulk cases preserve their original order and expected results.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
@@ -19,18 +19,18 @@ import Testing
 
 @testable import SwiftailWireGuard
 
-@Suite("재전송 방지 창")
+@Suite("Replay protection window")
 struct ReplayFilterTests {
     private static let rejectAfterMessages: UInt64 = .max - (1 << 13)
     private static let windowSize = ReplayFilter.windowSize
 
-    @Test("상수는 wireguard-go와 같다")
+    @Test("Constants match wireguard-go")
     func constants() {
         #expect(Self.windowSize == 8128)
         #expect(Self.rejectAfterMessages == Constants.rejectAfterMessages)
     }
 
-    @Test("고정 사례 34개")
+    @Test("34 fixed cases")
     func fixedSequence() {
         let limit = Self.windowSize + 1 // T_LIM
         let reject = Self.rejectAfterMessages
@@ -73,11 +73,11 @@ struct ReplayFilterTests {
         var filter = ReplayFilter()
         for (number, testCase) in cases.enumerated() {
             let accepted = filter.accept(testCase.counter, limit: reject)
-            #expect(accepted == testCase.accepted, "사례 \(number + 1): counter \(testCase.counter)")
+            #expect(accepted == testCase.accepted, "Case \(number + 1): counter \(testCase.counter)")
         }
     }
 
-    @Test("bulk 1: 1...창 크기를 차례로, 그다음 0")
+    @Test("bulk 1: 1 through window size in order, then 0")
     func bulk1() {
         var filter = ReplayFilter()
         expectAll(&filter, 1...Self.windowSize)
@@ -85,7 +85,7 @@ struct ReplayFilterTests {
         #expect(!accept(&filter, 0))
     }
 
-    @Test("bulk 2: 2...창+1을 차례로, 그다음 1과 0")
+    @Test("bulk 2: 2 through window+1 in order, then 1 and 0")
     func bulk2() {
         var filter = ReplayFilter()
         expectAll(&filter, 2...(Self.windowSize + 1))
@@ -93,20 +93,20 @@ struct ReplayFilterTests {
         #expect(!accept(&filter, 0))
     }
 
-    @Test("bulk 3: 창+1에서 1까지 거꾸로")
+    @Test("bulk 3: window+1 down to 1")
     func bulk3() {
         var filter = ReplayFilter()
         expectAll(&filter, (1...(Self.windowSize + 1)).reversed())
     }
 
-    @Test("bulk 4: 창+2에서 2까지 거꾸로, 그다음 0")
+    @Test("bulk 4: window+2 down to 2, then 0")
     func bulk4() {
         var filter = ReplayFilter()
         expectAll(&filter, (2...(Self.windowSize + 2)).reversed())
         #expect(!accept(&filter, 0))
     }
 
-    @Test("bulk 5: 창에서 1까지 거꾸로, 창+1, 그다음 0")
+    @Test("bulk 5: window down to 1, window+1, then 0")
     func bulk5() {
         var filter = ReplayFilter()
         expectAll(&filter, (1...Self.windowSize).reversed())
@@ -114,7 +114,7 @@ struct ReplayFilterTests {
         #expect(!accept(&filter, 0))
     }
 
-    @Test("bulk 6: 창에서 1까지 거꾸로, 0, 그다음 창+1")
+    @Test("bulk 6: window down to 1, 0, then window+1")
     func bulk6() {
         var filter = ReplayFilter()
         expectAll(&filter, (1...Self.windowSize).reversed())
@@ -122,14 +122,14 @@ struct ReplayFilterTests {
         #expect(accept(&filter, Self.windowSize + 1))
     }
 
-    /// #expect 안에서는 mutating 호출을 쓸 수 없어 결과만 꺼낸다.
+    /// Extracts the result because #expect cannot use a mutating call.
     private func accept(_ filter: inout ReplayFilter, _ counter: UInt64) -> Bool {
         filter.accept(counter, limit: Self.rejectAfterMessages)
     }
 
-    /// 모든 counter가 받아들여져야 한다. 실패하면 첫 counter만 알린다.
+    /// Requires acceptance of every counter and reports only the first rejected counter on failure.
     private func expectAll(_ filter: inout ReplayFilter, _ counters: some Sequence<UInt64>) {
         let rejected = counters.first { !filter.accept($0, limit: Self.rejectAfterMessages) }
-        #expect(rejected == nil, "거절된 counter: \(String(describing: rejected))")
+        #expect(rejected == nil, "Rejected counter: \(String(describing: rejected))")
     }
 }

@@ -2,9 +2,9 @@ import Testing
 
 import SwiftailBase
 
-@Suite("16진 변환")
+@Suite("Base-16 conversion")
 struct HexTests {
-    @Test("왕복과 소문자 출력")
+    @Test("Round trip and lowercase output")
     func roundTrip() {
         let bytes: [UInt8] = [0x00, 0x01, 0x7f, 0x80, 0xab, 0xff]
         #expect(bytes.hex == "00017f80abff")
@@ -15,7 +15,7 @@ struct HexTests {
         #expect([UInt8](hex: all.hex) == all)
     }
 
-    @Test("홀수 길이나 16진이 아닌 문자는 nil", arguments: ["0", "abc", "0g", "zz", " 0", "0x00", "é0", "-1"])
+    @Test("Odd lengths or characters outside base 16 yield nil", arguments: ["0", "abc", "0g", "zz", " 0", "0x00", "é0", "-1"])
     func invalid(_ text: String) {
         #expect([UInt8](hex: text) == nil)
     }

@@ -1,7 +1,7 @@
-// 계약 시험 3: 피어별 경로 상태 기계. 시각을 직접 넘겨 결정적으로 돈다.
+// Contract test 3 covers the per-peer path state machine. Passing times directly makes the tests deterministic.
 //
-// 기대값은 `docs/protocol-notes/disco-magicsock.md` 4.4~4.8·5절과 그 출처인 Go 구현에서 정했다.
-// 출처: tailscale.com v1.104.6 `wgengine/magicsock/endpoint.go` (`betterAddr`, `heartbeat`, `wantFullPingLocked`,
+// Expected values come from `docs/protocol-notes/disco-magicsock.md` §§4.4–4.8 and §5 and the Go implementation cited there.
+// Origin is tailscale.com v1.104.6 `wgengine/magicsock/endpoint.go` (`betterAddr`, `heartbeat`, `wantFullPingLocked`,
 // `sendDiscoPingsLocked`, `discoPingTimeout`, `handlePongConnLocked`, `handleCallMeMaybe`, `shouldDeleteLocked`).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
@@ -12,9 +12,9 @@ import SwiftailBase
 
 @Suite("PeerPathState")
 struct PeerPathStateTests {
-    // MARK: 후보
+    // MARK: Candidates
 
-    @Test("netmap 후보는 IPv4만, IPv4-mapped는 풀고, 포트 0과 중복은 버린다")
+    @Test("Netmap candidates are IPv4 only, with IPv4-mapped addresses unwrapped and port 0 and duplicates discarded")
     func netmapCandidates() throws {
         let lan = try pathEndpoint("192.168.1.10:41641")
         let mapped = try pathEndpoint("[::ffff:10.0.0.5]:41641")
@@ -29,7 +29,7 @@ struct PeerPathStateTests {
         #expect(state.candidates.map(\.address) == [lan, try pathEndpoint("10.0.0.5:41641")])
     }
 
-    @Test("첫 송신은 DERP로 보내며 모든 후보에 Ping하고 CallMeMaybe를 낸다")
+    @Test("The first send uses DERP, Pings all candidates, and emits CallMeMaybe")
     func firstSendGoesOverDERPAndStartsDiscovery() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         let b = try pathEndpoint("203.0.113.7:41641")
@@ -44,11 +44,11 @@ struct PeerPathStateTests {
         #expect(plan.actions.callMeMaybeCount == 1)
         #expect(state.lastSend == pathT0)
         #expect(state.path(at: pathT0) == .relayed(derpRegion: 7))
-        // heartbeat가 3초 뒤로 걸리고, Ping 기한(5초)보다 이르다.
+        // The heartbeat is scheduled for 3 seconds later, before the Ping deadline (5 seconds).
         #expect(state.nextDeadline == pathTime(3000))
     }
 
-    @Test("홈 DERP가 0이면 CallMeMaybe를 내지 않고, 후보도 없으면 보낼 곳이 없다")
+    @Test("Home DERP 0 suppresses CallMeMaybe, and without candidates there is nowhere to send")
     func zeroHomeDERP() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var random = PathTestRandom(state: 1)
@@ -65,13 +65,13 @@ struct PeerPathStateTests {
         let noRoute = empty.planSend(at: pathT0, using: &random)
         #expect(noRoute == .init(udp: nil, derpRegion: 0, actions: []))
 
-        // 후보가 없으면 Ping을 하나도 보내지 않았으므로 홈 DERP가 있어도 CallMeMaybe가 없다(노트 4.8 1).
+        // With no candidates, there are no Pings and therefore no CallMeMaybe even if there is a home DERP (notes §4.8 1).
         var noCandidates = PeerPathState(homeDERP: 3, endpoints: [])
         let derpOnly = noCandidates.planSend(at: pathT0, using: &random)
         #expect(derpOnly == .init(udp: nil, derpRegion: 3, actions: []))
     }
 
-    @Test("UDP Ping의 출처를 후보로 넣고, 같은 후보의 같은 TxID에는 Pong하지 않는다")
+    @Test("Adds the source of a UDP Ping as a candidate and skips a Pong for the same TxID from the same candidate")
     func pingSourceBecomesCandidate() throws {
         let source = try pathEndpoint("198.51.100.4:50000")
         var state = PeerPathState(homeDERP: 1, endpoints: [])
@@ -83,7 +83,7 @@ struct PeerPathStateTests {
             state.receivePing(first, from: source, at: pathT0),
             state.receivePing(first, from: source, at: pathTime(100)),
             state.receivePing(second, from: source, at: pathTime(200)),
-            // 같은 TxID라도 직전 것이 아니면 다시 답한다(Go는 마지막 TxID 하나만 기억한다).
+            // It replies again if the same TxID was not the one immediately before (Go remembers only the last TxID).
             state.receivePing(first, from: source, at: pathTime(300)),
         ]
         #expect(answers == [true, false, true, true])
@@ -92,7 +92,7 @@ struct PeerPathStateTests {
         #expect(plan.actions.pingDestinations == [source])
     }
 
-    @Test("IPv6·포트 0 출처의 Ping은 후보가 되지 않고 Pong도 하지 않는다")
+    @Test("Pings from IPv6 or port 0 sources create no candidate and get no Pong")
     func unsupportedPingSources() throws {
         var state = PeerPathState(homeDERP: 1, endpoints: [])
         var random = PathTestRandom(state: 1)
@@ -103,13 +103,13 @@ struct PeerPathStateTests {
         #expect(!fromPortZero)
         #expect(state.candidates.isEmpty)
 
-        // IPv4-mapped는 풀어서 넣는다.
+        // Unwrap IPv4-mapped addresses before adding them.
         let fromMapped = state.receivePing(txID, from: try pathEndpoint("[::ffff:10.0.0.1]:41641"), at: pathT0)
         #expect(fromMapped)
         #expect(state.candidates.map(\.address) == [try pathEndpoint("10.0.0.1:41641")])
     }
 
-    @Test("netmap 후보는 Ping을 받아도 netmap 출처로 남아 netmap에서 빠지면 지운다")
+    @Test("A netmap candidate retains its netmap origin after a Ping and is deleted if removed from netmap")
     func netmapCandidateStaysNetmapSourced() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
@@ -120,13 +120,13 @@ struct PeerPathStateTests {
         #expect(state.candidates.isEmpty)
     }
 
-    @Test("Ping으로 배운 후보는 마지막 Ping 뒤 45초를 넘으면 지운다")
+    @Test("Removes a candidate learned from a Ping more than 45 seconds after the last Ping")
     func pingLearnedCandidateExpires() throws {
         let source = try pathEndpoint("198.51.100.4:50000")
         var state = PeerPathState(homeDERP: 1, endpoints: [])
         var random = PathTestRandom(state: 1)
         _ = state.receivePing(TransactionID.random(using: &random), from: source, at: pathT0)
-        // 40초에 다시 받으면 기준이 40초로 옮겨진다.
+        // Receiving another Ping at 40 seconds moves the reference time to 40 seconds.
         _ = state.receivePing(TransactionID.random(using: &random), from: source, at: pathTime(40_000))
 
         var atLimit = state
@@ -138,7 +138,7 @@ struct PeerPathStateTests {
         #expect(afterLimit.candidates.isEmpty)
     }
 
-    @Test("netmap 갱신은 홈 DERP를 바꾸고 빠진 netmap 후보를 지우며 bestAddr도 함께 지운다")
+    @Test("A netmap update changes home DERP, deletes removed netmap candidates, and clears bestAddr as well")
     func netmapUpdateRemovesCandidateAndBestAddr() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         let b = try pathEndpoint("192.168.1.11:41641")
@@ -155,9 +155,9 @@ struct PeerPathStateTests {
         #expect(state.path(at: pathTime(2)) == .relayed(derpRegion: 2))
     }
 
-    // MARK: Pong과 bestAddr
+    // MARK: Pong and bestAddr
 
-    @Test("후보로 보낸 Ping의 UDP Pong이 bestAddr를 세우고 6.5초 동안 UDP로만 보낸다")
+    @Test("A UDP Pong for a Ping to a candidate establishes bestAddr and sends use only UDP for 6.5 seconds")
     func pongEstablishesBestAddr() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
@@ -170,12 +170,12 @@ struct PeerPathStateTests {
         #expect(state.path(at: pathTime(20)) == .direct(a))
         let plan = state.planSend(at: pathTime(1000), using: &random)
         #expect(plan == .init(udp: a, derpRegion: 0, actions: []))
-        // 같은 TxID의 두 번째 Pong은 모르는 것이다.
+        // A second Pong with the same TxID is unrecognized.
         let duplicate = state.receivePong(txID, from: a, at: pathTime(30))
         #expect(!duplicate)
     }
 
-    @Test("bestAddr는 Pong의 출처가 아니라 Ping을 보낸 후보로 정한다")
+    @Test("bestAddr is the candidate the Ping was sent to, independent of the Pong source")
     func bestAddrIsPingDestination() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
@@ -186,7 +186,7 @@ struct PeerPathStateTests {
         #expect(state.path(at: pathTime(5)) == .direct(a))
     }
 
-    @Test("DERP로 온 Pong, 모르는 TxID, 지운 후보로 간 Ping의 Pong은 bestAddr를 세우지 않는다")
+    @Test("A DERP Pong, an unknown TxID, or a Pong for a Ping to a removed candidate leaves bestAddr unset")
     func pongsThatDoNotEstablishPath() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var random = PathTestRandom(state: 1)
@@ -213,7 +213,7 @@ struct PeerPathStateTests {
         #expect(removed.path(at: pathTime(10)) == .relayed(derpRegion: 1))
     }
 
-    @Test("betterAddr: 없는 것보다 낫고, 같은 주소는 낫지 않다")
+    @Test("betterAddr favors an address over none and gives an equal address no preference")
     func betterAddrBasics() throws {
         let a = PeerPathState.AddressQuality(address: try pathEndpoint("203.0.113.1:41641"), latency: .milliseconds(10))
         let sameAddressFaster = PeerPathState.AddressQuality(address: a.address, latency: .milliseconds(1))
@@ -221,7 +221,7 @@ struct PeerPathStateTests {
         #expect(!PeerPathState.isBetter(sameAddressFaster, than: a))
     }
 
-    @Test("betterAddr: loopback +50이 LAN +20을 이기고, link-local +30이 사설을 이긴다")
+    @Test("betterAddr favors loopback +50 over LAN +20 and link-local +30 over private")
     func betterAddrPreferencePoints() throws {
         func quality(_ text: String, _ milliseconds: Int64) throws -> PeerPathState.AddressQuality {
             .init(address: try pathEndpoint(text), latency: .milliseconds(milliseconds))
@@ -232,29 +232,29 @@ struct PeerPathStateTests {
         #expect(!PeerPathState.isBetter(lan, than: loopback))
 
         #expect(PeerPathState.isBetter(try quality("169.254.1.1:41641", 1), than: try quality("10.0.0.1:41641", 1)))
-        // 172.16.0.0/12의 경계: 172.31은 사설, 172.32는 공인.
+        // The boundary of 172.16.0.0/12. 172.31 is private and 172.32 is public.
         #expect(PeerPathState.isBetter(try quality("172.31.0.1:41641", 1), than: try quality("172.32.0.1:41641", 1)))
         #expect(!PeerPathState.isBetter(try quality("172.32.0.1:41641", 1), than: try quality("172.16.0.1:41641", 1)))
-        // 지연이 크게 다르면 종류 점수를 넘는다: LAN 10 ms 대 loopback 1 ms는 20점 대 90 + 50점.
+        // A large latency difference outweighs address type points. LAN at 10 ms versus loopback at 1 ms scores 20 versus 90 + 50 points.
         #expect(!PeerPathState.isBetter(try quality("192.168.1.10:41641", 10), than: loopback))
     }
 
-    @Test("betterAddr: 지연 비율 점수와 1점 규칙")
+    @Test("betterAddr latency ratio score and 1-point rule")
     func betterAddrLatencyPoints() throws {
         func quality(_ text: String, _ milliseconds: Int64) throws -> PeerPathState.AddressQuality {
             .init(address: try pathEndpoint(text), latency: .milliseconds(milliseconds))
         }
-        // 10 ms 대 20 ms: 빠른 쪽이 100 − 1000/20 = 50점.
+        // 10 ms versus 20 ms. The faster address scores 100 − 1000/20 = 50 points.
         #expect(PeerPathState.isBetter(try quality("203.0.113.1:1", 10), than: try quality("198.51.100.1:1", 20)))
         #expect(!PeerPathState.isBetter(try quality("203.0.113.1:1", 20), than: try quality("198.51.100.1:1", 10)))
-        // 99 ms 대 100 ms: 1점이면 바꾸지 않는다. 98 ms는 2점이라 바꾼다.
+        // 99 ms versus 100 ms. A 1-point advantage keeps the address. 98 ms gives 2 points and switches it.
         #expect(!PeerPathState.isBetter(try quality("203.0.113.1:1", 99), than: try quality("198.51.100.1:1", 100)))
         #expect(PeerPathState.isBetter(try quality("203.0.113.1:1", 98), than: try quality("198.51.100.1:1", 100)))
-        // 지연이 모두 0인 공인 주소끼리는 바꾸지 않는다.
+        // Public addresses with all latencies at 0 do not trigger a switch.
         #expect(!PeerPathState.isBetter(try quality("203.0.113.1:1", 0), than: try quality("198.51.100.1:1", 0)))
     }
 
-    @Test("같은 기계의 loopback과 LAN 엔드포인트가 함께 오면 loopback이 bestAddr가 된다(노트 4.7 계산)")
+    @Test("When both loopback and LAN endpoints arrive from the same machine, loopback becomes bestAddr (calculation in notes §4.7)")
     func loopbackWinsOverLAN() throws {
         let lan = try pathEndpoint("192.168.1.10:41641")
         let loopback = try pathEndpoint("127.0.0.1:41641")
@@ -267,7 +267,7 @@ struct PeerPathStateTests {
         #expect(state.path(at: pathTime(1)) == .direct(loopback))
     }
 
-    @Test("신뢰 중에는 더 나쁜 주소로 바꾸지 않고, 신뢰가 지나면 Pong이 온 주소로 바꾼다")
+    @Test("Trust prevents switching to a worse address. After trust expires, a Pong can switch the address")
     func replacementRules() throws {
         let loopback = try pathEndpoint("127.0.0.1:41641")
         let publicAddress = try pathEndpoint("203.0.113.7:41641")
@@ -278,25 +278,25 @@ struct PeerPathStateTests {
         _ = state.receivePong(try first.txID(to: loopback), from: loopback, at: pathTime(1))
         _ = state.receivePong(try first.txID(to: publicAddress), from: publicAddress, at: pathTime(2))
         #expect(state.path(at: pathTime(2)) == .direct(loopback))
-        // 더 나쁜 주소의 Pong은 신뢰를 늘리지 않는다: loopback Pong(1 ms) + 6.5초.
+        // A Pong from a worse address does not extend trust. It lasts through loopback Pong (1 ms) + 6.5 seconds.
         #expect(state.trustedUntil == pathTime(6501))
 
-        // 7초: 신뢰가 지나 UDP + DERP로 보내며 두 후보에 다시 Ping한다.
+        // At 7 seconds, trust has expired. Send over UDP + DERP and Ping both candidates again.
         let retry = state.planSend(at: pathTime(7000), using: &random)
         #expect(retry.udp == loopback)
         #expect(retry.derpRegion == 1)
         #expect(retry.actions.pingDestinations == [loopback, publicAddress])
-        // 신뢰가 지났으므로 먼저 온 공인 주소의 Pong이 bestAddr가 된다.
+        // Trust has expired, so the first Pong, from the public address, makes that address bestAddr.
         _ = state.receivePong(try retry.actions.txID(to: publicAddress), from: publicAddress, at: pathTime(7001))
         #expect(state.path(at: pathTime(7001)) == .direct(publicAddress))
-        // 같은 지연의 loopback은 50점 더 나아 다시 바꾼다.
+        // With the same latency, loopback scores 50 points higher, so switch back.
         _ = state.receivePong(try retry.actions.txID(to: loopback), from: loopback, at: pathTime(7001))
         #expect(state.path(at: pathTime(7001)) == .direct(loopback))
     }
 
-    // MARK: 신뢰 기간
+    // MARK: Trust period
 
-    @Test("신뢰는 마지막 Pong + 6.5초와 같은 시각까지다")
+    @Test("Trust includes the exact time of the last Pong + 6.5 seconds")
     func trustBoundary() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
@@ -312,7 +312,7 @@ struct PeerPathStateTests {
         let atUntilPlan = atUntil.planSend(at: until, using: &random)
         #expect(atUntilPlan == .init(udp: a, derpRegion: 0, actions: []))
 
-        // 신뢰가 지나면 bestAddr와 DERP로 함께 보내고, 5초가 지난 후보에 다시 Ping한다.
+        // Once trust expires, send to both bestAddr and DERP and Ping candidates whose 5 seconds have elapsed.
         var afterUntil = state
         let plan = afterUntil.planSend(at: until + .nanoseconds(1), using: &random)
         #expect(plan.udp == a)
@@ -321,12 +321,12 @@ struct PeerPathStateTests {
         #expect(plan.actions.last == .callMeMaybe)
     }
 
-    @Test("신뢰 만료는 기한이다: 만료 1나노초 뒤의 advance에서 경로가 DERP로 바뀐다")
+    @Test("Trust expiration is a deadline. advance 1 nanosecond after expiration switches the path to DERP")
     func trustExpiryIsADeadline() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
         var random = PathTestRandom(state: 1)
-        // CallMeMaybe로 Ping을 내면 송신 기록과 heartbeat가 없어 기한이 Ping과 신뢰뿐이다.
+        // When CallMeMaybe emits a Ping, there is no send history or heartbeat, so the only deadlines are Ping and trust.
         let txID = try state.receiveCallMeMaybe([], at: pathT0, using: &random).txID(to: a)
         _ = state.receivePong(txID, from: a, at: pathTime(10))
         let expiry = pathTime(6510) + .nanoseconds(1)
@@ -336,13 +336,13 @@ struct PeerPathStateTests {
         #expect(actions.isEmpty)
         #expect(state.path(at: expiry) == .relayed(derpRegion: 1))
         #expect(state.nextDeadline == nil)
-        // bestAddr는 남아 UDP로도 함께 보낸다.
+        // bestAddr remains, so it still sends over UDP as well.
         #expect(state.bestAddr?.address == a)
     }
 
-    // MARK: Ping 간격과 기한
+    // MARK: Ping interval and deadline
 
-    @Test("같은 후보에는 5초 안에 다시 Ping하지 않고, 받은 CallMeMaybe가 그 제한을 푼다")
+    @Test("A candidate is not Pinged again within 5 seconds unless an incoming CallMeMaybe lifts the limit")
     func perCandidatePingInterval() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
@@ -350,7 +350,7 @@ struct PeerPathStateTests {
         _ = state.planSend(at: pathT0, using: &random)
 
         var soon = state
-        // 보낸 Ping이 없으므로 CallMeMaybe도 없다.
+        // No Ping went out, so there is no CallMeMaybe either.
         let soonPlan = soon.planSend(at: pathTime(4999), using: &random)
         #expect(soonPlan.actions.isEmpty)
 
@@ -363,11 +363,11 @@ struct PeerPathStateTests {
         var called = state
         let callActions = called.receiveCallMeMaybe([c], at: pathTime(1000), using: &random)
         #expect(callActions.pingDestinations == [a, c])
-        // 받은 CallMeMaybe의 전체 Ping은 CallMeMaybe를 되보내지 않는다.
+        // The full Ping sweep triggered by an incoming CallMeMaybe sends no CallMeMaybe back.
         #expect(callActions.callMeMaybeCount == 0)
     }
 
-    @Test("Ping 기한은 5초다: 직전까지는 Pong을 받고, 그 시각에 지운다")
+    @Test("The Ping deadline is 5 seconds. Accepts a Pong up to just before it and clears the Ping at that instant")
     func pingTimeoutBoundary() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
@@ -390,28 +390,28 @@ struct PeerPathStateTests {
         #expect(advanced.nextDeadline == nil)
     }
 
-    @Test("기한이 지난 bestAddr Ping은 신뢰가 남았으면 bestAddr를 지키고, 신뢰가 지났으면 지운다")
+    @Test("An expired bestAddr Ping leaves bestAddr in place if still trusted and clears it if trust has expired")
     func pingTimeoutAndBestAddr() throws {
         let a = try pathEndpoint("127.0.0.1:41641")
         var harness = PathHarness(PeerPathState(homeDERP: 1, endpoints: [a]))
         harness.responders = [a: .milliseconds(1)]
         harness.send()
-        // 첫 Pong(1 ms) → 신뢰 6.501초. 3초 heartbeat의 Ping과 Pong으로 이어진다.
+        // The first Pong (1 ms) sets trust through 6.501 seconds. The 3-second heartbeat Ping and Pong extend it.
         harness.run(until: pathTime(3500))
         #expect(harness.state.trustedUntil == pathTime(9501))
 
-        // 6초 heartbeat의 Ping은 잃고, 9초 heartbeat의 Pong은 받는다.
+        // Drop the Ping for the 6-second heartbeat and receive the Pong for the 9-second heartbeat.
         harness.responders = [:]
         harness.run(until: pathTime(8000))
         harness.responders = [a: .milliseconds(1)]
         harness.run(until: pathTime(9500))
         #expect(harness.state.trustedUntil == pathTime(15_501))
-        // 6초 Ping의 기한(11초)에는 신뢰가 남아 bestAddr를 지킨다.
+        // At the 6-second Ping's deadline (11 seconds), trust remains and bestAddr stays in place.
         harness.run(until: pathTime(11_000))
         #expect(harness.state.sentPings.isEmpty)
         #expect(harness.state.path(at: pathTime(11_000)) == .direct(a))
 
-        // 12초부터 모두 잃는다. 신뢰는 15.501초에 지나고, 12초 Ping의 기한(17초)에 bestAddr를 지운다.
+        // Drop all from 12 seconds on. Trust expires at 15.501 seconds, and the 12-second Ping's deadline (17 seconds) clears bestAddr.
         harness.responders = [:]
         harness.run(until: pathTime(16_999))
         #expect(harness.state.path(at: pathTime(16_999)) == .relayed(derpRegion: 1))
@@ -420,21 +420,21 @@ struct PeerPathStateTests {
         #expect(harness.state.bestAddr == nil)
     }
 
-    // MARK: heartbeat와 전체 Ping
+    // MARK: Heartbeat and full Ping sweeps
 
-    @Test("heartbeat는 3초마다 돌고, 마지막 송신 뒤 45초가 넘으면 멈추며 다음 송신이 다시 건다")
+    @Test("Heartbeat runs every 3 seconds, stops more than 45 seconds after the last send, and restarts on the next send")
     func heartbeatStopsWhenIdle() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var harness = PathHarness(PeerPathState(homeDERP: 1, endpoints: [a]))
         harness.send()
         harness.run(until: pathTime(45_000))
-        // 45초 heartbeat는 아직 돈다(45초를 "넘으면" 멈춘다).
+        // The 45-second heartbeat still runs (it stops after "more than" 45 seconds).
         #expect(harness.state.heartbeatDeadline == pathTime(48_000))
         harness.run(until: pathTime(60_000))
         #expect(harness.state.heartbeatDeadline == nil)
         #expect(harness.state.nextDeadline == nil)
 
-        // 답이 없는 후보에는 5초 제한 때문에 6초마다 Ping하고 그때마다 CallMeMaybe를 낸다.
+        // The 5-second limit causes Pings to an unresponsive candidate every 6 seconds, each with a CallMeMaybe.
         let expected = [0, 6, 12, 18, 24, 30, 36, 42].map { pathTime(Int64($0) * 1000) }
         #expect(harness.pingTimes(to: a) == expected)
         #expect(harness.actions.filter { $0.action == .callMeMaybe }.map(\.time) == expected)
@@ -444,7 +444,7 @@ struct PeerPathStateTests {
         #expect(harness.state.heartbeatDeadline == pathTime(63_000))
     }
 
-    @Test("지연이 5 ms 이하인 신뢰된 직접 경로에서는 전체 Ping을 하지 않는다")
+    @Test("A trusted direct path with latency of 5 ms or less skips full Ping sweeps")
     func noFullPingWhenGoodEnough() throws {
         let loopback = try pathEndpoint("127.0.0.1:41641")
         let lan = try pathEndpoint("192.168.1.10:41641")
@@ -455,12 +455,12 @@ struct PeerPathStateTests {
         harness.run(until: pathTime(130_000))
 
         #expect(harness.pingTimes(to: lan) == [pathT0])
-        // heartbeat는 3초마다 bestAddr에 Ping한다.
+        // Heartbeat Pings bestAddr every 3 seconds.
         #expect(harness.pingTimes(to: loopback).count == 1 + 43)
         #expect(harness.state.path(at: pathTime(130_000)) == .direct(loopback))
     }
 
-    @Test("지연이 5 ms보다 큰 직접 경로에서는 마지막 전체 Ping 뒤 1분마다 전체 Ping을 한다")
+    @Test("A direct path with more than 5 ms latency runs a full Ping sweep at 1-minute intervals after the last full sweep")
     func upgradeFullPingEveryMinute() throws {
         let a = try pathEndpoint("203.0.113.10:41641")
         let b = try pathEndpoint("198.51.100.20:41641")
@@ -474,7 +474,7 @@ struct PeerPathStateTests {
         #expect(harness.state.path(at: pathTime(130_000)) == .direct(a))
     }
 
-    @Test("직접 경로를 막으면 신뢰가 지나 UDP + DERP로, 기한 뒤 DERP로만 보내고, 풀면 직접으로 돌아온다")
+    @Test("Blocking the direct path causes sends over UDP + DERP after trust expires, then DERP only after the deadline. Unblocking restores direct")
     func blockAndUnblock() throws {
         let a = try pathEndpoint("127.0.0.1:41641")
         var harness = PathHarness(PeerPathState(homeDERP: 1, endpoints: [a]))
@@ -482,7 +482,7 @@ struct PeerPathStateTests {
         harness.send()
         harness.sendRepeatedly(every: .seconds(1))
         harness.run(until: pathTime(30_500))
-        // 30초 heartbeat의 Pong(30.001초) + 6.5초.
+        // The 30-second heartbeat's Pong (30.001 seconds) + 6.5 seconds.
         #expect(harness.state.trustedUntil == pathTime(36_501))
 
         harness.responders = [:]
@@ -492,14 +492,14 @@ struct PeerPathStateTests {
         #expect(harness.state.path(at: pathTime(36_501) + .nanoseconds(1)) == .relayed(derpRegion: 1))
 
         harness.run(until: pathTime(40_500))
-        // 37초: bestAddr와 DERP로 함께. 36초에 Ping한 후보는 5초 제한으로 건너뛴다.
+        // At 37 seconds, use both bestAddr and DERP. Skip candidates Pinged at 36 seconds due to the 5-second limit.
         #expect(try harness.plan(at: pathTime(37_000)) == .init(udp: a, derpRegion: 1, actions: []))
-        // 38초: 33초 heartbeat Ping의 기한이 신뢰가 지난 뒤라 bestAddr를 지웠다. DERP로만 보낸다.
+        // At 38 seconds, the 33-second heartbeat Ping's deadline has cleared bestAddr because trust expired. Send only over DERP.
         #expect(try harness.plan(at: pathTime(38_000)) == .init(udp: nil, derpRegion: 1, actions: []))
 
         harness.responders = [a: .milliseconds(1)]
         harness.run(until: pathTime(41_000))
-        // 41초 송신: 마지막 Ping(36초) 뒤 5초가 지나 다시 Ping하고 CallMeMaybe를 낸다.
+        // On the send at 41 seconds, 5 seconds have passed since the last Ping (36 seconds), so Ping again and emit CallMeMaybe.
         let retry = try harness.plan(at: pathTime(41_000))
         #expect(retry.actions.pingDestinations == [a])
         #expect(retry.actions.last == .callMeMaybe)
@@ -510,7 +510,7 @@ struct PeerPathStateTests {
 
     // MARK: CallMeMaybe
 
-    @Test("받은 CallMeMaybe는 주소를 후보로 넣고, 다음 CallMeMaybe에서 빠진 주소는 출처와 무관하게 지운다")
+    @Test("An incoming CallMeMaybe adds addresses as candidates. Addresses omitted from the next CallMeMaybe are removed regardless of source")
     func callMeMaybeReplacesPreviousAddresses() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         let c = try pathEndpoint("198.51.100.8:41641")
@@ -526,19 +526,19 @@ struct PeerPathStateTests {
         _ = state.receivePong(try first.txID(to: c), from: c, at: pathTime(1))
         #expect(state.path(at: pathTime(1)) == .direct(c))
 
-        // netmap 출처이기도 한 a도, bestAddr인 c도 지운다.
+        // Removes both a, which also came from netmap, and c, which is bestAddr.
         _ = state.receiveCallMeMaybe([d], at: pathTime(1000), using: &random)
         #expect(state.candidates.map(\.address) == [d])
         #expect(state.bestAddr == nil)
 
-        // CallMeMaybe 후보는 netmap에서 빠져도, 45초가 지나도 남는다.
+        // CallMeMaybe candidates persist even if removed from netmap and after 45 seconds.
         state.update(homeDERP: 1, endpoints: [a], at: pathTime(100_000))
         #expect(state.candidates.map(\.address) == [d, a])
     }
 
-    // MARK: disco 키 변경
+    // MARK: Disco key changes
 
-    @Test("disco 키가 바뀌면 신뢰와 기다리던 Ping을 버리고 bestAddr 주소는 남겨 곧바로 다시 찾는다")
+    @Test("A disco key change clears trust and pending Pings and retains the bestAddr address for immediate rediscovery")
     func resetForNewDiscoKey() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [a])
@@ -555,13 +555,13 @@ struct PeerPathStateTests {
         let acceptedOldPong = state.receivePong(pendingPing, from: a, at: pathTime(3002))
         #expect(!acceptedOldPong)
 
-        // 송신이 없으면 다음 heartbeat에서 멈춘다.
+        // If there are no sends, the next heartbeat stops.
         var idle = state
         let idleActions = idle.advance(to: pathTime(6000), using: &random)
         #expect(idleActions.isEmpty)
         #expect(idle.heartbeatDeadline == nil)
 
-        // 다음 송신은 UDP + DERP로 보내고, 3초 전에 Ping한 후보에도 곧바로 다시 Ping한다.
+        // The next send uses UDP + DERP and immediately Pings even candidates that were Pinged 3 seconds ago.
         let plan = state.planSend(at: pathTime(3100), using: &random)
         #expect(plan.udp == a)
         #expect(plan.derpRegion == 1)
@@ -569,9 +569,9 @@ struct PeerPathStateTests {
         #expect(plan.actions.last == .callMeMaybe)
     }
 
-    // MARK: 한도
+    // MARK: Limits
 
-    @Test("후보는 128개를 넘지 않고, 받은 Ping이 넘쳐도 있는 bestAddr를 밀어내지 않는다")
+    @Test("Candidates are capped at 128, and excess incoming Pings do not evict an existing bestAddr")
     func candidateLimitKeepsBestAddr() throws {
         let a = try pathEndpoint("192.168.1.10:41641")
         let late = try pathEndpoint("192.168.1.11:41641")
@@ -584,15 +584,15 @@ struct PeerPathStateTests {
             let source = IPEndpoint(
                 address: try #require(IPAddress(bytes: [10, 1, UInt8(index / 256), UInt8(index % 256)])),
                 port: 41641)
-            // 넣지 못해도 Pong은 한다.
+            // Still send a Pong if the candidate cannot be added.
             let answered = state.receivePing(TransactionID.random(using: &random), from: source, at: pathTime(2))
             #expect(answered)
         }
         #expect(state.candidates.count == PeerPathState.maxCandidates)
         #expect(state.path(at: pathTime(2)) == .direct(a))
 
-        // 가득 찬 표에 새 netmap 후보가 오면 Ping으로만 배운 후보 하나를 밀어내고 들어간다. Ping으로 배운 후보는 45초를
-        // 넘기면 지워진다.
+        // When a new netmap candidate arrives and the table is full, it displaces a candidate learned only from a Ping. Once Ping-learned candidates exceed 45 seconds of age,
+        // they are removed.
         state.update(homeDERP: 1, endpoints: [a, late], at: pathTime(3))
         #expect(state.candidates.contains { $0.address == late })
         #expect(state.candidates.count == PeerPathState.maxCandidates)
@@ -601,17 +601,17 @@ struct PeerPathStateTests {
         #expect(state.candidates.map(\.address) == [a, late])
     }
 
-    /// 10.1.x.y:41641. 캡처한 Ping을 다시 보내는 출처로 쓴다.
+    /// 10.1.x.y:41641. Used as a source when replaying captured Pings.
     private func replaySource(_ index: Int) throws -> IPEndpoint {
         IPEndpoint(
             address: try #require(IPAddress(bytes: [10, 1, UInt8(index / 256), UInt8(index % 256)])), port: 41641)
     }
 
-    @Test("캡처한 Ping 128개를 서로 다른 주소에서 넣어 표가 가득 차도, 새 Ping이 온 주소는 가장 오래된 것을 밀어내고 후보가 된다")
+    @Test("Even if 128 captured Pings from different addresses fill the table, the source of a new Ping becomes a candidate and evicts the oldest one")
     func fullTableAdmitsNewPingSource() throws {
         var state = PeerPathState(homeDERP: 1, endpoints: [])
         var random = PathTestRandom(state: 1)
-        // 같은 Ping 하나를 되풀이하는 것으로는 후보가 하나만 생긴다(`knownPingFromNewSourceIsNotCandidate`).
+        // Repeating one Ping creates only one candidate (`knownPingFromNewSourceIsNotCandidate`).
         for index in 0..<PeerPathState.maxCandidates {
             let captured = TransactionID.random(using: &random)
             #expect(state.receivePing(captured, from: try replaySource(index), at: pathTime(Int64(index))) == true)
@@ -622,19 +622,19 @@ struct PeerPathStateTests {
         #expect(state.receivePing(TransactionID.random(using: &random), from: real, at: pathTime(1_000)) == true)
         #expect(state.candidates.contains { $0.address == real })
         #expect(state.candidates.count == PeerPathState.maxCandidates)
-        // 밀려난 것은 Ping을 받은 지 가장 오래된 후보 하나다.
+        // The evicted candidate is the one whose last Ping was received longest ago.
         #expect(!state.candidates.contains { $0.address == (try? replaySource(0)) })
         #expect(state.candidates.contains { $0.address == (try? replaySource(1)) })
     }
 
-    @Test("가득 찬 표에서 netmap·CallMeMaybe 후보와 bestAddr는 밀려나지 않는다. 밀어낼 것이 없으면 새 후보를 넣지 않는다")
+    @Test("A full table never evicts netmap or CallMeMaybe candidates or bestAddr. With no candidate to evict, the new candidate is omitted")
     func fullTableKeepsTrustedSources() throws {
         let fromNetmap = try pathEndpoint("192.168.1.10:41641")
         let called = try pathEndpoint("192.168.1.11:41641")
         let best = try pathEndpoint("192.168.1.12:41641")
         var state = PeerPathState(homeDERP: 1, endpoints: [fromNetmap])
         var random = PathTestRandom(state: 1)
-        // `best`는 Ping으로 배운 뒤 Pong이 확인한 주소다. 가장 먼저 배웠으므로 Ping을 받은 지 가장 오래됐다.
+        // `best` was learned from a Ping and confirmed by a Pong. It was learned first, so its Ping was received longest ago.
         #expect(state.receivePing(TransactionID.random(using: &random), from: best, at: pathT0) == true)
         let actions = state.receiveCallMeMaybe([called], at: pathTime(1), using: &random)
         #expect(state.receivePong(try actions.txID(to: best), from: best, at: pathTime(2)) == true)
@@ -647,7 +647,7 @@ struct PeerPathStateTests {
         #expect(Array(state.candidates.map(\.address).prefix(3)) == [fromNetmap, best, called])
         #expect(state.path(at: pathTime(3)) == .direct(best))
 
-        // 표가 netmap 후보로만 가득이면 밀어낼 것이 없다. Ping에는 답하되 후보로 넣지 않는다.
+        // If the table is filled with netmap candidates only, nothing can be evicted. Reply to the Ping without adding a candidate.
         var endpoints: [IPEndpoint] = []
         for index in 0..<PeerPathState.maxCandidates {
             endpoints.append(IPEndpoint(
@@ -659,7 +659,7 @@ struct PeerPathStateTests {
         #expect(pinned.candidates.map(\.address) == endpoints)
     }
 
-    @Test("같은 TxID의 재전송은 Ping으로 배운 후보의 수명(45초)을 늘리지 않는다. 새 TxID의 Ping은 늘린다")
+    @Test("Replaying the same TxID leaves a Ping-learned candidate's lifetime (45 seconds) unchanged. A Ping with a new TxID extends it")
     func duplicatePingDoesNotExtendLifetime() throws {
         let source = try pathEndpoint("203.0.113.7:41641")
         var random = PathTestRandom(state: 1)
@@ -682,7 +682,7 @@ struct PeerPathStateTests {
         #expect(refreshed.candidates.isEmpty)
     }
 
-    @Test("이미 본 두 TxID를 번갈아 넣어도 후보의 수명(45초)은 늘지 않는다")
+    @Test("Alternating two previously seen TxIDs leaves the candidate's lifetime (45 seconds) unchanged")
     func alternatingKnownPingsDoNotExtendLifetime() throws {
         let source = try pathEndpoint("203.0.113.7:41641")
         var random = PathTestRandom(state: 1)
@@ -691,18 +691,18 @@ struct PeerPathStateTests {
         var state = PeerPathState(homeDERP: 1, endpoints: [])
         #expect(state.receivePing(first, from: source, at: pathT0) == true)
         #expect(state.receivePing(second, from: source, at: pathTime(1_000)) == true)
-        // 두 Ping을 10초마다 번갈아 다시 넣는다. 직전 TxID와는 늘 다르다.
+        // Replay the two Pings in alternating order every 10 seconds. Each TxID differs from the immediately preceding one.
         for (round, txID) in [first, second, first, second].enumerated() {
             _ = state.receivePing(txID, from: source, at: pathTime(Int64(round + 1) * 10_000))
         }
-        // 새 TxID를 마지막으로 받은 것은 1초다.
+        // The last new TxID arrived at 1 second.
         state.update(homeDERP: 1, endpoints: [], at: pathTime(46_000))
         #expect(state.candidates.map(\.address) == [source])
         state.update(homeDERP: 1, endpoints: [], at: pathTime(46_000) + .nanoseconds(1))
         #expect(state.candidates.isEmpty)
     }
 
-    @Test("이미 본 TxID를 다른 출처에서 넣어도 후보가 생기지 않는다. disco 키가 바뀌면 본 TxID를 잊는다")
+    @Test("Replaying a seen TxID from another source creates no candidate. Changing the disco key clears seen TxIDs")
     func knownPingFromNewSourceIsNotCandidate() throws {
         let source = try pathEndpoint("203.0.113.7:41641")
         let elsewhere = try pathEndpoint("198.51.100.4:50000")
@@ -713,11 +713,11 @@ struct PeerPathStateTests {
         _ = state.receivePing(seen, from: elsewhere, at: pathTime(1_000))
         #expect(state.candidates.map(\.address) == [source])
 
-        // 새 TxID는 어느 출처에서든 전과 같이 후보가 된다.
+        // A new TxID from any source still creates a candidate as before.
         #expect(state.receivePing(TransactionID.random(using: &random), from: elsewhere, at: pathTime(2_000)) == true)
         #expect(state.candidates.map(\.address) == [source, elsewhere])
 
-        // 새 disco 키의 Ping은 옛 키로 본 TxID와 견주지 않는다.
+        // A Ping under the new disco key is never compared with TxIDs seen under the old key.
         var rekeyed = PeerPathState(homeDERP: 1, endpoints: [])
         #expect(rekeyed.receivePing(seen, from: source, at: pathT0) == true)
         rekeyed.resetForNewDiscoKey()
@@ -725,7 +725,7 @@ struct PeerPathStateTests {
         #expect(rekeyed.candidates.map(\.address) == [source, elsewhere])
     }
 
-    @Test("본 TxID는 32개까지 기억한다. 그보다 많은 Ping이 지나가면 가장 먼저 본 것을 잊는다")
+    @Test("Remembers up to 32 seen TxIDs and forgets the earliest seen once more Pings have passed through")
     func knownPingRingIsBounded() throws {
         let source = try pathEndpoint("203.0.113.7:41641")
         let elsewhere = try pathEndpoint("198.51.100.4:50000")
@@ -745,7 +745,7 @@ struct PeerPathStateTests {
         #expect(state.candidates.map(\.address) == [source, elsewhere])
     }
 
-    @Test("CallMeMaybe와 netmap의 주소는 앞에서부터 128개까지만 넣는다")
+    @Test("Adds only the first 128 CallMeMaybe and netmap addresses")
     func candidateLimitKeepsLeadingAddresses() throws {
         var addresses: [IPEndpoint] = []
         for index in 0..<300 {
@@ -763,7 +763,7 @@ struct PeerPathStateTests {
         #expect(fromNetmap.candidates.map(\.address) == Array(addresses.prefix(PeerPathState.maxCandidates)))
     }
 
-    @Test("기다리는 Ping은 128개를 넘지 않고, 기한이 표를 비우면 다시 보낸다")
+    @Test("Caps pending Pings at 128 and sends again once deadlines clear the table")
     func sentPingLimit() throws {
         var addresses: [IPEndpoint] = []
         for index in 0..<PeerPathState.maxCandidates {
@@ -785,9 +785,9 @@ struct PeerPathStateTests {
         #expect(afterTimeout.count == PeerPathState.maxSentPings)
     }
 
-    // MARK: 임의 입력열
+    // MARK: Arbitrary input sequences
 
-    @Test("임의 입력열(시각 역행, 중복·모르는 TxID, 포트 0, IPv6 포함)로 죽지 않고 불변식을 지키며 결정적이다")
+    @Test("Arbitrary sequences (including backward time, duplicate and unknown TxIDs, port 0, and IPv6) do not crash, preserve invariants, and are deterministic")
     func randomInputSequences() throws {
         let first = try runRandomSequence(seed: 0x5EED)
         let second = try runRandomSequence(seed: 0x5EED)
@@ -795,7 +795,7 @@ struct PeerPathStateTests {
         #expect(first != (try runRandomSequence(seed: 0x5EED + 1)))
     }
 
-    /// 고정 시드로 5,000단계를 돌려 낸 것을 모두 적는다. 단계마다 불변식을 확인한다.
+    /// Runs 5,000 steps with a fixed seed and records all outputs. Checks invariants at each step.
     private func runRandomSequence(seed: UInt64) throws -> [String] {
         var random = PathTestRandom(state: seed)
         var pool: [IPEndpoint] = try [

@@ -4,21 +4,21 @@ import Testing
 import SwiftailBase
 @testable import SwiftailMagicsock
 
-// TSMP disco 키 광고를 받았을 때의 활성 키 판정(계약 "TSMP disco 키 광고" 동작 T3~T5).
-// 기대값은 tailscale.com v1.104.7 `wgengine/magicsock/endpoint.go`(`updateDiscoKey`, `updateTSMPDiscoKey`,
-// `checkAndUpdateDiscoKey`)와 `magicsock.go`(`HandleDiscoKeyAdvertisement`, BSD-3-Clause)에서 정했다.
+// Active key selection on receipt of a TSMP disco key advertisement (the "TSMP disco key advertisement" contract, behaviors T3–T5).
+// Expected values come from tailscale.com v1.104.7 `wgengine/magicsock/endpoint.go` (`updateDiscoKey`, `updateTSMPDiscoKey`,
+// `checkAndUpdateDiscoKey`) and `magicsock.go` (`HandleDiscoKeyAdvertisement`, BSD-3-Clause).
 
 private func discoKey(_ byte: UInt8) -> DiscoPublicKey {
     DiscoPublicKey(rawValue: [UInt8](repeating: byte, count: 32))!
 }
 
-@Suite("PeerDiscoKeys 활성 키 판정표")
+@Suite("PeerDiscoKeys active key decision table")
 struct PeerDiscoKeysTests {
     let control = discoKey(0xC1)
     let newer = discoKey(0xC2)
     let tsmp = discoKey(0x71)
 
-    @Test("netmap 키만 있으면 그것이 활성이고, 같은 키가 다시 오면 바뀌지 않는다")
+    @Test("If only the netmap key is present, it is active, and seeing it again leaves it unchanged")
     func netmapOnly() {
         var keys = PeerDiscoKeys()
         #expect(keys.active == nil)
@@ -34,7 +34,7 @@ struct PeerDiscoKeysTests {
         #expect(keys.active == newer)
     }
 
-    @Test("TSMP 광고가 오면 그 키가 활성이 된다. 같은 키가 다시 오면 바뀌지 않는다")
+    @Test("A TSMP advertisement makes its key active. Seeing the same key again leaves it unchanged")
     func tsmpWins() {
         var keys = PeerDiscoKeys()
         _ = keys.updateNetmap(control)
@@ -46,7 +46,7 @@ struct PeerDiscoKeysTests {
         #expect(keys.netmap == control)
     }
 
-    @Test("처음 온 광고가 netmap 키와 같아도 Go처럼 바뀐 것으로 본다(경로를 다시 찾는다)")
+    @Test("The first advertisement counts as a change even if its key matches the netmap key (rediscovers paths, as in Go)")
     func firstAdvertisementEqualToNetmap() {
         var keys = PeerDiscoKeys()
         _ = keys.updateNetmap(control)
@@ -58,7 +58,7 @@ struct PeerDiscoKeysTests {
         #expect(result8 == false)
     }
 
-    @Test("TSMP 키가 활성이면 netmap이 나중에 다른 키를 줘도 활성은 TSMP 키다. 바뀐 것으로는 본다")
+    @Test("An active TSMP key stays active if netmap later supplies a different key. This still counts as a change")
     func netmapLaterWithDifferentKey() {
         var keys = PeerDiscoKeys()
         _ = keys.updateNetmap(control)
@@ -69,7 +69,7 @@ struct PeerDiscoKeysTests {
         #expect(keys.netmap == newer)
     }
 
-    @Test("netmap이 나중에 TSMP와 같은 키를 주면(따라잡음) 활성은 그대로고 바뀐 것으로 본다")
+    @Test("When netmap catches up to the TSMP key, the active key stays the same and the update counts as a change")
     func netmapCatchesUp() {
         var keys = PeerDiscoKeys()
         _ = keys.updateNetmap(control)
@@ -79,7 +79,7 @@ struct PeerDiscoKeysTests {
         #expect(keys.active == tsmp)
     }
 
-    @Test("netmap보다 먼저 온 광고: 활성은 TSMP 키이고, 뒤에 온 netmap 키는 활성을 바꾸지 않는다")
+    @Test("If the advertisement arrives before netmap, the TSMP key becomes active and the later netmap key leaves it active")
     func tsmpBeforeNetmap() {
         var keys = PeerDiscoKeys()
         let result11 = keys.updateTSMP(tsmp)
@@ -90,7 +90,7 @@ struct PeerDiscoKeysTests {
         #expect(keys.active == tsmp)
     }
 
-    @Test("TSMP가 netmap보다 낡은 키를 줘도 TSMP 키가 활성이다(Go는 순서를 따지지 않는다)")
+    @Test("The TSMP key is active even if it is older than the netmap key (Go ignores the order)")
     func staleAdvertisement() {
         var keys = PeerDiscoKeys()
         _ = keys.updateNetmap(newer)
@@ -99,7 +99,7 @@ struct PeerDiscoKeysTests {
         #expect(keys.active == control)
     }
 
-    @Test("비활성 키로 온 disco를 보면 활성을 그쪽으로 바꾼다. 그 뒤 같은 광고는 되돌리지 않는다")
+    @Test("Receiving disco under the inactive key makes it active. Repeating the same advertisement leaves it active")
     func seenInactiveKey() {
         var keys = PeerDiscoKeys()
         _ = keys.updateNetmap(control)
@@ -119,7 +119,7 @@ struct PeerDiscoKeysTests {
         #expect(keys.active == tsmp)
     }
 
-    @Test("netmap 키가 없어지면 TSMP 키가 활성이고, 둘 다 없으면 disco를 하지 않는다")
+    @Test("Removing the netmap key makes the TSMP key active. With neither key, disco is disabled")
     func keysRemoved() {
         var keys = PeerDiscoKeys()
         _ = keys.updateNetmap(control)
@@ -138,12 +138,12 @@ struct PeerDiscoKeysTests {
     }
 }
 
-@Suite("Magicsock TSMP disco 키 광고 받기")
+@Suite("Magicsock receipt of TSMP disco key advertisements")
 struct MagicsockDiscoAdvertisementTests {
     let a: TestIdentity
     let b: TestIdentity
     let c: TestIdentity
-    /// b가 다시 켜져 만든 새 disco 키. 봉하기·열기에만 쓰므로 node 키는 보지 않는다(b의 node 키를 따로 넘긴다).
+    /// The new disco key b creates on restart. It is only for sealing and opening, so the node key is ignored (b's node key is supplied separately).
     let restartedB: TestIdentity
 
     init() throws {
@@ -159,12 +159,12 @@ struct MagicsockDiscoAdvertisementTests {
         return sock
     }
 
-    /// `peer`에게 데이터를 보내 Ping을 내고, Pong을 돌려 직접 경로를 세운다.
+    /// Sends data to `peer` to emit a Ping and returns a Pong to establish a direct path.
     private func establishDirect(_ sock: inout Magicsock, with peer: TestIdentity, at time: ContinuousClock.Instant, random: inout PathTestRandom) throws {
         let outputs = sock.send(testDatagram(1), to: peer.nodeKey, at: time, using: &random)
         let ping = try #require(outputs.compactMap(\.discoPacket).first { $0.udp == peer.address })
         guard case .ping(let id, _) = try peer.open(ping.bytes) else {
-            Issue.record("Ping이 아니다")
+            Issue.record("Expected a Ping")
             return
         }
         let pong = try peer.seal(.pong(id, source: a.address), to: a.discoPublicKey)
@@ -172,7 +172,7 @@ struct MagicsockDiscoAdvertisementTests {
             == [.pathChanged(peer.nodeKey, .direct(peer.address))])
     }
 
-    @Test("광고된 새 키로 봉한 disco를 netmap 갱신 없이 받고, 그 키로 봉해 답한다. 옛 netmap 키도 계속 안다")
+    @Test("Accepts disco sealed with the advertised new key before a netmap update and seals the reply with that key. The old netmap key remains known")
     func advertisedKeyIsUsed() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -186,19 +186,19 @@ struct MagicsockDiscoAdvertisementTests {
         let outputs = sock.receiveUDP(ping, from: b.address, at: sockTime(3), using: &random)
         let pong = try #require(outputs.compactMap(\.discoPacket).first { $0.udp == b.address })
         guard case .pong = try restartedB.open(pong.bytes) else {
-            Issue.record("Pong이 아니다")
+            Issue.record("Expected a Pong")
             return
         }
-        // 보내는 Ping도 새 키로 봉한다.
+        // Outgoing Ping is also sealed with the new key.
         let sent = sock.send(testDatagram(2), to: b.nodeKey, at: sockTime(4), using: &random)
         let newPing = try #require(sent.compactMap(\.discoPacket).first { $0.udp == b.address })
         guard case .ping = try restartedB.open(newPing.bytes) else {
-            Issue.record("새 키로 열리지 않는다")
+            Issue.record("Could not open with the new key")
             return
         }
     }
 
-    @Test("활성 키가 바뀌면 신뢰와 진행 중인 Ping을 지운다. 같은 광고가 다시 오면 아무것도 하지 않는다")
+    @Test("An active key change clears trust and pending Pings. Repeating the same advertisement has no effect")
     func advertisementResetsPath() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -209,13 +209,13 @@ struct MagicsockDiscoAdvertisementTests {
         #expect(sock.peers[b.nodeKey]?.path.sentPings.isEmpty == true)
         #expect(sock.receiveDiscoKeyAdvertisement(restartedB.discoPublicKey, from: b.nodeKey, at: sockTime(11)).isEmpty)
 
-        // 그다음 TSMP 키가 다시 바뀌면 앞의 TSMP 키는 잊는다(netmap 키는 남는다).
+        // When the TSMP key changes again, the previous TSMP key is forgotten (the netmap key remains).
         let third = try TestIdentity(10, address: "192.0.2.2:41641")
         _ = sock.receiveDiscoKeyAdvertisement(third.discoPublicKey, from: b.nodeKey, at: sockTime(12))
         #expect(Set(sock.discoPeers.keys) == [b.discoPublicKey, third.discoPublicKey])
     }
 
-    @Test("0 키, 모르는 피어의 광고는 아무것도 바꾸지 않는다")
+    @Test("A key set to 0 or an advertisement from an unknown peer leaves state intact")
     func ignoredAdvertisements() {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         #expect(sock.receiveDiscoKeyAdvertisement(.zero, from: b.nodeKey, at: sockTime(1)).isEmpty)
@@ -228,28 +228,28 @@ struct MagicsockDiscoAdvertisementTests {
         #expect(Array(sock.discoPeers.keys) == [b.discoPublicKey])
     }
 
-    @Test("광고는 보낸 피어의 키만 바꾼다. 다른 피어가 쓰는 disco 키를 광고하면 둘 다 그 키를 쥐고, 그 피어는 그대로다")
+    @Test("An advertisement changes only the sender's key. If it advertises a disco key used by another peer, both hold that key and the other peer stays unchanged")
     func advertisingAnotherPeersKey() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address]), c.peer(endpoints: [c.address])])
         var random = PathTestRandom(state: 7)
         try establishDirect(&sock, with: b, at: sockT0, random: &random)
-        // c가 b의 netmap 키를 광고한다: c의 TSMP 키가 되고, b의 키·경로·신뢰는 그대로다.
+        // c advertises b's netmap key. It becomes c's TSMP key, while b's keys, path, and trust stay intact.
         #expect(sock.receiveDiscoKeyAdvertisement(b.discoPublicKey, from: c.nodeKey, at: sockTime(1)).isEmpty)
         #expect(sock.discoPeers[b.discoPublicKey]?.nodes == [b.nodeKey, c.nodeKey])
         #expect(sock.peers[c.nodeKey]?.discoKey == b.discoPublicKey)
         #expect(sock.peers[b.nodeKey]?.discoKey == b.discoPublicKey)
         #expect(sock.path(to: b.nodeKey, at: sockTime(1)) == .direct(b.address))
 
-        // b가 TSMP로 쥔 키도 같다: c가 그 키를 광고해도 b의 활성 키는 그대로다.
+        // The same holds for a key b holds via TSMP. b's active key stays the same when c advertises it.
         _ = sock.receiveDiscoKeyAdvertisement(restartedB.discoPublicKey, from: b.nodeKey, at: sockTime(2))
         _ = sock.receiveDiscoKeyAdvertisement(restartedB.discoPublicKey, from: c.nodeKey, at: sockTime(3))
         #expect(sock.discoPeers[restartedB.discoPublicKey]?.nodes == [b.nodeKey, c.nodeKey])
         #expect(sock.peers[b.nodeKey]?.discoKey == restartedB.discoPublicKey)
-        // c가 앞의 TSMP 키(b의 netmap 키)를 놓아도 b는 그 키를 계속 쥔다.
+        // Even when c releases its previous TSMP key (b's netmap key), b still holds it.
         #expect(sock.discoPeers[b.discoPublicKey]?.nodes == [b.nodeKey])
     }
 
-    @Test("netmap 갱신은 TSMP 키를 남긴다. 다른 피어가 netmap 키로 같은 키를 내세워도 TSMP 키를 잃지 않는다")
+    @Test("Netmap updates retain the TSMP key, even if another peer claims the same key as its netmap key")
     func netmapKeepsTSMPKey() {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address]), c.peer(endpoints: [c.address])])
         _ = sock.receiveDiscoKeyAdvertisement(restartedB.discoPublicKey, from: b.nodeKey, at: sockTime(1))
@@ -265,7 +265,7 @@ struct MagicsockDiscoAdvertisementTests {
         #expect(sock.peers[c.nodeKey]?.discoKey == restartedB.discoPublicKey)
     }
 
-    @Test("DERP로 온 CallMeMaybe가 비활성 키로 봉했으면 받고 활성을 그 키로 바꾼다")
+    @Test("Accepts a DERP CallMeMaybe sealed with an inactive key and makes that key active")
     func callMeMaybeFromInactiveKey() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address]), c.peer(endpoints: [c.address])])
         var random = PathTestRandom(state: 7)
@@ -274,12 +274,12 @@ struct MagicsockDiscoAdvertisementTests {
         let outputs = sock.receiveDERP(callMeMaybe, from: b.nodeKey, region: 1, at: sockTime(2), using: &random)
         #expect(!outputs.contains(.dropped(.misroutedDisco)))
         #expect(sock.peers[b.nodeKey]?.discoKey == b.discoPublicKey)
-        // DERP 보낸 쪽의 키가 아닌 것(다른 피어의 키)으로 봉한 CallMeMaybe는 여전히 버린다.
+        // A CallMeMaybe sealed with a key other than the DERP sender's (another peer's key) is still dropped.
         let stranger = try c.seal(.callMeMaybe([c.address]), to: a.discoPublicKey)
         #expect(sock.receiveDERP(stranger, from: b.nodeKey, region: 1, at: sockTime(3), using: &random) == [.dropped(.misroutedDisco)])
     }
 
-    @Test("UDP로 온 Ping의 node 키가 그 피어면 비활성 키여도 활성을 바꾼다. node 키가 다르면 바꾸지 않는다")
+    @Test("A UDP Ping can make an inactive key active if the node key belongs to that peer. A different node key leaves the active key intact")
     func pingFromInactiveKey() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -294,9 +294,9 @@ struct MagicsockDiscoAdvertisementTests {
     }
 }
 
-/// disco 키 하나를 여러 피어가 쥘 때 받은 disco가 누구의 상태를 바꾸는가(계약 "TSMP disco 키 광고" T5의 판정표).
-/// c는 b의 netmap 키를 광고해 같은 키를 쥔 피어다. c는 그 키의 개인 키가 없으므로 그 키로 봉하지 못한다.
-@Suite("Magicsock 같은 disco 키를 쥔 피어들")
+/// Tests whose state incoming disco changes when multiple peers hold one disco key (decision table for T5 in the "TSMP disco key advertisement" contract).
+/// c holds the same key because it advertised b's netmap key. c cannot seal with it because c lacks its private key.
+@Suite("Magicsock peers that hold the same disco key")
 struct MagicsockSharedDiscoKeyTests {
     let a: TestIdentity
     let b: TestIdentity
@@ -310,7 +310,7 @@ struct MagicsockSharedDiscoKeyTests {
         restartedB = try TestIdentity(9, address: "192.0.2.2:41641")
     }
 
-    /// b와 c가 netmap에 있고, c가 b의 netmap 키를 광고해 둘 다 그 키를 쥔다.
+    /// Adds b and c to netmap and has c advertise b's netmap key so both hold it.
     private func squatted() -> Magicsock {
         var sock = a.magicsock()
         _ = sock.setPeers([b.peer(endpoints: [b.address]), c.peer(endpoints: [c.address])], at: sockT0)
@@ -322,14 +322,14 @@ struct MagicsockSharedDiscoKeyTests {
         try #require(TransactionID([UInt8](repeating: value, count: TransactionID.byteCount)))
     }
 
-    @Test("b의 Ping에 대한 Pong은 TxID가 맞는 b만 받는다. 같은 키를 쥔 c의 경로는 바뀌지 않는다")
+    @Test("Only b receives a Pong for b's Ping because its TxID matches. c holds the same key and its path stays intact")
     func pongGoesToPingOwner() throws {
         var sock = squatted()
         var random = PathTestRandom(state: 7)
         let sent = sock.send(testDatagram(1), to: b.nodeKey, at: sockTime(1), using: &random)
         let ping = try #require(sent.compactMap(\.discoPacket).first { $0.udp == b.address })
         guard case .ping(let id, _) = try b.open(ping.bytes) else {
-            Issue.record("Ping이 아니다")
+            Issue.record("Expected a Ping")
             return
         }
         let pong = try b.seal(.pong(id, source: a.address), to: a.discoPublicKey)
@@ -338,7 +338,7 @@ struct MagicsockSharedDiscoKeyTests {
         #expect(sock.peers[c.nodeKey]?.path.trustedUntil == nil)
     }
 
-    @Test("Ping 안의 node 키가 봉한 키를 쥐지 않은 피어면 그 피어의 키를 바꾸지 않는다")
+    @Test("If the Ping names a peer that does not hold the sealing key, that peer's key stays the same")
     func pingNodeKeyMustHoldSenderKey() throws {
         var sock = a.magicsock()
         _ = sock.setPeers([b.peer(endpoints: [b.address]), c.peer(endpoints: [c.address])], at: sockT0)
@@ -346,7 +346,7 @@ struct MagicsockSharedDiscoKeyTests {
         var random = PathTestRandom(state: 7)
         let bBefore = sock.peers[b.nodeKey]?.discoKeys
         let bCandidates = sock.peers[b.nodeKey]?.path.candidates.map(\.address)
-        // c가 자기 키로 봉하고 node 키를 b로 적는다.
+        // c seals with its own key and sets the node key to b.
         let forged = try c.seal(.ping(try txID(4), nodeKey: b.nodeKey), to: a.discoPublicKey)
         let outputs = sock.receiveUDP(forged, from: try #require(IPEndpoint("203.0.113.30:41641")), at: sockTime(1), using: &random)
         #expect(outputs.contains { $0.discoPacket != nil })
@@ -355,7 +355,7 @@ struct MagicsockSharedDiscoKeyTests {
         #expect(sock.peers[c.nodeKey]?.path.candidates.contains { $0.address == IPEndpoint("203.0.113.30:41641") } == true)
     }
 
-    @Test("DERP로 온 Ping은 DERP 보낸 쪽에게만 답하고 어느 피어의 후보도 바꾸지 않는다")
+    @Test("A DERP Ping gets a reply only to the DERP sender and leaves all peers' candidates intact")
     func derpPingTouchesNoCandidates() throws {
         var sock = squatted()
         var random = PathTestRandom(state: 7)
@@ -369,7 +369,7 @@ struct MagicsockSharedDiscoKeyTests {
         #expect(sock.peers[c.nodeKey]?.path.candidates.map(\.address) == cCandidates)
     }
 
-    @Test("UDP Ping은 그 키를 쥔 모든 피어의 후보가 되고 Pong은 한 번 나간다. 같은 Ping이 다시 오면 답하지 않는다")
+    @Test("A UDP Ping supplies a candidate to every peer holding that key and emits one Pong. A repeated Ping gets no reply")
     func udpPingReachesAllHolders() throws {
         var sock = squatted()
         var random = PathTestRandom(state: 7)

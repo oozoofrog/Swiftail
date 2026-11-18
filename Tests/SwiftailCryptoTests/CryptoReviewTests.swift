@@ -1,18 +1,18 @@
-// 독립 검토에서 더한 Go 대조와 경계 입력 시험.
+// Go comparisons and boundary input tests added in the independent review.
 //
-// `Vectors/crypto-review-go.json`은 기존 기준값(`ed25519-verify.json`, `argon2i-go.json`, `blake2b-kat.json`)에 없던
-// 종류의 입력에 대한 Go의 출력이다(만든 방법은 `Vectors/README.md`).
-// - `scalarReduction`: `edwards25519.Scalar.SetUniformBytes`. kL·kL±1(k ≤ 20), 2^n·2^n±1·2^n±L, 2^512−1 같은 경계와 무작위.
-// - `field`: `field.Element`의 곱·제곱·합·차·부호 반전·역원·`SqrtRatio`와 긴 연산 사슬. 0…39, p±0…39, 2^51·2^102 등
-//   림 경계, 맨 위 비트가 선 표현을 서로 짝지었다.
-// - `pointDecoding`: `Point.SetBytes`·`Bytes`·`MultByCofactor`. y = 0…59, p…2^255−1, p−59…p에 부호 비트 0·1.
-// - `verify`: 두 검증 규칙. 작은 위수 A(비정준 인코딩 포함) × R = [S]B + T × 경계 S(1, L−1, 2^252, 2^252−1),
-//   비정준 S(L, L+1, 2L−1, 2^253−1, …), 실제 키의 A와 R 양쪽에 작은 위수 성분, 0바이트~1 MiB 메시지.
-//   `messageLength`가 0보다 크면 메시지는 i번째 바이트가 (31·i + 7) mod 256인 바이트열이다.
-// - `blake2b`: `golang.org/x/crypto/blake2b.New(outputLength, key)`. 키는 i번째 바이트가 (13·i + 1) mod 256,
-//   입력은 (7·i + keyLength + outputLength) mod 256. 키 길이 0…64 전부.
-// - `argon2i`: `argon2.Key`. 병렬도 3·5·7·16·255, 메모리 8p·8p+1·8p+3·12p−1, 패스 10, 출력 5~4096바이트, 빈 비밀·솔트,
-//   조각 길이가 128의 배수가 아닌 메모리. `goOnly`는 Go만 받는 인자(출력 4바이트 미만, 메모리 8p 미만)다.
+// `Vectors/crypto-review-go.json` contains Go outputs for input categories absent from the existing reference values (`ed25519-verify.json`, `argon2i-go.json`, `blake2b-kat.json`).
+// See `Vectors/README.md` for how it was generated.
+// - `scalarReduction` uses `edwards25519.Scalar.SetUniformBytes`. Inputs include boundaries such as kL and kL±1 (k ≤ 20), 2^n, 2^n±1, 2^n±L, and 2^512−1, plus random values.
+// - `field` covers `field.Element` multiplication, squaring, addition, subtraction, negation, inversion, `SqrtRatio`, and long operation chains. Inputs pair 0…39, p±0…39, 2^51 and 2^102 and other
+//   limb boundaries, and representations with the top bit set.
+// - `pointDecoding` uses `Point.SetBytes`, `Bytes`, and `MultByCofactor`. y = 0…59, p…2^255−1, and p−59…p with both sign bits 0 and 1.
+// - `verify` covers both verification rules. Small-order A (including noncanonical encodings) × R = [S]B + T × boundary S (1, L−1, 2^252, 2^252−1),
+//   noncanonical S (L, L+1, 2L−1, 2^253−1, …), small-order components in both A and R of real keys, and messages from 0 bytes to 1 MiB.
+//   If `messageLength` is greater than 0, the message is a byte sequence with byte i equal to (31·i + 7) mod 256.
+// - `blake2b` uses `golang.org/x/crypto/blake2b.New(outputLength, key)`. Key byte i is (13·i + 1) mod 256,
+//   and input byte i is (7·i + keyLength + outputLength) mod 256. Covers all key lengths 0…64.
+// - `argon2i` uses `argon2.Key`. Parallelism 3, 5, 7, 16, 255, memory 8p, 8p+1, 8p+3, 12p−1, 10 passes, 5–4096 output bytes, empty secrets and salts,
+//   and memory with a segment length that is not a multiple of 128. `goOnly` marks parameters only Go accepts (output under 4 bytes and memory under 8p).
 
 import Foundation
 import Testing
@@ -60,14 +60,14 @@ private func pattern(_ count: Int, multiplier: Int, offset: Int) -> [UInt8] {
     (0..<count).map { UInt8(truncatingIfNeeded: $0 * multiplier + offset) }
 }
 
-/// `Scalar`에는 바이트 접근자가 없어 비트로 되돌린다.
+/// Recovers the bytes from bits because `Scalar` has no byte accessor.
 private func littleEndianBytes(_ s: Scalar) -> [UInt8] {
     (0..<32).map { byte in (0..<8).reduce(UInt8(0)) { $0 | (s.bit(8 * byte + $1) ? 1 << $1 : 0) } }
 }
 
-@Suite("검토: Go 대조와 경계 입력")
+@Suite("Review of Go comparisons and boundary inputs")
 struct CryptoReviewTests {
-    @Test("64바이트 환원이 Go SetUniformBytes와 같다(kL 경계, 2^n 경계, 무작위)")
+    @Test("64-byte reduction matches Go SetUniformBytes at kL and 2^n boundaries and for random inputs")
     func scalarReduction() throws {
         let cases = try loadReviewVectors().scalarReduction
         #expect(cases.count == 331)
@@ -75,13 +75,13 @@ struct CryptoReviewTests {
         #expect(mismatches.isEmpty, "\(mismatches.prefix(5))")
     }
 
-    @Test("필드 연산이 Go field.Element와 같다(p 근처, 림 경계, 맨 위 비트, 긴 사슬)")
+    @Test("Field operations match Go field.Element near p, at limb boundaries, with the top bit set, and in long chains")
     func fieldArithmetic() throws {
         let cases = try loadReviewVectors().field
         #expect(cases.count == 403)
         for c in cases {
             let a = FieldElement(bytes: bytes(c.a)), b = FieldElement(bytes: bytes(c.b))
-            // Go 생성기와 같은 순서의 사슬: 림이 커진 중간값을 오래 이어 간다.
+            // The chain follows the Go generator's order and carries intermediate values with grown limbs through many operations.
             var x = a
             for _ in 0..<16 {
                 x = x * b; x = x - a; x = x.squared(); x = x + b; x = -x; x = x + x; x = x - b
@@ -101,7 +101,7 @@ struct CryptoReviewTests {
         }
     }
 
-    @Test("y ≥ p, y 근처 0, 부호 비트가 선 인코딩의 해독이 Go Point.SetBytes와 같다")
+    @Test("Decoding matches Go Point.SetBytes for y ≥ p, y near 0, and encodings with the sign bit set")
     func pointDecoding() throws {
         let cases = try loadReviewVectors().pointDecoding
         #expect(cases.count == 292)
@@ -115,7 +115,7 @@ struct CryptoReviewTests {
         }
     }
 
-    @Test("작은 위수·경계 S·비정준 S·긴 메시지에서 두 규칙의 판정이 Go와 같다")
+    @Test("Both rules match Go for small orders, boundary S, noncanonical S, and long messages")
     func verification() throws {
         let cases = try loadReviewVectors().verify
         #expect(cases.count == 697)
@@ -130,13 +130,13 @@ struct CryptoReviewTests {
                 mismatches.append("\(c.kind) standard(Go \(c.standard)) A=\(c.publicKey) sig=\(c.signature)")
             }
         }
-        #expect(mismatches.isEmpty, "Go와 다른 판정 \(mismatches.count)개: \(mismatches.prefix(5))")
-        // 두 규칙이 갈리는 사례가 실제로 들어 있다(ZIP-215만 참인 사례가 있어야 대조가 의미 있다).
+        #expect(mismatches.isEmpty, "\(mismatches.count) verdicts differ from Go: \(mismatches.prefix(5))")
+        // The two rules do differ on some cases in the set (the comparison is meaningful only if ZIP-215 alone accepts some cases).
         #expect(cases.contains { $0.zip215 && !$0.standard })
         #expect(cases.contains { $0.zip215 && $0.standard })
     }
 
-    @Test("BLAKE2b 키 길이 0…64 × 출력 길이가 Go와 같다. 나누어 넣어도 같다")
+    @Test("BLAKE2b matches Go for key lengths 0…64 × output lengths, including chunked input")
     func blake2b() throws {
         let cases = try loadReviewVectors().blake2b
         #expect(cases.count == 520)
@@ -154,11 +154,11 @@ struct CryptoReviewTests {
                 offset = end
                 step = (step * 7 + 3) % 131
             }
-            #expect(hex(hasher.finalize()) == c.output, "나누어 넣음 \(label)")
+            #expect(hex(hasher.finalize()) == c.output, "Chunked input \(label)")
         }
     }
 
-    @Test("Argon2i가 Go argon2.Key와 같다(병렬도 3~255, 8p 경계, 긴 출력). Go만 받는 인자는 거절한다")
+    @Test("Argon2i matches Go argon2.Key (parallelism 3–255, 8p boundary, long output) and rejects parameters only Go accepts")
     func argon2i() throws {
         let cases = try loadReviewVectors().argon2i
         #expect(cases.count == 107)
@@ -178,7 +178,7 @@ struct CryptoReviewTests {
         }
     }
 
-    @Test("Ed25519 검증은 어떤 길이·값에서도 트랩하지 않고 거짓을 돌려준다")
+    @Test("Ed25519 verification returns false without trapping for any length or value")
     func ed25519ArbitraryInputs() {
         var generator = SystemRandomNumberGenerator()
         for signatureLength in [0, 1, 32, 63, 64, 65, 128] {
@@ -189,8 +189,8 @@ struct CryptoReviewTests {
                     let zip215 = Ed25519Verification.isValidZIP215(signature: signature, message: [fill], publicKey: publicKey)
                     let standard = Ed25519Verification.isValidStandard(signature: signature, message: [fill], publicKey: publicKey)
                     if signatureLength == 64, publicKeyLength == 32, fill == 0 {
-                        // A = R = (y = 0인 위수 4의 점), S = 0: [8](−[k]A − R) = 0이라 ZIP-215는 어떤 메시지든 참이다
-                        // (ed25519consensus zip215_test.go의 같은 꼴 벡터와 같다). 표준은 k mod 4에 달려 있어 보지 않는다.
+                        // A = R = (the point of order 4 with y = 0), S = 0. Since [8](−[k]A − R) = 0, ZIP-215 accepts any message
+                        // (as in the vector of the same form in ed25519consensus zip215_test.go). The standard rule depends on k mod 4, so this test omits it.
                         #expect(zip215)
                         _ = standard
                     } else {
@@ -199,7 +199,7 @@ struct CryptoReviewTests {
                 }
             }
         }
-        // 무작위 64·32바이트(곡선 밖, S ≥ L, sig[63]의 위 비트가 섞인다). 참이 나올 확률은 무시할 만하다.
+        // Random 64-byte and 32-byte inputs mix off-curve points, S ≥ L, and high bits of sig[63]. The probability of a true result is negligible.
         for _ in 0..<500 {
             let signature = (0..<64).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
             let publicKey = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
@@ -208,13 +208,13 @@ struct CryptoReviewTests {
         }
     }
 
-    @Test("Argon2i의 범위 밖 인자는 트랩 없이 invalidLength", arguments: [
-        (UInt32(1), UInt32(8), UInt8(0), 32),       // 병렬도 0
-        (UInt32(0), UInt32(8), UInt8(1), 32),       // 패스 0
-        (UInt32(1), UInt32(0), UInt8(1), 32),       // 메모리 0
-        (UInt32(1), UInt32(7), UInt8(1), 32),       // 메모리 8p − 1
-        (UInt32(1), UInt32(2039), UInt8(255), 32),  // 메모리 8·255 − 1
-        (UInt32(1), UInt32(8), UInt8(1), 3),        // 출력 3
+    @Test("Out-of-range Argon2i parameters yield invalidLength without trapping", arguments: [
+        (UInt32(1), UInt32(8), UInt8(0), 32),       // Parallelism 0
+        (UInt32(0), UInt32(8), UInt8(1), 32),       // Passes 0
+        (UInt32(1), UInt32(0), UInt8(1), 32),       // Memory 0
+        (UInt32(1), UInt32(7), UInt8(1), 32),       // Memory 8p − 1
+        (UInt32(1), UInt32(2039), UInt8(255), 32),  // Memory 8·255 − 1
+        (UInt32(1), UInt32(8), UInt8(1), 3),        // Output 3
         (UInt32(1), UInt32(8), UInt8(1), 0),
         (UInt32(1), UInt32(8), UInt8(1), -1),
         (UInt32(1), UInt32(8), UInt8(1), Int.min),
