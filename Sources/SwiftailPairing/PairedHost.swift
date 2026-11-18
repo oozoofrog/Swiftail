@@ -1,16 +1,16 @@
 import Foundation
 
-/// 들어오는 쪽이 짝이 된 여는 쪽(`PairingJoiner.pair`의 결과). 보관은 앱이 한다(`Codable`).
+/// The host paired with the joiner, as returned by `PairingJoiner.pair`. The app stores it (`Codable`).
 ///
-/// 프로세스 안 노드로 들어온 앱은 뒤의 연결에서 `whoIs(상대 주소)?.stableID`를 `stableID`와 견줘 상대가 이 짝인지 본다.
-/// OS 소켓으로 들어온 앱은 그럴 길이 없어 `host`의 이름 풀이(MagicDNS)와 WireGuard를 믿는다.
+/// An app that joined using an in-process node compares `whoIs(peer address)?.stableID` to `stableID` on later connections to identify this paired peer.
+/// An app that joined using an OS socket has no such check and relies on name resolution for `host` (MagicDNS) and WireGuard.
 public struct PairedHost: Sendable, Equatable, Codable {
-    /// 여는 노드의 MagicDNS FQDN(제안의 `host`).
+    /// The `host` node's MagicDNS FQDN (host from the offer).
     public let host: String
-    /// 여는 노드의 `StableID`. 여는 쪽이 `decision`에 실어 보냈고 제안의 비밀로 인증됐다.
+    /// The host node's `StableID`. The host sent it in `decision` and authenticated it with the offer secret.
     public let stableID: String
-    /// 여는 쪽의 표시 이름. 표시용이다.
+    /// The host's display name, for display only.
     public let name: String
-    /// 짝이 된 때.
+    /// The time pairing succeeded.
     public let pairedAt: Date
 }

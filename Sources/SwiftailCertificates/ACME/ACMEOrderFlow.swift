@@ -1,61 +1,61 @@
 import CryptoKit
 import Foundation
 
-/// 주문 절차 한 번의 결과.
+/// The result of one order flow.
 ///
-/// 계정 URL은 계정 키를 가진 사람을 가리키므로 로그에 남기지 않는다(계약 동작 K2).
+/// The account URL identifies the person holding the account key, so it is kept out of logs (contract behavior K2).
 enum ACMEIssuanceResult: Sendable, Equatable {
-    /// 발급됐다. `certificateChainPEM`은 인증서 URL의 응답 본문 그대로다(`application/pem-certificate-chain`, 256KiB
-    /// 이하). 사슬의 해석과 검증(계약 동작 X3)은 받는 쪽의 몫이다. `accountURL`은 다음 시도에서 계정 찾기를 건너뛰는 데
-    /// 쓸 수 있다(메모리에만 둔다. 계약 동작 C4).
+    /// Issuance succeeded. `certificateChainPEM` is the unmodified response body from the certificate URL (`application/pem-certificate-chain`,
+    /// up to 256KiB). The recipient parses and verifies the chain (contract behavior X3). `accountURL` can skip account lookup
+    /// on the next attempt (keep it in memory only, contract behavior C4).
     case issued(certificateChainPEM: [UInt8], accountURL: String)
-    /// 실패했다. `retryNotBefore`는 ACME 서버가 `Retry-After`로 알려 준 시각 가운데 시도가 끝난 때보다 늦은 것(7일로
-    /// 묶었다)이다. 그 전에는 그 서버에 요청을 보내지 않는다(계약 동작 X5). `accountURL`은 그 시도에서 알게 된 계정 URL이다.
+    /// Issuance failed. `retryNotBefore` is the time the ACME server announced via `Retry-After`, if later than the end of the attempt (capped
+    /// at 7 days). No requests go to that server before then (contract behavior X5). `accountURL` is the account URL learned during the attempt.
     case failed(CertificateFailure, retryNotBefore: Date?, accountURL: String?)
 }
 
-/// ACME(RFC 8555) DNS-01 주문 절차 한 번. 소켓·시계·난수를 갖지 않는 값 타입 상태 기계다(plan 5절 코드 기준).
+/// A single ACME (RFC 8555) DNS-01 order flow. This value-type state machine owns no sockets, clock, or randomness (plan §5, code criteria).
 ///
-/// 절차는 "지금 할 일 하나"(`Step`)를 내고, 그 결과(응답과 받은 시각, 기다림이 끝난 시각, TXT를 올렸다는 알림)를 받아
-/// 나아간다. 단계는 노트 4.3의 열두 단계와 계약 동작 C4~C7·C12, X1·X2·X4·X5다:
+/// The flow emits one action to take now (`Step`) and advances when it receives the result (a response and its receipt time,
+/// the end time of a wait, or confirmation that a TXT record was published). The stages follow the twelve steps in notes §4.3 and contract behaviors C4–C7, C12, X1, X2, X4, and X5.
 ///
 /// ```
-/// directory → newNonce → newAccount(onlyReturnExisting, 없으면 약관 동의로 만듦) → newOrder
-///   → 주문 상태로 가름: pending → authorization마다(valid 건너뜀, pending이면 dns-01의 TXT → challenge 응답)
-///                         → 주문을 다시 읽어 ready를 기다림
-///                     ready → finalize(CSR) → valid → 인증서 내려받기
-///                     valid·processing(CSR 전) → 새 주문으로 한 번만 다시(계약 H17)
+/// directory → newNonce → newAccount(onlyReturnExisting, or create with terms accepted if absent) → newOrder
+///   → branch by order status: pending → for each authorization (skip valid, publish the dns-01 TXT and answer the challenge if pending)
+///                         → poll the order until ready
+///                     ready → finalize(CSR) → valid → download the certificate
+///                     valid or processing (before CSR) → try again with a new order just once (contract H17)
 /// ```
 ///
-/// - 모든 응답의 유효한 `Replay-Nonce`를 쥐고 다음 POST에 한 번 쓴다. 쥔 것이 없으면 `HEAD newNonce`로 얻는다
-///   (RFC 8555 6.5·7.2). `badNonce`면 그 응답의 nonce로 같은 요청을 다시 서명해 보낸다. 요청마다 3번까지다(계약 X4).
-/// - `Retry-After`(RFC 7231 7.1.3)가 알려 준 시각 전에는 어떤 요청도 내지 않고 `.wait(until:)`을 낸다. 그 시각이 발급
-///   한 번의 기한(5분)을 넘으면 기다리지 않고 `timedOut`으로 끝내며 그 시각을 결과에 싣는다(계약 X5).
-/// - 주문을 다시 읽는 간격은 `Retry-After`, 없거나 더 짧으면 1초다(Go `WaitOrder`와 같은 값. RFC의 상수가 아니다).
-/// - 계정 키와 인증서 키는 받은 것을 쓴다. 인증서 키는 계정 키와 달라야 하고(RFC 8555 11.1) CSR은 처음 finalize할 때
-///   한 번 만들어 그 시도가 끝날 때까지 쓴다(계약 C7: `ready`·`pending`의 되풀이도 같은 키·CSR).
+/// - Keep the valid `Replay-Nonce` from each response and use it once on the next POST. If none is available, fetch one with `HEAD newNonce`
+///   (RFC 8555 6.5 and 7.2). On `badNonce`, re-sign the same request with the response nonce and send it again, up to 3 times per request (contract X4).
+/// - Emit `.wait(until:)` and withhold all requests until the time given by `Retry-After` (RFC 7231 7.1.3). If the time exceeds the
+///   deadline for one issuance attempt (5 minutes), finish immediately with `timedOut` and include that time in the result (contract X5).
+/// - Poll the order at the `Retry-After` interval, or after 1 second if the interval is absent or shorter (the same value as Go's `WaitOrder`, which the RFC does not specify).
+/// - Use the supplied account and certificate keys. The certificate key must differ from the account key (RFC 8555 11.1). Create the CSR
+///   on the first finalize and reuse it through the end of the attempt (contract C7, including the same key and CSR on repeated `ready` or `pending`).
 ///
-/// 서명(JWS·CSR)은 CryptoKit이 안에서 난수를 뽑으므로 같은 입력이어도 요청 본문의 서명 바이트는 실행마다 다르다.
-/// 개인 키를 쥐므로 `dump`·`description`에는 아무것도 드러내지 않는다.
+/// CryptoKit draws randomness internally for JWS and CSR signatures, so signature bytes in request bodies vary across runs even with identical inputs.
+/// Because the flow holds private keys, it exposes nothing through `dump` or `description`.
 struct ACMEOrderFlow: Sendable {
-    /// 절차가 지금 바라는 일.
+    /// The action the flow needs now.
     enum Step: Sendable, Equatable {
-        /// 이 요청을 지금 보내고 응답을 `receive(_:at:)`로, 전송의 실패를 `transportFailed(_:at:)`로 넘긴다.
+        /// Send this request now and pass the response to `receive(_:at:)` or a transport failure to `transportFailed(_:at:)`.
         case send(ACMEHTTPRequest)
-        /// 이 시각 전에는 요청하지 않는다. 그 시각이 지나면 `resume(at:)`을 부른다.
+        /// Withhold requests until this time, then call `resume(at:)`.
         case wait(until: Date)
-        /// `name`(`_acme-challenge.<이름>`)의 TXT 레코드에 `value`를 올린다(제어 서버의 `set-dns`, 계약 동작 D). 끝나면
-        /// `txtPublished(at:)`, 실패하면 `txtPublishingFailed(_:at:)`를 부른다. 값은 키 인가에서 나오므로 로그에 남기지 않는다.
+        /// Publish `value` in the TXT record at `name` (`_acme-challenge.<name>`) using the control server's `set-dns` (contract behavior D).
+        /// Call `txtPublished(at:)` on completion or `txtPublishingFailed(_:at:)` on failure. Keep the value out of logs because it comes from the key authorization.
         case publishTXT(name: String, value: String)
-        /// 끝났다. 이 뒤의 입력은 모두 같은 결과를 돌려준다.
+        /// The flow has finished. All subsequent inputs return the same result.
         case finished(ACMEIssuanceResult)
     }
 
-    /// 발급 한 번의 기한(계약 동작 C10).
+    /// The deadline for one issuance attempt (contract behavior C10).
     static let attemptDuration: TimeInterval = 5 * 60
-    /// 주문을 다시 읽는 최소 간격(계약 동작 X5).
+    /// The minimum interval between order polls (contract behavior X5).
     static let minimumPollInterval: TimeInterval = 1
-    /// 요청 하나의 `badNonce` 재시도 상한(계약 한도 표).
+    /// The maximum number of `badNonce` retries per request (contract limits table).
     static let maximumBadNonceRetries = 3
 
     private let directoryURL: String
@@ -63,22 +63,22 @@ struct ACMEOrderFlow: Sendable {
     private let accountKey: P256.Signing.PrivateKey
     private let certificateKey: P256.Signing.PrivateKey
 
-    /// 아는 계정 URL(`kid`). 처음부터 주어졌거나 newAccount 응답의 `Location`에서 얻었다.
+    /// The known account URL (`kid`), supplied at the start or obtained from the newAccount response's `Location`.
     private(set) var accountURL: String?
 
     private var deadline = Date.distantFuture
     private var directory: ACMEDirectory?
-    /// 마지막 응답이 준 nonce. 보내는 요청에 한 번 쓰면 버린다(RFC 8555 6.5).
+    /// The nonce from the last response. Discard it after using it in one outgoing request (RFC 8555 6.5).
     private var nonce: String?
-    /// 서버가 `Retry-After`로 알려 준 시각 가운데 가장 늦은 것. 그 전에는 어떤 요청도 보내지 않는다.
+    /// The latest time the server announced via `Retry-After`. No requests go out before this time.
     private var serverNotBefore: Date?
-    /// 다음 주문 읽기의 최소 시각(1초 간격).
+    /// The earliest time to poll the order again (1-second interval).
     private var pollNotBefore: Date?
-    /// 보내고 응답을 기다리는 요청.
+    /// The request that was sent and is awaiting a response.
     private var inFlight: Request?
-    /// 기다림이나 nonce 얻기가 끝나면 보낼 요청.
+    /// The request to send after waiting or obtaining a nonce.
     private var queued: Request?
-    /// TXT를 올린 뒤에 보낼 challenge 응답. 올리는 중이 아니면 `awaitingPublication`이 거짓이다.
+    /// The challenge response to send after publishing the TXT record. `awaitingPublication` is false when no publication is in progress.
     private var challengeAfterPublication: Request?
     private var awaitingPublication = false
     private var badNonceRetries = 0
@@ -88,11 +88,11 @@ struct ACMEOrderFlow: Sendable {
     private var result: ACMEIssuanceResult?
 
     /// - Parameters:
-    ///   - directoryURL: ACME 디렉터리의 URL. `https`가 아니면 첫 단계가 `unexpectedResponse`로 끝난다(계약 X1).
-    ///   - domain: 인증서를 받을 이름. 식별자 하나로 주문한다(계약 C5).
-    ///   - accountKey: 계정 키. P-256만 쓴다(계약 C4).
-    ///   - accountURL: 이미 아는 계정 URL. 주면 계정 찾기를 건너뛴다.
-    ///   - certificateKey: 이 시도의 인증서 키. 계정 키와 다른, 새로 만든 키여야 한다(RFC 8555 11.1).
+    ///   - directoryURL: The ACME directory URL. A scheme other than `https` ends the first step with `unexpectedResponse` (contract X1).
+    ///   - domain: The name to obtain a certificate for. The order uses one identifier (contract C5).
+    ///   - accountKey: The account key. Only P-256 is used (contract C4).
+    ///   - accountURL: An already known account URL. Supplying it skips account lookup.
+    ///   - certificateKey: The certificate key for this attempt. It must be freshly generated and differ from the account key (RFC 8555 11.1).
     init(
         directoryURL: String,
         domain: CertificateDomain,
@@ -107,9 +107,9 @@ struct ACMEOrderFlow: Sendable {
         self.certificateKey = certificateKey
     }
 
-    // MARK: 입력
+    // MARK: Input
 
-    /// 절차를 시작한다. 기한(5분)은 이 시각부터 센다.
+    /// Starts the flow. The deadline (5 minutes) starts at this time.
     mutating func start(at now: Date) -> Step {
         guard result == nil, inFlight == nil, deadline == .distantFuture else { return misuse(at: now) }
         deadline = now.addingTimeInterval(Self.attemptDuration)
@@ -117,13 +117,13 @@ struct ACMEOrderFlow: Sendable {
         return request(.directory, at: now)
     }
 
-    /// `.send`의 응답을 받았다.
+    /// Processes the response to `.send`.
     mutating func receive(_ response: ACMEHTTPResponse, at now: Date) -> Step {
         if let result { return .finished(result) }
         guard let request = inFlight else { return misuse(at: now) }
         inFlight = nil
 
-        // 성공이든 오류든 모든 응답의 nonce를 쓴다(RFC 8555 6.5). 형식이 틀린 값은 무시한다(6.5.1).
+        // Use the nonce from every response, whether success or error (RFC 8555 6.5). Ignore malformed values (6.5.1).
         if let value = response.firstHeader(named: "Replay-Nonce"), ACMEInputRules.isAcceptableNonce(value) {
             nonce = value
         }
@@ -142,7 +142,7 @@ struct ACMEOrderFlow: Sendable {
         return handleSuccess(response, for: request, at: now)
     }
 
-    /// `.send`의 요청이 응답을 받지 못했다.
+    /// Handles a `.send` request that received no response.
     mutating func transportFailed(_ error: ACMETransportError, at now: Date) -> Step {
         if let result { return .finished(result) }
         guard inFlight != nil else { return misuse(at: now) }
@@ -154,7 +154,7 @@ struct ACMEOrderFlow: Sendable {
         }
     }
 
-    /// `.wait(until:)`의 시각이 지났다.
+    /// Resumes after the time in `.wait(until:)` has passed.
     mutating func resume(at now: Date) -> Step {
         if let result { return .finished(result) }
         guard inFlight == nil, let queued else { return misuse(at: now) }
@@ -162,7 +162,7 @@ struct ACMEOrderFlow: Sendable {
         return request(queued, at: now)
     }
 
-    /// `.publishTXT`의 레코드를 올렸다.
+    /// Records successful publication of the `.publishTXT` record.
     mutating func txtPublished(at now: Date) -> Step {
         if let result { return .finished(result) }
         guard awaitingPublication else { return misuse(at: now) }
@@ -175,7 +175,7 @@ struct ACMEOrderFlow: Sendable {
         return nextAuthorization(at: now)
     }
 
-    /// `.publishTXT`의 레코드를 올리지 못했다. 그 실패로 시도를 끝낸다.
+    /// Handles failure to publish the `.publishTXT` record. Ends the attempt with that failure.
     mutating func txtPublishingFailed(_ failure: CertificateFailure, at now: Date) -> Step {
         if let result { return .finished(result) }
         guard awaitingPublication else { return misuse(at: now) }
@@ -183,9 +183,9 @@ struct ACMEOrderFlow: Sendable {
         return fail(failure, at: now)
     }
 
-    // MARK: 요청
+    // MARK: Requests
 
-    /// 절차가 보내는 요청의 종류. POST는 모두 JWS로 서명한다.
+    /// The kinds of requests the flow sends. All POST requests are signed with JWS.
     private enum Request: Sendable, Equatable {
         case directory
         case newNonce
@@ -197,36 +197,36 @@ struct ACMEOrderFlow: Sendable {
         case order(OrderRead)
         case finalize
         case certificate(String)
-        /// `invalid`가 된 주문의 authorization을 다시 읽어 실패의 종류를 가린다(계약 C7).
+        /// Rereads the authorizations for an order that became `invalid` to classify the failure (contract C7).
         case diagnosis(String)
     }
 
-    /// 주문을 다시 읽는 까닭. 같은 상태라도 까닭에 따라 갈래가 다르다(계약 C7).
+    /// The reason for rereading the order. The branch depends on the reason even for identical statuses (contract C7).
     private enum OrderRead: Sendable, Equatable {
-        /// authorization을 처리한 뒤 `ready`를 기다린다.
+        /// Waits for `ready` after processing the authorizations.
         case awaitingReady
-        /// finalize가 받아들여진 뒤 `valid`를 기다린다.
+        /// Waits for `valid` after finalize was accepted.
         case awaitingIssuance
-        /// finalize가 `orderNotReady`로 거절됐다.
+        /// Finalize was rejected with `orderNotReady`.
         case afterOrderNotReady
     }
 
-    /// 지금 이 주문에서 아는 것.
+    /// The information currently known about this order.
     private struct OrderState: Sendable {
         let url: String
         var finalizeURL: String
         var authorizations: [String]
         var certificateURL: String?
         var error: ProblemDocument?
-        /// finalize가 200으로 받아들여졌다. 그 뒤의 `valid`는 이 시도의 키·CSR로 발급된 것이다.
+        /// Finalize was accepted with 200. A subsequent `valid` means issuance used this attempt's key and CSR.
         var finalizeAccepted = false
-        /// finalize 뒤 `ready`·`pending`의 되풀이를 이미 했다(주문마다 한 번. 계약 H17).
+        /// Already repeated the `ready` or `pending` step after finalize (once per order, contract H17).
         var repeated = false
         var remainingAuthorizations: [String] = []
         var remainingDiagnoses: [String] = []
     }
 
-    /// 기한과 서버의 시각을 지키며 요청을 낸다. 서명할 요청인데 nonce가 없으면 먼저 `HEAD newNonce`를 낸다.
+    /// Emits a request while honoring the deadline and the server's time. Emits `HEAD newNonce` first if a request needs signing and no nonce is available.
     private mutating func request(_ request: Request, at now: Date) -> Step {
         guard now < deadline else { return fail(.timedOut, at: now) }
         var notBefore = serverNotBefore
@@ -234,7 +234,7 @@ struct ACMEOrderFlow: Sendable {
             notBefore = max(notBefore ?? pollNotBefore, pollNotBefore)
         }
         if let notBefore, notBefore > now {
-            // 기한을 넘는 기다림은 하지 않는다. 서버가 알려 준 시각은 `fail`이 결과에 싣는다(계약 X5).
+            // Do not wait beyond the deadline. `fail` includes the server's time in the result (contract X5).
             guard notBefore < deadline else { return fail(.timedOut, at: now) }
             queued = request
             return .wait(until: notBefore)
@@ -265,8 +265,8 @@ struct ACMEOrderFlow: Sendable {
             do {
                 jws = try JWS(payload: parts.payload, url: parts.url, nonce: nonce, keyReference: parts.key, signedWith: accountKey)
             } catch {
-                // shortcut: CryptoKit의 P-256 서명은 정상 키로 실패하지 않는다. `CertificateFailure`에 내부 오류의 종류가
-                // 없어 `unexpectedResponse`로 적는다. 실제로 일어나면 종류를 더한다.
+                // shortcut: CryptoKit's P-256 signing does not fail with a valid key. `CertificateFailure` has no internal error kind,
+                // so report `unexpectedResponse`. Add a kind if this ever happens.
                 return fail(.unexpectedResponse, at: now)
             }
             self.nonce = nil
@@ -275,13 +275,13 @@ struct ACMEOrderFlow: Sendable {
         }
     }
 
-    /// 서명할 요청의 URL, 본문, 키를 가리키는 방식, `Accept`.
+    /// The URL, body, key reference method, and `Accept` for the request to sign.
     private mutating func signedParts(
         of request: Request
     ) -> (url: String, payload: [UInt8], key: JWS.KeyReference, accept: String?)? {
         guard let directory else { return nil }
         if request == .findAccount || request == .createAccount {
-            // newAccount만 `jwk`로 서명한다(RFC 8555 6.2).
+            // Only newAccount is signed with `jwk` (RFC 8555 6.2).
             let payload = request == .findAccount ? ACMERequestBody.findAccount : ACMERequestBody.createAccount
             return (directory.newAccount, payload, .publicKey, nil)
         }
@@ -311,9 +311,9 @@ struct ACMEOrderFlow: Sendable {
         }
     }
 
-    // MARK: 응답
+    // MARK: Responses
 
-    /// 성공이 아닌 응답(RFC 8555 6.7, 계약 동작 C12).
+    /// Handles an unsuccessful response (RFC 8555 6.7, contract behavior C12).
     private mutating func handleError(
         _ response: ACMEHTTPResponse,
         retryAfter: Date?,
@@ -323,14 +323,14 @@ struct ACMEOrderFlow: Sendable {
         let problem = ProblemDocument(responseBody: response.body)
         switch problem.kind {
         case .badNonce where badNonceRetries < Self.maximumBadNonceRetries:
-            // 그 오류 응답의 nonce로 같은 요청을 다시 서명한다(RFC 8555 6.5 "MUST use the nonce provided in the error
-            // response"). 응답에 유효한 nonce가 없으면 `request`가 newNonce부터 얻는다.
+            // Re-sign the same request with the nonce from the error response (RFC 8555 6.5 "MUST use the nonce provided in the error
+            // response"). If the response lacks a valid nonce, `request` obtains one from newNonce first.
             badNonceRetries += 1
             return self.request(request, at: now)
         case .accountDoesNotExist where request == .findAccount:
             return self.request(.createAccount, at: now)
         case .orderNotReady where request == .finalize:
-            // RFC 8555 7.4: 주문을 POST-as-GET으로 읽어 그 상태로 간다.
+            // RFC 8555 7.4: Read the order with POST-as-GET and proceed according to its status.
             return self.request(.order(.afterOrderNotReady), at: now)
         case .rateLimited:
             return fail(.rateLimited(retryAfter: retryAfter), at: now)
@@ -347,26 +347,26 @@ struct ACMEOrderFlow: Sendable {
             return self.request(accountURL == nil ? .findAccount : .newOrder, at: now)
 
         case .newNonce:
-            // RFC 8555 7.2: HEAD는 200을 SHOULD로, GET은 204다. 응답의 nonce는 `receive`가 이미 쥐었다.
+            // RFC 8555 7.2: HEAD SHOULD return 200, and GET returns 204. `receive` already retained the response nonce.
             guard response.status == 200 || response.status == 204, nonce != nil, let queued else { return unexpected(at: now) }
             self.queued = nil
             return self.request(queued, at: now)
 
         case .findAccount, .createAccount:
-            // 계정 찾기는 200(RFC 8555 7.3.1), 만들기는 201 또는 이미 있으면 200(7.3). 둘 다 `Location`이 계정 URL이다.
+            // Account lookup returns 200 (RFC 8555 7.3.1). Creation returns 201, or 200 if it already exists (7.3). In both cases `Location` is the account URL.
             let accepted = request == .findAccount ? [200] : [200, 201]
             guard accepted.contains(response.status),
                   let location = response.firstHeader(named: "Location"), ACMEInputRules.isAcceptableURL(location),
                   let status = ACMEAccountStatus(body: response.body)
             else { return unexpected(at: now) }
-            // shortcut: `valid`가 아닌 계정(`deactivated`·`revoked`)에 맞는 실패 종류가 계약에 없어 `unexpectedResponse`로
-            // 적는다. 그런 계정은 서버가 보통 `unauthorized`로 거절하므로(RFC 8555 7.3.6) 이 갈래는 드물다.
+            // shortcut: The contract has no failure kind for a non-`valid` account (`deactivated` or `revoked`), so report
+            // `unexpectedResponse`. This branch is rare because servers usually reject such accounts with `unauthorized` (RFC 8555 7.3.6).
             guard status == .valid else { return unexpected(at: now) }
             accountURL = location
             return self.request(.newOrder, at: now)
 
         case .newOrder:
-            // RFC 8555 7.4: 201과 `Location`의 주문 URL.
+            // RFC 8555 7.4: 201 with the order URL in `Location`.
             guard response.status == 201,
                   let location = response.firstHeader(named: "Location"), ACMEInputRules.isAcceptableURL(location),
                   let created = ACMEOrder(body: response.body)
@@ -382,7 +382,7 @@ struct ACMEOrderFlow: Sendable {
             return handleAuthorization(authorization, at: now)
 
         case .challenge:
-            // RFC 8555 7.5.1은 200이고, Let's Encrypt는 202를 보낸 적이 있다(Go `tempfork/acme/acme.go:570-573`).
+            // RFC 8555 7.5.1 specifies 200. Let's Encrypt has also returned 202 (Go `tempfork/acme/acme.go:570-573`).
             guard response.status == 200 || response.status == 202 else { return unexpected(at: now) }
             return nextAuthorization(at: now)
 
@@ -396,7 +396,7 @@ struct ACMEOrderFlow: Sendable {
             return handleOrder(current, context: context, at: now)
 
         case .finalize:
-            // RFC 8555 7.4: 200과 갱신된 주문 객체.
+            // RFC 8555 7.4: 200 with the updated order object.
             guard response.status == 200, let current = ACMEOrder(body: response.body) else { return unexpected(at: now) }
             order?.finalizeAccepted = true
             return handleOrder(current, context: .awaitingIssuance, at: now)
@@ -420,34 +420,34 @@ struct ACMEOrderFlow: Sendable {
         }
     }
 
-    // MARK: 주문
+    // MARK: Order
 
-    /// 주문 객체를 받은 자리. 상태의 뜻이 자리마다 다르다(계약 C5·C7).
+    /// The context in which the order object was received. Each context interprets the status differently (contract C5 and C7).
     private enum OrderContext {
-        /// newOrder의 응답.
+        /// The response to newOrder.
         case created
-        /// authorization을 처리한 뒤 다시 읽었다.
+        /// Reread after processing the authorizations.
         case awaitingReady
-        /// finalize의 응답이거나 그 뒤에 다시 읽었다.
+        /// The response to finalize or a subsequent read.
         case awaitingIssuance
-        /// finalize가 `orderNotReady`로 거절된 뒤 다시 읽었다.
+        /// Reread after finalize was rejected with `orderNotReady`.
         case afterOrderNotReady
     }
 
-    /// 주문의 상태로 다음 일을 고른다.
+    /// Selects the next action based on the order status.
     ///
-    /// | 상태 | created | awaitingReady | awaitingIssuance | afterOrderNotReady |
+    /// | Status | created | awaitingReady | awaitingIssuance | afterOrderNotReady |
     /// | --- | --- | --- | --- | --- |
-    /// | pending | authorization 처리 | 다시 읽기 | 되풀이 → authorization 처리 | 되풀이 → authorization 처리 |
-    /// | ready | finalize | finalize | 되풀이 → 같은 CSR로 finalize | 되풀이 → 같은 CSR로 finalize |
-    /// | processing | 새 주문 | finalize가 받아들여졌으면 다시 읽기, 아니면 새 주문 | 다시 읽기 | 새 주문 |
-    /// | valid | 새 주문 | finalize가 받아들여졌으면 내려받기, 아니면 새 주문 | 내려받기 | 새 주문 |
-    /// | invalid | `orderFailed` | 실패의 종류를 가림 | 실패의 종류를 가림 | 실패의 종류를 가림 |
+    /// | pending | Process authorizations | Reread | Repeat → process authorizations | Repeat → process authorizations |
+    /// | ready | finalize | finalize | Repeat → finalize with the same CSR | Repeat → finalize with the same CSR |
+    /// | processing | New order | Reread if finalize was accepted, otherwise new order | Reread | New order |
+    /// | valid | New order | Download if finalize was accepted, otherwise new order | Download | New order |
+    /// | invalid | `orderFailed` | Classify failure | Classify failure | Classify failure |
     ///
-    /// "새 주문"은 CSR을 보내기 전에 `valid`·`processing`이 된 주문이다: 대응하는 개인 키가 없으므로 그 인증서를 받지
-    /// 않는다(한 시도에 한 번, 계약 H17). "되풀이"는 주문마다 한 번이고 두 번째는 `unexpectedResponse`다(H17).
+    /// "New order" applies to an order that became `valid` or `processing` before the CSR was sent. The corresponding private key is unavailable,
+    /// so skip that certificate (once per attempt, contract H17). Allow one "repeat" per order and report `unexpectedResponse` on the second (H17).
     private mutating func handleOrder(_ current: ACMEOrder, context: OrderContext, at now: Date) -> Step {
-        // 응답의 식별자가 요청한 집합과 같아야 한다(RFC 8555 7.4, 계약 C5).
+        // The response identifiers must match the requested set (RFC 8555 7.4, contract C5).
         guard Set(current.identifiers) == [requestedIdentifier], var state = order else { return unexpected(at: now) }
         state.finalizeURL = current.finalize
         state.authorizations = current.authorizations
@@ -501,13 +501,13 @@ struct ACMEOrderFlow: Sendable {
         return true
     }
 
-    /// 1초(또는 `Retry-After`) 뒤에 주문을 다시 읽는다.
+    /// Rereads the order after 1 second (or `Retry-After`).
     private mutating func poll(_ reason: OrderRead, at now: Date) -> Step {
         pollNotBefore = now.addingTimeInterval(Self.minimumPollInterval)
         return request(.order(reason), at: now)
     }
 
-    /// CSR 전에 `valid`·`processing`이 된 주문을 버리고 새 주문을 한 번만 만든다(계약 H17).
+    /// Discards an order that became `valid` or `processing` before the CSR and creates a new order just once (contract H17).
     private mutating func restart(at now: Date) -> Step {
         guard ordersCreated < 2 else { return fail(.orderFailed(type: order?.error?.type ?? ""), at: now) }
         order = nil
@@ -522,14 +522,14 @@ struct ACMEOrderFlow: Sendable {
 
     // MARK: authorization
 
-    /// 주문의 authorization을 모두, 차례 무관하게 처리한다(계약 C5).
+    /// Processes all authorizations for the order regardless of order (contract C5).
     private mutating func processAuthorizations(at now: Date) -> Step {
         guard let authorizations = order?.authorizations, !authorizations.isEmpty else { return unexpected(at: now) }
         order?.remainingAuthorizations = authorizations
         return nextAuthorization(at: now)
     }
 
-    /// 남은 authorization을 읽는다. 다 끝났으면 곧바로 주문을 다시 읽는다(Go와 같다. 노트 4.3 9).
+    /// Reads the remaining authorizations. Rereads the order immediately once they are done (same as Go, notes §4.3 step 9).
     private mutating func nextAuthorization(at now: Date) -> Step {
         guard let url = order?.remainingAuthorizations.first else {
             pollNotBefore = nil
@@ -539,7 +539,7 @@ struct ACMEOrderFlow: Sendable {
         return request(.authorization(url), at: now)
     }
 
-    /// authorization 하나의 상태로 가른다(RFC 8555 7.1.4·7.1.6, 계약 C5).
+    /// Branches on the status of one authorization (RFC 8555 7.1.4 and 7.1.6, contract C5).
     private mutating func handleAuthorization(_ authorization: ACMEAuthorization, at now: Date) -> Step {
         guard isRequestedIdentifier(authorization) else { return unexpected(at: now) }
         switch authorization.status {
@@ -557,16 +557,16 @@ struct ACMEOrderFlow: Sendable {
             case .invalid:
                 return fail(.validationFailed(type: authorization.dns01Challenge?.error?.type ?? ""), at: now)
             case .pending:
-                // 레코드를 올린 뒤 challenge에 `{}`로 응답한다(RFC 8555 7.5.1).
+                // Respond to the challenge with `{}` after publishing the record (RFC 8555 7.5.1).
                 return publishTXT(token: challenge.token, thenRespondTo: .challenge(challenge.url))
             case .processing:
-                // 서버가 이미 확인 중이다. 레코드만 올리고 응답은 다시 보내지 않는다(계약 C5).
+                // The server is already validating. Publish the record and skip resending the response (contract C5).
                 return publishTXT(token: challenge.token, thenRespondTo: nil)
             }
         }
     }
 
-    /// `identifier.type`이 `dns`이고, 값이 요청한 이름이고, 와일드카드가 아니다(계약 C5).
+    /// Checks that `identifier.type` is `dns`, the value is the requested name, and the identifier is not a wildcard (contract C5).
     private func isRequestedIdentifier(_ authorization: ACMEAuthorization) -> Bool {
         authorization.identifier == requestedIdentifier && !authorization.wildcard
     }
@@ -578,16 +578,16 @@ struct ACMEOrderFlow: Sendable {
         return .publishTXT(name: domain.challengeRecordName, value: keyAuthorization.dns01TXTValue)
     }
 
-    /// `invalid`인 authorization의 실패 종류: dns-01 challenge의 `error`, 없으면 `error`가 있는 첫 challenge의 것.
+    /// The failure kind for an `invalid` authorization is the dns-01 challenge's `error` or, if absent, the first challenge's `error` that is present.
     private static func validationErrorType(_ authorization: ACMEAuthorization) -> String {
         let failed = authorization.dns01Challenge?.error ?? authorization.challenges.lazy.compactMap(\.error).first
         return failed?.type ?? ""
     }
 
-    // MARK: invalid 주문의 진단
+    // MARK: Diagnosing an invalid order
 
-    /// 주문의 `invalid`는 DNS 확인 실패만이 아니라 만료·CSR·발급의 거절일 수 있다. authorization을 한 번씩 다시 읽어
-    /// `invalid`가 있으면 `validationFailed`, 없으면 `orderFailed`다(계약 C7).
+    /// An `invalid` order can mean failed DNS validation, expiration, or rejection of the CSR or issuance. Reread each authorization once.
+    /// If any is `invalid`, report `validationFailed`. Otherwise, report `orderFailed` (contract C7).
     private mutating func diagnose(at now: Date) -> Step {
         let authorizations = order?.authorizations ?? []
         order?.remainingDiagnoses = authorizations
@@ -602,7 +602,7 @@ struct ACMEOrderFlow: Sendable {
         return request(.diagnosis(url), at: now)
     }
 
-    // MARK: 끝
+    // MARK: Completion
 
     private mutating func unexpected(at now: Date) -> Step {
         fail(.unexpectedResponse, at: now)
@@ -617,7 +617,7 @@ struct ACMEOrderFlow: Sendable {
         return .finished(failed)
     }
 
-    /// 절차가 기다리지 않는 입력(보내지 않은 요청의 응답 등). 부르는 쪽의 잘못이지만 죽지 않고 시도를 끝낸다.
+    /// Handles input the flow is not waiting for (such as a response to a request it never sent). Ends the attempt without crashing on the caller's mistake.
     private mutating func misuse(at now: Date) -> Step {
         if let result { return .finished(result) }
         return fail(.unexpectedResponse, at: now)
@@ -625,7 +625,7 @@ struct ACMEOrderFlow: Sendable {
 }
 
 extension ACMEOrderFlow: CustomReflectable {
-    /// 계정 키·인증서 키, 계정 URL, nonce, 이름을 드러내지 않는다(계약 동작 K1·K2).
+    /// Keeps account and certificate keys, the account URL, nonces, and names private (contract behaviors K1 and K2).
     var customMirror: Mirror {
         Mirror(self, children: [] as [Mirror.Child])
     }

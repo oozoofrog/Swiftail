@@ -1,19 +1,19 @@
 import Foundation
 
-/// `CertificateManager`의 지금 모습. 앱이 화면에 보이고(만료 시각, 실패의 문구, 다음 시도 시각) "지금 다시 시도"를
-/// 붙일지 정하는 데 쓴다.
+/// The current `CertificateManager` status. Apps use it to display the expiration time, failure message, and next attempt time and decide
+/// whether to offer "Retry Now".
 public struct CertificateStatus: Sendable, Equatable {
-    /// 인증서를 받으려는 이름. 노드의 이름을 아직 모르면 nil.
+    /// The name for which a certificate is requested, or nil if the node name is still unknown.
     public var domain: String?
-    /// 지금 쥔 인증서의 만료 시각. 없으면 nil.
+    /// The expiration time of the currently held certificate, or nil if absent.
     public var notAfter: Date?
-    /// 마지막 시도가 실패한 까닭. 성공하면 nil로 돌아간다.
+    /// The reason the last attempt failed. Returns to nil on success.
     public var lastFailure: CertificateFailure?
-    /// 다음에 발급이나 갱신을 시도할 시각. ACME 서버가 `Retry-After`로 알려 준 시각이 더 늦으면 그 시각이다(7일로 묶는다.
-    /// 동작 X5). 조건(로그인, MagicDNS, HTTPS, cert 도메인)을 기다리는 중이면 nil이다: 시간으로 다시 시도하지 않는다.
+    /// The time to attempt issuance or renewal again. If the ACME server's `Retry-After` time is later, uses that time (capped at 7 days,
+    /// behavior X5). Returns nil when waiting for conditions (login, MagicDNS, HTTPS, cert domains), with no timer-based retry.
     public var nextAttempt: Date?
 
-    /// 값을 직접 채운다. 관리자는 자기 상태에서 만들므로 쓰지 않는다. 이 타입을 받는 쪽의 코드를 관리자 없이 시험할 때 쓴다.
+    /// Sets the values directly. The manager builds this from its own state and does not use this initializer. Use it to test consumers without a manager.
     public init(domain: String? = nil, notAfter: Date? = nil, lastFailure: CertificateFailure? = nil, nextAttempt: Date? = nil) {
         self.domain = domain
         self.notAfter = notAfter
@@ -23,7 +23,7 @@ public struct CertificateStatus: Sendable, Equatable {
 }
 
 extension CertificateStatus: CustomStringConvertible, CustomReflectable {
-    /// 로그에 남겨도 되는 것만 표시한다. `domain`에는 tailnet 이름이 들어 있어 가린다(동작 K2).
+    /// Displays only values safe to log. Redacts `domain` because it contains the tailnet name (behavior K2).
     public var description: String {
         """
         CertificateStatus(notAfter: \(String(describing: notAfter)), lastFailure: \(String(describing: lastFailure)), \
@@ -31,7 +31,7 @@ extension CertificateStatus: CustomStringConvertible, CustomReflectable {
         """
     }
 
-    /// 반영과 덤프에서 `domain`을 뺀다.
+    /// Omits `domain` from reflection and dumps.
     public var customMirror: Mirror {
         Mirror(
             self,

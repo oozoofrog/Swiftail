@@ -1,11 +1,11 @@
 import Foundation
 
-/// OAuth 클라이언트로 Tailscale 관리 API에서 1회용 인증 키를 만든다(계약 `docs/contracts/SwiftailPairing.md` 4절).
+/// Creates single-use auth keys through the Tailscale admin API using an OAuth client (contract `docs/contracts/SwiftailPairing.md` §4).
 ///
-/// 페어링 제안에 실어 보낼 키를 만드는 데 쓴다. 받는 쪽은 로그인 없이 그 키로 tailnet에 들어온다. 호출마다 토큰을 새로
-/// 받고 쥐고 있지 않는다(K2). 발급은 드문 일이라 토큰을 아껴 둘 까닭이 없고, 쥐지 않으면 새어 나갈 곳도 없다.
-/// 자격을 싣는 방식(머리·본문)도 기억하지 않고 호출마다 머리부터 묻는다.
-/// 만든 키는 지우지 않는다. 쓰지 않은 키는 `lifetime`이 지나면 스스로 죽는다(K8).
+/// Creates keys to include in pairing offers. The recipient uses the key to join the tailnet without logging in. Obtains a fresh token for each
+/// call and does not retain it (K2). Issuance is infrequent, so caching is unnecessary, and a token that is never retained cannot leak from storage.
+/// It also does not remember the credential method (header or body) and tries the header first on each call.
+/// Does not delete created keys. Unused keys expire on their own after `lifetime` (K8).
 ///
 /// ```swift
 /// let issuer = try AuthKeyIssuer(client: TailscaleOAuthClient(
@@ -13,10 +13,10 @@ import Foundation
 /// let issued = try await issuer.issue(lifetime: .seconds(600))
 /// ```
 public struct AuthKeyIssuer: Sendable {
-    /// Tailscale 관리 API.
+    /// The Tailscale admin API.
     public static let defaultBaseURL: URL = {
         guard let url = URL(string: "https://api.tailscale.com") else {
-            preconditionFailure("고정된 관리 API URL은 올바른 URL이다")
+            preconditionFailure("The fixed admin API URL is valid")
         }
         return url
     }()
@@ -25,18 +25,18 @@ public struct AuthKeyIssuer: Sendable {
     private let baseURL: URL
     private let transport: any AuthKeyTransport
 
-    /// 클라이언트와 API 주소를 검사하고 담는다(K4). 아직 아무것도 보내지 않는다.
+    /// Validates and stores the client and API address (K4). Sends nothing yet.
     ///
     /// - Parameters:
-    ///   - client: OAuth 클라이언트와 키에 붙일 태그.
-    ///   - baseURL: 관리 API의 주소. `https`여야 한다. 시험 서버를 위해 루프백 호스트(`127.0.0.1`, `::1`,
-    ///     `localhost`)의 평문 `http`만 받는다.
+    ///   - client: The OAuth client and the tags to attach to the key.
+    ///   - baseURL: The admin API address. Requires `https`, except that plaintext http is accepted on loopback hosts (`127.0.0.1`, `::1`,
+    ///     `localhost`) for test servers.
     /// - Throws: `.invalidClient`, `.invalidTags`, `.invalidBaseURL`.
     public init(client: TailscaleOAuthClient, baseURL: URL = AuthKeyIssuer.defaultBaseURL) throws(AuthKeyIssueError) {
         try self.init(client: client, baseURL: baseURL, transport: URLSessionAuthKeyTransport())
     }
 
-    /// 시험이 가짜 전송을 넣는 길.
+    /// Allows tests to inject fake transport.
     init(client: TailscaleOAuthClient, baseURL: URL, transport: any AuthKeyTransport) throws(AuthKeyIssueError) {
         try client.validate()
         guard Self.isAllowed(baseURL) else { throw .invalidBaseURL }
@@ -45,15 +45,15 @@ public struct AuthKeyIssuer: Sendable {
         self.transport = transport
     }
 
-    /// 한 번만 쓸 수 있는 키 하나를 만든다(K1). 토큰 요청(한두 번)과 키 요청을 보낸다.
+    /// Creates one single-use key (K1). Sends one or two token requests and a key request.
     ///
-    /// 만든 키는 한 번만 쓰이고, 들어온 노드는 승인 없이 들어와 tailnet에 남는다(K3). 페어링에 필요한 값으로 고정해
-    /// 매개변수로 두지 않는다.
+    /// The key is single-use, and the node joins without approval and stays in the tailnet (K3). These settings are fixed to the values pairing needs
+    /// and are not parameters.
     ///
-    /// - Parameter lifetime: 키의 수명. 초 단위로 버린다. 제안의 수명과 같게 짧게 준다. 너무 길면 서버가
-    ///   거절한다(`.http(status:)`).
-    /// - Throws: `AuthKeyIssueError`. 1초보다 짧으면 아무것도 보내지 않고 `.invalidLifetime`. 어느 오류에도
-    ///   비밀·토큰·키가 실리지 않는다.
+    /// - Parameter lifetime: The key lifetime, truncated to whole seconds. Keep it short and match the offer lifetime. The server rejects
+    ///   excessive lifetimes (`.http(status:)`).
+    /// - Throws: `AuthKeyIssueError`. A lifetime shorter than 1 second produces `.invalidLifetime` without sending anything. Errors contain
+    ///   no secrets, tokens, or keys.
     public func issue(lifetime: Duration) async throws(AuthKeyIssueError) -> IssuedAuthKey {
         let expirySeconds = try AuthKeyExchange.expirySeconds(for: lifetime)
         let token = try await accessToken()
@@ -61,8 +61,8 @@ public struct AuthKeyIssuer: Sendable {
         return try AuthKeyExchange.issuedKey(from: await transport.send(request))
     }
 
-    /// 토큰을 받는다. `x/oauth2`의 자동 감지처럼 머리 방식이 어떤 까닭으로든 실패하면 본문 방식으로 한 번 더 묻고,
-    /// 그 결과로 분류한다(`internal/token.go` `RetrieveToken`). 취소만은 다시 묻지 않는다.
+    /// Obtains a token. Like `x/oauth2` autodetection, any failure using the header method leads to one attempt with the body method, and that
+    /// result determines the classification (`RetrieveToken` in `internal/token.go`). Cancellation is the only failure that skips the retry.
     private func accessToken() async throws(AuthKeyIssueError) -> String {
         do throws(AuthKeyIssueError) {
             let request = AuthKeyExchange.tokenRequest(baseURL: baseURL, client: client, style: .header)
@@ -75,7 +75,7 @@ public struct AuthKeyIssuer: Sendable {
         }
     }
 
-    /// `https`는 늘, 평문 `http`는 루프백 호스트일 때만. 사용자 정보·쿼리·조각은 받지 않는다: 경로를 뒤에 이을 base다.
+    /// Always allows `https` and allows plaintext `http` only on loopback hosts. Rejects userinfo, queries, and fragments because a path is appended to the base.
     private static func isAllowed(_ url: URL) -> Bool {
         guard let host = url.host(), !host.isEmpty, url.user() == nil, url.password() == nil,
               url.query() == nil, url.fragment() == nil
@@ -89,12 +89,12 @@ public struct AuthKeyIssuer: Sendable {
 }
 
 extension AuthKeyIssuer: CustomStringConvertible, CustomReflectable {
-    /// 클라이언트 비밀을 가린다.
+    /// Redacts the client secret.
     public var description: String {
         "AuthKeyIssuer(client: \(client), baseURL: \(baseURL))"
     }
 
-    /// `dump`도 가린 클라이언트만 보인다.
+    /// `dump` also shows only the redacted client.
     public var customMirror: Mirror {
         Mirror(self, children: ["client": client, "baseURL": baseURL])
     }

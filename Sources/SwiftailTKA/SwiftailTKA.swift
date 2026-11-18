@@ -1,2 +1,2 @@
-// Tailnet Lock(TKA)의 자료 형식과 검증. 계약은 `docs/contracts/SwiftailTailnetLock.md`다.
-// 구현 단위 TL-1~TL-4가 이 타깃을 채운다.
+// Data formats and verification for Tailnet Lock (TKA). See the contract in `docs/contracts/SwiftailTailnetLock.md`.
+// Implementation units TL-1–TL-4 make up this target.

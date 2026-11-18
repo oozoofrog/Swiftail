@@ -1,17 +1,17 @@
 import Foundation
 
-/// `URLSession`으로 관리 API와 HTTPS 왕복을 한다. 이 타깃에서 `URLSession`을 쓰는 유일한 곳이다.
+/// Performs HTTPS round trips with the admin API using `URLSession`. This is the only use of URLSession in this target.
 ///
-/// 계약 `docs/contracts/SwiftailPairing.md` 4절 K5:
-/// - ephemeral 설정에 쿠키·캐시·자격 증명 저장을 모두 끈다. 연결을 기다리지 않는다.
-/// - 요청 하나의 기한은 15초다. 넘으면 `.network`.
-/// - 리다이렉트를 따르지 않는다. 3xx 응답을 그대로 돌려준다. 자격을 실은 요청이 다른 곳으로 옮겨 가지 않게 한다.
-/// - 응답 본문은 64KiB까지만 받는다. 넘으면 `.invalidResponse`.
-/// - 서버 인증서는 시스템 루트로 검증한다(기본 처리).
+/// See contract `docs/contracts/SwiftailPairing.md` §4 K5.
+/// - Uses an ephemeral configuration with cookie, cache, and credential storage disabled. Does not wait for connectivity.
+/// - Limits each request to 15 seconds. Exceeding the deadline produces `.network`.
+/// - Returns 3xx responses unchanged without following redirects. This keeps credential-bearing requests from going elsewhere.
+/// - Accepts response bodies up to 64KiB. Exceeding the limit produces `.invalidResponse`.
+/// - Verifies server certificates using system roots (default handling).
 final class URLSessionAuthKeyTransport: AuthKeyTransport {
-    /// 요청 하나의 기한.
+    /// The per-request deadline.
     static let requestTimeout: TimeInterval = 15
-    /// 응답 본문의 한도.
+    /// The response body limit.
     static let maximumBodyByteCount = 64 * 1024
 
     private let session: URLSession
@@ -31,7 +31,7 @@ final class URLSessionAuthKeyTransport: AuthKeyTransport {
     }
 
     deinit {
-        // 세션은 delegate를 강하게 쥐므로 무효화해야 둘 다 풀린다. 진행 중인 요청은 끝까지 간다.
+        // The session retains its delegate strongly. Invalidate the session to release both. In-flight requests run to completion.
         session.finishTasksAndInvalidate()
     }
 
@@ -60,13 +60,13 @@ final class URLSessionAuthKeyTransport: AuthKeyTransport {
         } catch let error as AuthKeyIssueError {
             throw error
         } catch {
-            // URLSession은 Task 취소를 `URLError.cancelled`나 `CancellationError`로 알린다.
+            // URLSession reports Task cancellation as `URLError.cancelled` or `CancellationError`.
             throw Task.isCancelled ? .cancelled : .network
         }
     }
 }
 
-/// 리다이렉트를 막는다.
+/// Blocks redirects.
 private final class RedirectBlocker: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _ session: URLSession,

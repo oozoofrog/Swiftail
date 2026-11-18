@@ -1,37 +1,37 @@
-/// 짝 맺기와 짝 목록의 실패(`PairingHost`, `PairingJoiner`). 계약 `docs/contracts/SwiftailPairing.md` 5·6절.
+/// Pairing and paired peer list failures (`PairingHost`, `PairingJoiner`). See contract `docs/contracts/SwiftailPairing.md` §§5 and 6.
 ///
-/// 메시지에는 무엇이 잘못됐는지만 담는다. 비밀·인증 키·확인 숫자·이름·주소·경로는 담지 않는다.
+/// Messages describe only what went wrong. They omit secrets, auth keys, SAS values, names, addresses, and paths.
 public enum PairingError: Error, Sendable, Equatable {
-    /// 쓸 수 없는 값이다: 노드의 장치가 `.inProcess`가 아님, 포트가 0이거나 이미 쓰는 중, 수명이 1~3600초 밖, 기기 이름이
-    /// 1~64바이트의 표시할 수 있는 글이 아님, OS 소켓 길에 준 `localAddress`가 tailnet 대역 밖.
+    /// An unusable value. The node device is not `.inProcess`, the port is zero or in use, the lifetime is outside 1–3600 seconds, the device name
+    /// is not 1–64 bytes of displayable text, or the OS socket's `localAddress` is outside the tailnet range.
     case invalidConfiguration(String)
-    /// `openOffer`에 준 인증 키가 링크에 실을 수 있는 모양이 아니다(감싼 키 포함. 계약 동작 O2).
+    /// The auth key supplied to `openOffer` cannot be put in a link (including wrapped keys, contract behavior O2).
     case invalidAuthKey
-    /// 노드에 자기 FQDN이 아직 없거나 노드의 `run()`이 끝났다.
+    /// The node does not yet have its own FQDN, or its `run()` has ended.
     case notRunning
-    /// 짝 목록 파일이 있지만 읽지 못했다(빈 목록으로 덮어쓰지 않는다). 또는 짝 목록 디렉터리가 다른 사용자의 것이거나
-    /// 그룹·기타가 쓸 수 있다.
+    /// The paired peer list file exists but could not be read (it will not be overwritten with an empty list), or its directory belongs to another user
+    /// or is writable by the group or others.
     case storeUnreadable
-    /// 같은 디렉터리를 쓰는 `PairingHost`가 이 프로세스에 이미 있다.
+    /// A `PairingHost` in this process already uses the same directory.
     case storeInUse
-    /// 짝 목록 파일을 쓰지 못했다.
+    /// Could not write the paired peer list file.
     case storeWriteFailed
-    /// 60초 안에 여는 쪽의 `challenge`를 받지 못했다(이름을 찾지 못함, 경로가 없음, 여는 쪽이 이 노드를 아직 모름).
+    /// The host's `challenge` did not arrive within 60 seconds (name lookup failed, no route, or the host does not know this node yet).
     case unreachable
-    /// OS 소켓으로 건 연결이 터널을 거친 것이 아니다: 로컬 끝이 이 기기의 tailnet 주소(`localAddress`)가 아니거나 원격
-    /// 끝이 tailnet 대역 밖이다. 터널이 연결되지 않았거나 이름이 다른 곳으로 풀렸다.
+    /// The OS socket connection did not traverse the tunnel. Its local endpoint differs from this device's tailnet address (`localAddress`), or its remote
+    /// endpoint is outside the tailnet range. The tunnel was disconnected or the name resolved elsewhere.
     case notOnTailnet
-    /// 여는 쪽이 받아 주지 않았다: 열린 제안이 없다, 만료됐다, 이미 쓰였다, 비밀이 틀렸다.
+    /// The host did not accept the joiner. There is no open offer, the offer expired or was already used, or the secret is wrong.
     case rejected
-    /// 상대가 제안의 비밀을 안다는 것을 보이지 못했다(`accepted`나 `decision`의 HMAC이 틀림). 프로세스 안 노드로 들어올
-    /// 때는 `decision`의 `StableID`가 연결 상대의 것과 다른 경우도 이것이다.
+    /// The peer failed to prove knowledge of the offer secret (an incorrect HMAC in `accepted` or `decision`). For in-process joiners,
+    /// this also covers a `decision` `StableID` that differs from the connected peer's.
     case hostNotVerified
-    /// 여는 쪽이 거절했다(사용자의 거절, 승인할 때 이 노드의 신원이 달라짐, 짝 목록이 가득 참, 저장 실패).
+    /// The host denied pairing (user denial, this node's identity changed during approval, the paired peer list is full, or saving failed).
     case denied
-    /// 승인이 기한 안에 오지 않았다.
+    /// Approval did not arrive before the deadline.
     case timedOut
-    /// 상대가 절차와 다른 바이트를 보냈거나, 결정을 보내지 않고 연결을 닫았다.
+    /// The peer sent bytes outside the protocol or closed the connection before sending a decision.
     case protocolViolation
-    /// 호출한 Task가 취소되었다.
+    /// The calling Task was canceled.
     case cancelled
 }

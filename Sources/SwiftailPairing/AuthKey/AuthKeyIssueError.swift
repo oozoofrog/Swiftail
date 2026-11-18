@@ -1,28 +1,28 @@
-/// 인증 키를 만들지 못한 까닭(계약 `docs/contracts/SwiftailPairing.md` 4절 K4·K6).
+/// The reason an auth key could not be created (contract `docs/contracts/SwiftailPairing.md` §4 K4 and K6).
 ///
-/// 연관 값에 비밀·토큰·키·서버 본문을 싣지 않는다. 오류를 그대로 로그에 찍어도 된다.
+/// Associated values omit secrets, tokens, keys, and server bodies. The error can be logged as is.
 public enum AuthKeyIssueError: Error, Sendable, Equatable {
-    /// OAuth 클라이언트의 `id`나 `secret`이 규칙에 맞지 않는다.
+    /// The OAuth client's `id` or `secret` violates the rules.
     case invalidClient
-    /// 태그가 없거나 `tag:` 규칙에 맞지 않는 것이 있다.
+    /// Tags are missing or one fails the `tag:` rules.
     case invalidTags
-    /// `lifetime`이 1초보다 짧다(초 단위로 버린 값이 0 이하).
+    /// `lifetime` is shorter than 1 second (its value truncated to whole seconds is 0 or less).
     case invalidLifetime
-    /// `baseURL`이 `https`가 아니거나(루프백의 `http`만 예외) 쿼리·조각·사용자 정보가 있다.
+    /// `baseURL` does not use `https` (except `http` on loopback) or contains a query, fragment, or userinfo.
     case invalidBaseURL
-    /// 토큰 요청이 거절됐다: 400·401이거나, 2xx인데 응답에 `error`가 있거나 `access_token`이 비었다. 클라이언트 ID나
-    /// 비밀이 틀렸거나 지워진 클라이언트다.
+    /// The token request was rejected. A 400 or 401, or a 2xx with `error` or an empty `access_token`, indicates a bad client ID or secret
+    /// or a deleted client.
     case clientRejected
-    /// 키 요청이 401로 거절됐다. 받은 토큰이 받아들여지지 않았다.
+    /// The key request was rejected with 401. The received token was not accepted.
     case unauthorized
-    /// 키 요청이 403으로 거절됐다. 클라이언트에 `auth_keys` 쓰기 권한이 없거나 그 태그를 다룰 수 없다.
+    /// The key request was rejected with 403. The client lacks write access to `auth_keys` or cannot manage the tag.
     case forbidden
-    /// 그 밖의 HTTP 상태. 리다이렉트(3xx)는 따르지 않고 여기로 온다.
+    /// Another HTTP status. Redirects (3xx) are reported here without being followed.
     case http(status: Int)
-    /// 응답을 읽지 못했다. JSON이 아니거나, 필드가 없거나 모양이 틀렸거나, 본문이 64KiB를 넘었다.
+    /// The response could not be read. It was not JSON, a field was missing or malformed, or the body exceeded 64KiB.
     case invalidResponse
-    /// 연결하지 못했거나 도중에 끊겼거나 요청 하나의 기한(15초)을 넘었다.
+    /// The connection failed or dropped, or the per-request deadline (15 seconds) elapsed.
     case network
-    /// 호출한 Task가 취소됐다.
+    /// The calling Task was canceled.
     case cancelled
 }

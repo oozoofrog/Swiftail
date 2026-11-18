@@ -1,38 +1,38 @@
 import Foundation
 import Security
 
-/// `URLSession`으로 ACME 서버와 HTTPS 왕복을 한다. 이 타깃에서 `URLSession`을 쓰는 유일한 곳이다(계약 H8).
+/// Performs HTTPS round trips to the ACME server with `URLSession`. This is the only use of URLSession in this target (contract H8).
 ///
-/// - ephemeral 설정: 쿠키·캐시·자격 증명 저장이 없다. 연결을 기다리지 않는다.
-/// - 리다이렉트를 따르지 않는다. 3xx 응답을 그대로 돌려준다(계약 동작 X1).
-/// - 요청 하나의 기한은 30초다(계약 동작 C10). 넘으면 `timedOut`.
-/// - 응답 본문은 256KiB(인증서 사슬의 한도)까지만 받는다. 넘으면 `responseTooLarge`(계약 동작 X2).
-/// - `User-Agent`는 `Swiftail/<버전>`이다(RFC 8555 6.1, 계약 H13).
-/// - 서버 인증서는 운영에서는 시스템 루트로만 검증한다. 시험과 스테이징은 신뢰 앵커를 주며, 주면 그 앵커만 쓴다
-///   (계약 동작 C8·S3 ⑤, H10. Go의 내장 루트 fallback은 옮기지 않는다).
+/// - Uses an ephemeral configuration with no cookie, cache, or credential storage. It does not wait for connectivity.
+/// - Returns 3xx responses unchanged without following redirects (contract behavior X1).
+/// - Limits each request to 30 seconds (contract behavior C10). Exceeding the deadline produces `timedOut`.
+/// - Accepts up to 256KiB of response body (the certificate chain limit). Exceeding it produces `responseTooLarge` (contract behavior X2).
+/// - Uses `Swiftail/<version>` as `User-Agent` (RFC 8555 6.1, contract H13).
+/// - Verifies server certificates using only system roots in production. Tests and staging supply trust anchors and use only those anchors
+///   (contract behaviors C8 and S3 ⑤, H10. Go's embedded root fallback is omitted).
 final class URLSessionACMETransport: ACMETransport {
-    /// `User-Agent` 머리 값. 저장소에 라이브러리 버전 문자열이 없어 여기에 둔다.
+    /// The `User-Agent` header value. It lives here because the repository has no library version string.
     static let userAgent = "Swiftail/0.1.1"
-    /// 요청 하나의 기한.
+    /// The per-request deadline.
     static let requestTimeout: TimeInterval = 30
 
     private let session: URLSession
     private let allowsLoopbackHTTP: Bool
     private let maximumBodyByteCount: Int
 
-    /// 운영용: 시스템 루트로 검증하는 HTTPS만.
+    /// The production configuration. Allows only HTTPS verified with system roots.
     convenience init() {
         self.init(trustAnchors: nil)
     }
 
-    /// 시험·스테이징용 길(계약 H10).
+    /// The initialization path for tests and staging (contract H10).
     ///
     /// - Parameters:
-    ///   - trustAnchors: 서버 인증서 사슬을 검증할 루트들의 DER. 주면 시스템 루트 대신 이것만 쓴다.
-    ///   - allowsLoopbackHTTP: 참이면 루프백 호스트(`127.0.0.1`, `::1`, `localhost`)의 평문 `http`도 보낸다. 전송을
-    ///     시험하는 루프백 서버만을 위한 길이다. 주문 절차는 이 값과 무관하게 `https` URL만 받는다(계약 동작 X1).
-    ///   - requestTimeout: 요청 하나의 기한.
-    ///   - maximumBodyByteCount: 응답 본문의 한도.
+    ///   - trustAnchors: DER for the roots used to verify the server certificate chain. When supplied, only these roots are used in place of system roots.
+    ///   - allowsLoopbackHTTP: If true, also sends plaintext `http` to loopback hosts (`127.0.0.1`, `::1`, `localhost`). This is only for loopback
+    ///     servers that test the transport. The order flow accepts only `https` URLs regardless of this value (contract behavior X1).
+    ///   - requestTimeout: The per-request deadline.
+    ///   - maximumBodyByteCount: The response body limit.
     init(
         trustAnchors: [[UInt8]]?,
         allowsLoopbackHTTP: Bool = false,
@@ -55,7 +55,7 @@ final class URLSessionACMETransport: ACMETransport {
     }
 
     deinit {
-        // 세션은 delegate를 강하게 쥐므로 무효화해야 둘 다 풀린다. 진행 중인 요청은 끝까지 간다.
+        // The session retains its delegate strongly. Invalidate the session to release both. In-flight requests run to completion.
         session.finishTasksAndInvalidate()
     }
 
@@ -97,7 +97,7 @@ final class URLSessionACMETransport: ACMETransport {
         }
     }
 
-    /// `https`는 늘, 평문 `http`는 시험용 길에서 루프백 호스트일 때만.
+    /// Allows `https` in all configurations and plaintext `http` only for loopback hosts in the test configuration.
     private func isAllowed(_ url: URL) -> Bool {
         switch url.scheme?.lowercased() {
         case "https": url.host?.isEmpty == false
@@ -106,11 +106,11 @@ final class URLSessionACMETransport: ACMETransport {
         }
     }
 
-    /// 응답 머리.
+    /// The response headers.
     ///
-    /// shortcut: `HTTPURLResponse`는 머리를 사전으로만 주므로 받은 순서와 같은 이름의 여러 줄을 되살릴 수 없다(같은 이름은
-    /// 쉼표로 이어진 한 값이 된다). 이름 순으로 낸다. 이 절차가 읽는 머리(`Replay-Nonce`·`Location`·`Retry-After`)는
-    /// 한 줄씩이다. `Link`(대체 사슬, 약관)를 읽게 되면 다시 본다.
+    /// shortcut: `HTTPURLResponse` supplies headers only as a dictionary, so wire order and repeated lines with the same name cannot be recovered
+    /// (they become one comma-separated value). Return them in name order. This flow reads `Replay-Nonce`, `Location`, and `Retry-After`, each on a
+    /// single line. Revisit if it starts reading `Link` (alternate chains, terms).
     private static func headers(of response: HTTPURLResponse) -> [ACMEHTTPResponse.Header] {
         response.allHeaderFields
             .compactMap { name, value -> ACMEHTTPResponse.Header? in
@@ -121,7 +121,7 @@ final class URLSessionACMETransport: ACMETransport {
     }
 }
 
-/// 리다이렉트를 막고, 신뢰 앵커가 주어졌으면 서버 인증서를 그 앵커로만 검증한다.
+/// Blocks redirects and verifies server certificates using only the supplied trust anchors when present.
 private final class SessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     private let trustAnchors: [[UInt8]]?
 
@@ -138,7 +138,7 @@ private final class SessionDelegate: NSObject, URLSessionTaskDelegate, Sendable 
         nil
     }
 
-    /// `session.bytes(for:)`의 작업은 서버 신뢰 요구를 작업 수준으로만 묻는다(세션 수준 처리기는 불리지 않는다).
+    /// The task from `session.bytes(for:)` asks for server trust only at the task level (the session-level handler is not called).
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -154,11 +154,11 @@ private final class SessionDelegate: NSObject, URLSessionTaskDelegate, Sendable 
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust
         else {
-            // 클라이언트 인증서·암호 같은 다른 요구에는 응하지 않는다.
+            // Decline other challenges such as client certificates or passwords.
             return (.cancelAuthenticationChallenge, nil)
         }
         guard let trustAnchors else {
-            // 운영: 시스템 루트와 기본 검사(이름·기간·사슬)를 그대로 쓴다.
+            // Production uses system roots and the default name, validity period, and chain checks.
             return (.performDefaultHandling, nil)
         }
         let anchors = trustAnchors.compactMap { SecCertificateCreateWithData(nil, Data($0) as CFData) }

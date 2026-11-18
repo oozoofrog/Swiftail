@@ -2,66 +2,66 @@ import CryptoKit
 import Foundation
 import Security
 
-/// 사슬 검증에서 믿을 루트(계약 동작 S3 ⑤·X3 ④·C8).
+/// Roots to trust during chain verification (contract behaviors S3 ⑤, X3 ④, and C8).
 ///
-/// 운영은 `system`만 쓴다. Go와 다른 선택이다: Go는 시스템 루트로 실패하면 내장 Let's Encrypt 루트로 다시 검사하고,
-/// 비운영 디렉터리에서는 "모르는 인증 기관" 오류를 통과시킨다(`feature/acme/certstore.go:440-477`). Swiftail은 둘 다
-/// 옮기지 않고, 시험과 스테이징은 앵커를 명시적으로 준다(Go `testRoots`의 자리).
+/// Production uses only `system`. Go falls back to embedded Let's Encrypt roots if system roots fail, and lets
+/// "unknown certificate authority" errors pass for non-production directories (`feature/acme/certstore.go:440-477`). Swiftail omits both
+/// behaviors. Tests and staging supply explicit anchors (the role of Go's `testRoots`).
 package enum CertificateTrustAnchors: Sendable, Equatable {
-    /// OS의 기본 신뢰 저장소(`SecTrust`의 기본 앵커).
+    /// The OS default trust store (`SecTrust`'s default anchors).
     case system
-    /// 이 DER 인증서들만 믿는다. 시스템 루트는 쓰지 않는다(`SecTrustSetAnchorCertificatesOnly`).
+    /// Trusts only these DER certificates and excludes system roots (`SecTrustSetAnchorCertificatesOnly`).
     case only([[UInt8]])
 }
 
-/// 받은 사슬이 검증을 통과하지 못한 까닭. `CertificateManager`는 모두 `CertificateFailure.invalidCertificate`로 낸다.
+/// The reason the received chain failed verification. `CertificateManager` reports all of these as `CertificateFailure.invalidCertificate`.
 ///
-/// 이름과 경로를 담지 않는다(계약 동작 K3). `untrusted`의 상태 코드는 Security의 오류 코드(`SecBase.h`의 `errSec…`)다.
+/// Omits names and paths (contract behavior K3). The status code in `untrusted` is a Security error code (`errSec…` in `SecBase.h`).
 enum CertificateVerificationError: Error, Sendable, Equatable {
-    /// PEM이 틀렸거나, `CERTIFICATE`가 아닌 블록이 있거나, 1~5장이 아니다(동작 X3 ①·②).
+    /// Invalid PEM, a block other than `CERTIFICATE`, or a count outside 1–5 certificates (behavior X3 ① and ②).
     case malformedChain(PEMError)
-    /// DER가 X.509 인증서로 읽히지 않았다(`SecCertificateCreateWithData`가 nil).
+    /// DER could not be read as an X.509 certificate (`SecCertificateCreateWithData` returned nil).
     case unparsableCertificate
-    /// leaf의 공개 키가 쥔 개인 키의 공개 키와 다르다(동작 X3 ③·S3 ④).
+    /// The leaf public key differs from the public key of the held private key (behaviors X3 ③ and S3 ④).
     case keyMismatch
-    /// leaf에서 유효 기간을 꺼내지 못했다.
+    /// The validity period could not be extracted from the leaf.
     case validityUnavailable
-    /// `notAfter − notBefore`가 1시간보다 짧다(동작 X3 ⑤).
+    /// `notAfter − notBefore` is less than 1 hour (behavior X3 ⑤).
     case lifetimeTooShort
-    /// `SecTrust`가 받지 않았다: 이름, 지금 시각의 기간, 사슬(앵커까지) 가운데 하나(동작 X3 ④·S3 ⑤).
+    /// `SecTrust` rejected the name, validity at the current time, or chain up to the anchor (behaviors X3 ④ and S3 ⑤).
     case untrusted(status: Int)
 }
 
-/// 검증을 통과한 인증서 사슬과 그 개인 키. 이 타입의 값은 `init`의 검증을 거쳐서만 생긴다.
+/// A verified certificate chain and its private key. Values can be created only through the checks in `init`.
 ///
-/// ACME가 내려 준 사슬(동작 C8·X3)과 `certs/`에서 읽은 사슬(동작 S3)이 같은 검증을 지난다. 저장소는 이 타입만 쓴다.
-/// 그래서 검증하지 않은 사슬이 디스크에 남지 않는다.
+/// Chains returned by ACME (behaviors C8 and X3) and read from `certs/` (behavior S3) undergo the same checks. The store uses only this type,
+/// so unverified chains are never persisted to disk.
 ///
-/// 개인 키를 담으므로 `description`과 `dump`에는 유효 기간만 드러낸다(이름에는 tailnet 이름이 들어 있다. 동작 K).
+/// Because this holds a private key, `description` and `dump` expose only the validity period (the name contains the tailnet name, behavior K).
 struct VerifiedCertificate: Sendable {
-    /// 인증서의 이름과 유효 기간(leaf의 것).
+    /// The certificate's name and validity period (from the leaf).
     let lifetime: CertificateLifetime
-    /// 받은 그대로의 사슬(DER, leaf 먼저). `<이름>.crt`에 이것을 쓴다(동작 S6. Go와 같다).
+    /// The original chain as received (DER, leaf first). Write this to `<name>.crt` (behavior S6, same as Go).
     let receivedChain: [[UInt8]]
-    /// TLS 신원에 실을 사슬: 받은 사슬에서 leaf가 아닌 자기 서명 인증서(루트)를 뗀 것(동작 S6).
-    /// `TailnetCertificate.chain`이 이것이다.
+    /// The chain for the TLS identity, with non-leaf self-signed certificates (roots) removed from the received chain (behavior S6).
+    /// This is `TailnetCertificate.chain`.
     let chain: [[UInt8]]
-    /// leaf의 개인 키.
+    /// The leaf private key.
     let privateKey: P256.Signing.PrivateKey
 
-    /// 인증서 수명의 하한(동작 X3 ⑤). 짧으면 갱신 판정이 헛돈다.
+    /// The minimum certificate lifetime (behavior X3 ⑤). A shorter lifetime makes renewal decisions run pointlessly.
     static let minimumLifetime: TimeInterval = 3600
 
-    /// PEM 사슬을 읽고 검증한다.
+    /// Reads and verifies a PEM chain.
     ///
-    /// 차례: ① PEM 전체 검사와 1~5장(`PEM.certificateChain`), ② leaf의 공개 키가 `privateKey`의 것과 같음,
-    /// ③ 수명 1시간 이상, ④ `SecTrust`(SSL 서버 정책과 `domain`, 검증 시각 `now`, `anchors`)가 받음.
-    /// 통과하면 동작 S6으로 `chain`을 만든다.
+    /// In order: ① check all PEM and the count of 1–5 certificates (`PEM.certificateChain`), ② match the leaf public key to `privateKey`,
+    /// ③ require a lifetime of at least 1 hour, and ④ require `SecTrust` acceptance (SSL server policy and `domain`, verification time `now`, `anchors`).
+    /// On success, builds `chain` according to behavior S6.
     ///
-    /// `SecTrustEvaluateWithError`는 부른 스레드를 막는다. 빠진 중간 인증서를 네트워크에서 받지 않게 했으므로
-    /// (`SecTrustSetNetworkFetchAllowed`) 서버가 보낸 사슬만으로 검증한다.
+    /// `SecTrustEvaluateWithError` blocks the calling thread. Network fetching for missing intermediate certificates is disabled
+    /// (`SecTrustSetNetworkFetchAllowed`), so verification uses only the chain sent by the server.
     ///
-    /// - Parameter maximumByteCount: PEM 입력의 한도(ACME 응답 256KiB, 디스크의 파일 64KiB. 동작 M).
+    /// - Parameter maximumByteCount: The PEM input limit (256KiB for ACME responses, 64KiB for disk files, behavior M).
     init(
         pemChain: [UInt8],
         maximumByteCount: Int,
@@ -83,11 +83,11 @@ struct VerifiedCertificate: Sendable {
         self.privateKey = privateKey
     }
 
-    /// Security로 본 사슬의 사실. Security의 타입(`SecCertificate`, `SecTrust`)은 이 함수 밖으로 나가지 않는다.
+    /// Chain facts obtained from Security. Security types (`SecCertificate`, `SecTrust`) never leave this function.
     private struct Facts {
         var notBefore: Date
         var notAfter: Date
-        /// 평가가 고른 사슬의 신뢰 앵커(DER). 사슬이 leaf 하나뿐이면 nil.
+        /// The trust anchor (DER) of the chain selected by evaluation, or nil for a chain consisting only of the leaf.
         var anchor: [UInt8]?
     }
 
@@ -101,19 +101,19 @@ struct VerifiedCertificate: Sendable {
         let certificates = der.compactMap { SecCertificateCreateWithData(nil, Data($0) as CFData) }
         guard certificates.count == der.count, let leaf = certificates.first else { throw .unparsableCertificate }
 
-        // ② 공개 키: X9.63 비압축 점(04 ‖ X ‖ Y)끼리 견준다(`SecKey.h`의 EC 외부 표현). 공개 값이라 상수 시간이 아니어도 된다.
+        // ② Public key: Compare uncompressed X9.63 points (04 ‖ X ‖ Y, the EC external representation in `SecKey.h`). The values are public, so comparison need not be constant-time.
         guard let leafKey = SecCertificateCopyKey(leaf),
               let leafPoint = SecKeyCopyExternalRepresentation(leafKey, nil) as Data?,
               leafPoint == publicKey.x963Representation
         else { throw .keyMismatch }
 
-        // ③ 기간: macOS 15·iOS 18의 `SecCertificateCopyNotValidBeforeDate`·`…AfterDate`.
+        // ③ Validity period: `SecCertificateCopyNotValidBeforeDate` and `…AfterDate` in macOS 15 and iOS 18.
         guard let notBefore = SecCertificateCopyNotValidBeforeDate(leaf) as Date?,
               let notAfter = SecCertificateCopyNotValidAfterDate(leaf) as Date?
         else { throw .validityUnavailable }
         guard notAfter.timeIntervalSince(notBefore) >= minimumLifetime else { throw .lifetimeTooShort }
 
-        // ④ 사슬, 이름, 지금 시각.
+        // ④ Chain, name, and current time.
         let policy = SecPolicyCreateSSL(true, domain.name as CFString)
         var created: SecTrust?
         try check(SecTrustCreateWithCertificates(certificates as CFArray, policy, &created))
@@ -122,7 +122,7 @@ struct VerifiedCertificate: Sendable {
         try check(SecTrustSetVerifyDate(trust, now as CFDate))
         if case .only(let anchorDER) = anchors {
             let anchorCertificates = anchorDER.compactMap { SecCertificateCreateWithData(nil, Data($0) as CFData) }
-            // 읽지 못하는 앵커를 빼고 나머지로 검증하면 넓어질 일은 없지만, 시험의 실수를 가리므로 닫는다.
+            // Dropping unreadable anchors would not broaden trust, but it could hide test mistakes, so fail closed.
             guard anchorCertificates.count == anchorDER.count else { throw .untrusted(status: Int(errSecParam)) }
             try check(SecTrustSetAnchorCertificates(trust, anchorCertificates as CFArray))
             try check(SecTrustSetAnchorCertificatesOnly(trust, true))
@@ -132,9 +132,9 @@ struct VerifiedCertificate: Sendable {
             throw .untrusted(status: error.map { CFErrorGetCode($0) } ?? Int(errSecNotTrusted))
         }
 
-        // 동작 S6: 서버가 함께 보낸 신뢰 앵커는 `chain`에서 뗀다. 평가가 고른 사슬의 마지막이 앵커다
-        // (`SecTrust.h`의 `SecTrustCopyCertificateChain`). 주체와 발급자가 같다는 것만으로 떼지 않는다: 키를 바꿀 때 쓰는
-        // 자기 발급 중간 인증서(이름이 같고 키가 다르다)는 상대가 사슬을 잇는 데 필요하다.
+        // Behavior S6: Remove the trust anchor from `chain` if the server sent it. The last certificate in the evaluated chain is the anchor
+        // (`SecTrustCopyCertificateChain` in `SecTrust.h`). Matching subject and issuer names alone do not warrant removal. A self-issued intermediate
+        // with the same name and a different key supports key rollover and is needed by the peer to build the chain.
         let evaluated = SecTrustCopyCertificateChain(trust) as? [SecCertificate] ?? []
         let anchor = evaluated.count > 1 ? evaluated.last.map { [UInt8](SecCertificateCopyData($0) as Data) } : nil
         return Facts(notBefore: notBefore, notAfter: notAfter, anchor: anchor)

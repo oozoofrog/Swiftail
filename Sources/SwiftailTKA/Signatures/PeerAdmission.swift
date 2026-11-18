@@ -1,19 +1,19 @@
-// 피어 집합의 판정: 서명 검증과 회전으로 낡은 키. 노트 4.9, 계약 동작 P1~P5.
-// Go `tailscale.com` v1.104.7 `ipn/ipnlocal/tailnet-lock.go:189-338`(`tkaFilterNetmapLocked`의 거르기와 `rotationTracker`)을 옮겼다.
+// Decisions for a set of peers, including signature checks and keys superseded by rotation. Notes §4.9, contract behaviors P1–P5.
+// Ported from Go `tailscale.com` v1.104.7 `ipn/ipnlocal/tailnet-lock.go:189-338` (filtering in `tkaFilterNetmapLocked` and `rotationTracker`).
 //   Copyright (c) Tailscale Inc & contributors, SPDX-License-Identifier: BSD-3-Clause.
 
 import SwiftailBase
 
-/// 피어 하나의 판정 입력(netmap의 `Node`에서 쓰는 것만).
+/// Input for the decision about one peer (only the fields used from the netmap `Node`).
 package struct PeerCredential: Sendable {
-    /// `Node.Key`. 서명이 인가해야 하는 node 키다.
+    /// `Node.Key`, the node key the signature must authorize.
     package var nodeKey: NodePublicKey
-    /// `Node.KeySignature`의 바이트. 비면 서명 없음이다.
+    /// The `Node.KeySignature` bytes. Empty means no signature.
     package var keySignature: [UInt8]
-    /// `Node.UnsignedPeerAPIOnly`. 서명 검사를 받지 않지만, 다른 피어의 회전으로 낡은 키가 되면 Go처럼 빠진다.
+    /// `Node.UnsignedPeerAPIOnly`. Skips signature verification but, as in Go, is removed if another peer's rotation supersedes the key.
     package var unsignedPeerAPIOnly: Bool
 
-    /// netmap의 `Node` 하나에서 판정에 쓰는 세 값. 서명은 여기서 읽지 않는다: `AuthorityState.admitted(_:)`가 판정할 때 읽는다.
+    /// The three values used to decide one netmap `Node`. Signature decoding takes place in `AuthorityState.admitted(_:)` at decision time.
     package init(nodeKey: NodePublicKey, keySignature: [UInt8], unsignedPeerAPIOnly: Bool) {
         self.nodeKey = nodeKey
         self.keySignature = keySignature
@@ -22,15 +22,15 @@ package struct PeerCredential: Sendable {
 }
 
 extension AuthorityState {
-    /// 피어마다 netmap에 남기는가(Go `tkaFilterNetmapLocked`의 피어 부분). 입력과 같은 순서다.
+    /// Determines whether each peer stays in the netmap (the peer portion of Go `tkaFilterNetmapLocked`). Results follow input order.
     ///
-    /// 빠지는 것: 서명이 없거나 `authorize`를 통과하지 못한 피어(`UnsignedPeerAPIOnly`는 보지 않는다), 그리고 node 키가
-    /// 회전으로 낡은 키인 피어(`UnsignedPeerAPIOnly`를 포함해 모든 피어). 낡은 키는 통과한 rotation의 `previousNodeKeys` 전부와,
-    /// `initialSignature`가 direct인 rotation을 그 `WrappingPubkey`로 묶은 묶음마다 내력이 가장 길지 않은 것이다. 가장 긴 것이
-    /// 둘 이상이면 그 묶음 전부가 낡은 키다. credential에서 시작한 사슬은 묶지 않는다(재사용 인증 키로 여러 노드가 들어온다).
+    /// Removes peers with no signature or whose signatures fail `authorize` (`UnsignedPeerAPIOnly` is exempt) and any peer whose node key was
+    /// superseded by rotation (including `UnsignedPeerAPIOnly`). Superseded keys include all `previousNodeKeys` from verified rotations and
+    /// keys of rotations without the longest history in each group of rotations with a direct `initialSignature` and the same `WrappingPubkey`. If two or more
+    /// tie for longest, the whole group is superseded. Chains starting from credential are not grouped (multiple nodes join with a reusable auth key).
     ///
-    /// 묶음을 보는 순서는 묶음이 처음 나온 피어의 순서다. Go는 맵을 돌아 순서가 정해지지 않는데, 한 묶음의 판정이 다른 묶음의
-    /// 판정을 바꾸는 것은 같은 node 키가 서로 다른 회전 키의 묶음에 함께 들 때뿐이다.
+    /// Groups are considered in the order of the first peer in each group. Go has no fixed order because it iterates a map. One group's decision affects
+    /// another's only when the same node key appears in groups with different rotation keys.
     package func admitted(_ peers: [PeerCredential]) -> [Bool] {
         var rejected = [Bool](repeating: false, count: peers.count)
         var obsolete: Set<NodePublicKey> = []
@@ -38,7 +38,7 @@ extension AuthorityState {
         for (index, peer) in peers.enumerated() where !peer.unsignedPeerAPIOnly {
             let details: RotationDetails?
             do {
-                // 빈 서명(Go의 "missing signature")은 디코딩에서 떨어지므로 따로 보지 않는다.
+                // An empty signature (Go's "missing signature") fails decoding, so no separate check is needed.
                 details = try authorize(peer.nodeKey, keySignature: peer.keySignature)
             } catch {
                 rejected[index] = true
@@ -56,7 +56,7 @@ extension AuthorityState {
             }
         }
         for group in groups {
-            // 다른 서명이 이미 낡은 키로 만든 것은 견주지 않는다.
+            // Skip comparison for keys another signature already superseded.
             let members = group.members.filter { !obsolete.contains($0.nodeKey) }
             guard let longest = members.map(\.previousKeyCount).max() else { continue }
             let isUnique = members.count(where: { $0.previousKeyCount == longest }) == 1

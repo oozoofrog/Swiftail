@@ -1,24 +1,24 @@
-// node 키에 대한 서명(Go `tka.NodeKeySignature`, `tailscale.com/tka/sig.go:74-242`). 노트 3.6·3.7, 계약 동작 E2·E4·E5·D·M.
+// A signature over a node key (Go `tka.NodeKeySignature`, `tailscale.com/tka/sig.go:74-242`). Notes §§3.6 and 3.7, contract behaviors E2, E4, E5, D, and M.
 // Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
-/// node 키에 대한 서명(NKS). 검증은 `Authority`가 한다(동작 S). 여기는 읽기·정준 쓰기·`SigHash`까지다.
+/// A node key signature (NKS). `Authority` verifies it (behavior S). This type handles reading, canonical writing, and `SigHash`.
 ///
-/// 바이트 필드는 모두 omitempty라 nil과 빈 값을 가리지 않는다(노트 3.6).
+/// All byte fields use omitempty, so nil and empty values are treated alike (notes §3.6).
 package struct NodeKeySignature: Sendable, Equatable {
     /// 1 direct, 2 rotation, 3 credential(`Kind`).
     package var kind: UInt8
-    /// `"np"` ‖ node 공개 키 32바이트. credential은 비운다.
+    /// `"np"` ‖ 32 bytes of node public key. credential leaves it empty.
     package var publicKey: [UInt8]
-    /// 서명한 신뢰 키의 KeyID. direct·credential만 쓴다.
+    /// The KeyID of the trusted signing key. Only direct and credential use it.
     package var keyID: [UInt8]
-    /// Ed25519 서명. 입력은 `signatureHash`다.
+    /// The Ed25519 signature. The input is `signatureHash`.
     package var signature: [UInt8]
-    /// 이 서명을 감싸는 서명에 서명할 Ed25519 공개 키.
+    /// The Ed25519 public key for signing a signature that wraps this one.
     package var wrappingPublicKey: [UInt8]
-    /// `Nested`의 자리. 값 타입은 자기 자신을 바로 담지 못하므로 `indirect` 열거형으로 간접 저장한다.
+    /// The slot for `Nested`. A value type cannot contain itself directly, so an `indirect` enum stores it.
     private var nestedLink: Link?
 
-    /// rotation이 감싸는 서명.
+    /// The signature wrapped by rotation.
     package var nested: NodeKeySignature? {
         get {
             guard case .signature(let signature) = nestedLink else { return nil }
@@ -31,10 +31,10 @@ package struct NodeKeySignature: Sendable, Equatable {
         case signature(NodeKeySignature)
     }
 
-    /// NKS 하나의 바이트 한도(동작 M, Swiftail의 선택. 16겹이 약 3KiB).
+    /// The byte limit per NKS (behavior M, a Swiftail choice. 16 layers take about 3KiB).
     static let maximumByteCount = 8 * 1_024
 
-    /// `SigKind`의 값(노트 3.6).
+    /// `SigKind` values (notes §3.6).
     enum Kind {
         static let invalid: UInt8 = 0
         static let direct: UInt8 = 1
@@ -54,19 +54,19 @@ package struct NodeKeySignature: Sendable, Equatable {
         self.nested = nested
     }
 
-    /// 한도(8KiB)와 동작 D의 규칙으로 읽는다. 서명은 검증하지 않는다.
+    /// Reads under the limit (8KiB) and the rules in behavior D. Does not verify the signature.
     package init(decoding bytes: [UInt8]) throws(TKAError) {
         try self.init(item: decodeItem(bytes, maximumByteCount: Self.maximumByteCount))
     }
 
-    /// 정준 CBOR(동작 E1~E4). `RegisterRequest`·`Node.KeySignature`에 싣는 바이트다.
+    /// Canonical CBOR (behaviors E1–E4). These bytes go in `RegisterRequest` and `Node.KeySignature`.
     package func serialized() -> [UInt8] {
         var writer = CBORWriter()
         write(to: &writer)
         return writer.bytes
     }
 
-    /// `Signature`를 뺀 정준 바이트의 BLAKE2s-256. `Nested`는 서명까지 그대로 들어간다(노트 3.7).
+    /// The BLAKE2s-256 of the canonical bytes without `Signature`. `Nested` is included unchanged, including its signature (notes §3.7).
     package var signatureHash: [UInt8] {
         var unsigned = self
         unsigned.signature = []
@@ -86,14 +86,14 @@ extension NodeKeySignature {
         static let wrappingPublicKey: UInt64 = 6
     }
 
-    /// 재귀의 깊이는 CBOR의 중첩 한도(16단)가 묶는다.
+    /// The CBOR nesting limit (16 levels) bounds recursion depth.
     private init(item: CBORValue) throws(TKAError) {
         let fields = try StructureFields(
             item,
             knownKeys: [Field.kind, Field.publicKey, Field.keyID, Field.signature, Field.nested, Field.wrappingPublicKey]
         )
         var nested: NodeKeySignature?
-        // 포인터 필드의 null은 없음이다.
+        // Null pointer fields are absent.
         if let value = fields[Field.nested], value != .null {
             nested = try NodeKeySignature(item: value)
         }
@@ -107,7 +107,7 @@ extension NodeKeySignature {
         )
     }
 
-    /// 키 순서대로 쓴다. `SigKind`는 늘, 나머지는 비지 않을 때만 쓴다(동작 E4).
+    /// Writes in key order. Always writes `SigKind` and writes the rest only when nonempty (behavior E4).
     private func write(to writer: inout CBORWriter) {
         let nested = nested
         let present = [!publicKey.isEmpty, !keyID.isEmpty, !signature.isEmpty, nested != nil, !wrappingPublicKey.isEmpty]

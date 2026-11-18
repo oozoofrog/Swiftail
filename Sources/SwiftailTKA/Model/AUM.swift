@@ -1,34 +1,34 @@
-// 서명 권한 상태를 바꾸는 메시지(Go `tka.AUM`, `tailscale.com/tka/aum.go:132-288`). 노트 3.4·3.7, 계약 동작 E2~E6·D3~D9·A1.
+// A message that changes signing authority state (Go `tka.AUM`, `tailscale.com/tka/aum.go:132-288`). Notes §§3.4 and 3.7, contract behaviors E2–E6, D3–D9, and A1.
 // Copyright (c) Tailscale Inc & contributors. BSD-3-Clause.
 
-/// 서명 권한 상태를 바꾸는 메시지 하나(Authority Update Message).
+/// A message that changes signing authority state (Authority Update Message).
 ///
-/// 받은 바이트를 쥐지 않는다. 해시와 서명 검증은 이 값을 다시 인코딩한 정준 바이트로 한다(동작 E5). 그래서 모르는 필드,
-/// 비최단 정수, 정렬 안 된 키는 받아들이되 해시에서 사라진다.
+/// Does not retain received bytes. Hashing and signature verification use this value's reencoded canonical bytes (behavior E5). Unknown fields,
+/// non-shortest integers, and unsorted keys are accepted but do not survive in the hash.
 package struct AUM: Sendable, Equatable {
-    /// 종류(`Kind`). 0과 6 이상도 받아들인다(노트 3.4).
+    /// The kind (`Kind`). Also accepts 0 and values at least 6 (notes §3.4).
     package var messageKind: UInt8
-    /// nil = 부모 없음(null로 인코딩). 길이 0인 바이트열은 null과 다르게 인코딩되고 정적 검사에서 떨어진다(동작 E4·A1).
+    /// nil means no parent and encodes as null. A zero-length byte string encodes differently and fails static checks (behaviors E4 and A1).
     package var prevAUMHash: [UInt8]?
-    /// AddKey가 더하는 키. 그 밖의 종류에서는 정적 검사가 nil만 통과시킨다.
+    /// The key added by AddKey. Static checks allow only nil for other kinds.
     package var key: TrustedKey? = nil
-    /// nil과 빈 바이트열은 둘 다 인코딩에서 빠지지만(omitempty) 정적 검사에서 다르다: AddKey·Checkpoint는 nil만 통과한다
-    /// (Go `aum.go:189`, `:207`의 `a.KeyID != nil`).
+    /// Both nil and empty byte strings are omitted from encoding (omitempty), but static checks distinguish them. AddKey and Checkpoint accept only nil
+    /// (Go `aum.go:189` and `:207`, `a.KeyID != nil`).
     package var keyID: [UInt8]? = nil
-    /// Checkpoint가 싣는 상태 전체. 그 밖의 종류에서는 정적 검사가 nil만 통과시킨다.
+    /// The complete state carried by Checkpoint. Static checks allow only nil for other kinds.
     package var state: AuthorityState? = nil
-    /// 0이어도 있으면 인코딩한다(Go `*uint`, omitempty).
+    /// Encodes a present value even if 0 (Go `*uint`, omitempty).
     package var votes: UInt64? = nil
-    /// nil과 빈 맵은 검증에서만 다르다(인코딩에서는 둘 다 빠진다).
+    /// nil and an empty map differ only in validation. Encoding omits both.
     package var meta: [MetaEntry]? = nil
-    /// 신뢰 키의 서명들. 해시(`hash`)에는 들고 서명의 입력(`signatureHash`)에는 들지 않으므로, 같은 서명을 되풀이하거나
-    /// 순서를 바꾼 목록은 해시가 다른 "유효한" AUM이다(계약 5절 TL-11a 항목 1).
+    /// Trusted key signatures. They are included in `hash` and omitted from the signing input `signatureHash`, so repeating a signature or reordering the
+    /// list produces a "valid" AUM with a different hash (contract §5 TL-11a item 1).
     package var signatures: [AUMSignature] = []
 
-    /// AUM 하나의 바이트 한도(동작 M, Swiftail의 선택).
+    /// The byte limit per AUM (behavior M, a Swiftail choice).
     static let maximumByteCount = 512 * 1_024
 
-    /// `MessageKind`의 값(Go `AUMKind`, 노트 3.4).
+    /// `MessageKind` values (Go `AUMKind`, notes §3.4).
     enum Kind {
         static let invalid: UInt8 = 0
         static let addKey: UInt8 = 1
@@ -38,24 +38,24 @@ package struct AUM: Sendable, Equatable {
         static let checkpoint: UInt8 = 5
     }
 
-    /// 정준 CBOR(동작 E1~E4). 해시와 서명 검증은 받은 바이트가 아니라 이것으로 한다(동작 E5).
+    /// Canonical CBOR (behaviors E1–E4). Hashing and signature verification use these bytes in place of the received bytes (behavior E5).
     package func serialized() -> [UInt8] {
         var writer = CBORWriter()
         write(to: &writer, includingSignatures: true)
         return writer.bytes
     }
 
-    /// BLAKE2s-256(`serialized()`). 서명을 포함한다(노트 3.7).
+    /// BLAKE2s-256(`serialized()`). Includes signatures (notes §3.7).
     package var hash: AUMHash { AUMHash(hashing: serialized()) }
 
-    /// `Signatures`를 뺀 정준 바이트의 BLAKE2s-256. 서명은 이 32바이트에 대한 것이다(노트 3.7).
+    /// The BLAKE2s-256 of the canonical bytes without `Signatures`. Signatures cover these 32 bytes (notes §3.7).
     package var signatureHash: [UInt8] {
         var writer = CBORWriter()
         write(to: &writer, includingSignatures: false)
         return AUMHash(hashing: writer.bytes).bytes
     }
 
-    /// Go `AUM.StaticValidate`(동작 A1). 서명과 부모는 보지 않는다(동작 A2·A3은 `Authority`가 한다).
+    /// Runs Go `AUM.StaticValidate` (behavior A1). `Authority` checks signatures and parents separately (behaviors A2 and A3).
     package func validate() throws(TKAError) {
         try key?.validate()
         if let prevAUMHash, prevAUMHash.isEmpty { throw .invalidAUM }
@@ -73,7 +73,7 @@ package struct AUM: Sendable, Equatable {
             case Kind.checkpoint:
                 state != nil && keyID == nil && key == nil && votes == nil && meta == nil
             default:
-                // NoOp와 모르는 종류는 종류별 검사가 없다(옛 클라이언트는 무시해도 된다는 Go의 계약).
+                // NoOp and unknown kinds have no kind-specific checks (Go's contract lets older clients ignore them).
                 true
             }
         guard isValid else { throw .invalidAUM }
@@ -83,7 +83,7 @@ package struct AUM: Sendable, Equatable {
 // MARK: CBOR
 
 extension AUM {
-    /// 한도(동작 M)와 동작 D의 규칙으로 읽는다. 정적 검사는 하지 않는다. 멤버별 생성자가 남도록 확장에 둔다.
+    /// Decodes under the limits in behavior M and rules in behavior D. Does not run static checks. Lives in an extension to preserve the memberwise initializer.
     package init(decoding bytes: [UInt8]) throws(TKAError) {
         try self.init(item: decodeItem(bytes, maximumByteCount: Self.maximumByteCount))
     }
@@ -111,7 +111,7 @@ extension AUM {
             truncatingIfNeeded: try fields[Field.messageKind]?.unsignedField(maximum: UInt64(UInt8.max)) ?? 0
         )
         prevAUMHash = try fields[Field.prevAUMHash]?.byteField()
-        // 포인터 필드(`Key`·`State`·`Votes`)의 null은 없음이다.
+        // Null pointer fields (`Key`, `State`, and `Votes`) are absent.
         if let value = fields[Field.key], value != .null {
             key = try TrustedKey(field: value)
         }
@@ -128,7 +128,7 @@ extension AUM {
         }
     }
 
-    /// 키 순서대로 쓴다(동작 E2). `MessageKind`·`PrevAUMHash`는 늘, 나머지는 비지 않을 때만 쓴다(동작 E4).
+    /// Writes in key order (behavior E2). Always writes `MessageKind` and `PrevAUMHash` and writes the rest only when nonempty (behavior E4).
     private func write(to writer: inout CBORWriter, includingSignatures: Bool) {
         let keyID = keyID ?? []
         let meta = meta ?? []

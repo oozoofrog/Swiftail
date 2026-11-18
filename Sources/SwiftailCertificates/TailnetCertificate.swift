@@ -1,23 +1,23 @@
 import CryptoKit
 import Foundation
 
-/// 노드의 ts.net 이름에 발급된 인증서와 그 개인 키.
+/// A certificate issued for the node's ts.net name and its private key.
 ///
-/// 개인 키와 tailnet 이름이 로그에 남지 않도록 문자열 표현과 `dump`에는 유효 기간만 드러낸다(동작 K1·K2).
+/// The string representation and `dump` expose only the validity period, keeping the private key and tailnet name out of logs (behaviors K1 and K2).
 public struct TailnetCertificate: Sendable {
-    /// 인증서의 이름(`rd-mac-1a2b3c4d.tail0001.ts.net`).
+    /// The certificate name (`rd-mac-1a2b3c4d.tail0001.ts.net`).
     public let domain: String
-    /// DER 인증서. leaf가 먼저이고 중간 인증서가 뒤따른다. ACME 서버가 루트를 함께 보낼 수도 있으므로(RFC 8555 9.1),
-    /// 사슬을 검증한 뒤 leaf가 아닌 자기 서명 인증서를 떼어 낸 것이다(동작 S6). TLS 신원에 그대로 싣는다.
+    /// DER certificates with the leaf first, followed by intermediates. As the ACME server may include the root (RFC 8555 9.1),
+    /// non-leaf self-signed certificates are removed after verification (behavior S6). Use the result directly in the TLS identity.
     public let chain: [[UInt8]]
-    /// leaf의 개인 키. `x963Representation`을 `SecKeyCreateWithData`에 넘겨 `SecKey`를 만들 수 있다.
+    /// The leaf private key. Pass `x963Representation` to `SecKeyCreateWithData` to create a `SecKey`.
     public let privateKey: P256.Signing.PrivateKey
-    /// leaf의 유효 기간이 시작하는 시각.
+    /// The start of the leaf's validity period.
     public let notBefore: Date
-    /// leaf의 유효 기간이 끝나는 시각. 이 시각 전(수명의 2/3 지점)에 관리자가 갱신한다.
+    /// The end of the leaf's validity period. The manager renews before this time, at the 2/3 point of its lifetime.
     public let notAfter: Date
 
-    /// 검증을 통과한 사슬에서만 만든다(동작 C8·S3).
+    /// Creates a value only from a verified chain (behaviors C8 and S3).
     init(_ certificate: VerifiedCertificate) {
         domain = certificate.lifetime.domain.name
         chain = certificate.chain
@@ -28,12 +28,12 @@ public struct TailnetCertificate: Sendable {
 }
 
 extension TailnetCertificate: CustomStringConvertible, CustomReflectable {
-    /// 로그에 남겨도 되는 유효 기간만 표시한다.
+    /// Displays only the validity period, which is safe to log.
     public var description: String {
         "TailnetCertificate(notBefore: \(notBefore), notAfter: \(notAfter))"
     }
 
-    /// 반영과 덤프에서 유효 기간만 드러낸다.
+    /// Exposes only the validity period through reflection and dumps.
     public var customMirror: Mirror {
         Mirror(self, children: ["notBefore": notBefore, "notAfter": notAfter], displayStyle: .struct)
     }

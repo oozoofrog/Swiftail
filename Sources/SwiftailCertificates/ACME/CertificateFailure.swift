@@ -1,40 +1,40 @@
-// 계약 `docs/contracts/SwiftailHost.md` 2절의 선언 그대로다. ACME 주문 절차(M7-4)와 `CertificateManager`(M7-6)가
-// 값을 만들고, `CertificateStatus.lastFailure`로 앱에 낸다.
+// Matches the declaration in contract §2 of `docs/contracts/SwiftailHost.md`. The ACME order flow (M7-4) and `CertificateManager` (M7-6)
+// create these values and expose them to the app through `CertificateStatus.lastFailure`.
 
 import Foundation
 
-/// 발급이 되지 않는 까닭. 앱은 종류로 사용자 문구를 고르고, 연관 문자열은 진단에만 쓴다.
+/// The reason issuance failed. The app chooses user-facing wording by kind and uses associated strings only for diagnostics.
 public enum CertificateFailure: Sendable, Equatable {
-    /// 노드가 `.running`이 아니다.
+    /// The node is not `.running`.
     case nodeNotRunning
-    /// tailnet에서 MagicDNS가 꺼져 있다. 사용자가 관리 콘솔에서 켜야 한다.
+    /// MagicDNS is disabled on the tailnet. The user must enable it in the admin console.
     case magicDNSDisabled
-    /// tailnet에서 HTTPS 인증서가 꺼져 있다(netmap `DNSConfig.CertDomains`가 비었다). 사용자가 관리 콘솔에서 켜야 한다.
+    /// HTTPS certificates are disabled on the tailnet (netmap `DNSConfig.CertDomains` is empty). The user must enable them in the admin console.
     case httpsNotEnabled
-    /// 노드의 이름이 netmap의 cert 도메인에 없거나, 동작 C2의 이름 검사에 어긋난다.
+    /// The node name is absent from the netmap's cert domains or fails the name check in behavior C2.
     case domainNotAllowed
-    /// 제어 서버가 DNS 레코드 요청을 받지 않았다. HTTP 상태 코드.
+    /// The control server rejected the DNS record request. The associated value is the HTTP status code.
     case controlRejected(status: Int)
-    /// ACME 서버가 성공이 아닌 HTTP 응답으로 거절했다. `status`는 HTTP 상태 코드, `type`은 문제 문서의 `type` 전체
-    /// 문자열(`urn:ietf:params:acme:error:badCSR`, 서버 고유 URI, `about:blank`)이다. 문제 문서가 없거나 JSON이
-    /// 아니거나 `type`이 없으면 빈 문자열이다. 256바이트로 자른다. 문제 문서의 `detail`은 싣지 않는다(식별자가 들어
-    /// 있을 수 있다. 동작 K2).
+    /// The ACME server rejected the request with an unsuccessful HTTP response. `status` is the HTTP status code, and `type` is the full
+    /// type string from the problem document (`urn:ietf:params:acme:error:badCSR`, a server-specific URI, or `about:blank`). If the problem
+    /// document is absent, is not JSON, or lacks `type`, the string is empty. Truncate it to 256 bytes. Omit the problem document's `detail`
+    /// because it may contain identifiers (behavior K2).
     case acme(status: Int, type: String)
-    /// ACME 서버의 속도 제한(`type`이 `urn:ietf:params:acme:error:rateLimited`). 서버가 알려 준 다시 시도할 시각.
+    /// The ACME server's rate limit (`type` is `urn:ietf:params:acme:error:rateLimited`), with the retry time supplied by the server.
     case rateLimited(retryAfter: Date?)
-    /// 인증 기관이 이름의 소유를 확인하지 못했다: authorization이 `invalid`다(DNS 레코드를 찾지 못했거나 값이 달랐다).
-    /// `type`은 그 challenge의 `error` 문제 문서의 `type`이다(`acme`와 같은 규칙).
+    /// The certificate authority failed to verify ownership of the name. The authorization is `invalid` (the DNS record was missing or its value differed).
+    /// `type` is the type of that challenge's `error` problem document (same rules as `acme`).
     case validationFailed(type: String)
-    /// 주문이 `invalid`가 되었는데 authorization의 실패가 아니다(만료, CSR·발급의 거절 등), 또는 주문을 이어 갈 수 없는
-    /// authorization(`deactivated`·`expired`·`revoked`)이 있다. `type`은 주문의 `error` 문제 문서의 `type`이다.
+    /// The order became `invalid` for a reason other than authorization failure (expiration, CSR or issuance rejection, etc.), or an authorization
+    /// prevents the order from proceeding (`deactivated`, `expired`, or `revoked`). `type` is the type of the order's `error` problem document.
     case orderFailed(type: String)
-    /// ACME 서버의 응답이 규격이나 이 계약의 한도에 맞지 않았다(모르는 상태, 다른 이름의 authorization, 한도를 넘는
-    /// 본문, `https`가 아닌 URL 등. 동작 C5·X).
+    /// The ACME server's response violated the specification or the contract limits (unknown status, authorization for another name,
+    /// oversized body, a URL with a scheme other than `https`, etc., behaviors C5 and X).
     case unexpectedResponse
-    /// 받은 인증서가 검증을 통과하지 못했다(이름, 기간, 사슬, 키).
+    /// The certificate received failed verification (name, validity period, chain, or key).
     case invalidCertificate
-    /// ACME 서버나 제어 서버에 닿지 못했다.
+    /// The ACME server or control server could not be reached.
     case network(String)
-    /// 발급이 기한 안에 끝나지 않았다.
+    /// Issuance did not finish before the deadline.
     case timedOut
 }

@@ -1,26 +1,26 @@
 import Foundation
 
-/// `Retry-After` 머리(RFC 7231 7.1.3)를 "이 시각 전에는 요청하지 않는다"는 벽시계 시각으로 바꾼다.
+/// Converts the `Retry-After` header (RFC 7231 7.1.3) to the wall-clock time before which requests are withheld.
 ///
 /// ```
 /// Retry-After = HTTP-date / delay-seconds
 /// delay-seconds = 1*DIGIT
 /// ```
 ///
-/// HTTP-date는 세 형식을 모두 받는다(RFC 7231 7.1.1.1 "MUST accept all three"): IMF-fixdate
+/// Accepts all three HTTP-date formats (RFC 7231 7.1.1.1 "MUST accept all three"): IMF-fixdate
 /// (`Sun, 06 Nov 1994 08:49:37 GMT`), RFC 850(`Sunday, 06-Nov-94 08:49:37 GMT`), asctime(`Sun Nov  6 08:49:37 1994`).
-/// 둘 다 아닌 값은 없는 것으로 본다(계약 동작 X5, H21). Go `retryAfter`도 정수 초와 `http.ParseTime`(같은 세 형식)을
-/// 읽고 나머지를 0으로 본다(`tempfork/acme/http.go:92-104`).
+/// Treats values that are neither format as absent (contract behavior X5, H21). Go's `retryAfter` also reads integer seconds and uses
+/// http.ParseTime (the same three formats), treating everything else as 0 (`tempfork/acme/http.go:92-104`).
 ///
-/// 결과는 `received + 7일`로 묶는다(계약 동작 X5: 위쪽 끝만 묶는다). 지난 날짜도 그대로 돌려준다: 부르는 쪽이 지금보다
-/// 이르면 기다림이 없는 것으로 본다.
+/// Caps the result at `received + 7 days` (contract behavior X5 caps only the upper end). Returns past dates unchanged so the caller
+/// can skip the wait if the date precedes the current time.
 enum RetryAfter {
-    /// 서버가 알려 준 시각의 위쪽 한도(7일).
+    /// The upper limit on the server's time (7 days).
     static let maximumDelay: TimeInterval = 7 * 24 * 60 * 60
 
     /// - Parameters:
-    ///   - value: 머리 값. 앞뒤 공백은 무시한다(RFC 7230 3.2의 OWS).
-    ///   - received: 응답을 받은 시각. 초 단위 값의 기준이자 7일 묶음의 기준이다.
+    ///   - value: The header value. Leading and trailing whitespace is ignored (OWS in RFC 7230 3.2).
+    ///   - received: The time the response arrived. The base for values in seconds and for the 7-day cap.
     static func date(from value: String, receivedAt received: Date) -> Date? {
         let text = value.trimmingCharacters(in: .whitespaces)
         let latest = received.addingTimeInterval(maximumDelay)
@@ -31,7 +31,7 @@ enum RetryAfter {
         return min(date, latest)
     }
 
-    /// `1*DIGIT`. 아주 큰 값은 7일을 넘는 값으로 포화한다(넘쳐도 죽지 않는다).
+    /// Parses `1*DIGIT`. Very large values saturate beyond 7 days without crashing on overflow.
     private static func delaySeconds(_ text: String) -> TimeInterval? {
         let digits = Array(text.utf8)
         guard !digits.isEmpty, digits.allSatisfy(isDigit) else { return nil }
@@ -58,8 +58,8 @@ enum RetryAfter {
         return date(year: year, month: month, day: day, time: parts[4])
     }
 
-    /// `day-name-l "," SP day "-" month "-" 2DIGIT SP time-of-day SP "GMT"`. RFC 7231 7.1.1.1은 50년보다 먼 미래로
-    /// 보이는 두 자리 해를 같은 끝 두 자리의 가장 최근 과거 해로 읽게 한다.
+    /// Parses `day-name-l "," SP day "-" month "-" 2DIGIT SP time-of-day SP "GMT"`. RFC 7231 7.1.1.1 interprets a two-digit year that
+    /// appears more than 50 years in the future as the most recent past year with the same last two digits.
     private static func rfc850Date(_ text: String, receivedAt received: Date) -> Date? {
         let parts = text.split(separator: " ", omittingEmptySubsequences: false)
         guard parts.count == 4, parts[0].hasSuffix(","), longDayNames.contains(String(parts[0].dropLast())), parts[3] == "GMT"
@@ -83,7 +83,7 @@ enum RetryAfter {
     /// `day-name SP month SP ( 2DIGIT / ( SP 1DIGIT ) ) SP time-of-day SP year`.
     private static func asctimeDate(_ text: String) -> Date? {
         let parts = text.split(separator: " ", omittingEmptySubsequences: false)
-        // 한 자리 날은 앞에 공백이 하나 더 있어 빈 조각이 생긴다(`Nov  6`).
+        // A one-digit day has an extra leading space, yielding an empty part (`Nov  6`).
         let fields: [Substring]
         if parts.count == 6, parts[2].isEmpty, parts[3].count == 1 {
             fields = [parts[0], parts[1], parts[3], parts[4], parts[5]]
@@ -98,7 +98,7 @@ enum RetryAfter {
         return date(year: year, month: month, day: day, time: fields[3])
     }
 
-    /// `hour ":" minute ":" second`(각 2자리)를 붙여 UTC 시각을 만든다. 날이 그 달에 없으면 nil.
+    /// Appends `hour ":" minute ":" second` (2 digits each) to form a UTC time. Returns nil if the day does not exist in that month.
     private static func date(year: Int, month: Int, day: Int, time: Substring) -> Date? {
         let clock = time.split(separator: ":", omittingEmptySubsequences: false)
         guard clock.count == 3, let hour = number(clock[0], digits: 2), let minute = number(clock[1], digits: 2),
@@ -113,7 +113,7 @@ enum RetryAfter {
         monthNames.firstIndex(of: String(text)).map { $0 + 1 }
     }
 
-    /// 정확히 `digits`자리의 십진수.
+    /// A decimal number of exactly `digits` digits.
     private static func number(_ text: Substring, digits: Int) -> Int? {
         let bytes = Array(text.utf8)
         guard bytes.count == digits, (1...4).contains(digits), bytes.allSatisfy(isDigit) else { return nil }
@@ -132,7 +132,7 @@ enum RetryAfter {
         }
     }
 
-    /// 1970-01-01부터의 날 수(그레고리력). Howard Hinnant의 `days_from_civil` 식이다.
+    /// The number of days since 1970-01-01 (Gregorian calendar), using Howard Hinnant's `days_from_civil` formula.
     private static func daysFromCivil(year: Int, month: Int, day: Int) -> Int {
         let y = month <= 2 ? year - 1 : year
         let era = (y >= 0 ? y : y - 399) / 400

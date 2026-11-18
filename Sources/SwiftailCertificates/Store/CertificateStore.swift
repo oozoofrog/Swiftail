@@ -1,76 +1,76 @@
-// 자리·이름·쓰는 차례는 Go `feature/acme/certstore.go`(certDir, ACMEKey, Read, WriteTLSCertAndKey, keyFile, certFile)와
-// `atomicfile/atomicfile.go`(tailscale.com v1.104.6, BSD-3-Clause, Copyright (c) Tailscale Inc & contributors)를 따랐다.
-// 코드는 옮기지 않았다.
+// The location, names, and write order follow Go's `feature/acme/certstore.go` (certDir, ACMEKey, Read, WriteTLSCertAndKey, keyFile, certFile) and
+// `atomicfile/atomicfile.go` (tailscale.com v1.104.6, BSD-3-Clause, Copyright (c) Tailscale Inc & contributors).
+// No code was ported.
 
 import CryptoKit
 import Foundation
 
-/// 저장소가 일을 하지 못한 까닭. `CertificateManager`는 `CertificateError`의 같은 이름 case로 옮긴다.
+/// A storage failure. `CertificateManager` maps it to the same-named `CertificateError` case.
 enum CertificateStoreError: Error, Sendable, Equatable {
-    /// `certs/`를 만들거나 열거나 쓰거나 읽지 못했다. 이미 있는 `certs/`가 다른 사용자의 것이거나 그룹·기타가 쓸 수
-    /// 있는 것도 여기다(동작 S1, H20). 메시지에는 까닭과 오류 코드만 담는다(경로·이름·키를 넣지 않는다. 동작 K3).
+    /// Failed to create, open, write, or read `certs/`. Also covers an existing certs/ owned by another user or writable by the group or others
+    /// (behavior S1, H20). The message includes only the reason and error code, omitting paths, names, and keys (behavior K3).
     case storage(String)
-    /// `acme-account.key.pem`이 있지만 P-256 키로 읽지 못했다(RSA, 깨짐, 64KiB 초과). 덮어쓰지 않는다(동작 C4, H16).
+    /// `acme-account.key.pem` exists but could not be read as a P-256 key (RSA, corrupt, or over 64KiB). It is kept as is (behavior C4, H16).
     case accountKeyUnreadable
 }
 
-/// 노드 상태 디렉터리 아래 `certs/`의 파일: 인증서 사슬, 인증서 키, ACME 계정 키(계약 동작 S1~S3·C4, H7·H20).
+/// Files in `certs/` under the node's state directory: the certificate chain, certificate key, and ACME account key (contract behaviors S1–S3 and C4, H7 and H20).
 ///
-/// 자리와 이름은 Go와 같다: `certs/<이름>.crt`(사슬, `CERTIFICATE` PEM을 leaf부터), `certs/<이름>.key`(개인 키 PEM),
-/// `certs/acme-account.key.pem`. Go가 받아 둔 파일을 복사만으로 쓰고(동작 G6), Go도 Swiftail이 쓴 파일을 읽는다.
+/// Locations and names match Go: `certs/<name>.crt` (chain, `CERTIFICATE` PEM with leaf first), `certs/<name>.key` (private key PEM),
+/// and `certs/acme-account.key.pem`. Go files work after copying alone (behavior G6), and Go can read Swiftail's files.
 ///
-/// 디렉터리: 새 `certs/`는 0700이다. 이미 있으면 권한을 고치지 않지만, 디렉터리가 아니거나(심볼릭 링크 포함), 지금
-/// 사용자의 것이 아니거나, 그룹·기타가 쓸 수 있으면 읽지도 쓰지도 않고 `storage`로 실패한다. 남이 바꿔 넣을 수 있는
-/// 키를 TLS 신원으로 내지 않기 위해서다(H20).
+/// New `certs/` directories have mode 0700. Existing permissions are kept. If the path is not a directory (including symlinks), is owned
+/// by someone other than the current user, or is writable by the group or others, reading and writing fail with `storage`. This keeps
+/// a key that someone else could substitute from being served as the TLS identity (H20).
 ///
-/// 파일: 새로 쓰는 파일은 모두 0600이다(Go는 인증서를 0644로 쓴다. 동작 S2). 같은 디렉터리의 임시 파일에 다 쓰고
-/// 권한을 정하고 디스크에 내린 뒤 이름을 바꾼다. 읽을 때는 심볼릭 링크를 따라가지 않고 정규 파일만 64KiB까지 읽는다.
+/// All newly written files have mode 0600 (Go writes certificates with 0644, behavior S2). Write everything to a temporary file in the same
+/// directory, set permissions, flush it to disk, and rename it. Reads never follow symlinks and accept only regular files up to 64KiB.
 ///
-/// 한 `certs/`를 두 관리자나 두 프로세스가 함께 쓰는 것은 막지 못한다(Go도 프로세스 사이 잠금이 없다. 동작 C9).
+/// Two managers or processes can still share one `certs/` (Go also lacks cross-process locking, behavior C9).
 ///
-/// 판단(형식, 키 짝, 검증, 권한)은 값 함수(`decodeAccountKey`, `decodeCertificate`, `directoryProblem`)가 하고,
-/// 파일 입출력은 이 타입의 `private` 가장자리 함수에만 있다. POSIX 호출은 디렉터리 기술자에 묶은 `openat`·
-/// `renameatx_np` 같은 것만 쓴다: 확인한 `certs/` 밖으로 경로가 새지 않게 하고, 처음부터 0600으로 만들고, 계정 키를
-/// 덮어쓰지 않는 것(`RENAME_EXCL`)을 Foundation의 파일 API로는 할 수 없기 때문이다.
+/// Value functions make decisions about format, key matching, verification, and permissions (`decodeAccountKey`, `decodeCertificate`, `directoryProblem`).
+/// File I/O lives only in this type's `private` edge functions. It uses only POSIX calls bound to the directory descriptor, such as `openat` and
+/// `renameatx_np`. Foundation file APIs cannot confine paths to the verified `certs/`, create files with mode 0600 from the outset, or avoid
+/// overwriting the account key (`RENAME_EXCL`).
 struct CertificateStore: Sendable {
-    /// 상태 디렉터리 아래의 인증서 디렉터리 이름(`feature/acme/certstore.go` `certDir`).
+    /// The certificate directory name under the state directory (`certDir` in `feature/acme/certstore.go`).
     static let directoryName = "certs"
-    /// ACME 계정 키 파일의 이름(`certstore.go` `acmePEMName`).
+    /// The ACME account key file name (`acmePEMName` in `certstore.go`).
     static let accountKeyFileName = "acme-account.key.pem"
-    /// 디스크의 인증서·키 파일 하나의 한도(동작 M).
+    /// The size limit for one certificate or key file on disk (behavior M).
     static let maximumFileByteCount = 64 * 1024
 
-    /// 노드의 상태 디렉터리. 이미 있어야 한다(노드가 신원을 저장한 자리다). 없으면 쓰기는 `storage`, 읽기는 "없음"이다.
+    /// The node's state directory. It must already exist as the place where the node stored its identity. If absent, writes fail with `storage` and reads report absence.
     let stateDirectory: URL
 
     init(stateDirectory: URL) {
         self.stateDirectory = stateDirectory
     }
 
-    // MARK: - 계정 키(동작 C4)
+    // MARK: - Account Key (behavior C4)
 
-    /// 저장된 ACME 계정 키. 파일이 없을 때만 nil이다.
+    /// The stored ACME account key. Returns nil only when the file is absent.
     ///
-    /// - Throws: 파일이 있는데 P-256 키로 읽지 못하면 `accountKeyUnreadable`, 그 밖의 읽기 오류는 `storage`.
+    /// - Throws: `accountKeyUnreadable` if the file exists but cannot be read as a P-256 key, or `storage` for other read errors.
     func accountKey() throws(CertificateStoreError) -> P256.Signing.PrivateKey? {
         guard let directory = try openDirectory(creating: false) else { return nil }
         defer { close(directory) }
         return try Self.decodeAccountKey(Self.read(Self.accountKeyFileName, in: directory))
     }
 
-    /// 새 계정 키를 저장한다. 이미 파일이 있으면 덮어쓰지 않고 `storage`로 실패한다(Go가 쓰던 계정을 잃지 않게).
+    /// Stores a new account key. Fails with `storage` if the file already exists, preserving the account that Go used.
     func saveAccountKey(_ key: P256.Signing.PrivateKey) throws(CertificateStoreError) {
-        guard let directory = try openDirectory(creating: true) else { throw .storage("상태 디렉터리가 없다") }
+        guard let directory = try openDirectory(creating: true) else { throw .storage("The state directory is missing") }
         defer { close(directory) }
         try Self.write(Array(key.pemRepresentation.utf8), as: Self.accountKeyFileName, in: directory, replacing: false)
     }
 
-    // MARK: - 인증서(동작 S2·S3)
+    // MARK: - Certificates (behaviors S2 and S3)
 
-    /// 저장된 인증서를 읽어 검증한다(동작 S3). 파일이 없거나, 64KiB를 넘거나, 해석되지 않거나, 키와 짝이 맞지 않거나,
-    /// 검증을 통과하지 못하면 nil이다(지우지 않는다. 새 발급이 덮어쓴다).
+    /// Reads and verifies a stored certificate (behavior S3). Returns nil for a missing file, more than 64KiB, invalid encoding, a key mismatch,
+    /// or verification failure. The files stay in place for new issuance to overwrite.
     ///
-    /// - Throws: 디렉터리의 권한(H20)이나 없음 밖의 읽기 오류(심볼릭 링크, 정규 파일이 아님 포함)는 `storage`.
+    /// - Throws: `storage` for directory permission failures (H20) or read errors other than absence, including symlinks and non-regular files.
     func certificate(
         for domain: CertificateDomain, at now: Date, anchors: CertificateTrustAnchors
     ) throws(CertificateStoreError) -> VerifiedCertificate? {
@@ -81,12 +81,12 @@ struct CertificateStore: Sendable {
         return Self.decodeCertificate(key: key, chain: chain, domain: domain, at: now, anchors: anchors)
     }
 
-    /// 검증을 통과한 인증서를 쓴다: 키 파일, 그다음 인증서 파일(Go와 같은 차례. 동작 S2).
+    /// Writes a verified certificate. Writes the key file first, then the certificate file (same order as Go, behavior S2).
     ///
-    /// 두 파일의 쓰기는 한 트랜잭션이 아니다. 둘 사이에 멈추면 새 키와 옛 인증서가 남고, 다음 읽기의 키 짝 확인이
-    /// 그것을 "없음"으로 본다.
+    /// The two writes occur outside a single transaction. Stopping between them leaves the new key and old certificate. The next read's key-match check
+    /// treats the pair as absent.
     func save(_ certificate: VerifiedCertificate) throws(CertificateStoreError) {
-        guard let directory = try openDirectory(creating: true) else { throw .storage("상태 디렉터리가 없다") }
+        guard let directory = try openDirectory(creating: true) else { throw .storage("The state directory is missing") }
         defer { close(directory) }
         let files = Self.encode(certificate)
         let domain = certificate.lifetime.domain
@@ -94,24 +94,24 @@ struct CertificateStore: Sendable {
         try Self.write(files.chain, as: Self.certificateFileName(domain), in: directory, replacing: true)
     }
 
-    // MARK: - 파일 이름과 형식(값 함수)
+    // MARK: - File Names and Formats (Value Functions)
 
-    /// `<이름>.crt`. 이름 검사(동작 C2)를 통과한 이름이라 경로 문자가 없다. Go의 `wildcard_` 치환은 와일드카드를
-    /// 받지 않으므로 필요 없다.
+    /// `<name>.crt`. The name passed validation (behavior C2), so it contains no path characters. Go's `wildcard_` substitution is unnecessary
+    /// because wildcards are not accepted.
     static func certificateFileName(_ domain: CertificateDomain) -> String { domain.name + ".crt" }
 
-    /// `<이름>.key`.
+    /// `<name>.key`.
     static func keyFileName(_ domain: CertificateDomain) -> String { domain.name + ".key" }
 
-    /// 파일 하나를 읽은 결과.
+    /// The result of reading one file.
     enum StoredFile: Sendable, Equatable {
         case missing
-        /// 한도(64KiB)를 넘는다. 내용은 읽지 않았다.
+        /// The file exceeds the limit (64KiB). Its contents were not read.
         case tooLarge
         case contents([UInt8])
     }
 
-    /// 계정 키 파일을 해석한다. 없을 때만 nil이고, 있는데 읽지 못하면(크기 초과 포함) `accountKeyUnreadable`.
+    /// Parses an account key file. Returns nil only for absence and reports `accountKeyUnreadable` if unreadable, including oversized files.
     static func decodeAccountKey(_ file: StoredFile) throws(CertificateStoreError) -> P256.Signing.PrivateKey? {
         switch file {
         case .missing:
@@ -127,7 +127,7 @@ struct CertificateStore: Sendable {
         }
     }
 
-    /// 인증서 파일과 키 파일을 해석하고 검증한다(동작 S3 ①~⑤). 어느 하나라도 어긋나면 nil(없는 것으로 본다).
+    /// Parses and verifies the certificate and key files (behavior S3 ①–⑤). Returns nil if any check fails (treats the files as absent).
     static func decodeCertificate(
         key: StoredFile, chain: StoredFile, domain: CertificateDomain, at now: Date, anchors: CertificateTrustAnchors
     ) -> VerifiedCertificate? {
@@ -140,51 +140,51 @@ struct CertificateStore: Sendable {
         )
     }
 
-    /// 쓸 두 파일의 바이트: 키는 CryptoKit의 PKCS#8 PEM(Go가 읽는다. 노트 4.6), 사슬은 받은 그대로를 블록마다 PEM으로
-    /// 다시 적은 것(Go `feature/acme/cert.go:600-609`와 같다. 동작 S6).
+    /// The bytes for the two files. The key is CryptoKit's PKCS#8 PEM (Go can read it, notes §4.6). The chain is the original chain reencoded
+    /// block by block as PEM (same as Go `feature/acme/cert.go:600-609`, behavior S6).
     static func encode(_ certificate: VerifiedCertificate) -> (key: [UInt8], chain: [UInt8]) {
         let chain = certificate.receivedChain.map { PEM.encode(PEMBlock(label: .certificate, der: $0)) }.joined()
         return (Array(certificate.privateKey.pemRepresentation.utf8), Array(chain.utf8))
     }
 
-    /// 이미 있는 `certs/`를 쓰면 안 되는 까닭. 써도 되면 nil(동작 S1, H20).
+    /// The reason an existing `certs/` is unusable, or nil if usable (behavior S1, H20).
     static func directoryProblem(mode: mode_t, owner: uid_t, currentUser: uid_t) -> String? {
-        if mode & S_IFMT != S_IFDIR { return "인증서 자리가 디렉터리가 아니다" }
-        if owner != currentUser { return "인증서 디렉터리가 다른 사용자의 것이다" }
-        if mode & (S_IWGRP | S_IWOTH) != 0 { return "인증서 디렉터리를 그룹이나 기타가 쓸 수 있다" }
+        if mode & S_IFMT != S_IFDIR { return "The certificate path is not a directory" }
+        if owner != currentUser { return "The certificate directory belongs to another user" }
+        if mode & (S_IWGRP | S_IWOTH) != 0 { return "The certificate directory is writable by the group or others" }
         return nil
     }
 
-    // MARK: - 가장자리: 파일 입출력
+    // MARK: - Edge File I/O
 
-    /// `certs/`를 열어 검사한 디렉터리 기술자. 부르는 쪽이 닫는다.
+    /// Opens `certs/`, checks it, and returns its directory descriptor. The caller closes it.
     ///
-    /// - Parameter creating: 없으면 0700으로 만든다(umask는 권한을 줄이기만 한다).
-    /// - Returns: `creating`이 거짓인데 상태 디렉터리나 `certs/`가 없으면 nil. `creating`이 참이면 상태 디렉터리가
-    ///   없을 때만 nil.
+    /// - Parameter creating: Creates a missing directory with mode 0700 (umask can only restrict permissions).
+    /// - Returns: nil if `creating` is false and the state directory or `certs/` is missing. If creating is true, returns nil only when the state
+    ///   directory is missing.
     private func openDirectory(creating: Bool) throws(CertificateStoreError) -> Int32? {
         let state = open(stateDirectory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard state >= 0 else {
             let code = errno
             if code == ENOENT { return nil }
-            throw .storage("상태 디렉터리를 열지 못했다(errno \(code))")
+            throw .storage("Could not open the state directory (errno \(code))")
         }
         defer { close(state) }
         if creating, mkdirat(state, Self.directoryName, 0o700) != 0, errno != EEXIST {
-            throw .storage("인증서 디렉터리를 만들지 못했다(errno \(errno))")
+            throw .storage("Could not create the certificate directory (errno \(errno))")
         }
-        // O_NOFOLLOW: `certs`가 심볼릭 링크면 따라가지 않고 실패한다(ELOOP).
+        // O_NOFOLLOW: Fail with ELOOP if `certs` is a symlink, without following it.
         let directory = openat(state, Self.directoryName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard directory >= 0 else {
             let code = errno
             if code == ENOENT, !creating { return nil }
-            throw .storage("인증서 디렉터리를 열지 못했다(errno \(code))")
+            throw .storage("Could not open the certificate directory (errno \(code))")
         }
         var status = stat()
         guard fstat(directory, &status) == 0 else {
             let code = errno
             close(directory)
-            throw .storage("인증서 디렉터리를 보지 못했다(errno \(code))")
+            throw .storage("Could not inspect the certificate directory (errno \(code))")
         }
         if let problem = Self.directoryProblem(mode: status.st_mode, owner: status.st_uid, currentUser: geteuid()) {
             close(directory)
@@ -193,47 +193,47 @@ struct CertificateStore: Sendable {
         return directory
     }
 
-    /// `certs/` 안의 파일 하나를 읽는다. 없으면 `missing`, 한도를 넘으면 내용을 읽지 않고 `tooLarge`.
+    /// Reads one file in `certs/`. Returns `missing` if absent or `tooLarge` without reading contents if it exceeds the limit.
     private static func read(_ name: String, in directory: Int32) throws(CertificateStoreError) -> StoredFile {
-        // O_NOFOLLOW: 심볼릭 링크는 따라가지 않는다. O_NONBLOCK: FIFO에서 막히지 않는다(정규 파일이 아니면 아래서 거절).
+        // O_NOFOLLOW prevents following symlinks. O_NONBLOCK prevents blocking on a FIFO (non-regular files are rejected below).
         let descriptor = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard descriptor >= 0 else {
             let code = errno
             if code == ENOENT { return .missing }
-            throw .storage("인증서 파일을 열지 못했다(errno \(code))")
+            throw .storage("Could not open the certificate file (errno \(code))")
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var status = stat()
-        guard fstat(descriptor, &status) == 0 else { throw .storage("인증서 파일을 보지 못했다(errno \(errno))") }
-        guard status.st_mode & S_IFMT == S_IFREG else { throw .storage("인증서 파일이 정규 파일이 아니다") }
+        guard fstat(descriptor, &status) == 0 else { throw .storage("Could not inspect the certificate file (errno \(errno))") }
+        guard status.st_mode & S_IFMT == S_IFREG else { throw .storage("The certificate file is not a regular file") }
         guard status.st_size <= maximumFileByteCount else { return .tooLarge }
         do {
-            // 크기를 본 뒤에 파일이 자랐을 수도 있으므로 한도보다 한 바이트 더 읽어 본다.
+            // Read one byte beyond the limit in case the file grew after checking its size.
             let data = try handle.read(upToCount: maximumFileByteCount + 1) ?? Data()
             return data.count <= maximumFileByteCount ? .contents(Array(data)) : .tooLarge
         } catch {
-            throw .storage("인증서 파일을 읽지 못했다(코드 \((error as NSError).code))")
+            throw .storage("Could not read the certificate file (code \((error as NSError).code))")
         }
     }
 
-    /// `certs/` 안에 파일 하나를 원자적으로 쓴다: 임시 파일(0600) → 쓰기 → `fsync` → 닫기 → 이름 바꾸기
-    /// (Go `atomicfile.WriteFile`과 같은 차례).
+    /// Writes one file atomically in `certs/`. Create a temporary file (0600) → write → `fsync` → close → rename
+    /// (same order as Go's `atomicfile.WriteFile`).
     ///
-    /// - Parameter replacing: 거짓이면 이미 있는 파일을 덮어쓰지 않는다(`RENAME_EXCL`, 실패하면 `storage`).
-    ///   참이면 같은 이름의 항목을 바꾼다. 그 항목이 심볼릭 링크면 링크 자체가 바뀌고 가리키던 곳은 건드리지 않는다.
+    /// - Parameter replacing: If false, preserves any existing file (`RENAME_EXCL`, `storage` on failure).
+    ///   If true, replaces the entry with the same name. If the entry is a symlink, replaces the link itself without touching its target.
     private static func write(
         _ bytes: [UInt8], as name: String, in directory: Int32, replacing: Bool
     ) throws(CertificateStoreError) {
         let temporary = ".\(name).\(UUID().uuidString).tmp"
         let descriptor = openat(directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw .storage("임시 파일을 만들지 못했다(errno \(errno))") }
+        guard descriptor >= 0 else { throw .storage("Could not create the temporary file (errno \(errno))") }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        // umask와 무관하게 정확히 0600으로 둔다(Go는 `Chmod(perm)`).
+        // Set exactly 0600 regardless of umask (Go uses `Chmod(perm)`).
         guard fchmod(descriptor, 0o600) == 0 else {
             let code = errno
             try? handle.close()
             unlinkat(directory, temporary, 0)
-            throw .storage("임시 파일의 권한을 정하지 못했다(errno \(code))")
+            throw .storage("Could not set the temporary file permissions (errno \(code))")
         }
         do {
             try handle.write(contentsOf: Data(bytes))
@@ -242,12 +242,12 @@ struct CertificateStore: Sendable {
         } catch {
             try? handle.close()
             unlinkat(directory, temporary, 0)
-            throw .storage("파일을 쓰지 못했다(코드 \((error as NSError).code))")
+            throw .storage("Could not write the file (code \((error as NSError).code))")
         }
         guard renameatx_np(directory, temporary, directory, name, replacing ? 0 : UInt32(RENAME_EXCL)) == 0 else {
             let code = errno
             unlinkat(directory, temporary, 0)
-            throw .storage("파일 이름을 바꾸지 못했다(errno \(code))")
+            throw .storage("Could not rename the file (errno \(code))")
         }
     }
 }

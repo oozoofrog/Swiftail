@@ -1,34 +1,34 @@
-// 서명된 인증 키(`<인증 키>--TL<A>-<B>`)의 해석과, 그것으로 새 node 키에 서명하기. 노트 3.8·4.6 2, 계약 동작 R3·R5②·K, 결정 L12·L13.
-// 자르는 자리와 서명의 모양은 Go `tailscale.com` v1.104.7 `tka/sig.go:439-498`(`SignByCredential`·`DecodeWrappedAuthkey`)을 따른다.
+// Parses a signed auth key (`<auth key>--TL<A>-<B>`) and signs a new node key with it. Notes §3.8 and §4.6 item 2, contract behaviors R3, R5②, and K, decisions L12 and L13.
+// Split positions and the signature form follow Go `tailscale.com` v1.104.7 `tka/sig.go:439-498` (`SignByCredential` and `DecodeWrappedAuthkey`).
 //   Copyright (c) Tailscale Inc & contributors, SPDX-License-Identifier: BSD-3-Clause.
 
 import CryptoKit
 import SwiftailBase
 
-/// `--TL`이 붙은 인증 키를 해석한 것. 감싼 개인 키를 쥐는 비밀이다.
+/// A parsed auth key containing `--TL`. This is a secret that contains the wrapped private key.
 ///
-/// 인증 키와 감싼 개인 키는 `description`·`dump`·`String(reflecting:)`에 나오지 않는다(동작 K2). 서버에는 `controlValue`만 보낸다.
+/// The auth key and wrapped private key stay out of `description`, `dump`, and `String(reflecting:)` (behavior K2). Only `controlValue` goes to the server.
 package struct WrappedAuthKey: Sendable {
-    /// 서버에 보낼 부분(첫 `--TL` 앞). 이것도 인증 키라 비밀이다.
+    /// The portion to send to the server, before the first `--TL`. It is still an auth key and therefore secret.
     package let controlValue: String
-    /// 서명 권한을 위임한 credential NKS(A). 신뢰 키인지는 여기서 보지 않는다(받는 쪽의 `authorize`가 본다).
+    /// The credential NKS (A) that delegated signing authority. The recipient's `authorize` checks whether the key is trusted.
     let credential: NodeKeySignature
-    /// 위임받은 Ed25519 키(B의 앞 32바이트 시드).
+    /// The delegated Ed25519 key, the first 32 bytes of B as a seed.
     private let wrappingKey: Curve25519.Signing.PrivateKey
 
-    /// 인증 키 문자열 전체의 한도와 감싼 개인 키의 길이(동작 M, R3).
+    /// The limit on the full auth key string and the wrapped private key length (behaviors M and R3).
     static let maximumByteCount = 16 * 1_024
     static let wrappedPrivateKeyByteCount = 64
 
-    /// 인증 키를 해석한다(동작 R3). 첫 `--TL`에서 자르고, 그 뒤를 첫 `-`에서 잘라 A(credential)와 B(64바이트 개인 키)를 얻는다.
+    /// Parses an auth key (behavior R3). Splits at the first `--TL`, then splits the suffix at the first `-` to get A (credential) and B (64-byte private key).
     ///
-    /// Go는 디코딩이 실패하면 원문 전체(개인 키 포함)를 인증 키로 돌려주고, B가 64바이트가 아니면 서명할 때 panic하며, B의 뒤 32바이트를
-    /// 확인하지 않는다(노트 3.8). Swiftail은 그 모두를 서버로 아무것도 보내기 전에 거절한다(결정 L12·L13).
+    /// If decoding fails, Go returns the full original string (including the private key) as the auth key. It panics at signing if B is not 64 bytes and does not check
+    /// B's last 32 bytes (notes §3.8). Swiftail rejects all these cases before sending anything to the server (decisions L12 and L13).
     ///
-    /// - Returns: `--TL`이 없으면 nil(평범한 인증 키).
-    /// - Throws: `invalidAuthKey` — 문자열이 16KiB를 넘음, `-` 없음, A·B가 패딩 없는 표준 base64의 정규형이 아님, A가 8KiB를 넘거나
-    ///   NKS로 읽히지 않거나 credential이 아니거나 `WrappingPubkey`가 32바이트가 아님, B가 64바이트가 아님, B의 시드로 만든 공개 키가
-    ///   B의 뒤 32바이트나 A의 `WrappingPubkey`와 다름. 오류에 키 내용은 담지 않는다.
+    /// - Returns: nil without `--TL` (an ordinary auth key).
+    /// `-` Throws: `invalidAuthKey` if the string exceeds 16KiB, - is missing, A or B is not canonical unpadded standard base64, A exceeds 8KiB,
+    ///   A does not decode as an NKS, A is not a credential, `WrappingPubkey` is not 32 bytes, B is not 64 bytes, or the public key derived
+    ///   from B's seed differs from B's last 32 bytes or A's `WrappingPubkey`. Errors omit key contents.
     package init?(parsing authKey: String) throws(TKAError) {
         let text = Array(authKey.utf8)
         guard let marker = text.firstRange(of: Array("--TL".utf8)) else { return nil }
@@ -50,19 +50,19 @@ package struct WrappedAuthKey: Sendable {
         self.wrappingKey = wrappingKey
     }
 
-    /// 새 node 키에 대한 서명(Go `SignByCredential`): rotation NKS{`Pubkey`: np ‖ node 키, `Nested`: credential}의 `SigHash`에
-    /// 감싼 키로 서명한 정준 바이트. 등록 요청의 `NodeKeySignature`에 싣는다(동작 R5②).
+    /// A signature for a new node key (Go `SignByCredential`). Returns the canonical bytes of rotation NKS{`Pubkey`: np ‖ node key, `Nested`: credential}, whose `SigHash`
+    /// is signed with the wrapped key. Put these bytes in the registration request's `NodeKeySignature` (behavior R5②).
     ///
-    /// CryptoKit의 Ed25519 서명은 결정적이지 않아 부를 때마다 바이트가 다르다. 받는 쪽은 Go 표준 규칙으로 검증한다(노트 3.7).
-    /// - Throws: `signingFailed` — CryptoKit이 서명하지 못했다.
+    /// CryptoKit's Ed25519 signatures are nondeterministic, so the bytes differ on each call. The recipient verifies with Go's standard rules (notes §3.7).
+    /// - Throws: `signingFailed` if CryptoKit could not sign.
     package func keySignature(for nodeKey: NodePublicKey) throws(TKAError) -> [UInt8] {
         var signature = NodeKeySignature(kind: NodeKeySignature.Kind.rotation, publicKey: nodeKey.binaryForm, nested: credential)
         try signature.sign(with: wrappingKey)
         return signature.serialized()
     }
 
-    /// 패딩 없는 표준 base64(RFC 4648 4절, `+/`)의 정규형만 읽는다: 다른 글자·`=`·줄바꿈, 남는 6비트, 0이 아닌 남는 비트는 nil.
-    /// Go `base64.RawStdEncoding`은 줄바꿈을 건너뛰고 남는 비트를 보지 않는다(동작 R3이 정규형만 받기로 했다).
+    /// Reads only canonical unpadded standard base64 (RFC 4648 §4, `+/`). Returns nil for other characters, `=`, line breaks, 6 unused bits, or nonzero unused bits.
+    /// Go `base64.RawStdEncoding` skips line breaks and ignores unused bits (behavior R3 accepts only the canonical form).
     private static func decodeRawBase64(_ text: ArraySlice<UInt8>) -> [UInt8]? {
         var bytes: [UInt8] = []
         var buffer: UInt32 = 0
@@ -91,17 +91,17 @@ package struct WrappedAuthKey: Sendable {
 }
 
 extension WrappedAuthKey: CustomStringConvertible, CustomReflectable {
-    /// 인증 키와 감싼 키를 가린다.
-    package var description: String { "WrappedAuthKey(<가림>)" }
+    /// Redacts the auth key and wrapped key.
+    package var description: String { "WrappedAuthKey(<redacted>)" }
 
-    /// `dump`는 `description`을 거치지 않으므로 자식을 비운다.
+    /// `dump` bypasses `description`, so omit all children.
     package var customMirror: Mirror { Mirror(self, children: []) }
 }
 
 extension NodeKeySignature {
-    /// `signatureHash`에 Ed25519로 서명해 `signature`를 채운다(Go `NLPrivate.SignNKS`, `ed25519.Sign`).
+    /// Signs `signatureHash` with Ed25519 to fill `signature` (Go `NLPrivate.SignNKS`, `ed25519.Sign`).
     ///
-    /// - Throws: `signingFailed` — CryptoKit이 서명하지 못했다.
+    /// - Throws: `signingFailed` if CryptoKit could not sign.
     mutating func sign(with key: Curve25519.Signing.PrivateKey) throws(TKAError) {
         do {
             signature = Array(try key.signature(for: signatureHash))
