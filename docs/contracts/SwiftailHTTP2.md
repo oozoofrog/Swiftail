@@ -21,7 +21,7 @@ public struct HTTP2StreamID: Hashable, Sendable {
 
 public enum HTTP2Error: Error, Sendable, Equatable {
     /// The peer violated the specification, and the connection has ended. The code is an error code from RFC 9113 §7.
-    /// A received GOAWAY is reported as a `goAway` event even if it carries an error code, so events collected in the same call are preserved.
+    /// Report received GOAWAY as a `goAway` event without throwing, even when it carries an error code. This preserves events collected in the same call.
     case connectionFailed(code: UInt32)
     /// The connection has ended or received GOAWAY, so new requests cannot start.
     case connectionClosed
@@ -46,7 +46,7 @@ public struct HTTP2ClientConnection: Sendable {
         case responseData(HTTP2StreamID, [UInt8])
         /// The stream has ended. A nil resetCode means a normal end (END_STREAM). Otherwise, it is the RST_STREAM error code.
         case streamClosed(HTTP2StreamID, resetCode: UInt32?)
-        /// The peer sent GOAWAY. Streams greater than lastStreamID were not processed.
+        /// The peer sent GOAWAY. Streams with IDs greater than lastStreamID were not processed.
         case goAway(lastStreamID: HTTP2StreamID, code: UInt32)
     }
 
@@ -83,14 +83,14 @@ Supported behavior includes the following.
 
 Limits for untrusted input are 16,384 bytes per incoming frame (the advertised MAX_FRAME_SIZE), 64KiB per complete header block, 4,096 bytes for the HPACK dynamic table, and 64KiB of pending bytes for control frames prompted by the peer (PING ACK, SETTINGS ACK, RST_STREAM), drained by `takeOutboundBytes()`. Exceeding a limit is a connection error (ENHANCE_YOUR_CALM for the last limit, with GOAWAY appended regardless of the limit). No byte sequence can crash the process.
 
-Response validation failures produce RST_STREAM PROTOCOL_ERROR and `streamClosed` for the affected stream only (RFC 9113 §8.1.1, §8.2, §8.3, §8.6). Header names must be nonempty lowercase tokens and cannot contain an interior `:`, spaces, or uppercase letters. Values cannot contain NUL, CR, or LF. Connection-specific fields are forbidden (`connection`, `keep-alive`, `proxy-connection`, `transfer-encoding`, `upgrade`, and `te` with a value other than `trailers`). Apply the same rules to request headers (`invalidRequest`) and trailers, and forbid pseudo-headers in trailers. The `content-length` must be a single base-10 value equal to the total DATA received (skip the comparison for HEAD responses, 204, and 304 because they have no body). Treat 101 as an error rather than forwarding it as an informational response.
+Response validation failures produce RST_STREAM PROTOCOL_ERROR and `streamClosed` for the affected stream only (RFC 9113 §8.1.1, §8.2, §8.3, §8.6). Header names must be nonempty lowercase tokens and cannot contain an interior `:`, spaces, or uppercase letters. Values cannot contain NUL, CR, or LF. Connection-specific fields are forbidden (`connection`, `keep-alive`, `proxy-connection`, `transfer-encoding`, `upgrade`, and `te` with a value other than `trailers`). Apply the same rules to request headers (`invalidRequest`) and trailers, and forbid pseudo-headers in trailers. A `content-length` field must occur only once and contain a decimal integer equal to the number of DATA bytes received (skip the comparison for HEAD responses, 204, and 304 because they have no body). Treat 101 as an error rather than forwarding it as an informational response.
 
 Apply SETTINGS_INITIAL_WINDOW_SIZE to open stream windows in received order, even within one frame, and check for overflow (above 2^31-1) after each change. Intermediate overflow is a FLOW_CONTROL_ERROR connection error.
 
 Record the following exclusions in `shortcut:` comments.
 
 - Receive-side backpressure. The client restores the window as soon as it receives data, so slow consumption cannot slow the server. This becomes necessary when large responses must be consumed as a stream
-- Incremental request body supply, trailers, server push, priorities, and compression table reuse on the sending side
+- Incremental request body supply, outgoing trailers, server push, priorities, and reuse of the compression table when sending
 - Idle PING and timeouts. The connection owner (actor) keeps the clock and decides
 
 ## Tests
@@ -99,7 +99,7 @@ Unit tests (`Tests/SwiftailHTTP2Tests`) cover the following.
 
 1. HPACK. All examples from RFC 7541 Appendix C (C.1 integers, C.2 header representations, C.3 and C.4 requests, C.5 and C.6 responses, including Huffman encoding and dynamic table eviction).
 2. Frames. Parsing each type, producing the same events when fed one byte at a time, combining CONTINUATION frames, and handling padding.
-3. Flow control. A body larger than the window waits for WINDOW_UPDATE. SETTINGS_INITIAL_WINDOW_SIZE changes the windows of open streams. WINDOW_UPDATE restores the amount of DATA received.
+3. Flow control. A body larger than the window waits for WINDOW_UPDATE. SETTINGS_INITIAL_WINDOW_SIZE changes the windows of open streams. The client sends WINDOW_UPDATE for the amount of DATA received.
 4. Lifecycle. SETTINGS ACK, PING replies, rejection of new requests after GOAWAY, RST_STREAM, and increasing odd stream IDs.
 5. Limits and arbitrary input. Input that exceeds a limit causes a connection error, and random bytes do not cause a crash.
 

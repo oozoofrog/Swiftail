@@ -17,6 +17,7 @@ let package = Package(
         // Optional products (M7) only for apps that act as servers. iOS tunnel extensions do not link them.
         .library(name: "SwiftailCertificates", targets: ["SwiftailCertificates"]),
         .library(name: "SwiftailLoopback", targets: ["SwiftailLoopback"]),
+
         .library(name: "SwiftailPairing", targets: ["SwiftailPairing"]),
     ],
     targets: [
@@ -34,7 +35,7 @@ let package = Package(
         .target(name: "SwiftailHTTP2"),
         .testTarget(name: "SwiftailHTTP2Tests", dependencies: ["SwiftailHTTP2"], resources: [.copy("Fixtures")]),
         .testTarget(name: "SwiftailHTTP2InteropTests", dependencies: ["SwiftailHTTP2"]),
-        // Internal target for Tailnet Lock (TKA) data formats and verification. It uses no sockets, files, or clocks.
+        // Tailnet Lock (TKA) data formats and verification, with no sockets, files, or clocks. This target has no library product.
         .target(name: "SwiftailTKA", dependencies: ["SwiftailBase", "SwiftailCrypto"]),
         .testTarget(
             name: "SwiftailTKATests",
@@ -48,7 +49,7 @@ let package = Package(
             dependencies: ["SwiftailControl", "SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2", "SwiftailTKA"],
             resources: [.copy("Fixtures")]
         ),
-        // Internal I/O component at the boundary for targets that open sockets (Control, DERP, Swiftail).
+        // Edge I/O for targets that open sockets (Control, DERP, Swiftail). This target has no library product.
         .target(name: "SwiftailIO", dependencies: ["SwiftailBase"]),
         .testTarget(name: "SwiftailIOTests", dependencies: ["SwiftailIO"]),
         .target(name: "SwiftailMagicsock", dependencies: ["SwiftailBase", "SwiftailCrypto"]),
@@ -88,7 +89,7 @@ let package = Package(
         // Bridges tailnet connections to an OS TCP listener on 127.0.0.1.
         .target(name: "SwiftailLoopback", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(name: "SwiftailLoopbackTests", dependencies: ["SwiftailLoopback", "Swiftail", "SwiftailBase", "SwiftailIO", "SwiftailControl", "SwiftailEngine"]),
-        // Pairs apps by QR code or link and issues one-time auth keys (M9) using CryptoKit, Network, CoreImage, and Foundation's URLSession.
+        // Pairs apps by QR code or link and issues single-use auth keys (M9) using CryptoKit, Network, CoreImage, and Foundation's URLSession.
         .target(name: "SwiftailPairing", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(
             name: "SwiftailPairingTests",

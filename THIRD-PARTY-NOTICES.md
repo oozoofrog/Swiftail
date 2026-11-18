@@ -130,13 +130,14 @@ SOFTWARE.
 
 ## Test tool dependencies
 
-These are the direct dependencies in `Tools/interop/go.mod`. The build fetches them from outside the repository. Each module's `LICENSE` file specifies its license.
+These are the direct dependencies in `Tools/interop/go.mod`. The build fetches them at build time. Their source code is absent from this repository. Each module's `LICENSE` file specifies its license.
 
 | Module | License |
 | --- | --- |
 | `tailscale.com` | BSD-3-Clause |
 | `github.com/tailscale/wireguard-go` | MIT |
 | `golang.org/x/net` | BSD-3-Clause |
+| `golang.org/x/oauth2` | BSD-3-Clause |
 | `filippo.io/edwards25519` | BSD-3-Clause |
 | `github.com/hdevalence/ed25519consensus` | BSD-3-Clause |
 | `github.com/miekg/dns` | BSD-3-Clause |

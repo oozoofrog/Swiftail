@@ -24,7 +24,7 @@ public enum CryptoError: Error, Sendable, Equatable {
 
 /// RFC 7693 BLAKE2s in sequential mode only.
 public struct BLAKE2s: Sendable {
-    /// The outputByteCount is 1...32, and the key is 0...32 bytes.
+    /// outputByteCount is 1...32 bytes, and the key is 0...32 bytes.
     public init(outputByteCount: Int = 32, key: [UInt8] = [])
     public mutating func update(_ data: some DataProtocol)
     /// Returns the hash of the input so far. The state is unchanged, so you can continue calling update.
@@ -113,14 +113,14 @@ The two rules are defined below (pure Ed25519 variant, k = SHA-512(R ‖ A ‖ M
 
 Implementation rules follow.
 
-- Port the 51-bit limb representation for the field GF(2^255−19) from Go's `crypto/internal/fips140/edwards25519/field` (origin and BSD-3-Clause at the top of `Sources/SwiftailCrypto/Edwards25519/FieldElement.swift`). Point, scalar, and field types are `internal`.
+- The implementation ports the 51-bit limb representation for the field GF(2^255−19) from Go's `crypto/internal/fips140/edwards25519/field` (origin and BSD-3-Clause at the top of `Sources/SwiftailCrypto/Edwards25519/FieldElement.swift`). Point, scalar, and field types are `internal`.
 - All inputs are public, so double-scalar multiplication and comparison take variable time. No tables are precomputed (0.08~0.21ms per signature in a release build).
 - No input causes a trap. Incorrect lengths return false.
 
 Test criteria (`Tests/SwiftailCryptoTests/Ed25519VerificationTests.swift`) follow.
 
 1. The 5 RFC 8032 §7.1 vectors return true under both rules.
-2. The 196 vectors in `ed25519consensus` `zip215_test.go` all return true under ZIP-215. The set of vector numbers that return true under the standard rules matches standard Go.
+2. The 196 vectors in `ed25519consensus` `zip215_test.go` all return true under ZIP-215. The set of vector numbers that return true under the standard rules matches Go's standard library verifier.
 3. Verdicts from both Go implementations collected by `Tools/interop/cmd/ed25519fixtures` (`Vectors/ed25519-verify.json`). Both rules match Go in every case. Supplying the tool path in `SWIFTAIL_ED25519FIXTURES` also compares against freshly generated verdicts.
 4. Unit tests for field and scalar boundaries and point decoding failures.
 
@@ -167,4 +167,4 @@ Decisions follow.
 - There is no upper limit on `memoryKiB` (as in Go). The caller supplies only values it can afford.
 - Go accepts 1~3-byte outputs and memory below `8p`, and Swift rejects them (RFC 9106 ranges). This does not affect the TKA parameters.
 
-Unverified items are a ZIP-215 signature that returns true using a noncanonical encoding of a large-order point (it cannot be constructed without knowing the discrete logarithm of such a point, and the decoding rules and verification equation were checked separately), and empirical confirmation that Argon2i execution time is independent of the secret (verified by reading the code).
+Unverified items are a ZIP-215 signature that returns true using a noncanonical encoding of a large-order point (it cannot be constructed without knowing the discrete logarithm of such a point, and the decoding rules and verification equation were checked separately), and measurements confirming that Argon2i execution time is independent of the secret (the independence was verified by reading the code).

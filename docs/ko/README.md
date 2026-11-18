@@ -19,7 +19,7 @@ Swift로만 작성한 Tailscale tailnet 노드입니다. Swiftail을 쓰면 Go �
 | --- | --- |
 | 제어 평면 | HTTP/2 위의 Noise (ts2021) 전송, 등록(인증 키, 대화형 로그인), netmap 스트리밍, 로그아웃 |
 | 데이터 평면 | WireGuard (Noise IK, 쿠키, 키 갱신), tailnet 정책을 반영한 패킷 필터, MagicDNS 응답기 |
-| 연결 | DERP 릴레이, STUN, disco 경로 탐색, 대체 경로 전환과 업그레이드를 지원하는 직접 UDP 경로 |
+| 연결 | DERP 릴레이, STUN, disco 경로 탐색, 직접 UDP 경로와 중계 경로 간 전환(직접 경로를 쓸 수 없으면 중계로 전환하고, 직접 경로가 확보되면 직접 연결로 전환) |
 | 소켓 | Swift로 작성한 TCP 스택. 프로세스 안에서 tailnet 주소로 `listen` 및 `connect` |
 | 터널 | iOS/macOS 패킷 터널 확장용 `utun` 장치 모드 |
 | 신원 | `whoIs` (tailnet 주소로 노드와 사용자 조회), Tailnet Lock 서명 검증 |
@@ -101,7 +101,7 @@ QR 페어링을 포함한 완전한 macOS 및 iOS 예제 앱은 [`Examples/Pairi
 | `Tests/` | 단위 테스트(swift-testing)와 Go 피어를 상대로 한 상호 운용 테스트 |
 | `Examples/PairingDemo/` | macOS 및 iOS 예제 앱(XcodeGen 프로젝트) |
 | `Tools/` | Go 테스트 도구(테스트 제어 서버, DERP, 테스트 벡터 생성기). 라이브러리에 포함되지 않습니다 |
-| `docs/plan.md` | 범위, 결정 사항, 마일스톤, 통과 기준 |
+| `docs/plan.md` | 범위, 결정 사항, 마일스톤, 검증 관문 |
 | `docs/contracts/` | 모듈별 계약(API, 동작, 제한 사항, 테스트, 검토 기록) |
 | `docs/protocol-notes/` | Tailscale 소스와 대조해 확인한 프로토콜 노트 |
 | `AGENTS.md` | 기여자와 코딩 에이전트의 작업 규칙 |
@@ -129,9 +129,9 @@ swift test --filter "SwiftailInteropTests|SwiftailWireGuardInteropTests|Swiftail
 
 의심되는 취약점을 비공개로 보고하는 방법은 [보안 정책](../../SECURITY.md)을 참고하세요.
 
-Swiftail은 **외부 보안 전문가가 직접 수행하는 독립 감사**를 받은 적이 없습니다.
+Swiftail은 **독립적인 보안 전문가가 직접 수행하는 감사**를 받은 적이 없습니다.
 
-- **AI를 활용한 검토(2026-11-17).** Claude Mythos 5.2로 소스 전체를 세 영역에 걸쳐 검토했습니다. 앱에 노출되는 계층(페어링, 루프백 브리지, 인증서, 상태 파일), 암호 기술과 인증된 채널(WireGuard, 제어 프로토콜, Tailnet Lock), 데이터 평면(경로 탐색, DERP, TCP 스택, 패킷 필터, DNS)입니다. 의심되는 문제는 테스트로 재현했습니다. 심각 또는 높은 등급의 문제는 발견되지 않았고, 중간 등급 3건과 낮은 등급 11건이 발견됐습니다. 모두 수정했고 같은 모델로 수정 사항을 두 차례 다시 검토했습니다. 수용한 제한 사항은 `docs/contracts/` 아래의 계약에 기록했습니다.
+- **AI를 활용한 검토(2026-11-17).** Claude Mythos 5.2로 소스 전체를 세 영역에 걸쳐 검토했습니다. 앱에 노출되는 계층(페어링, 루프백 브리지, 인증서, 상태 파일), 암호 기술과 인증된 채널(WireGuard, 제어 프로토콜, Tailnet Lock), 데이터 평면(경로 탐색, DERP, TCP 스택, 패킷 필터, DNS)입니다. 의심되는 문제는 테스트로 재현했습니다. 치명적이거나 심각도가 높은 문제는 발견되지 않았고, 중간 등급 3건과 낮은 등급 11건이 발견됐습니다. 모두 수정했고 같은 모델로 수정 사항을 두 차례 다시 검토했습니다. 수용한 제한 사항은 `docs/contracts/` 아래의 계약에 기록했습니다.
 - **이 검토가 보안을 보증하지는 않습니다.** 독립적인 감사를 대신할 수 없습니다.
 - **직접 구현한 암호 기술.** 일부 암호 기본 요소(BLAKE2s, BLAKE2b, XSalsa20-Poly1305, Argon2i, Ed25519 검증)는 Swift로 구현했으며, 공개 테스트 벡터와 Go에서 얻은 대조용 벡터로 검증했습니다. 키 데이터는 해제할 때 0으로 지우지 않습니다.
 - **비공식 프로토콜.** Tailscale 제어 프로토콜은 공개된 계약이 아닙니다. 서버가 바뀌면 이 라이브러리가 동작하지 않을 수 있습니다.
@@ -147,6 +147,6 @@ Swiftail은 **외부 보안 전문가가 직접 수행하는 독립 감사**를 
 
 ## 라이선스
 
-BSD-3-Clause입니다. [`LICENSE`](../../LICENSE)를 참고하세요. 다른 프로젝트에서 가져와 수정한 파일은 머리말에 출처와 라이선스를 적어 두었습니다. 라이선스 전문은 [`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md)에 있습니다.
+BSD-3-Clause입니다. [`LICENSE`](../../LICENSE)를 참고하세요. 다른 프로젝트의 코드를 옮겨 쓰거나 수정한 파일은 머리말에 출처와 라이선스를 적어 두었습니다. 라이선스 전문은 [`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md)에 있습니다.
 
 Tailscale과 WireGuard는 각 소유자의 상표입니다.
