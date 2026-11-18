@@ -6,6 +6,6 @@ xcuserdata/
 DerivedData/
 *.xcresult
 
-# 실제 tailnet 시험의 로그·상태. 노드 이름, tailnet 주소, 키가 들어 있을 수 있다.
+# Logs and state from live tailnet tests may contain node names, tailnet addresses, or keys.
 interop-evidence/
 *.state

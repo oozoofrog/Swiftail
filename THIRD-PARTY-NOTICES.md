@@ -1,17 +1,17 @@
-# 제3자 고지
+# Third-party notices
 
-Swiftail의 코드는 `LICENSE`(BSD-3-Clause)를 따른다. 일부 파일은 아래 프로젝트의 코드를 Swift로 옮겨 적었거나 그 규칙을 따랐다. 그런 파일은 머리말에 출처(프로젝트, 버전, 파일, 함수)와 라이선스를 적었다. 이 문서는 그 라이선스들의 원문을 한곳에 모은 것이다.
+Swiftail's code is licensed under `LICENSE` (BSD-3-Clause). Some files port code from the projects below to Swift or follow their rules. The headers of those files record the source (project, version, file, and function) and license. This document collects the original license texts.
 
-Swiftail의 라이브러리(`Sources/`)는 외부 패키지에 의존하지 않는다. 아래 "시험 도구의 의존"은 `Tools/interop`의 Go 시험 도구가 빌드할 때 Go 모듈로 받는 것이고, 이 저장소에 그 코드가 들어 있지는 않다(`Tools/interop/internal/testcontrol`은 예외: Tailscale의 시험용 제어 서버를 옮겨 적은 사본이다).
+The Swiftail library (`Sources/`) has no external package dependencies. The Go test tools in `Tools/interop` fetch the Go modules listed under "Test tool dependencies" at build time. The repository does not contain that code, with one exception. `Tools/interop/internal/testcontrol` is an adapted copy of Tailscale's test control server.
 
-## 옮겨 적은 코드
+## Adapted code
 
-| 출처 | 라이선스 | 쓰인 곳 |
+| Source | License | Use |
 | --- | --- | --- |
-| Tailscale (`tailscale.com`) | BSD-3-Clause | 제어 프로토콜, DERP, magicsock, Tailnet Lock, DNS, 인증서 발급의 규칙과 일부 함수. `Tools/interop/internal/testcontrol`의 사본 |
-| Go 표준 라이브러리와 `golang.org/x/net` | BSD-3-Clause | edwards25519 연산, JSON 인코딩 규칙, DNS 이름 해석 |
-| wireguard-go (`github.com/tailscale/wireguard-go`) | MIT | WireGuard 타이머와 재전송 방지 창의 규칙 |
-| `github.com/fxamacker/cbor` | MIT | CBOR 디코딩의 판정 규칙 |
+| Tailscale (`tailscale.com`) | BSD-3-Clause | Rules and selected functions for the control protocol, DERP, magicsock, Tailnet Lock, DNS, and certificate issuance. The copy in `Tools/interop/internal/testcontrol` |
+| Go standard library and `golang.org/x/net` | BSD-3-Clause | edwards25519 operations, JSON encoding rules, DNS name resolution |
+| wireguard-go (`github.com/tailscale/wireguard-go`) | MIT | Rules for WireGuard timers and the replay protection window |
+| `github.com/fxamacker/cbor` | MIT | Validation rules for CBOR decoding |
 
 ### Tailscale
 
@@ -46,7 +46,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### Go 표준 라이브러리, `golang.org/x/net`
+### Go standard library, `golang.org/x/net`
 
 ```
 Copyright 2009 The Go Authors.
@@ -80,7 +80,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### wireguard-go
 
-옮긴 파일의 머리말에 있는 저작권 표기: `Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.`
+The adapted file's header carries the copyright notice `Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.`
 
 ```
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -128,11 +128,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## 시험 도구의 의존
+## Test tool dependencies
 
-`Tools/interop/go.mod`의 직접 의존이다. 저장소에 코드가 들어 있지 않고 빌드할 때 받는다. 각 모듈의 라이선스는 그 모듈의 `LICENSE` 파일을 따른다.
+These are the direct dependencies in `Tools/interop/go.mod`. The build fetches them from outside the repository. Each module's `LICENSE` file specifies its license.
 
-| 모듈 | 라이선스 |
+| Module | License |
 | --- | --- |
 | `tailscale.com` | BSD-3-Clause |
 | `github.com/tailscale/wireguard-go` | MIT |

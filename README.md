@@ -104,7 +104,7 @@ A complete app for macOS and iOS, including QR pairing, is in [`Examples/Pairing
 | `docs/protocol-notes/` | Protocol notes verified against the Tailscale source |
 | `AGENTS.md` | Working rules for contributors and coding agents |
 
-Design documents, contracts, and source comments are written in Korean. Identifiers and protocol terms are in English.
+Design documents, contracts, and source comments are written in English. Identifiers and protocol terms are in English. Korean reference copies of the README, security policy, and release guide are in [`docs/ko/`](docs/ko/).
 
 ## Testing
 

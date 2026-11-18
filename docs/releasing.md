@@ -6,6 +6,7 @@ The lead session may tag and push PATCH releases once the conditions below hold.
 
 - [ ] Read the diff since the previous tag and choose the version using the rule above.
 - [ ] Update the hard-coded versions in the `README.md` installation example, the `User-Agent` in `Sources/SwiftailCertificates/ACME/URLSessionACMETransport.swift`, its expectation in `Tests/SwiftailCertificatesTests/ACME/URLSessionACMETransportTests.swift`, and the `User-Agent` example in `docs/contracts/SwiftailHost.md`.
+- [ ] Update the corresponding Korean copies in `docs/ko/` when `README.md`, `SECURITY.md`, or `docs/releasing.md` change.
 - [ ] Pass the local gate with a zero-warning `-warnings-as-errors` build, all unit tests, and local interoperability tests.
 - [ ] Confirm that the GitHub CI `push` run on `main` passed for the exact commit SHA to be tagged.
 

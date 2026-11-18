@@ -14,7 +14,7 @@ let package = Package(
         .library(name: "SwiftailMagicsock", targets: ["SwiftailMagicsock"]),
         .library(name: "SwiftailEngine", targets: ["SwiftailEngine"]),
         .library(name: "Swiftail", targets: ["Swiftail"]),
-        // 서버 노릇을 하는 앱만 쓰는 선택 제품(M7). iOS 터널 확장은 링크하지 않는다.
+        // Optional products (M7) only for apps that act as servers. iOS tunnel extensions do not link them.
         .library(name: "SwiftailCertificates", targets: ["SwiftailCertificates"]),
         .library(name: "SwiftailLoopback", targets: ["SwiftailLoopback"]),
         .library(name: "SwiftailPairing", targets: ["SwiftailPairing"]),
@@ -34,7 +34,7 @@ let package = Package(
         .target(name: "SwiftailHTTP2"),
         .testTarget(name: "SwiftailHTTP2Tests", dependencies: ["SwiftailHTTP2"], resources: [.copy("Fixtures")]),
         .testTarget(name: "SwiftailHTTP2InteropTests", dependencies: ["SwiftailHTTP2"]),
-        // 제품으로 내보내지 않는다. Tailnet Lock(TKA)의 자료 형식과 검증이다. 소켓·파일·시계가 없다.
+        // Internal target for Tailnet Lock (TKA) data formats and verification. It uses no sockets, files, or clocks.
         .target(name: "SwiftailTKA", dependencies: ["SwiftailBase", "SwiftailCrypto"]),
         .testTarget(
             name: "SwiftailTKATests",
@@ -48,7 +48,7 @@ let package = Package(
             dependencies: ["SwiftailControl", "SwiftailBase", "SwiftailCrypto", "SwiftailHTTP2", "SwiftailTKA"],
             resources: [.copy("Fixtures")]
         ),
-        // 제품으로 내보내지 않는다. 소켓을 여는 타깃(Control, DERP, Swiftail)이 쓰는 가장자리 입출력 부품이다.
+        // Internal I/O component at the boundary for targets that open sockets (Control, DERP, Swiftail).
         .target(name: "SwiftailIO", dependencies: ["SwiftailBase"]),
         .testTarget(name: "SwiftailIOTests", dependencies: ["SwiftailIO"]),
         .target(name: "SwiftailMagicsock", dependencies: ["SwiftailBase", "SwiftailCrypto"]),
@@ -78,17 +78,17 @@ let package = Package(
             name: "SwiftailInteropTests",
             dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl", "SwiftailMagicsock", "SwiftailCertificates", "SwiftailLoopback", "SwiftailPairing"]
         ),
-        // ts.net 인증서의 발급·저장·갱신(ACME DNS-01). CryptoKit, Security, Foundation의 URLSession을 쓴다.
+        // Issues, stores, and renews ts.net certificates (ACME DNS-01) using CryptoKit, Security, and Foundation's URLSession.
         .target(name: "SwiftailCertificates", dependencies: ["Swiftail", "SwiftailBase", "SwiftailControl"]),
         .testTarget(
             name: "SwiftailCertificatesTests",
             dependencies: ["SwiftailCertificates", "Swiftail", "SwiftailBase"],
             resources: [.copy("Fixtures")]
         ),
-        // tailnet 연결을 127.0.0.1의 OS TCP 리스너에 잇는 다리.
+        // Bridges tailnet connections to an OS TCP listener on 127.0.0.1.
         .target(name: "SwiftailLoopback", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(name: "SwiftailLoopbackTests", dependencies: ["SwiftailLoopback", "Swiftail", "SwiftailBase", "SwiftailIO", "SwiftailControl", "SwiftailEngine"]),
-        // 앱끼리의 QR·링크 페어링과 1회용 인증 키 발급(M9). CryptoKit, Network, CoreImage, Foundation의 URLSession을 쓴다.
+        // Pairs apps by QR code or link and issues one-time auth keys (M9) using CryptoKit, Network, CoreImage, and Foundation's URLSession.
         .target(name: "SwiftailPairing", dependencies: ["Swiftail", "SwiftailBase", "SwiftailCrypto", "SwiftailIO"]),
         .testTarget(
             name: "SwiftailPairingTests",
