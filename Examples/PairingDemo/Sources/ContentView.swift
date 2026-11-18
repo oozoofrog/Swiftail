@@ -47,7 +47,7 @@ private struct NodeSection: View {
             if let status = model.node.status {
                 LabeledContent("Status", value: status.state.label)
                 if case .needsLogin(let url) = status.state {
-                    Button("Sign In in Browser") { openURL(url) }
+                    Button("Sign In with Browser") { openURL(url) }
                 }
                 LabeledContent("Name", value: status.fqdn ?? "—")
                 LabeledContent("Peers", value: "\(status.peerCount)")

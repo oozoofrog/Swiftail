@@ -15,7 +15,7 @@ A Tailscale tailnet node written entirely in Swift. Swiftail lets an app join a 
 
 | Area | Implemented |
 | --- | --- |
-| Control plane | Noise (ts2021) transport over HTTP/2, registration (auth key, interactive login), streaming netmaps, logout |
+| Control plane | HTTP/2 over the Noise (ts2021) transport, registration (auth key, interactive login), streaming netmaps, logout |
 | Data plane | WireGuard (Noise IK, cookies, rekey), packet filter from tailnet policy, MagicDNS responder |
 | Connectivity | DERP relays, STUN, disco path discovery, direct UDP paths with fallback and upgrade |
 | Sockets | A TCP stack written in Swift: `listen` and `connect` on tailnet addresses inside the process |
@@ -112,7 +112,7 @@ Design documents, contracts, and source comments are written in English. Identif
 swift test
 ```
 
-Interoperability tests need Go 1.27+ and skip themselves when their tool path is not set.
+Interoperability tests need Go 1.27.3 or later and skip themselves when their tool path is not set.
 
 ```sh
 SWIFTAIL_TAILNET="$(sh Scripts/build-interop-tools.sh tailnet)" \

@@ -17,7 +17,7 @@ Swift로만 작성한 Tailscale tailnet 노드입니다. Swiftail을 쓰면 Go �
 
 | 영역 | 구현된 기능 |
 | --- | --- |
-| 제어 평면 | HTTP/2 위의 Noise (ts2021) 전송, 등록(인증 키, 대화형 로그인), netmap 스트리밍, 로그아웃 |
+| 제어 평면 | Noise (ts2021) 전송 위의 HTTP/2, 등록(인증 키, 대화형 로그인), netmap 스트리밍, 로그아웃 |
 | 데이터 평면 | WireGuard (Noise IK, 쿠키, 키 갱신), tailnet 정책을 반영한 패킷 필터, MagicDNS 응답기 |
 | 연결 | DERP 릴레이, STUN, disco 경로 탐색, 직접 UDP 경로와 중계 경로 간 전환(직접 경로를 쓸 수 없으면 중계로 전환하고, 직접 경로가 확보되면 직접 연결로 전환) |
 | 소켓 | Swift로 작성한 TCP 스택. 프로세스 안에서 tailnet 주소로 `listen` 및 `connect` |
@@ -114,7 +114,7 @@ QR 페어링을 포함한 완전한 macOS 및 iOS 예제 앱은 [`Examples/Pairi
 swift test
 ```
 
-상호 운용 테스트에는 Go 1.27 이상이 필요합니다. 도구 경로를 설정하지 않으면 해당 테스트를 자동으로 건너뜁니다.
+상호 운용 테스트에는 Go 1.27.3 이상이 필요합니다. 도구 경로를 설정하지 않으면 해당 테스트를 자동으로 건너뜁니다.
 
 ```sh
 SWIFTAIL_TAILNET="$(sh Scripts/build-interop-tools.sh tailnet)" \

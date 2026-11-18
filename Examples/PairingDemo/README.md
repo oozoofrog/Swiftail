@@ -24,7 +24,7 @@ Start in the "Node" section. There are three options.
 | --- | --- |
 | Saved identity | A previously registered device reconnects automatically when you launch the app |
 | Auth key | Enter the key and select "Start Node". The app does not save the key |
-| Sign-in | Without a key, select "Start Node" → "Sign In in Browser" |
+| Sign-in | Without a key, select "Start Node" → "Sign In with Browser" |
 
 When the status changes to "Connected", you can see the node's name, peer count, and tailnet lock status.
 
