@@ -2,7 +2,7 @@
 ///
 /// Parses the response's first header block once. Exactly one `:status` pseudo-header is required, with a three-digit value
 /// before the regular headers. All other pseudo-headers are forbidden (RFC 9113 §8.1.1, §8.3.2). Regular
-/// headers must follow `HeaderValidation`, and `content-length` must be a single decimal number (§8.1.1).
+/// headers must follow `HeaderValidation`. If present, `content-length` must occur once and contain a decimal number (§8.1.1).
 /// A violation is a stream error.
 struct ResponseHead: Equatable {
     var status: Int

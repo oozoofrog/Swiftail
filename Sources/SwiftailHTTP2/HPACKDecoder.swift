@@ -7,7 +7,7 @@
 /// - `1`: Indexed field (§6.1). Uses an entry from the static or dynamic table as is.
 /// - `01`: Literal field added to the dynamic table (§6.2.1).
 /// - `001`: Dynamic table size update (§6.3). May appear only at the start of the block (§4.2).
-/// - `0000`, `0001`: Literal field without indexing (§6.2.2). `0001` also forbids intermediaries from indexing the field (§6.2.3).
+/// - `0000`: Literal without indexing (§6.2.2). `0001`: Literal never indexed (§6.2.3), which also forbids intermediaries from indexing the field.
 ///   This module does not proxy and treats both the same.
 struct HPACKDecoder {
     /// The initial advertised SETTINGS_HEADER_TABLE_SIZE (RFC 9113 §6.5.2). The peer cannot request a larger table.

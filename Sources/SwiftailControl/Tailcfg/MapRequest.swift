@@ -3,12 +3,12 @@ import SwiftailBase
 /// The body of `POST /machine/map`. Go `tailcfg.MapRequest`.
 ///
 /// Has two uses (notes §4.2).
-/// - Map stream: `stream = true`, `keepAlive = true`. The response is a sequence of map frames. Servers at version 68 or later
-///   ignore state fields in this request (`hostinfo`, `endpoints`, and others).
+/// - Map stream: `stream = true`, `keepAlive = true`. The response is a sequence of map frames. When the request's capability version is 68 or later,
+///   the server should treat the request as read-only and ignore state fields (`hostinfo`, `endpoints`, and others).
 /// - State update (lite): `stream = false`, `omitPeers = true`. Reports `hostinfo`, `discoKey`, and `endpoints`
 ///   without closing the open stream.
 ///
-/// Leaves `compress` empty to request uncompressed frames. There is no zstd decoder (contract "Framing and Applying Deltas").
+/// Leaves `compress` empty to request uncompressed frames. See "Framing and Delta Application" in `docs/contracts/SwiftailControl.md` for the absence of a zstd decoder.
 /// Map session resumption (`MapSessionHandle` and `MapSessionSeq`) is unused. The Go client also leaves it unused.
 /// `docs/protocol-notes/control-map.md` §3.4, §3.5 (origin: `MapRequest` in tailscale.com `tailcfg/tailcfg.go`).
 public struct MapRequest: Encodable, Sendable, Equatable {
@@ -33,7 +33,7 @@ public struct MapRequest: Encodable, Sendable, Equatable {
     /// Allows the response to omit the peer list. Used for state update requests.
     public var omitPeers: Bool
     /// The head of the local tailnet lock signing authority state (base32). When no state exists, it is an empty string and omitted from JSON
-    /// (`docs/protocol-notes/tailnet-lock.md` 3.9).
+    /// (`docs/protocol-notes/tailnet-lock.md` §3.9).
     public var tkaHead: String
 
     public init(

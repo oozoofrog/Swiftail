@@ -15,7 +15,7 @@ import SwiftailIO
 /// `AsyncThrowingStream`. The read loop (`readLoop`) receives from the socket and dispatches to streams.
 /// The lifetime matches the scope of `withConnection`. Leaving scope cancels the read loop and closes the socket.
 ///
-/// `docs/protocol-notes/control-transport.md` 4.2, 4.4, 4.7, 6.3.
+/// `docs/protocol-notes/control-transport.md` §4.2, §4.4, §4.7, and §6.3.
 actor ControlConnection {
     /// A part flowing through the response stream.
     enum ResponsePart: Sendable {
@@ -131,7 +131,7 @@ actor ControlConnection {
                     try await connection.start(with: remainder)
                     return connection
                 }
-                // The server closes the connection without an error message on handshake failure (notes §4.4, item 3.6).
+                // The server closes the connection without an error message on handshake failure (`docs/protocol-notes/control-transport.md` §4.4, item 3.6).
                 guard let next = try await socket.receiveBytes() else {
                     throw .connection("Server closed the connection during the Noise handshake")
                 }

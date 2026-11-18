@@ -18,9 +18,9 @@ package struct ServerLockState: Sendable, Equatable {
         self.head = head
     }
 
-    /// Computes from the last `TKAInfo` received in this map session. If none has arrived (nil), the lock is disabled.
+    /// Computes the server-reported state from the last `TKAInfo` in this map session. Before receiving one (`nil`), treats the server state as disabled.
     ///
-    /// Even if `Head` cannot be read as an AUM hash, absence of `Disabled` means "enabled, head unknown" (contract §5 TL-11b item 3,
+    /// If `Disabled` is false or omitted and `Head` cannot be read as an AUM hash, the result is "enabled, head unknown" (contract §5 TL-11b item 3,
     /// which changes "disabled" in behavior N1). This prevents an unreadable response announcing the lock from being treated as no lock. Go treats an unreadable head
     /// as disabled. For text accepted by Go and rejected by Swiftail (behavior D10), that would leave Swiftail unfiltered while Go filters.
     /// Reads the head regardless of `Disabled`. If an incorrect disablement secret leaves the lock enabled, compares this head with the local head to decide whether to synchronize.

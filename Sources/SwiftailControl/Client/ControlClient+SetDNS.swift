@@ -7,7 +7,7 @@ import SwiftailIO
 /// matches Go. Sharing the physical connection is a Swiftail implementation choice, and there is no evidence the server requires it.
 ///
 /// Swiftail's choices that differ from Go (contract `docs/contracts/SwiftailHost.md` behaviors D2 and D3).
-/// - If disconnected (reconnecting), waits until a connection opens. Waiting and the response have a combined 60 seconds. Go fails immediately with `not connected`.
+/// - If disconnected (reconnecting), waits until a connection opens. A single 60-second deadline covers the wait and the response. Go fails immediately with `not connected`.
 /// - For a status other than 200, includes only the status code and skips reading or logging the body. Go includes up to 200 code points of the body.
 /// - For a 200, reads up to 4KiB and requires a JSON object. Go reads up to 1MiB and also accepts `null`.
 ///
@@ -21,9 +21,9 @@ extension ControlClient {
 
     /// Requests publication of one TXT record and waits for the control server's reply.
     ///
-    /// The caller (`TailnetNode.setDNS`) checks which record name is required (`_acme-challenge.` for its own cert domain).
+    /// The caller (`TailnetNode.setDNS`) checks that the record name is `_acme-challenge.` followed by the node's own certificate domain.
     ///
-    /// - Throws: `invalidConfiguration` for an empty name or value. Throws `connection` immediately before registration (no node key).
+    /// - Throws: `invalidConfiguration` for an empty name or value. Before registration (with no node key), throws `connection` immediately.
     ///   Throws `connection` if no connection or reply arrives within 60 seconds, the connection drops, or the 200 body exceeds 4KiB or is not a JSON object.
     ///   Throws `http(status:)` for a status other than 200.
     package func setDNS(name: String, value: String) async throws(ControlError) {
@@ -69,7 +69,7 @@ extension ControlClient {
         }
     }
 
-    /// Waits for a registered connection. Throws `connection` if the waiting Task is canceled.
+    /// Waits for a connection that has completed registration. Throws `connection` if the waiting task is canceled.
     private func waitForConnection() async throws(ControlError) -> ControlConnection {
         while true {
             if let activeConnection { return activeConnection }

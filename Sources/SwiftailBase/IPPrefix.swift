@@ -28,7 +28,7 @@ public struct IPPrefix: Hashable, Sendable, LosslessStringConvertible {
         self.init(address: address, length: length)
     }
 
-    /// Whether the address belongs to this prefix. Returns `false` when the address families (IPv4 or IPv6) differ.
+    /// Returns whether the address belongs to this prefix. Returns `false` when the address families (IPv4 or IPv6) differ.
     public func contains(_ other: IPAddress) -> Bool {
         other.isIPv4 == address.isIPv4 && Self.mask(other.bytes, length: length) == address.bytes
     }

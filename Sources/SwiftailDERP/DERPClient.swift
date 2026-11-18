@@ -5,7 +5,7 @@ import SwiftailIO
 
 /// Maintains a connection to one DERP server. Backs off and reconnects after a disconnect.
 ///
-/// This is the only place in the package with a socket and a clock. The I/O-free state machine (`DERPConnection`) makes
+/// This is the only place in the DERP module that uses sockets and a clock. The I/O-free state machine (`DERPConnection`) makes
 /// protocol decisions. This actor feeds it bytes and times and emits the results as events (`events`).
 ///
 /// Uses structured concurrency. For the lifetime of one connection, `run()` runs the read loop, write loop, write watchdog, and idle watchdog as children of one TaskGroup.
@@ -39,7 +39,7 @@ import SwiftailIO
 ///
 /// Reads continue during blocked writes because the reader is a separate child. The server disconnects if it cannot write within 2 seconds.
 ///
-/// Contract `docs/contracts/SwiftailDERP.md` "DERPClient" and `docs/protocol-notes/derp-stun.md` §4.1 and §4.4~§4.6
+/// See the `DERPClient` behavior in `docs/contracts/SwiftailDERP.md` and `docs/protocol-notes/derp-stun.md` §4.1 and §§4.4–4.6
 /// (origin: tailscale.com `derp/derphttp/derphttp_client.go` and `wgengine/magicsock/derp.go`, BSD-3-Clause).
 public actor DERPClient {
     public enum Event: Sendable {
@@ -61,7 +61,7 @@ public actor DERPClient {
         /// TCP or TLS could not connect. This includes connection refusal, no route, name resolution failure, and certificate rejection
         /// (the socket layer does not report which occurred).
         case connectionFailed
-        /// The server connected, then rejected the upgrade or handshake, sent bytes that violated the specification, or disconnected.
+        /// The connection was established, but during the upgrade or handshake the server rejected it, sent bytes that violated the specification, or disconnected.
         case handshakeFailed
         /// No target to dial (the server list or the last server's `targets` is empty).
         case noServers
@@ -84,13 +84,13 @@ public actor DERPClient {
     static let eventBufferLimit = 256
     /// The byte limit for unread `packet` event bodies (1MiB). Drops the oldest packets first on overflow.
     ///
-    /// The count limit alone permits up to 65,536 bytes per packet × 256 packets = 16MiB in the worst case. That is about a third of the iOS packet tunnel
-    /// extension's limit (about 50MiB), so three receive buffers would exceed it. 1MiB is one sixteenth of that worst case. This is a proposed value based only on this calculation
+    /// At 65,536 bytes per packet from a Go server, the count limit permits 65,536 × 256 = 16MiB. That is about a third of the iOS packet tunnel
+    /// extension's reported limit (about 50MiB). Three such buffers would consume 48MiB before other memory use. The proposed 1MiB limit is one sixteenth of that 16MiB estimate
     /// (`docs/contracts/SwiftailTunnel.md` behavior M). Adjust it if real device throughput measurements show packet drops. Packets are datagrams and may
-    /// be dropped (TCP over WireGuard retransmits). One maximum-size packet (65,536 bytes) fits within the limit, so no individual packet
-    /// can exceed it.
+    /// be dropped (TCP over WireGuard retransmits). A maximum-size packet from a Go server (65,536 bytes) fits within the limit, and the 1MiB receive frame body limit
+    /// also keeps any larger individual packet within the byte limit.
     static let eventBufferByteLimit = 1 << 20
-    /// The maximum packets still waiting to be written to the socket, regardless of connection state. Drops the oldest on overflow.
+    /// The maximum number of packets waiting to be written to the socket, regardless of connection state. Drops the oldest on overflow.
     ///
     /// Matches `derpWriteQueueDepth = 32` (the write queue for one regional connection) in Go's `wgengine/magicsock/derp.go`, and dropping the oldest
     /// on overflow matches `sendDerp` in `magicsock.go`. As the Go comment notes, a queue above the TCP buffer is almost pure
@@ -143,6 +143,8 @@ public actor DERPClient {
     /// The consecutive count of attempts that failed to open a connection. Resets to 0 when a connection opens. Included in `attemptFailed`.
     private var consecutiveAttemptFailures = 0
 
+    /// Creates a DERP client for the servers in one region.
+    ///
     /// - Parameters:
     ///   - servers: The servers in one region. Tries them in list order.
     ///   - interface: The outbound interface. With nil, the system chooses. Leaves loopback server connections unbound.
@@ -170,14 +172,14 @@ public actor DERPClient {
         eventStream = AsyncStream(unfolding: { await queue.next() })
     }
 
-    /// The event stream. Supports one subscriber. Ends when `run()` ends.
+    /// The event stream. Supports one subscriber. Finishes after the first `run()` ends and any buffered events are consumed.
     ///
     /// With a slow consumer, keeps up to the newest 256 `attemptFailed`, `packet`, and `peerGone` events and 1MiB of total packet bytes, dropping
-    /// the oldest first. Packets are datagrams and may be dropped. Preserves `connected` and `disconnected`, keeping just the latest unread state event
+    /// the oldest first. Packets are datagrams and may be dropped. Connection state events (`connected` and `disconnected`) are exempt from eviction, with just the latest unread state event kept
     /// (`EventQueue`).
     public nonisolated var events: AsyncStream<Event> { eventStream }
 
-    /// Connects, reads, and reconnects after a disconnect. Returns only when the calling Task is canceled.
+    /// Connects, reads, and reconnects after a disconnect until the calling task is canceled.
     ///
     /// Call once per client. Subsequent calls return immediately.
     public func run() async {
@@ -198,7 +200,7 @@ public actor DERPClient {
         }
     }
 
-    /// Sends a packet. Queues it without waiting. If disconnected, sends it after reconnecting.
+    /// Queues a packet for sending and returns immediately. If disconnected, sends the packet on the next connection.
     ///
     /// The queue holds up to 32 packets and drops the oldest on overflow. Drops packets over 65,536 bytes.
     public func send(_ packet: [UInt8], to peer: NodePublicKey) {
@@ -355,7 +357,7 @@ enum Disconnection: Error {
 }
 
 extension DERPClient: CustomReflectable {
-    /// Hides children because they hold a private key.
+    /// Hides child values because they include a private key.
     public nonisolated var customMirror: Mirror {
         Mirror(self, children: ["serverCount": servers.count, "isPreferred": isPreferred])
     }

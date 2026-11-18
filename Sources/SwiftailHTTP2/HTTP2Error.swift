@@ -1,6 +1,6 @@
 /// An error thrown by `HTTP2ClientConnection`.
 public enum HTTP2Error: Error, Sendable, Equatable {
-    /// The peer violated the specification or reported a connection error. The connection has ended. code is an RFC 9113 §7 error code.
+    /// The peer violated the specification or reported a connection error. The connection has ended. `code` is an RFC 9113 §7 error code.
     case connectionFailed(code: UInt32)
     /// The connection ended or received GOAWAY, so it cannot start new requests.
     case connectionClosed

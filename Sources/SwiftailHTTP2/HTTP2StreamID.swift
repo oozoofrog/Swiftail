@@ -1,6 +1,6 @@
 /// A stream identifier (RFC 9113 §5.1.1).
 ///
-/// Client-initiated streams use increasing odd numbers starting at 1. The value 0 identifies the connection as a whole and is reserved outside streams.
+/// Client-initiated streams use increasing odd numbers starting at 1. The value 0 refers to the connection as a whole and identifies no stream.
 public struct HTTP2StreamID: Hashable, Sendable {
     public let rawValue: UInt32
 

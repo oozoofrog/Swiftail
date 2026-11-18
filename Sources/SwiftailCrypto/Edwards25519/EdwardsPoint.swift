@@ -30,7 +30,7 @@ struct EdwardsPoint {
         self.x = x; self.y = y; self.z = z; self.t = t
     }
 
-    /// Decodes a 32-byte encoding using Go `Point.SetBytes`'s relaxed version of the rules in RFC 8032 §5.1.3.
+    /// Decodes a 32-byte encoding using the relaxed rules that Go's `Point.SetBytes` applies to RFC 8032 §5.1.3.
     ///
     /// Accepts two kinds of noncanonical encodings beyond those allowed by the RFC.
     /// 1. A representation with y ≥ p (`FieldElement(bytes:)` reduces it modulo p).

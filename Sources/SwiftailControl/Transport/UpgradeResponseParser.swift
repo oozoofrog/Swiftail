@@ -21,7 +21,7 @@ public struct UpgradeResponseParser: Sendable {
 
     public init() {}
 
-    /// Returns nil until the full head arrives, then returns the remaining bytes (for the Noise layer).
+    /// Accepts bytes from the server and returns `nil` until the response header is complete. Then returns any remaining Noise bytes.
     ///
     /// - Throws: `upgradeRejected` for a status other than 101, `malformed` for an invalid format or different `Upgrade` value,
     ///   `messageTooLarge` for a head over 16KiB, or `closed` after returning the head or failing.

@@ -50,7 +50,7 @@ enum NoiseIK {
         return (initiation, PendingHandshake(state: state, machineKey: machineKey, ephemeral: ephemeral))
     }
 
-    /// Steps 11~15 open response, authenticate the server, and derive transport keys.
+    /// Steps 11–15 open the Noise response, authenticate the server, and derive transport keys.
     ///
     /// - Returns: `nil` if DH (ee, se) is 0 or the tag does not match.
     static func consumeResponse(_ response: HandshakeResponse, pending: PendingHandshake) -> TransportKeys? {

@@ -3,7 +3,7 @@ import Foundation
 /// The response to `POST /machine/register`. Go `tailcfg.RegisterResponse`.
 ///
 /// A nonempty `error` is a failure even with HTTP 200, and other fields are ignored. Otherwise,
-/// branches in `nodeKeySignature` → `nodeKeyExpired` → `authURL` order (notes §4.1, items 3~5).
+/// the client checks `nodeKeySignature`, then `nodeKeyExpired`, then `authURL` (notes §4.1, items 3–5).
 /// A `false` value for `machineAuthorized` is allowed. Device authorization follows the self `Node` in the map.
 /// `docs/protocol-notes/control-map.md` §3.2 (origin: `RegisterResponse` in tailscale.com `tailcfg/tailcfg.go`).
 public struct RegisterResponse: Decodable, Sendable, Equatable {
@@ -17,7 +17,7 @@ public struct RegisterResponse: Decodable, Sendable, Equatable {
     public internal(set) var machineAuthorized: Bool
     /// A nonempty value is the URL where the user must complete login.
     public internal(set) var authURL: String
-    /// A nonempty value requires re-signing the tailnet lock signature with the new key.
+    /// A nonempty signature asks the client to extend that signature chain for a fresh node key using the client's NL key.
     public internal(set) var nodeKeySignature: [UInt8]
     /// A nonempty value explains why registration was rejected.
     public internal(set) var error: String

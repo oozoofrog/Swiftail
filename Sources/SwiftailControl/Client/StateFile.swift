@@ -10,7 +10,7 @@ enum StateFile {
     ///
     /// - Parameters:
     ///   - limit: The maximum bytes to read. Rejects larger files.
-    ///   - label: The file name to use in error messages ("identity file"). Omits the path and contents.
+    ///   - label: The descriptive file label for errors ("identity file"). Error messages omit the path and contents.
     static func read(_ file: URL, limit: Int, label: String) throws(ControlError) -> Data? {
         // O_NOFOLLOW fails if the final path component is a symlink (ELOOP). O_NONBLOCK avoids blocking on a FIFO (rejected below).
         let descriptor = open(file.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)

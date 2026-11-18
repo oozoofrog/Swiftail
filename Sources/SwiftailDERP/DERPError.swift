@@ -1,6 +1,6 @@
 /// The reason a DERP connection failed or rejected a request.
 ///
-/// Failures originating in bytes sent by the server (`malformed` through `tooManyPendingReplies`) end the connection. Subsequent calls throw
+/// Failures originating in bytes sent by the server (`malformed` through `tooManyPendingReplies`) end the connection. Subsequent `receive` and `send` calls throw
 /// `closed`. The `packetTooLarge` and `notReady` cases are caller errors and leave the connection open.
 ///
 /// `docs/protocol-notes/derp-stun.md` Chapter 3, §4.2~§4.3.

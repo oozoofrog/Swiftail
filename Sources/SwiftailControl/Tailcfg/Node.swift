@@ -34,11 +34,11 @@ public struct Node: Decodable, Sendable, Equatable {
     public internal(set) var keySignature: [UInt8]
     /// The device's machine public key.
     public internal(set) var machine: MachinePublicKey
-    /// The disco public key. Encrypts path discovery messages.
+    /// The disco public key, used to encrypt path discovery messages.
     public internal(set) var discoKey: DiscoPublicKey
     /// The node's tailnet addresses (typically IPv4 /32 and IPv6 /128).
     public internal(set) var addresses: [IPPrefix]
-    /// Destination prefixes to send to this node. Become WireGuard AllowedIPs.
+    /// Destination prefixes routed to this node as WireGuard AllowedIPs.
     public internal(set) var allowedIPs: [IPPrefix]
     /// Candidate UDP addresses for direct connections.
     public internal(set) var endpoints: [IPEndpoint]
@@ -66,9 +66,9 @@ public struct Node: Decodable, Sendable, Equatable {
     public internal(set) var unsignedPeerAPIOnly: Bool
     /// Whether the node key has expired.
     public internal(set) var expired: Bool
-    /// The IPv4 address by which this peer knows self. Used when rewriting the source address of a packet sent to the peer.
+    /// The IPv4 address this peer uses for the self node. Used to rewrite the source address of packets sent to that peer.
     public internal(set) var selfNodeV4MasqAddrForThisPeer: IPAddress?
-    /// The IPv6 address by which this peer knows self.
+    /// The IPv6 address this peer uses for the self node.
     public internal(set) var selfNodeV6MasqAddrForThisPeer: IPAddress?
     /// A WireGuard-only peer with no disco or DERP. Reachable only through `endpoints`.
     public internal(set) var isWireGuardOnly: Bool

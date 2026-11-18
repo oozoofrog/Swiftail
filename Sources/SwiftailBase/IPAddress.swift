@@ -5,7 +5,7 @@ import Network
 ///
 /// Stores 4 or 16 bytes in network byte order. String parsing uses the Network framework's
 /// `IPv4Address` and `IPv6Address` with three additional restrictions.
-/// - Strings containing characters other than hexadecimal digits, `:`, or `.` are rejected. This includes zones (zone, `%en0`). Tailnet addresses have no zones.
+/// - Strings containing characters other than hexadecimal digits, `:`, or `.` are rejected. This includes zone identifiers (`%en0`). Tailnet addresses have no zones.
 ///   Ignoring zones would make distinct addresses equal. This also rejects trailing text after a NUL, which Network ignores.
 /// - IPv4 outside four-part dotted-decimal notation (`1.2.3`, `010.0.0.1`, `0x7f.0.0.1`) is rejected. Network accepts legacy inet_aton notation and
 ///   reads `1.2.3` as `1.2.0.3`. Accepting only standard notation keeps the same string from yielding different addresses across tools.
@@ -40,7 +40,7 @@ public struct IPAddress: Hashable, Sendable, LosslessStringConvertible {
         self.bytes = bytes
     }
 
-    /// Whether the address is IPv4. IPv4-mapped IPv6 (`::ffff:a.b.c.d`) takes 16 bytes and returns `false`.
+    /// Whether the address is IPv4. An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) uses 16 bytes, so this property is `false`.
     public var isIPv4: Bool { bytes.count == 4 }
 
     /// The Tailscale address ranges used by the engine and pairing. Distinguishes the ChromeOS VM range within CGNAT.

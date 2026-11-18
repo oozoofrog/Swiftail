@@ -52,7 +52,7 @@ extension HTTP2ClientConnection {
 
     // MARK: Stream identifiers
 
-    /// A stream never requested is a connection error. Client-initiated streams have odd identifiers below `nextStreamID`.
+    /// Throws a connection error for a stream the client never opened. Client-initiated streams have odd identifiers below `nextStreamID`.
     private func requireNotIdle(_ id: HTTP2StreamID) throws(HTTP2Error) {
         guard id.rawValue % 2 == 1, id.rawValue < nextStreamID else { throw .connection(.protocolError) }
     }
@@ -140,7 +140,7 @@ extension HTTP2ClientConnection {
             if endStream { finishResponse(id, events: &events) }
         case .receivingBody:
             // shortcut: validates and discards trailers, add support when handling responses where trailers carry meaning.
-            // A header block after the body is trailers. It must have END_STREAM and cannot contain pseudo-headers (§8.1, §8.1.1).
+            // A header block after the final response head is trailers. It must have END_STREAM and cannot contain pseudo-headers (§8.1, §8.1.1).
             guard endStream, fields.allSatisfy({ $0.name.utf8.first != UInt8(ascii: ":") && HeaderValidation.isValid($0) }) else {
                 resetStream(id, code: .protocolError, events: &events)
                 return
@@ -160,8 +160,8 @@ extension HTTP2ClientConnection {
         }
     }
 
-    /// The response ended with END_STREAM. Forget the stream if the full request was sent. If any body remains unsent, the server
-    /// responded without waiting for the body, so abandon the rest (§8.1).
+    /// Finishes a response that ended with END_STREAM and removes the stream. If any request body remains unsent, the server
+    /// responded without waiting for it, so send RST_STREAM CANCEL and abandon the rest (§8.1).
     private mutating func finishReceiving(_ id: HTTP2StreamID, events: inout [Event]) {
         events.append(.streamClosed(id, resetCode: nil))
         guard let stream = streams[id] else { return }
@@ -228,7 +228,7 @@ extension HTTP2ClientConnection {
         sendBody(of: id)
     }
 
-    /// GOAWAY discards streams above `lastStreamID` because the server left them unprocessed. Receives the other streams to completion.
+    /// Handles GOAWAY by discarding streams above `lastStreamID`, which the server left unprocessed. Lets the remaining streams finish.
     /// Blocks new requests.
     private mutating func receiveGoAway(lastStreamID: HTTP2StreamID, code: UInt32, events: inout [Event]) {
         if phase == .open { phase = .draining }

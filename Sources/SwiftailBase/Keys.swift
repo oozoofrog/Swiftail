@@ -41,7 +41,7 @@ public struct PrefixedKey<Kind: KeyKind>: Hashable, Sendable {
 }
 
 extension PrefixedKey: LosslessStringConvertible {
-    /// Accepts only the form `"nodekey:" + 64 hexadecimal digits`. Returns `nil` for a different prefix or length.
+    /// Parses the prefix for `Kind` followed by exactly 64 hexadecimal digits, such as `"nodekey:"` followed by 64 digits. Returns `nil` for a different prefix or length.
     public init?(_ description: String) {
         guard description.hasPrefix(Kind.prefix),
               let bytes = [UInt8](hex: String(description.dropFirst(Kind.prefix.count)))

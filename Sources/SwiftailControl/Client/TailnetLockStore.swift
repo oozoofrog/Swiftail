@@ -4,7 +4,7 @@ import SwiftailTKA
 
 /// Keeps signing authority state in one file (`tailnet-lock.cbor`) in the state directory, so filtering uses the same trust state after restart.
 ///
-/// The file concatenates a canonical CBOR map and the 32-byte BLAKE2s-256 of those bytes.
+/// The file concatenates a canonical CBOR map and the 32-byte BLAKE2s-256 digest of that map's bytes.
 ///
 /// ```
 /// {1: format version(1), 2: bootstrap AUM hash(32 bytes), 3: [canonical bytes of accepted AUMs, in acceptance order]} ‖ BLAKE2s-256
@@ -20,8 +20,8 @@ import SwiftailTKA
 ///
 /// Uses no compression, so every change rewrites the entire file.
 /// shortcut: revisit when writing a long chain takes a noticeable amount of time.
-/// shortcut: logging in to another tailnet with the same state directory leaves the old tailnet's state behind and filters out all peers on the new tailnet
-/// (`TailnetLockStatus.issue` is `.storedStateDiverged`). Requires manual resolution. If the user chooses to, the app deletes only this file with
+/// shortcut: logging in to another tailnet with the same state directory leaves the old tailnet's state behind and can filter out peers on the new tailnet, potentially all of them.
+/// When synchronization finds no common ancestor, `TailnetLockStatus.issue` is `.storedStateDiverged` and requires manual recovery. If the user chooses to, the app deletes only this file with
 /// `ControlClient.removeTailnetLockState(inDirectory:)`. Revisit when an adopter automatically switches tailnets using
 /// one state directory.
 ///
@@ -44,7 +44,7 @@ struct TailnetLockStore: Sendable {
     /// Opens stored state and recomputes it. Returns nil if the file is absent.
     ///
     /// Checks size, the trailing hash, CBOR, the format version, decoding of each AUM, chain invariants, and signatures in order. Any violation
-    /// throws and leaves the file untouched. The caller must treat it as unverified state. The state is still present (behavior T4).
+    /// throws and leaves the file untouched. The caller must treat the state as unverified even though it could not be loaded (behavior T4).
     func load() throws(ControlError) -> Authority? {
         // Read by the same rules as the identity file: no symlink following, regular files only, and at most the limit.
         guard let data = try StateFile.read(fileURL, limit: Self.maximumFileSize, label: "tailnet lock state file") else {
@@ -152,7 +152,7 @@ extension ControlClient {
     /// Deletes only this file because removing the entire state directory also loses the NL key and requires a new signature from the signing device.
     ///
     /// After deletion, the next startup establishes trust in signing authority state from scratch using the server's checkpoint (TOFU). The previously verified state
-    /// no longer checks the server, so apps must invoke this as a **user-chosen action**.
+    /// previously constrained what the server could change. The app may call this method only as an explicit user decision.
     /// Call while the node is stopped, after `ControlClient.run()` using this directory has ended. A running client continues filtering with in-memory
     /// state and rewrites the file when that state changes.
     ///

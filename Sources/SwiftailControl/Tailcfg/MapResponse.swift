@@ -12,7 +12,7 @@ import Foundation
 /// client version notifications, `Debug`, and session resumption fields (`MapSessionHandle`, `Seq`). Unknown keys are ignored.
 /// `docs/protocol-notes/control-map.md` §3.5, §3.6 (origin: `MapResponse` in tailscale.com `tailcfg/tailcfg.go`).
 public struct MapResponse: Decodable, Sendable, Equatable {
-    /// A keepalive response. Leaves state unchanged. Only `pingRequest` and `controlTime` also apply.
+    /// Whether this is a keepalive response. It carries no map delta. Only `pingRequest` and `controlTime` also apply.
     public internal(set) var keepAlive: Bool
     /// A ping for which the server requested a reply. An event for this response alone.
     public internal(set) var pingRequest: PingRequest?

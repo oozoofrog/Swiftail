@@ -17,7 +17,7 @@ public struct TailnetLockStatus: Sendable, Equatable {
         case unverified
     }
 
-    /// Why signing authority state could not be held in verified form or synchronized with the server (contract §5 TL-11b item 4). Determines what
+    /// The reason verified signing authority state is unavailable or could not be synchronized with the server (contract §5 TL-11b item 4). Determines what
     /// the app tells the user.
     public enum Issue: Sendable, Equatable {
         /// Obtaining verified state: the server reports an enabled lock, and bootstrap has yet to succeed. Retries automatically (`.unverified`).
@@ -47,10 +47,10 @@ public struct TailnetLockStatus: Sendable, Equatable {
     public var mode: Mode
     /// The local head (52 base32 characters). Present only in `.enforcing`.
     public var head: String?
-    /// The number of peers removed from the netmap. In `.enforcing`, this includes peers whose signatures are absent or unverified, or whose keys were superseded by rotation.
+    /// The number of peers removed from the netmap. In `.enforcing`, it counts peers with missing signatures, signatures that fail verification, or keys superseded by rotation.
     /// In `.unverified`, it includes all peers reported by the server.
     public var filteredPeerCount: Int
-    /// The values to pass to the signing device when the self node's signature fails verification under current state (locked out). Nil if unlocked.
+    /// The values to pass to the signing device when the self node's signature fails verification under the current state and the node is locked out. Otherwise, `nil`.
     public var signingRequest: SigningRequest?
 
     /// Why verified state could not be held or synchronized with the server. Nil when there is no such issue.

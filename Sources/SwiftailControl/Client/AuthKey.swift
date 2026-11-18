@@ -3,7 +3,7 @@ import SwiftailTKA
 /// The two parts of an auth key: the portion sent to the control server and the tailnet lock signature material.
 ///
 /// A signed auth key for a tailnet using tailnet lock appends lock material as `<key>--TL<credential>-<wrapped private key>`.
-/// Sends only the part before `--TL` to the server. The suffix signs the new node key and contains private key material, so it is excluded from every request.
+/// Sends only the part before `--TL` to the server. The suffix contains the material for signing the new node key, including a private key, so it is excluded from every request.
 /// If the suffix cannot be parsed, stops with a configuration error before sending anything to the server. Go sends the entire original text as the auth key in this case (decision L12).
 ///
 /// `docs/protocol-notes/tailnet-lock.md` §3.8, §4.6 item 2, `docs/contracts/SwiftailTailnetLock.md` behaviors R3 and R4

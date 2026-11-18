@@ -3,7 +3,7 @@ import Foundation
 /// The configured server URL, validated once into values used to connect.
 ///
 /// - For `http://`, opens plaintext TCP on the given port (default 80). For `https://`, opens TLS on the given port (default 443).
-/// - The upgrade request's `Host` is the URL's host and port if specified.
+/// The upgrade request's `Host` is the URL's host, with the port appended if specified.
 /// - The HTTP/2 `:authority` over Noise is the host without the port (Go requests `"https://" + host + path`).
 ///
 /// `shortcut:` for an `http://` URL, Go races 80 and 443 (443 starts 500ms later) and also follows ControlDialPlan and HTTP proxies.

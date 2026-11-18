@@ -23,7 +23,7 @@ private let tailnetLockLog = Logger(subsystem: "Swiftail", category: "tailnet-lo
 ///    Commits and stores the candidate key only after authentication. If the connection drops before then, resumes waiting after reconnecting using the same candidate
 ///    key and Followup URL, because the URL the user sees is tied to that candidate key.
 /// 4. If `startInteractiveLogin()` is called during registration, the request remains pending after registration completes (Go `authRoutine`'s
-///    `loginGoal == goal` check). Commits the key it received and registers again with a fresh key on the next connection. If a Followup long poll
+///    `loginGoal == goal` check). Commits the candidate key after successful registration and registers again with a fresh key on the next connection. If a Followup long poll
 ///    is waiting for login, stops it immediately and starts over with a fresh key (the user gets a fresh URL immediately).
 ///
 /// `docs/protocol-notes/control-map.md` §3.2, §4.1, `docs/protocol-notes/tailnet-lock.md` §4.6, contract
@@ -151,7 +151,7 @@ extension ControlClient {
     /// The node key signature for the registration request (behavior R5). Follows the exact order of Go `doLogin`.
     ///
     /// 1. If an old node key exists and the server just supplied the old signature, extend that signature chain using the NL key (`ResignNKS`). If the old signature
-    ///    is outside the chain this node already signed with its NL key, re-signing throws (contract §5 TL-11b item 1 prohibits signing a server-selected node key).
+    ///    does not belong to a chain this node already signed with its NL key, re-signing throws (contract §5 TL-11b item 1 prohibits signing a server-selected node key).
     ///    On error, logs only its kind and registers without a signature. The node is locked out, which the next netmap's `signingRequest` reveals.
     /// 2. Otherwise, if the request includes a signed auth key, signs the new node key using the wrapped key (`SignByCredential`). Failure
     ///    ends registration with an error (backs off and retries, as Go does).
@@ -204,7 +204,7 @@ extension ControlClient {
     }
 
     /// Prepares the server rejection message for an error. To keep secrets out of errors and logs even if the server echoes the auth key,
-    /// redacts occurrences of the configured auth key (the original and the portion before `--TL`) and truncates to `maximumRejectionLength`.
+    /// redacts occurrences of the configured auth key (the original and the portion before `--TL`). After `maximumRejectionLength` characters, truncates the message and appends an ellipsis.
     static func rejectionMessage(_ message: String, authKey: String?) -> String {
         var message = message
         if let authKey {
@@ -217,7 +217,7 @@ extension ControlClient {
         return String(message.prefix(maximumRejectionLength)) + "…"
     }
 
-    /// Converts a status other than 200 into an error. Includes the wait time for 429 and 503 with `Retry-After`.
+    /// Converts a status other than 200 into an error. Includes a wait time for 429, or for 503 when `Retry-After` is present.
     static func check(status: Int, retryAfter: String?) throws {
         switch status {
         case 200:

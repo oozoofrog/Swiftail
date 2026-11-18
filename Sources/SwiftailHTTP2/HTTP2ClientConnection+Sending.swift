@@ -20,7 +20,7 @@ extension HTTP2ClientConnection {
         return id
     }
 
-    /// Discards the stream (RST_STREAM CANCEL). Does nothing if the stream has already ended.
+    /// Cancels the stream with RST_STREAM CANCEL. If the stream has already ended, this has no effect.
     /// Emits no further events for the stream, including `streamClosed`. The caller cleans up.
     public mutating func cancel(_ stream: HTTP2StreamID) {
         guard phase != .failed, streams.removeValue(forKey: stream) != nil else { return }

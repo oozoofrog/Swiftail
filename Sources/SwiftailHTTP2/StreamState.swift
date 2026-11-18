@@ -1,8 +1,8 @@
 /// An open stream tracked by the connection (RFC 9113 §5.1).
 ///
 /// The request and response end independently. The request side ends when `unsentBody` becomes `nil` (when END_STREAM is sent).
-/// The response side ends when `receiving` becomes `ended` (when END_STREAM is received). When both sides end or RST_STREAM
-/// resets the stream, the connection forgets it. Later frames are handled as frames for a closed stream.
+/// Receiving END_STREAM finishes the response. The connection removes the stream and cancels any unsent request body. It also removes streams reset
+/// with RST_STREAM. Later frames are handled as frames for a closed stream.
 struct StreamState {
     enum Receiving: Equatable {
         /// Waiting for the response head.

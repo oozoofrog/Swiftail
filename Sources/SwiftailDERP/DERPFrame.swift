@@ -1,6 +1,6 @@
 /// A DERP frame with a 5-byte header (1 byte for the type and a 4-byte BE body length) followed by the body.
 ///
-/// Byte boundaries are independent of TCP chunks and the HTTP response head. `DERPFrameReader` assembles frames from fragmented input.
+/// Frame boundaries are independent of TCP chunk boundaries and the HTTP response head. `DERPFrameReader` assembles frames from fragmented input.
 ///
 /// `docs/protocol-notes/derp-stun.md` §3.1 and §3.2 (origin: tailscale.com `derp/derp.go`, BSD-3-Clause).
 struct DERPFrame: Sendable, Equatable {

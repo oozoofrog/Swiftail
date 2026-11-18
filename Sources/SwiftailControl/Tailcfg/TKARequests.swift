@@ -25,7 +25,7 @@ struct TKABootstrapRequest: Encodable, Sendable {
     }
 }
 
-/// The bootstrap RPC response. Empty if both values are absent.
+/// The bootstrap RPC response. Each field defaults to an empty byte array if absent.
 struct TKABootstrapResponse: Decodable, Sendable {
     /// The checkpoint AUM (CBOR) for initializing signing authority state.
     var genesisAUM: [UInt8]
@@ -74,7 +74,7 @@ struct TKASyncOfferResponse: Decodable, Sendable {
 
     /// The `MissingAUMs` count limit. Matches the limit on AUMs accepted at once (4,096, contract behavior M and decision L16).
     ///
-    /// Acceptance checks the same limit, but first each entry would be decoded from base64 and as an AUM, so count here first (§5 TL-11b item 5).
+    /// Acceptance checks the same limit. Count the entries here before decoding their base64 and then their AUMs (§5 TL-11b item 5).
     /// An 8MiB body can hold more than a million entries a few bytes long.
     static let maximumMissingAUMCount = 4_096
 
@@ -107,7 +107,7 @@ struct TKASyncSendRequest: Encodable, Sendable {
     var head: String
     /// The AUMs' CBOR bytes. Sends `[]` even with nothing to send (never null).
     var missingAUMs: [[UInt8]]
-    /// Automatic synchronization without interactive administrator action. Always false on ordinary nodes.
+    /// Whether this is an interactive administrator operation. Ordinary nodes always send false because they synchronize automatically.
     var interactive = false
 
     private enum CodingKeys: String, CodingKey {

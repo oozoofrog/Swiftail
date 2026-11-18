@@ -2,8 +2,8 @@ import Foundation
 
 /// The retry delay specified by the control server. Computes it without a clock or randomness.
 ///
-/// - Ordinary backoff: Uses `Backoff.delay` with a 30-second cap. Resets the consecutive failure count to 0 on receipt of a full netmap.
-/// - 429 and 503 with `Retry-After`: Waits the server-specified time. If missing, at or below 0, above 1 hour, or unparseable,
+/// - Ordinary backoff: Uses `Backoff.delay` with a 30-second cap. `ControlClient` resets its consecutive failure count on a usable netmap.
+/// - 429, or 503 with `Retry-After`: Waits the server-specified time. If the value is missing, at or below 0, above 1 hour, or unparseable,
 ///   uses `5s + [0, 5s)`. Both cases are capped at 5 minutes.
 ///
 /// `docs/protocol-notes/control-map.md` §4.4, Chapter 5

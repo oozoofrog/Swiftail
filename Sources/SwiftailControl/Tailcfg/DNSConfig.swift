@@ -66,7 +66,7 @@ public struct DNSResolver: Decodable, Sendable, Equatable {
 public struct DNSRecord: Decodable, Sendable, Equatable {
     /// The name (an FQDN with or without a trailing dot).
     public internal(set) var name: String
-    /// The record type. An empty string means A or AAAA depending on the address family of `value`. Go also ignores other values.
+    /// The record type. An empty string means A or AAAA depending on the address family of `value`. Go also ignores records with a nonempty type.
     public internal(set) var type: String
     /// The record value. For A and AAAA, this is an IP address string.
     public internal(set) var value: String

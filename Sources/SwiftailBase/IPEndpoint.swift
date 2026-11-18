@@ -1,6 +1,6 @@
 /// An IP address and UDP port. Corresponds to Go `netip.AddrPort`.
 ///
-/// Used for addresses that can receive direct connections (endpoints reported to the control server or advertised by peers) and UDP destinations.
+/// Used for candidate addresses for direct connections (endpoints reported to the control server or advertised by peers) and for UDP destinations.
 /// The text form is `"192.0.2.1:41641"` for IPv4 and `"[2001:db8::1]:41641"` for IPv6. IPv6 requires square brackets.
 public struct IPEndpoint: Hashable, Sendable, LosslessStringConvertible {
     public var address: IPAddress

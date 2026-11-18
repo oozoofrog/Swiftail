@@ -11,10 +11,10 @@ public enum ControlError: Error, Sendable {
     case storage(String)
     /// A connection or transport layer failure. Retries.
     case connection(String)
-    /// A response other than 200. Handles the wait for 429 and 503 with `Retry-After` internally.
+    /// A response other than 200. Handles the wait internally for 429, and for 503 when `Retry-After` is present.
     case http(status: Int)
     /// The server rejected registration that included an auth key (`RegisterResponse.Error`). The key was invalid, expired, or previously used.
-    /// The server does not specify which as an error kind. The associated value is a server diagnostic message and is unsuitable for user-facing copy.
+    /// The server supplies no error kind that distinguishes these reasons. The associated value is the server's diagnostic message. Use app-provided wording for users.
     case authKeyRejected(String)
     /// The server rejected registration without an auth key (`RegisterResponse.Error`). This may be due to administrator policy or another reason.
     /// The associated value is a server diagnostic message.

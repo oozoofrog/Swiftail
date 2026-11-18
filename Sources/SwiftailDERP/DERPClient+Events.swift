@@ -8,7 +8,7 @@ extension DERPClient {
     /// - `attemptFailed`, `packet`, and `peerGone`: Keep up to the newest `eventBufferLimit` events and drop the oldest first. Packets are datagrams.
     ///   Also keep at most `eventBufferByteLimit` total bytes of packet bodies and drop the oldest packets when above the limit
     ///   (`peerGone` has no bytes and is exempt from the byte limit).
-    /// - `connected` and `disconnected`: Preserve the latest unread connection state event. Prior
+    /// - `connected` and `disconnected`: Exempt from eviction. Keep only the latest unread connection state event. Prior
     ///   states are no longer meaningful, and this keeps the queue from growing during repeated reconnection if consumption stalls.
     ///
     /// `AsyncStream` buffering cannot drop selectively by type. When it overflowed, `connected` was pushed out (the node thought it

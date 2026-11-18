@@ -12,10 +12,10 @@ import SwiftailIO
 /// The reader emits frames one at a time for handling by type. This boundary parses all bytes from the server once and produces validated
 /// values (`Event`).
 ///
-/// Failure discards all buffered incoming and outgoing bytes. Subsequent calls throw `closed`. The limits are 16KiB for the response head,
+/// Failure discards all buffered incoming and outgoing bytes. Subsequent `receive` and `send` calls throw `closed`. The limits are 16KiB for the response head,
 /// 1MiB for the frame body, and 64KiB for pending Pong replies.
 ///
-/// `docs/protocol-notes/derp-stun.md` Chapter 3, §4.2~§4.5, contract `docs/contracts/SwiftailDERP.md` behaviors 1~7
+/// See `docs/protocol-notes/derp-stun.md` §3 and §§4.2–4.5, and `docs/contracts/SwiftailDERP.md` behaviors 1–7
 /// (origin: tailscale.com `derp/derp_client.go`, BSD-3-Clause).
 public struct DERPConnection: Sendable {
     public enum Event: Sendable, Equatable {
@@ -57,6 +57,8 @@ public struct DERPConnection: Sendable {
     /// `DERPClient` uses this to reset its backoff count. It remains available after failure.
     private(set) var hasReceivedFrameAfterHandshake = false
 
+    /// Creates a connection state machine and queues the HTTP upgrade request.
+    ///
     /// - Parameters:
     ///   - privateKey: This node's node private key (the same as the WireGuard key).
     ///   - host: The HTTP `Host` value.
@@ -73,7 +75,7 @@ public struct DERPConnection: Sendable {
         outbound = try DERPHandshake.upgradeRequest(host: host)
     }
 
-    /// Accepts bytes from the server. Byte boundaries need not align with frame boundaries.
+    /// Accepts bytes from the server. Input chunks can end anywhere within a frame.
     ///
     /// - Throws: Failure ends the connection. Subsequent calls throw `closed`.
     public mutating func receive(_ bytes: [UInt8]) throws(DERPError) -> [Event] {
@@ -189,7 +191,7 @@ public struct DERPConnection: Sendable {
         }
     }
 
-    /// Discards buffered incoming and outgoing bytes and makes subsequent calls throw `closed`.
+    /// Discards buffered incoming and outgoing bytes. Subsequent `receive` and `send` calls throw `closed`.
     private mutating func fail() {
         phase = .failed
         head = HTTPResponseHead.Parser()
@@ -201,7 +203,7 @@ public struct DERPConnection: Sendable {
 }
 
 extension DERPConnection: CustomReflectable {
-    /// Hides children because they hold private and shared keys. Keys are omitted from `dump` and `String(describing:)`.
+    /// Hides child values because they include private and shared keys. Keys are omitted from `dump` and `String(describing:)`.
     public var customMirror: Mirror {
         Mirror(self, children: [:])
     }

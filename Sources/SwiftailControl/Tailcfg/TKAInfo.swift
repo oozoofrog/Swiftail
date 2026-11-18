@@ -1,6 +1,6 @@
 /// Server-side tailnet lock (TKA) state. Go `tailcfg.TKAInfo`. Arrives as `TKAInfo` in a map response.
 ///
-/// If absent initially, the tailnet has lock disabled. Later, `nil` keeps the previous value.
+/// If initially absent, the server is treated as reporting lock disabled. Later, `nil` keeps the previous server-reported value.
 /// Contract `docs/contracts/SwiftailTailnetLock.md` behaviors N and O cover interpretation of this value (`ServerLockState`) and the resulting procedure.
 /// `docs/protocol-notes/control-map.md` §4.6 (origin: `TKAInfo` in tailscale.com `tailcfg/tka.go`).
 public struct TKAInfo: Decodable, Sendable, Equatable {

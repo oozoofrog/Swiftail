@@ -1,7 +1,7 @@
 /// The HPACK Huffman code table.
 ///
 /// A static Huffman code for compressing string literals. Symbols 0~255 are byte values and 256 is EOS,
-/// the end-of-string symbol. Each code is right-aligned in a `bitCount`-bit integer.
+/// the end-of-string symbol. Each code is right-aligned in an integer and occupies its low `bitCount` bits.
 ///
 /// RFC 7541 Appendix B (https://www.rfc-editor.org/rfc/rfc7541#appendix-B). The values were copied mechanically from the original table,
 /// verifying "bit sequence = hexadecimal value = length," and checked against the 256 entries in Go's `hpack/tables.go`.

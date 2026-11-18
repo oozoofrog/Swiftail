@@ -10,7 +10,7 @@ import Foundation
 /// Go's zero time (`0001-01-01T00:00:00Z`) marks absence. A timestamp field that cannot be omitted
 /// is sent as this string even if it has no value.
 ///
-/// `docs/protocol-notes/control-map.md` 3.1.
+/// `docs/protocol-notes/control-map.md` §3.1.
 enum GoTime {
     /// Go's zero time, −62,135,596,800 seconds relative to 1970.
     static let zero = Date(timeIntervalSince1970: -62_135_596_800)
@@ -182,7 +182,7 @@ enum GoTime {
 }
 
 private extension Int {
-    /// The quotient rounded toward negative infinity. For dates before 1970, differs from `/` (which rounds toward 0).
+    /// The quotient rounded toward negative infinity. For days before 1970, Swift's `/` rounds toward 0 instead.
     func floorDivided(by divisor: Int) -> Int {
         let quotient = self / divisor
         return (self % divisor != 0 && (self < 0) != (divisor < 0)) ? quotient - 1 : quotient

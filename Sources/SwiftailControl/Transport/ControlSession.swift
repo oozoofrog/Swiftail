@@ -6,10 +6,10 @@ import CryptoKit
 /// chunks of that size. Receiving opens only complete records from arbitrary byte chunks and concatenates their plaintext. Record
 /// boundaries are independent of higher-layer (HTTP/2) data boundaries.
 ///
-/// Each direction's counter starts at 0 and increases by 1 per record. The nonce is big-endian. Even an empty plaintext record
-/// verifies the tag and consumes a nonce. Records have no AAD. There is no termination message.
+/// Each direction's counter starts at 0 and increases by 1 per record. The nonce is big-endian. Even a record with empty plaintext
+/// requires tag verification and consumes a nonce. Records have no AAD. There is no termination message.
 ///
-/// A malformed or unopenable received record means the nonce is out of sync with the peer, so the session discards the keys and becomes `closed`.
+/// If a record is malformed or cannot be opened, the session cannot safely continue with synchronized nonces. It discards the keys and becomes `closed`.
 /// Go clears keys only on authentication failure. This session never restarts after any receive error.
 ///
 /// `docs/protocol-notes/control-transport.md` §3.4, §3.5, §4.6
@@ -25,7 +25,7 @@ public struct ControlSession: Sendable {
         receiver = RecordCipher(key: keys.receive)
     }
 
-    /// Converts plaintext into one or more records. The maximum plaintext per record is 4,077 bytes.
+    /// Seals plaintext into Noise records of up to 4,077 plaintext bytes each.
     ///
     /// Empty plaintext produces no record, matching Go's `Write([])`.
     ///

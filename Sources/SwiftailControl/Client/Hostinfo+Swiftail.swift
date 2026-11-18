@@ -11,7 +11,7 @@ extension Hostinfo {
     ///   Uses semver syntax (`0.0.0-swiftail`) so the version parser accepts it.
     /// - `BackendLogID`: The Go client rejects an empty value. Since logs are not uploaded, uses a fixed nonsecret value
     ///   derived from the machine public key.
-    /// - `Userspace`: This is a userspace implementation and uses no kernel device.
+    /// - `Userspace`: Swiftail implements the network stack in userspace. This describes the stack, even when an app uses a packet tunnel device.
     ///
     /// `docs/protocol-notes/control-map.md` §3.3, contract unit 4 behavior 6.
     static func swiftail(hostname: String, machineKey: MachinePublicKey, netInfo: NetInfo?) -> Hostinfo {
