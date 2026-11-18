@@ -1,11 +1,11 @@
-// tailnet lock 시험용 가짜 제어 서버: 루프백 TCP 위에서 `GET /key`, `POST /ts2021` 업그레이드, Noise IK 응답자, 최소
-// HTTP/2 서버를 흉내 낸다(`SetDNSFakeControlServer`와 같은 뼈대). 더한 것은 둘이다.
+// Fake control server for tailnet lock tests. Simulates `GET /key`, the `POST /ts2021` upgrade, a Noise IK responder, and a minimal
+// HTTP/2 server over loopback TCP (same structure as `SetDNSFakeControlServer`). Adds two features.
 //
-// - 맵 스트림에 시험이 정한 응답을 보낸다: 스트림이 열릴 때의 첫 응답과, 열린 스트림에 밀어 넣는 응답.
-// - TKA RPC 셋에 답한다. 서버 쪽 서명 권한 상태는 실제 `Authority`라서 동기화의 답(`MissingAUMs`)이 진짜 계산이다.
-//   경로마다 고정 답을 걸거나(`faults`) 답을 붙들어 둘 수 있다(`hold`·`release`). 상태 올리기도 붙들 수 있다.
+// - Sends test-defined responses on the map stream: the first response when the stream opens and responses pushed onto the open stream.
+// - Answers the three TKA RPCs. The server uses a real `Authority` for its authority state, so the sync response (`MissingAUMs`) is actually computed.
+//   Each path can have a fixed response (`faults`) or a held response (`hold` and `release`). State uploads can be held too.
 //
-// 흐름 제어 창은 갱신하지 않는다(클라이언트는 받는 창을 강제하지 않는다).
+// Does not update flow-control windows (the client does not enforce the receive window).
 
 import CryptoKit
 import Foundation
@@ -22,10 +22,10 @@ final class LockFakeControlServer: Sendable {
     static let bootstrapPath = "/machine/tka/bootstrap"
     static let syncOfferPath = "/machine/tka/sync/offer"
     static let syncSendPath = "/machine/tka/sync/send"
-    /// 상태 올리기와 맵 스트림의 경로. `faults`에 `hold`를 걸면 상태 올리기(스트림이 아닌 요청)만 붙든다.
+    /// The paths for state uploads and the map stream. Setting `hold` in `faults` holds only state uploads (non-streaming requests).
     static let mapPath = "/machine/map"
 
-    /// 서버가 받은 HTTP/2 요청 하나.
+    /// A single HTTP/2 request received by the server.
     struct Request: Sendable {
         var connection: Int
         var method: String
@@ -34,30 +34,30 @@ final class LockFakeControlServer: Sendable {
         var body: [UInt8]
 
         func header(_ name: String) -> String? { headers.first { $0.name == name }?.value }
-        /// 본문의 JSON 객체. 객체가 아니면 비어 있다.
+        /// The body's JSON object. Empty if the body is not an object.
         var object: [String: Any] { (try? JSONSerialization.jsonObject(with: Data(body))) as? [String: Any] ?? [:] }
     }
 
     enum Reply: Sendable {
         case respond(status: Int, body: [UInt8])
-        /// 답하지 않고 붙들어 둔다. `release(_:)`가 그때의 서버 상태로 답한다.
+        /// Holds the request without responding. `release(_:)` responds with the server state at that time.
         case hold
 
         static func json(_ text: String) -> Reply { .respond(status: 200, body: Array(text.utf8)) }
     }
 
-    /// 서버 쪽 tailnet lock.
+    /// Server-side tailnet lock.
     struct Lock: Sendable {
-        /// 서버의 서명 권한 상태. nil이면 lock이 꺼진 tailnet이다.
+        /// The server's authority state. nil means tailnet lock is disabled.
         var authority: Authority?
-        /// lock이 꺼진 뒤 bootstrap이 주는 끄기 비밀.
+        /// The disablement secret returned by bootstrap after lock is disabled.
         var disablementSecret: [UInt8] = []
-        /// 경로 → 고정 답. 있으면 서버 상태 대신 이것으로 답한다.
+        /// Path → fixed response. If present, send it instead of a response based on server state.
         var faults: [String: Reply] = [:]
     }
 
-    /// 연결 하나의 보내는 쪽. 요청을 처리하는 흐름과 시험이 밀어 넣는 흐름이 함께 쓰므로 봉인과 송신을 한 잠금 안에서 한다
-    /// (레코드의 nonce 순서가 송신 순서와 같아야 한다).
+    /// The send side of a single connection. Request handling and test pushes share it, so sealing and sending use one lock
+    /// (record nonce order must match send order).
     private final class Link: Sendable {
         let connection: NWConnection
         private let session: Mutex<ControlSession>
@@ -82,7 +82,7 @@ final class LockFakeControlServer: Sendable {
     private struct State {
         var lock = Lock()
         var requests: [Request] = []
-        /// 새 맵 스트림의 첫 응답(JSON). nil이면 머리만 보내고 열어 둔다.
+        /// The first response (JSON) on a new map stream. If nil, sends only headers and leaves the stream open.
         var mapResponse: String?
         var mapStreams: [(link: Link, stream: HTTP2StreamID)] = []
         var held: [(request: Request, link: Link, stream: HTTP2StreamID)] = []
@@ -92,7 +92,7 @@ final class LockFakeControlServer: Sendable {
 
     private let listener: NWListener
     private let state = Mutex(State())
-    /// 서버의 Noise 정적 키. 시험 전용이고 실행마다 새로 만든다.
+    /// The server's static Noise key. Test-only and generated fresh for each run.
     private let serverKey = Curve25519.KeyAgreement.PrivateKey()
 
     init() throws {
@@ -111,11 +111,11 @@ final class LockFakeControlServer: Sendable {
         }
     }
 
-    // MARK: 시험이 쓰는 것
+    // MARK: Test interface
 
     var requests: [Request] { state.withLock { $0.requests } }
     func requests(to path: String) -> [Request] { requests.filter { $0.path == path } }
-    /// TKA RPC의 경로들. 받은 순서다.
+    /// TKA RPC paths in receipt order.
     var tkaPaths: [String] { requests.map(\.path).filter { $0.hasPrefix("/machine/tka/") } }
     var lock: Lock { state.withLock { $0.lock } }
     var openMapStreamCount: Int { state.withLock { $0.mapStreams.count } }
@@ -123,7 +123,7 @@ final class LockFakeControlServer: Sendable {
     func updateLock(_ body: (inout Lock) -> Void) { state.withLock { body(&$0.lock) } }
     func setMapResponse(_ json: String?) { state.withLock { $0.mapResponse = json } }
 
-    /// 열려 있는 맵 스트림에 응답 하나를 밀어 넣는다.
+    /// Pushes one response onto an open map stream.
     func push(_ json: String) {
         let payload = frame(json)
         for (link, stream) in state.withLock({ $0.mapStreams }) {
@@ -131,7 +131,7 @@ final class LockFakeControlServer: Sendable {
         }
     }
 
-    /// 붙들어 둔 `path`의 요청에 지금의 서버 상태로 답한다. 그 경로의 고정 답도 지운다.
+    /// Answers the held request for `path` with the current server state. Also clears any fixed response for that path.
     func release(_ path: String) {
         let answers = state.withLock { state in
             state.lock.faults[path] = nil
@@ -144,7 +144,7 @@ final class LockFakeControlServer: Sendable {
         }
     }
 
-    /// 모든 연결을 끊는다. 클라이언트는 물러났다가 다시 잇는다.
+    /// Drops all connections. The client backs off and reconnects.
     func dropConnections() {
         let connections = state.withLock { state in
             state.mapStreams = []
@@ -179,16 +179,16 @@ final class LockFakeControlServer: Sendable {
         dropConnections()
     }
 
-    // MARK: TKA RPC의 답
+    // MARK: TKA RPC responses
 
-    /// 서버 상태로 계산한 답. 고정 답이 걸려 있으면 그것이다.
+    /// The response computed from server state. A fixed response takes precedence when set.
     private static func tkaReply(to request: Request, lock: inout Lock) -> Reply {
         if let fault = lock.faults[request.path] { return fault }
         let object = request.object
         let base64 = { (bytes: [UInt8]) in Data(bytes).base64EncodedString() }
         switch request.path {
         case mapPath:
-            // 붙들어 둔 상태 올리기를 놓을 때만 여기 온다.
+            // Reached only when releasing a held state upload.
             return .respond(status: 200, body: [])
         case bootstrapPath:
             guard let authority = lock.authority, let checkpoint = authority.aums.first else {
@@ -236,7 +236,7 @@ final class LockFakeControlServer: Sendable {
         ))
     }
 
-    // MARK: 연결 하나
+    // MARK: Single connection
 
     private func serve(_ connection: NWConnection, number: Int) async {
         var received: [UInt8] = []
@@ -253,7 +253,7 @@ final class LockFakeControlServer: Sendable {
         }
     }
 
-    /// 업그레이드 머리의 initiation으로 Noise 응답자를 돌리고 101과 response를 보낸다. 실패하면 연결을 끊는다.
+    /// Runs the Noise responder with the initiation from the upgrade header and sends 101 and response. Closes the connection on failure.
     /// `<- s ... -> e, es, s, ss <- e, ee, se`(`docs/protocol-notes/control-transport.md` 4.5).
     private func upgrade(_ connection: NWConnection, head: [String]) -> ControlSession? {
         let prefix = "x-tailscale-handshake:"
@@ -355,8 +355,8 @@ final class LockFakeControlServer: Sendable {
             connection: connection, method: field(":method"), path: field(":path"),
             headers: pending.headers.filter { !$0.name.hasPrefix(":") }, body: pending.body
         )
-        // 답은 잠금 안에서 정하고 보내기도 그 안에서 한다: 맵 스트림을 등록하는 것과 첫 응답을 보내는 것 사이에 `push`가
-        // 끼어들어 순서가 뒤바뀌지 않게 한다.
+        // Choose and send the response under the same lock so `push` cannot intervene
+        // between registering the map stream and sending the first response, which would reverse their order.
         state.withLock { state in
             state.requests.append(request)
             switch request.path {
@@ -364,7 +364,7 @@ final class LockFakeControlServer: Sendable {
                 Self.send(.json(#"{"MachineAuthorized":true}"#), on: stream, over: link)
             case "/machine/map":
                 guard request.object["Stream"] as? Bool == true else {
-                    // 상태 올리기. 고정 답(`hold`)이 걸려 있으면 붙들어 둔다.
+                    // State upload. Hold it if the fixed response (`hold`) is set.
                     if case .hold = state.lock.faults[request.path] {
                         state.held.append((request, link, stream))
                     } else {
@@ -388,7 +388,7 @@ final class LockFakeControlServer: Sendable {
         }
     }
 
-    // MARK: 소켓
+    // MARK: Sockets
 
     private func receive(_ connection: NWConnection) async -> [UInt8]? {
         await withCheckedContinuation { continuation in
@@ -402,7 +402,7 @@ final class LockFakeControlServer: Sendable {
         }
     }
 
-    /// HTTP/1.1 머리(빈 줄까지)를 읽어 줄로 나눈다. 머리 뒤에 이미 온 바이트도 돌려준다.
+    /// Reads HTTP/1.1 headers through the blank line and splits them into lines. Also returns bytes already received after the headers.
     private func readHead(_ connection: NWConnection, buffer: inout [UInt8]) async -> ([String], [UInt8])? {
         let terminator = Array("\r\n\r\n".utf8)
         while true {

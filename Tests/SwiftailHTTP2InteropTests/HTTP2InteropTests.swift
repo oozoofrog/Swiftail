@@ -6,16 +6,16 @@ private let downloadSizes = [0, 1, 16_383, 16_384, 16_385, 65_535, 65_536, 1_048
 
 private func pattern(_ count: Int) -> [UInt8] { (0..<count).map { UInt8($0 % 251) } }
 
-/// 큰 배열 전체를 실패 메시지에 쏟지 않고 최초 불일치 위치를 보고한다.
+/// Reports the first mismatch instead of dumping entire large arrays into the failure message.
 private func verify(_ response: H2Driver.Response, status: Int = 200, body: [UInt8]) throws {
     try #require(response.status == status)
     try #require(response.closed)
     try #require(response.resetCode == nil)
     guard response.body.count == body.count else {
-        throw H2InteropFailure("본문 길이: 실제 \(response.body.count), 기대 \(body.count)")
+        throw H2InteropFailure("Body length: actual \(response.body.count), expected \(body.count)")
     }
     if let offset = body.indices.first(where: { response.body[$0] != body[$0] }) {
-        throw H2InteropFailure("본문 \(offset)번째 바이트: 실제 \(response.body[offset]), 기대 \(body[offset])")
+        throw H2InteropFailure("Body byte at offset \(offset): actual \(response.body[offset]), expected \(body[offset])")
     }
 }
 
@@ -48,16 +48,16 @@ private func headerCases(_ driver: H2Driver) async throws {
         }
     }
     let frames = await driver.receivedFrames()
-    try #require(frames.contains { $0.type == 9 }, "큰 응답이 실제 CONTINUATION을 사용해야 한다")
+    try #require(frames.contains { $0.type == 9 }, "The large response must use CONTINUATION on the wire")
     let sizes = smallIDs.map { id in
         frames.filter { $0.stream == id.rawValue && ($0.type == 1 || $0.type == 9) }.reduce(0) { $0 + $1.length }
     }
-    try #require(sizes.count == 2 && sizes[1] > 0 && sizes[1] < sizes[0], "두 번째 응답이 실제 동적 색인으로 줄어야 한다")
+    try #require(sizes.count == 2 && sizes[1] > 0 && sizes[1] < sizes[0], "Dynamic indexing must make the second response smaller on the wire")
 }
 
-@Suite("Go HTTP/2 TCP 상호 운용", .enabled(if: h2serverBinary != nil, "SWIFTAIL_H2SERVER가 없어 Go HTTP/2 상호 운용 시험을 건너뜁니다"), .timeLimit(.minutes(4)))
+@Suite("Go HTTP/2 TCP interop", .enabled(if: h2serverBinary != nil, "Skipping Go HTTP/2 interop tests because SWIFTAIL_H2SERVER is missing"), .timeLimit(.minutes(4)))
 struct HTTP2InteropTests {
-    @Test("작은 GET의 상태·본문·정상 종료")
+    @Test("Status, body, and clean closure of a small GET")
     func small() async throws {
         try await withH2Server { driver, _ in
             let id = try await driver.request("/small")
@@ -65,7 +65,7 @@ struct HTTP2InteropTests {
         }
     }
 
-    @Test("최종 상태 코드와 빈 본문", arguments: [204, 404, 500])
+    @Test("Final status code and empty body", arguments: [204, 404, 500])
     func status(code: Int) async throws {
         try await withH2Server { driver, _ in
             let id = try await driver.request("/status?code=\(code)")
@@ -73,22 +73,22 @@ struct HTTP2InteropTests {
         }
     }
 
-    @Test("수신 창과 DATA 경계의 모든 바이트", arguments: downloadSizes)
+    @Test("Every byte at receive window and DATA boundaries", arguments: downloadSizes)
     func bytes(size: Int) async throws {
         try await withH2Server { driver, _ in try await download(driver, size: size) }
     }
 
-    @Test("POST 프레임 분할과 양방향 흐름 제어", arguments: [0, 1, 65_535, 65_536, 1_048_576, 4_000_000])
+    @Test("POST frame splitting and bidirectional flow control", arguments: [0, 1, 65_535, 65_536, 1_048_576, 4_000_000])
     func post(size: Int) async throws {
         try await withH2Server { driver, _ in try await echo(driver, size: size) }
     }
 
-    @Test("허프만·CONTINUATION·같은 연결의 동적 색인 재사용")
+    @Test("Huffman coding, CONTINUATION, and dynamic index reuse on the same connection")
     func headers() async throws {
         try await withH2Server { driver, _ in try await headerCases(driver) }
     }
 
-    @Test("끝없는 스트림과 다른 요청을 다중화하고 취소 뒤에도 재사용한다")
+    @Test("Multiplexes an endless stream with another request and reuses the connection after cancellation")
     func multiplexAndCancel() async throws {
         try await withH2Server { driver, _ in
             let stream = try await driver.request("/stream?count=0&intervalMs=50")
@@ -117,7 +117,7 @@ struct HTTP2InteropTests {
         }
     }
 
-    @Test("한 연결에서 서로 다른 본문 크기 20개를 함께 진행한다")
+    @Test("Runs 20 requests with different body sizes concurrently on one connection")
     func concurrentRequests() async throws {
         try await withH2Server { driver, _ in
             var requests: [(HTTP2StreamID, Int)] = []
@@ -125,14 +125,14 @@ struct HTTP2InteropTests {
                 let size = index * 16_385
                 requests.append((try await driver.request("/bytes?size=\(size)"), size))
             }
-            // 응답을 기다리기 전에 20개를 모두 시작한다. 수신은 actor에서 계속 진행한다.
+            // Start all 20 before awaiting responses. The actor continues receiving.
             for (id, size) in requests {
                 try verify(await driver.closed(id), body: pattern(size))
             }
         }
     }
 
-    @Test("GOAWAY는 새 요청을 막고 진행 중인 스트림은 끝까지 보낸다")
+    @Test("GOAWAY blocks new requests and lets in-flight streams finish")
     func goAway() async throws {
         try await withH2Server { driver, server in
             let id = try await driver.request("/stream?count=12&intervalMs=50")
@@ -143,7 +143,7 @@ struct HTTP2InteropTests {
             try #require(event.lastStreamID.rawValue >= id.rawValue)
             do {
                 _ = try await driver.request("/small")
-                throw H2InteropFailure("GOAWAY 뒤 새 요청을 받아들임")
+                throw H2InteropFailure("Accepted a new request after GOAWAY")
             } catch let error as HTTP2Error {
                 try #require(error == .connectionClosed)
             }
@@ -151,7 +151,7 @@ struct HTTP2InteropTests {
         }
     }
 
-    @Test("TCP를 한 바이트·일곱 바이트로 잘라도 본문과 헤더가 같다", arguments: [1, 7])
+    @Test("Preserves the body and headers when TCP is split into one-byte or seven-byte chunks", arguments: [1, 7])
     func fragmentedTCP(fragmentSize: Int) async throws {
         try await withH2Server(fragmentSize: fragmentSize) { driver, _ in
             for size in downloadSizes { try await download(driver, size: size, timeout: .seconds(180)) }

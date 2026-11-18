@@ -1,22 +1,22 @@
-// 계약 시험 5: 한도와 임의 입력. 한도를 넘는 입력은 연결 오류이고, 무작위 바이트로 죽지 않는다.
+// Contract test 5: Limits and arbitrary input. Input over the limit is a connection error, and random bytes do not cause a crash.
 
 import Testing
 
 @testable import SwiftailHTTP2
 
-@Suite("한도")
+@Suite("Limits")
 struct LimitTests {
-    @Test("프레임 길이 16,384 초과는 머리만 받고도 FRAME_SIZE_ERROR")
+    @Test("A frame length over 16,384 yields FRAME_SIZE_ERROR from the header alone")
     func frameTooLarge() throws {
         var connection = try HTTP2ClientConnection.established()
-        // payload는 보내지 않는다. 길이를 알린 것만으로 거절하므로 기다리며 쌓지 않는다.
+        // Do not send the payload. The advertised length alone triggers rejection, so the connection neither waits for nor buffers it.
         let header = Array(frameBytes(0, stream: 1).prefix(9))
         let oversized = [0x00, 0x40, 0x01] + header.dropFirst(3)
         #expect(throws: HTTP2Error.connectionFailed(code: 6)) { try connection.receive(Array(oversized)) }
         #expect(try connection.takeOutboundFrames() == [.goAway(lastStreamID: .connection, code: 6)])
     }
 
-    @Test("프레임 길이 16,384는 허용")
+    @Test("A frame length of 16,384 is allowed")
     func frameAtLimit() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -24,22 +24,22 @@ struct LimitTests {
         #expect(events.last == .responseData(id, [UInt8](repeating: 1, count: 16_384)))
     }
 
-    @Test("헤더 블록 합계가 64KiB를 넘으면 연결 오류")
+    @Test("A total header block length over 64KiB is a connection error")
     func headerBlockTooLarge() throws {
         var connection = try HTTP2ClientConnection.established()
         _ = try connection.startRequest(getRequest, body: nil)
-        // 16,384바이트씩 4조각 = 65,536은 한도 안이고, 한 바이트 더 오면 넘친다.
+        // 4 fragments of 16,384 bytes = 65,536, within the limit. One more byte exceeds it.
         let chunk = [UInt8](repeating: 0, count: 16_384)
         _ = try connection.receive(frameBytes(1, stream: 1, payload: chunk) + frameBytes(9, stream: 1, payload: chunk)
             + frameBytes(9, stream: 1, payload: chunk) + frameBytes(9, stream: 1, payload: chunk))
         #expect(throws: HTTP2Error.connectionFailed(code: 11)) { try connection.receive(frameBytes(9, stream: 1, payload: [0])) }
     }
 
-    @Test("작은 블록이 해제 뒤 한도를 넘는 경우도 연결 오류")
+    @Test("A small block that exceeds the limit after decoding is also a connection error")
     func decompressionBomb() throws {
         var connection = try HTTP2ClientConnection.established()
         _ = try connection.startRequest(getRequest, body: nil)
-        // 4,000바이트 값을 동적 표에 넣고, 1바이트 색인으로 20번 불러 80KB가 된다.
+        // Insert a 4,000-byte value into the dynamic table and reference it 20 times with a 1-byte index to get 80KB.
         var block: [UInt8] = [0x40, 0x01, 0x61]
         HPACKEncoding.appendInteger(4_000, prefixBits: 7, flags: 0, to: &block)
         block += [UInt8](repeating: 0x62, count: 4_000)
@@ -47,13 +47,13 @@ struct LimitTests {
         #expect(throws: HTTP2Error.connectionFailed(code: 11)) { try connection.receive(frameBytes(1, flags: 0x4, stream: 1, payload: block)) }
     }
 
-    @Test("HPACK 오류는 COMPRESSION_ERROR")
+    @Test("HPACK errors yield COMPRESSION_ERROR")
     func hpackErrors() throws {
         let blocks: [[UInt8]] = [
-            [0x80],                // 색인 0
-            [0xff, 0xff, 0xff],    // 잘린 정수
-            [0x3f, 0xe2, 0x1f],    // 알린 한도(4,096)를 넘는 표 크기 갱신
-            [0x82, 0x20],          // 필드 뒤의 표 크기 갱신
+            [0x80],                // Index 0
+            [0xff, 0xff, 0xff],    // Truncated integer
+            [0x3f, 0xe2, 0x1f],    // Table size update above the advertised limit (4,096)
+            [0x82, 0x20],          // Table size update after a field
         ]
         for block in blocks {
             var connection = try HTTP2ClientConnection.established()
@@ -62,8 +62,8 @@ struct LimitTests {
         }
     }
 
-    // 상대가 요구해서 쌓이는 제어 프레임의 대기 바이트 한도(`maximumPendingControlBytes`). PING ACK는 17바이트다.
-    @Test("PING ACK가 한도 직전까지 쌓이는 것은 허용하고, 한 개 넘으면 ENHANCE_YOUR_CALM")
+    // Byte limit for queued control frames requested by the peer (`maximumPendingControlBytes`). A PING ACK is 17 bytes.
+    @Test("PING ACKs can accumulate up to the limit. One more yields ENHANCE_YOUR_CALM")
     func pingFloodLimit() throws {
         let ping = frameBytes(6, payload: [1, 2, 3, 4, 5, 6, 7, 8])
         let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 17
@@ -76,12 +76,12 @@ struct LimitTests {
         #expect(throws: HTTP2Error.connectionFailed(code: 11)) {
             try overflowing.receive(Array(repeating: ping, count: allowed + 1).flatMap { $0 })
         }
-        // 한도를 넘겨 쌓인 답 뒤에 GOAWAY가 붙는다.
+        // GOAWAY follows the queued replies that exceeded the limit.
         #expect(try overflowing.takeOutboundFrames().last == .goAway(lastStreamID: .connection, code: 11))
         #expect(throws: HTTP2Error.connectionClosed) { try overflowing.receive([]) }
     }
 
-    @Test("대기 바이트는 꺼내 가면 비워지므로 한도를 여러 번 받아도 된다")
+    @Test("Draining the pending bytes clears them, so the limit can be received multiple times")
     func pendingBytesResetWhenTaken() throws {
         let ping = frameBytes(6, payload: [1, 2, 3, 4, 5, 6, 7, 8])
         let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 17
@@ -92,7 +92,7 @@ struct LimitTests {
         }
     }
 
-    @Test("꺼내 가지 않고 여러 번 나눠 받아도 합계가 한도를 넘으면 연결 오류")
+    @Test("With no draining, exceeding the total limit is a connection error even across multiple receives")
     func pendingBytesAccumulateAcrossReceives() throws {
         let ping = frameBytes(6, payload: [1, 2, 3, 4, 5, 6, 7, 8])
         let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 17
@@ -101,7 +101,7 @@ struct LimitTests {
         #expect(throws: HTTP2Error.connectionFailed(code: 11)) { try connection.receive(ping) }
     }
 
-    @Test("SETTINGS ACK가 쌓이는 것도 같은 한도")
+    @Test("Queued SETTINGS ACKs count toward the same limit")
     func settingsFloodLimit() throws {
         let empty = settingsBytes()
         let allowed = HTTP2ClientConnection.maximumPendingControlBytes / 9
@@ -113,7 +113,7 @@ struct LimitTests {
         }
     }
 
-    @Test("작은 DATA 프레임이 한꺼번에 와도 WINDOW_UPDATE는 연결과 스트림에 하나씩이다")
+    @Test("Small DATA frames arriving together generate one WINDOW_UPDATE each for the connection and stream")
     func smallDataFramesShareOneWindowUpdate() throws {
         func connectionWithHead() throws -> HTTP2ClientConnection {
             var connection = try HTTP2ClientConnection.established()
@@ -122,8 +122,8 @@ struct LimitTests {
             _ = connection.takeOutboundBytes()
             return connection
         }
-        // 1바이트 DATA 3,000개(30,000바이트)는 유효한 응답이다. 프레임마다 답을 쌓으면 78,000바이트가 되어
-        // 제어 프레임 대기 한도(64KiB)에 걸리고, TCP 조각이 어떻게 나뉘었느냐에 따라 성패가 갈린다.
+        // 3,000 1-byte DATA frames (30,000 bytes) make a valid response. Queuing a reply for each frame would reach 78,000 bytes,
+        // hitting the pending control frame limit (64KiB) and making success depend on how TCP chunks are split.
         let frames = (0..<3_000).map { _ in dataBytes(stream: 1, [0x61]) }
 
         var coalesced = try connectionWithHead()
@@ -134,7 +134,7 @@ struct LimitTests {
         ])
         #expect(coalesced.takeOutboundBytes().isEmpty)
 
-        // 꺼내 가지 않고 조각조각 받아도 쌓이는 것은 숫자뿐이다.
+        // Only counts accumulate, even across many small receives without draining.
         var fragmented = try connectionWithHead()
         for frame in frames { _ = try fragmented.receive(frame) }
         #expect(try fragmented.takeOutboundFrames() == [
@@ -142,24 +142,24 @@ struct LimitTests {
         ])
     }
 
-    @Test("닫힌 스트림의 헤더 블록도 해제해 동적 표를 맞춘다")
+    @Test("Decodes header blocks on closed streams to keep the dynamic table in sync")
     func closedStreamHeadersKeepTableInSync() throws {
         var connection = try HTTP2ClientConnection.established()
         let first = try connection.startRequest(getRequest, body: nil)
         connection.cancel(first)
         let second = try connection.startRequest(getRequest, body: nil)
-        // 취소한 스트림 1에 온 응답이 동적 표에 항목 하나를 넣는다.
-        let inserted: [UInt8] = [0x40, 0x01, 0x78, 0x01, 0x79]  // x: y를 색인
+        // The response on canceled stream 1 inserts one entry into the dynamic table.
+        let inserted: [UInt8] = [0x40, 0x01, 0x78, 0x01, 0x79]  // Index x: y
         _ = try connection.receive(frameBytes(1, flags: 0x4, stream: 1, payload: [0x88] + inserted))
-        // 스트림 3의 응답이 그 항목(색인 62)을 부른다.
+        // The response on stream 3 references that entry (index 62).
         let events = try connection.receive(frameBytes(1, flags: 0x4, stream: 3, payload: [0x88, 0xbe]))
         #expect(events == [.responseHead(second, status: 200, headers: [HeaderField("x", "y")])])
     }
 }
 
-@Suite("임의 입력")
+@Suite("Arbitrary input")
 struct FuzzTests {
-    @Test("무작위 바이트를 넣어도 죽지 않는다")
+    @Test("Random bytes do not cause a crash")
     func randomBytes() throws {
         var random = SplitMix64(state: 0x5eed)
         for _ in 0..<3_000 {
@@ -171,7 +171,7 @@ struct FuzzTests {
         }
     }
 
-    @Test("프레임 모양의 무작위 입력(type·flags·stream을 바꿔 가며)")
+    @Test("Random frame-shaped input with varying type, flags, and stream")
     func randomFrames() throws {
         var random = SplitMix64(state: 0xf4a3e)
         for _ in 0..<3_000 {
@@ -190,7 +190,7 @@ struct FuzzTests {
         }
     }
 
-    @Test("올바른 대화의 바이트를 하나씩 뒤집어도 죽지 않는다")
+    @Test("Flipping each byte of a valid exchange individually does not cause a crash")
     func flippedBytes() throws {
         let transcript = settingsBytes([(3, 100)]) + responseHeadBytes(stream: 1, headers: [HeaderField("x-a", "b")])
             + dataBytes(stream: 1, [1, 2, 3, 4]) + goAwayBytes(lastStream: 1, code: 0)
@@ -206,7 +206,7 @@ struct FuzzTests {
         }
     }
 
-    @Test("HPACK 해제기와 허프만 해제는 무작위 바이트에도 죽지 않는다")
+    @Test("HPACK and Huffman decoders do not crash on random bytes")
     func hpackRandom() {
         var random = SplitMix64(state: 0xabcdef)
         var decoder = HPACKDecoder()
@@ -217,7 +217,7 @@ struct FuzzTests {
         }
     }
 
-    @Test("연결 오류가 난 연결은 이후 어떤 입력에도 connectionClosed")
+    @Test("After a connection error, any subsequent input gets connectionClosed")
     func failedStaysFailed() throws {
         var connection = try HTTP2ClientConnection.established()
         _ = try? connection.receive(dataBytes(stream: 0, [1]))

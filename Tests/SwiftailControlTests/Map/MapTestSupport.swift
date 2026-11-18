@@ -3,25 +3,25 @@ import SwiftailBase
 
 @testable import SwiftailControl
 
-/// JSON 문자열을 맵 응답으로 해독한다.
+/// Decodes a JSON string as a map response.
 func mapResponse(_ json: String) throws -> MapResponse {
     try JSONDecoder().decode(MapResponse.self, from: Data(json.utf8))
 }
 
-/// 시험용 피어 JSON. ID마다 이름·사용자·주소가 다르다. extra는 `,"Key":…`처럼 쉼표로 시작한다.
+/// Test peer JSON. The name, user, and address differ by ID. extra begins with a comma, as in `,"Key":…`.
 func peerJSON(_ id: Int64, _ extra: String = "") -> String {
     #"{"ID":\#(id),"Name":"peer\#(id).tail0001.ts.net.","User":\#(100 + id),"Addresses":["100.64.0.\#(id)/32"]\#(extra)}"#
 }
 
-/// 시험용 self 노드 JSON.
+/// Test self-node JSON.
 let selfNodeJSON = #"{"ID":1,"Name":"rd-mac-1a2b3c4d.tail0001.ts.net.","User":100,"Addresses":["100.64.0.1/32"],"MachineAuthorized":true}"#
 
-/// 같은 바이트 32개로 만든 키 텍스트. prefix는 `"nodekey:"` 같은 접두사.
+/// Key text made of 32 copies of the same byte. prefix is a prefix such as `"nodekey:"`.
 func keyText(_ prefix: String, byte: UInt8) -> String {
     prefix + [UInt8](repeating: byte, count: 32).hex
 }
 
-/// 4바이트 리틀엔디언 길이 + 페이로드.
+/// 4-byte little-endian length + payload.
 func frame(_ payload: [UInt8]) -> [UInt8] {
     let length = UInt32(payload.count)
     return (0..<4).map { UInt8(truncatingIfNeeded: length >> (8 * $0)) } + payload
@@ -31,7 +31,7 @@ func frame(_ json: String) -> [UInt8] {
     frame(Array(json.utf8))
 }
 
-/// 인코딩 결과를 키 순서와 무관하게 비교하려고 Foundation 객체로 바꾼다.
+/// Converts the encoded result to a Foundation object for comparison independent of key order.
 func jsonObject(_ data: Data) throws -> NSDictionary {
     guard let object = try JSONSerialization.jsonObject(with: data) as? NSDictionary else {
         throw CocoaError(.coderInvalidValue)
@@ -43,7 +43,7 @@ func jsonObject(_ text: String) throws -> NSDictionary {
     try jsonObject(Data(text.utf8))
 }
 
-/// 고정 시드 의사 난수(SplitMix64). 실패한 입력을 그대로 재현하기 위해 쓴다.
+/// Fixed-seed pseudorandom generator (SplitMix64). Used to reproduce failing inputs exactly.
 struct SeededRandom: RandomNumberGenerator {
     private var state: UInt64
 
@@ -58,5 +58,5 @@ struct SeededRandom: RandomNumberGenerator {
     }
 }
 
-/// 시험에서 응답을 "받은" 시각.
+/// The time the test "received" the response.
 let receivedAt = Date(timeIntervalSince1970: 1_800_000_000)

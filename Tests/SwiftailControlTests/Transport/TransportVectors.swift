@@ -1,7 +1,7 @@
-// 노트 7.3절의 고정 입력 시험 벡터(Go v1.104.6 controlbase를 실행해 얻은 값).
+// Fixed-input test vectors from notes §7.3, obtained by running Go v1.104.6 controlbase.
 //
-// 아래 키는 전부 공개된 시험 전용 고정 값이다. 실제 연결에 쓰지 않는다.
-// 개인 키는 연속 바이트열 00..1f·20..3f·40..5f·60..7f에 X25519 clamp를 적용한 것이다.
+// All keys below are public, fixed test-only values. Do not use them for real connections.
+// The private keys apply X25519 clamping to the consecutive byte sequences 00..1f, 20..3f, 40..5f, and 60..7f.
 
 import CryptoKit
 import Testing
@@ -20,11 +20,11 @@ enum TransportVectors {
     static let initiation = "009401006079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51aad5b8febedeb97415be53612205e6bfab385e34cb127dd8854c4f9afb10f9b0e635d32b6eacf64ca7ce3a83fdf2f525f62cda6ef940fef0c11064f09a292d01e"
     static let response = "020030675dd574ed7789310b3d2e7681f3790b466c773b1521fecf36577958371ea52fe938fd4935979fcc3489231f7ef4c9c7"
 
-    /// Split k_a(클라이언트 → 서버)와 k_b(서버 → 클라이언트).
+    /// Split k_a (client → server) and k_b (server → client).
     static let clientToServerKey = "b5a6c358cd51a1fc717517315852e009148ee5480cf70a3caf4d4f9498c9ca8e"
     static let serverToClientKey = "d8ebca0df9236e3c51fcc4e5d506d473b019dd191d7ac7112d1e046898a1e78d"
 
-    /// 클라이언트 → 서버 레코드. 카운터 0, 1, 2, 3(빈 평문), 4.
+    /// Client → server records. Counters 0, 1, 2, 3 (empty plaintext), and 4.
     static let clientRecords: [(plaintext: String, record: String)] = [
         ("client-0", "0400184d8db142648da2b8ceb16a43dbdb67e57ba92f2c667e173e"),
         ("client-1", "040018848768a068cbdd2364ed56d8293a3f5264a340bdf735bb5a"),
@@ -33,14 +33,14 @@ enum TransportVectors {
         ("after-empty", "04001b8a5c4fe32e73ff64383e91d49bec27571d8e198737eae631cbd94a"),
     ]
 
-    /// 서버 → 클라이언트 레코드. 카운터 0, 1, 2.
+    /// Server → client records. Counters 0, 1, and 2.
     static let serverRecords: [(plaintext: String, record: String)] = [
         ("server-0", "040018775de2b464bfc78e7ed71c2598a5bf25f9c23ad37efcd53e"),
         ("server-1", "040018a0b7204f4127b4280c93761eceed2305f8f1ec9fa93d8760"),
         ("server-2", "0400180096fa0ae79135bea550c3d6d6a63c427e2b5eb1980579f4"),
     ]
 
-    /// 벡터의 키와 임시 키로 만든 초기자.
+    /// Initiator created with the vector keys and ephemeral key.
     static func handshake(protocolVersion: UInt16 = 148) throws -> ControlHandshake {
         try ControlHandshake(
             machineKey: Curve25519.KeyAgreement.PrivateKey(rawRepresentation: bytes(clientMachinePrivate)),
@@ -50,14 +50,14 @@ enum TransportVectors {
         )
     }
 
-    /// 벡터 response로 핸드셰이크를 마친 클라이언트 세션.
+    /// Client session whose handshake completed with the response vector.
     static func clientSession() throws -> ControlSession {
         var handshake = try handshake()
         let result = try handshake.receive(bytes(response))
         return try #require(result).session
     }
 
-    /// 서버 쪽 세션: 클라이언트와 방향이 반대인 키.
+    /// Server-side session with keys in the opposite direction from the client.
     static func serverSession() throws -> ControlSession {
         ControlSession(keys: TransportKeys(
             send: SymmetricKey(data: try bytes(serverToClientKey)),

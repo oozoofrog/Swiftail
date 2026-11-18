@@ -1,10 +1,10 @@
-// `set-dns` 시험용 가짜 제어 서버: 루프백 TCP 위에서 `GET /key`, `POST /ts2021` 업그레이드, Noise IK 응답자, 최소
-// HTTP/2 서버를 흉내 낸다. 등록(`/machine/register`)과 상태 올리기는 곧바로 받아 주고, 맵 스트림은 머리만 보내고
-// 열어 둔다(롱폴). `set-dns`의 답은 시험이 정한다.
+// Fake control server for `set-dns` tests. Simulates `GET /key`, the `POST /ts2021` upgrade, a Noise IK responder, and a minimal
+// HTTP/2 server over loopback TCP. Accepts registration (`/machine/register`) and state uploads immediately, and sends only headers for the map stream
+// before leaving it open (long poll). The test sets the `set-dns` response.
 //
-// Noise 응답자는 `NoiseIK`(초기자)의 거울이다: `<- s ... -> e, es, s, ss <- e, ee, se`
-// (`docs/protocol-notes/control-transport.md` 4.5). 흐름 제어 창은 갱신하지 않는다. 시험의 요청과 응답은 기본 창
-// (65,535바이트)보다 훨씬 작다.
+// The Noise responder mirrors `NoiseIK` (initiator): `<- s ... -> e, es, s, ss <- e, ee, se`
+// (`docs/protocol-notes/control-transport.md` §4.5). Does not update flow-control windows. The test requests and responses are much smaller than the default window
+// (65,535 bytes).
 
 import CryptoKit
 import Foundation
@@ -17,15 +17,15 @@ import SwiftailBase
 @testable import SwiftailHTTP2
 
 final class SetDNSFakeControlServer: Sendable {
-    /// `set-dns`에 줄 답.
+    /// The response to send for `set-dns`.
     enum SetDNSReply: Sendable {
-        /// 이 상태와 본문으로 답한다.
+        /// Responds with this status and body.
         case respond(status: Int, body: [UInt8])
-        /// 답하지 않는다(스트림을 열어 둔다).
+        /// Leaves the stream open without responding.
         case never
     }
 
-    /// 서버가 받은 HTTP/2 요청 하나.
+    /// A single HTTP/2 request received by the server.
     struct Request: Sendable {
         var connection: Int
         var stream: UInt32
@@ -39,15 +39,15 @@ final class SetDNSFakeControlServer: Sendable {
 
     private struct State {
         var keyRequests = 0
-        /// false면 `/key`에 500으로 답한다(클라이언트는 물러났다가 다시 시도한다).
+        /// If false, answers `/key` with 500 (the client backs off and retries).
         var acceptsConnections = true
         var setDNSReply = SetDNSReply.respond(status: 200, body: Array("{}".utf8))
-        /// 등록 요청에 차례로 줄 본문. 비면 곧바로 받아 준다(`MachineAuthorized`).
+        /// Bodies for registration requests in order. Accepts immediately (`MachineAuthorized`) when the list is empty.
         var registerReplies: [[UInt8]] = []
-        /// 참이면 등록 요청에 답하지 않는다(스트림을 열어 둔다). 로그아웃의 기한 시험이 쓴다.
+        /// If true, leaves registration requests unanswered (leaves the stream open). Used by the logout deadline test.
         var registerNeverAnswers = false
         var requests: [Request] = []
-        /// 열려 있는 맵 스트림(연결 번호, 스트림 ID). 클라이언트가 RST_STREAM으로 닫으면 빠진다.
+        /// Open map streams (connection number and stream ID). Removed when the client closes them with RST_STREAM.
         var openMapStreams: Set<[UInt32]> = []
         var connections: [NWConnection] = []
         var nextConnection = 0
@@ -55,7 +55,7 @@ final class SetDNSFakeControlServer: Sendable {
 
     private let listener: NWListener
     private let state = Mutex(State())
-    /// 서버의 Noise 정적 키. 시험 전용이고 실행마다 새로 만든다.
+    /// The server's static Noise key. Test-only and generated fresh for each run.
     private let serverKey = Curve25519.KeyAgreement.PrivateKey()
 
     init() throws {
@@ -74,7 +74,7 @@ final class SetDNSFakeControlServer: Sendable {
         }
     }
 
-    // MARK: 시험이 쓰는 것
+    // MARK: Test interface
 
     var keyRequests: Int { state.withLock { $0.keyRequests } }
     var requests: [Request] { state.withLock { $0.requests } }
@@ -110,21 +110,21 @@ final class SetDNSFakeControlServer: Sendable {
         for connection in state.withLock({ $0.connections }) { connection.cancel() }
     }
 
-    /// `condition`이 참이 될 때까지 기다린다. 기한을 넘기면 시험 실패로 적고 던진다.
+    /// Waits for `condition` to become true. Records a test failure and throws when the deadline expires.
     func wait(
         _ what: String, within duration: Duration = .seconds(20), until condition: (SetDNSFakeControlServer) -> Bool
     ) async throws {
         let deadline = ContinuousClock.now + duration
         while !condition(self) {
             guard ContinuousClock.now < deadline else {
-                Issue.record("\(duration) 안에 \(what)")
+                Issue.record("\(what) within \(duration)")
                 throw CancellationError()
             }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
 
-    // MARK: 연결 하나
+    // MARK: Single connection
 
     private func serve(_ connection: NWConnection, number: Int) async {
         var received: [UInt8] = []
@@ -151,7 +151,7 @@ final class SetDNSFakeControlServer: Sendable {
         connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
     }
 
-    /// 업그레이드 머리의 initiation으로 Noise 응답자를 돌리고 101과 response를 보낸다. 실패하면 연결을 끊는다.
+    /// Runs the Noise responder with the initiation from the upgrade header and sends 101 and response. Closes the connection on failure.
     private func upgrade(_ connection: NWConnection, head: [String]) -> ControlSession? {
         let prefix = "x-tailscale-handshake:"
         guard let line = head.first(where: { $0.lowercased().hasPrefix(prefix) }),
@@ -195,7 +195,7 @@ final class SetDNSFakeControlServer: Sendable {
         return ControlSession(keys: TransportKeys(send: serverToClient, receive: clientToServer))
     }
 
-    /// 요청 하나의 머리와 본문을 모으는 중인 스트림.
+    /// A stream collecting the headers and body of one request.
     private struct PendingRequest {
         var headers: [HeaderField]
         var body: [UInt8] = []
@@ -286,7 +286,7 @@ final class SetDNSFakeControlServer: Sendable {
         let block = { (status: Int) in HPACKEncoder.encode([HeaderField(":status", "\(status)")]) }
         switch reply {
         case nil:
-            // 맵 스트림: 머리만 보내고 열어 둔다.
+            // Map stream: Send headers only and leave it open.
             send(FrameEncoder.headers(stream, block: block(200), endStream: false, maximumPayloadLength: FrameBuffer.defaultMaximumPayloadLength))
         case .never?:
             break
@@ -296,7 +296,7 @@ final class SetDNSFakeControlServer: Sendable {
         }
     }
 
-    // MARK: 소켓
+    // MARK: Sockets
 
     private func receive(_ connection: NWConnection) async -> [UInt8]? {
         await withCheckedContinuation { continuation in
@@ -310,7 +310,7 @@ final class SetDNSFakeControlServer: Sendable {
         }
     }
 
-    /// HTTP/1.1 머리(빈 줄까지)를 읽어 줄로 나눈다. 머리 뒤에 이미 온 바이트도 돌려준다.
+    /// Reads HTTP/1.1 headers through the blank line and splits them into lines. Also returns bytes already received after the headers.
     private func readHead(_ connection: NWConnection, buffer: inout [UInt8]) async -> ([String], [UInt8])? {
         let terminator = Array("\r\n\r\n".utf8)
         while true {

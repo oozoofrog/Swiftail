@@ -2,7 +2,7 @@ import Foundation
 import Network
 import SwiftailHTTP2
 
-/// 상태 기계에는 공개 API로만 접근한다. TCP 수신 콜백은 처리 후 다음 수신을 걸어 순서를 지킨다.
+/// Access the state machine only through its public API. The TCP receive callback schedules the next receive after processing to preserve order.
 actor H2Driver {
     struct Response: Sendable {
         var status: Int?
@@ -23,7 +23,7 @@ actor H2Driver {
         }
     }
 
-    /// 진단용 파서는 프레임을 해석하거나 구현에 전달할 바이트를 바꾸지 않는다.
+    /// The diagnostic parser neither interprets frames nor changes the bytes passed to the implementation.
     private struct Recorder {
         var pending: [UInt8] = []
         var frames: [RecordedFrame] = []
@@ -59,7 +59,7 @@ actor H2Driver {
 
     init(port: UInt16, fragmentSize: Int? = nil) throws {
         guard let port = NWEndpoint.Port(rawValue: port), fragmentSize.map({ $0 > 0 }) ?? true else {
-            throw H2InteropFailure("잘못된 TCP 포트 또는 분할 크기")
+            throw H2InteropFailure("Invalid TCP port or chunk size")
         }
         socket = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
         self.fragmentSize = fragmentSize
@@ -70,10 +70,10 @@ actor H2Driver {
             Task { await self?.stateChanged(state) }
         }
         socket.start(queue: DispatchQueue(label: "swiftail.h2interop"))
-        try await wait("TCP 준비", timeout: .seconds(15)) { $0.ready }
+        try await wait("TCP ready", timeout: .seconds(15)) { $0.ready }
         flush()
         readNext()
-        try await wait("서버 SETTINGS", timeout: .seconds(15)) { driver in
+        try await wait("Server SETTINGS", timeout: .seconds(15)) { driver in
             driver.incoming.frames.contains { $0.type == 4 && $0.flags & 1 == 0 }
         }
     }
@@ -82,7 +82,7 @@ actor H2Driver {
         guard !stopped else { return }
         switch state {
         case .ready: ready = true
-        case .failed(let error): failure = H2InteropFailure("TCP 실패: \(error)")
+        case .failed(let error): failure = H2InteropFailure("TCP failed: \(error)")
         case .cancelled: eof = true
         default: break
         }
@@ -104,7 +104,7 @@ actor H2Driver {
     private func flush() {
         let bytes = connection.takeOutboundBytes()
         guard !bytes.isEmpty, !stopped else { return }
-        // init이 준비한 프리페이스 24바이트는 프레임이 아니다.
+        // The 24-byte preface prepared by init is not a frame.
         record(sentPreface ? bytes : Array(bytes.dropFirst(24)), incoming: false)
         sentPreface = true
         socket.send(content: Data(bytes), completion: .contentProcessed { [weak self] error in
@@ -113,12 +113,12 @@ actor H2Driver {
     }
 
     private func sendFailed(_ error: NWError) {
-        if !stopped { failure = H2InteropFailure("TCP 쓰기 실패: \(error)") }
+        if !stopped { failure = H2InteropFailure("TCP write failed: \(error)") }
     }
 
     private func readNext() {
         guard !stopped, !eof else { return }
-        // Network 콜백을 actor로 옮기는 최소 경계다. 다음 읽기는 이 조각 처리 뒤에만 시작한다.
+        // The minimal boundary for moving Network callbacks into the actor. The next read starts only after this chunk is processed.
         socket.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, complete, error in
             Task { await self?.received(data, complete: complete, error: error) }
         }
@@ -148,11 +148,11 @@ actor H2Driver {
                     flush()
                 }
             } catch {
-                failure = H2InteropFailure("receive 실패: \(error)")
+                failure = H2InteropFailure("receive failed: \(error)")
                 flush()
             }
         }
-        if let error { failure = H2InteropFailure("TCP 읽기 실패: \(error)") }
+        if let error { failure = H2InteropFailure("TCP read failed: \(error)") }
         eof = complete || error != nil
         if failure == nil { readNext() }
     }
@@ -161,7 +161,7 @@ actor H2Driver {
         let previous = isIncoming ? incoming.frames.count : outgoing.frames.count
         if isIncoming { incoming.append(bytes) } else { outgoing.append(bytes) }
         let frames = isIncoming ? incoming.frames : outgoing.frames
-        history += frames.dropFirst(previous).map { "\(isIncoming ? "수신" : "송신") \($0.description)" }
+        history += frames.dropFirst(previous).map { "\(isIncoming ? "received" : "sent") \($0.description)" }
     }
 
     private func wait(_ description: String, timeout: Duration, until predicate: (isolated H2Driver) -> Bool) async throws {
@@ -170,48 +170,48 @@ actor H2Driver {
             try Task.checkCancellation()
             if let failure { throw failure }
             if predicate(self) { return }
-            if eof { throw H2InteropFailure("\(description) 전에 TCP EOF") }
+            if eof { throw H2InteropFailure("TCP EOF before \(description)") }
             guard ContinuousClock.now < deadline else {
-                throw H2InteropFailure("\(description) 제한 시간 \(timeout) 초과")
+                throw H2InteropFailure("Timed out waiting for \(description) after \(timeout)")
             }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
 
     func head(_ id: HTTP2StreamID, timeout: Duration = .seconds(30)) async throws -> Response {
-        try await wait("스트림 \(id.rawValue) 응답 머리", timeout: timeout) {
+        try await wait("Response headers for stream \(id.rawValue)", timeout: timeout) {
             $0.responses[id]?.status != nil || $0.responses[id]?.closed == true
         }
-        guard let response = responses[id], response.status != nil else { throw H2InteropFailure("응답 머리 없이 스트림 종료") }
+        guard let response = responses[id], response.status != nil else { throw H2InteropFailure("Stream ended without response headers") }
         return response
     }
 
     func data(_ id: HTTP2StreamID, count: Int, timeout: Duration = .seconds(60)) async throws -> Response {
-        try await wait("스트림 \(id.rawValue) 본문 \(count)바이트", timeout: timeout) {
+        try await wait("\(count) body bytes on stream \(id.rawValue)", timeout: timeout) {
             ($0.responses[id]?.body.count ?? 0) >= count || $0.responses[id]?.closed == true
         }
-        guard let response = responses[id], response.body.count >= count else { throw H2InteropFailure("본문 \(count)바이트 전에 스트림 종료") }
+        guard let response = responses[id], response.body.count >= count else { throw H2InteropFailure("Stream ended before \(count) body bytes") }
         return response
     }
 
     func closed(_ id: HTTP2StreamID, timeout: Duration = .seconds(60)) async throws -> Response {
-        try await wait("스트림 \(id.rawValue) 종료", timeout: timeout) { $0.responses[id]?.closed == true }
-        guard let response = responses[id] else { throw H2InteropFailure("종료 사건의 스트림 없음") }
+        try await wait("Stream \(id.rawValue) closure", timeout: timeout) { $0.responses[id]?.closed == true }
+        guard let response = responses[id] else { throw H2InteropFailure("No stream for the closure event") }
         return response
     }
 
     func serverGoAway() async throws -> (lastStreamID: HTTP2StreamID, code: UInt32) {
-        try await wait("서버 GOAWAY", timeout: .seconds(30)) { $0.goAway != nil }
-        guard let goAway else { throw H2InteropFailure("GOAWAY 사건 없음") }
+        try await wait("Server GOAWAY", timeout: .seconds(30)) { $0.goAway != nil }
+        guard let goAway else { throw H2InteropFailure("No GOAWAY event") }
         return goAway
     }
 
     func receivedFrames() -> [RecordedFrame] { incoming.frames }
 
     func diagnostics() -> String {
-        let lines = history.count > 100 ? Array(history.prefix(16)) + ["중간 프레임 생략"] + Array(history.suffix(84)) : history
+        let lines = history.count > 100 ? Array(history.prefix(16)) + ["Middle frames omitted"] + Array(history.suffix(84)) : history
         let states = responses.sorted { $0.key.rawValue < $1.key.rawValue }.map {
-            "스트림 \($0.key.rawValue): status=\($0.value.status.map(String.init) ?? "없음") body=\($0.value.body.count) closed=\($0.value.closed) reset=\($0.value.resetCode.map(String.init) ?? "없음")"
+            "Stream \($0.key.rawValue): status=\($0.value.status.map(String.init) ?? "none") body=\($0.value.body.count) closed=\($0.value.closed) reset=\($0.value.resetCode.map(String.init) ?? "none")"
         }
         return (lines + states).joined(separator: "\n")
     }
@@ -223,7 +223,7 @@ actor H2Driver {
     }
 }
 
-/// 성공·실패·취소 모두 소켓과 자식 프로세스를 닫고, 실패에는 Go 로그와 프레임 순서를 붙인다.
+/// Closes the socket and child process on success, failure, and cancellation, and attaches the Go log and frame sequence on failure.
 func withH2Server(fragmentSize: Int? = nil, _ operation: @Sendable (H2Driver, GoH2Server) async throws -> Void) async throws {
     let server = GoH2Server()
     var driver: H2Driver?
@@ -236,7 +236,7 @@ func withH2Server(fragmentSize: Int? = nil, _ operation: @Sendable (H2Driver, Go
         await connected.stop()
         await server.stop()
     } catch {
-        let frames = await driver?.diagnostics() ?? "연결 전 실패"
+        let frames = await driver?.diagnostics() ?? "Failed before connecting"
         await driver?.stop()
         await server.stop()
         let log = await server.diagnostics()

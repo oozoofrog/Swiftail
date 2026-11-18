@@ -10,7 +10,7 @@ struct GateFailure: Error, Sendable, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
-/// 사건과 마감 시각을 경쟁시킨다. 시간 초과는 시험을 끝내므로 취소된 구독을 재사용하지 않는다.
+/// Races events against a deadline. A timeout ends the test, so a canceled subscription is not reused.
 func nextEvent<T: Sendable>(
     _ stream: AsyncStream<T>, waitingFor description: String, timeout: Duration = .seconds(20)
 ) async throws -> T {
@@ -18,28 +18,28 @@ func nextEvent<T: Sendable>(
         defer { group.cancelAll() }
         group.addTask {
             for await event in stream { return event }
-            throw GateFailure("\(description) 대기 중 사건 흐름 종료")
+            throw GateFailure("Event stream ended while waiting for \(description)")
         }
         group.addTask {
             try await Task.sleep(for: timeout)
-            throw GateFailure("\(description) 제한 시간 초과 (\(timeout))")
+            throw GateFailure("\(description) timed out (\(timeout))")
         }
-        guard let event = try await group.next() else { throw GateFailure("\(description) 사건 없음") }
+        guard let event = try await group.next() else { throw GateFailure("No event for \(description)") }
         return event
     }
 }
 
-/// 개인 키·인증 키·사용자 경로가 외부 도구의 진단에 섞여도 보고에 남기지 않는다.
+/// Keeps private keys, auth keys, and user paths out of the report even if external tool diagnostics contain them.
 func redacted(_ text: String) -> String {
     var result = text
     for pattern in [#"(?:privkey|nodekey|discokey|mkey):[0-9a-fA-F]+"#, #"tskey-[A-Za-z0-9_-]+"#,
                     #"/Users/[^\s\"']+"#, #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#] {
-        result = result.replacingOccurrences(of: pattern, with: "<가림>", options: .regularExpression)
+        result = result.replacingOccurrences(of: pattern, with: "<redacted>", options: .regularExpression)
     }
     return result
 }
 
-/// 공개 사건만 관측한다. 내부 상태·전송 구현에는 접근하지 않는다.
+/// Observes only public events without accessing internal state or the transport implementation.
 struct GateClient: Sendable {
     enum Observation: Sendable {
         case event(ControlClient.Event)
@@ -66,7 +66,7 @@ struct GateClient: Sendable {
         let running = Task<ControlError?, Never> {
             do { try await client.run(); return nil }
             catch let error as ControlError { return error }
-            catch { return .connection("예상하지 않은 run 오류: \(redacted(String(describing: error)))") }
+            catch { return .connection("Unexpected run error: \(redacted(String(describing: error)))") }
         }
         self.running = running
         collecting = Task {
@@ -82,20 +82,20 @@ struct GateClient: Sendable {
     }
 
     func registered() async throws -> NodePublicKey {
-        switch try await next("등록 완료(서버 키 조회 → 업그레이드 → Noise → HTTP/2)") {
+        switch try await next("Registration complete (server key lookup → upgrade → Noise → HTTP/2).") {
         case .event(.registered(let key)): return key
-        case let other: throw unexpected(other, during: "등록 완료")
+        case let other: throw unexpected(other, during: "Registration complete")
         }
     }
 
     func netmap(
-        _ description: String = "첫 netmap", timeout: Duration = .seconds(20),
+        _ description: String = "First netmap", timeout: Duration = .seconds(20),
         matching predicate: @Sendable (Netmap) -> Bool = { _ in true }
     ) async throws -> Netmap {
         let deadline = ContinuousClock.now + timeout
         var received = 0
         while true {
-            switch try await next("\(description), 관측 netmap \(received)개", timeout: ContinuousClock.now.duration(to: deadline)) {
+            switch try await next("\(description), \(received) netmaps observed", timeout: ContinuousClock.now.duration(to: deadline)) {
             case .event(.netmap(let map)):
                 received += 1
                 if predicate(map) { return map }
@@ -104,7 +104,7 @@ struct GateClient: Sendable {
         }
     }
 
-    /// KeepAlive는 공개 사건이 아니다. 관측 시간 내 재등록·disconnected·종료를 모두 거부한다.
+    /// KeepAlive is not a public event. Rejects any re-registration, disconnected event, or termination during the observation period.
     func remainsConnected(until deadline: ContinuousClock.Instant) async throws {
         let continuation = observationContinuation
         let timer = Task {
@@ -115,10 +115,10 @@ struct GateClient: Sendable {
         }
         defer { timer.cancel() }
         while true {
-            switch try await next("KeepAlive를 넘긴 125초 스트림 유지", timeout: .seconds(140)) {
+            switch try await next("125 seconds of stream uptime beyond KeepAlive", timeout: .seconds(140)) {
             case .observationEnded: return
             case .event(.netmap): continue
-            case let other: throw unexpected(other, during: "125초 스트림 유지")
+            case let other: throw unexpected(other, during: "125 seconds of stream uptime")
             }
         }
     }
@@ -133,18 +133,18 @@ struct GateClient: Sendable {
         let actual: String
         switch observation {
         case .event(.loginRequired): actual = "loginRequired"
-        case .event(.registered): actual = "예상하지 않은 재등록"
+        case .event(.registered): actual = "Unexpected re-registration"
         case .event(.netmap): actual = "netmap"
         case .event(.disconnected): actual = "disconnected"
         case .failed(let error): actual = redacted(String(describing: error))
-        case .ended: actual = "run() 종료"
-        case .observationEnded: actual = "관측 종료"
+        case .ended: actual = "run() ended"
+        case .observationEnded: actual = "Observation ended"
         }
-        return GateFailure("\(stage): 기대한 사건 대신 \(actual)")
+        return GateFailure("\(stage): received \(actual) instead of the expected event")
     }
 }
 
-/// 성공·실패·취소 모두 신원 디렉터리와 Go 프로세스를 회수한다.
+/// Removes the identity directory and reaps the Go process on success, failure, or cancellation.
 func withTailnet(_ body: (GoTailnet, GoTailnet.Event, URL) async throws -> Void) async throws {
     let tool = GoTailnet()
     let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-m2-\(UUID().uuidString)")

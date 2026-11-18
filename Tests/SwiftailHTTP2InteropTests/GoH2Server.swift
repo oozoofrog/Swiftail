@@ -8,7 +8,7 @@ struct H2InteropFailure: Error, CustomStringConvertible, Sendable {
     init(_ description: String) { self.description = description }
 }
 
-/// 표준 출력은 JSON 줄, 표준 오류는 진단으로 모으는 독립 Go 서버다.
+/// A standalone Go server whose stdout is collected as JSON lines and stderr as diagnostics.
 actor GoH2Server {
     private struct Event: Decodable {
         let event: String
@@ -27,14 +27,14 @@ actor GoH2Server {
     private var failure: H2InteropFailure?
 
     func start() async throws -> UInt16 {
-        guard let binary = h2serverBinary else { throw H2InteropFailure("SWIFTAIL_H2SERVER가 없음") }
+        guard let binary = h2serverBinary else { throw H2InteropFailure("SWIFTAIL_H2SERVER is missing") }
         process.executableURL = URL(fileURLWithPath: binary)
         process.standardInput = input
         process.standardOutput = output
         process.standardError = errors
-        // 종료와 명령 쓰기가 겹쳐도 SIGPIPE로 시험 프로세스가 죽지 않게 한다.
+        // Prevent SIGPIPE from killing the test process if shutdown overlaps a command write.
         guard fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
-            throw H2InteropFailure("서버 입력 F_SETNOSIGPIPE 실패: \(errno)")
+            throw H2InteropFailure("F_SETNOSIGPIPE failed on server input: \(errno)")
         }
         for (handle, isLog) in [(output.fileHandleForReading, false), (errors.fileHandleForReading, true)] {
             let stream = Self.read(handle)
@@ -48,17 +48,17 @@ actor GoH2Server {
             try Task.checkCancellation()
             if let failure { throw failure }
             if let port { return port }
-            guard process.isRunning else { throw H2InteropFailure("ready 전에 서버 종료") }
+            guard process.isRunning else { throw H2InteropFailure("Server exited before ready") }
             try await Task.sleep(for: .milliseconds(10))
         }
-        throw H2InteropFailure("서버 ready 제한 시간 15초 초과")
+        throw H2InteropFailure("Server exceeded the 15-second ready timeout")
     }
 
-    /// Foundation 콜백을 순서가 보존되는 AsyncStream으로 옮겨 actor에서만 상태를 바꾼다.
+    /// Moves Foundation callbacks into an AsyncStream that preserves their order, so state changes only in the actor.
     private static func read(_ handle: FileHandle) -> AsyncStream<Data> {
         AsyncStream { continuation in
             handle.readabilityHandler = { file in
-                // read(upToCount:)는 짧은 ready 줄 뒤에도 채워질 때까지 기다릴 수 있다.
+                // read(upToCount:) can wait for the buffer to fill even after a short ready line.
                 let data = file.availableData
                 if data.isEmpty {
                     file.readabilityHandler = nil
@@ -75,13 +75,13 @@ actor GoH2Server {
             return
         }
         pending.append(data)
-        guard pending.count <= 65_536 else { recordFailure("서버 JSON 줄 상한 초과"); return }
+        guard pending.count <= 65_536 else { recordFailure("Server JSON line exceeds the limit"); return }
         while let newline = pending.firstIndex(of: 10) {
             do {
                 let event = try JSONDecoder().decode(Event.self, from: pending.prefix(upTo: newline))
                 if event.event == "ready", let value = event.port, value > 0 { port = value }
-                else { recordFailure("서버 사건 \(event.event): \(event.message ?? "내용 없음")") }
-            } catch { recordFailure("서버 JSON 해석 실패: \(error)") }
+                else { recordFailure("Server event \(event.event): \(event.message ?? "no details")") }
+            } catch { recordFailure("Could not decode server JSON: \(error)") }
             pending.removeSubrange(...newline)
         }
     }
@@ -89,14 +89,14 @@ actor GoH2Server {
     private func recordFailure(_ message: String) { failure = H2InteropFailure(message) }
 
     func command(_ command: String) throws {
-        guard process.isRunning else { throw H2InteropFailure("명령 전에 서버 종료") }
+        guard process.isRunning else { throw H2InteropFailure("Server exited before the command") }
         var data = try JSONEncoder().encode(["cmd": command])
         data.append(10)
         try input.fileHandleForWriting.write(contentsOf: data)
     }
 
     func diagnostics() -> String {
-        "서버 로그: \(String(decoding: log, as: UTF8.self))\n서버 파이프: \(failure?.description ?? "오류 없음")"
+        "Server log: \(String(decoding: log, as: UTF8.self))\nServer pipe: \(failure?.description ?? "no error")"
     }
 
     func stop() async {
@@ -104,7 +104,7 @@ actor GoH2Server {
         try? input.fileHandleForWriting.close()
         let deadline = ContinuousClock.now + .seconds(2)
         while process.isRunning, ContinuousClock.now < deadline {
-            // 취소된 시험에서도 반드시 프로세스 회수를 끝낸다.
+            // Always finish reaping the process, even if the test is canceled.
             try? await Task.sleep(for: .milliseconds(10))
         }
         if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }

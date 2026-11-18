@@ -1,4 +1,4 @@
-// `TailnetLockStore`: 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 T·M, 결정 L6·L14, 단위 시험 20.
+// `TailnetLockStore`: contract `docs/contracts/SwiftailTailnetLock.md`, behaviors T and M, decisions L6 and L14, unit test 20.
 
 import Foundation
 import Testing
@@ -7,22 +7,22 @@ import SwiftailCrypto
 @testable import SwiftailControl
 @testable import SwiftailTKA
 
-@Suite("tailnet lock: 상태 저장")
+@Suite("Tailnet lock: State storage")
 struct TailnetLockStoreTests {
     private let signer = LockTesting.Signer()
 
-    /// 임시 디렉터리의 저장소로 `body`를 돌린다.
+    /// Runs `body` with a store in a temporary directory.
     private func withStore<T>(_ body: (TailnetLockStore, URL) throws -> T) throws -> T {
         let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-lock-store-\(UUID().uuidString)")
         defer {
-            // 읽기 전용으로 바꾼 시험도 지워지게 권한을 되돌린다.
+            // Restore permissions so tests that made the directory read-only can also clean it up.
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
             try? FileManager.default.removeItem(at: directory)
         }
         return try body(TailnetLockStore(directory: directory), directory)
     }
 
-    /// 체크포인트와 그 뒤의 AddKey 하나.
+    /// A checkpoint followed by one AddKey.
     private func chain() throws -> (authority: Authority, aums: [AUM]) {
         let genesis = try LockTesting.checkpoint(trusting: [signer], signedBy: signer)
         var authority = try Authority(bootstrappingWith: genesis)
@@ -31,7 +31,7 @@ struct TailnetLockStoreTests {
         return (authority, [genesis, added])
     }
 
-    /// 저장 파일의 바이트를 직접 만든다(형식은 `TailnetLockStore`의 주석).
+    /// Builds the on-disk bytes directly (the `TailnetLockStore` comment describes the format).
     private func file(version: UInt64 = 1, bootstrap: [UInt8], aums: [[UInt8]], digest: ([UInt8]) -> [UInt8] = { BLAKE2s.hash($0) }) -> Data {
         var writer = CBORWriter()
         writer.mapHeader(count: 3)
@@ -55,7 +55,7 @@ struct TailnetLockStoreTests {
         return false
     }
 
-    @Test("파일이 없으면 nil. 쓰고 다시 열면 같은 머리·뿌리·AUM이고, 파일은 0600이며 임시 파일이 남지 않는다")
+    @Test("A missing file yields nil. Writing then reopening preserves the head, root, and AUMs, the file is 0600, and no temporary file remains")
     func roundTrip() throws {
         try withStore { store, directory in
             #expect(try store.load() == nil)
@@ -71,13 +71,13 @@ struct TailnetLockStoreTests {
             let attributes = try FileManager.default.attributesOfItem(atPath: store.fileURL.path)
             #expect(attributes[.posixPermissions] as? Int == 0o600)
             #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [TailnetLockStore.fileName])
-            // 내용은 주석의 형식 그대로다: 맵과 그 BLAKE2s-256.
+            // The contents match the documented format: a map and its BLAKE2s-256.
             let expected = file(bootstrap: authority.bootstrap.bytes, aums: aums.map { $0.serialized() })
             #expect(try Data(contentsOf: store.fileURL) == expected)
         }
     }
 
-    @Test("다시 쓰면 통째로 바뀐다. 지우면 없어지고, 없는 것을 지워도 된다")
+    @Test("Rewriting replaces the entire file. Removing it makes it disappear, and removing a missing file is allowed")
     func overwriteAndRemove() throws {
         try withStore { store, _ in
             let genesis = try LockTesting.checkpoint(trusting: [signer], signedBy: signer)
@@ -93,7 +93,7 @@ struct TailnetLockStoreTests {
         }
     }
 
-    @Test("깨진 파일은 열리지 않고 그대로 남는다: 끝의 해시, 잘림, 빈 파일, 형식 버전")
+    @Test("Corrupt files fail to open and stay intact: trailing hash, truncation, empty file, and format version")
     func corrupted() throws {
         let (authority, aums) = try chain()
         let good = file(bootstrap: authority.bootstrap.bytes, aums: aums.map { $0.serialized() })
@@ -102,42 +102,42 @@ struct TailnetLockStoreTests {
         var wrongDigest = good
         wrongDigest[good.count - 1] ^= 0x01
         let cases: [(String, Data)] = [
-            ("본문의 한 바이트", flipped),
-            ("해시의 한 바이트", wrongDigest),
-            ("끝이 잘림", good.dropLast(5)),
-            ("해시보다 짧음", good.prefix(20)),
-            ("해시뿐", Data(BLAKE2s.hash([UInt8]()))),
-            ("빈 파일", Data()),
-            ("모르는 형식 버전", file(version: 2, bootstrap: authority.bootstrap.bytes, aums: aums.map { $0.serialized() })),
-            ("해시는 맞지만 CBOR이 아님", Data([0xff, 0x00] + BLAKE2s.hash([0xff, 0x00]))),
+            ("One byte in the body", flipped),
+            ("One byte in the hash", wrongDigest),
+            ("Truncated tail", good.dropLast(5)),
+            ("Shorter than the hash", good.prefix(20)),
+            ("Hash only", Data(BLAKE2s.hash([UInt8]()))),
+            ("Empty file", Data()),
+            ("Unknown format version", file(version: 2, bootstrap: authority.bootstrap.bytes, aums: aums.map { $0.serialized() })),
+            ("Correct hash with non-CBOR data", Data([0xff, 0x00] + BLAKE2s.hash([0xff, 0x00]))),
         ]
         for (name, contents) in cases {
             try withStore { store, directory in
                 try write(contents, to: store, in: directory)
                 #expect("\(name)", performing: { try store.load() }, throws: isStorageError)
-                #expect(try Data(contentsOf: store.fileURL) == contents, "\(name): 파일을 고치거나 지웠다")
+                #expect(try Data(contentsOf: store.fileURL) == contents, "\(name): Modified or removed the file")
             }
         }
     }
 
-    @Test("해시를 다시 계산해 바꿔 넣은 내용도 열리지 않는다: 서명, 뿌리, 부모, 한도")
+    @Test("Replaced contents with a recomputed hash also fail to open: signature, root, parent, and limits")
     func tampered() throws {
         let (authority, aums) = try chain()
         let bytes = aums.map { $0.serialized() }
-        // 서명 한 바이트를 바꾼 AddKey(끝 64바이트가 서명이다).
+        // AddKey with one signature byte changed (the last 64 bytes are the signature).
         var forged = bytes[1]
         forged[forged.count - 1] ^= 0x01
-        // 다른 서명 기기의 체크포인트: 그 자체로는 유효한 사슬이다.
+        // A different signing device's checkpoint. A valid chain on its own.
         let other = LockTesting.Signer()
         let foreign = try LockTesting.checkpoint(trusting: [other], signedBy: other)
         let cases: [(String, Data)] = [
-            ("서명이 바뀐 AUM", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[0], forged])),
-            ("기록된 뿌리가 저장소에 없음", file(bootstrap: foreign.hash.bytes, aums: bytes)),
-            ("뿌리가 둘", file(bootstrap: authority.bootstrap.bytes, aums: bytes + [foreign.serialized()])),
-            ("부모가 빠짐", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[1]])),
-            ("AUM이 아닌 원소", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[0], [0x00]])),
-            ("31바이트 뿌리", file(bootstrap: Array(authority.bootstrap.bytes.dropLast()), aums: bytes)),
-            ("AUM 4,097개", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[0]] + Array(repeating: bytes[1], count: 4_096))),
+            ("AUM with a changed signature", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[0], forged])),
+            ("Recorded root missing from the store", file(bootstrap: foreign.hash.bytes, aums: bytes)),
+            ("Two roots", file(bootstrap: authority.bootstrap.bytes, aums: bytes + [foreign.serialized()])),
+            ("Missing parent", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[1]])),
+            ("Non-AUM element", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[0], [0x00]])),
+            ("31-byte root", file(bootstrap: Array(authority.bootstrap.bytes.dropLast()), aums: bytes)),
+            ("4,097 AUMs", file(bootstrap: authority.bootstrap.bytes, aums: [bytes[0]] + Array(repeating: bytes[1], count: 4_096))),
         ]
         for (name, contents) in cases {
             try withStore { store, directory in
@@ -145,14 +145,14 @@ struct TailnetLockStoreTests {
                 #expect("\(name)", performing: { try store.load() }, throws: isStorageError)
             }
         }
-        // 통째로 바꿔 넣은 유효한 사슬은 열린다: 첫 신뢰가 TOFU라 서명으로는 막지 못하고, 파일 권한이 지킨다.
+        // A valid chain substituted in full opens because initial trust is TOFU, so signatures cannot prevent it and file permissions provide protection.
         try withStore { store, directory in
             try write(file(bootstrap: foreign.hash.bytes, aums: [foreign.serialized()]), to: store, in: directory)
             #expect(try store.load()?.head == foreign.hash)
         }
     }
 
-    @Test("17MiB를 넘는 파일은 읽지 않는다")
+    @Test("Does not read files over 17MiB")
     func tooLarge() throws {
         try withStore { store, directory in
             #expect(TailnetLockStore.maximumFileSize == 17 * 1_024 * 1_024)
@@ -161,10 +161,10 @@ struct TailnetLockStoreTests {
         }
     }
 
-    @Test("상태 파일이 심볼릭 링크면 따라가지 않는다")
+    @Test("Does not follow a symlink at the state file path")
     func refusesSymbolicLink() throws {
         try withStore { store, directory in
-            // 올바른 상태 파일이 다른 곳에 있고, 상태 디렉터리의 파일은 그것을 가리키는 링크다.
+            // A valid state file is located elsewhere, and the file in the state directory is a link to it.
             let elsewhere = TailnetLockStore(directory: directory.appending(path: "elsewhere"))
             try elsewhere.save(try chain().authority)
             try FileManager.default.createSymbolicLink(at: store.fileURL, withDestinationURL: elsewhere.fileURL)
@@ -173,7 +173,7 @@ struct TailnetLockStoreTests {
         }
     }
 
-    @Test("쓰지 못하면 storage 오류이고 이전 파일이 그대로 남는다")
+    @Test("A write failure yields a storage error and leaves the previous file intact")
     func saveFailure() throws {
         try withStore { store, directory in
             let genesis = try Authority(bootstrappingWith: LockTesting.checkpoint(trusting: [signer], signedBy: signer))

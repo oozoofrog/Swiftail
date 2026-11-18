@@ -4,9 +4,9 @@ import Testing
 
 @testable import SwiftailControl
 
-@Suite("등록에 보내는 값")
+@Suite("Values sent during registration")
 struct RegistrationValuesTests {
-    @Test("인증 키는 --TL 앞부분만 보낸다", arguments: [
+    @Test("Sends only the part of the auth key before --TL", arguments: [
         ("tskey-auth-fake", "tskey-auth-fake"),
         ("tskey-auth-fake--TLc2ln-cHJpdg", "tskey-auth-fake"),
         ("tskey-auth-fake--TL", "tskey-auth-fake"),
@@ -18,7 +18,7 @@ struct RegistrationValuesTests {
         #expect(AuthKey.controlValue(of: input) == expected)
     }
 
-    @Test("Hostinfo: 최소 필드와 Swiftail 표시")
+    @Test("Hostinfo: Minimum fields and the Swiftail identifier")
     func hostinfo() throws {
         let machineKey = try #require(MachinePublicKey("mkey:" + String(repeating: "ab", count: 32)))
         let hostinfo = Hostinfo.swiftail(hostname: "rd-mac-1a2b3c4d", machineKey: machineKey, netInfo: nil)
@@ -31,7 +31,7 @@ struct RegistrationValuesTests {
         #expect((object["OSVersion"] as? String)?.isEmpty == false)
         #expect(object["Userspace"] as? Bool == true)
         #expect(object["NetInfo"] == nil)
-        // 비밀이 아닌 고정값: 같은 machine 키면 같고, 키 자체를 드러내지 않는다.
+        // A fixed, nonsecret value. The same machine key yields the same value without revealing the key itself.
         let logID = try #require(object["BackendLogID"] as? String)
         #expect(logID.count == 64)
         #expect(!logID.contains("abababab"))
@@ -39,7 +39,7 @@ struct RegistrationValuesTests {
         #expect(Hostinfo.swiftail(hostname: "x", machineKey: .zero, netInfo: nil).backendLogID != logID)
     }
 
-    @Test("Hostinfo에 NetInfo를 싣는다")
+    @Test("Includes NetInfo in Hostinfo")
     func hostinfoNetInfo() throws {
         var netInfo = NetInfo()
         netInfo.preferredDERP = 1
@@ -49,7 +49,7 @@ struct RegistrationValuesTests {
         #expect(encoded["PreferredDERP"] as? Int == 1)
     }
 
-    @Test("설정의 인증 키는 description에 나오지 않는다")
+    @Test("The configured auth key is absent from description")
     func configurationHidesAuthKey() throws {
         let configuration = ControlClient.Configuration(
             serverURL: try #require(URL(string: "http://127.0.0.1:9911")),
@@ -59,7 +59,7 @@ struct RegistrationValuesTests {
         #expect(!String(describing: configuration).contains("secretvalue"))
     }
 
-    @Test("거절 메시지에서 인증 키(원문과 --TL 앞부분)를 가린다", arguments: [
+    @Test("Redacts the auth key (the original and the part before --TL) in rejection messages", arguments: [
         ("invalid authkey: tskey-auth-fake--TLc2ln-cHJpdg", "invalid authkey: <가림>"),
         ("invalid authkey: tskey-auth-fake", "invalid authkey: <가림>"),
         ("tskey-auth-fake and tskey-auth-fake", "<가림> and <가림>"),
@@ -69,7 +69,7 @@ struct RegistrationValuesTests {
         #expect(ControlClient.rejectionMessage(message, authKey: "tskey-auth-fake--TLc2ln-cHJpdg") == expected)
     }
 
-    @Test("인증 키가 없거나 비었으면 메시지를 그대로 두고, 긴 메시지는 자른다")
+    @Test("Leaves the message unchanged if the auth key is missing or empty and truncates long messages")
     func rejectionLength() {
         #expect(ControlClient.rejectionMessage("invalid authkey", authKey: nil) == "invalid authkey")
         #expect(ControlClient.rejectionMessage("invalid authkey", authKey: "") == "invalid authkey")
@@ -80,7 +80,7 @@ struct RegistrationValuesTests {
         #expect(shortened.hasSuffix("…"))
     }
 
-    @Test("/key 응답에서 Noise 키를 꺼낸다")
+    @Test("Extracts the Noise key from the /key response")
     func serverKey() throws {
         let key = "mkey:" + String(repeating: "cd", count: 32)
         let body = #"{"legacyPublicKey":"mkey:\#(String(repeating: "0", count: 64))","publicKey":"\#(key)"}"#
@@ -90,7 +90,7 @@ struct RegistrationValuesTests {
         }
     }
 
-    @Test("서버 URL에서 연결 값을 정한다", arguments: [
+    @Test("Derives connection values from the server URL", arguments: [
         ("http://127.0.0.1:9911", "127.0.0.1", 9911, false, "127.0.0.1:9911", "127.0.0.1"),
         ("https://controlplane.example", "controlplane.example", 443, true, "controlplane.example", "controlplane.example"),
         ("http://controlplane.example/", "controlplane.example", 80, false, "controlplane.example", "controlplane.example"),
@@ -107,7 +107,7 @@ struct RegistrationValuesTests {
         #expect(endpoint.url(path: "/key?v=148")?.absoluteString.contains("//key") == false)
     }
 
-    @Test("잘못된 서버 URL은 거절한다", arguments: ["ftp://controlplane.example", "file:///x", "http://user:pass@controlplane.example", "http:///nohost"])
+    @Test("Rejects an invalid server URL", arguments: ["ftp://controlplane.example", "file:///x", "http://user:pass@controlplane.example", "http:///nohost"])
     func badEndpoint(url: String) throws {
         let parsed = try #require(URL(string: url))
         #expect(throws: ControlError.self) { try ControlEndpoint(serverURL: parsed) }

@@ -1,5 +1,5 @@
-// tailcfg 모델의 JSON 규칙. 예는 docs/protocol-notes/control-map.md 3.1의 표(Go 1.27.3 encoding/json으로
-// 확인한 것)와, 아래 goMarshaledMapResponse(가짜 값으로 Go가 marshal한 결과)다.
+// JSON rules for the tailcfg models. Examples come from the tables in docs/protocol-notes/control-map.md §3.1 (checked with Go 1.27.3 encoding/json)
+// and goMarshaledMapResponse below (Go's marshal output for fake values).
 
 import Foundation
 import SwiftailBase
@@ -13,9 +13,9 @@ struct TailcfgJSONTests {
     private let discoKey = keyText("discokey:", byte: 0xCD)
     private let nlKey = keyText("nlpub:", byte: 0xEF)
 
-    // MARK: 요청 부호화
+    // MARK: Request encoding
 
-    @Test("인증 키 첫 등록 요청: omitempty 없는 필드는 비어 있어도 나간다")
+    @Test("Initial auth-key registration sends fields without omitempty even when they are empty")
     func registerRequest() throws {
         let request = RegisterRequest(
             nodeKey: try #require(NodePublicKey(nodeKey)),
@@ -27,7 +27,7 @@ struct TailcfgJSONTests {
         #expect(try jsonObject(JSONEncoder().encode(request)) == jsonObject(expected))
     }
 
-    @Test("로그아웃 등록 요청: 과거 Expiry, Auth 생략, 서명은 base64")
+    @Test("Logout registration uses a past Expiry, omits Auth, and encodes the signature in base64")
     func logoutRequest() throws {
         let request = RegisterRequest(
             nodeKey: try #require(NodePublicKey(nodeKey)),
@@ -44,7 +44,7 @@ struct TailcfgJSONTests {
         #expect(encoded["NodeKeySignature"] as? String == "AQID")
     }
 
-    @Test("인증 키는 description·debugDescription·dump 어디에도 나오지 않는다. 품은 요청을 찍어도 같다")
+    @Test("The auth key is absent from description, debugDescription, and dump, including output of the request that holds it")
     func authKeyRedacted() throws {
         let secret = "tskey-auth-fake0000-SECRET"
         let auth = RegisterResponseAuth(authKey: secret)
@@ -66,11 +66,11 @@ struct TailcfgJSONTests {
             #expect(!output.contains("tskey"), "\(output)")
         }
         #expect(dumped(request).contains("authKey: \"<\(secret.count)자>\""))
-        // 부호화에는 원문이 그대로 나가야 한다.
+        // Encoding must send the original text unchanged.
         #expect(try JSONSerialization.jsonObject(with: JSONEncoder().encode(auth)) as? [String: String] == ["AuthKey": secret])
     }
 
-    @Test("스트림 맵 요청")
+    @Test("Streaming map request")
     func streamMapRequest() throws {
         let request = MapRequest(
             compress: "zstd",
@@ -86,7 +86,7 @@ struct TailcfgJSONTests {
         #expect(try jsonObject(JSONEncoder().encode(request)) == jsonObject(expected))
     }
 
-    @Test("상태 갱신 맵 요청: 0 값은 빠지고 opt.Bool은 값이 있을 때만 나간다")
+    @Test("A state update map request omits values of 0 and sends opt.Bool only when it has a value")
     func liteMapRequest() throws {
         let hostinfo = Hostinfo(backendLogID: "fake-log-id", os: "iOS", hostname: "rd-mac-1a2b3c4d", userspace: false,
                                 netInfo: NetInfo(workingUDP: true, preferredDERP: 1, derpLatency: ["1-v4": 0.025]))
@@ -98,13 +98,13 @@ struct TailcfgJSONTests {
         )
         let expected = #"{"Version":148,"NodeKey":"\#(nodeKey)","DiscoKey":"\#(discoKey)","Hostinfo":{"BackendLogID":"fake-log-id","OS":"iOS","Hostname":"rd-mac-1a2b3c4d","Userspace":false,"NetInfo":{"WorkingUDP":true,"PreferredDERP":1,"DERPLatency":{"1-v4":0.025}}},"OmitPeers":true}"#
         #expect(try jsonObject(JSONEncoder().encode(request)) == jsonObject(expected))
-        // Hostinfo는 노드의 것으로 되돌아오기도 하므로 같은 값으로 읽혀야 한다.
+        // Hostinfo can return as the node's Hostinfo, so it must decode to the same value.
         #expect(try JSONDecoder().decode(Hostinfo.self, from: JSONEncoder().encode(hostinfo)) == hostinfo)
     }
 
-    // MARK: 응답 해독
+    // MARK: Response decoding
 
-    @Test("0 값의 등록 응답")
+    @Test("Registration response with values of 0")
     func zeroRegisterResponse() throws {
         let json = #"{"User":{"ID":0,"DisplayName":""},"Login":{"ID":0,"Provider":"","LoginName":"","DisplayName":""},"NodeKeyExpired":false,"MachineAuthorized":false,"AuthURL":"","NodeKeySignature":null,"Error":""}"#
         let response = try JSONDecoder().decode(RegisterResponse.self, from: Data(json.utf8))
@@ -114,7 +114,7 @@ struct TailcfgJSONTests {
         #expect(!response.machineAuthorized && !response.nodeKeyExpired)
     }
 
-    @Test("값이 있는 등록 응답")
+    @Test("Registration response with values")
     func registerResponse() throws {
         let json = #"{"User":{"ID":100,"DisplayName":"User","Created":"2026-01-02T03:04:05.5+09:00"},"Login":{"ID":7,"Provider":"github","LoginName":"user@example.com","DisplayName":"User"},"MachineAuthorized":true,"AuthURL":"https://login.example/a/1","NodeKeySignature":"AQID","Error":""}"#
         let response = try JSONDecoder().decode(RegisterResponse.self, from: Data(json.utf8))
@@ -126,18 +126,18 @@ struct TailcfgJSONTests {
         #expect(response.machineAuthorized)
     }
 
-    @Test("keepalive 페이로드")
+    @Test("Keepalive payload")
     func keepAlive() throws {
         let response = try mapResponse(#"{"KeepAlive":true}"#)
         #expect(response.keepAlive)
         #expect(response.node == nil && response.peers == nil && response.packetFilter == nil)
     }
 
-    /// Go 1.27.3이 tailscale.com v1.104.6의 `tailcfg.MapResponse`(가짜 값)를 `json.Marshal`한 결과.
-    /// 생성: `eyebuild dir m2-map` 아래 임시 Go 모듈, Tools/interop의 go.mod를 복사해 `go run`.
+    /// Result of Go 1.27.3 calling `json.Marshal` on `tailcfg.MapResponse` from tailscale.com v1.104.6 with fake values.
+    /// Generation: Temporary Go module under `eyebuild dir m2-map`. Copy the go.mod in Tools/interop and use `go run`.
     static let goMarshaledMapResponse = #"{"Node":{"ID":1,"StableID":"nSELF","Name":"rd-mac-1a2b3c4d.tail0001.ts.net.","User":100,"Key":"nodekey:0000000000000000000000000000000000000000000000000000000000000000","Addresses":["100.64.0.1/32","fd7a:115c:a1e0::1/128"],"HomeDERP":1,"Hostinfo":{"OS":"macOS","Hostname":"rd-mac-1a2b3c4d"},"MachineAuthorized":true,"Capabilities":["cap/old"],"CapMap":{"cap/x":null,"cap/y":[{"a":1}]}},"DERPMap":{"Regions":{"1":{"RegionID":1,"RegionCode":"r1","RegionName":"","Nodes":[{"Name":"1a","RegionID":1,"HostName":"derp.example","STUNPort":-1}]}}},"Peers":[{"ID":2,"StableID":"nPEER","Name":"peer.tail0001.ts.net.","User":101,"Key":"nodekey:0000000000000000000000000000000000000000000000000000000000000000","KeyExpiry":"2026-01-02T03:04:05.123456789+09:00","Addresses":["100.64.0.2/32"],"Endpoints":["192.0.2.1:41641","[2001:db8::1]:41641"],"DERP":"127.3.3.40:2","LastSeen":"2026-01-02T03:04:05.123456789+09:00","Online":true}],"OnlineChange":{"2":true},"DNSConfig":{"Domains":["tail0001.ts.net"],"Proxied":true},"Domain":"tail0001.ts.net","PacketFilter":[{"SrcIPs":["*"],"DstPorts":[{"IP":"*","Ports":{"First":0,"Last":65535}}]}],"UserProfiles":[{"ID":100,"LoginName":"user@example.com","DisplayName":"User"}],"ControlTime":"2026-01-02T03:04:05.123456789+09:00"}"#
 
-    @Test("Go가 만든 맵 응답을 읽는다")
+    @Test("Reads a Go-generated map response")
     func goMarshaled() throws {
         let response = try mapResponse(Self.goMarshaledMapResponse)
         let node = try #require(response.node)
@@ -149,10 +149,10 @@ struct TailcfgJSONTests {
         #expect(node.capabilities == ["cap/old"])
 
         let peer = try #require(response.peers?.first)
-        #expect(peer.homeDERP == 2)                     // 옛 "DERP" 문자열에서
+        #expect(peer.homeDERP == 2)                     // from the legacy "DERP" string
         #expect(peer.endpoints.map(\.description) == ["192.0.2.1:41641", "[2001:db8::1]:41641"])
         #expect(peer.online == true)
-        // 2026-01-01T18:04:05.123456789Z. Date는 Double이라 마이크로초 수준까지만 비교한다.
+        // 2026-01-01T18:04:05.123456789Z. Date uses Double, so compare only to microsecond precision.
         let expected = 1_767_290_645.123456789
         #expect(abs(try #require(peer.keyExpiry).timeIntervalSince1970 - expected) < 1e-6)
         #expect(abs(try #require(peer.lastSeen).timeIntervalSince1970 - expected) < 1e-6)
@@ -165,7 +165,7 @@ struct TailcfgJSONTests {
         #expect(response.controlTime != nil)
     }
 
-    @Test("Node 정규화: AllowedIPs 생략은 Addresses, 빈 배열은 그대로, unsigned는 자기 주소로 줄인다")
+    @Test("Node normalization uses Addresses if AllowedIPs is omitted, preserves an empty array, and limits unsigned nodes to their own addresses")
     func nodeNormalization() throws {
         func node(_ json: String) throws -> Node { try JSONDecoder().decode(Node.self, from: Data(json.utf8)) }
         let address = try #require(IPPrefix("100.64.0.2/32"))
@@ -176,17 +176,17 @@ struct TailcfgJSONTests {
         #expect(try node(#"{"Addresses":["100.64.0.2/32"],"AllowedIPs":[]}"#).allowedIPs == [])
         #expect(try node(#"{"Addresses":["100.64.0.2/32"],"AllowedIPs":["100.64.0.2/32","10.0.0.0/8"]}"#).allowedIPs == [address, route])
         #expect(try node(#"{"Addresses":["100.64.0.2/32"],"AllowedIPs":["10.0.0.0/8"],"UnsignedPeerAPIOnly":true}"#).allowedIPs == [address])
-        // 지금의 HomeDERP가 있으면 옛 문자열을 보지 않는다. 마법 주소가 아니면 무시한다.
+        // When the current HomeDERP is present, ignore the legacy string. Ignore the string if it lacks the magic address.
         #expect(try node(#"{"HomeDERP":5,"DERP":"127.3.3.40:2"}"#).homeDERP == 5)
         #expect(try node(#"{"DERP":"192.0.2.1:2"}"#).homeDERP == 0)
         #expect(try node(#"{"DERP":"127.3.3.40:x"}"#).homeDERP == 0)
-        // 0 시각의 KeyExpiry는 만료 없음.
+        // A KeyExpiry time of 0 means no expiration.
         #expect(try node(#"{"KeyExpiry":"0001-01-01T00:00:00Z"}"#).keyExpiry == nil)
     }
 
-    // MARK: JSON 세부 규칙
+    // MARK: JSON details
 
-    @Test("정수 ID를 10진 문자열 키로 쓴 map")
+    @Test("Map with integer IDs as base-10 string keys")
     func integerKeyedMaps() throws {
         let response = try mapResponse(#"{"PeerSeenChange":{"5":true,"-1":false,"9007199254740993":true}}"#)
         #expect(response.peerSeenChange == [5: true, -1: false, 9_007_199_254_740_993: true])
@@ -195,7 +195,7 @@ struct TailcfgJSONTests {
         #expect(throws: DecodingError.self) { try mapResponse(#"{"OnlineChange":{"":true}}"#) }
     }
 
-    @Test("CapMap 인자의 64비트 정수는 그대로 보존하고, 그 밖의 수는 Double이다")
+    @Test("CapMap arguments preserve 64-bit integers and represent other numbers as Double")
     func capMapNumbers() throws {
         let response = try mapResponse(#"""
             {"Node":{"CapMap":{"cap/n":[9007199254740992,9007199254740993,-9223372036854775808,
@@ -208,20 +208,20 @@ struct TailcfgJSONTests {
         ])
     }
 
-    @Test("2^53을 넘는 ID도 정확히 읽는다")
+    @Test("Reads IDs beyond 2^53 exactly")
     func largeIDs() throws {
         let response = try mapResponse(#"{"PeersRemoved":[9007199254740993,-9223372036854775808]}"#)
         #expect(response.peersRemoved == [9_007_199_254_740_993, .min])
         #expect(throws: DecodingError.self) { try mapResponse(#"{"PeersRemoved":[9223372036854775808]}"#) }
     }
 
-    @Test("CapMap 값의 null과 []는 모두 인자 없음")
+    @Test("Both null and [] as a CapMap value mean no arguments")
     func capMapNull() throws {
         let response = try mapResponse(#"{"PeersChangedPatch":[{"NodeID":1,"CapMap":{"cap/x":null,"cap/y":[],"cap/z":[true,"s",null,[1]]}}]}"#)
         #expect(response.peersChangedPatch?.first?.capMap == ["cap/x": [], "cap/y": [], "cap/z": [.bool(true), .string("s"), .null, .array([.integer(1)])]])
     }
 
-    @Test("opt.Bool은 true·false·null만 받는다")
+    @Test("opt.Bool accepts only true, false, and null")
     func optBool() throws {
         func netInfo(_ json: String) throws -> NetInfo { try JSONDecoder().decode(NetInfo.self, from: Data(json.utf8)) }
         #expect(try netInfo(#"{"WorkingUDP":true}"#).workingUDP == true)
@@ -231,7 +231,7 @@ struct TailcfgJSONTests {
         #expect(throws: DecodingError.self) { try netInfo(#"{"WorkingUDP":"true"}"#) }
     }
 
-    @Test("모르는 키는 무시한다")
+    @Test("Ignores unknown keys")
     func unknownKeys() throws {
         let json = #"{"FutureField":{"x":[1,2,{"y":null}]},"Seq":7,"Health":[],"SSHPolicy":{"rules":[]},"Node":{"ID":1,"NewThing":true,"Hostinfo":{"Brand":"new"}},"DERPMap":{"Regions":{"1":{"RegionID":1,"Latitude":1.5,"Nodes":[{"Name":"a","Future":1}]}}}}"#
         let response = try mapResponse(json)
@@ -239,7 +239,7 @@ struct TailcfgJSONTests {
         #expect(response.derpMap?.regions?[1]?.nodes.first?.name == "a")
     }
 
-    @Test("아는 키의 타입이 틀리면 거절한다", arguments: [
+    @Test("Rejects a known key with the wrong type", arguments: [
         #"{"KeepAlive":"true"}"#,
         #"{"Node":"x"}"#,
         #"{"Node":{"ID":"1"}}"#,
@@ -266,23 +266,23 @@ struct TailcfgJSONTests {
         #expect(throws: (any Error).self) { try mapResponse(json) }
     }
 
-    // MARK: 값 타입
+    // MARK: Value types
 
-    @Test("시각: 소수 초와 오프셋을 받는다")
+    @Test("Time parsing accepts fractional seconds and offsets")
     func timeParsing() throws {
         let base = 1_767_323_045.0  // 2026-01-02T03:04:05Z
         #expect(GoTime.parse("2026-01-02T03:04:05Z") == Date(timeIntervalSince1970: base))
         #expect(GoTime.parse("2026-01-02T03:04:05.5Z") == Date(timeIntervalSince1970: base + 0.5))
         #expect(GoTime.parse("2026-01-02T12:04:05+09:00") == Date(timeIntervalSince1970: base))
         #expect(GoTime.parse("2026-01-01T21:34:05-05:30") == Date(timeIntervalSince1970: base))
-        // 9자리를 넘는 소수는 잘라 낸다.
+        // Truncates fractional digits beyond 9.
         #expect(GoTime.parse("2026-01-02T03:04:05.1234567899Z") == GoTime.parse("2026-01-02T03:04:05.123456789Z"))
         #expect(GoTime.parse("0001-01-01T00:00:00Z") == GoTime.zero)
         #expect(GoTime.parse("1969-12-31T23:59:59Z") == Date(timeIntervalSince1970: -1))
         #expect(GoTime.parse("2024-02-29T00:00:00Z") != nil)
     }
 
-    @Test("시각: 형식이 틀리거나 범위 밖이면 거절한다", arguments: [
+    @Test("Time parsing rejects invalid formats and out-of-range values", arguments: [
         "", "2026-01-02", "2026-01-02T03:04:05", "2026-01-02 03:04:05Z", "2026-01-02t03:04:05Z",
         "2026-13-01T00:00:00Z", "2026-00-01T00:00:00Z", "2026-02-29T00:00:00Z", "2026-04-31T00:00:00Z",
         "2026-01-02T24:00:00Z", "2026-01-02T03:60:00Z", "2026-01-02T03:04:60Z",
@@ -293,13 +293,13 @@ struct TailcfgJSONTests {
         #expect(GoTime.parse(text) == nil)
     }
 
-    @Test("시각 쓰기: UTC, 뒤 0을 지운 소수 초, 0~9999년")
+    @Test("Time formatting uses UTC, drops trailing zeros from fractional seconds, and supports years 0~9999")
     func timeFormatting() {
         #expect(GoTime.format(GoTime.zero) == "0001-01-01T00:00:00Z")
         #expect(GoTime.format(Date(timeIntervalSince1970: 123)) == "1970-01-01T00:02:03Z")
         #expect(GoTime.format(Date(timeIntervalSince1970: 1_767_323_045.5)) == "2026-01-02T03:04:05.5Z")
         #expect(GoTime.format(Date(timeIntervalSince1970: -1)) == "1969-12-31T23:59:59Z")
-        #expect(GoTime.format(Date(timeIntervalSince1970: 253_402_300_800)) == nil)  // 10000년
+        #expect(GoTime.format(Date(timeIntervalSince1970: 253_402_300_800)) == nil)  // Year 10000
         #expect(GoTime.format(Date(timeIntervalSince1970: .infinity)) == nil)
         for seconds in stride(from: -62_135_596_800.0, to: 253_402_300_799, by: 9_876_543_210.25) {
             let date = Date(timeIntervalSince1970: seconds)

@@ -2,17 +2,17 @@ import Foundation
 import SwiftailControl
 import Testing
 
-// 비교하지 못하는 표현은 여기서만 제외한다.
-// - DNSConfig.Nameservers: 계약에서 제외한 구 필드이며 공개 DNSConfig에 없다.
-// - Node.CapMap의 null/{} 및 각 인자의 null/[]: 공개 타입이 이미 합친다. 키와 실제 인자는 비교한다.
-// - Node.LastSeen·KeyExpiry의 원래 오프셋과 나노초: Date가 보존하지 않는다. 순간을 1µs 이내로 비교한다.
-// ControlTime은 애초에 Go 자료의 투영 대상이 아니다.
+// This is the only place that excludes representations that cannot be compared.
+// - DNSConfig.Nameservers: A legacy field excluded by the contract and absent from the public DNSConfig.
+// - Node.CapMap null/{} and null/[] for each argument: The public type already treats them alike. Compare the keys and actual arguments.
+// - Original offset and nanoseconds in Node.LastSeen and KeyExpiry: Date does not preserve them. Compare instants within 1µs.
+// ControlTime is outside the scope of the Go fixture projection.
 
-/// Double을 거치지 않는 시험 전용 JSON. 불·숫자·null·빈 컨테이너와 키 존재를 구분한다.
+/// Test-only JSON that avoids Double. Distinguishes Booleans, numbers, null, empty containers, and key presence.
 indirect enum GoFixtureJSON: Codable, Sendable, Equatable, CustomStringConvertible {
     case null, bool(Bool), number(Decimal), string(String)
     case array([Self]), object([String: Self])
-    // 투영한 시각은 Decimal로 왕복하지 않아 Date의 정밀도를 그대로 보존한다.
+    // Projected instants avoid a round trip through Decimal, preserving Date's precision.
     case instant(Date)
 
     init(from decoder: any Decoder) throws {
@@ -34,14 +34,14 @@ indirect enum GoFixtureJSON: Codable, Sendable, Equatable, CustomStringConvertib
         case .string(let v): try c.encode(v)
         case .array(let v): try c.encode(v)
         case .object(let v): try c.encode(v)
-        case .instant(let v): try c.encode("Unix초: \(v.timeIntervalSince1970)")
+        case .instant(let v): try c.encode("Unix seconds: \(v.timeIntervalSince1970)")
         }
     }
 
     var description: String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(self) else { return "<부호화 실패>" }
+        guard let data = try? encoder.encode(self) else { return "<encoding failed>" }
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -51,7 +51,7 @@ indirect enum GoFixtureJSON: Codable, Sendable, Equatable, CustomStringConvertib
     }
 
     static func integer(_ value: some BinaryInteger) -> Self {
-        // 정수의 십진 문자열을 사용해 큰 ID를 부동소수점으로 바꾸지 않는다.
+        // Uses decimal strings for integers to avoid converting large IDs to floating point.
         .number(Decimal(string: String(value)) ?? 0)
     }
 
@@ -83,14 +83,14 @@ func loadGoFixtures<T: Decodable>(_ name: String, as: T.Type) throws -> T {
 }
 
 func goFixtureDate(_ text: String) throws -> Date {
-    // 구현의 GoTime을 사용하지 않고 Foundation으로 독립 해독한다.
-    // Foundation의 역사적 달력 전환 영향을 피한다. Go zero 시각은 전향 그레고리력의 Unix초로 고정한다.
+    // Independently decodes with Foundation without using the implementation's GoTime.
+    // Avoids Foundation's historical calendar transition. Fixes the Go zero time at its proleptic Gregorian value in Unix seconds.
     if text == "0001-01-01T00:00:00Z" { return Date(timeIntervalSince1970: -62_135_596_800) }
     let style = Date.ISO8601FormatStyle(includingFractionalSeconds: text.contains("."))
     return try style.parse(text)
 }
 
-/// 객체 키는 정렬해 순서 없이, 배열은 자료 순서 그대로, 나머지는 타입까지 비교한다.
+/// Sorts object keys for order-independent comparison, preserves fixture order for arrays, and compares types as well for everything else.
 func compareGoJSON(_ expected: GoFixtureJSON?, _ actual: GoFixtureJSON?, context: String,
                    path: String = "$", netmap: Bool = false) throws {
     if netmap, path == "$.DNSConfig.Nameservers" { return }
@@ -99,7 +99,7 @@ func compareGoJSON(_ expected: GoFixtureJSON?, _ actual: GoFixtureJSON?, context
         let expectedDate = try goFixtureDate(text)
         let difference = abs(expectedDate.timeIntervalSince(actualDate))
         #expect(difference <= 0.000_001,
-                "\(context) \(path): 기대=\(text), 실제=\(actualDate.timeIntervalSince1970) (Unix초), 차이=\(difference)초")
+                "\(context) \(path): expected=\(text), actual=\(actualDate.timeIntervalSince1970) (Unix seconds), difference=\(difference) seconds")
         return
     }
     if case .object(let lhs) = expected, case .object(let rhs) = actual {
@@ -107,26 +107,26 @@ func compareGoJSON(_ expected: GoFixtureJSON?, _ actual: GoFixtureJSON?, context
             try compareGoJSON(lhs[key], rhs[key], context: context, path: path + "." + key, netmap: netmap)
         }
     } else if case .array(let lhs) = expected, case .array(let rhs) = actual {
-        #expect(lhs.count == rhs.count, "\(context) \(path).count: 기대=\(lhs.count), 실제=\(rhs.count)")
+        #expect(lhs.count == rhs.count, "\(context) \(path).count: expected=\(lhs.count), actual=\(rhs.count)")
         for index in 0..<max(lhs.count, rhs.count) {
             try compareGoJSON(index < lhs.count ? lhs[index] : nil, index < rhs.count ? rhs[index] : nil,
                               context: context, path: "\(path)[\(index)]", netmap: netmap)
         }
     } else {
         #expect(expected == actual,
-                "\(context) \(path): 기대=\(expected?.description ?? "<키 없음>"), 실제=\(actual?.description ?? "<키 없음>")")
+                "\(context) \(path): expected=\(expected?.description ?? "<missing key>"), actual=\(actual?.description ?? "<missing key>")")
     }
 }
 
-/// 공개 Netmap을 README의 투영으로 옮긴다. 상태를 보충하거나 증분 규칙을 다시 적용하지 않는다.
-/// Go의 `TKAEnabled`는 netmap이 아니라 세션이 따로 내는 서버의 lock 상태(`MapSession.Update.serverLock`)에 있다.
+/// Converts the public Netmap to the projection in the README. Does not fill in state or reapply delta rules.
+/// Go's `TKAEnabled` is in the server's lock state, which the session emits separately (`MapSession.Update.serverLock`), outside the netmap.
 func projectGoNetmap(_ map: Netmap, tkaEnabled: Bool) -> GoFixtureJSON {
     .object([
         "SelfNode": projectGoNode(map.selfNode),
-        // Swift가 정렬했는지도 검사하므로 시험에서 다시 정렬하지 않는다.
+        // Do not sort again in the test because it also checks whether Swift sorted the values.
         "Peers": .array(map.peers.map(projectGoNode)),
         "DERPMap": map.derpMap.map(projectGoDERP) ?? .null,
-        // Go의 초기 DNS는 zero 객체다. Swift의 미수신 nil도 이 투영에서는 zero로 옮긴다.
+        // Go starts with a zero DNS object. In this projection, Swift's nil before receiving DNS also maps to zero.
         "DNSConfig": map.dnsConfig.map(projectGoDNS) ?? .object([:]),
         "PacketFilter": .array(map.packetFilter.map(projectGoFilter)),
         "UserProfiles": .object(Dictionary(uniqueKeysWithValues: map.userProfiles.map { id, p in
@@ -172,7 +172,7 @@ private func projectGoRawJSON(_ value: JSONValue) -> GoFixtureJSON {
     }
 }
 
-/// 공개 타입에서 잃어버린 CapMap 표현만 맞춘다(대상 필드 목록은 파일 머리).
+/// Aligns only the CapMap representations lost in the public type (the file header lists the affected fields).
 func comparableGoNetmap(_ value: GoFixtureJSON) -> GoFixtureJSON {
     guard case .object(var fields) = value else { return value }
     func node(_ value: GoFixtureJSON) -> GoFixtureJSON {

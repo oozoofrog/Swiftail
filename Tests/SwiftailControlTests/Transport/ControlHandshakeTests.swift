@@ -1,5 +1,5 @@
-// 계약 단위 2 시험: 고정 벡터(initiation, response, 중간값, 방향별 키), 조각난 response, 서버 error 메시지,
-// 101 뒤 EOF 처리에 필요한 상태.
+// Contract unit test 2: Fixed vectors (initiation, response, intermediate values, keys by direction), fragmented response, server error message,
+// and state needed to handle EOF after 101.
 
 import CryptoKit
 import SwiftailBase
@@ -7,16 +7,16 @@ import Testing
 
 @testable import SwiftailControl
 
-@Suite("제어 Noise 핸드셰이크")
+@Suite("Control Noise handshake")
 struct ControlHandshakeTests {
     private typealias V = TransportVectors
 
-    @Test("initiation이 노트 7.3의 벡터와 바이트 단위로 같다")
+    @Test("initiation matches the vector in notes §7.3 byte for byte")
     func initiationVector() throws {
         #expect(try V.handshake().initiation == V.bytes(V.initiation))
     }
 
-    @Test("중간 hash·ck·AEAD 키가 노트 7.3의 표와 같다")
+    @Test("The intermediate hash, ck, and AEAD key match the table in notes §7.3")
     func intermediateValues() throws {
         let machine = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: V.bytes(V.clientMachinePrivate))
         let ephemeral = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: V.bytes(V.clientEphemeralPrivate))
@@ -71,7 +71,7 @@ struct ControlHandshakeTests {
         SymmetricKey(data: try V.bytes(hex))
     }
 
-    @Test("response를 받으면 세션이 생기고, 양방향 레코드가 벡터와 같다")
+    @Test("Receiving response creates a session, and records in both directions match the vectors")
     func responseAndRecordVectors() throws {
         var session = try V.clientSession()
         for (plaintext, record) in V.clientRecords.prefix(3) {
@@ -82,7 +82,7 @@ struct ControlHandshakeTests {
         }
     }
 
-    @Test("response 뒤에 같이 온 바이트를 남은 바이트로 넘긴다")
+    @Test("Passes bytes received alongside and after response as leftover bytes")
     func remainderAfterResponse() throws {
         var handshake = try V.handshake()
         let record = try V.bytes(V.serverRecords[0].record)
@@ -93,7 +93,7 @@ struct ControlHandshakeTests {
         #expect(try session.receive(result.remainder) == Array("server-0".utf8))
     }
 
-    @Test("response가 한 바이트씩 와도 마지막 바이트에서 세션이 생긴다")
+    @Test("A response received one byte at a time creates a session on the last byte")
     func byteByByteResponse() throws {
         var handshake = try V.handshake()
         let response = try V.bytes(V.response)
@@ -103,18 +103,18 @@ struct ControlHandshakeTests {
         let received = try handshake.receive([response[response.count - 1]])
         let result = try #require(received)
         #expect(result.remainder.isEmpty)
-        // 세션을 돌려준 뒤에는 더 받지 않는다.
+        // Accepts no more bytes after returning the session.
         #expect(throws: ControlTransportError.closed) { try handshake.receive([]) }
     }
 
-    @Test("101 뒤 아무것도 오지 않았거나 response가 덜 왔으면 세션이 없다(이때의 EOF는 핸드셰이크 실패)")
+    @Test("No session if nothing follows 101 or the response is incomplete (EOF here is a handshake failure)")
     func noSessionBeforeFullResponse() throws {
         var handshake = try V.handshake()
         #expect(try handshake.receive([]) == nil)
         #expect(try handshake.receive(Array(V.bytes(V.response)[..<50])) == nil)
     }
 
-    @Test("서버 error 메시지는 handshakeFailed이고, 그 뒤는 closed다")
+    @Test("A server error message yields handshakeFailed, then closed")
     func serverError() throws {
         var handshake = try V.handshake()
         let message = Array("unexpected handshake message type".utf8)
@@ -124,13 +124,13 @@ struct ControlHandshakeTests {
         #expect(throws: ControlTransportError.closed) { try handshake.receive(V.bytes(V.response)) }
     }
 
-    @Test("모르는 type이나 48이 아닌 길이는 malformed", arguments: [[0x04, 0x00, 0x30], [0x02, 0x00, 0x2F], [0x02, 0x01, 0x30]])
+    @Test("An unknown type or length other than 48 yields malformed", arguments: [[0x04, 0x00, 0x30], [0x02, 0x00, 0x2F], [0x02, 0x01, 0x30]])
     func malformedResponse(_ header: [UInt8]) throws {
         var handshake = try V.handshake()
         #expect(throws: ControlTransportError.malformed) { try handshake.receive(header) }
     }
 
-    @Test("response의 임시 키나 태그가 한 바이트라도 바뀌면 handshakeFailed")
+    @Test("Changing even one byte of the response ephemeral key or tag yields handshakeFailed")
     func tamperedResponse() throws {
         let response = try V.bytes(V.response)
         for index in 3..<response.count {
@@ -141,18 +141,18 @@ struct ControlHandshakeTests {
         }
     }
 
-    @Test("버전은 initiation 머리와 프롤로그에 실린다. 다른 버전의 transcript로는 벡터 response가 열리지 않는다")
+    @Test("The version is in the initiation header and prologue. A transcript for another version cannot open the response vector")
     func protocolVersion() throws {
         var handshake = try V.handshake(protocolVersion: 149)
         #expect(handshake.initiation.count == 101)
         #expect(Array(handshake.initiation[..<5]) == [0x00, 0x95, 0x01, 0x00, 0x60])
-        // 임시 공개 키는 같고, 프롤로그가 섞인 암호문은 다르다.
+        // The ephemeral public key matches, and the ciphertext that mixes in the prologue differs.
         #expect(handshake.initiation[5..<37] == (try V.bytes(V.initiation))[5..<37])
         #expect(handshake.initiation[37...] != (try V.bytes(V.initiation))[37...])
         #expect(throws: ControlTransportError.handshakeFailed) { try handshake.receive(V.bytes(V.response)) }
     }
 
-    @Test("서버 정적 키가 저차 점이면 initiation을 만들지 않고 handshakeFailed")
+    @Test("A low-order server static key yields handshakeFailed without creating initiation")
     func lowOrderServerKey() throws {
         let machine = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: V.bytes(V.clientMachinePrivate))
         #expect(throws: ControlTransportError.handshakeFailed) {
@@ -160,14 +160,14 @@ struct ControlHandshakeTests {
         }
     }
 
-    @Test("서버 임시 키가 저차 점이면 handshakeFailed")
+    @Test("A low-order server ephemeral key yields handshakeFailed")
     func lowOrderServerEphemeral() throws {
         var handshake = try V.handshake()
         let response = [2, 0, 48] + [UInt8](repeating: 0, count: 48)
         #expect(throws: ControlTransportError.handshakeFailed) { try handshake.receive(response) }
     }
 
-    @Test("시스템 난수 임시 키: 같은 장기 키로 만들어도 initiation이 매번 다르다")
+    @Test("With system-random ephemeral keys, initiation differs every time even with the same long-term keys")
     func freshEphemeral() throws {
         let machine = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: V.bytes(V.clientMachinePrivate))
         let server = try #require(MachinePublicKey(rawValue: V.bytes(V.serverStaticPublic)))

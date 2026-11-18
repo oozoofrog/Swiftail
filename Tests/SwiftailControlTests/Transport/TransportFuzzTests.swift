@@ -1,32 +1,32 @@
-// 계약 단위 2 시험: 서버가 보낸 어떤 바이트열로도 트랩이 없다.
+// Contract unit test 2: No byte sequence sent by the server causes a trap.
 //
-// 고정 시드 난수로 입력을 만들어 매번 같은 입력을 돌린다. 완전 무작위 바이트는 첫 검사에서 대부분
-// 걸러지므로, 유효한 메시지의 앞부분을 붙이거나 한 바이트를 바꾼 입력도 섞어 깊은 분기까지 들어가게 한다.
-// 결과(값이든 오류든)는 보지 않는다. 트랩 없이 돌아오는 것만 확인한다.
+// Generates input with a fixed random seed so each run uses the same inputs. Most fully random bytes are
+// rejected at the first check, so include inputs with valid message prefixes or one changed byte to reach deeper branches.
+// Checks only that the call returns without trapping, whether it returns a value or throws an error.
 
 import Testing
 
 @testable import SwiftailControl
 
-@Suite("임의 입력")
+@Suite("Arbitrary input")
 struct TransportFuzzTests {
     private typealias V = TransportVectors
     private static let iterations = 2_000
 
-    @Test("업그레이드 응답 파서")
+    @Test("Upgrade response parser")
     func upgradeResponse() {
         var random = SplitMix64(seed: 1)
         let valid = Array("HTTP/1.1 101 Switching Protocols\r\nUpgrade: tailscale-control-protocol\r\n\r\n".utf8)
         for _ in 0..<Self.iterations {
             var parser = UpgradeResponseParser()
             for chunk in random.chunks(of: random.input(near: valid)) {
-                // 미완성(nil)과 오류에서는 계속 넣고, 머리가 완성되면 끝낸다.
+                // Keep feeding bytes on incomplete input (nil) or errors, and stop once the header is complete.
                 guard (try? parser.receive(chunk)) == nil else { break }
             }
         }
     }
 
-    @Test("핸드셰이크 response")
+    @Test("Handshake response")
     func handshakeResponse() throws {
         var random = SplitMix64(seed: 2)
         let valid = try V.bytes(V.response) + V.bytes(V.serverRecords[0].record)
@@ -39,7 +39,7 @@ struct TransportFuzzTests {
         }
     }
 
-    @Test("레코드")
+    @Test("Records")
     func records() throws {
         var random = SplitMix64(seed: 3)
         let valid = try V.serverRecords.flatMap { try V.bytes($0.record) }
@@ -66,7 +66,7 @@ struct TransportFuzzTests {
     }
 }
 
-/// 시험용 결정적 난수(SplitMix64).
+/// Deterministic pseudorandom generator for tests (SplitMix64).
 private struct SplitMix64: RandomNumberGenerator {
     private var state: UInt64
 
@@ -86,7 +86,7 @@ private struct SplitMix64: RandomNumberGenerator {
         (0..<count).map { _ in UInt8.random(in: .min ... .max, using: &self) }
     }
 
-    /// 무작위 바이트, 유효한 입력의 앞부분 + 무작위 꼬리, 한 바이트를 바꾼 유효한 입력 중 하나.
+    /// Random bytes, a valid input prefix plus a random tail, or valid input with one changed byte.
     mutating func input(near valid: [UInt8]) -> [UInt8] {
         switch Int.random(in: 0..<3, using: &self) {
         case 0:
@@ -100,7 +100,7 @@ private struct SplitMix64: RandomNumberGenerator {
         }
     }
 
-    /// 입력을 임의 크기의 조각으로 나눈다. 빈 조각도 섞는다.
+    /// Splits input into randomly sized chunks, including empty chunks.
     mutating func chunks(of input: [UInt8]) -> [[UInt8]] {
         var result: [[UInt8]] = []
         var start = 0

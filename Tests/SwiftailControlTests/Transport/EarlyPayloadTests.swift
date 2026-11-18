@@ -1,4 +1,4 @@
-// 계약 단위 2 시험: early payload 있음·없음·잘못됨.
+// Contract unit test 2: Present, absent, and invalid early payloads.
 
 import SwiftailBase
 import Testing
@@ -8,7 +8,7 @@ import Testing
 @Suite("early payload")
 struct EarlyPayloadTests {
     private let magic: [UInt8] = [0xFF, 0xFF, 0xFF, 0x54, 0x53]
-    /// 서버의 첫 HTTP/2 SETTINGS 프레임 머리(payload 18바이트).
+    /// Header of the server's first HTTP/2 SETTINGS frame (18-byte payload).
     private let settingsHeader: [UInt8] = [0x00, 0x00, 0x12, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]
     private let challengeHex = String(repeating: "5a", count: 32)
 
@@ -17,7 +17,7 @@ struct EarlyPayloadTests {
         return magic + UInt32(body.count).bigEndianBytes + body
     }
 
-    @Test("매직이 아니면 9바이트를 포함해 전부 HTTP/2에 넘긴다")
+    @Test("If the magic does not match, forwards everything to HTTP/2, including the 9 bytes")
     func absent() throws {
         var parser = EarlyPayloadParser()
         #expect(try parser.receive(Array(settingsHeader[..<8])) == nil)
@@ -28,7 +28,7 @@ struct EarlyPayloadTests {
         #expect(throws: ControlTransportError.closed) { try parser.receive([]) }
     }
 
-    @Test("nodeKeyChallenge를 읽고 뒤의 바이트를 넘긴다. 조각나 와도 같다")
+    @Test("Reads nodeKeyChallenge and forwards the bytes after it, even across fragments")
     func present() throws {
         let bytes = frame("{\"nodeKeyChallenge\":\"chalpub:\(challengeHex)\",\"future\":[1,2]}") + settingsHeader
         let expected = EarlyPayloadParser.EarlyPayload(nodeKeyChallenge: ChallengePublicKey(rawValue: [UInt8](repeating: 0x5A, count: 32)))
@@ -39,7 +39,7 @@ struct EarlyPayloadTests {
         #expect(result.payload == expected)
         #expect(result.remainder == settingsHeader)
 
-        // Go 시험 서버처럼 매직·길이·JSON이 따로 오거나, 한 바이트씩 와도 같다.
+        // The result is the same when magic, length, and JSON arrive separately as with the Go test server, or one byte at a time.
         var split = EarlyPayloadParser()
         var last: (payload: EarlyPayloadParser.EarlyPayload?, remainder: [UInt8])?
         for byte in bytes {
@@ -49,11 +49,11 @@ struct EarlyPayloadTests {
         }
         let splitResult = try #require(last)
         #expect(splitResult.payload == expected)
-        // 마지막 JSON 바이트에서 판단이 끝나므로 뒤의 SETTINGS 머리는 아직 오지 않았다.
+        // The last JSON byte completes the decision, so the SETTINGS header has yet to arrive.
         #expect(splitResult.remainder.isEmpty)
     }
 
-    @Test("JSON null은 payload 없음, 빈 객체·0 키는 challenge 없음")
+    @Test("JSON null means no payload, and an empty object or a key of 0 means no challenge")
     func emptyForms() throws {
         var null = EarlyPayloadParser()
         let received = try null.receive(frame(" null "))
@@ -68,7 +68,7 @@ struct EarlyPayloadTests {
         }
     }
 
-    @Test("JSON이 비었거나 틀리거나, 키 형식이 틀리면 malformed", arguments: [
+    @Test("Empty or invalid JSON or an invalid key format yields malformed", arguments: [
         "",
         "{",
         "[]",
@@ -85,7 +85,7 @@ struct EarlyPayloadTests {
         #expect(throws: ControlTransportError.closed) { try parser.receive([]) }
     }
 
-    @Test("길이가 10MiB를 넘으면 본문을 기다리지 않고 messageTooLarge")
+    @Test("A length over 10MiB yields messageTooLarge without waiting for the body")
     func tooLarge() throws {
         var parser = EarlyPayloadParser()
         #expect(throws: ControlTransportError.messageTooLarge) {
@@ -93,7 +93,7 @@ struct EarlyPayloadTests {
         }
     }
 
-    @Test("길이가 10MiB 정각이면 본문을 기다린다")
+    @Test("A length of exactly 10MiB waits for the body")
     func atLimit() throws {
         var parser = EarlyPayloadParser()
         #expect(try parser.receive(magic + UInt32(10 << 20).bigEndianBytes) == nil)
