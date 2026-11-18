@@ -40,7 +40,7 @@ Swiftail은 1.0 이전 버전입니다. MINOR 릴리스에서는 API 호환성�
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/oozoofrog/Swiftail.git", .upToNextMinor(from: "0.1.1"))
+    .package(url: "https://github.com/oozoofrog/Swiftail.git", .upToNextMinor(from: "0.1.2"))
 ]
 ```
 

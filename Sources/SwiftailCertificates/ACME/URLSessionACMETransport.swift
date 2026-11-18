@@ -12,7 +12,7 @@ import Security
 ///   (contract behaviors C8 and S3 ⑤, H10. Go's embedded root fallback is omitted).
 final class URLSessionACMETransport: ACMETransport {
     /// The `User-Agent` header value. It lives here because the repository has no library version string.
-    static let userAgent = "Swiftail/0.1.1"
+    static let userAgent = "Swiftail/0.1.2"
     /// The per-request deadline.
     static let requestTimeout: TimeInterval = 30
 

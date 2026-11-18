@@ -442,7 +442,7 @@ ACME server responses, control server responses, files on disk, and other loopba
 7. **Disk**: Read certificate and key files in `certs/` per behavior S3. Treat oversized or unparseable files as absent. Behavior C4 covers the account key file (fail if unreadable), behavior S1 covers directory permissions, and behavior G2 covers Go state files.
 8. **Other loopback processes**: Behaviors B6 and B7.
 
-Decisions from implementation (M7-4): `Retry-After` in any response blocks all requests until that time. Read all three HTTP date formats from RFC 7231 7.1.1.1. The plaintext `http` path for tests exists only in the transport (test initializer argument for `URLSessionACMETransport`, loopback hosts only), and the order procedure always accepts only `https`. The `User-Agent` version is a transport constant (`Swiftail/0.1.1`) because the repository has no version string.
+Decisions from implementation (M7-4): `Retry-After` in any response blocks all requests until that time. Read all three HTTP date formats from RFC 7231 7.1.1.1. The plaintext `http` path for tests exists only in the transport (test initializer argument for `URLSessionACMETransport`, loopback hosts only), and the order procedure always accepts only `https`. The `User-Agent` version is a transport constant (`Swiftail/0.1.2`) because the repository has no version string.
 
 ### B. Loopback Bridge
 
