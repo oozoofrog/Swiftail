@@ -10,9 +10,9 @@ public enum NodeEvent: Sendable, Equatable {
     case stateChanged(NodeState)
     /// The peer's path changed. Has the same meaning as `TailnetNode.path(toPeerNamed:)`.
     ///
-    /// Nil means the peer left the data plane or neither sent nor received traffic for more than 45 seconds (idle).
-    /// When traffic resumes, emits another event with the path at that time. A peer with an empty name produces no
-    /// event.
+    /// A nil path means the peer left the data plane or its path became idle. The path becomes idle once more than
+    /// 45 seconds have passed since the node last sent to the peer. When sending resumes and a path is available,
+    /// the node emits another event with that path. The node emits no path events for peers with empty names.
     ///
     /// - Parameter fqdn: The node name in the netmap with its trailing dot removed (`rd-mac-1a2b3c4d.tail0001.ts.net`).
     case peerPathChanged(fqdn: String, path: PeerPath?)
@@ -29,8 +29,8 @@ public enum NodeEvent: Sendable, Equatable {
     /// Emitted only when `status` actually differs from the previously reported value in at least one of peer count,
     /// local name, addresses, or `StableID`, certificate names, tunnel settings, state, or tailnet lock. Changes to
     /// state or lock also emit this after `stateChanged` or `tailnetLockChanged`. Those two report the transitions
-    /// themselves, such as opening a login URL or showing signing instructions. This event tells the app to read the
-    /// state it should display. An app that only updates its display needs only this event.
+    /// themselves so the app can open a login URL or show signing instructions. This event tells the app to read the
+    /// status again for display. An app that only updates its display needs only this event.
     ///
     /// Keeps only one unread event. A new event removes its predecessor and goes at the end. It therefore does not
     /// count toward the event buffer limit or displace other events. The initial snapshot (`.starting`, no netmap)

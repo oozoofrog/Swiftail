@@ -18,8 +18,8 @@ import SwiftailMagicsock
 /// ```
 ///
 /// Each event starts with `process` and runs the exchange between the two state machines to completion without `await`.
-/// I/O only enqueues work in nonblocking channels (UDP send group, region connection channel, event stream). Processes
-/// output lists in the order received (the `Magicsock` calling rules). All calls within one event use the same time
+/// The actor queues I/O for later through nonblocking channels (UDP send group, region connection channel, event
+/// stream). It processes output lists in the order received (the `Magicsock` calling rules). All calls within one event use the same time
 /// `now`.
 ///
 /// Processing can nest, with one `process` calling another `process`. Finish accumulated work only when the outermost pass ends
@@ -101,7 +101,7 @@ extension TailnetNode {
 
     /// Ends a processing pass. If it is the outermost pass, finishes accumulated work.
     ///
-    /// 1. Stack. Pass in queued packets and call `advance(to:)` at the same time (`settleNetstack(at:)`). Handle its output in a nested pass.
+    /// 1. Stack. Pass in queued packets and call `advance(to:)` with the same timestamp (`settleNetstack(at:)`). Handle its output in a nested pass.
     /// 2. Pass the accumulated UDP datagrams to the socket's send queue together.
     /// 3. Reset the timer. Calculate the deadline once after updating all state machines.
     func endProcessing(at now: ContinuousClock.Instant) {
@@ -124,7 +124,7 @@ extension TailnetNode {
     }
 
     /// Passes the accumulated datagrams to the current socket's send queue together. The socket's serial queue calls
-    /// `sendto` outside this actor (tunnel contract behavior M, “UDP Send Queue”). Drops datagrams if there is no
+    /// `sendto` outside this actor (the “Node → UDP send queue” row in tunnel contract behavior M). Drops datagrams if there is no
     /// socket (during rebinding) or a send fails. They also go over DERP or are retransmitted by WireGuard or disco.
     /// Processing does not wait, so the socket cannot change while handing off the group.
     // shortcut: Does not rebind after a send error (`EHOSTUNREACH`, `EPERM`, and so on) (tunnel contract behavior N 6).
@@ -247,7 +247,7 @@ extension Magicsock.Source {
     }
 }
 
-/// Builds a “Peer N path” log line. Diagnoses why a path changed on a real device and which peer changed.
+/// Builds a “Peer N path” log line. Diagnoses why a path changed on a real device and which peer's path changed.
 ///
 /// The line includes the peer number, path, reason if it degraded, time since that peer's previous path event, and
 /// counts by kind of disco dropped since the previous path event for any peer. Example:
@@ -258,8 +258,8 @@ extension Magicsock.Source {
 ///   accumulating as unopened mean the peer sealed messages with this node's old key. If neither occurs, disco was
 ///   exchanged but UDP did not reach its destination.
 ///
-/// “Fixes” in “Investigation of Direct Path Delay” and “Findings” in “`relayed` about 100 seconds after `direct` was
-/// established” in `docs/contracts/SwiftailMagicsock.md`.
+/// See “Fixes” under “Direct Path Delay Investigation” and “Investigation Results” under
+/// “`relayed` About 100 Seconds After Going Direct” in `docs/contracts/SwiftailMagicsock.md`.
 struct PathEventTally: Sendable {
     /// The number of the peer that emitted the path event and the time of its previous event.
     private var peers: [NodePublicKey: (number: Int, lastEvent: ContinuousClock.Instant)] = [:]

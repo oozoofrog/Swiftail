@@ -6,7 +6,7 @@
 public enum ConnectionError: Error, Sendable, Equatable {
     /// The device is not `.inProcess`, the port is 0, the host is empty, or the read length is less than 1.
     case invalidConfiguration(String)
-    /// The node is not running (`run()` ended). `connect` also returns this when the state is not `.running`.
+    /// The node is not running (`run()` ended). `connect` also throws this when the state is not `.running`.
     case notRunning
     /// The name is missing from the netmap, or no peer has that address.
     case unknownHost

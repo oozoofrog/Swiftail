@@ -111,7 +111,7 @@ package final class NetworkSocket: Sendable {
 
     /// Sends bytes and waits for the network stack to accept them.
     ///
-    /// The call does not return while the peer is not reading or the uplink is slow. The caller therefore holds only
+    /// The call can stall if the peer does not read or the uplink is slow. The caller therefore holds only
     /// one unsent chunk, the current write, and uses a deadline to detect a stall (`DERPClient` has one write watchdog
     /// per connection). This is simpler for the caller than reporting a byte count because it need not separately wait
     /// for the backlog to shrink.
@@ -148,7 +148,7 @@ package final class NetworkSocket: Sendable {
         }
     }
 
-    /// Receives incoming bytes. Returns nil if the peer closed the connection.
+    /// Receives incoming bytes. Returns nil at end of stream, when the peer has closed its write side and no bytes remain.
     package func receive() async throws(SocketError) -> [UInt8]? {
         guard !receivedEnd.withLock({ $0 }) else { return nil }
         let connection = connection

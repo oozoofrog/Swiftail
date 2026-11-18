@@ -29,7 +29,7 @@ package struct TCPSegment: Sendable, Equatable {
         package static let syn = Flags(rawValue: 0x02)
         /// Resets the connection.
         package static let rst = Flags(rawValue: 0x04)
-        /// The receiver passes data to the application immediately. The state machine does not use this flag.
+        /// Requests prompt delivery to the receiving application. The state machine does not use this flag.
         package static let psh = Flags(rawValue: 0x08)
         /// `acknowledgmentNumber` is meaningful.
         package static let ack = Flags(rawValue: 0x10)

@@ -7,13 +7,13 @@ import Foundation
 public enum NodeState: Sendable, Equatable {
     /// Waiting for registration, a netmap, and the first connection.
     case starting
-    /// The user must sign in at this URL. The control server always supplies a URL when the node starts registration.
+    /// The user must sign in at this URL. The control server supplies this URL when registration requires interactive login.
     ///
     /// The URL itself grants login access, so it is never logged.
     case needsLogin(URL)
     /// A tailnet administrator must approve this device (the local node's `MachineAuthorized` in the netmap is false).
     case needsMachineAuth
-    /// A netmap was received and a home DERP connection was established or at least one WireGuard session was
-    /// established with a peer. The state persists if the connection later drops, including while reconnecting.
+    /// The node has received a netmap and has established either a home DERP connection or a WireGuard session with at
+    /// least one peer. The state persists if the connection later drops, including while reconnecting.
     case running
 }

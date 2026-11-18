@@ -1,13 +1,13 @@
 /// The receive buffer for one connection (contract `docs/contracts/SwiftailNetstack.md` behaviors F1 and F4, behavior X6).
 ///
-/// Holds contiguous readable bytes starting at `RCV.NXT` and ranges that arrived out of order within the receive
-/// window in a single fixed-capacity circular store. Out-of-order data goes straight into place at its distance from `RCV.NXT`,
+/// Holds contiguous readable bytes immediately before `RCV.NXT` and out-of-order ranges within the receive window
+/// in a single fixed-capacity circular store. Out-of-order data goes straight into place at its distance from `RCV.NXT`,
 /// so segments need not be retained separately or copied later. Even when 1-byte segments arrive with gaps, memory is
 /// limited to the capacity (256KiB) and the range table (32 entries).
 ///
 /// The receive window extends `windowSize` bytes from `RCV.NXT`. Unread bytes occupy space and out-of-order bytes sit
 /// within the window. As a result, the right edge (`windowEnd`) stays put when data arrives and advances only when the
-/// app reads. This is why the right edge does not move left, as required by SHLD-14 (RFC 9293 §3.8.6).
+/// app reads. Keeping the edge from moving left follows SHLD-14 (RFC 9293 §3.8.6).
 ///
 /// FIN consumes one sequence number but carries no data. This buffer's `nextSequence` is the end of **data**, and the
 /// connection tracks `RCV.NXT` (= `nextSequence + 1`) after consuming FIN.
@@ -74,8 +74,8 @@ package struct ReceiveBuffer: Sendable {
     /// Storage capacity in bytes. The receive window cannot exceed it.
     package var capacity: Int { ring.capacity }
 
-    /// The largest window that can be advertised, from `RCV.NXT` to the end of free buffer space. The connection
-    /// applies SWS avoidance and rounds down for window scaling before advertising it.
+    /// The largest window the buffer allows, measured from `RCV.NXT` and including any buffered out-of-order data.
+    /// The connection applies SWS avoidance and rounds down for window scaling before advertising it.
     package var windowSize: Int { capacity - readableCount }
 
     /// The right edge of the window (`RCV.NXT + windowSize`). Advances only when the app reads and never retreats.
@@ -108,7 +108,7 @@ package struct ReceiveBuffer: Sendable {
         let upper = lower + min(bytes.count - skipped, windowSize - lower)
         let payload = bytes[bytes.startIndex + skipped..<bytes.startIndex + skipped + (upper - lower)]
 
-        // The existing ranges overlapping or touching the new range are first..<last.
+        // The existing ranges that overlap or touch the new range are at indices `first..<last`.
         let first = extents.firstIndex { $0.end >= lower } ?? extents.count
         let last = extents[first...].firstIndex { $0.start > upper } ?? extents.count
         if first == last, lower > 0, extents.count >= Self.maximumOutOfOrderRanges {
@@ -138,7 +138,7 @@ package struct ReceiveBuffer: Sendable {
         let hadOutOfOrderData = !extents.isEmpty
         extents.replaceSubrange(first..<last, with: [merged])
 
-        // The range that reaches `RCV.NXT` becomes readable bytes. Shift the remaining ranges forward by that amount.
+        // The range that reaches `RCV.NXT` becomes readable bytes. Subtract that length from the remaining ranges' offsets.
         var advancedCount = 0
         if merged.start == 0 {
             advancedCount = merged.end

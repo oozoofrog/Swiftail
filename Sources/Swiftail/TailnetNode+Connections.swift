@@ -7,11 +7,11 @@ import SwiftailNetstack
 /// (`suspend(until:)`) and a stack event wakes it. There are no detached Tasks. A wait ends in four ways, with one
 /// return from the call in every case.
 /// - Event (readable data, available space, establishment, or entry in the queue) → retry.
-/// - Connection ends → the error for the reason. Returns `closed` if the app called `close` or `abort`.
-/// - Calling Task canceled → `read` returns `cancelled` and leaves the connection and data in place, `write` aborts
-///   with RST and returns `cancelled`, `connect` discards the attempt and returns `cancelled`, and the listener stream
+/// - Connection ends → throw the corresponding error, or `closed` if the app called `close` or `abort`.
+/// - Calling task is canceled → `read` throws `cancelled` and preserves the connection and data, `write` aborts
+///   with RST and throws `cancelled`, `connect` discards the attempt and throws `cancelled`, and the listener stream
 ///   returns nil.
-/// - `run()` ends → `notRunning`, or nil for the listener stream.
+/// - `run()` ends → throw `notRunning`, or return nil for the listener stream.
 extension TailnetNode {
     /// The listener limit (contract behaviors S3 and M), the same as the stack's. The node counts first so listeners
     /// opened before `run()` count toward it.

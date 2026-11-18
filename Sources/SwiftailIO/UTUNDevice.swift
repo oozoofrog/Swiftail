@@ -20,7 +20,7 @@ import Synchronization
 ///   `O_NONBLOCK` also applies to the caller's descriptor because it shares the open file description, but the app does
 ///   not read or write with it (contract U2).
 /// - **Verifies that the descriptor is utun.** The socket address family must be `AF_SYSTEM` and the name from
-///   `UTUN_OPT_IFNAME` must start with `utun`. The checks use only read calls on the duplicate, leaving the caller's
+///   `UTUN_OPT_IFNAME` must start with `utun`. The checks use read-only system calls on the duplicate, leaving the caller's
 ///   descriptor unchanged on rejection (contract U1).
 /// - **Each packet has a 4-byte header.** On read, strip the header and pass up only the IP packet. Drop reads of 4
 ///   bytes or fewer (no IP packet) and ignore the header value. On write, put `AF_INET` in the header for IP version
@@ -104,8 +104,9 @@ package final class UTUNDevice: Sendable {
 
     /// Verifies that `descriptor` is a utun control socket, duplicates it, and starts reading.
     ///
-    /// - Parameters: - descriptor: The utun file descriptor found by the packet tunnel provider. This initializer
-    ///   leaves it open. - mtu: The MTU the app applies. Must be within `supportedMTU`.
+    /// - Parameters:
+    ///   - descriptor: The utun file descriptor found by the packet tunnel provider. This initializer leaves it open.
+    ///   - mtu: The MTU the app applies. Must be within `supportedMTU`.
     /// - Throws: `SocketError.invalidDevice` if the descriptor is not utun, is closed or negative, or the MTU is out of
     ///   range. Throws `SocketError.readFailed` (errno name) if duplication fails.
     package convenience init(duplicating descriptor: Int32, mtu: Int) throws(SocketError) {
@@ -246,7 +247,7 @@ package final class UTUNDevice: Sendable {
         }
     }
 
-    /// Returns the interface name (such as `utun3`) if `descriptor` is a utun control socket. Uses only read calls and does not duplicate it.
+    /// Returns the interface name (such as `utun3`) if `descriptor` is a utun control socket. Uses only read-only system calls and does not duplicate it.
     ///
     /// The node uses this to validate the device in `init` without creating files or sockets, and to filter out its own
     /// utun in default interface notifications (contract U1, N1).
@@ -257,7 +258,7 @@ package final class UTUNDevice: Sendable {
         return try requireUTUN(descriptor)
     }
 
-    /// Verifies a utun control socket using only read calls and returns its interface name (contract U1). The peer
+    /// Verifies a utun control socket using only read-only system calls and returns its interface name (contract U1). The peer
     /// address family must be `AF_SYSTEM` and the interface name must start with `utun`. For a non-socket (such as a
     /// pipe) or another address family, a call fails or the family differs.
     @discardableResult

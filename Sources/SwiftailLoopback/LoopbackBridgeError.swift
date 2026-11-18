@@ -2,8 +2,8 @@
 /// connection has already been aborted with RST.
 ///
 /// A disconnect or failure on either side after forwarding begins (`reset`, `timedOut`, `peerRemoved`, loopback
-/// failure, or node stop) is not an error. The bridge cleans up both connections and returns. Messages omit addresses
-/// and names (contract behavior K).
+/// failure, or the node stopping) makes the bridge clean up both connections and return normally. Messages omit
+/// addresses and names (contract behavior K).
 public enum LoopbackBridgeError: Error, Sendable, Equatable {
     /// No identity for the peer address was found in the netmap.
     case unknownPeer

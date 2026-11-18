@@ -44,8 +44,8 @@ extension TCPStack {
 
     // MARK: LISTEN (RFC 9293 3.10.7.2)
 
-    /// A segment arrived at a listener. For a SYN-only segment (no ACK or RST), checks the limits and creates a
-    /// connection. Skips SYN security and compartment checks (the third step in the same section).
+    /// A segment arrived at a listener. For a segment with SYN set and ACK and RST clear, checks the limits and
+    /// creates a connection. Skips SYN security and compartment checks (RFC 9293 §3.10.7.2, step three).
     ///
     /// Responds to other segments as on an unlistened port (`reset(answering:)`). Ignores RST, sends
     /// `<SEQ=SEG.ACK><CTL=RST>` if ACK is set, and sends `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>` if neither is set.
@@ -104,7 +104,7 @@ extension TCPStack {
                 receiveWindowLimit: TCPConnection.unacceptedReceiveWindow, at: now)
         } catch {
             // Responds to the SYN with RST when the peer's MSS is less than 64 (contract behavior X9). The check above
-            // already filtered notInitialSYN.
+            // already ruled out `notInitialSYN`.
             if case .unacceptableMaximumSegmentSize(let reset) = error {
                 append(reset, to: &outputs)
             }

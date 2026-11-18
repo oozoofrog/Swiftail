@@ -1,11 +1,11 @@
 import SwiftailBase
 
 extension TCPSegment {
-    /// Serializes the segment to IP packet bytes. Fills both checksums (IPv4 header and TCP).
+    /// Serializes the segment to an IP packet. Writes the TCP checksum and, for IPv4, the IP header checksum.
     ///
-    /// - A 20-byte header + options + data. Segments with SYN set carry MSS (4 bytes), two NOPs and SACK-Permitted (2
-    ///   bytes), then NOP and Window Scale (3 bytes), in that order (the Linux order followed by gVisor's
-    ///   `makeSynOptions`). Segments with SYN clear carry two NOPs and SACK (`2 + 8n` bytes) only if there are SACK
+    /// - A 20-byte header + options + data. On a segment with SYN set, the order of the options is MSS (4 bytes),
+    ///   two NOPs and SACK-Permitted (2 bytes), then one NOP and Window Scale (3 bytes). This is the Linux order followed by gVisor's
+    ///   `makeSynOptions`. Segments with SYN clear carry two NOPs and SACK (`2 + 8n` bytes) only if there are SACK
     ///   blocks (as in gVisor's `makeOptions`). Every combination aligns to a 4-byte boundary without padding.
     /// - IPv4 uses IHL 5, DF set, identifier 0, and TTL `hopLimit`. IPv6 uses traffic class and flow label 0, and hop
     ///   limit `hopLimit`. The default of 64 matches Go and gVisor (tunnel contract behavior L2).
@@ -13,8 +13,9 @@ extension TCPSegment {
     ///
     /// - Parameter hopLimit: The IPv4 TTL or IPv6 hop limit.
     /// - Returns: The IP packet. Returns `nil` if the source and destination address families differ, more than 4 SACK
-    ///   blocks make the options exceed the TCP header space (40 bytes), or the segment does not fit in one IP packet
-    ///   (65,535 bytes). These cases do not occur with segments produced by the state machine.
+    ///   blocks would exceed the TCP option space (40 bytes) on a non-SYN segment, or the encoded length exceeds
+    ///   65,535 bytes (total packet length for IPv4, payload length for IPv6). These cases do not occur with segments
+    ///   produced by the state machine.
     package func ipPacket(hopLimit: UInt8 = 64) -> [UInt8]? {
         let isIPv4 = source.address.isIPv4
         guard destination.address.isIPv4 == isIPv4 else { return nil }
@@ -94,8 +95,8 @@ extension TCPSegment {
 
 extension TCPSegment {
     /// The option length for `blockCount` SACK blocks on a non-SYN segment is two NOPs + `2 + 8n`. Returns 0 if there
-    /// are no blocks. This reduces the maximum sendable data by the same amount (RFC 9293 §3.7.1 subtracts the TCP
-    /// header including options from Eff.snd.MSS).
+    /// are no blocks. This reduces the maximum sendable data by the same amount (RFC 9293 §3.7.1 accounts for the TCP header, including
+    /// options, when calculating Eff.snd.MSS).
     package static func sackOptionLength(blockCount: Int) -> Int {
         blockCount == 0 ? 0 : 4 + 8 * blockCount
     }

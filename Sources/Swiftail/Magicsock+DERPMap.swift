@@ -16,7 +16,7 @@ extension Magicsock.Region {
     /// The default STUN port for nodes with a port of 0 (RFC 5389).
     static let defaultSTUNPort = 3478
 
-    /// Regions eligible to be home, in ascending region ID order.
+    /// Regions eligible to serve as the home DERP region, in ascending region ID order.
     ///
     /// Includes only regions without `noMeasureNoHome` and with at least one connectable server (`DERPServer`), the M3
     /// home criteria. Collects STUN addresses by examining nodes in order within each region, including `stunOnly`

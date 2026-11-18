@@ -1,7 +1,7 @@
 /// A TCP sequence number (RFC 9293 §3.4).
 ///
-/// A number modulo 2³². Sending more than 4GiB wraps the sequence back through 0, so unsigned `UInt32` magnitude
-/// comparisons are invalid. The sign of the 32-bit difference orders two sequence numbers. The comparison is meaningful
+/// A number modulo 2³². The sequence wraps through zero and returns to its starting value after advancing by
+/// 2³² bytes (4GiB). Unsigned `UInt32` magnitude comparisons cannot order sequence numbers across a wrap. The sign of the 32-bit difference orders two sequence numbers. The comparison is meaningful
 /// only when they are less than 2³¹ apart, which the TCP window guarantees even with scaling (less than 2³⁰). This is
 /// not a total order, so the type does not conform to `Comparable`.
 package struct SequenceNumber: Sendable, Hashable {

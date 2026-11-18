@@ -87,7 +87,9 @@ public final class LoopbackBridge: Sendable {
         self.willExpect = willExpect
     }
 
-    /// Creates the protocol to install on the server's loopback listener. Only connections whose bridge token verifies are passed up.
+    /// Creates protocol options for the server's loopback listener.
+    ///
+    /// The protocol passes a connection up the stack only after verifying the token sent by this bridge.
     ///
     /// Add it **at the end of** `NWParameters.defaultProtocolStack.applicationProtocols` (`append`). This puts it below
     /// TLS, directly above TCP. The same applies to plaintext listeners. Use one bridge per listener because the
@@ -100,10 +102,12 @@ public final class LoopbackBridge: Sendable {
 
     /// Forwards one connection to `127.0.0.1:<port>` and copies bytes until both directions end. Closes both connections before returning.
     ///
-    /// Sequence (behavior B1). Checks the limit, verifies the peer's identity, and connects to loopback (5 seconds).
-    /// Sends the new token **after** recording it under the connection's (source port, listener port), then starts
-    /// copying. If the table rejects the key because an earlier admission remains, retries with another source port (up
-    /// to 3 attempts). On completion, closes the loopback connection **after** withdrawing the unconsumed token.
+    /// After checking the limit and verifying the peer's identity, the bridge opens a loopback connection with a
+    /// 5-second deadline for each attempt (behavior B1). It sends a fresh token **after** recording it under the
+    /// connection's `(source port, listener port)`, then starts copying. If the table rejects the registration, for
+    /// example because an earlier admission remains for that key, the bridge retries with another source port, for up
+    /// to 3 attempts total. When forwarding ends, the bridge withdraws any unconsumed token **before** closing the
+    /// loopback connection.
     ///
     /// Copying (behaviors B3 and B4). Holds only one chunk per direction (up to 64KiB) and waits for the receiver to
     /// accept it before reading the next. When one side closes its write side (FIN), closes the other side's write side
@@ -159,9 +163,9 @@ public final class LoopbackBridge: Sendable {
     ///
     /// Answers only if `connection` is `.ready` and the listener's `makeListenerProtocolOptions()` verified this
     /// bridge's token on that connection. The token arrives before TLS bytes, and the connection stays unready until
-    /// verification, so querying after `.ready` always yields an answer for a connection forwarded by the bridge. A nil
-    /// result means the bridge did not forward the connection or it has already been queried. The server aborts that
-    /// connection.
+    /// verification. The first lookup after `.ready` returns the peer while the bridge is still forwarding the
+    /// connection. A lookup can return nil for an unbridged connection, a connection whose peer has already been
+    /// claimed, or an ended connection whose admission was evicted. Abort the connection if the result is nil.
     public func origin(of connection: NWConnection) -> Origin? {
         guard case .ready = connection.state,
               case .hostPort(.ipv4(let remoteHost), let remotePort) = connection.endpoint, remoteHost == .loopback,

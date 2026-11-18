@@ -5,7 +5,7 @@ extension TCPConnection {
     /// Processes one segment from the peer. The stack has already checked that the 4-tuple belongs to this connection.
     ///
     /// Immediate ACKs (out-of-order data, data filling a gap, 2×MSS of accumulated data, FIN, out-of-window segments,
-    /// and so on) come from this segment's output. This sends one ACK per segment even when received in a group (RFC
+    /// and so on) come from this segment's output. The stack therefore emits these immediate ACKs individually even when it receives segments in a group (RFC
     /// 5681 §4.2 immediate ACK, since the peer's fast retransmit counts three duplicate ACKs). Only deferrable ACKs
     /// (less than 2×MSS of in-order data) get a 40ms deadline (see the type documentation). Accepting any segment does
     /// not crash (contract behavior X1).
@@ -22,7 +22,7 @@ extension TCPConnection {
                 isFastRetransmitPending = false
                 if state != .closed { retransmitFirstUnacknowledgedSegment(at: now, into: &outputs) }
             }
-            // Measure from the state after processing, so a connection that just entered FIN-WAIT-2 or CLOSE-WAIT also gets keep-alive.
+            // Measure from the state after processing, so a connection that just entered FIN-WAIT-2 or CLOSE-WAIT also gets a keep-alive deadline.
             refreshKeepalive(at: now)
         }
         transmit(at: now, into: &outputs)
@@ -112,7 +112,7 @@ extension TCPConnection {
     ///
     /// RCV.WND extends to the farthest advertised right edge (contract behavior F1, RFC 7323 §2.4). A window of 0
     /// generally rejects data segments. For a segment starting at RCV.NXT, drops the data and checks only ACK and RST
-    /// (the special allowance for a zero window in the same section). Otherwise the side that closed the window would
+    /// (the special allowance for a zero window in RFC 9293 §3.10.7.4, step one). Otherwise the side that closed the window would
     /// miss the peer's ACKs.
     ///
     /// Accepts a **FIN without data** at RCV.NXT even if the window is 0 (contract behavior T6). Table 6 would reject
@@ -157,7 +157,7 @@ extension TCPConnection {
 
     // MARK: Fifth Step — ACK
 
-    /// ACK in SYN-RECEIVED. If `SND.UNA < SEG.ACK =< SND.NXT`, enter ESTABLISHED and fill the window from this segment.
+    /// ACK in SYN-RECEIVED. If `SND.UNA < SEG.ACK =< SND.NXT`, enter ESTABLISHED and set the send window from this segment.
     /// Otherwise, send `<SEQ=SEG.ACK><CTL=RST>` (contract behavior T4). Skip the preliminary RFC 5961 §5.2 range check
     /// in this state. Every invalid ACK gets RST, as in Linux and gVisor.
     mutating func completeHandshake(

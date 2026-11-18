@@ -3,7 +3,7 @@ import SwiftailBase
 import SwiftailDERP
 import SwiftailMagicsock
 
-/// The lifecycle of a DERP region connection. There is one connection per region. Nonwaiting actor methods open and close them.
+/// The lifecycle of a DERP region connection. There is one connection per region. Actor methods open and close connections without suspending.
 ///
 /// - **Opening** (`openDERPLink`). Opens when the home region is selected (`isPreferred: true`) or when `Magicsock`
 ///   wants to send to a region without a connection (`isPreferred: false`). Creates a client and mailbox, adds them to
@@ -198,8 +198,8 @@ extension TailnetNode {
             Self.log.info("DERP region \(link.region, privacy: .public): disconnected, reconnecting")
             connectedDERPRegions.remove(link.region)
         case let .attemptFailed(failure, consecutiveFailures):
-            // The 5-second backoff cap means failures continue indefinitely without a network. Log only the first
-            // consecutive failure and every tenth one thereafter.
+            // The 5-second backoff cap means failures continue indefinitely without a network. Within a streak,
+            // log failures 1, 10, 20, and so on.
             guard isCurrent, consecutiveFailures == 1 || consecutiveFailures.isMultiple(of: 10) else { return }
             Self.log.info(
                 "DERP region \(link.region, privacy: .public): connection failed (\(String(describing: failure), privacy: .public)), \(consecutiveFailures, privacy: .public) consecutive failures"

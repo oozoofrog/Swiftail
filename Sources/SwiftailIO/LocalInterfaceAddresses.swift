@@ -13,7 +13,7 @@ import SwiftailBase
 ///   its own tunnel cannot be advertised.
 /// - Puts addresses on the loopback interface and addresses in `127/8` in `loopback`.
 /// - Collects link-local addresses (`169.254/16`) separately and uses them as `regular` only if no regular addresses
-///   are available. Some environments can connect to these addresses behind NAT (such as AWS Lambda).
+///   are available. In some environments behind NAT (such as AWS Lambda), these addresses can be used to connect.
 /// - Puts the remaining addresses in `regular`. Each list is in ascending address order.
 ///
 /// Reads the addresses at node startup and on each `setDefaultInterface` call, then passes them to `Magicsock`. It does

@@ -10,21 +10,23 @@ import SwiftailMagicsock
 import SwiftailNetstack
 import os
 
-/// A node on a tailnet. Exchanges IP packets through a tunnel device (utun or in-memory), publishes tunnel settings for
-/// the app to apply to the OS, and answers MagicDNS queries for the service IP. Finds and uses direct UDP paths to
-/// peers. Falls back to DERP relay if it cannot find a path or the path drops. With an `.inProcess` device, listens and
-/// connects using the in-process TCP stack without OS sockets (`listen(port:)`, `connect(to:port:)`).
+/// A node on a tailnet.
 ///
-/// This actor is the edge. Protocol decisions belong to `ControlClient` (registration and maps), `DERPClient` (relay),
-/// and the I/O-free state machines: `TailnetEngine` (WireGuard, filtering, local replies), `Magicsock` (path discovery,
-/// STUN, home region), `TCPStack` (in-process TCP), `NodeStateMachine` (node state), `NetworkSettingsPublisher`
-/// (settings publication), and `DefaultLink` (network change decisions). This actor connects them to devices, sockets,
-/// and clocks.
+/// The node exchanges IP packets through a tunnel device (utun or in-memory), publishes tunnel settings for the
+/// app to apply to the OS, and answers MagicDNS queries sent to the service IP. It finds and uses direct UDP paths
+/// to peers and falls back to DERP relay if it cannot find a path or the path drops. With an `.inProcess` device,
+/// it listens and connects using the in-process TCP stack without OS sockets (`listen(port:)`, `connect(to:port:)`).
+///
+/// This actor connects the protocol components to devices, sockets, and clocks at the I/O edge. Protocol decisions
+/// come from `ControlClient` (registration and maps), `DERPClient` (relay), and the state machines without I/O.
+/// These are `TailnetEngine` (WireGuard, filtering, local replies), `Magicsock` (path discovery, STUN, home region),
+/// `TCPStack` (in-process TCP), `NodeStateMachine` (node state), `NetworkSettingsPublisher` (settings publication),
+/// and `DefaultLink` (network change decisions).
 ///
 /// The state machines are value types stored in this actor's properties and mutated only in place. For one event
-/// (received UDP, received DERP packet, IP packet read from the device, or timer), run outputs between components to
-/// completion without `await` and only enqueue I/O. This prevents actor reentrancy between their states. This is also
-/// the only place that obtains current time (`ContinuousClock.now`, `Date()`).
+/// (a received UDP datagram or DERP packet, an IP packet read from the device, or a timer), the actor passes outputs
+/// between components to completion without `await` and only enqueues I/O. This prevents actor reentrancy between
+/// state updates. Only this actor reads the current time (`ContinuousClock.now`, `Date()`).
 ///
 /// Concurrency is structured. All work runs as children of the TaskGroup in `run()`. Canceling the Task that called `run()` stops all of it.
 ///
@@ -228,7 +230,9 @@ public actor TailnetNode {
         (failures, failureContinuation) = AsyncStream.makeStream(of: NodeError.self, bufferingPolicy: .bufferingOldest(1))
     }
 
-    /// Events for changes in state, paths, lock, and status. One subscriber. The stream ends when `run()` ends.
+    /// A stream of changes to node state, peer paths, tailnet lock, and node status.
+    ///
+    /// Use one subscriber. The stream ends when `run()` ends.
     ///
     /// Keeps only the newest 64 unread events and drops older events first. Keeps only one unread `statusChanged` at
     /// the end, outside this limit (`NodeEvent.statusChanged`).
@@ -240,7 +244,7 @@ public actor TailnetNode {
     /// (behavior E). One subscriber. The stream ends when `run()` ends.
     public nonisolated var networkSettings: AsyncStream<TunnelNetworkSettings> { settingsStream }
 
-    /// IP packets for the in-memory device to write, including packets from peers that passed the filter, locally
+    /// IP packets to write to the in-memory device, including packets from peers that passed the filter, locally
     /// generated replies (such as MagicDNS), and packets sent to local addresses and looped back. Emits nothing for
     /// utun and `.inProcess` devices because packets go to utun or the stack. One subscriber. The stream ends when
     /// `run()` ends.
@@ -253,13 +257,15 @@ public actor TailnetNode {
         NodeStatus(state: stateMachine.state, netmap: lastNetmap, networkSettings: settingsPublisher.published)
     }
 
-    /// Registers the node, receives netmaps, and maintains the data plane. Does not return until the calling Task is
-    /// canceled. Call once per node.
+    /// Registers the node, receives netmaps, and maintains the data plane until canceled or a terminal error occurs.
     ///
-    /// On disconnect, backs off and reconnects internally. Throws only failures that restarting would not resolve: a
-    /// terminal control failure (`control`), device closure (`tunnelDeviceClosed`), another node in the process using
-    /// the state directory (`stateDirectoryInUse`, before opening files or sockets), or inability to open a UDP socket
-    /// (`udpUnavailable`). Calling again during or after a run throws `invalidConfiguration`.
+    /// On disconnect, the node backs off and reconnects internally. Call `run()` once per node. A second call throws
+    /// `invalidConfiguration` during or after the first run.
+    ///
+    /// - Throws: A terminal control failure (`control`, including state directory setup failures), an invalid utun
+    ///   descriptor at startup (`invalidConfiguration`), an unavailable or closed tunnel device
+    ///   (`tunnelDeviceClosed`), a directory claim held by another node in the same process (`stateDirectoryInUse`,
+    ///   before opening files or sockets), or failure to open a UDP socket (`udpUnavailable`).
     ///
     /// Inside `Task { }`, write `do throws(NodeError) { try await node.run() } catch { … }` to get a `NodeError` as the
     /// `error` in `catch`. Omitting `throws(NodeError)` infers `any Error`.
@@ -301,8 +307,8 @@ public actor TailnetNode {
         isRunning = true
         defer {
             isRunning = false
-            // A stopped node retains no keys, sessions, connections, or descriptors. `path(toPeerNamed:)` returns nil
-            // and `send` drops input. Closes only the duplicate utun descriptor (behavior U2). The socket closes after
+            // Release the active node key, WireGuard sessions, connections, and descriptors. `path(toPeerNamed:)`
+            // returns nil and `send` drops input. Closes only the duplicate utun descriptor (behavior U2). The socket closes after
             // sending the RSTs `stopNetstack()` placed in the send queue.
             self.socket?.closeAfterSending()
             self.socket = nil
@@ -378,15 +384,19 @@ public actor TailnetNode {
         Self.log.info("Node stopped")
     }
 
-    /// Passes in one IP packet with an in-memory device, using the same processing as a utun read. Silently drops it
-    /// when unable to send (before registration, no peer, or no path). Drops it with utun and `.inProcess` devices.
+    /// Submits an IP packet from the in-memory tunnel device.
+    ///
+    /// Uses the same processing as a utun read. Silently drops the packet before registration or if no peer or path
+    /// is available. With a utun or `.inProcess` device, drops the packet.
     public func send(_ ipPacket: [UInt8]) {
         guard case .memory = device else { return }
         deliverFromDevice(ipPacket)
     }
 
-    /// The current path to the peer named `fqdn`. Nil if no such peer is in the data plane or it has neither sent nor
-    /// received traffic for more than 45 seconds (idle).
+    /// Returns the current path to the peer named `fqdn`.
+    ///
+    /// Returns nil if the peer is absent from the data plane or idle. The path is idle until the node sends to the
+    /// peer and again once more than 45 seconds have passed since the last send.
     ///
     /// Compares names after removing one trailing dot and ignoring ASCII case. If two peers share a name, the lower
     /// node ID wins. A path has the same meaning as the direct address (`CurAddr`) in Go `tailscale status`

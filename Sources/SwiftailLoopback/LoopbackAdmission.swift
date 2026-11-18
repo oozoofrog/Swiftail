@@ -7,8 +7,8 @@ import Synchronization
 ///
 /// When the bridge establishes a loopback connection, it sends a 32-byte token before any TLS bytes.
 /// `LoopbackAdmissionFramer`, below TLS and directly above TCP in the listener's stack, passes up only connections
-/// whose token it finds and consumes in this table. The table records the peer under the connection's (source port,
-/// listener port). The server retrieves it once after that connection becomes `.ready`.
+/// whose token it finds and consumes in this table. The table records the peer under the connection's
+/// `(source port, listener port)`. The server retrieves it once after the connection becomes `.ready`.
 ///
 /// The source port alone cannot distinguish connections. The review reproduced connections using the same source port
 /// with different listeners and connections reusing a port released by RST. The token travels only within that
@@ -95,7 +95,7 @@ final class LoopbackAdmissionTable: Sendable {
     /// connection identified by `key`.
     ///
     /// Compares all pending tokens in constant time, continuing even after a match. Consumes a matching token even if
-    /// the key differs. A token presented from a different listener or source port was intercepted.
+    /// the key differs. Treats a token presented from a different listener or source port as intercepted.
     func admit(_ token: [UInt8], for key: Key) -> Bool {
         state.withLock { state in
             var match: Int?

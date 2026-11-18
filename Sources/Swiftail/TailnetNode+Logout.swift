@@ -6,13 +6,13 @@ extension TailnetNode {
     ///
     /// Call before `run()` starts or after it ends. The app cancels `run()` and waits for it to end, calls `logOut()`,
     /// then empties the state directory. This method leaves local files (identity, lock state, and certificates) in
-    /// place. The app can clear the directory even on a failure such as no network, in which case the old node remains
-    /// on the server. If cancellation or a timeout occurs after sending the request, the server may already have
-    /// expired the key. A failure does not imply that the node remains on the server.
+    /// place. The app can clear the directory after a failure. If the request never reached the server, for example
+    /// because there was no network, the old node remains there. After a cancellation or timeout following delivery
+    /// of the request, the server may already have expired the key.
     ///
     /// Overlapping calls are prevented **only within the same process**. If another process (a tunnel extension) is in
     /// `run()` with the same state directory, it is not blocked. That node sees its key expire and registers again with
-    /// a new key, undoing logout if it has an auth key. The app stops that process first.
+    /// a new key. An auth key that the server accepts lets the other process undo the logout by reauthenticating. The app stops that process first.
     ///
     /// Returns without sending anything if the node was never registered (no stored node key). Does not retry a request
     /// that was sent. Connects through the interface reported by `setDefaultInterface`, if any.

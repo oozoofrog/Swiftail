@@ -48,9 +48,8 @@ package struct SendBuffer: Sendable {
     }
 
     /// Copies up to `maximumLength` bytes beginning at `offset` from `startSequence`. Both outgoing segments
-    /// (`offset = SND.NXT − SND.UNA`) and retransmissions (`offset = 0`) use this. Copies only buffered bytes. Returns
-    /// an empty
-    /// array if `offset` is out of range or `maximumLength` is 0 or less.
+    /// (`offset = SND.NXT − SND.UNA`) and retransmissions (`offset = 0`) use this. Copies only buffered bytes.
+    /// Returns an empty array if `offset` is out of range or `maximumLength` is 0 or less.
     ///
     /// shortcut: Copies into a new array per call. The segment payload is `[UInt8]`, so one copy is needed anyway.
     /// Lending the storage would require an unsafe pointer or `Span`, which is unavailable at the minimum platform
@@ -62,9 +61,9 @@ package struct SendBuffer: Sendable {
 
     /// Discards bytes acknowledged by cumulative ACK `ack` from the front and returns the number discarded.
     ///
-    /// Returns 0 if `ack` is at or before `startSequence` (a stale or duplicate ACK). If it is after `endSequence`,
-    /// meaning it acknowledges unsent data, returns 0 without changing anything. The connection decides how to handle
-    /// such an ACK (answer with an ACK and drop it, behavior X3).
+    /// Returns 0 without changing the buffer if `ack` is at or before `startSequence` (a stale or duplicate ACK)
+    /// or past `endSequence`. The connection validates ACKs against `SND.NXT` and answers with an ACK before
+    /// dropping an ACK of unsent data (behavior X3).
     package mutating func acknowledge(upTo ack: SequenceNumber) -> Int {
         let released = Int(ack.distance(from: startSequence))
         guard released > 0, released <= count else { return 0 }

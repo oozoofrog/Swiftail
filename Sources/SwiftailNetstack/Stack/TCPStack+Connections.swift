@@ -64,7 +64,7 @@ extension TCPStack {
 
     /// Reports once per connection when TCP processing ends (it reaches CLOSED or enters TIME-WAIT). Emits `.closed`
     /// for an application-held connection and `.releasedConnectionClosed` for a released connection, for logging only
-    /// (contract “Connection Closure Statistics Log”). Does not report establishing or queued connections.
+    /// (contract “Connection close statistics log”). Does not report establishing or queued connections.
     private mutating func reportClose(_ reason: CloseReason, of id: ConnectionID, into outputs: inout [Output]) {
         guard let index = connections.index(forKey: id), !connections.values[index].hasReportedClose else { return }
         let statistics = connections.values[index].connection.statistics

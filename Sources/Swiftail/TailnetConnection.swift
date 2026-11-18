@@ -1,11 +1,13 @@
 import SwiftailBase
 import SwiftailNetstack
 
-/// An established TCP connection returned by `TailnetNode.connect(to:port:)` or `TailnetListener`. Corresponds to tsnet's `net.Conn`.
+/// An established TCP connection.
 ///
-/// One read and one write may run simultaneously on separate Tasks. A second call in the same direction returns
-/// `ConnectionError.concurrentUse`. There is no time limit argument. Set a time limit by canceling the calling Task. If
-/// released without closing (`deinit`), aborts with RST.
+/// `TailnetNode.connect(to:port:)` returns it and `TailnetListener` yields it. It corresponds to tsnet's `net.Conn`.
+///
+/// One read and one write may run concurrently in separate tasks. A second call in the same direction throws
+/// `ConnectionError.concurrentUse`. To enforce a timeout, cancel the calling task. The API has no timeout parameter.
+/// Releasing the connection without closing it aborts it with an RST in `deinit`.
 ///
 /// After the peer ends the connection, `read`, `write`, and `finishWriting` throw the reason (`reset`, `timedOut`, or
 /// `peerRemoved`). After the app calls `close` or `abort`, they throw `closed`. After the node's `run()` ends, they

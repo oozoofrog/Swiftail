@@ -2,7 +2,7 @@ import SwiftailBase
 import SwiftailControl
 import SwiftailEngine
 
-/// The node's current state. The app's status screen and diagnostics read it through `TailnetNode.status`. Contains no keys.
+/// The node's current state. Read it through `TailnetNode.status` for display and diagnostics. It contains no keys.
 public struct NodeStatus: Sendable, Equatable {
     public var state: NodeState
     /// Local tailnet addresses (single-address entries in the netmap's local node `Addresses`). Empty before a netmap.
@@ -12,7 +12,7 @@ public struct NodeStatus: Sendable, Equatable {
     public var fqdn: String?
     /// The local node's `StableID`. Nil before a netmap or if empty.
     public var stableID: String?
-    /// Names eligible for ts.net certificates (netmap `DNSConfig.CertDomains`). Only read and display them.
+    /// Names eligible for ts.net certificates (netmap `DNSConfig.CertDomains`). The node exposes these names for display.
     public var certDomains: [String]
     /// The number of peers in the netmap.
     public var peerCount: Int

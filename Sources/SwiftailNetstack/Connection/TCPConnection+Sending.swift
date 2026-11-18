@@ -53,8 +53,7 @@ extension TCPConnection {
             let segmentEnd = transmitNext.advanced(by: UInt32(length))
             var fin = false
             if finRequested, segmentEnd == finSequence {
-                // A retransmitted FIN ignores the window. A first FIN must be inside the window. The peer will not
-                // accept it if the window is 0.
+                // A retransmitted FIN ignores the window. A first FIN must be inside the window. A peer following the standard receive-window check can reject it when the window is 0.
                 fin = finSequence.precedes(sendNext) || windowRoom > length
             }
             guard length > 0 || fin else { break }
@@ -158,7 +157,8 @@ extension TCPConnection {
 
     /// A segment with ACK set. Includes RCV.NXT, the current window, and SACK blocks (`sackBlocksToSend`), and clears
     /// any delayed ACK because this segment carries it. Pure ACKs, piggybacked ACKs on data, zero-window probes, and
-    /// keep-alives all go through here, so every outgoing ACK carries SACK while gaps remain (RFC 2018 §4).
+    /// keep-alives all go through here, so every outgoing ACK carries SACK while gaps remain if the peer advertised
+    /// SACK-Permitted (RFC 2018 §4).
     mutating func acknowledgingSegment(
         sequence: SequenceNumber, flags: TCPSegment.Flags, payload: [UInt8] = []
     ) -> TCPSegment {
@@ -198,9 +198,9 @@ extension TCPConnection {
 
     // MARK: ACK
 
-    /// Schedules an ACK by deadline. An immediate ACK is due now and goes out in `advance(to:)` at the same time or at
-    /// the end of an application call. Keeps an earlier deadline if one exists, so the 40ms delayed ACK is not
-    /// postponed.
+    /// Schedules an ACK by deadline. An immediate ACK is due now and goes out in the output of the receive, timer,
+    /// or application call that scheduled it. `advance(to:)` drives timer processing. Keeps an earlier deadline if
+    /// one exists, so the 40ms delayed ACK is not postponed.
     mutating func scheduleAcknowledgment(immediately: Bool, at now: ContinuousClock.Instant) {
         let deadline = immediately ? now : now + Self.delayedAcknowledgmentTimeout
         if let existing = timers[.acknowledgment], existing <= deadline { return }
