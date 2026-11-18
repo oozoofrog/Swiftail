@@ -1,58 +1,58 @@
-# SwiftailEngine·Swiftail 계약 (M3)
+# SwiftailEngine and Swiftail contract (M3)
 
-netmap을 데이터면으로 바꾸는 층이다. M3의 목표는 **직접 UDP 경로 없이 DERP 중계만으로** Go tsnet 피어와 IP 패킷을 주고받는 것이다(`docs/plan.md` 7절 M3).
+This layer turns the netmap into a data plane. The M3 goal is to exchange IP packets with a Go tsnet peer **using only DERP relay, without a direct UDP path** (`docs/plan.md` §7 M3).
 
-- `SwiftailEngine`: 입출력 없는 값 타입들. IP 패킷 해석, 패킷 필터, netmap → WireGuard 피어 계산, 그리고 이들과 `WireGuardDevice`를 묶은 데이터면 상태 기계 `TailnetEngine`.
-- `Swiftail`: 공개 actor `TailnetNode`. `ControlClient`, `DERPClient`, `TailnetEngine`, 시계를 잇는 가장자리다.
+- `SwiftailEngine` provides I/O-free value types for IP packet parsing, packet filtering, and computing WireGuard peers from a netmap. The `TailnetEngine` data plane state machine combines them with `WireGuardDevice`.
+- `Swiftail` provides the public `TailnetNode` actor, the edge that connects `ControlClient`, `DERPClient`, `TailnetEngine`, and the clock.
 
-프로토콜 세부는 [protocol-notes/netmap-engine.md](../protocol-notes/netmap-engine.md)(검증됨)와 [derp-stun.md](../protocol-notes/derp-stun.md) 4.8·4.9절을 따른다.
+Protocol details follow [protocol-notes/netmap-engine.md](../protocol-notes/netmap-engine.md) (verified) and [derp-stun.md](../protocol-notes/derp-stun.md) §§4.8 and 4.9.
 
-## 타깃
+## Targets
 
-| 타깃 | 의존 | 내용 |
+| Target | Dependencies | Contents |
 | --- | --- | --- |
-| `SwiftailEngine` | `SwiftailBase`, `SwiftailWireGuard`, `SwiftailControl`, CryptoKit | 아래 "엔진" API. 소켓·시계 없음 |
+| `SwiftailEngine` | `SwiftailBase`, `SwiftailWireGuard`, `SwiftailControl`, CryptoKit | "Engine" API below. No sockets or clock |
 | `Swiftail` | `SwiftailBase`, `SwiftailEngine`, `SwiftailControl`, `SwiftailDERP`, `SwiftailIO` | `TailnetNode` |
 
-## M3에서 지원하는 범위
+## M3 support
 
-지원: 일반 Tailscale 피어(Go tsnet)와 그 자기 주소(/32, /128) 사이의 IPv4·IPv6 패킷. 홈 DERP 지역 하나.
+Supported are IPv4 and IPv6 packets between ordinary Tailscale peers (Go tsnet) and their own addresses (/32, /128), with one home DERP region.
 
-지원하지 않는 것은 **닫힌 쪽으로** 처리한다(피어로 올리지 않거나 패킷을 버린다):
+Unsupported cases **fail closed** (exclude peers or drop packets):
 
-- 서브넷 경로·exit node(`RouteAll=false`, exit node 없음으로 고정), WireGuard 전용 피어(`isWireGuardOnly`), jailed 피어(`isJailed`), masquerade 주소가 있는 피어, tailnet lock 서명이 없는 피어(`unsignedPeerAPIOnly`. Go는 이런 피어와 겹치는 패킷 규칙이 있으면 규칙 전체를 비운다), `cap:` 출발지 규칙, shields-up.
-- IP 조각과 IPv6 확장 헤더: 버린다(Go는 일부를 통과시킨다. 재조립하는 스택이 없으므로 M3은 받지 않는다).
-- TSMP(IP 프로토콜 99): 받으면 엔진이 소비하고 위로 올리지 않는다. 그 가운데 0이 아닌 disco 키 광고는 보낸 WireGuard 피어와 함께 `.discoKeyAdvertised`로 낸다. pong·거절은 보내지 않는다. disco 키 광고는 피어마다 WireGuard 세션이 설 때 보낸다(2026-11-16, `SwiftailMagicsock` 계약 "TSMP disco 키 광고"). 위에서 내려온 TSMP는 버린다(Go도 host가 만든 TSMP를 버린다. M5-8a에서 넣음, `SwiftailTunnel` 계약 동작 L 4).
-- 옛 형식의 규칙(`SrcBits`, `DstPorts[].Bits`)이 있으면 규칙을 모두 비운다. 자기 주소와 UDP 흐름 기록은 남으므로 먼저 보낸 UDP의 응답은 계속 받는다(Go와 같다).
-- 직접 UDP, disco, STUN, 홈이 아닌 DERP 지역: M4.
+- Subnet routes and exit nodes (fixed at `RouteAll=false` and no exit node), WireGuard-only peers (`isWireGuardOnly`), jailed peers (`isJailed`), peers with masquerade addresses, peers without tailnet lock signatures (`unsignedPeerAPIOnly`. Go clears all packet rules if a rule overlaps with one of these peers), `cap:` source rules, and shields-up.
+- IP fragments and IPv6 extension headers are dropped (Go passes some through. M3 has no stack to reassemble them).
+- The engine consumes inbound TSMP (IP protocol 99) without passing it up. It emits nonzero disco key advertisements as `.discoKeyAdvertised` with the sending WireGuard peer. It sends neither pongs nor rejections. It sends disco key advertisements when a WireGuard session is established for each peer (2026-11-16, `SwiftailMagicsock` contract "TSMP disco key advertisement"). It drops TSMP from above (Go also drops host-generated TSMP. Added in M5-8a, `SwiftailTunnel` contract behavior L 4).
+- If legacy rules (`SrcBits`, `DstPorts[].Bits`) are present, clear all rules. Local addresses and recorded UDP flows remain, so replies to previously sent UDP are still accepted (as in Go).
+- Direct UDP, disco, STUN, and non-home DERP regions are M4.
 
-## 엔진 API (`SwiftailEngine`)
+## Engine API (`SwiftailEngine`)
 
 ```swift
-/// 검증을 마친 IP 패킷 하나의 머리. 필터와 경로 선택이 읽는 필드만 담는다.
+/// The header of a validated IP packet. Contains only the fields read by filtering and path selection.
 public struct IPPacket: Sendable, Equatable {
     public enum TransportProtocol: Sendable, Equatable { case tcp, udp, sctp, icmpv4, icmpv6, tsmp, other(UInt8) }
     public enum ParseError: Error, Sendable, Equatable {
-        case malformed      // 길이·버전·머리 길이가 맞지 않음
-        case fragment       // 조각(첫 조각 포함)
-        case extensionHeader // IPv6 확장 헤더
+        case malformed      // Invalid length, version, or header length
+        case fragment       // Fragment, including the first fragment
+        case extensionHeader // IPv6 extension header
     }
 
-    /// 선언된 길이로 자른 패킷 전체.
+    /// The entire packet, trimmed to its declared length.
     public let bytes: [UInt8]
     public let source: IPAddress
     public let destination: IPAddress
     public let transportProtocol: TransportProtocol
-    /// TCP·UDP·SCTP의 포트. 그 밖에는 0.
+    /// The TCP, UDP, or SCTP port. Zero for other protocols.
     public let sourcePort: UInt16
     public let destinationPort: UInt16
-    /// TCP에서 SYN이 켜지고 ACK가 꺼진 패킷(새 연결의 시작).
+    /// Whether this TCP packet has SYN set and ACK clear (the start of a new connection).
     public let isTCPSYN: Bool
 
     public init(parsing bytes: [UInt8]) throws(ParseError)
 }
 
-/// 들어오는 패킷을 받을지 정한다. tailcfg 필터 규칙과 자기 주소에서 만든다.
+/// Determines whether to accept an incoming packet. Built from tailcfg filter rules and local addresses.
 public struct PacketFilter: Sendable {
     public enum Verdict: Sendable, Equatable {
         case accept
@@ -60,114 +60,114 @@ public struct PacketFilter: Sendable {
     }
     public enum DropReason: Sendable, Equatable { case notForUs, noRuleMatched, multicastOrLinkLocal }
 
-    /// 규칙도 자기 주소도 없다. 모든 패킷을 버린다(netmap을 받기 전의 상태).
+    /// A filter with no rules or local addresses. Drops every packet (the state before receiving a netmap).
     public static var allowNone: PacketFilter { get }
 
     /// - Parameters:
-    ///   - rules: `Netmap.packetFilter` 그대로.
-    ///   - localAddresses: 자기 노드의 주소. 목적지가 여기에 없으면 버린다.
+    ///   - rules: `Netmap.packetFilter` as provided.
+    ///   - localAddresses: The local node's addresses. Drops packets whose destination is absent from this list.
     public init(rules: [FilterRule], localAddresses: [IPAddress])
 
-    /// 받은 패킷을 판정한다. 먼저 보낸 UDP의 응답이면 규칙이 없어도 받는다.
+    /// Evaluates an incoming packet. Accepts replies to previously sent UDP even without a rule.
     public mutating func checkInbound(_ packet: IPPacket) -> Verdict
-    /// 내보낸 패킷을 적어 둔다(UDP 응답을 받기 위해서다).
+    /// Records an outgoing packet so that UDP replies can be accepted.
     public mutating func recordOutbound(_ packet: IPPacket)
-    /// 규칙만 바꾸고 UDP 흐름 기록은 이어 간다.
+    /// Replaces the rules and preserves recorded UDP flows.
     public mutating func replaceRules(_ rules: [FilterRule], localAddresses: [IPAddress])
 }
 
-/// netmap의 피어 하나를 데이터면에 올린 모습.
+/// A netmap peer installed in the data plane.
 public struct EnginePeer: Sendable, Equatable {
     public var key: NodePublicKey
-    /// 이 피어가 출발지로 쓸 수 있는 주소. WireGuard AllowedIPs가 된다.
+    /// The addresses this peer may use as sources. These become WireGuard AllowedIPs.
     public var allowedIPs: [IPPrefix]
-    /// 이 피어에게 보낼 때 쓸 DERP 지역. 0이면 모른다.
+    /// The DERP region to use when sending to this peer. Zero means unknown.
     public var homeDERP: Int64
 
-    /// netmap에서 데이터면에 올릴 피어들을 고른다. 순서는 node ID 오름차순이다.
+    /// Selects the netmap peers to install in the data plane, in ascending node ID order.
     public static func peers(in netmap: Netmap, at now: Date) -> [EnginePeer]
 }
 
-/// 한 노드의 데이터면: netmap, WireGuard, 패킷 필터를 묶은 상태 기계.
+/// A node's data plane state machine, combining its netmap, WireGuard, and packet filter.
 public struct TailnetEngine: Sendable {
     public enum Output: Sendable, Equatable {
-        /// DERP로 보낼 WireGuard 메시지.
+        /// A WireGuard message to send over DERP.
         case datagram([UInt8], to: NodePublicKey, derpRegion: Int64)
-        /// 필터를 통과해 위로 올릴 IP 패킷.
+        /// An IP packet that passed the filter and should be passed up.
         case ipPacket([UInt8])
-        /// 버린 패킷. 진단과 시험용이다.
+        /// A dropped packet, for diagnostics and tests.
         case dropped(Drop)
     }
     public enum Drop: Sendable, Equatable {
         case inbound(PacketFilter.DropReason)
         case malformedPacket
-        case unsupportedPacket        // 조각, IPv6 확장 헤더
+        case unsupportedPacket        // Fragment, IPv6 extension header
         case consumedControlPacket    // TSMP
         case noPeerForDestination
-        case noRouteToPeer            // 피어의 홈 DERP를 모르거나 우리 홈 지역이 아님
-        case discoMessage             // M3은 disco를 처리하지 않는다
+        case noRouteToPeer            // The peer's home DERP is unknown or differs from our home region
+        case discoMessage             // M3 does not handle disco
         case wireGuard(WireGuardError)
     }
 
     public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, now: ContinuousClock.Instant, wallClock: Date)
 
-    /// netmap을 적용한다: 피어를 더하고 빼고, 필터를 바꾼다. 나가야 할 것이 있으면 돌려준다.
+    /// Applies the netmap by adding and removing peers and replacing the filter. Returns any outgoing output.
     public mutating func apply(_ netmap: Netmap, homeDERP: Int64, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
-    /// 위에서 내려온 IP 패킷 하나를 보낸다.
+    /// Sends one IP packet from the layer above.
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]
-    /// DERP에서 받은 패킷 하나를 처리한다.
+    /// Processes one packet received from DERP.
     public mutating func receive(_ packet: [UInt8], from peer: NodePublicKey, at now: ContinuousClock.Instant) -> [Output]
-    /// now까지 기한이 지난 타이머를 처리한다(WireGuard 타이머, 피어 키 만료).
+    /// Processes timers due by now (WireGuard timers and peer key expiration).
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output]
-    /// 다음에 advance를 불러야 하는 시각.
+    /// The next time to call advance.
     public var nextDeadline: ContinuousClock.Instant? { get }
 }
 ```
 
-### 동작
+### Behavior
 
-1. **IP 패킷 해석**(노트 3.1·3.2): 경계에서 한 번 검증한다. IPv4는 20바이트 이상·IHL 5 이상·선언 길이가 버퍼 이하, IPv6는 40바이트 이상·선언 길이가 버퍼 이하, TCP(20)·UDP(8)·SCTP(12)·ICMP는 전송 머리의 최소 길이. 선언 길이 뒤의 바이트는 잘라 낸다. IP 프로토콜 번호 0과 255는 `malformed`다(Go는 둘을 Unknown으로 버린다). IPv4의 MF가 켜졌거나 오프셋이 0이 아니면, IPv6의 next-header가 44면 `fragment`. IPv6 next-header가 0·43·50·51·60·135·139·140이면 `extensionHeader`. Go의 약한 검사(IHL 최솟값 없음, 재사용 필드)는 옮기지 않는다.
-2. **피어 계산**(노트 4.1, `RouteAll=false`·exit node 없음):
-   - 올리지 않는 피어: `id`가 0, `key`가 0, 만료(`expired`이거나 0이 아닌 `keyExpiry <= now`), `discoKey`가 0이고 `homeDERP`가 0, 위 "지원하지 않는 것"의 피어.
-   - AllowedIPs: 피어의 `allowedIPs` 가운데 한 주소짜리(IPv4 `/32`, IPv6 `/128`)이고, Tailscale 주소 범위에 있거나 피어의 `addresses`에 있는 것만 남긴다. Tailscale 주소 범위는 `100.64.0.0/10`(단 `100.115.92.0/23` 제외)과 `fd7a:115c:a1e0::/48`. 이 노드 자신의 `addresses`와 같은 접두는 어느 피어에게도 주지 않는다. IPv4-mapped IPv6 주소(`::ffff:a.b.c.d/128`)는 `addresses`에 있어도 받지 않는다(2026-11-17 보안 검증 2차): 주소로 신원을 찾는 `whoIs`는 mapped 주소를 IPv4로 바꿔 찾으므로, 그 IPv4 주소의 주인이 아닌 피어가 mapped 주소를 출발지로 쓰면 다른 노드의 신원으로 보인다. 남는 것이 없으면 올리지 않는다. Go `peerViewOf`는 `addresses`에 있는 접두를 길이와 무관하게 자기 주소로 보지만 여기서는 받지 않는다(2026-11-17 보안 검증): `WireGuardDevice`의 출발지 검사는 피어마다 따로라(가장 긴 접두로 주인을 고르지 않는다) 넓은 접두를 가진 피어는 다른 피어나 이 노드의 주소를 출발지로 쓸 수 있다. 서브넷 경로를 받게 되면 이 규칙과 출발지 검사를 함께 다시 정한다.
-   - 키 하나는 피어 하나에만, 접두 하나도 피어 하나에만 준다. 같은 키나 같은 접두를 여러 노드가 내세우면 node ID가 작은 쪽이 갖는다(출발 주소가 피어 하나에 묶여야 한다. wireguard-go의 AllowedIPs도 접두마다 주인이 하나다).
-   - `shortcut:` 만료는 로컬 시계로 판단한다(Go는 ControlTime으로 1분 넘는 시계 차를 보정한다). 접두의 호스트 비트가 남은 원문은 구분하지 못한다(`IPPrefix`가 해독 때 지운다).
-3. **netmap 적용**(노트 4.2의 설계 선택, 6.1): 계산한 피어를 모두 `WireGuardDevice.addPeer`로 미리 올린다(Go의 지연 생성은 하지 않는다). 사라졌거나 올릴 수 없게 된 키는 `removePeer`. 같은 키의 AllowedIPs 변경은 세션을 유지한다. 필터는 규칙만 바꾸고 UDP 흐름 기록은 잇는다. 다음 키 만료 시각을 `nextDeadline`에 넣어 그때 피어를 다시 계산한다(만료된 피어를 내리고, 그 피어가 갖고 있던 접두를 내세운 다른 노드가 있으면 그 노드에게 준다). 피어를 계산할 때마다 같은 계산에서 "주소 → 주인 노드" 표(`addressOwners`)를 함께 만든다. 노드의 `whoIs`와 연결의 주인 확인이 그 표를 읽는다(호스트 계약 동작 W1·W6). `advance(to:)`가 키 만료를 처리하는지는 `recomputesPeers(at:)`가 알려 준다.
-4. **보내기**: 패킷 해석 → 수신 출발지 검사에 쓰는 AllowedIPs로 만든 `addressOwners`에서 목적지의 피어를 고른다(없으면 `noPeerForDestination`) → 피어의 `homeDERP`가 우리 홈 지역이 아니면 `noRouteToPeer` → `recordOutbound` → `WireGuardDevice.send`. 장치가 내놓은 `.datagram`에 지역을 붙여 돌려준다. 나가는 패킷에는 ACL을 적용하지 않는다(Go와 같다).
-5. **받기**: 패킷이 disco magic `54 53 f0 9f 92 ac`로 시작하고 62바이트 이상이면 `discoMessage`로 버린다. (`shortcut:` Go의 disco 판정 기준은 38바이트다(`disco-magicsock.md`). 그 사이 길이의 것은 WireGuard 장치가 형식 오류로 버리므로 결과는 같다. M4에서 disco를 처리할 때 38로 맞춘다.) 아니면 `WireGuardDevice.receive`에 넣는다. 장치의 `.ipPacket`(복호화와 AllowedIPs 출발지 검사를 통과한 것)만 해석 → TSMP면 소비 → `checkInbound` → `accept`면 `.ipPacket`. 장치의 `.datagram`(핸드셰이크 응답 등)은 지역을 붙여 내보낸다. DERP 프레임의 보낸 쪽 키는 출발지 검사를 대신하지 않는다.
-6. **필터**(노트 4.4~4.6):
-   - 규칙 변환: `SrcBits`가 있거나 `DstPorts[].Bits`가 있으면 필터 전체가 `allowNone`이 된다(Go와 같다. 넓은 옛 규칙을 남기지 않는다). `IPProto`가 비면 TCP·UDP·ICMPv4·ICMPv6, 있으면 0…255만. 주소 문자열은 `*`, CIDR(호스트 비트가 남으면 그 항목을 버린다), `a-b` 범위, 단일 주소. `cap:`으로 시작하는 출발지와 해석할 수 없는 항목은 그 항목만 버린다. `CapGrant`만 있는 규칙은 패킷을 열지 않는다.
-   - 판정 순서: 목적지가 multicast·link-local이면 버린다 → 목적지가 자기 주소가 아니면 `notForUs` → 프로토콜별 판정.
-   - TCP: SYN이 켜지고 ACK가 꺼진 패킷만 규칙(프로토콜·출발 주소·목적 주소·목적 포트)을 본다. 나머지 TCP는 받는다(연결 추적이 아니다. Go와 같다).
-   - UDP·SCTP: 흐름 기록에 있으면 받고, 아니면 규칙을 본다. 기록은 내보낸 UDP·SCTP의 역방향 튜플(프로토콜, 주소·포트 쌍)이고 512개 LRU, 시간 제한은 없다. 받은 패킷은 기록을 만들지 않는다.
-   - ICMP: echo reply와 오류(v4 type 3·11·12, v6 type 1·2·3·4)는 받는다. 그 밖에는 포트를 보지 않고 출발·목적 주소만 맞는 규칙이 있으면 받는다. Go의 v4 오류 집합은 3·11·`0x12`(18)인데, 규격의 Parameter Problem은 12이므로 12를 쓴다(알려진 차이. Go 대조 자료에 표시한다).
-   - 그 밖의 프로토콜: 그 번호를 명시하고 포트 범위가 0…65535인 규칙이 있을 때만 받는다.
-   - 허용 규칙의 합이다. 거부 규칙과 우선순위는 없다.
-7. `TailnetEngine`은 node 개인 키와 WireGuard 세션을 쥐므로 `CustomReflectable`로 자식을 감춘다.
+1. **IP packet parsing** (notes §§3.1 and 3.2). Validate once at the boundary. IPv4 requires at least 20 bytes, IHL of at least 5, and declared length within the buffer. IPv6 requires at least 40 bytes and declared length within the buffer. TCP (20), UDP (8), SCTP (12), and ICMP require the minimum transport header length. Trim bytes after the declared length. IP protocol numbers 0 and 255 are `malformed` (Go drops both as Unknown). IPv4 with MF set or a nonzero offset and IPv6 with next-header 44 are `fragment`. IPv6 next-header 0, 43, 50, 51, 60, 135, 139, or 140 is `extensionHeader`. Go's weaker checks (no minimum IHL, reused fields) are omitted.
+2. **Peer computation** (notes §4.1, `RouteAll=false` and no exit node):
+   - Exclude peers with `id` 0, `key` 0, expiration (`expired` or a nonzero `keyExpiry <= now`), both zero `discoKey` and zero `homeDERP`, or an unsupported peer type listed above.
+   - AllowedIPs. Keep only the peer's single-address `allowedIPs` (IPv4 `/32`, IPv6 `/128`) that are in the Tailscale address ranges or the peer's `addresses`. The Tailscale ranges are `100.64.0.0/10` except `100.115.92.0/23`, and `fd7a:115c:a1e0::/48`. Never assign prefixes matching this node's own `addresses` to a peer. Reject IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d/128`) even if present in `addresses` (2026-11-17 security verification, second pass). `whoIs` converts mapped addresses to IPv4 when looking up identity by address. A peer that uses a mapped source without owning the IPv4 address could therefore appear as another node. Exclude the peer if nothing remains. Go's `peerViewOf` treats any prefix in `addresses` as a local address regardless of length. This implementation rejects broader prefixes (2026-11-17 security verification). `WireGuardDevice` checks sources separately for each peer and does not select the owner by longest prefix. A peer with a broad prefix could use another peer's or this node's address as a source. Revisit this rule and source checks together when supporting subnet routes.
+   - Assign each key and each prefix to only one peer. If several nodes claim the same key or prefix, the lowest node ID wins (each source address must bind to one peer, and wireguard-go AllowedIPs also gives each prefix one owner).
+   - `shortcut:` Use the local clock for expiration (Go compensates for clock skew over 1 minute using ControlTime). Original inputs with host bits set cannot be distinguished (`IPPrefix` clears them when decoding).
+3. **Applying a netmap** (notes §4.2 design choice and §6.1). Install all computed peers up front with `WireGuardDevice.addPeer` (Go creates them lazily). Call `removePeer` for keys that disappear or become ineligible. Changing AllowedIPs for the same key preserves the session. Replace filter rules and carry over recorded UDP flows. Put the next key expiration in `nextDeadline` and recompute peers then (remove expired peers and reassign their prefixes to other nodes that claim them). Each peer computation also builds the "address → owner node" table (`addressOwners`) in the same pass. The node's `whoIs` and connection owner checks read this table (host contract behaviors W1 and W6). `recomputesPeers(at:)` indicates whether `advance(to:)` handles key expiration.
+4. **Sending**. Parse the packet → select the destination peer from `addressOwners`, built from the AllowedIPs used for inbound source checks (if absent, `noPeerForDestination`) → if the peer's `homeDERP` differs from our home region, `noRouteToPeer` → `recordOutbound` → `WireGuardDevice.send`. Attach the region to each `.datagram` the device emits and return it. Outbound packets bypass ACLs (as in Go).
+5. **Receiving**. Drop packets that start with disco magic `54 53 f0 9f 92 ac` and are at least 62 bytes long as `discoMessage`. (`shortcut:` Go identifies disco at 38 bytes (`disco-magicsock.md`). The WireGuard device drops packets between those lengths as malformed, so the result is the same. Match 38 in M4 when handling disco.) Otherwise pass the packet to `WireGuardDevice.receive`. Parse only the device's `.ipPacket` output (packets that passed decryption and the AllowedIPs source check) → consume TSMP → `checkInbound` → on `accept`, emit `.ipPacket`. Attach the region to the device's `.datagram` output (such as handshake responses) and emit it. The sender key from the DERP frame does not substitute for source checks.
+6. **Filter** (notes §§4.4–4.6):
+   - Rule conversion. If `SrcBits` or `DstPorts[].Bits` is present, the entire filter becomes `allowNone` (as in Go, so broad legacy rules do not survive). An empty `IPProto` means TCP, UDP, ICMPv4, and ICMPv6. Otherwise keep only 0…255. Address strings are `*`, CIDR (discard the entry if host bits are set), an `a-b` range, or a single address. Discard individual sources beginning with `cap:` and individual unparseable entries. A rule with only `CapGrant` does not allow packets.
+   - Evaluation order. Drop multicast or link-local destinations → `notForUs` if the destination is not a local address → protocol-specific evaluation.
+   - TCP. Check rules (protocol, source address, destination address, and destination port) only for packets with SYN set and ACK clear. Accept all other TCP packets (no connection tracking, as in Go).
+   - UDP and SCTP. Accept matching recorded flows, otherwise check rules. The record is the reverse tuple of outbound UDP or SCTP (protocol and address/port pairs), with a 512-entry LRU and no timeout. Inbound packets create no records.
+   - ICMP. Accept echo replies and errors (v4 types 3, 11, and 12, v6 types 1, 2, 3, and 4). Otherwise accept when a rule matches the source and destination addresses, ignoring ports. Go's v4 error set is 3, 11, and `0x12` (18), but the specification uses 12 for Parameter Problem, so use 12 (known difference, marked in the Go comparison fixtures).
+   - Other protocols. Accept only if a rule specifies that protocol number and a port range of 0…65535.
+   - The result is the union of allow rules. There are no deny rules or priorities.
+7. `TailnetEngine` holds the node private key and WireGuard sessions, so it hides its children with `CustomReflectable`.
 
-## 노드 API (`Swiftail`)
+## Node API (`Swiftail`)
 
-아래는 M3 시점의 선언이다. 지금의 사건과 공개 API는 `docs/contracts/SwiftailTunnel.md` "공개 API"가 정본이다. 2026-11-18에 더한 것: `NodeEvent.statusChanged`(`status`가 실제로 바뀔 때만, 값 없이), `TailnetNode.hasSavedIdentity(in:)`(저장된 신원이 있는지), 공개 API에 나오는 다른 모듈 타입의 별명(`import Swiftail`만으로 이름을 쓴다).
+These are the M3 declarations. The canonical source for current events and public API is "Public API" in `docs/contracts/SwiftailTunnel.md`. Additions on 2026-11-18 were `NodeEvent.statusChanged` (only when `status` actually changes, with no value), `TailnetNode.hasSavedIdentity(in:)` (whether a saved identity exists), and aliases for other modules' types that appear in the public API (their names require only `import Swiftail`).
 
 ```swift
 public struct NodeConfiguration: Sendable {
-    /// 신원 파일을 둘 디렉터리.
+    /// The directory for identity files.
     public var stateDirectory: URL
     public var hostname: String
     public var controlURL: URL
-    /// 첫 등록에만 쓴다.
+    /// Used only for initial registration.
     public var authKey: String?
     public var ephemeral: Bool
     public init(stateDirectory: URL, hostname: String, controlURL: URL, authKey: String? = nil, ephemeral: Bool = false)
 }
 
 public enum NodeEvent: Sendable {
-    /// 사용자가 이 URL에서 로그인해야 한다.
+    /// The user must sign in at this URL.
     case loginRequired(URL)
-    /// 등록되고 netmap을 받았다. 자기 tailnet 주소다. 주소가 바뀌면 다시 나온다.
-    /// `reconnecting` 뒤 끊겼던 연결이 모두 돌아와도 다시 나온다.
+    /// The node registered and received a netmap. Includes its own tailnet addresses. Emitted again when they change.
+    /// Also emitted when all lost connections recover after `reconnecting`.
     case running(addresses: [IPAddress])
-    /// 제어 서버나 DERP와의 연결이 끊겼다. 다시 잇는 중이다.
+    /// A connection to the control server or DERP dropped and is being restored.
     case reconnecting
 }
 
@@ -176,94 +176,94 @@ public enum NodeError: Error, Sendable {
     case invalidConfiguration(String)
 }
 
-/// tailnet의 노드 하나. M3에서는 IP 패킷을 메모리로 주고받는다(TUN은 M5, 리스너는 M6).
+/// A node in a tailnet. M3 exchanges IP packets in memory (TUN is M5, listeners are M6).
 public actor TailnetNode {
     public init(configuration: NodeConfiguration)
 
-    /// 사건의 흐름. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// The event stream for one subscriber. The stream ends when `run()` ends.
     public nonisolated var events: AsyncStream<NodeEvent> { get }
-    /// 피어가 보냈고 필터를 통과한 IP 패킷. 구독자는 하나다. 소비가 느리면 오래된 것부터 버린다.
+    /// The stream of IP packets sent by peers and accepted by the filter. One subscriber. Slow consumption drops the oldest packets first.
     public nonisolated var inboundPackets: AsyncStream<[UInt8]> { get }
 
-    /// 등록하고, netmap을 받아 데이터면을 유지한다. 호출한 Task가 취소될 때까지 돌아오지 않는다.
-    /// 다시 시도해도 소용없는 실패는 던진다. 노드 하나에 한 번만 부른다.
+    /// Registers, receives the netmap, and maintains the data plane. Returns when the calling Task is canceled.
+    /// Throws failures that retrying cannot resolve. Call only once per node.
     public func run() async throws(NodeError)
 
-    /// IP 패킷 하나를 tailnet으로 보낸다. 보낼 수 없으면 조용히 버린다(IP는 원래 그렇다).
+    /// Sends one IP packet to the tailnet. Silently drops it if it cannot be sent (as IP normally does).
     public func send(_ ipPacket: [UInt8])
 
-    /// 대화형 로그인 URL을 새로 요청한다.
+    /// Requests a new interactive login URL.
     public func startInteractiveLogin()
 }
 ```
 
-`docs/plan.md` 6절의 초안과 다른 점: `start()`/`stop()` 대신 `run()`과 Task 취소를 쓴다(`ControlClient`·`DERPClient`와 같은 모양이고, 분리된 Task 없이 수명이 호출 범위에 묶인다). `TunnelDevice`와 `TunnelNetworkSettings`는 M5에서 정한다.
+The change from the draft in `docs/plan.md` §6 is `run()` with Task cancellation in place of `start()`/`stop()` (the same shape as `ControlClient` and `DERPClient`, with the lifetime scoped to the call and no detached Task). M5 defines `TunnelDevice` and `TunnelNetworkSettings`.
 
-### 동작
+### Behavior
 
-1. **시작**: `NodeIdentityStore`와 `ControlClient`를 만든다. disco 키를 새로 만들고(저장하지 않는다) 공개 키를 `LocalStatus.discoKey`로 올린다. **0이 아닌 DiscoKey가 없으면 Go 피어는 이 노드를 피어로 만들지 않는다**(노트 derp-stun 6절 7). M3은 disco 메시지에 답하지 않는다.
-2. **등록 뒤**: `registered` 사건을 받으면 신원 파일에서 node 개인 키를 읽어 `TailnetEngine`을 만든다(키가 바뀌면 새로 만든다).
-3. **홈 DERP**(노트 derp-stun 4.8): 첫 netmap의 DERPMap에서 `noMeasureNoHome`이 아니고 쓸 수 있는 서버(`stunOnly`가 아니고 `hostName`이 비지 않은 것. M8 ③부터 `certName`으로 건너뛰지 않는다)가 있는 지역 가운데 ID가 가장 작은 것을 고른다. `LocalStatus.netInfo.preferredDERP`로 올린다(**올리지 않으면 Go 피어가 보낼 곳을 모른다**). 그 지역에 `DERPClient`를 `isPreferred: true`로 띄운다. DERPMap에서 그 지역이 바뀌면 클라이언트를 다시 띄운다. 쓸 수 있는 지역이 없어지면 클라이언트를 내리고, DERP를 끊긴 연결로 세지 않는다. `shortcut:` 지연 측정 없음, 지역 하나만(M4).
-   - `DERPServer` 변환: `hostName` 그대로, `ipv4`가 IPv4 주소면 그 주소·비었으면 DNS·그 밖이면(`"none"`) `ipv6`를 같은 규칙으로, 둘 다 못 쓰면 그 서버를 건너뛴다. `derpPort`가 0이면 443. 인증서 확인은 `certName`이 `sha256-raw:`로 시작하면 `.pinned(나머지)`, 비지 않고 `hostName`과 다르면 `.named(certName)`, 그 밖에는 `insecureForTests`면 `.noneForTests`(DERP 계약 "M8 ③"). `hostName`이 빈 서버는 건너뛴다.
-4. **netmap**: 받을 때마다 `engine.apply`. 자기 주소가 정해지면 `running`.
-5. **패킷**: `send` → `engine.send`. DERP `packet` 사건 → `engine.receive`. 엔진의 `.datagram` → `DERPClient.send`, `.ipPacket` → `inboundPackets`. `nextDeadline`에 맞춰 `engine.advance`.
-6. **구조적 동시성**: `run()` 안의 TaskGroup 하나에 제어, DERP, 타이머가 자식으로 돈다. `run()`을 부른 Task가 취소되면 모두 멈춘다. 엔진 호출은 actor가 직렬화한다.
-7. **비밀**: node 개인 키와 disco 개인 키를 사건·오류·`description`·`dump`에 넣지 않는다.
+1. **Startup**. Create `NodeIdentityStore` and `ControlClient`. Generate a new disco key without storing it and publish its public key as `LocalStatus.discoKey`. **Without a nonzero DiscoKey, Go peers do not make this node a peer** (derp-stun notes §6 item 7). M3 does not answer disco messages.
+2. **After registration**. On a `registered` event, read the node private key from the identity file and create `TailnetEngine` (recreate it if the key changes).
+3. **Home DERP** (derp-stun notes §4.8). From the first netmap's DERPMap, choose the lowest-ID region that is eligible (`noMeasureNoHome` is false) and has a usable server (not `stunOnly` and with a nonempty `hostName`. Starting in M8 ③, `certName` does not cause a skip). Publish it as `LocalStatus.netInfo.preferredDERP` (**otherwise Go peers do not know where to send**). Start a `DERPClient` for the region with `isPreferred: true`. Restart it if that region changes in DERPMap. If no usable regions remain, stop the client and exclude DERP from the count of lost connections. `shortcut:` no latency measurement, one region only (M4).
+   - `DERPServer` conversion. Keep `hostName` as is. Use `ipv4` if it is an IPv4 address, DNS if empty, or apply the same rule to `ipv6` otherwise (`"none"`). Skip the server if neither works. Use 443 when `derpPort` is 0. For certificate verification, use `.pinned(remainder)` when `certName` starts with `sha256-raw:`, `.named(certName)` when it is nonempty and differs from `hostName`, or `.noneForTests` when `insecureForTests` is set in the remaining case (DERP contract "M8 ③"). Skip servers with an empty `hostName`.
+4. **Netmap**. Call `engine.apply` on every netmap. Emit `running` once local addresses are known.
+5. **Packets**. `send` → `engine.send`. DERP `packet` event → `engine.receive`. Engine `.datagram` → `DERPClient.send`, `.ipPacket` → `inboundPackets`. Call `engine.advance` at `nextDeadline`.
+6. **Structured concurrency**. Control, DERP, and timers run as children in one TaskGroup within `run()`. They all stop when the Task that called `run()` is canceled. The actor serializes engine calls.
+7. **Secrets**. Keep the node and disco private keys out of events, errors, `description`, and `dump`.
 
-## 시험
+## Tests
 
-단위 시험(`Tests/SwiftailEngineTests`, 소켓·시계 없음. tailcfg 값은 JSON을 해독해 만든다):
+Unit tests (`Tests/SwiftailEngineTests`, no sockets or clock. Decode tailcfg values from JSON):
 
-- `IPPacket`: IPv4·IPv6의 TCP·UDP·ICMP 고정 패킷, 선언 길이로 자르기, 짧은 머리, IHL 4, 조각(MF, 오프셋, IPv6 44), 확장 헤더, 임의 입력으로 죽지 않음.
-- 필터 변환과 판정: 노트 7절 3~6의 항목 — `*`·CIDR·단일 주소·범위·`cap:`, 포트 양끝, 빈 `IPProto`·명시 프로토콜·범위 밖 번호, 잘못된 CIDR·`SrcBits`, `CapGrant`만 있는 규칙, TCP의 SYN과 SYN이 아닌 패킷, ICMP의 주소만 보는 규칙과 echo reply, 자기 주소가 아닌 목적지, UDP 흐름 기록(먼저 보낸 것의 응답, 튜플 하나만 다른 것, 513번째 기록, 규칙 교체 뒤 유지).
-- **Go 기준 대조**: Go의 실제 `wgengine/filter`에 같은 규칙과 패킷을 넣어 얻은 판정을 자료(`Tests/SwiftailEngineTests/Fixtures`)로 두고 비교한다. 자료는 `Tools/interop`의 도구가 만들고, 대조 시험은 구현자와 다른 세션이 쓴다. M3에서 일부러 다르게 한 것(조각, 확장 헤더, `cap:` 출발지)은 자료에 표시해 따로 본다.
-- 피어 계산: 노트 7절 7 — 만료 경계(`==`, `<`, `>`), 만료 없음, 0 키, 빈 AllowedIPs, 서브넷·`/0`을 AllowedIPs에서 빼는지, 지원하지 않는 피어.
-- `TailnetEngine`: 엔진 둘을 메모리에서 맞물려(한쪽의 `.datagram`을 다른 쪽 `receive`에) UDP 패킷이 왕복한다. netmap 갱신으로 피어 추가·삭제·키 교체, AllowedIPs 밖 출발지, disco 메시지, TSMP 소비, 홈 지역이 다른 피어, 키 만료 시각에 피어가 내려감. `dump`에 키가 나오지 않음.
+- `IPPacket`. Fixed IPv4 and IPv6 TCP, UDP, and ICMP packets, trimming to declared length, short headers, IHL 4, fragments (MF, offset, IPv6 44), extension headers, and arbitrary input without a crash.
+- Filter conversion and evaluation. Items 3–6 of notes §7 cover `*`, CIDR, single addresses, ranges, `cap:`, both port endpoints, empty `IPProto`, explicit protocols, out-of-range numbers, invalid CIDR, `SrcBits`, `CapGrant`-only rules, TCP SYN and non-SYN packets, ICMP address-only rules and echo replies, nonlocal destinations, and recorded UDP flows (reply to an earlier send, one differing tuple, the 513th record, and retention after rule replacement).
+- **Comparison against Go**. Feed identical rules and packets to Go's actual `wgengine/filter`, save the verdicts as fixtures (`Tests/SwiftailEngineTests/Fixtures`), and compare. A tool in `Tools/interop` produces the fixtures, and a separate session from the implementer writes the comparison tests. Mark and examine intentional M3 differences separately in the fixtures (fragments, extension headers, and `cap:` sources).
+- Peer computation. Notes §7 item 7 covers expiration boundaries (`==`, `<`, `>`), no expiration, zero keys, empty AllowedIPs, removing subnets and `/0` from AllowedIPs, and unsupported peers.
+- `TailnetEngine`. Connect two engines in memory (send one engine's `.datagram` to the other's `receive`) for a UDP round trip. Test peer addition, removal, and key rotation through netmap updates, sources outside AllowedIPs, disco messages, TSMP consumption, peers in another home region, removal at key expiration, and absence of keys in `dump`.
 
-## M3 관문
+## M3 gate
 
-`Tools/interop`의 `tailnet`(testcontrol + DERP + Go tsnet 피어. 피어는 TCP·UDP 포트 7에서 에코한다)을 상대로, Swift 노드는 UDP 소켓을 열지 않으므로 모든 통신이 DERP를 거친다:
+Test against `tailnet` from `Tools/interop` (testcontrol + DERP + Go tsnet peer, which echoes on TCP and UDP port 7). The Swift node opens no UDP socket, so all traffic goes through DERP:
 
-1. Swift 노드가 등록되고 `running`이 된다. Go 피어의 `peerStatus`에 Swift 노드가 보이고 그 경로가 DERP(relay)다.
-2. **UDP 에코**: Swift가 Go 피어의 주소 포트 7로 보낸 UDP 패킷의 에코가 `inboundPackets`로 돌아온다. IPv4와 IPv6 각각.
-3. **TCP**: Swift가 보낸 SYN에 Go 피어의 SYN-ACK가 돌아온다(포트 7). 리스너가 없는 포트에는 RST가 돌아온다.
-4. **ACL**: Swift 노드의 맵에 특정 UDP 포트만 여는 필터를 주입한 뒤, Go 피어가 Swift 주소의 열린 포트로 보낸 UDP는 `inboundPackets`에 나오고 막힌 포트로 보낸 것은 나오지 않는다. TCP SYN도 같다. (Go 피어가 임의 주소·포트로 패킷을 보내는 명령을 도구에 더한다.)
-5. Swift가 먼저 보낸 UDP의 응답은 필터가 모두 막힌 상태에서도 돌아온다.
-6. 피어를 맵에서 지우면(`PeersRemoved` 주입) 그 피어로 가는 패킷이 더 나가지 않는다.
-7. 2분 넘게 유지한 뒤에도 에코가 된다(WireGuard rekey와 DERP KeepAlive를 넘긴다).
+1. The Swift node registers and becomes `running`. The Go peer's `peerStatus` shows the Swift node and a DERP (relay) path.
+2. **UDP echo**. The echo of a Swift UDP packet sent to port 7 at the Go peer's address returns through `inboundPackets`. Test IPv4 and IPv6 separately.
+3. **TCP**. The Go peer returns a SYN-ACK to Swift's SYN (port 7) and an RST on a port without a listener.
+4. **ACL**. Inject a filter into the Swift node's map allowing only a specific UDP port. UDP from the Go peer to an open port on the Swift address appears in `inboundPackets`. UDP to a blocked port is absent. The same holds for TCP SYN. (Add a tool command for the Go peer to send packets to an arbitrary address and port.)
+5. Replies to UDP first sent by Swift return even when the filter blocks everything.
+6. Removing a peer from the map (injecting `PeersRemoved`) stops packets to that peer.
+7. Echo still works after keeping the connection for more than 2 minutes (through WireGuard rekey and DERP KeepAlive).
 
-마무리 관문(실제 tailnet)은 M4 끝에 한다.
+The final gate (a real tailnet) takes place at the end of M4.
 
-## M4에서 바뀌는 것
+## Changes in M4
 
-이 절은 위의 M3 내용을 고치지 않고 M4의 변경을 덧붙인다. 위 내용과 어긋나면 이 절이 앞선다. 경로 찾기 자체는 [SwiftailMagicsock.md](SwiftailMagicsock.md)(아래에서 "magicsock 계약")에 있다.
+This section appends the M4 changes to the preceding M3 description. This section takes precedence where they differ. Path discovery itself is in [SwiftailMagicsock.md](SwiftailMagicsock.md) (the "magicsock contract" below).
 
-원칙: 엔진은 지금처럼 "이 피어에게 보낼 WireGuard 데이터그램"만 내고, UDP와 DERP 가운데 어디로 보낼지는 `Magicsock`이 고른다. 노드가 두 값 타입을 저장 프로퍼티로 쥐고 출력을 서로에게 넘긴다(magicsock 계약 Q1). WireGuard 장치가 주소를 모르는 것과 같은 원칙이다(`docs/contracts/SwiftailWireGuard.md` "왜 이 구조인가").
+The engine still emits only "a WireGuard datagram to send to this peer," and `Magicsock` chooses between UDP and DERP. The node holds the two value types as stored properties and passes their outputs to one another (magicsock contract Q1). This follows the same principle as the WireGuard device having no knowledge of addresses (`docs/contracts/SwiftailWireGuard.md` "Why this structure?").
 
-### 엔진 (`SwiftailEngine`)
+### Engine (`SwiftailEngine`)
 
 ```swift
 public struct EnginePeer: Sendable, Equatable {
     public var key: NodePublicKey
     public var allowedIPs: [IPPrefix]
     public var homeDERP: Int64
-    /// 새로 더함. netmap의 `DiscoKey`. 0이면 disco를 하지 않는다.
+    /// Added. The netmap's `DiscoKey`. Zero disables disco.
     public var discoKey: DiscoPublicKey
-    /// 새로 더함. netmap의 `Endpoints` 그대로(거르기는 `Magicsock`이 한다).
+    /// Added. The netmap's `Endpoints` as provided (`Magicsock` filters them).
     public var endpoints: [IPEndpoint]
-    public static func peers(in netmap: Netmap, at now: Date) -> [EnginePeer]   // 그대로
+    public static func peers(in netmap: Netmap, at now: Date) -> [EnginePeer]   // Unchanged
 }
 
 public struct TailnetEngine: Sendable {
     public enum Output: Sendable, Equatable {
-        /// 피어에게 보낼 WireGuard 메시지. 경로는 부르는 쪽(`Magicsock`)이 고른다.
+        /// A WireGuard message to send to a peer. The caller (`Magicsock`) chooses the path.
         case datagram([UInt8], to: NodePublicKey)
         case ipPacket([UInt8])
         case dropped(Drop)
-        /// 새로 더함(2026-11-15). 방금 `receive`한 데이터그램의 출처로 그 길 그대로 되돌릴 WireGuard cookie reply.
-        /// 보낸 피어를 모르므로 피어 경로 선택을 거치지 않는다. `receive`의 출력에만 나온다.
+        /// Added 2026-11-15. A WireGuard cookie reply to return to the source of the last `receive` datagram over the same path.
+        /// The sending peer is unknown, so it bypasses peer path selection. Appears only in `receive` output.
         case cookieReply([UInt8])
-        /// 새로 더함(2026-11-16). 피어가 터널 안으로 알린 disco 키(TSMP 광고, 0이 아닌 키). `receive`의 출력에만 나온다.
+        /// Added 2026-11-16. A disco key advertised by a peer through the tunnel (TSMP advertisement, nonzero key). Appears only in `receive` output.
         case discoKeyAdvertised(DiscoPublicKey, from: NodePublicKey)
     }
     public enum Drop: Sendable, Equatable {
@@ -273,88 +273,88 @@ public struct TailnetEngine: Sendable {
         case consumedControlPacket
         case noPeerForDestination
         case wireGuard(WireGuardError)
-        // 지움: noRouteToPeer(→ Magicsock.Drop.noRouteToPeer), discoMessage(엔진에 disco가 오지 않는다)
+        // Removed noRouteToPeer (→ Magicsock.Drop.noRouteToPeer) and discoMessage (disco never reaches the engine)
     }
-    /// 새로 더함(2026-11-15). 받은 데이터그램이 온 곳. 노드가 경로에서 만든 불투명한 값이고 엔진은 장치에 넘기기만 한다.
+    /// Added 2026-11-15. The source of a received datagram. The node builds this opaque value from the path, and the engine only passes it to the device.
     public typealias Source = WireGuardDevice.Source
 
-    /// `discoKey`는 2026-11-16에 더했다. 세션이 설 때 피어에게 광고할 자기 disco 공개 키다. 필수 인자다(기본값을 두면
-    /// 빠뜨렸을 때 광고가 조용히 꺼진다). 0 키를 넘기면 광고하지 않는다.
+    /// Creates the engine with its disco public key to advertise when a peer session is established. `discoKey` was added 2026-11-16 and is required
+    /// because a default would silently disable advertisement when omitted. Pass a zero key to disable advertisement.
     public init(nodeKey: Curve25519.KeyAgreement.PrivateKey, discoKey: DiscoPublicKey, now: ContinuousClock.Instant, wallClock: Date)
-    /// `homeDERP` 인자를 지운다. 엔진은 지역을 모른다.
+    /// Applies a netmap. Removes the `homeDERP` argument because the engine does not know the region.
     public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output]
-    public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]   // 그대로
-    /// `Magicsock`이 `.wireGuard`로 낸 데이터그램 하나. 보낸 쪽 키 인자를 지운다(UDP에는 없다. 피어는 WireGuard가 정한다).
-    /// `source`는 2026-11-15에 더했다. WireGuard가 부하 상태일 때 cookie를 묶고 출처별 속도 제한을 세는 데만 쓴다.
+    public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]   // Unchanged
+    /// Receives one datagram emitted as `.wireGuard` by `Magicsock`. Removes the sender key argument (UDP has none. WireGuard determines the peer).
+    /// `source` was added 2026-11-15. It is used only to bind cookies and count per-source rate limits when WireGuard is under load.
     public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) -> [Output]
-    public mutating func advance(to now: ContinuousClock.Instant) -> [Output]   // 그대로
-    public var nextDeadline: ContinuousClock.Instant? { get }                 // 그대로
+    public mutating func advance(to now: ContinuousClock.Instant) -> [Output]   // Unchanged
+    public var nextDeadline: ContinuousClock.Instant? { get }                 // Unchanged
 }
 ```
 
-동작 변경(번호는 위 "동작"의 번호를 가리킨다):
+Behavior changes (numbers refer to "Behavior" above):
 
-- **M-E1 (동작 4 보내기)**: "피어의 `homeDERP`가 우리 홈 지역이 아니면 `noRouteToPeer`"를 지운다. 데이터면에 올린 모든 피어에게 `.datagram(_, to:)`를 낸다. 보낼 곳이 없는 피어는 `Magicsock`이 `noRouteToPeer`로 버린다. 핸드셰이크 응답·재시도·keepalive도 같다(`route`에서 지역을 붙이지 않는다).
-- **M-E2 (동작 5 받기)**: disco 판정을 지운다. 엔진에 들어오는 것은 `Magicsock`이 WireGuard로 분류한 것뿐이다(magicsock 계약 동작 A). DERP 프레임의 보낸 쪽 키는 M3에서도 쓰지 않았으므로 인자를 지운다. 나머지(WireGuard → AllowedIPs 출발지 검사 → TSMP 소비 → 필터)는 그대로다.
-- **M-E3 (동작 2 피어 계산)**: `EnginePeer`에 `discoKey`와 `endpoints`를 그대로 옮겨 담는다. 올리는 조건은 그대로다(disco 키가 0이어도 홈 DERP가 있으면 올린다. 그 피어는 DERP만 쓴다).
-- **M-E4 (TSMP)**: 소비하고 올리지 않는다. 2026-11-16부터 disco 키 광고(`disco-magicsock.md` 3.8)는 `.discoKeyAdvertised(키, from: 피어)`로 알리고(노드가 `Magicsock.receiveDiscoKeyAdvertisement`에 넘긴다), `init`의 `discoKey`가 0이 아니면 피어마다 광고를 WireGuard priority message로 정해 세션이 설 때 보낸다(magicsock 계약 "TSMP disco 키 광고").
-- 시험: 엔진 둘을 맞물리는 시험은 출력 모양만 바뀐다. "홈 지역이 다른 피어" 시험은 이제 데이터그램이 나오는지 본다. disco 메시지 시험은 엔진에서 지우고 `MagicsockTests`로 간다.
+- **M-E1 (behavior 4, sending)**. Remove "if the peer's `homeDERP` differs from our home region, `noRouteToPeer`." Emit `.datagram(_, to:)` for every peer installed in the data plane. `Magicsock` drops a peer with nowhere to send as `noRouteToPeer`. The same applies to handshake responses, retries, and keepalive (`route` does not attach a region).
+- **M-E2 (behavior 5, receiving)**. Remove disco detection. The engine receives only packets that `Magicsock` classified as WireGuard (magicsock contract behavior A). The sender key from the DERP frame was already unused in M3, so remove the argument. The rest stays the same (WireGuard → AllowedIPs source check → TSMP consumption → filter).
+- **M-E3 (behavior 2, peer computation)**. Copy `discoKey` and `endpoints` into `EnginePeer` as provided. The inclusion criteria stay the same (include a peer with a zero disco key if it has a home DERP. That peer uses only DERP).
+- **M-E4 (TSMP)**. Consume it without passing it up. Starting 2026-11-16, emit disco key advertisements (`disco-magicsock.md` §3.8) as `.discoKeyAdvertised(key, from: peer)` (the node passes them to `Magicsock.receiveDiscoKeyAdvertisement`). If the `init` `discoKey` is nonzero, set the advertisement as each peer's WireGuard priority message so it sends when the session is established (magicsock contract "TSMP disco key advertisement").
+- Tests. Only the output shape changes in the tests connecting two engines. The "peer in another home region" test now checks that a datagram is emitted. Move the disco message test from the engine to `MagicsockTests`.
 
-### 노드 (`Swiftail`)
+### Node (`Swiftail`)
 
 ```swift
 public enum NodeEvent: Sendable {
     case loginRequired(URL)
     case running(addresses: [IPAddress])
     case reconnecting
-    /// 새로 더함. 피어의 경로가 바뀌었다. nil은 그 피어가 데이터면에서 빠졌다는 뜻이다.
-    /// - Parameter fqdn: netmap의 노드 이름에서 끝의 점을 뗀 것(`rd-mac-1a2b3c4d.tail0001.ts.net`).
+    /// Added. A peer's path changed. nil means the peer was removed from the data plane.
+    /// - Parameter fqdn: The node name from the netmap with its trailing dot removed (`rd-mac-1a2b3c4d.tail0001.ts.net`).
     case peerPathChanged(fqdn: String, path: PeerPath?)
 }
 
 public enum NodeError: Error, Sendable {
     case control(ControlError)
     case invalidConfiguration(String)
-    /// 새로 더함. UDP 소켓을 열거나 묶지 못했다. 메시지에는 errno 이름만 담는다.
+    /// Added. The UDP socket could not be opened or bound. The message contains only the errno name.
     case udpUnavailable(String)
 }
 
 extension TailnetNode {
-    /// 새로 더함. 이름이 `fqdn`인 피어의 지금 경로. 그런 피어가 데이터면에 없으면 nil.
+    /// Returns the current path of the peer named `fqdn`, or nil if absent from the data plane. This API is new.
     ///
-    /// 이름은 끝의 점 하나를 떼고 ASCII 대소문자를 무시해 비교한다. 같은 이름이 둘이면 node ID가 작은 쪽이다.
-    /// 경로의 뜻은 Go `tailscale status`의 직접 주소(`CurAddr`)와 같다(`PeerPath`).
+    /// Comparison strips one trailing dot and ignores ASCII case. When two names match, the lower node ID wins.
+    /// The path has the same meaning as the direct address (`CurAddr`) in Go's `tailscale status` (`PeerPath`).
     public func path(toPeerNamed fqdn: String) -> PeerPath?
 
-    /// 시험 전용(공개 API 아님). 이 원격 UDP 포트로 보낼 것과 이 포트에서 온 것을 소켓 경계에서 버린다.
+    /// For tests only (outside the public API). Drops outbound and inbound traffic for these remote UDP ports at the socket boundary.
     package func setBlockedUDPPorts(_ ports: Set<UInt16>)
 }
 ```
 
-`PeerPath`는 `SwiftailMagicsock`의 공개 타입이다(`IPAddress`가 `SwiftailBase`의 것인 것과 같다). 2026-11-18부터 `Swiftail`이 둘 다 같은 이름의 별명으로 낸다(`docs/contracts/SwiftailTunnel.md` "공개 API에 나오는 다른 모듈의 타입").
+`PeerPath` is a public type in `SwiftailMagicsock` (as `IPAddress` is in `SwiftailBase`). Starting 2026-11-18, `Swiftail` exposes both under same-name aliases (`docs/contracts/SwiftailTunnel.md` "Types from other modules in the public API").
 
-동작 변경:
+Behavior changes:
 
-- **N1 (시작)**: `run()`이 시작할 때 `DatagramSocket(port: 0)`을 열고(실패하면 `udpUnavailable`을 던진다), `LocalInterfaceAddresses.current()`를 한 번 읽는다(실패하면 빈 목록으로 계속한다. STUN 엔드포인트만 올라간다). disco 개인 키를 만들어 **노드가 쥔다**(M3은 공개 키만 남겼다). `LocalStatus.discoKey`는 그 공개 키다. 소켓은 `run()`이 끝날 때 닫는다.
-- **N2 (등록 뒤)**: node 키를 얻으면 엔진과 함께 `Magicsock(discoKey:nodeKey:localPort:localAddresses:loopbackAddresses:now:)`을 만든다. node 키가 바뀌면 둘 다 새로 만든다(disco 키와 소켓은 그대로). 새로 만든 뒤 마지막 netmap의 피어와 지역을 다시 넣는다.
-- **N3 (DERP 지역)**: M3 동작 3의 "홈 DERP 고정 선택, 클라이언트 하나"를 바꾼다.
-  - 홈 후보 `Magicsock.Region`: DERPMap의 지역 가운데 M3의 홈 조건(`noMeasureNoHome`이 아니고 `DERPServer`로 바꿀 수 있는 노드가 있음)을 만족하는 것. `stunServers`는 그 지역 노드를 순서대로 보며 magicsock 계약 E3의 규칙(`stunTestIP` → IPv4 리터럴, `stunPort` 0은 3478, 음수는 건너뜀)으로 만든다(`stunOnly` 노드 포함). `score`는 `homeParams.regionScore[id]`(없으면 0). DERPMap이 바뀔 때마다 `setRegions`. 이 변환은 입출력 없는 함수로 두고 `SwiftailTests`에서 시험한다.
-  - 연결: 지역 ID → `DERPClient` 표. 홈 지역(`.homeRegionChanged`로 받은 것)은 `isPreferred: true`로 연다. `Magicsock`이 `.derp(_, to:, region:)`로 처음 가리킨 지역은 그때 `isPreferred: false`로 연다(DERPMap의 어느 지역이든, `noMeasureNoHome` 포함. 서버로 바꿀 수 없으면 그 데이터그램을 버린다). 홈이 바뀌어도 옛 홈 연결은 닫지 않는다(magicsock 계약 E6). DERPMap에서 사라진 지역의 연결은 닫는다. 연결할 서버 목록(`DERPServer`로 바꾼 것)이 바뀐 지역의 연결도 닫고, 홈이면 곧바로 새 서버로 다시 연다(Go `derp.go`의 `derp-region-redefined`. `DERPClient`의 서버 목록은 만들 때 고정된다). node 키가 바뀌면 모두 다시 연다. 이때 옛 `Magicsock`의 피어를 먼저 비워 알렸던 경로를 nil로 거둔다(M4 검토 B, 2026-11-15).
-  - `shortcut:` 홈이 아닌 연결의 60초 미사용 정리(DERP 노트 4.9 5)는 하지 않는다. 열린 연결 수는 DERPMap 지역 수로 묶인다. 필요해지는 시점: M5 메모리 측정. 홈이 바뀌어도 이미 열린 연결의 NotePreferred는 다시 보내지 않는다(서버 통계용, DERP 노트 4.8 3).
-  - `reconnecting`은 홈 지역 연결의 끊김만 알린다. `peerGone`은 계속 무시한다(역방향 경로를 쓰지 않는다).
-  - 각 연결의 `.packet`은 `magicsock.receiveDERP(_, from:, region: 그 연결의 지역)`으로 넣는다.
-  - `DERPHome.choose`는 쓰지 않는다(홈 선택은 `Magicsock`). `DERPServer.init(_: DERPNode)`는 그대로 쓴다.
-- **N4 (제어 서버에 올리기)**: `.endpointsChanged(eps)` → `localStatus.endpoints = eps.map(\.address)`, `endpointTypes`는 같은 순서로 `.local`→`EndpointType.local`, `.stun`→`EndpointType.stun`. `.homeRegionChanged(id)` → `localStatus.netInfo = NetInfo(preferredDERP: id)`. 어느 쪽이든 바뀌면 `control.setLocalStatus(localStatus)`. `ControlClient`는 상태 올리기마다 `DiscoKey`와 엔드포인트 전체를 함께 보내므로 testcontrol이 노드 값을 통째로 덮는 동작(`disco-magicsock.md` 4.9 4)과 맞는다. M3의 "netmap마다 홈 지역을 올리기"는 이 흐름으로 바뀐다.
-- **N5 (패킷 흐름)**:
-  - 보내기: `send(ipPacket)` → `engine.send` → `.datagram(b, to: k)` → `magicsock.send(b, to: k)`.
-  - UDP 받기: 소켓 흐름의 `(bytes, source)` → `magicsock.receiveUDP`.
-  - `Magicsock` 출력: `.udp` → `socket.send`(실패는 버린다. `shortcut:` 송신 오류에 따른 재결속은 M5, magicsock 계약 제외 표), `.derp` → 그 지역 연결(N3), `.wireGuard(b, from: 길)` → `engine.receive(b, from: 길의 출처)` → 엔진 출력은 다시 이 흐름으로, `.endpointsChanged`·`.homeRegionChanged` → N4, `.pathChanged` → N6, `.dropped` → 버린다.
-  - cookie reply(2026-11-15): `engine.receive`가 낸 `.cookieReply(b)`는 `magicsock.send`를 거치지 않고 받은 길로 보낸다. UDP로 왔으면 `.udp(b, to: 출처)`, DERP로 왔으면 `.derp(b, to: 보낸 쪽, region: 받은 지역)`을 위 흐름에 넣는다(N8의 거르개도 그대로 적용된다). 엔진에 넘기는 출처는 `address`(cookie가 묶이는 값)와 `host`(속도 제한 단위)다. UDP는 Go 표준 bind와 같이 `address` = 주소 ‖ 포트(LE), `host` = 주소. DERP는 Tailscale magicsock과 같은 뜻으로 피어마다 하나이고 지역은 넣지 않는다: 둘 다 node 공개 키 32바이트(Go는 피어별 가짜 주소 `fakeWGAddr`에 묶고 피어의 tailnet 주소 `nodeAddr`로 제한한다, `wgengine/magicsock/endpoint.go` `DstToBytes`·`DstIP`). 길이가 달라 UDP 값과 겹치지 않는다.
-  - netmap: `engine.apply` 뒤 `magicsock.setPeers(EnginePeer.peers(in: netmap, at: Date()).map { Magicsock.Peer(key: $0.key, discoKey: $0.discoKey, homeDERP: $0.homeDERP, endpoints: $0.endpoints) })`. 순서는 node ID 오름차순이다(disco 키의 주인, magicsock 계약 B1). `engine.apply` 뒤에는 엔진의 주인 표를 받아 쥐고 스택의 주인을 견준다(호스트 계약 동작 W6, netstack 계약 동작 X10). `shortcut:` 키 만료로 엔진이 `advance`에서 내린 피어는 다음 netmap까지 `Magicsock`에 남는다. 엔진이 그 피어에게 데이터그램을 내지 않으므로 heartbeat는 45초 뒤 멈추고, 받은 WireGuard는 장치가 버린다. 주인 표와 스택의 주인은 그때 바로 다시 맞춘다(아래 타이머).
-  - 타이머: `min(engine.nextDeadline, magicsock.nextDeadline)`에 깨어나 둘 다 `advance`. 엔진의 `advance`가 키 만료를 처리했으면(`recomputesPeers(at:)`) 그 직후에 주인 표를 다시 받아 쥐고, 주인이 바뀐 주소의 연결을 끊는다(netmap을 적용할 때와 같은 길).
-- **N6 (경로 사건과 조회)**: 노드는 netmap마다 데이터면 피어의 키 → 이름 표를 만든다(이름은 `Node.name`에서 끝의 점 하나를 뗀 것). `.pathChanged(k, p)`는 그 표의 이름으로 `peerPathChanged`를 낸다. 피어가 빠지는 경우의 이름은 표를 바꾸기 전의 것을 쓴다. 이름이 빈 피어는 사건을 내지 않는다. `path(toPeerNamed:)`는 이름 → 키(N6의 비교 규칙) → `magicsock.path(to:at: .now)`. 이름은 엔진이 데이터면에 올린 바로 그 노드의 것이다(`EnginePeer.name`. 같은 키를 여러 노드가 내세울 때 netmap에서 키로 다시 찾으면 다른 노드의 이름이 붙는다).
-  - 경로는 **실제로 알 때만** 알린다(첫 사용처 검토, 2026-11-15): 최근 45초(Go의 유휴 판단, `Magicsock`이 피어별 마지막 WireGuard 송신 시각으로 본다) 안에 그 피어와 주고받은 것이 없으면 `path(toPeerNamed:)`는 nil이고, 유휴가 되는 순간과 다시 주고받기 시작하는 순간에 `peerPathChanged`(nil, 그리고 그때의 경로)가 나온다. 유휴 피어를 `.relayed`로 보이면 트래픽이 생기면 직접으로 붙을 연결이 "중계"로 표시되기 때문이다. `Magicsock.path(to:at:)`가 이 규칙으로 nil을 내게 하고 경로 사건(`pathChanged`)도 같은 값으로 낸다(유휴가 되는 시각을 `nextDeadline`에 넣는다).
-- **N7 (구조적 동시성)**: `run()`의 TaskGroup 자식이 바뀐다.
+- **N1 (startup)**. When `run()` starts, open `DatagramSocket(port: 0)` (throw `udpUnavailable` on failure), and read `LocalInterfaceAddresses.current()` once (continue with an empty list on failure and publish only STUN endpoints). Generate a disco private key and **retain it on the node** (M3 retained only the public key). Its public key is `LocalStatus.discoKey`. Close the socket when `run()` ends.
+- **N2 (after registration)**. When the node key is available, create `Magicsock(discoKey:nodeKey:localPort:localAddresses:loopbackAddresses:now:)` alongside the engine. If the node key changes, recreate both (keep the disco key and socket). Then reapply the peers and regions from the last netmap.
+- **N3 (DERP regions)**. Replace M3 behavior 3's "fixed home DERP choice, one client."
+  - Home candidate `Magicsock.Region`. Include DERPMap regions meeting the M3 home criteria (`noMeasureNoHome` is false and a node can be converted to `DERPServer`). Build `stunServers` by examining the region's nodes in order, including `stunOnly` nodes, using magicsock contract E3 rules (`stunTestIP` → IPv4 literal, `stunPort` 0 means 3478, skip negative values). The `score` is `homeParams.regionScore[id]` (0 if absent). Call `setRegions` whenever DERPMap changes. Keep this conversion in an I/O-free function and test it in `SwiftailTests`.
+  - Connections. Maintain a region ID → `DERPClient` table. Open the home region (received via `.homeRegionChanged`) with `isPreferred: true`. Open a region with `isPreferred: false` when `Magicsock` first targets it in `.derp(_, to:, region:)` (any region in DERPMap, including `noMeasureNoHome`. Drop the datagram if the region cannot be converted to servers). Keep the previous home connection open when home changes (magicsock contract E6). Close connections for regions removed from DERPMap. Also close connections whose server lists (converted to `DERPServer`) change, and immediately reopen a home connection with the new servers (Go `derp.go`'s `derp-region-redefined`. A `DERPClient` server list is fixed on creation). Reopen all connections when the node key changes. In that case first clear the old `Magicsock` peers to withdraw previously reported paths using nil (M4 review B, 2026-11-15).
+  - `shortcut:` Skip cleanup of non-home connections after 60 seconds of inactivity (DERP notes §4.9 item 5). The number of open connections is bounded by the number of DERPMap regions. Revisit during M5 memory measurements. When home changes, do not resend NotePreferred on already-open connections (used for server statistics, DERP notes §4.8 item 3).
+  - `reconnecting` reports only loss of the home region connection. Continue ignoring `peerGone` (reverse routes are unused).
+  - Pass each connection's `.packet` to `magicsock.receiveDERP(_, from:, region: the connection's region)`.
+  - `DERPHome.choose` is unused (`Magicsock` chooses home). Keep using `DERPServer.init(_: DERPNode)`.
+- **N4 (publishing to the control server)**. `.endpointsChanged(eps)` → `localStatus.endpoints = eps.map(\.address)`, with `endpointTypes` in the same order, `.local`→`EndpointType.local`, `.stun`→`EndpointType.stun`. `.homeRegionChanged(id)` → `localStatus.netInfo = NetInfo(preferredDERP: id)`. When either changes, call `control.setLocalStatus(localStatus)`. `ControlClient` sends `DiscoKey` and all endpoints together on each status update, matching testcontrol's wholesale replacement of node values (`disco-magicsock.md` §4.9 item 4). This replaces M3's publication of the home region on each netmap.
+- **N5 (packet flow)**:
+  - Sending. `send(ipPacket)` → `engine.send` → `.datagram(b, to: k)` → `magicsock.send(b, to: k)`.
+  - Receiving UDP. `(bytes, source)` from the socket stream → `magicsock.receiveUDP`.
+  - `Magicsock` output. `.udp` → `socket.send` (discard failures. `shortcut:` rebinding on send errors is M5, see exclusions table in magicsock contract), `.derp` → that region's connection (N3), `.wireGuard(b, from: path)` → `engine.receive(b, from: path source)` → engine output reenters this flow, `.endpointsChanged` and `.homeRegionChanged` → N4, `.pathChanged` → N6, discard `.dropped`.
+  - Cookie reply (2026-11-15). Send an `engine.receive` `.cookieReply(b)` over the incoming path without calling `magicsock.send`. For UDP input feed `.udp(b, to: source)` into the flow above. For DERP input feed `.derp(b, to: sender, region: incoming region)` into it (the N8 filter still applies). The source passed to the engine is `address` (what the cookie binds to) and `host` (the rate limit unit). For UDP, as with Go's standard bind, `address` = address ‖ port (LE), `host` = address. For DERP, as in Tailscale magicsock, use one value per peer and omit the region. Both values are the 32-byte node public key (Go binds to the per-peer fake address `fakeWGAddr` and limits by the peer's tailnet address `nodeAddr`, `wgengine/magicsock/endpoint.go` `DstToBytes` and `DstIP`). The lengths differ, so they do not collide with UDP values.
+  - Netmap. After `engine.apply`, call `magicsock.setPeers(EnginePeer.peers(in: netmap, at: Date()).map { Magicsock.Peer(key: $0.key, discoKey: $0.discoKey, homeDERP: $0.homeDERP, endpoints: $0.endpoints) })`. Order is ascending node ID (disco key ownership, magicsock contract B1). After `engine.apply`, retain the engine's owner table and compare the stack's owners (host contract behavior W6, netstack contract behavior X10). `shortcut:` Peers that the engine removes in `advance` due to key expiration stay in `Magicsock` until the next netmap. The engine emits no datagrams to those peers, so heartbeat stops after 45 seconds, and the device drops incoming WireGuard. Reconcile the owner table and the stack's owners immediately at expiration (see timers below).
+  - Timers. Wake at `min(engine.nextDeadline, magicsock.nextDeadline)` and call `advance` on both. If the engine's `advance` handled key expiration (`recomputesPeers(at:)`), immediately retain the new owner table and close connections to addresses whose owner changed (the same path as applying a netmap).
+- **N6 (path events and lookup)**. For each netmap the node builds a data plane peer key → name table (the name is `Node.name` with one trailing dot removed). `.pathChanged(k, p)` emits `peerPathChanged` using the name from that table. For a removed peer use its name from before the table changed. Emit no event for peers with empty names. `path(toPeerNamed:)` maps name → key (N6 comparison rules) → `magicsock.path(to:at: .now)`. The name belongs to the exact node installed by the engine (`EnginePeer.name`. If multiple nodes claim a key, looking it up again in the netmap can attach a different node's name).
+  - Report paths **only when actually known** (first adopter review, 2026-11-15). If nothing has been exchanged with a peer in the last 45 seconds (Go's idle criterion, which `Magicsock` determines using the last WireGuard send per peer), `path(toPeerNamed:)` returns nil. Emit `peerPathChanged` when the path goes idle (nil) and when traffic resumes (the path at that time). Reporting an idle peer as `.relayed` would label a connection "relayed" even though it will connect directly when traffic starts. Apply this nil rule in `Magicsock.path(to:at:)` and emit the same value in path events (`pathChanged`), adding the idle time to `nextDeadline`.
+- **N7 (structured concurrency)**. The TaskGroup children in `run()` change.
 
   ```
   run()
@@ -362,16 +362,16 @@ extension TailnetNode {
       ├ control.run()
       ├ follow(control)
       ├ forwardLoginRequests
-      ├ uploadLocalStatus()  엔드포인트·홈 지역을 제어 서버에 올린다. 출력 처리에는 await가 없어 통로로 넘겨받는다
-      ├ receiveUDP()     소켓의 데이터그램 → magicsock.receiveUDP. 소켓이 닫히면 끝난다
-      ├ maintainDERP()   지역별 DERPClient 묶음(홈 + Magicsock이 가리킨 지역). 지역마다 M3의 serve와 같은 모양
-      └ runTimer()       엔진과 Magicsock의 이른 기한
+      ├ uploadLocalStatus()  Publishes endpoints and home region to the control server. Receives them through a channel because output handling has no await
+      ├ receiveUDP()     Socket datagram → magicsock.receiveUDP. Ends when the socket closes
+      ├ maintainDERP()   Group of DERPClient instances by region (home + regions targeted by Magicsock). Each has the shape of M3's serve
+      └ runTimer()       Earlier deadline of the engine and Magicsock
   ```
 
-  엔진과 `Magicsock`은 actor의 저장 프로퍼티로 두고 제자리에서만 바꾼다. 한쪽 출력을 다른 쪽에 넘기는 일은 `await` 없이 한 번의 actor 실행 안에서 끝낸다(재진입으로 두 상태가 어긋나지 않게 한다).
-- **N8 (시험용 UDP 거르개)**: `setBlockedUDPPorts`의 집합을 `receiveUDP()`(받은 직후)와 `.udp` 출력(보내기 직전)에서만 본다. `Magicsock`과 엔진은 이 집합을 모른다. 기본은 빈 집합이다.
-- **N9 (비밀)**: disco 개인 키를 사건·오류·`description`·`dump`에 넣지 않는다. `customMirror`는 그대로(호스트 이름만).
+  Keep the engine and `Magicsock` as actor stored properties and mutate them only in place. Pass outputs between them without `await` in a single actor execution so reentrancy cannot put their states out of sync.
+- **N8 (UDP filter for tests)**. Check the `setBlockedUDPPorts` set only in `receiveUDP()` (immediately after receiving) and on `.udp` output (just before sending). `Magicsock` and the engine have no knowledge of the set. It defaults to empty.
+- **N9 (secrets)**. Keep the disco private key out of events, errors, `description`, and `dump`. `customMirror` still exposes only the hostname.
 
-시험(`Tests/SwiftailTests`, 소켓 없음): N3의 지역 변환(`noMeasureNoHome`, 쓸 수 없는 서버만 있는 지역, `stunTestIP`, `stunPort` 0·음수, `stunOnly`, `regionScore`), N6의 이름 비교(끝의 점, 대소문자, 같은 이름 둘). 노드 전체 흐름은 magicsock 계약의 "M4 관문"이 덮는다.
+Tests (`Tests/SwiftailTests`, no sockets) cover N3 region conversion (`noMeasureNoHome`, regions with only unusable servers, `stunTestIP`, zero or negative `stunPort`, `stunOnly`, and `regionScore`) and N6 name comparison (trailing dot, case, and two identical names). The magicsock contract's "M4 gate" covers the full node flow.
 
-공개 API에 더하는 것은 `NodeEvent.peerPathChanged`, `NodeError.udpUnavailable`, `TailnetNode.path(toPeerNamed:)`, `PeerPath`(`SwiftailMagicsock`)뿐이다. `docs/plan.md` 6절의 `setDefaultInterface`는 M5에서 정한다.
+The only public API additions are `NodeEvent.peerPathChanged`, `NodeError.udpUnavailable`, `TailnetNode.path(toPeerNamed:)`, and `PeerPath` (`SwiftailMagicsock`). M5 defines `setDefaultInterface` from `docs/plan.md` §6.

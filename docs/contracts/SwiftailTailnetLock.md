@@ -1,54 +1,54 @@
-# Swiftail Tailnet Lock 계약 (M8 ①, 초안)
+# Swiftail Tailnet Lock contract (M8 ①, draft)
 
-M8 ①의 목표는 **lock이 켜진 tailnet에서 Go 노드와 같은 판정을 내는 보통 노드**다(`docs/plan.md` 3절, 7절 M8). 등록되고(서명된 인증 키 `--TL`, 또는 서명 기기가 뒤에 서명), 서명 권한 상태(TKA)를 받아 검증·저장하고, 서명되지 않은 피어를 netmap에서 거르고, lock이 꺼지는 것을 끄기 비밀로 확인한 뒤에만 받아들인다. 첫 사용처(RemoteDebug)의 Mac 호스트가 속한 tailnet은 lock이 켜져 있어서, 이 기능이 Mac 호스트 교체의 선행 조건이다.
+M8 ① aims for **an ordinary node that makes the same decisions as a Go node on a tailnet with lock enabled** (`docs/plan.md` §3 and §7 M8). It registers (with a signed auth key, `--TL`, or with a signing device signing later), receives, verifies, and saves the signing authority state (TKA), filters unsigned peers out of the netmap, and accepts disablement only after verifying the disablement secret. Lock is enabled on the first adopter's (RemoteDebug) Mac host tailnet, making this feature a prerequisite for replacing the Mac host.
 
-이 문서는 **초안**이다. 구현 전에 "총괄 확인 필요"와 "사용자 확인 필요"를 정하고, "첫 사용처 확인 필요"를 첫 사용처 세션에 보낸 뒤 확정한다.
+This document is a **draft**. Before implementation, resolve "Lead session confirmation required" and "Owner confirmation required," and send "First adopter confirmation required" to the first adopter's session before finalizing.
 
-프로토콜 세부는 [tailnet-lock.md](../protocol-notes/tailnet-lock.md)(아래에서 "노트". 2026-11-15 다른 세션이 `tailscale.com` v1.104.7 소스와 실행으로 검증했다)만 따른다. 노트에 없어서 Go 원본을 직접 읽은 곳은 `경로:줄`(모듈 `tailscale.com@v1.104.7` 기준)을 달았다. 이 문서는 범위, 타깃, API, 동작, 한도, 결정, 시험과 관문만 정한다.
+Protocol details follow only [tailnet-lock.md](../protocol-notes/tailnet-lock.md) (the "notes" below, verified by another session on 2026-11-15 against `tailscale.com` v1.104.7 source and by execution). Where the notes had no coverage and the Go source was read directly, `path:line` references are given relative to the `tailscale.com@v1.104.7` module. This document defines only scope, targets, API, behavior, limits, decisions, tests, and gates.
 
-기존 계약과의 관계: [SwiftailControl.md](SwiftailControl.md) 단위 4의 동작 2("`--TL`을 담고 있으면 그 앞부분만 보낸다")에 서명 만들기를 더하고, 동작 4의 "`TKAInfo`로 tailnet lock이 켜진 것을 알면 `tailnetLockEnabled`로 끝낸다"와 `ControlError.tailnetLockEnabled`를 없앤다. [SwiftailHost.md](SwiftailHost.md) 4절 표의 "`NetworkLockStatus` 진단 로그 → 없다. lock이 켜진 tailnet은 `tailnetLockEnabled`로 끝난다"를 이 문서의 `TailnetLockStatus`로 바꾼다. plan 8절 위험 8과 9절의 "tailnet lock이 켜진 tailnet의 처리"를 이 문서가 닫는다. 어긋나면 이 문서가 앞선다.
+Relationship to existing contracts. Add signature creation to [SwiftailControl.md](SwiftailControl.md) unit 4 behavior 2 ("if it contains `--TL`, send only the preceding part") and remove behavior 4's "if `TKAInfo` indicates tailnet lock is enabled, end with `tailnetLockEnabled`" and `ControlError.tailnetLockEnabled`. Replace the entry in [SwiftailHost.md](SwiftailHost.md) §4, "`NetworkLockStatus` diagnostic log → absent. A tailnet with lock enabled ends with `tailnetLockEnabled`," with this document's `TailnetLockStatus`. This document closes plan §8 risk 8 and §9's "handling tailnets with tailnet lock enabled." This document takes precedence in case of conflict.
 
-이미 정해진 것(다시 논의하지 않는다):
+Settled decisions (closed to further discussion):
 
-- **Ed25519 검증은 순수 Swift로 직접 구현한다**(사용자 결정, 2026-11-15. 노트 6.1의 (나)). ZIP-215 규칙과 Go 표준 규칙 둘 다. 서명 만들기는 CryptoKit(`Curve25519.Signing`)을 쓴다.
-- 암호 기본 요소 둘은 다른 세션이 만드는 **선행 단위**다: `Sources/SwiftailCrypto/Ed25519Verification.swift`(`Ed25519Verification.isValidZIP215(signature:message:publicKey:) -> Bool`, `isValidStandard(signature:message:publicKey:) -> Bool`, 인자는 `[UInt8]`), `Sources/SwiftailCrypto/BLAKE2b.swift`·`Argon2i.swift`(`BLAKE2b.hash(_:outputByteCount:key:)`, `Argon2i.derive(password:salt:iterations:memoryKiB:parallelism:outputByteCount:) -> [UInt8]`). 이 계약은 그 선언에만 기댄다.
-- Go 상태 이관은 하지 않는다. 저장 형식을 Go(tailchonk)와 맞추지 않는다(노트 6.3).
-- 라이브러리는 전부 Swift, 값 타입 상태 기계와 가장자리 입출력, 타입 있는 오류, 경계에서의 입력 검증(plan 5절 코드 기준).
+- **Implement Ed25519 verification directly in pure Swift** (owner decision, 2026-11-15, notes §6.1 (b)). Support both ZIP-215 and Go standard rules. Use CryptoKit (`Curve25519.Signing`) to create signatures.
+- Two cryptographic primitives are **prerequisite units** from another session. `Sources/SwiftailCrypto/Ed25519Verification.swift` (`Ed25519Verification.isValidZIP215(signature:message:publicKey:) -> Bool`, `isValidStandard(signature:message:publicKey:) -> Bool`, with `[UInt8]` arguments), and `Sources/SwiftailCrypto/BLAKE2b.swift` and `Argon2i.swift` (`BLAKE2b.hash(_:outputByteCount:key:)`, `Argon2i.derive(password:salt:iterations:memoryKiB:parallelism:outputByteCount:) -> [UInt8]`). This contract depends only on their declarations.
+- Go state migration is out of scope. The storage format differs from Go's (tailchonk) (notes §6.3).
+- The library is entirely Swift, with value-type state machines, edge I/O, typed errors, and input validation at boundaries (plan §5 code standards).
 
-## 1. 목표와 범위
+## 1. Goals and scope
 
-| 넣는다 | 근거(노트) |
+| Included | Basis (notes) |
 | --- | --- |
-| NL 키의 생성·저장, `RegisterRequest.NLKey`에 늘 싣기 | 4.6 1, 6.3 |
-| 서명된 인증 키(`--TL`)의 해석과 `SignByCredential` | 3.8, 4.6 2 |
-| 서버의 재서명 요청(`RegisterResponse.NodeKeySignature`) → `ResignNKS`(사슬 줄이기 포함) | 4.4 끝, 4.6 4 |
+| Generating and storing the NL key and always including it in `RegisterRequest.NLKey` | 4.6 item 1, 6.3 |
+| Parsing a signed auth key (`--TL`) and `SignByCredential` | 3.8, 4.6 item 2 |
+| Server re-signing request (`RegisterResponse.NodeKeySignature`) → `ResignNKS` (including chain trimming) | End of 4.4, 4.6 item 4 |
 | `MapRequest.TKAHead` | 3.9, 4.7 |
-| 부트스트랩(처음 받은 체크포인트를 믿는 TOFU), 동기화(offer·send), AUM 들이기(`Inform`) | 4.3, 4.8 |
-| AUM 검증과 상태 적용, 갈래 해소, 머리 계산 | 4.1~4.3 |
-| NKS 검증(direct·rotation·credential), 피어 거르기, 회전으로 낡은 키 | 4.4, 4.9 |
-| 끄기 비밀 검증 뒤에만 lock을 지우기 | 4.5, 4.10 |
-| 자기 노드가 잠겨 서명을 기다리는 상태를 앱에 알리기 | 4.6 3, 6.3 |
-| 서명 권한 상태의 로컬 저장과 다시 시작 뒤 이어 가기 | 3.11, 6.3 |
-| 서명 기기가 만든 것(AUM 사슬, 복구 AUM이 만든 갈래, 서명, 감싼 인증 키)의 **검증** | 2장 |
+| Bootstrap (TOFU on the first checkpoint received), synchronization (offer and send), and admitting AUMs (`Inform`) | 4.3, 4.8 |
+| AUM verification and state application, fork resolution, and head computation | 4.1–4.3 |
+| NKS verification (direct, rotation, credential), peer filtering, and keys made obsolete by rotation | 4.4, 4.9 |
+| Removing lock only after verifying the disablement secret | 4.5, 4.10 |
+| Telling the app when the local node is locked out and awaiting a signature | 4.6 item 3, 6.3 |
+| Persisting signing authority state locally and resuming after restart | 3.11, 6.3 |
+| **Verifying** products of signing devices (AUM chains, forks created by recovery AUMs, signatures, and wrapped auth keys) | Chapter 2 |
 
-| 뺀다 | 까닭 | 필요해지는 시점 |
+| Excluded | Reason | When needed |
 | --- | --- | --- |
-| 서명 기기 노릇: 다른 노드에 서명, lock 켜기·끄기 명령, 서명 키 더하기·빼기, 인증 키 감싸기, 복구 AUM 만들기, 서명 딥링크, 영향받는 서명 조회 | M8 범위 밖(plan 3절, 노트 2장) | Swiftail 노드가 서명 기기가 되어야 하는 사용처 |
-| 로컬 강제 끄기와 `DisallowedTKAStateIDs` | 강제 끄기가 없으면 목록이 늘 비어 있다(노트 6.3) | 강제 끄기를 넣을 때 |
-| `TS_UNSAFE_SKIP_NKS_VERIFICATION`에 해당하는 스위치 | 거르기를 끄는 길을 두지 않는다(노트 4.9) | — |
-| c2n `/debug/tka/log` | tsnet도 들이지 않는다(노트 2장) | — |
-| 압축(compaction) | 결정 L7. 판정을 바꾸지 않고 저장만 줄인다 | 저장이 한도(동작 M)에 닿는 tailnet이 보고될 때 |
-| `UnsignedPeerAPIOnly` 피어를 데이터면에 올리기 | 지금도 올리지 않는다(`Sources/SwiftailEngine/EnginePeer.swift:94-103`). 기존 차이를 유지한다(노트 6.3) | Funnel 진입 같은 기능을 넣을 때 |
-| Go 상태(tailchonk, `Persist.NetworkLockKey`) 읽기 | 사용자 결정 | — |
+| Acting as a signing device, including signing other nodes, commands to enable or disable lock, adding or removing signing keys, wrapping auth keys, creating recovery AUMs, signing deep links, and listing affected signatures | Outside M8 scope (plan §3, notes chapter 2) | An adopter needs a Swiftail node to act as a signing device |
+| Local force-disable and `DisallowedTKAStateIDs` | The list is always empty without force-disable (notes §6.3) | When adding force-disable |
+| A switch corresponding to `TS_UNSAFE_SKIP_NKS_VERIFICATION` | Filtering cannot be disabled (notes §4.9) | — |
+| c2n `/debug/tka/log` | tsnet omits it too (notes chapter 2) | — |
+| Compaction | Decision L7. Reduces only storage while preserving decisions | A tailnet reports storage reaching its limit (behavior M) |
+| Installing `UnsignedPeerAPIOnly` peers in the data plane | Already excluded (`Sources/SwiftailEngine/EnginePeer.swift:94-103`). Keeps the existing difference (notes §6.3) | When adding a feature such as Funnel ingress |
+| Reading Go state (tailchonk, `Persist.NetworkLockKey`) | Owner decision | — |
 
-## 타깃과 의존 방향
+## Targets and dependency direction
 
-| 타깃 | 종류 | M8 ①에서 더하는 것 |
+| Target | Kind | Additions in M8 ① |
 | --- | --- | --- |
-| `SwiftailCrypto` | 기존 | (선행 단위, 진행 중) `Ed25519Verification`, `BLAKE2b`, `Argon2i` |
-| `SwiftailTKA` | **새 타깃**(`package` 접근, 제품으로 내보내지 않는다) | CBOR 읽기·쓰기, `AUMHash`·`TrustedKey`·`AUMSignature`·`AUM`·`AuthorityState`·`NodeKeySignature`, 서명 권한 상태 기계 `Authority`, NKS 검증과 만들기, 서명된 인증 키 해석. 소켓·파일·시계가 없다 |
-| `SwiftailControl` | 기존 | NL 키(`NodeIdentity`·`NodeIdentityStore`), tailcfg 보탬(TKA RPC 셋, `MapRequest.TKAHead`), 등록 요청의 서명, TKA RPC, 저장(`TailnetLockStore`), netmap을 받을 때의 절차와 피어 거르기, `TailnetLockStatus`, `Netmap`·`ControlError` 변경 |
-| `Swiftail` | 기존 | `NodeStatus.tailnetLock`, `NodeEvent.tailnetLockChanged` |
+| `SwiftailCrypto` | Existing | (Prerequisite unit, in progress) `Ed25519Verification`, `BLAKE2b`, `Argon2i` |
+| `SwiftailTKA` | **New target** (`package` access, outside the exported products) | CBOR reading and writing, `AUMHash`, `TrustedKey`, `AUMSignature`, `AUM`, `AuthorityState`, `NodeKeySignature`, the `Authority` signing authority state machine, NKS verification and creation, and signed auth key parsing. No sockets, files, or clock |
+| `SwiftailControl` | Existing | NL key (`NodeIdentity` and `NodeIdentityStore`), tailcfg additions (TKA RPC set, `MapRequest.TKAHead`), registration request signatures, TKA RPCs, persistence (`TailnetLockStore`), procedure on netmap receipt and peer filtering, `TailnetLockStatus`, and changes to `Netmap` and `ControlError` |
+| `Swiftail` | Existing | `NodeStatus.tailnetLock`, `NodeEvent.tailnetLockChanged` |
 
 ```
 SwiftailBase ◄─┐
@@ -56,33 +56,33 @@ SwiftailCrypto ◄─ SwiftailTKA ◄─ SwiftailControl ◄─ SwiftailEngine �
                   (CryptoKit)
 ```
 
-- **새 타깃을 두는 까닭**(결정 L1): ① Go의 경계와 같다. 자료 형식과 검증은 `tka` 패키지, 절차는 `ipnlocal`·`controlclient`다(노트 3·4장). ② 입출력이 없는 순수 로직이라 `SwiftailControl`의 의존(HTTP/2, 소켓)이 필요 없고, Go 기준값과의 대조 시험을 제어 클라이언트 없이 돌린다. ③ 소유 파일이 타깃 단위로 갈려 병렬로 구현하고 따로 검토받는다(8절). ④ `package` 접근이라 공개 표면이 늘지 않는다(`SwiftailNetstack`과 같은 방식).
-- CBOR은 `SwiftailTKA` 안에 둔다. 쓰는 곳이 TKA 하나다(`SwiftailHost.md` H14와 같은 판단). `SwiftailCrypto`에는 암호 기본 요소만 둔다.
-- iOS 터널 확장도 lock이 켜진 tailnet의 노드가 되므로 선택 제품으로 떼지 않는다. `SwiftailControl`의 의존이 된다.
-- `SwiftailControl`의 공개 표면에는 TKA 타입이 나오지 않는다(`TailnetLockStatus`는 문자열과 수만 담는다).
+- **Why a new target** (decision L1). ① Matches Go's boundary. Data formats and verification are in the `tka` package, and the procedure is in `ipnlocal` and `controlclient` (notes chapters 3 and 4). ② Pure logic with no I/O needs no `SwiftailControl` dependencies (HTTP/2, sockets), and tests against Go reference values run without the control client. ③ File ownership follows target boundaries, allowing parallel implementation and separate review (§8). ④ `package` access keeps the public surface the same (as with `SwiftailNetstack`).
+- Keep CBOR inside `SwiftailTKA`, since TKA is its only consumer (same reasoning as `SwiftailHost.md` H14). Keep only cryptographic primitives in `SwiftailCrypto`.
+- The iOS tunnel extension also becomes a node on a tailnet with lock enabled, so this is a `SwiftailControl` dependency and remains outside optional products.
+- The `SwiftailControl` public surface exposes no TKA types (`TailnetLockStatus` contains only strings and numbers).
 
-### 지금 lock 처리가 있는 곳
+### Where lock is currently handled
 
-| 자리 | 지금 | 바뀐 뒤 |
+| Location | Current | After the change |
 | --- | --- | --- |
-| `Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:20`, `:32`, `:38`, `:44` | `nlKey`는 기본값 `.zero`, `nodeKeySignature`는 빈 값. 필드와 부호화(`:76`, `:82`)는 이미 있다 | 값을 채운다(동작 R) |
-| `Sources/SwiftailControl/Client/ControlClient+Registration.swift:44-53` | 등록 요청을 만들 때 NL 키와 서명을 넣지 않는다 | 동작 R2·R5 |
-| `Sources/SwiftailControl/Client/ControlClient+Registration.swift:76-79` | `RegisterResponse.NodeKeySignature`가 오면 `ControlError.tailnetLockEnabled` | 새 node 키로 재서명해 다시 등록(동작 R6) |
-| `Sources/SwiftailControl/Client/AuthKey.swift:10-13` | `--TL` 뒤를 버리고 앞부분만 돌려준다 | 앞부분은 그대로 서버로, 뒤는 해석해 서명에 쓴다(동작 R3) |
-| `Sources/SwiftailControl/Client/NodeIdentity.swift:12-31`, `NodeIdentityStore.swift`(`identity.json`) | machine 키와 node 키만 | NL 키를 더한다(동작 R1) |
-| `Sources/SwiftailControl/Tailcfg/NLPublicKey.swift:5-9` | "lock을 구현하지 않지만 필드는 늘 보낸다" | 주석만 고친다 |
-| `Sources/SwiftailControl/Tailcfg/MapRequest.swift` | `TKAHead`가 없다 | 더한다(동작 N4) |
-| `Sources/SwiftailControl/Tailcfg/TKAInfo.swift:6`, `MapResponse.swift:48` | 해독만 한다 | 그대로 |
-| `Sources/SwiftailControl/Netmap/MapSession.swift:44`, `:99-101`, `:218` | `TKAInfo`를 세션에 쥐고 `tailnetLockEnabled = !disabled`. `Head`는 해석하지 않는다(`shortcut:`) | Go의 `TKAEnabled`·`TKAHead` 규칙으로 계산한다(동작 N1) |
-| `Sources/SwiftailControl/Netmap/MapSession.swift:158`, `:240`, `:255`, `Tailcfg/Node.swift:34`, `PeerChange.swift:29` | `KeySignature`를 netmap에 반영한다 | 그대로(거르기의 입력) |
+| `Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:20`, `:32`, `:38`, `:44` | `nlKey` defaults to `.zero`, and `nodeKeySignature` is empty. The fields and encoding (`:76`, `:82`) already exist | Populate the values (behavior R) |
+| `Sources/SwiftailControl/Client/ControlClient+Registration.swift:44-53` | Registration request creation omits the NL key and signature | Behaviors R2 and R5 |
+| `Sources/SwiftailControl/Client/ControlClient+Registration.swift:76-79` | `RegisterResponse.NodeKeySignature` produces `ControlError.tailnetLockEnabled` | Re-sign with the new node key and register again (behavior R6) |
+| `Sources/SwiftailControl/Client/AuthKey.swift:10-13` | Discards everything after `--TL` and returns only the prefix | Send the prefix to the server as is and parse the suffix for signing (behavior R3) |
+| `Sources/SwiftailControl/Client/NodeIdentity.swift:12-31`, `NodeIdentityStore.swift` (`identity.json`) | Machine and node keys only | Add the NL key (behavior R1) |
+| `Sources/SwiftailControl/Tailcfg/NLPublicKey.swift:5-9` | "Always sends the field despite having no lock implementation" | Update only the comment |
+| `Sources/SwiftailControl/Tailcfg/MapRequest.swift` | No `TKAHead` | Add it (behavior N4) |
+| `Sources/SwiftailControl/Tailcfg/TKAInfo.swift:6`, `MapResponse.swift:48` | Decode only | Unchanged |
+| `Sources/SwiftailControl/Netmap/MapSession.swift:44`, `:99-101`, `:218` | Holds `TKAInfo` in the session and sets `tailnetLockEnabled = !disabled`. Skips parsing `Head` (`shortcut:`) | Compute using Go's `TKAEnabled` and `TKAHead` rules (behavior N1) |
+| `Sources/SwiftailControl/Netmap/MapSession.swift:158`, `:240`, `:255`, `Tailcfg/Node.swift:34`, `PeerChange.swift:29` | Reflects `KeySignature` in the netmap | Unchanged (input to filtering) |
 | `Sources/SwiftailControl/Netmap/Netmap.swift:23` | `tailnetLockEnabled: Bool` | `tailnetLock: TailnetLockStatus` |
-| `Sources/SwiftailControl/Client/ControlClient+MapPoll.swift:82`, `:101-104`, `ControlClient.swift:142-143` | `lastTKAInfo`를 기록하고, lock이 켜진 netmap이면 `tailnetLockEnabled`로 끝낸다 | 절차를 돌고 거른 netmap을 낸다(동작 N·P) |
-| `Sources/SwiftailControl/Client/ControlError.swift:25`, `:33` | `case tailnetLockEnabled` | 없앤다(결정 L5) |
-| `Sources/SwiftailControl/Tailcfg/Node.swift:66`, `:146`, `Sources/SwiftailEngine/EnginePeer.swift:94-103` | `UnsignedPeerAPIOnly` 피어의 `allowedIPs`를 자기 주소로 줄이고, 엔진에 올리지 않는다 | 그대로(동작 P1) |
-| `Sources/Swiftail/NodeError.swift:9`, `Sources/Swiftail/TailnetNode.swift:477`, `Sources/SwiftailCertificates/CertificateManager.swift:392` | `tailnetLockEnabled`를 가리키는 주석과 `switch` 갈래 | 갈래를 지운다 |
-| 첫 사용처 `Apps/iOSTunnel/SwiftailTunnelEngine.swift:180`(읽기만) | `.control(.tailnetLockEnabled)`에 사용자 문구를 붙인다 | 첫 사용처가 지운다(첫 사용처 확인 필요 F1) |
+| `Sources/SwiftailControl/Client/ControlClient+MapPoll.swift:82`, `:101-104`, `ControlClient.swift:142-143` | Records `lastTKAInfo` and ends with `tailnetLockEnabled` for a netmap with lock enabled | Run the procedure and emit a filtered netmap (behaviors N and P) |
+| `Sources/SwiftailControl/Client/ControlError.swift:25`, `:33` | `case tailnetLockEnabled` | Remove (decision L5) |
+| `Sources/SwiftailControl/Tailcfg/Node.swift:66`, `:146`, `Sources/SwiftailEngine/EnginePeer.swift:94-103` | Narrows `UnsignedPeerAPIOnly` peers' `allowedIPs` to their own addresses and excludes them from the engine | Unchanged (behavior P1) |
+| `Sources/Swiftail/NodeError.swift:9`, `Sources/Swiftail/TailnetNode.swift:477`, `Sources/SwiftailCertificates/CertificateManager.swift:392` | Comment and `switch` branches referring to `tailnetLockEnabled` | Remove the branches |
+| First adopter `Apps/iOSTunnel/SwiftailTunnelEngine.swift:180` (read only) | Adds user-facing text to `.control(.tailnetLockEnabled)` | First adopter removes it (first adopter confirmation required F1) |
 
-## 2. API 초안
+## 2. Draft API
 
 ### `SwiftailTKA` (`package`)
 
@@ -90,22 +90,22 @@ SwiftailCrypto ◄─ SwiftailTKA ◄─ SwiftailControl ◄─ SwiftailEngine �
 import CryptoKit
 import SwiftailBase
 
-// MARK: CBOR (노트 3.1, 6.2)
+// MARK: CBOR (notes §§3.1 and 6.2)
 
-/// 디코딩한 CBOR 자료 항목. TKA 구조가 쓰는 종류와, 모르는 필드를 건너뛰는 데 필요한 나머지다.
+/// A decoded CBOR data item. Includes types used by TKA structures and those needed to skip unknown fields.
 package enum CBORValue: Sendable, Equatable {
     case unsigned(UInt64)
-    /// 음의 정수 `-1 - n`. 모르는 필드의 키와 값으로만 나타난다.
+    /// The negative integer `-1 - n`. Appears only as a key or value of an unknown field.
     case negative(UInt64)
     case bytes([UInt8])
-    /// 텍스트의 바이트. 여기서는 UTF-8을 검사하지 않는다(모르는 필드의 값은 잘못된 UTF-8이어도 건너뛴다. 동작 D6).
+    /// The text bytes. UTF-8 is unchecked here (even invalid UTF-8 is skipped for unknown field values. Behavior D6).
     case text([UInt8])
     case array([CBORValue])
     case map([CBORPair])
-    /// null(0xf6)과 undefined(0xf7). 다시 쓸 때는 0xf6이다. Go 디코더는 undefined를 null과 똑같이 다뤄 알려진 필드에서
-    /// 그 필드의 0 값으로 읽는다(`fxamacker/cbor` `decode.go`의 `nextCBORNil`. TL-1이 확인해 초안의 선언을 고쳤다).
+    /// null (0xf6) and undefined (0xf7). Re-encodes as 0xf6. Go's decoder treats undefined like null and reads it as the
+    /// zero value for known fields (`nextCBORNil` in `fxamacker/cbor` `decode.go`. TL-1 verified this and updated the draft declaration).
     case null
-    /// major 7의 나머지(false·true·단순값·실수). 값을 쥐지 않는다. 알려진 필드에는 올 수 없다.
+    /// The remaining major type 7 items (false, true, simple values, and floats). Discards the value. Cannot appear in known fields.
     case simpleOrFloat
 }
 package struct CBORPair: Sendable, Equatable {
@@ -114,27 +114,27 @@ package struct CBORPair: Sendable, Equatable {
 }
 
 package enum CBORError: Error, Sendable, Equatable {
-    case truncated          // 빈 입력, 항목 중간에서 끝남
-    case trailingBytes      // 첫 항목 뒤에 바이트가 남음
+    case truncated          // Empty input or input that ends within an item
+    case trailingBytes      // Bytes left over after the first item
     case indefiniteLength
     case tag
-    case malformed          // 예약된 추가 정보 등 잘 짜이지 않은 항목
-    case nestingTooDeep     // 17단
-    case arrayTooLong       // 4,097개
-    case mapTooLong         // 1,025쌍
+    case malformed          // Ill-formed items, such as reserved additional information
+    case nestingTooDeep     // 17 levels
+    case arrayTooLong       // 4,097 elements
+    case mapTooLong         // 1,025 pairs
 }
 
 package enum CBOR {
-    /// 항목 하나를 읽는다. 입력 전체가 정확히 항목 하나여야 한다. 한도와 거절 목록은 동작 D.
+    /// Decodes one item. The full input must be exactly one item. See behavior D for limits and rejection rules.
     package static func decode(_ bytes: [UInt8]) throws(CBORError) -> CBORValue
 }
 
-/// 정준(CTAP2) 인코딩을 한 방향으로 써 나간다. 길이 미정·태그·실수를 쓰는 길이 없다.
-/// 맵의 쌍은 부르는 쪽이 정준 순서로 쓴다(구조의 정수 키는 오름차순, `Meta`는 동작 E3).
+/// Writes canonical (CTAP2) encoding in one direction. Cannot write indefinite lengths, tags, or floats.
+/// The caller writes map pairs in canonical order (ascending integer keys for structures, behavior E3 for `Meta`).
 package struct CBORWriter: Sendable {
     package init()
     package private(set) var bytes: [UInt8]
-    package mutating func unsigned(_ value: UInt64)        // 가장 짧은 길이
+    package mutating func unsigned(_ value: UInt64)        // Shortest length
     package mutating func byteString(_ value: [UInt8])
     package mutating func textString(utf8 value: [UInt8])
     package mutating func null()
@@ -142,75 +142,75 @@ package struct CBORWriter: Sendable {
     package mutating func mapHeader(count: Int)
 }
 
-// MARK: 자료 형식 (노트 3.2~3.8)
+// MARK: Data formats (notes §§3.2–3.8)
 
-/// AUM의 해시 32바이트(Go `tka.AUMHash`). 비교는 바이트로 한다(텍스트는 끝 글자가 달라도 같은 해시일 수 있다. 노트 3.8).
+/// A 32-byte AUM hash (Go `tka.AUMHash`). Compares bytes (text can differ in the last character and still represent the same hash. Notes §3.8).
 package struct AUMHash: Sendable, Hashable {
-    package init?(_ bytes: [UInt8])          // 32바이트가 아니면 nil
-    /// base32 표준 알파벳(대문자), 패딩 없음, 52자. 소문자·패딩·다른 길이는 nil.
+    package init?(_ bytes: [UInt8])          // nil unless 32 bytes
+    /// Parses 52 unpadded characters in the standard base32 alphabet (uppercase). Returns nil for lowercase, padding, or other lengths.
     package init?(text: String)
     package var bytes: [UInt8] { get }
     package var text: String { get }
 }
 
-/// `Meta`의 한 쌍. Swift `String`으로 바꾸지 않는다: `String`의 비교는 유니코드 정규 동등이라 Go의 바이트 비교와 다르고,
-/// 그 차이는 다시 인코딩한 해시를 바꾼다(동작 E3).
+/// A pair in `Meta`. Stored without converting to Swift `String`. Swift compares `String` values by Unicode canonical equivalence, which differs from Go's byte comparison
+/// and changes the re-encoded hash (behavior E3).
 package struct MetaEntry: Sendable, Equatable {
-    package var key: [UInt8]      // 검증된 UTF-8
-    package var value: [UInt8]    // 검증된 UTF-8
+    package var key: [UInt8]      // Validated UTF-8
+    package var value: [UInt8]    // Validated UTF-8
 }
 
-/// 서명 권한을 가진 키(Go `tka.Key`). KeyID는 `publicKey` 바이트 그 자체다.
+/// A key with signing authority (Go `tka.Key`). The KeyID is the raw `publicKey` bytes.
 package struct TrustedKey: Sendable, Equatable {
     package var kind: UInt8               // 1 = Key25519
     package var votes: UInt64
-    /// nil은 CBOR null이다. null과 빈 바이트열은 인코딩이 다르므로 구분한다(동작 E4).
+    /// The public key, with nil representing CBOR null. Null and empty byte strings encode differently and are distinguished (behavior E4).
     package var publicKey: [UInt8]?
-    package var meta: [MetaEntry]         // 정준 순서. 비면 인코딩에서 빠진다
+    package var meta: [MetaEntry]         // Canonical order. Omitted from encoding when empty
     package func validate() throws(TKAError)          // Go `Key.StaticValidate`
 }
 
-/// AUM에 붙는 서명(Go `tkatype.Signature`).
+/// A signature attached to an AUM (Go `tkatype.Signature`).
 package struct AUMSignature: Sendable, Equatable {
     package var keyID: [UInt8]
     package var signature: [UInt8]
 }
 
-/// 서명 권한 상태를 바꾸는 메시지 하나(Go `tka.AUM`).
+/// A message that updates signing authority state (Go `tka.AUM`).
 package struct AUM: Sendable, Equatable {
     package var messageKind: UInt8
-    package var prevAUMHash: [UInt8]?     // nil = 부모 없음(null로 인코딩)
+    package var prevAUMHash: [UInt8]?     // nil = no parent (encoded as null)
     package var key: TrustedKey?
-    package var keyID: [UInt8]            // 비면 인코딩에서 빠진다
+    package var keyID: [UInt8]            // Omitted from encoding when empty
     package var state: AuthorityState?
-    package var votes: UInt64?            // 0이어도 있으면 인코딩한다
-    package var meta: [MetaEntry]?        // nil과 빈 맵은 검증에서만 다르다(인코딩에서는 둘 다 빠진다)
+    package var votes: UInt64?            // Encoded if present, even if 0
+    package var meta: [MetaEntry]?        // nil and an empty map differ only in validation (both are omitted from encoding)
     package var signatures: [AUMSignature]
 
-    /// 한도(동작 M)와 동작 D의 규칙으로 읽는다. 정적 검사는 하지 않는다.
+    /// Decodes within the limits of behavior M and the rules of behavior D. Skips static validation.
     package init(decoding bytes: [UInt8]) throws(TKAError)
-    /// 정준 CBOR. 해시와 서명 검증은 받은 바이트가 아니라 이것으로 한다(동작 E5).
+    /// Returns canonical CBOR. Hashing and signature verification use these bytes in place of the received bytes (behavior E5).
     package func serialized() -> [UInt8]
     package var hash: AUMHash { get }                  // BLAKE2s-256(serialized())
-    package var signatureHash: [UInt8] { get }         // 서명을 지운 것의 BLAKE2s-256
+    package var signatureHash: [UInt8] { get }         // BLAKE2s-256 with signatures removed
     package func validate() throws(TKAError)           // Go `AUM.StaticValidate`
 }
 
-/// 어느 AUM까지 적용한 뒤의 신뢰 상태(Go `tka.State`).
+/// Trust state after applying updates through a particular AUM (Go `tka.State`).
 package struct AuthorityState: Sendable, Equatable {
     package var lastAUMHash: AUMHash?
     package var disablementValues: [[UInt8]]
     package var keys: [TrustedKey]
     package var stateID1: UInt64
     package var stateID2: UInt64
-    /// 검증된 AUM을 적용한 새 상태(Go `applyVerifiedAUM`). 동작 A6.
+    /// Returns the new state after applying a verified AUM (Go `applyVerifiedAUM`). Behavior A6.
     package func applying(_ update: AUM) throws(TKAError) -> AuthorityState
 }
 
-/// node 키에 대한 서명(Go `tka.NodeKeySignature`). `nested`는 간접 저장한다(값 타입의 재귀).
+/// A signature for a node key (Go `tka.NodeKeySignature`). Stores `nested` indirectly for value-type recursion.
 package struct NodeKeySignature: Sendable, Equatable {
     package var kind: UInt8               // 1 direct, 2 rotation, 3 credential
-    package var publicKey: [UInt8]        // "np" ‖ node 공개 키 32바이트
+    package var publicKey: [UInt8]        // "np" ‖ 32-byte node public key
     package var keyID: [UInt8]
     package var signature: [UInt8]
     package var nested: NodeKeySignature? { get set }
@@ -220,71 +220,71 @@ package struct NodeKeySignature: Sendable, Equatable {
     package var signatureHash: [UInt8] { get }
 }
 
-// MARK: 서명 권한 상태 기계 (노트 4.1~4.5, 4.8)
+// MARK: Signing authority state machine (notes §§4.1–4.5 and 4.8)
 
-/// 동기화에서 주고받는 제안: 머리와, 교차점을 찾을 조상들(Go `tka.SyncOffer`).
+/// An offer exchanged during synchronization, with the head and ancestors for finding an intersection (Go `tka.SyncOffer`).
 package struct SyncOffer: Sendable, Equatable {
     package var head: AUMHash
     package var ancestors: [AUMHash]
 }
 
-/// 통과한 rotation 서명의 내력(Go `tka.RotationDetails`). 낡은 키를 가리는 데 쓴다(동작 P4).
+/// The history of a verified rotation signature (Go `tka.RotationDetails`). Used to identify obsolete keys (behavior P4).
 package struct RotationDetails: Sendable, Equatable {
-    package var previousNodeKeys: [NodePublicKey]     // 새것부터
-    package var initialSignature: NodeKeySignature    // 맨 안쪽의 rotation이 아닌 서명
+    package var previousNodeKeys: [NodePublicKey]     // Newest first
+    package var initialSignature: NodeKeySignature    // Innermost non-rotation signature
 }
 
-/// 피어 하나의 판정 입력.
+/// Input for evaluating one peer.
 package struct PeerCredential: Sendable {
     package var nodeKey: NodePublicKey
     package var keySignature: [UInt8]
 }
 
-/// tailnet의 서명 권한 상태. 받아들인 AUM 전부와 거기서 계산한 머리·신뢰 상태를 쥔 값 타입이다.
-/// 소켓·파일·시계를 갖지 않는다. 저장은 `aums`를 가장자리(`TailnetLockStore`)가 적는다.
+/// A tailnet's signing authority state. A value type holding all admitted AUMs and the head and trust state computed from them.
+/// Has no sockets, files, or clock. The edge (`TailnetLockStore`) persists `aums`.
 package struct Authority: Sendable {
-    /// 서버가 준 체크포인트 하나로 시작한다(Go `Bootstrap`). 그 체크포인트 자신의 상태로 서명을 검증한다(동작 F5).
+    /// Bootstraps from one server-provided checkpoint (Go `Bootstrap`). Verifies signatures against the checkpoint's own state (behavior F5).
     package init(bootstrappingWith checkpoint: AUM) throws(TKAError)
-    /// 저장해 둔 AUM들에서 다시 계산한다(Go `Open`). 동작 F6·T3.
+    /// Recomputes from persisted AUMs (Go `Open`). Behaviors F6 and T3.
     package init(opening stored: [AUM], bootstrap: AUMHash) throws(TKAError)
 
     package var head: AUMHash { get }
     package var state: AuthorityState { get }
-    /// 부트스트랩한 AUM의 해시. 저장소의 하나뿐인 뿌리다.
+    /// The hash of the bootstrap AUM. The sole root of the store.
     package var bootstrap: AUMHash { get }
-    /// 받아들인 AUM 전부(활성 사슬과 갈래). 저장할 것이다.
+    /// All admitted AUMs (active chain and forks) for persistence.
     package var aums: [AUM] { get }
 
-    /// AUM 묶음을 받은 순서대로 들인다(Go `Inform`). 하나라도 실패하면 아무것도 바뀌지 않는다(동작 F4).
+    /// Admits a group of AUMs in arrival order (Go `Inform`). Any failure leaves everything unchanged (behavior F4).
     package mutating func inform(_ updates: [AUM]) throws(TKAError)
-    /// 서버에 보낼 제안(Go `SyncOffer`). 동작 Y1.
+    /// Returns an offer to send to the server (Go `SyncOffer`). Behavior Y1.
     package func syncOffer() throws(TKAError) -> SyncOffer
-    /// 상대의 제안에 견줘 상대가 모르는 로컬 AUM(Go `MissingAUMs`). 동작 Y4.
+    /// Returns local AUMs unknown to the peer based on its offer (Go `MissingAUMs`). Behavior Y4.
     package func missingAUMs(for remote: SyncOffer) throws(TKAError) -> [AUM]
 
-    /// 이 node 키가 지금 상태로 인가되는가(Go `NodeKeyAuthorizedWithDetails`). 인가되지 않으면 던진다.
-    /// 바깥 서명이 rotation이면 내력을, direct면 nil을 돌려준다. 동작 S.
+    /// Verifies that this node key is authorized by the current state (Go `NodeKeyAuthorizedWithDetails`). Throws if unauthorized.
+    /// Returns the history for an outer rotation signature and nil for a direct one. Behavior S.
     package func authorize(_ nodeKey: NodePublicKey, keySignature: [UInt8]) throws(TKAError) -> RotationDetails?
-    /// 피어 집합의 판정: 서명 검증과 회전으로 낡은 키(Go `tkaFilterNetmapLocked`의 2~5). 입력과 같은 순서의 "남긴다".
+    /// Evaluates a peer set by verifying signatures and identifying keys made obsolete by rotation (Go `tkaFilterNetmapLocked` items 2–5). Returns "keep" flags in input order.
     package func admitted(_ peers: [PeerCredential]) -> [Bool]
-    /// 끄기 비밀이 맞는가(Go `ValidDisablement`). Argon2i로 16MiB를 한 번 쓴다(동작 X).
+    /// Checks whether a disablement secret is valid (Go `ValidDisablement`). Uses 16MiB once for Argon2i (behavior X).
     package func isValidDisablement(secret: [UInt8]) -> Bool
 }
 
-// MARK: 서명 만들기 (노트 3.8, 4.6)
+// MARK: Signature creation (notes §§3.8 and 4.6)
 
-/// `--TL`이 붙은 인증 키를 해석한 것. 감싼 개인 키를 쥐므로 `description`과 `dump`에 내용을 드러내지 않는다.
+/// A parsed auth key with `--TL`. Holds a wrapped private key and hides its contents from `description` and `dump`.
 package struct WrappedAuthKey: Sendable {
-    /// 서버에 보낼 부분(`--TL` 앞).
+    /// The part to send to the server (before `--TL`).
     package let controlValue: String
-    /// `--TL`이 없으면 nil. 있는데 동작 R3의 검사에 하나라도 어긋나면 던진다(서버로 아무것도 보내기 전에).
+    /// Parses an auth key, returning nil without `--TL`. If present, any failure of behavior R3's checks throws before anything is sent to the server.
     package init?(parsing authKey: String) throws(TKAError)
-    /// 새 node 키에 대한 서명(Go `SignByCredential`): credential을 안에 넣은 rotation NKS의 정준 바이트.
+    /// Returns a signature for a new node key (Go `SignByCredential`), as canonical bytes of a rotation NKS nesting the credential.
     package func keySignature(for nodeKey: NodePublicKey) throws(TKAError) -> [UInt8]
 }
 
 extension NodeKeySignature {
-    /// 옛 서명을 새 node 키로 이어 서명한다(Go `ResignNKS`, 사슬 줄이기 포함). 동작 R7.
+    /// Extends the old signature to the new node key (Go `ResignNKS`, including chain trimming). Behavior R7.
     package static func resigned(
         _ previous: [UInt8], for nodeKey: NodePublicKey, with lockKey: Curve25519.Signing.PrivateKey
     ) throws(TKAError) -> [UInt8]
@@ -292,105 +292,105 @@ extension NodeKeySignature {
 
 package enum TKAError: Error, Sendable, Equatable {
     case cbor(CBORError)
-    /// CBOR로는 읽히지만 구조에 맞지 않는다: 맨 바깥이 맵이 아님, 받지 않는 키 종류, 중복 키, 알려진 필드의 타입·범위, 잘못된 UTF-8.
+    /// Valid CBOR with an invalid structure. Non-map at the top level, unsupported key type, duplicate key, invalid type or range of a known field, or invalid UTF-8.
     case invalidStructure
-    /// 정적 검사 실패(`StaticValidate`, 체크포인트 상태 검사).
+    /// Failed static validation (`StaticValidate` and checkpoint state validation).
     case invalidAUM
-    case emptyUpdate            // 빈 묶음
-    case missingParent          // 부모 없는 AUM을 들이려 함, 부모를 모름
-    case unsigned               // 서명 없음
-    case untrustedSigner        // 신뢰 키가 아닌 KeyID의 서명
+    case emptyUpdate            // Empty group
+    case missingParent          // Attempt to admit an AUM without a parent, or unknown parent
+    case unsigned               // No signatures
+    case untrustedSigner        // Signature whose KeyID is not trusted
     case invalidSignature
-    /// 적용 실패: 부모 해시 불일치, 이미 있는 키, 없는 키, 마지막 키 제거, StateID 불일치, 고친 키의 검사 실패.
+    /// Failed application due to parent hash mismatch, existing or missing key, removal of the last key, mismatched StateID, or invalid updated key.
     case rejectedUpdate
-    case notACheckpoint         // 부트스트랩에 체크포인트가 아닌 AUM
-    case corruptStore           // 저장된 AUM이 사슬을 이루지 않는다(동작 T3)
+    case notACheckpoint         // Bootstrap AUM is not a checkpoint
+    case corruptStore           // Stored AUMs do not form a chain (behavior T3)
     case iterationLimit
     case noIntersection
-    /// node 키가 인가되지 않는다(동작 S의 어느 단계든).
+    /// The node key is unauthorized (failure at any step of behavior S).
     case unauthorized
-    case invalidAuthKey         // `--TL` 뒤가 동작 R3에 어긋난다
+    case invalidAuthKey         // The suffix after `--TL` violates behavior R3
     case signingFailed
-    case limitExceeded          // 이 계약의 한도(동작 M)
+    case limitExceeded          // A limit in this contract (behavior M)
 }
 ```
 
-`SignByCredential`·`ResignNKS`는 CryptoKit의 서명을 쓰므로 순수 함수가 아니다(CryptoKit은 같은 키·메시지에도 매번 다른 서명을 낸다. 노트 8.1). 시험은 서명 바이트를 견주지 않고 검증한다(`SwiftailHost.md` 동작 C의 ECDSA와 같은 예외다).
+`SignByCredential` and `ResignNKS` are impure because they sign with CryptoKit (CryptoKit produces a different signature each time even for the same key and message. Notes §8.1). Tests verify signatures without comparing their bytes (the same exception as ECDSA in `SwiftailHost.md` behavior C).
 
 ### `SwiftailControl`
 
 ```swift
-/// tailnet lock의 지금 모습. `ControlClient`가 netmap마다 채운다. 개인 키와 비밀은 담지 않는다.
+/// The current tailnet lock status. `ControlClient` fills it for every netmap. Contains no private keys or secrets.
 public struct TailnetLockStatus: Sendable, Equatable {
     public enum Mode: Sendable, Equatable {
-        /// lock이 없다: 로컬 서명 권한 상태가 없고, 서버가 켜졌다고 알리지 않았거나 이 노드에 `tailnet-lock` capability가 없다.
+        /// Lock is absent. There is no local signing authority state, and either the server did not report lock enabled or the node lacks the `tailnet-lock` capability.
         case disabled
-        /// 검증한 서명 권한 상태를 쥐고 있고, 그것으로 피어를 거른다.
+        /// Holds verified signing authority state and uses it to filter peers.
         case enforcing
-        /// 거를 근거가 없다: 서버는 lock이 켜졌다고 하는데 부트스트랩하지 못했거나, 저장된 상태를 열지 못했다.
-        /// 피어를 하나도 올리지 않는다(사용자 확인 필요 U1).
+        /// No basis for filtering. Either the server reports lock enabled but bootstrap failed, or persisted state could not be opened.
+        /// Installs no peers (owner confirmation required U1).
         case unverified
     }
     public var mode: Mode
-    /// 로컬 머리(base32 52자). `.enforcing`일 때만 있다.
+    /// The local head (52-character base32). Present only in `.enforcing` mode.
     public var head: String?
-    /// 서명이 없거나 검증되지 않거나 낡은 키라서 netmap에서 뺀 피어 수.
+    /// The number of peers removed from the netmap for missing or unverified signatures or obsolete keys.
     public var filteredPeerCount: Int
-    /// 자기 노드의 서명이 지금 상태로 검증되지 않을 때(잠김), 서명 기기에 넘길 값. 잠기지 않았으면 nil이다.
+    /// The values to give a signing device when the current state cannot verify the local node's signature (locked out). Nil otherwise.
     public var signingRequest: SigningRequest?
-    /// 자기 노드가 잠겨 있다: 서명 기기가 서명할 때까지 lock을 지키는 피어와 통신하지 못한다.
+    /// Whether the local node is locked out. It cannot communicate with peers enforcing lock until a signing device signs it.
     public var isLockedOut: Bool { get }
 
-    /// 서명 기기에서 `tailscale lock sign <nodeKey> <lockKey>`에 넣는 두 값. 둘 다 공개 키다.
+    /// The two values for `tailscale lock sign <nodeKey> <lockKey>` on a signing device. Both are public keys.
     public struct SigningRequest: Sendable, Equatable {
-        public var nodeKey: String      // `nodekey:` + 16진
-        public var lockKey: String      // `tlpub:` + 16진
+        public var nodeKey: String      // `nodekey:` + hex
+        public var lockKey: String      // `tlpub:` + hex
     }
 }
 
 public struct Netmap: Sendable, Equatable {
     // …
-    /// tailnet lock의 모습. `peers`는 이것으로 이미 걸러져 있다(`ControlClient`가 내는 netmap).
-    public var tailnetLock: TailnetLockStatus          // `tailnetLockEnabled: Bool`을 대신한다
+    /// The tailnet lock status. `peers` is already filtered against it in the netmap emitted by `ControlClient`.
+    public var tailnetLock: TailnetLockStatus          // Replaces `tailnetLockEnabled: Bool`
 }
 
 public struct NodeIdentity: Sendable {
     // …
-    /// tailnet lock 키(NL 키). 한 번 만들면 바꾸지 않는다. `init()`이 새로 만든다.
+    /// The tailnet lock key (NL key). Remains fixed once created. `init()` generates a new key.
     public var lockKey: Curve25519.Signing.PrivateKey
 }
 
 public enum ControlError: Error, Sendable {
-    // `tailnetLockEnabled`를 없앤다. 새 case는 없다.
-    // `--TL` 뒤가 잘못된 인증 키는 `invalidConfiguration`이다(동작 R3).
+    // Removes `tailnetLockEnabled` and adds no cases.
+    // An auth key with a malformed suffix after `--TL` is `invalidConfiguration` (behavior R3).
 }
 
 // package·internal
 public struct MapRequest {
-    /// 로컬 머리의 base32. lock 상태가 없으면 빈 문자열이고 JSON에서 빠진다(`TKAHead`, omitzero).
+    /// The local head in base32. An empty string omitted from JSON when there is no lock state (`TKAHead`, omitzero).
     public var tkaHead: String
 }
-/// 서버가 알린 lock 상태(Go `netmap.TKAEnabled`·`TKAHead`). `MapSession`이 계산한다(동작 N1).
+/// The server-reported lock state (Go `netmap.TKAEnabled` and `TKAHead`). Computed by `MapSession` (behavior N1).
 package struct ServerLockState: Sendable, Equatable {
     package var isEnabled: Bool
     package var head: AUMHash?
 }
 extension MapSession.Update {
-    /// 세션의 지금 값. netmap이 바뀌지 않은 응답에도 싣는다.
+    /// The current session value. Included even in responses that leave the netmap unchanged.
     package var serverLock: ServerLockState
 }
-/// netmap을 받았을 때 할 일(Go `tkaSyncIfNeeded`의 갈래). 입출력 없는 판정이다(동작 N2).
+/// The action to take on netmap receipt (Go `tkaSyncIfNeeded` branches). Evaluated without I/O (behavior N2).
 enum TailnetLockPlan: Equatable {
     case nothing
-    case bootstrap                 // 로컬 없음, 서버 켜짐
-    case synchronize               // 로컬 있음, 머리 다름
-    case verifyDisablement         // 로컬 있음, 서버 꺼짐
+    case bootstrap                 // No local state, server enabled
+    case synchronize               // Local state present, heads differ
+    case verifyDisablement         // Local state present, server disabled
     init(localHead: AUMHash?, hasCapability: Bool, server: ServerLockState)
 }
-/// 서명 권한 상태를 상태 디렉터리의 파일 하나에 둔다(동작 T).
+/// Stores signing authority state in one file in the state directory (behavior T).
 struct TailnetLockStore: Sendable {
     init(directory: URL)
-    func load() throws(ControlError) -> Authority?        // 파일이 없으면 nil. 열지 못하면 던진다
+    func load() throws(ControlError) -> Authority?        // nil if no file. Throws if it cannot be opened
     func save(_ authority: Authority) throws(ControlError)
     func remove() throws(ControlError)
 }
@@ -402,588 +402,588 @@ extension ControlClient {
 }
 ```
 
-`ControlClient`의 공개 선언(`init`, `Configuration`, `Event`, `run()`)은 바뀌지 않는다. `Event.netmap`이 싣는 netmap이 걸러진 것이 되고 `tailnetLock`을 담는다. 저장 자리는 `NodeIdentityStore`의 디렉터리에서 얻는다(새 인자가 없다).
+`ControlClient` public declarations (`init`, `Configuration`, `Event`, `run()`) stay the same. The netmap in `Event.netmap` is now filtered and contains `tailnetLock`. The storage location comes from the `NodeIdentityStore` directory without a new argument.
 
 ### `Swiftail`
 
 ```swift
 public struct NodeStatus: Sendable, Equatable {
     // …
-    /// tailnet lock의 모습. netmap 전에는 `.disabled`다.
+    /// The tailnet lock status. `.disabled` before a netmap arrives.
     public var tailnetLock: TailnetLockStatus
 }
 
 public enum NodeEvent: Sendable, Equatable {
     // …
-    /// tailnet lock의 모습이 바뀌었다. 같은 값은 다시 내지 않는다. 처음 값은 `.disabled`이고 그것은 내지 않는다.
+    /// The tailnet lock status changed. The same value is never emitted twice in a row. The initial value is `.disabled` and is not emitted.
     case tailnetLockChanged(TailnetLockStatus)
 }
 ```
 
-`NodeState`와 `NodeError`의 case는 바뀌지 않는다(결정 L4). 잠긴 노드의 상태는 Go와 같이 `.running`까지 가고, 잠김은 `tailnetLock.isLockedOut`으로 안다. `NodeError.control`이 싣던 `tailnetLockEnabled`는 더 나오지 않는다.
+The `NodeState` and `NodeError` cases stay the same (decision L4). A locked-out node still reaches `.running` as in Go, and `tailnetLock.isLockedOut` indicates lockout. `NodeError.control` no longer carries `tailnetLockEnabled`.
 
-쓰는 모양(앱):
+App usage:
 
 ```swift
 for await event in node.events {
     if case let .tailnetLockChanged(lock) = event, let request = lock.signingRequest {
-        // 서명 기기에서: tailscale lock sign <request.nodeKey> <request.lockKey>
+        // On the signing device: tailscale lock sign <request.nodeKey> <request.lockKey>
     }
 }
 ```
 
-## 3. 동작
+## 3. Behavior
 
-번호는 시험과 검토에서 가리키는 이름이다. 괄호 안의 절 번호는 노트의 것이다. "Swiftail의 선택"이라고 적은 것은 Go에 없는 규칙이고, 나머지는 Go와 같은 판정을 내야 한다.
+The numbers are identifiers used by tests and reviews. Parenthetical section numbers refer to the notes. Items labeled "Swiftail's choice" are rules absent from Go. All other items must produce the same decisions as Go.
 
-### E. CBOR 인코딩
+### E. CBOR encoding
 
-1. 정준(CTAP2) 인코딩만 쓴다: 정수와 길이는 가장 짧게, 정의 길이만, 태그·실수 없음(3.1, 6.2).
-2. 구조는 정수 키 맵이다. 키는 `Key` 1·2·3·12, `AUMSignature` 1·2, `AUM` 1~7·23, `State` 1~5, NKS 1~6이고(3.2~3.6) 모두 한 바이트라 숫자 오름차순이 정준 순서다.
-3. `Meta`는 텍스트 → 텍스트 맵이다. 쌍의 순서는 **인코딩한 키 바이트의 사전순**이다(머리 바이트가 길이를 담으므로 짧은 키가 먼저다. `a`, `c`, `bb`. 3.1). 키와 값은 받은 UTF-8 바이트 그대로 쓴다.
-4. 빠지는 것과 남는 것(3.1, 3.4~3.6): omitempty 필드는 비면 뺀다(`AUM`의 `Key`·`KeyID`·`State`·`Meta`·`Signatures`, `Key.Meta`, `State.StateID1/2`가 0, NKS의 `Pubkey`·`KeyID`·`Signature`·`Nested`·`WrappingPubkey`). `AUM.Votes`는 값이 0이어도 있으면 쓴다(`0600`). omitempty가 아닌 필드는 늘 쓴다: `AUM.MessageKind`, `AUM.PrevAUMHash`(없으면 null `f6`), `Key.Kind`·`Votes`·`Public`(null이면 `f6`, 길이 0이면 `40`), `Signature.KeyID`·`Signature`, `State.LastAUMHash`(없으면 null), `State.DisablementValues`·`Keys`, NKS의 `SigKind`. 기준 바이트: `UpdateKey{KeyID:[1], Votes:0, Meta:{}}` → `a4010402f60441010600`, `NoOp{PrevAUMHash: 길이 0}` → `a201030240`, `StateID1=2^40` → `041b0000010000000000`(8.1).
-5. **해시와 서명 입력은 받은 바이트가 아니라 디코딩한 값을 다시 인코딩한 바이트다**(3.1, 3.7). `AUMHash` = BLAKE2s-256(정준 AUM, 서명 포함). AUM `SigHash` = `Signatures`를 뺀 것의 BLAKE2s-256. NKS `SigHash` = `Signature`를 뺀 것의 BLAKE2s-256(`Nested`는 그대로). 모르는 필드, 비최단 정수, 정렬 안 된 키는 받아들이되 해시에서는 사라진다.
-6. 판정에 쓰이는 값에서 null과 빈 값을 가려 쥐는 곳은 셋이다: `AUM.prevAUMHash`, `AUM.votes`, `TrustedKey.publicKey`. `TrustedKey.publicKey`의 null과 길이 0은 **쓰기에서만** 가린다(`f6`과 `40`). KeyID로 견줄 때는 같은 키다: null로 AddKey한 뒤 빈 값으로 AddKey하면 "이미 있는 키"다(실행 확인). `State`의 배열과 `LastAUMHash`는 가리지 않는다: 받아들여지는 체크포인트에서는 배열이 비지 않고 `LastAUMHash`가 null이기 때문이다(3.5). 그래서 정적 검사를 통과하지 못하는 입력의 재인코딩 바이트는 Go와 다를 수 있고, 대조 시험은 그런 입력에서 판정만 견준다(7절).
+1. Use only canonical (CTAP2) encoding, with shortest integers and lengths, definite lengths only, and no tags or floats (3.1, 6.2).
+2. Structures are maps with integer keys. The keys are 1, 2, 3, and 12 for `Key`, 1 and 2 for `AUMSignature`, 1–7 and 23 for `AUM`, 1–5 for `State`, and 1–6 for NKS (3.2–3.6). All fit in one byte, so ascending numeric order is canonical.
+3. `Meta` is a text → text map. Order pairs by **lexicographic order of encoded key bytes** (the header byte contains the length, so shorter keys come first, as in `a`, `c`, `bb`. 3.1). Write key and value UTF-8 bytes as received.
+4. Field omission and retention (3.1, 3.4–3.6). Omit empty omitempty fields (`Key`, `KeyID`, `State`, `Meta`, and `Signatures` in `AUM`, `Key.Meta`, zero `State.StateID1/2`, and NKS `Pubkey`, `KeyID`, `Signature`, `Nested`, and `WrappingPubkey`). Write `AUM.Votes` when present even if 0 (`0600`). Always write fields without omitempty. These are `AUM.MessageKind`, `AUM.PrevAUMHash` (null `f6` if absent), `Key.Kind`, `Votes`, and `Public` (`f6` for null, `40` for length 0), `Signature.KeyID` and `Signature`, `State.LastAUMHash` (null if absent), `State.DisablementValues` and `Keys`, and NKS `SigKind`. Reference bytes are `UpdateKey{KeyID:[1], Votes:0, Meta:{}}` → `a4010402f60441010600`, `NoOp{PrevAUMHash: length 0}` → `a201030240`, and `StateID1=2^40` → `041b0000010000000000` (8.1).
+5. **Hash and sign the re-encoded bytes of the decoded value** (3.1, 3.7). `AUMHash` = BLAKE2s-256(canonical AUM, including signatures). AUM `SigHash` = BLAKE2s-256 with `Signatures` omitted. NKS `SigHash` = BLAKE2s-256 with `Signature` omitted (`Nested` is intact). Unknown fields, non-shortest integers, and unsorted keys are accepted and disappear from the hash.
+6. Three values used in decisions distinguish null from empty in storage. They are `AUM.prevAUMHash`, `AUM.votes`, and `TrustedKey.publicKey`. Null and length 0 in `TrustedKey.publicKey` differ **only on writing** (`f6` and `40`). KeyID comparison treats them as the same key. An AddKey with an empty value after AddKey with null reports "key already exists" (verified by execution). No distinction is kept for `State` arrays and `LastAUMHash`, because accepted checkpoints have nonempty arrays and null `LastAUMHash` (3.5). Re-encoded bytes may therefore differ from Go for inputs that fail static validation. Comparison tests check only the decision for those inputs (§7).
 
-### D. CBOR 디코딩과 거절
+### D. CBOR decoding and rejection
 
-AUM과 NKS에 같은 규칙을 쓴다(3.1의 `Unmarshal` 경로).
+Apply the same rules to AUM and NKS (the `Unmarshal` path in 3.1).
 
-1. **항목 수준에서 거절**: 빈 입력, 잘린 항목, 첫 항목 뒤에 남은 바이트, 길이 미정, 태그(모르는 필드의 값 안에 있어도), 중첩 17단(맨 바깥 맵이 1단), 원소 4,097개의 배열, 1,025쌍의 맵(3.1, 6.2, 8.1). RFC 8949의 잘 짜임 규칙에 어긋나는 나머지도 거절한다: 예약된 추가 정보 28~30(모든 주요 타입), 정수의 31, 짝 없는 `ff`, 두 바이트로 쓴 32 미만 단순값(`f800`~`f81f`. `f820`은 받는다). 한 바이트 단순값 0~19와 255는 받는다(모르는 필드의 값으로). 이 줄은 `tkafixtures`의 실행으로 확정했다(`tka-fixtures.json`의 `cbor`).
-2. **받아들임**: 비최단 정수(값과 키), 비최단 맵 머리와 바이트열 길이, 정렬 안 된 키(3.1, 실행 확인).
-3. **구조 맵의 키**(AUM·`Key`·`State`·`Signature`·NKS): 받는 키는 양의 정수 2^63−1 이하, 음의 정수(−2^63까지), 올바른 UTF-8 텍스트다. 그 밖의 키(bstr, 실수, true·false·null·undefined, 배열, 맵, 2^63 이상의 정수, 잘못된 UTF-8 텍스트)는 거절한다(3.1).
-4. **중복 키**: 구조 맵과 `Meta`에서 같은 키가 두 번 나오면 거절한다. 알려진 키든 모르는 키든 음수 키든 같고, 한쪽을 비최단으로 써도 같은 키다(값으로 견준다. 실행 확인). 모르는 필드의 **값 안쪽** 맵의 중복은 거절하지 않는다(3.1).
-5. **알려진 필드**는 정수 키로만 찾는다. 텍스트 키 `"1"`·`"MessageKind"`는 모르는 필드다(3.1). 타입이 맞지 않으면 거절한다(정수 자리에 음수·실수·텍스트, 바이트열 자리에 텍스트, `Meta`의 키나 값이 true·배열 같은 것, `Signatures`의 원소가 맵도 null도 아님). **Go가 받아들여서 받아들이는 것**(`tkafixtures`의 실행으로 확정. 초안은 거절로 적었었다): ① **바이트열 자리의 정수 배열**: 원소가 모두 0~255면 그 바이트열로 읽는다(다시 쓰면 바이트열이다. `PrevAUMHash`, `Key.Public`, 서명의 KeyID·Signature, `DisablementValues`의 원소, NKS `Pubkey`에서 확인. 원소가 256 이상이거나 음수면 거절). ② **`Meta`의 null·undefined 키나 값**은 빈 문자열로 읽는다(다시 쓰면 `60`). ③ `Signatures`의 null 원소는 디코딩되고 정적 검사에서 거절된다. ④ AddKey의 `Public`은 null·없음·빈 값·31바이트·33바이트가 모두 디코딩된다(그 KeyID로 RemoveKey·UpdateKey도 통과한다. 33바이트 KeyID로 단 서명은 정적 검사에서 거절된다). 범위: `MessageKind`·`SigKind`·`Key.Kind`는 255까지(256은 거절), `Votes`·`StateID`는 `UInt64` 전 범위. null과 undefined는 그 필드의 0 값(정수 0, 없음)이 된다. `Meta`의 텍스트는 올바른 UTF-8이어야 한다(3.1, 6.2).
-6. **모르는 필드**는 조용히 버린다. 값은 잘 짜인 항목이면 무엇이든 된다(음수, 실수, 단순값, 잘못된 UTF-8 텍스트, 중첩 맵). D1의 한도와 금지는 그 안에도 적용된다(3.1, 6.2).
-7. 맨 바깥이 배열·정수·바이트열·텍스트면 거절한다. **맨 바깥이 null(`f6`)이나 undefined(`f7`)면 받아들인다**: 모든 필드가 0 값인 구조가 된다(AUM은 종류 0·부모 없음으로 읽혀 `a2010002f6`으로 다시 쓰이고 정적 검사를 통과한다. NKS는 `a10100`). Go가 그렇게 한다(`tkafixtures`의 실행으로 확정. 초안과 노트 3.1은 "맵이 아니면 거절"로 적었었다).
-8. **Swiftail의 선택**: 체크포인트 `State`의 `LastAUMHash`가 null이 아니면 디코딩에서 거절한다. Go는 길이가 2든 33이든 읽어 들인 뒤 정적 검사에서 거절한다(3.5, 8.1). 그 AUM이 거절된다는 판정은 같다. 텍스트인 `LastAUMHash`는 Go도 디코딩에서 거절한다.
-9. 디코딩 전에 바이트 길이를 본다(동작 M). 어떤 입력으로도 프로세스가 죽지 않는다.
-10. **Swiftail의 선택**: `AUMHash`의 텍스트는 52자 base32 알파벳만 받는다. 줄바꿈(`\r`·`\n`)이 섞인 텍스트는 거절한다. Go는 길이를 줄바꿈을 지우기 전의 글자 수로 재고 지운 뒤에 읽어, 31·30바이트만 채운 **원래와 다른 해시**로 받는다(`tailscale.com/tka/aum.go:33-41`. `tkafixtures`의 실행으로 확인: 50자 + `\r\n` 등 7가지). 그것을 따르면 잘린 해시를 쓰게 된다. 이런 텍스트는 제어 서버만 보낼 수 있고, 읽히지 않는 머리는 동작 N1이 다룬다.
+1. **Reject at the item level**. Reject empty input, truncated items, bytes after the first item, indefinite lengths, tags (even within unknown field values), 17 levels of nesting (outermost map is level 1), arrays of 4,097 elements, and maps of 1,025 pairs (3.1, 6.2, 8.1). Also reject other violations of RFC 8949 well-formedness rules, including reserved additional information 28–30 (all major types), 31 for integers, unmatched `ff`, and simple values below 32 encoded in 2 bytes (`f800`–`f81f`. Accept `f820`). Accept single-byte simple values 0–19 and 255 as values of unknown fields. This line was confirmed by running `tkafixtures` (`cbor` in `tka-fixtures.json`).
+2. **Accept** non-shortest integers (values and keys), non-shortest map headers and byte string lengths, and unsorted keys (3.1, verified by execution).
+3. **Structure map keys** (AUM, `Key`, `State`, `Signature`, NKS). Accept positive integers up to 2^63−1, negative integers (down to −2^63), and valid UTF-8 text. Reject other keys (bstr, floats, true, false, null, undefined, arrays, maps, integers at or above 2^63, and invalid UTF-8 text) (3.1).
+4. **Duplicate keys**. Reject repeated keys in structure maps and `Meta`, whether the keys are known, unknown, or negative. A non-shortest encoding of one still counts as the same key (comparison is by value, verified by execution). Allow duplicates in maps **inside the value** of an unknown field (3.1).
+5. Look up **known fields** only by integer keys. Text keys `"1"` and `"MessageKind"` are unknown fields (3.1). Reject type mismatches (negative integers, floats, or text where an integer is expected, text for byte strings, `Meta` keys or values like true or arrays, and `Signatures` elements that are neither maps nor null). **Accept the following because Go does** (confirmed by running `tkafixtures`. The draft specified rejection). ① **Integer arrays in place of byte strings** decode as the corresponding byte string if all elements are 0–255 (re-encoded as a byte string. Confirmed for `PrevAUMHash`, `Key.Public`, signature KeyID and Signature, `DisablementValues` elements, and NKS `Pubkey`. Reject elements at or above 256 or negative). ② **Null or undefined `Meta` keys or values** decode as empty strings (re-encoded as `60`). ③ Null `Signatures` elements decode and then fail static validation. ④ AddKey `Public` decodes when null, absent, empty, 31 bytes, or 33 bytes (RemoveKey and UpdateKey also pass with that KeyID. A signature with a 33-byte KeyID fails static validation). Range limits are 255 for `MessageKind`, `SigKind`, and `Key.Kind` (reject 256) and the full `UInt64` range for `Votes` and `StateID`. Null and undefined become the field's zero value (integer 0 or absent). `Meta` text must be valid UTF-8 (3.1, 6.2).
+6. Silently discard **unknown fields**. Their values can be any well-formed item (negative integers, floats, simple values, invalid UTF-8 text, or nested maps). D1 limits and prohibitions still apply inside them (3.1, 6.2).
+7. Reject top-level arrays, integers, byte strings, and text. **Accept top-level null (`f6`) or undefined (`f7`)** as a structure with all zero-valued fields (AUM decodes as kind 0 with no parent, re-encodes to `a2010002f6`, and passes static validation. NKS re-encodes to `a10100`). This matches Go (confirmed by running `tkafixtures`. The draft and notes §3.1 specified "reject if it is not a map").
+8. **Swiftail's choice**. Reject a non-null `LastAUMHash` in checkpoint `State` during decoding. Go decodes lengths such as 2 or 33 and rejects them in static validation (3.5, 8.1). The decision to reject the AUM is the same. Go also rejects a text `LastAUMHash` during decoding.
+9. Check byte length before decoding (behavior M). No input crashes the process.
+10. **Swiftail's choice**. Accept only 52 characters from the base32 alphabet in `AUMHash` text. Reject text containing line breaks (`\r` or `\n`). Go measures the length before stripping line breaks, then strips them and decodes, accepting a **different hash from the original** with only 31 or 30 bytes filled (`tailscale.com/tka/aum.go:33-41`. Verified with 7 cases in `tkafixtures`, including 50 characters + `\r\n`). Following Go would use a truncated hash. Only the control server can send such text, and behavior N1 handles unreadable heads.
 
-### A. AUM 검증과 상태 적용
+### A. AUM verification and state application
 
-1. **정적 검사**(3.4, 3.5): `PrevAUMHash`가 길이 0인 바이트열이면 거절(null은 된다. 길이는 보지 않는다). `Key`가 있으면 `Kind`가 1, `Votes`가 1~4,096, `Meta`의 키·값 길이 합이 512바이트 이하(3.2). 모든 서명의 KeyID가 32바이트, 서명이 64바이트. `State`가 있으면 체크포인트 검사: `LastAUMHash` 없음, `DisablementValues` 1~32개·각 32바이트·서로 다름, `Keys` 1~512개·각각 검사 통과·KeyID 서로 다름. 종류별: AddKey는 `Key` 필수이고 `KeyID`·`State`·`Votes`·`Meta` 금지, RemoveKey는 `KeyID`(길이>0) 필수이고 `Key`·`State`·`Votes`·`Meta` 금지, UpdateKey는 `KeyID`(길이>0)와 `Votes`나 `Meta` 가운데 하나 이상(빈 맵 `Meta`도 "있음"이다) 필수이고 `Key`·`State` 금지, Checkpoint는 `State` 필수이고 `KeyID`·`Key`·`Votes`·`Meta` 금지. NoOp(3), 종류 0, 6 이상은 종류별 검사가 없다.
-2. **부모**(4.1 2): 부모 없는 AUM이 아니면 부모 상태의 `LastAUMHash`가 있고 `PrevAUMHash`와 바이트가 같아야 한다. 길이가 32가 아닌 `PrevAUMHash`는 여기서 떨어진다(3.4).
-3. **서명**(4.1 3·4, 3.7): 하나 이상 있어야 한다. **모든** 서명의 KeyID가 부모 상태의 신뢰 키여야 하고, 그 키의 `Public`(상태 안의 값. 32바이트가 아니면 실패)으로 `SigHash`에 대한 `Ed25519Verification.isValidZIP215`가 참이어야 한다. 모르는 키의 서명이 하나라도 섞이면 거절한다. 한 AUM 안에서 같은 (KeyID, 서명) 쌍은 한 번만 검증한다(2026-11-17 보안 검증). 판정은 되풀이한 만큼 검증하는 Go와 같고, 신뢰 키의 서명 하나를 4,096번 되풀이한 AUM 하나가 받는 쪽을 수십 초 붙잡지 못한다.
-4. `Votes`의 문턱은 없다. 신뢰 키 하나의 서명으로 충분하다(4.1).
-5. 키가 하나뿐인 상태에서 그 키를 지우는 RemoveKey는 거절한다(4.1 5).
-6. **적용**(4.2): 결과 상태의 `LastAUMHash`는 이 AUM의 해시다. NoOp는 그대로. Checkpoint는 `StateID1/2`가 부모와 같아야 하고 상태 전체를 체크포인트의 것으로 바꾼다. AddKey는 KeyID가 이미 있으면 거절하고 끝에 덧붙인다(512개 검사는 여기에 없다). UpdateKey는 키가 없으면 거절하고, `Votes`·`Meta`를 바꾼 키가 A1의 키 검사를 다시 통과해야 한다. RemoveKey는 키가 없으면 거절하고 순서를 지키며 지운다. 그 밖의 종류는 상태를 그대로 둔다.
-7. **종류 0(`AUMInvalid`)과 6 이상**은 서명이 맞으면 받아들이고 머리가 옮겨 간다(4.2, 8.1. 결정 L10). 부모 없는 자리에서는 NoOp·AddKey·Checkpoint만 된다(4.2).
+1. **Static validation** (3.4, 3.5). Reject a length-0 byte string for `PrevAUMHash` (null is accepted. Length is otherwise unchecked). If `Key` is present, require `Kind` of 1, `Votes` of 1–4,096, and total `Meta` key and value length at most 512 bytes (3.2). Every signature must have a 32-byte KeyID and a 64-byte signature. If `State` is present, validate the checkpoint. Require no `LastAUMHash`, 1–32 distinct 32-byte `DisablementValues`, and 1–512 valid `Keys` with distinct KeyIDs. By kind, AddKey requires `Key` and forbids `KeyID`, `State`, `Votes`, and `Meta`. RemoveKey requires `KeyID` (length>0) and forbids `Key`, `State`, `Votes`, and `Meta`. UpdateKey requires `KeyID` (length>0) and at least one of `Votes` or `Meta` (an empty `Meta` map counts as present), and forbids `Key` and `State`. Checkpoint requires `State` and forbids `KeyID`, `Key`, `Votes`, and `Meta`. NoOp (3), kind 0, and kinds 6 and higher have no kind-specific validation.
+2. **Parent** (4.1 item 2). Unless the AUM has no parent, the parent state's `LastAUMHash` must exist and match the bytes of `PrevAUMHash`. A `PrevAUMHash` with length other than 32 fails here (3.4).
+3. **Signatures** (4.1 items 3 and 4, 3.7). Require at least one. **Every** signature's KeyID must be trusted by the parent state, and `Ed25519Verification.isValidZIP215` must be true for `SigHash` using that key's `Public` (the value from state, which must be 32 bytes). Reject if any signature uses an unknown key. Verify an identical (KeyID, signature) pair only once within an AUM (2026-11-17 security verification). The decision matches Go, which verifies every repetition. A single AUM repeating one trusted key's signature 4,096 times cannot tie up the recipient for tens of seconds.
+4. `Votes` has no threshold. One trusted key's signature is enough (4.1).
+5. Reject a RemoveKey that would remove the only key in the state (4.1 item 5).
+6. **Application** (4.2). The resulting state's `LastAUMHash` is the hash of this AUM. NoOp leaves the rest unchanged. Checkpoint requires `StateID1/2` to match the parent and replaces the whole state with the checkpoint's state. AddKey rejects existing KeyIDs and otherwise appends (the 512-key check does not apply here). UpdateKey rejects missing keys and requires the key with updated `Votes` and `Meta` to pass A1 key validation again. RemoveKey rejects missing keys and removes the key while preserving order. Other kinds leave the state unchanged.
+7. **Kind 0 (`AUMInvalid`) and kinds 6 and higher** are accepted if their signatures are valid, and the head advances (4.2, 8.1. Decision L10). Only NoOp, AddKey, and Checkpoint are allowed where there is no parent (4.2).
 
-### F. 사슬, 갈래 해소, 머리
+### F. Chains, fork resolution, and head
 
-1. **갈래 해소**(4.3 `pickNextAUM`): 같은 부모의 자식이 여럿이면 ① 서명 가중치가 큰 것(부모 상태의 `Votes` 합. 같은 키의 서명은 한 번만, 모르는 키는 0) ② 같으면 RemoveKey인 것 ③ 같으면 AUM 해시가 바이트 비교로 작은 것.
-2. **머리**: 뿌리(부트스트랩 AUM)의 상태에서 자식이 없을 때까지 F1로 하나씩 적용한 끝이다(4.3 `fastForward`).
-3. **어느 AUM의 상태**(4.3 `computeStateAt`): 그 AUM에서 체크포인트나 뿌리를 만날 때까지 거꾸로 가고, 지나온 경로를 따라 다시 적용한다(갈래 규칙이 아니라 경로를 따른다).
-4. **들이기**(4.3 `Inform`): 빈 묶음은 오류. 받은 순서대로 처리하고 정렬하지 않는다. 이미 쥔 AUM은 건너뛴다. 부모 없는 AUM은 오류. 각 AUM의 부모 상태는 같은 묶음에서 앞서 처리한 것이거나 F3으로 구하고, 부모를 모르면 오류. A1~A6을 통과해야 한다. **하나라도 실패하면 그 앞의 것까지 아무것도 들이지 않는다.** 모두 통과하면 머리를 다시 계산한다.
-5. **부트스트랩**(4.3 `Bootstrap`): 상태가 비어 있을 때만 한다. AUM이 Checkpoint이고 `State`가 있어야 하며, 그 체크포인트 **자신의 상태**를 부모 상태 삼아 A1·A3을 검사한다. 첫 신뢰는 제어 서버가 준 체크포인트에 대한 TOFU다. 서버가 genesis가 아닌 나중 체크포인트를 주어도 같다(8.2).
-6. **다시 열기**: Swiftail의 저장소는 뿌리가 하나다(F4가 부모를 모르는 AUM을 받지 않고, 압축하지 않는다. 결정 L7). 그래서 Go `Open`의 "여러 사슬 가운데 조상 고르기"(4.3, 8.2의 미확인 항목)에 닿지 않는다. 열 때 그 불변 조건을 검사한다: 뿌리가 기록된 부트스트랩 해시 하나이고, 나머지는 모두 부모가 저장소에 있다. 어긋나면 `corruptStore`다. 뿌리부터 F2로 다시 계산하며 A1~A6을 다시 검사한다(Swiftail의 선택. 결정 L14).
-7. 반복 한도(5장): 부모 상태를 찾아 거꾸로 가기 2,000, 동기화의 머리 교차 1,000, 꼬리 교차의 앞으로 감기 2,000. 뿌리부터 머리까지의 재계산(F2·F6)에는 Go의 2,000을 쓰지 않는다: 압축하지 않는 저장소에서는 사슬이 그보다 길어질 수 있다. 저장 한도(동작 M)가 그 상한이다(Swiftail의 선택).
+1. **Fork resolution** (4.3 `pickNextAUM`). If a parent has several children, prefer ① the largest signature weight (sum of parent state `Votes`, counting signatures from the same key once and unknown keys as 0), ② on a tie, a RemoveKey, and ③ on a tie, the smaller AUM hash by byte comparison.
+2. **Head**. Start with the root state (bootstrap AUM) and apply successive children according to F1 until no child remains (4.3 `fastForward`).
+3. **State at an AUM** (4.3 `computeStateAt`). Walk backward from that AUM to a checkpoint or the root, then reapply updates along the path taken, following the path without fork selection.
+4. **Admission** (4.3 `Inform`). An empty group is an error. Process in arrival order without sorting. Skip AUMs already held. An AUM without a parent is an error. Use the parent state previously processed in the same group or compute it with F3. An unknown parent is an error. Require A1–A6 to pass. **If any update fails, admit none of them, including earlier ones.** If all pass, recompute the head.
+5. **Bootstrap** (4.3 `Bootstrap`). Only when state is empty. Require a Checkpoint AUM with `State` and perform checks A1 and A3 using the checkpoint's **own state** as the parent state. Initial trust is TOFU for the control server's checkpoint. This also applies when the server supplies a later checkpoint in place of genesis (8.2).
+6. **Reopening**. Swiftail stores have one root (F4 rejects AUMs with unknown parents, and there is no compaction. Decision L7). This avoids Go `Open`'s "choosing an ancestor among multiple chains" (4.3, unverified item in 8.2). Check the invariant on open. The recorded bootstrap hash is the only root, and every other AUM has its parent in the store. Otherwise return `corruptStore`. Recompute from the root with F2 and check A1–A6 again (Swiftail's choice. Decision L14).
+7. Iteration limits (chapter 5) are 2,000 for walking back to find a parent state, 1,000 for synchronization head intersection, and 2,000 for fast-forwarding on tail intersection. Recomputing root to head (F2 and F6) does not use Go's 2,000. In a store without compaction, the chain can grow longer. The storage limit (behavior M) bounds it (Swiftail's choice).
 
-### S. NKS 검증
+### S. NKS verification
 
-`Authority.authorize`(4.4). 어느 단계든 실패하면 인가되지 않는다.
+`Authority.authorize` (4.4). Failure at any step means unauthorized.
 
-1. 동작 D로 디코딩한다.
-2. 맨 바깥이 credential이면 거절한다.
-3. 허가 KeyID: direct·credential은 자기 `KeyID`(비면 거절), rotation은 `Nested`를 따라 내려간 값(`Nested`가 없으면 거절).
-4. 그 KeyID가 **지금 상태**의 신뢰 키여야 한다.
-5. 서명 검증(재귀):
-   - credential이 아니면 `Pubkey`가 `"np"` ‖ node 공개 키 32바이트와 같아야 한다.
-   - **rotation**: `Nested` 필수. 회전 키는 `Nested.WrappingPubkey`이고, 비었고 `Nested`가 rotation이면 더 안쪽 것이다. 없거나 32바이트가 아니면 거절. 바깥 `Signature`는 그 키로 **`Ed25519Verification.isValidStandard`**(Go 표준 규칙)로 검증한다. 안쪽이 credential이 아니면 안쪽 `Pubkey`가 올바른 `np` 형식(34바이트)이어야 하고, 안쪽을 그 키로 다시 검증한다.
-   - **direct·credential**: `Nested`가 있으면 거절. 신뢰 키가 `Key25519`이고 `Public`이 32바이트여야 하며 **`isValidZIP215`**로 검증한다.
-6. 통과한 rotation은 내력을 돌려준다: `previousNodeKeys`는 안쪽 서명들 가운데 `Pubkey`가 비지 않은 것의 키(새것부터, 맨 안쪽 direct의 키 포함), `initialSignature`는 맨 안쪽의 rotation 아닌 서명이다. credential의 `Pubkey`에 값이 들어 있는데 `np` 형식으로 읽히지 않으면 검증 전체가 실패한다(4.4 6).
-7. 깊이는 CBOR 중첩 16단이 한도다. direct 위에 rotation 15겹까지 검증된다(4.4).
+1. Decode using behavior D.
+2. Reject an outermost credential.
+3. Resolve the authorizing KeyID. For direct or credential, use its own `KeyID` (reject if empty). For rotation, follow `Nested` (reject if `Nested` is absent).
+4. That KeyID must be trusted in the **current state**.
+5. Verify signatures recursively:
+   - For non-credentials, `Pubkey` must match `"np"` ‖ the 32-byte node public key.
+   - **rotation** requires `Nested`. The rotation key is `Nested.WrappingPubkey`. If empty and `Nested` is a rotation, use the key further inside. Reject a missing key or a length other than 32 bytes. Verify the outer `Signature` with that key and **`Ed25519Verification.isValidStandard`** (Go standard rules). For a nested non-credential, require a valid `np` format (34 bytes) in its `Pubkey` and verify it recursively using that public key.
+   - **direct and credential** reject `Nested`. Require a trusted `Key25519` key with a 32-byte `Public` and verify with **`isValidZIP215`**.
+6. A valid rotation returns its history. `previousNodeKeys` contains keys of nested signatures with nonempty `Pubkey` (newest first, including the innermost direct key), and `initialSignature` is the innermost non-rotation signature. If the credential has a `Pubkey` value that cannot be parsed in `np` format, the entire verification fails (4.4 item 6).
+7. CBOR nesting limits depth to 16 levels. Up to 15 rotations on top of a direct signature can be verified (4.4).
 
-### X. 끄기 비밀
+### X. Disablement secret
 
-1. `Authority.isValidDisablement(secret:)`는 `Argon2i.derive(password: secret, salt: "tailscale network-lock disablement salt"(ASCII 39바이트), iterations: 4, memoryKiB: 16384, parallelism: 4, outputByteCount: 32)`의 결과가 상태의 `DisablementValues` 가운데 하나와 **상수 시간 비교**(`constantTimeEqual`)로 같을 때 참이다(4.5). Argon2**i**이고 버전 `0x13`, 비밀 키와 연관 자료는 비어 있다.
-2. 빈 비밀도 그대로 KDF에 넣는다(Go와 같은 판정. 서버가 비밀을 주지 않으면 빈 값이다).
-3. 기준값: 비밀 `0xa5` × 32 → `c3fea8a0d70ede2555990ca60d70a8a03cbe627d2c9f3cb0e2ba7093d0884e2f`(4.5).
-4. 16MiB를 한 번 쓰고 끝나면 놓는다. 절차가 한 번에 하나만 돌므로(동작 N3) 겹쳐 돌지 않는다. 같은 비밀은 다시 계산하지 않는다(동작 O6).
+1. `Authority.isValidDisablement(secret:)` returns true when the result of `Argon2i.derive(password: secret, salt: "tailscale network-lock disablement salt"(39 ASCII bytes), iterations: 4, memoryKiB: 16384, parallelism: 4, outputByteCount: 32)` matches any state `DisablementValues` by **constant-time comparison** (`constantTimeEqual`) (4.5). It uses Argon2**i**, version `0x13`, with empty secret key and associated data.
+2. Pass even an empty secret to the KDF unchanged (same decision as Go. An omitted server secret is empty).
+3. Reference value for secret `0xa5` × 32 → `c3fea8a0d70ede2555990ca60d70a8a03cbe627d2c9f3cb0e2ba7093d0884e2f` (4.5).
+4. Use 16MiB once and release it afterward. Only one procedure runs at a time (behavior N3), so computations do not overlap. Do not recompute for the same secret (behavior O6).
 
-### R. NL 키와 등록
+### R. NL key and registration
 
-1. **NL 키**(4.6 1): `NodeIdentity`가 쥐고 `identity.json`에 `"NLKey":"nlpriv:<16진 128자리>"`(시드 32 ‖ 공개 32. Go의 텍스트 형식, 3.8)로 저장한다. 읽을 때 뒤 32바이트가 시드로 만든 공개 키와 같은지 확인하고 다르면 `storage`다. `NLKey`가 없는 옛 신원 파일을 읽으면 새 키를 만들고 **첫 요청을 보내기 전에 저장한다**(저장하지 않고 등록하면 다시 시작할 때 다른 키가 나간다). 한 번 정하면 바꾸지 않는다: 잃으면 다음 node 키 교체 뒤 스스로 재서명하지 못한다.
-2. `RegisterRequest.NLKey`에 늘 0이 아닌 공개 키를 싣는다(4.6 1).
-3. **인증 키의 해석**(3.8): `run()`이 첫 연결 전에 한 번 한다. `--TL`이 없으면 평범한 인증 키다. 있으면 첫 `--TL`에서 자르고 나머지를 첫 `-`에서 잘라 A·B를 얻는다. 다음 가운데 하나라도 어긋나면 `ControlError.invalidConfiguration`으로 끝내고 **서버로 아무것도 보내지 않는다**: 문자열 전체 16KiB 이하. `-`가 있다. A·B가 패딩 없는 표준 base64(`+/`)의 정규형이다. A가 8KiB 이하이고 동작 D로 읽히는 NKS이며 종류가 credential이고 `WrappingPubkey`가 32바이트다. **B가 정확히 64바이트다.** B의 앞 32바이트(시드)로 만든 공개 키가 B의 뒤 32바이트와 같고 A의 `WrappingPubkey`와도 같다. Go는 디코딩이 실패하면 개인 키가 든 원문 전체를 서버로 보내고, B가 64바이트가 아니면 panic한다(3.8). Swiftail은 어느 쪽도 하지 않는다(결정 L12·L13).
-4. **서버로 가는 것**: `Auth.AuthKey`에는 `--TL` 앞부분만 싣는다(4.6 2). 감싼 개인 키(B)와 credential(A)의 원문은 어떤 요청에도 싣지 않는다. 서버의 거절 메시지에서 인증 키 원문과 앞부분을 가리는 기존 규칙(`SwiftailControl.md` 동작 2)은 그대로다.
-5. **요청의 서명**(Go의 순서 그대로. 4.6 2·4): ① 옛 node 키가 있고 서버가 방금 준 옛 서명이 있으면 R7의 재서명. 실패하면 로그만 남기고 서명 없이 등록한다. ② 아니고 감싼 인증 키를 실어 보내는 요청이면 `WrappedAuthKey.keySignature(for:)`(= rotation NKS{`Pubkey`: `"np"` ‖ 새 node 키, `Nested`: credential}의 `SigHash`에 감싼 키로 서명). 실패하면 등록을 오류로 끝낸다. ③ 그 밖에는 서명 없이(null) 등록한다. 서명 없는 등록은 lock과 무관하게 진행되고, 서명은 서명 기기가 뒤에 올린다(4.6 3).
-6. **서버의 재서명 요청**(4.6 4): `RegisterResponse.NodeKeySignature`가 비지 않으면 새 node 키를 만들어 다시 등록한다. `OldNodeKey`는 저장된 지금의 node 키이고, 재서명의 입력은 **방금 받은 응답의 바이트**다(로컬에 저장한 서명이 아니다). 응답은 지금처럼 `Error` → `NodeKeySignature` → `NodeKeyExpired` → `AuthURL` 순으로 본다. 한 번의 등록에서 재서명 요청은 한 번만 따른다. 두 번째로 오면 연결 오류로 보고 물러났다가 다시 잇는다(Swiftail의 선택. Go는 두 번째 응답의 재서명 요청을 버린다, `control/controlclient/direct.go:534-545`. 그 뒤의 Go 상태는 확인하지 못했다, 9절).
-7. **재서명**(4.4 끝, 4.6 4 `ResignNKS`): 옛 서명의 `Pubkey`가 새 키와 같으면 옛 서명을 그대로 쓴다. 아니면 옛 서명을 `Nested`로 하는 rotation NKS를 NL 키로 서명한다. 지금 서명의 `Pubkey`와 안쪽 키를 합한 수가 15개를 넘으면, 맨 안쪽 rotation 아닌 서명 위에 가장 최근 키 14개만 NL 키로 다시 서명해 감싼 뒤 새 rotation을 씌운다. 만든 서명은 스스로 검증하지 않고 보낸다(Go와 같다. 결정 L9): 옛 사슬의 회전 키가 자기 NL 공개 키가 아니면(`--TL`로 등록한 노드, `WrappingPubkey` 없이 서명된 direct) 이 서명은 검증되지 않고, 노드는 다시 서명받을 때까지 잠긴다. 그 경우를 로그에 종류로 남기고, 잠김은 다음 netmap에서 `signingRequest`로 드러난다.
-8. 등록이 끝나도 서명이 맞는지는 여기서 알 수 없다. 자기 서명의 판정은 netmap의 자기 노드 `KeySignature`로 한다(동작 P6).
+1. **NL key** (4.6 item 1). `NodeIdentity` holds it and stores it in `identity.json` as `"NLKey":"nlpriv:<128 hexadecimal digits>"` (32 bytes of seed ‖ 32 public bytes, Go text format, 3.8). On read, verify that the last 32 bytes match the public key derived from the seed, or return `storage`. If an old identity file lacks `NLKey`, generate a new key and **save it before sending the first request** (registering without saving would send a different key after restart). Keep the key fixed once set. Losing it prevents self-re-signing after the next node key rotation.
+2. Always include a nonzero public key in `RegisterRequest.NLKey` (4.6 item 1).
+3. **Auth key parsing** (3.8). `run()` parses it once before the first connection. Without `--TL`, it is an ordinary auth key. Otherwise split at the first `--TL` and split the remainder at its first `-` into A and B. If any check fails, end with `ControlError.invalidConfiguration` and **send nothing to the server**. The whole string is at most 16KiB. The `-` is present. A and B use canonical unpadded standard base64 (`+/`). A is at most 8KiB and decodes using behavior D as a credential NKS with a 32-byte `WrappingPubkey`. **B is exactly 64 bytes.** The public key derived from B's first 32 bytes (seed) matches B's last 32 bytes and A's `WrappingPubkey`. Go sends the entire original text, including the private key, to the server if decoding fails, and panics when B is not 64 bytes (3.8). Swiftail rejects both cases (decisions L12 and L13).
+4. **What goes to the server**. Include only the prefix before `--TL` in `Auth.AuthKey` (4.6 item 2). No request includes the original wrapped private key (B) or credential (A). Keep the existing rule hiding the original auth key and prefix in server rejection messages (`SwiftailControl.md` behavior 2).
+5. **Request signature** (Go's order, 4.6 items 2 and 4). ① If the old node key and the old signature just supplied by the server exist, re-sign using R7. On failure, log and register without a signature. ② Otherwise, for a request sending a wrapped auth key, use `WrappedAuthKey.keySignature(for:)` (= sign the `SigHash` of rotation NKS{`Pubkey`: `"np"` ‖ new node key, `Nested`: credential} with the wrapped key). If this fails, end registration with an error. ③ In all other cases, register without a signature (null). Unsigned registration proceeds regardless of lock, and a signing device supplies the signature later (4.6 item 3).
+6. **Server re-signing request** (4.6 item 4). If `RegisterResponse.NodeKeySignature` is nonempty, generate a new node key and register again. `OldNodeKey` is the stored current node key, and re-signing uses the **bytes from the response just received** in place of a locally stored signature. Continue examining responses in this order: `Error` → `NodeKeySignature` → `NodeKeyExpired` → `AuthURL`. Follow only one re-signing request per registration. Treat a second as a connection error, back off, and reconnect (Swiftail's choice. Go ignores a re-signing request in the second response, `control/controlclient/direct.go:534-545`. Go's state afterward is unverified, §9).
+7. **Re-signing** (end of 4.4, 4.6 item 4 `ResignNKS`). If the old signature's `Pubkey` matches the new key, reuse the old signature unchanged. Otherwise sign a rotation NKS with the old signature as `Nested` using the NL key. If the current signature's `Pubkey` and the nested keys total more than 15, re-sign and wrap only the 14 most recent keys with the NL key above the innermost non-rotation signature, then add the new rotation. Send the resulting signature without verifying it locally (as in Go. Decision L9). If the old chain's rotation key differs from the local NL public key (nodes registered with `--TL`, direct signatures without `WrappingPubkey`), the signature fails verification and the node is locked out until it is signed again. Log the type of this case and report lockout in the next netmap via `signingRequest`.
+8. Registration completion does not tell us whether the signature is valid. Evaluate the local signature against the local node's `KeySignature` in the netmap (behavior P6).
 
-### N. netmap을 받을 때
+### N. Receiving a netmap
 
-구조: 판정(`TailnetLockPlan`, `Authority`)은 값 타입이고, RPC와 파일은 `ControlClient`가 맡는다. **거르지 않은 netmap은 `ControlClient` 밖으로 나가지 않는다**(결정 L2).
+Decisions (`TailnetLockPlan`, `Authority`) use value types. `ControlClient` handles RPCs and files. **Unfiltered netmaps never leave `ControlClient`** (decision L2).
 
-1. **서버가 알린 상태**(4.7, 4.10 1): `MapSession`이 계산한다. `isEnabled` = 이 맵 세션에서 받은 마지막 `TKAInfo`가 있고 `Disabled`가 아님. `Head`가 비지 않았는데 `AUMHash(text:)`로 읽히지 않으면 `isEnabled`는 거짓이다. `TKAInfo`가 없는 응답은 "변화 없음"이고, 세션의 처음에는 없는 상태다(맵 스트림마다 새 `MapSession`). capability는 자기 노드의 `Capabilities` 목록과 `CapMap`의 키를 **합친 집합**에 `https://tailscale.com/cap/tailnet-lock`이 있는지다(Go가 둘을 합친다: `tailscale.com/control/controlclient/map.go:371-381`. 초안은 `capMap`만 적었었고 TL-9가 짚었다).
-2. **할 일**(4.7, 4.12. `TailnetLockPlan`):
+1. **Server-reported state** (4.7, 4.10 item 1). `MapSession` computes it. `isEnabled` = the current map session has received a `TKAInfo` and the last one is not `Disabled`. If `Head` is nonempty and `AUMHash(text:)` cannot parse it, `isEnabled` is false. A response without `TKAInfo` means "no change," and it starts absent in a new session (new `MapSession` per map stream). Capability is the presence of `https://tailscale.com/cap/tailnet-lock` in the **union** of the local node's `Capabilities` list and `CapMap` keys (Go combines them in `tailscale.com/control/controlclient/map.go:371-381`. The draft listed only `capMap` and TL-9 flagged it).
+2. **Action** (4.7, 4.12. `TailnetLockPlan`):
 
-   | 로컬 상태 | capability | 서버 | 할 일 |
+   | Local state | Capability | Server | Action |
    | --- | --- | --- | --- |
-   | 없음 | 없음 | 무엇이든 | 없음. 거르지 않는다(사용자 확인 필요 U2) |
-   | 없음 | 있음 | 꺼짐 | 없음 |
-   | 없음 | 있음 | 켜짐 | `bootstrap`: 부트스트랩 RPC(`Head` 빈 문자열) → 동작 F5 → 저장 → 곧바로 동기화(동작 Y) |
-   | 있음 | 무관 | 켜짐, 머리 같음 | 없음 |
-   | 있음 | 무관 | 켜짐, 머리 다름 | `synchronize`(동작 Y) |
-   | 있음 | 무관 | 꺼짐 | `verifyDisablement`(동작 O) |
+   | Absent | Absent | Any | None. Skip filtering (owner confirmation required U2) |
+   | Absent | Present | Disabled | None |
+   | Absent | Present | Enabled | `bootstrap`: bootstrap RPC (empty `Head` string) → behavior F5 → persist → synchronize immediately (behavior Y) |
+   | Present | Irrelevant | Enabled, same head | None |
+   | Present | Irrelevant | Enabled, different head | `synchronize` (behavior Y) |
+   | Present | Irrelevant | Disabled | `verifyDisablement` (behavior O) |
 
-   머리는 32바이트로 견준다(3.8).
-3. **차례**: 할 일이 있는 netmap은 그 절차가 끝날 때까지(성공이든 실패든) 내지 않고 쥔다. Go가 동기화한 뒤에 거르는 것과 같은 차례다(4.7). 절차는 한 연결에서 한 번에 하나만 돈다(Go의 `tkaSyncLock`). 맵 스트림 읽기는 멈추지 않고, 그사이 온 netmap은 가장 새것 하나만 쥔다. 절차가 끝나면 가장 새 netmap을 그때의 상태로 걸러 낸다. 할 일이 없는 netmap은 곧바로 걸러 낸다(결정 L3).
-4. **머리 알리기**(3.9, 4.7): 맵 요청(스트림과 상태 올리기 둘 다)의 `TKAHead`에 로컬 머리를 싣는다. 절차 뒤 머리가 마지막으로 올린 값과 달라졌으면 상태 올리기 요청을 한 번 더 보낸다(Go `SetTKAHead` → `updateControl`, `control/controlclient/auto.go:706-714`). 견주는 값은 마지막으로 **보낸** 머리다: 올리기의 응답을 기다리는 사이 머리가 바뀌면(lock이 꺼져 빈 머리가 되는 것 포함) 그 응답 뒤에 지금 머리를 다시 올린다(Go는 바뀔 때마다 세대를 올리고 `updateRoutine`이 보낸 세대와 견준다, `auto.go:61-107`·`:264-272`). 저장된 상태가 있으면 첫 요청부터 싣는다(Swiftail의 선택. Go의 첫 요청이 싣는지는 확인하지 못했다, 9절).
-5. **실패**(4.7 5): RPC 실패, 응답 해독 실패, 검증 실패는 종류만 로그에 남긴다. `run()`을 끝내지 않는다. 로컬 상태가 있으면 예전 상태로 계속 거른다. 다음 netmap이 오거나 서버가 알린 머리가 바뀌면 다시 시도한다. TKA RPC에는 429·`Retry-After` 처리가 없다(3.10).
-6. **`.unverified`**(사용자 확인 필요 U1): 서버가 켜졌다고 알리고 capability가 있는데 절차가 끝난 뒤에도 로컬 상태가 없으면(부트스트랩 실패), 또는 저장된 상태를 열지 못했으면, 피어를 비운 netmap을 내고 `mode`를 `.unverified`로 한다. Go는 이때 거르지 않고 모든 피어를 받아들인다(4.7 끝). 부트스트랩 실패는 다음 netmap을 기다리지 않고 물러나며 다시 시도한다(5초에서 두 배씩, 5분까지. Swiftail의 선택: 닫힌 쪽에서는 다음 netmap까지 피어가 없기 때문이다). 열지 못한 저장소는 다시 시도해도 같으므로 시도하지 않는다(동작 T4).
-7. **시작**: `run()`이 첫 연결 전에 저장소를 연다(동작 T3). 연결이 끊겨 다시 이어도 메모리의 상태는 그대로 쥔다.
+   Compare heads as 32 bytes (3.8).
+3. **Order**. Hold netmaps that require action until the procedure completes, regardless of success or failure. This matches Go's order of synchronization followed by filtering (4.7). Run one procedure at a time per connection (Go's `tkaSyncLock`). Keep reading the map stream and retain only the latest netmap received during the procedure. Once it completes, filter and emit the latest netmap using the state at that time. Filter and emit netmaps needing no action immediately (decision L3).
+4. **Publishing the head** (3.9, 4.7). Include the local head in `TKAHead` on map requests (both stream and status upload). After the procedure, if the head differs from the last published value, send one more status upload (Go `SetTKAHead` → `updateControl`, `control/controlclient/auto.go:706-714`). Compare against the head last **sent**. If the head changes while waiting for the upload response (including lock disablement resulting in an empty head), publish the current head after that response (Go increments the generation on every change and compares it with the generation sent by `updateRoutine`, `auto.go:61-107` and `:264-272`). If persisted state exists, include the head starting with the first request (Swiftail's choice. Whether Go includes it in the first request is unverified, §9).
+5. **Failures** (4.7 item 5). Log only the type for RPC, response decoding, and verification failures. Keep `run()` going. If local state exists, keep filtering with the old state. Retry when the next netmap arrives or the server-reported head changes. TKA RPCs have no 429 or `Retry-After` handling (3.10).
+6. **`.unverified`** (owner confirmation required U1). If the server reports enabled, the capability is present, and local state is still absent after the procedure (bootstrap failed), or if persisted state could not be opened, emit a netmap with no peers and set `mode` to `.unverified`. Go accepts all peers without filtering in this case (end of 4.7). Retry failed bootstrap with backoff without waiting for another netmap (start at 5 seconds and double up to 5 minutes. Swiftail's choice, because failing closed leaves no peers until the next netmap). Skip retrying a store that could not be opened because the outcome would be the same (behavior T4).
+7. **Startup**. `run()` opens the store before the first connection (behavior T3). Retain the in-memory state across reconnections.
 
-### Y. 동기화
+### Y. Synchronization
 
-`Authority`가 있을 때(4.8).
+When `Authority` exists (4.8).
 
-1. **제안**: `head`는 로컬 머리. `ancestors`는 머리에서 거꾸로 가며(최대 1,000) 만나는 체크포인트 AUM의 해시(새것부터, 뿌리는 빼고), 끝에 뿌리의 해시.
-2. `/machine/tka/sync/offer`로 보낸다. 응답의 `Head`·`Ancestors`를 `AUMHash(text:)`로 읽는다(읽히지 않으면 실패).
-3. 서버 머리가 로컬 머리와 같으면 **여기서 끝낸다**(send를 보내지 않는다).
-4. 서버가 모르는 로컬 AUM을 **먼저** 계산한다(`missingAUMs(for:)`, 결정 L8): 서버 머리가 로컬에 있으면 로컬 머리에서 거꾸로(최대 1,000) 가며 찾아 머리 교차. 아니면 서버 `ancestors`를 앞에서부터 보며, 그 AUM의 상태에서 앞으로 감아(최대 2,000) 로컬 머리에 닿는 첫 것이 꼬리 교차. 서버 조상이 로컬에 없으면 다음 조상으로 넘어가고, 그 밖의 실패(반복 한도 등)는 곧바로 오류다. 교차가 없으면 `noIntersection`. 교차 AUM 다음부터 로컬 머리까지가 보낼 목록이다. **이 계산이 실패하면 동기화 전체를 끝낸다**: 5도 6도 하지 않는다.
-5. 응답의 `MissingAUMs`가 있으면 모두 디코딩하고(하나라도 실패하면 오류) 동작 F4로 들인다. 통과하면 저장한다(동작 T2).
-6. 로컬 머리와 4의 목록을 `/machine/tka/sync/send`로 보낸다(`Interactive` false, 목록이 비어도 `[]`). 응답 `Head`가 로컬 머리와 다르면 로그만 남긴다.
-7. **RPC의 형식**(3.10): 셋 다 Noise 채널 위의 **`GET`이고 본문에 JSON**을 싣는다. `Content-Type`과 부하 분산 머리를 붙이지 않는다. `Version`은 148, `NodeKey`는 `nodekey:` 텍스트, JSON 키는 Go 필드 이름 그대로다. `TKABootstrapRequest.Head`는 비어도 `""`로 늘 있다. `MissingAUMs`와 `GenesisAUM`·`DisablementSecret`은 base64다. 요청마다 시한 60초. 200이 아니면 실패이고 본문은 로그에 남기지 않는다(Swiftail의 선택. Go는 본문을 오류에 담는다). 응답 본문 한도는 동작 M.
+1. **Offer**. `head` is the local head. For `ancestors`, walk back from the head (at most 1,000), collecting hashes of checkpoint AUMs (newest first, excluding the root), then append the root hash.
+2. Send to `/machine/tka/sync/offer`. Parse response `Head` and `Ancestors` with `AUMHash(text:)` (fail if unparseable).
+3. If the server head matches the local head, **stop here** without sending a send request.
+4. **First** compute local AUMs unknown to the server (`missingAUMs(for:)`, decision L8). If the server head exists locally, walk backward from the local head (at most 1,000) to find it as the head intersection. Otherwise examine server `ancestors` in order, taking the first whose AUM state can fast-forward to the local head (at most 2,000) as the tail intersection. Skip server ancestors absent locally. Other failures, such as iteration limits, are immediate errors. If there is no intersection, return `noIntersection`. The send list runs from immediately after the intersection AUM through the local head. **If this computation fails, stop synchronization entirely**, skipping steps 5 and 6.
+5. If the response contains `MissingAUMs`, decode all of them (any failure is an error) and admit them with behavior F4. On success, persist them (behavior T2).
+6. Send the local head and the list from step 4 to `/machine/tka/sync/send` (`Interactive` false, `[]` even for an empty list). Only log a mismatch between response `Head` and local head.
+7. **RPC format** (3.10). All three are **`GET` with JSON bodies** over the Noise channel. Omit `Content-Type` and load balancing headers. `Version` is 148, `NodeKey` is `nodekey:` text, and JSON keys use Go's field names as is. `TKABootstrapRequest.Head` is always present, as `""` if empty. `MissingAUMs`, `GenesisAUM`, and `DisablementSecret` are base64. Each request has a 60-second deadline. A status other than 200 is a failure, and the body is omitted from logs (Swiftail's choice. Go includes it in the error). Response body limits are in behavior M.
 
-### P. 피어 거르기
+### P. Peer filtering
 
-`mode`가 `.enforcing`일 때 netmap마다 **전체를 다시** 거른다(4.9. 결정 L11).
+When `mode` is `.enforcing`, filter **the entire netmap again** each time (4.9. Decision L11).
 
-1. `UnsignedPeerAPIOnly` 피어는 **서명 검사를 받지 않는다**(lock 대상이 아니다). 다만 낡은 키 검사는 모든 피어에 하므로, 회전으로 낡은 키가 된 node 키면 이 피어도 빠진다(Go가 그렇게 한다: `tailscale.com/ipn/ipnlocal/tailnet-lock.go:225-231`. 초안은 "거르지 않는다"로만 적었었고 TL-4가 짚었다). 남은 것은 netmap에 남고, 엔진은 지금처럼 올리지 않는다(`Sources/SwiftailEngine/EnginePeer.swift:94-103`). 그래서 Go가 그런 피어와 패킷 필터가 겹칠 때 필터를 비우는 안전장치(4.9 끝)는 필요 없다.
-2. `KeySignature`가 비었으면 뺀다.
-3. 동작 S가 실패하면 뺀다.
-4. **회전으로 낡은 키**(4.9 4 `rotationTracker`): 통과한 rotation 서명의 `previousNodeKeys`에 든 키는 모두 낡은 키다. `initialSignature`가 direct인 rotation들을 그 `WrappingPubkey`로 묶고(이미 낡은 키로 표시된 것은 빼고), 한 묶음에 여럿이면 `previousNodeKeys`가 가장 많은 하나만 남기고 나머지를 낡은 키로 한다. 가장 많은 것이 둘 이상 같으면 그 묶음 전부를 낡은 키로 한다. credential에서 시작한 사슬은 묶지 않는다.
-5. 2·3에서 뺀 피어와 낡은 키를 가진 피어를 순서를 지키며 netmap에서 지운다. 지운 수가 `filteredPeerCount`다. 그 피어의 주소는 `whoIs`와 MagicDNS에서도 없는 노드다(둘 다 netmap을 읽는다).
-6. **자기 노드**는 빼지 않는다. 자기 node 키와 자기 `KeySignature`가 동작 S를 통과하지 못하면 `signingRequest`를 채운다(Go의 `LockedOut` 건강 경고. 4.6 3, 4.9 6). 이때 서명된 피어는 netmap에 남지만, lock을 지키는 피어가 이 노드를 빼므로 통신은 되지 않는다.
-7. `.disabled`면 거르지 않는다. `.unverified`면 피어를 모두 뺀다(`UnsignedPeerAPIOnly` 포함. 동작 N6).
-8. 거르기를 끄는 설정은 없다(4.9).
+1. **Skip signature checks** for `UnsignedPeerAPIOnly` peers (outside lock scope). Obsolete key checks apply to all peers, so these peers are also removed if rotation made their node key obsolete (as in Go, `tailscale.com/ipn/ipnlocal/tailnet-lock.go:225-231`. The draft only said "skip filtering," and TL-4 flagged it). Survivors stay in the netmap, and the engine continues to exclude them (`Sources/SwiftailEngine/EnginePeer.swift:94-103`). This makes Go's safeguard of clearing the packet filter when it overlaps such a peer unnecessary (end of 4.9).
+2. Remove peers with an empty `KeySignature`.
+3. Remove peers that fail behavior S.
+4. **Keys made obsolete by rotation** (4.9 item 4 `rotationTracker`). Every key in a verified rotation signature's `previousNodeKeys` is obsolete. Group rotations whose `initialSignature` is direct by its `WrappingPubkey`, excluding keys already marked obsolete. If a group has multiple keys, keep only the one with the most `previousNodeKeys` and mark the others obsolete. If two or more tie for the most, mark the entire group obsolete. Do not group chains starting with a credential.
+5. Remove the peers rejected in steps 2 and 3 and peers with obsolete keys from the netmap while preserving order. The removal count is `filteredPeerCount`. Their addresses also resolve to absent nodes in `whoIs` and MagicDNS (both read the netmap).
+6. Keep the **local node**. If its node key and `KeySignature` fail behavior S, populate `signingRequest` (Go's `LockedOut` health warning. 4.6 item 3, 4.9 item 6). Signed peers stay in the netmap, but communication is impossible because peers enforcing lock exclude this node.
+7. In `.disabled`, skip filtering. In `.unverified`, remove every peer (including `UnsignedPeerAPIOnly`. Behavior N6).
+8. There is no setting to disable filtering (4.9).
 
-### O. lock이 꺼질 때
+### O. When lock is disabled
 
-1. **세션의 처음부터 `TKAInfo`가 없는 것**은 "서버가 꺼졌다고 알림"이고, **도중에 빠진 것**은 "변화 없음"이다(4.10 1, 동작 N1). 그래서 켜진 상태에서 `TKAInfo` 없는 증분을 받아도 아무 일도 하지 않고, 다시 이은 맵 스트림의 첫 응답에 `TKAInfo`가 없으면 2로 간다. `TKAInfo.Disabled`가 참이면 도중이어도 2로 간다.
-2. 로컬 상태가 없으면 할 일이 없다. 있으면 부트스트랩 RPC를 **로컬 머리를 실어** 불러 `DisablementSecret`을 받는다(4.10 2).
-3. 동작 X가 참이면 저장소를 지우고(동작 T5) 로컬 상태를 없앤 뒤 `TKAHead`를 비워 알린다. netmap은 거르지 않고 내고 `mode`는 `.disabled`다.
-4. 거짓이면(틀린 비밀, 빈 비밀) 로그만 남기고 **lock을 유지한다**. 서버가 알린 머리(없음)와 로컬 머리가 다르므로 동기화(동작 Y)를 이어서 한다(4.10 3, `ipn/ipnlocal/tailnet-lock.go:410`, `:423`). 부트스트랩 RPC 자체가 실패하면 절차를 거기서 끝낸다(동작 N5). 어느 쪽이든 계속 예전 상태로 거른다.
-5. `TKAInfo.Disabled`만 믿고 지우지 않는다. 끄기 값은 신뢰 체크포인트에 서명되어 있으므로, 비밀 검증이 제어 서버가 lock을 끄지 못하게 지킨다(4.10).
-6. **Swiftail의 선택**: 한 연결에서 같은 비밀을 다시 받으면 KDF를 다시 돌리지 않는다(거절한 비밀의 BLAKE2s-256을 메모리에만 쥔다). 서버가 `Disabled`를 되풀이해 보내도 16MiB 계산이 netmap마다 돌지 않게 한다. 판정은 같다.
+1. **`TKAInfo` absent from the start of a session** means "server reports disabled," and **omission mid-session** means "no change" (4.10 item 1, behavior N1). Take no action for a delta without `TKAInfo` while enabled, and go to step 2 if the first response on a reconnected map stream lacks `TKAInfo`. If `TKAInfo.Disabled` is true, go to step 2 even mid-session.
+2. If there is no local state, take no action. Otherwise call the bootstrap RPC **with the local head** to get `DisablementSecret` (4.10 item 2).
+3. If behavior X returns true, delete the store (behavior T5), clear local state, and publish an empty `TKAHead`. Emit the netmap without filtering and set `mode` to `.disabled`.
+4. If false (wrong or empty secret), log and **keep lock enabled**. The server-reported head (absent) differs from the local head, so continue with synchronization (behavior Y) (4.10 item 3, `ipn/ipnlocal/tailnet-lock.go:410`, `:423`). If the bootstrap RPC itself fails, end the procedure there (behavior N5). In either case, keep filtering with the old state.
+5. `TKAInfo.Disabled` alone cannot remove lock. Disablement values are signed in a trusted checkpoint, so verifying the secret prevents the control server from disabling lock (4.10).
+6. **Swiftail's choice**. When the same secret recurs on a connection, skip rerunning the KDF (hold the rejected secret's BLAKE2s-256 only in memory). This avoids a 16MiB computation on every netmap if the server repeatedly sends `Disabled`. The decision is the same.
 
-### T. 저장
+### T. Persistence
 
-1. **자리와 형식**(결정 L6): 상태 디렉터리의 파일 하나 `tailnet-lock.cbor`. 내용은 정준 CBOR 맵 `{1: 형식 버전(1), 2: 부트스트랩 AUM의 해시(32바이트), 3: [받아들인 AUM의 정준 바이트, 받아들인 순서]}`와 그 바이트의 BLAKE2s-256 32바이트를 이어 붙인 것이다. AUM을 정준 바이트로 두므로 다시 읽으면 해시가 같다(6.3). 신뢰 상태 자체는 저장하지 않고 열 때 다시 계산한다.
-2. **쓰기**: 부트스트랩이 통과한 뒤, 들이기가 새 AUM을 받아들인 뒤에 파일 전체를 다시 쓴다. 같은 디렉터리의 임시 파일에 다 쓰고 0600으로 정하고 디스크에 내린 뒤 이름을 바꾼다(`NodeIdentityStore`와 같은 차례). iOS의 데이터 보호 등급과 백업 제외도 `identity.json`과 같게 건다(`SwiftailTunnel.md` 동작 P 2). **쓰기가 실패해도 판정은 바뀌지 않는다**: 메모리의 상태로 계속 거르고, 종류를 로그에 남기고, 다음 변화 때 다시 쓴다. 다시 시작하면 저장된 것까지만 이어 가고 동기화가 나머지를 채운다. 한 번도 쓰지 못했으면 다시 시작할 때 부트스트랩부터 한다(Go가 상태 디렉터리 없이 메모리 저장소를 쓸 때와 같다, 3.11).
-3. **읽기**: 파일이 없으면 로컬 상태 없음이다. 있으면 크기 한도(동작 M), 끝 32바이트의 해시, CBOR, 형식 버전, AUM마다 동작 D, 그리고 동작 F6을 차례로 본다.
-4. **열지 못함**: 3의 어느 것이든 실패하면 파일을 고치거나 지우지 않고 `mode`를 `.unverified`로 한다(동작 N6. 사용자 확인 필요 U1). 서버가 lock이 꺼졌다고 알려도 같다: 끄기 값을 모르므로 그 말을 확인할 수 없다. 풀려면 앱이 노드를 멈추고 그 파일을 지운다. 그러면 다음 시작에 다시 부트스트랩한다. Go는 이때 저장소를 고칠 때까지 거르지 않는다(4.7 끝).
-5. **지우기**: 끄기 비밀이 맞았을 때만 파일을 지운다(동작 O3). 지우지 못하면 메모리의 상태는 없애고 로그를 남기며, 다음 시작에 그 파일이 다시 열려 lock이 유지된다(닫힌 쪽).
-6. `shortcut:` 한 상태 디렉터리로 다른 tailnet에 다시 로그인하면 옛 tailnet의 상태가 남아 새 tailnet의 피어가 모두 걸러진다(Go는 프로필마다 따로 둔다, 3.11). 필요해지는 시점: 상태 디렉터리 하나로 tailnet을 바꾸는 사용처. 그 전에는 앱이 상태 디렉터리를 새로 쓴다(`SwiftailHost.md` U1의 답과 같다).
+1. **Location and format** (decision L6). One file in the state directory, `tailnet-lock.cbor`. It contains a canonical CBOR map `{1: format version (1), 2: bootstrap AUM hash (32 bytes), 3: [canonical bytes of admitted AUMs, in admission order]}` followed by the 32-byte BLAKE2s-256 of those bytes. Keeping canonical bytes preserves AUM hashes when reread (6.3). Recompute trust state on open without persisting it directly.
+2. **Writing**. Rewrite the file after successful bootstrap and whenever admission accepts new AUMs. Write everything to a temporary file in the same directory, set 0600, flush to disk, and rename (same order as `NodeIdentityStore`). Apply the same iOS data protection class and backup exclusion as `identity.json` (`SwiftailTunnel.md` behavior P 2). **Write failures leave decisions unchanged**. Keep filtering with in-memory state, log the failure type, and write again on the next change. Restart resumes from persisted data, and synchronization fills the rest. If no write ever succeeded, restart with bootstrap (as Go does with an in-memory store and no state directory, 3.11).
+3. **Reading**. A missing file means no local state. Otherwise check the size limit (behavior M), hash in the last 32 bytes, CBOR, format version, behavior D for each AUM, and then behavior F6, in order.
+4. **Open failure**. If any check in step 3 fails, leave the file intact and set `mode` to `.unverified` (behavior N6. Owner confirmation required U1). This also applies when the server reports lock disabled, because the disablement values are unknown and the claim cannot be verified. To recover, the app stops the node and deletes the file. The next startup bootstraps again. Go skips filtering until the store is repaired (end of 4.7).
+5. **Deletion**. Delete the file only when the disablement secret is valid (behavior O3). If deletion fails, clear in-memory state and log the failure. The next startup opens the file again and retains lock (fail closed).
+6. `shortcut:` Signing in again to a different tailnet with the same state directory leaves old tailnet state, filtering out all peers in the new tailnet (Go keeps state per profile, 3.11). Revisit when an adopter switches tailnets in one state directory. Until then, the app uses a new state directory (same as the answer to `SwiftailHost.md` U1).
 
-### M. 한도
+### M. Limits
 
-| 항목 | 값 | 출처 | 넘으면 |
+| Item | Value | Origin | On exceeding the limit |
 | --- | --- | --- | --- |
-| CBOR 중첩, 배열, 맵 | 16단, 4,096개, 1,024쌍 | Go(5장) | 디코딩 거절 |
-| `Key.Votes` | 1~4,096 | Go | 정적 검사 실패 |
-| `Meta`의 키·값 길이 합 | 512바이트 | Go | 정적 검사 실패 |
-| 체크포인트의 끄기 값, 키 | 1~32개, 1~512개 | Go | 정적 검사 실패 |
-| 재서명 사슬의 이전 키 | 15개 | Go | 줄인다(동작 R7) |
-| 동기화의 머리 교차, 꼬리 교차, 부모 상태 찾기 | 1,000 / 2,000 / 2,000 | Go | 그 계산 실패 |
-| TKA RPC 시한 | 60초 | Go | 그 절차 실패 |
-| 부트스트랩·sync/send 응답 본문 | 1MiB | Go | 실패 |
-| sync/offer 응답 본문 | **8MiB** | Swiftail(Go는 512MiB. 맵 프레임 한도와 같게 낮춘다) | 실패 |
-| AUM 하나의 바이트 | 512KiB | Swiftail(키 512개에 `Meta`를 가득 채운 체크포인트가 약 350KiB) | 디코딩 전에 거절 |
-| NKS 하나의 바이트 | 8KiB | Swiftail(16겹이 약 3KiB) | 거절(그 피어는 빠진다) |
-| 인증 키 문자열, 그 안의 credential | 16KiB, 8KiB | Swiftail | `invalidConfiguration` |
-| 감싼 개인 키 | 정확히 64바이트 | Swiftail(동작 R3) | `invalidConfiguration` |
-| 한 번에 들이는 AUM | 4,096개 | Swiftail | 그 묶음 거절 |
-| 쥐는 AUM 전체 | 4,096개, 정준 바이트 합 16MiB | Swiftail(결정 L7) | 그 묶음 거절(`limitExceeded`). 예전 상태로 계속 거른다 |
-| 저장 파일 | 17MiB | Swiftail | 열지 못함(동작 T4) |
-| `.unverified`의 재시도 간격 | 5초~5분 | Swiftail | — |
+| CBOR nesting, arrays, maps | 16 levels, 4,096 elements, 1,024 pairs | Go (chapter 5) | Decode rejects |
+| `Key.Votes` | 1–4,096 | Go | Static validation fails |
+| Total `Meta` key and value length | 512 bytes | Go | Static validation fails |
+| Checkpoint disablement values and keys | 1–32, 1–512 | Go | Static validation fails |
+| Previous keys in re-signing chain | 15 | Go | Trim (behavior R7) |
+| Synchronization head intersection, tail intersection, and parent state lookup | 1,000 / 2,000 / 2,000 | Go | Computation fails |
+| TKA RPC deadline | 60 seconds | Go | Procedure fails |
+| Bootstrap and sync/send response body | 1MiB | Go | Fail |
+| sync/offer response body | **8MiB** | Swiftail (Go uses 512MiB. Lowered to match the map frame limit) | Fail |
+| Bytes in one AUM | 512KiB | Swiftail (about 350KiB for a checkpoint with 512 keys and full `Meta`) | Reject before decoding |
+| Bytes in one NKS | 8KiB | Swiftail (16 layers are about 3KiB) | Reject (remove the peer) |
+| Auth key string and its credential | 16KiB, 8KiB | Swiftail | `invalidConfiguration` |
+| Wrapped private key | Exactly 64 bytes | Swiftail (behavior R3) | `invalidConfiguration` |
+| AUMs admitted at once | 4,096 | Swiftail | Reject the group |
+| Total retained AUMs | 4,096, 16MiB total canonical bytes | Swiftail (decision L7) | Reject the group (`limitExceeded`). Keep filtering with old state |
+| Store file | 17MiB | Swiftail | Open fails (behavior T4) |
+| `.unverified` retry interval | 5 seconds–5 minutes | Swiftail | — |
 
-Swiftail의 한도는 제안값이고 관문의 기록으로 조정한다. Go보다 낮은 한도는 닫힌 쪽이다: 넘으면 받지 않을 뿐, 거르기를 풀지 않는다.
+Swiftail limits are proposed and will be adjusted based on gate results. Limits below Go's fail closed by refusing excess input while continuing to filter.
 
-### K. 비밀과 로그
+### K. Secrets and logs
 
-1. 비밀은 NL 개인 키, 인증 키 전체와 그 안의 감싼 개인 키, 서버가 준 끄기 비밀이다. NL 키는 `identity.json`(0600)에만 있고 메모리에서는 CryptoKit의 키 타입으로 쥔다. 감싼 키는 `WrappedAuthKey` 안에만 있다. 끄기 비밀은 KDF에 넣은 뒤 버리고 저장하지 않는다.
-2. `NodeIdentity`·`WrappedAuthKey`·`ControlClient.Configuration`의 `description`과 `dump`에 개인 키·감싼 키·인증 키가 나오지 않는다(`CustomReflectable`). `TailnetLockStatus`가 담는 것은 공개 키와 해시뿐이다.
-3. 감싼 개인 키는 어떤 요청에도 실리지 않는다(동작 R4). 시험이 등록 요청의 바이트에서 이것을 확인한다.
-4. 비밀과 견주는 곳은 끄기 값 하나이고 상수 시간 비교를 쓴다(동작 X1). 감싼 키의 공개 키 일치(동작 R3)는 공개 값의 비교다.
-5. 로그(`os.Logger(subsystem: "Swiftail")`, 범주 `tailnet-lock`)에 남기는 것: `mode`의 변화, 절차의 종류와 실패의 종류, 들인 AUM 수, 거른 피어 수, 자기 노드의 잠김 여부. 남기지 않는 것: 키(공개 키 포함), 인증 키, 끄기 비밀, 서명과 AUM의 바이트, 서버 오류 본문, 피어의 이름·주소. 오류의 연관 문자열에 키·경로를 넣지 않는다.
-6. 저장 파일에는 비밀이 없다(AUM은 공개 키와 서명, 끄기 값은 KDF의 출력이다). 그래도 0600으로 둔다: 바꿔 넣으면 신뢰 상태가 바뀐다.
+1. Secrets are the NL private key, the entire auth key and its wrapped private key, and the server-supplied disablement secret. The NL key is stored only in `identity.json` (0600) and held in memory as a CryptoKit key type. The wrapped key exists only in `WrappedAuthKey`. The disablement secret is discarded after use in the KDF without persisting it.
+2. `description` and `dump` for `NodeIdentity`, `WrappedAuthKey`, and `ControlClient.Configuration` omit private keys, wrapped keys, and auth keys (`CustomReflectable`). `TailnetLockStatus` contains only public keys and hashes.
+3. No request includes the wrapped private key (behavior R4). A test checks this in the registration request bytes.
+4. Only the disablement value is compared against a secret, using a constant-time comparison (behavior X1). Matching the wrapped key's public key (behavior R3) compares public values.
+5. Logs (`os.Logger(subsystem: "Swiftail")`, category `tailnet-lock`) record `mode` changes, procedure and failure types, counts of admitted AUMs and filtered peers, and local node lockout. Logs omit keys (including public keys), auth keys, disablement secrets, signature and AUM bytes, server error bodies, and peer names and addresses. Error-associated strings omit keys and paths.
+6. The store contains no secrets (AUMs contain public keys and signatures, and disablement values are KDF outputs). Keep 0600 because replacing the file changes trust state.
 
-## 4. C API·Go 동작 대응표
+## 4. C API and Go behavior mapping
 
-첫 사용처의 C 함수 18개(`SwiftailHost.md` 4절) 가운데 lock에 닿는 것은 셋이다.
+Three of the first adopter's 18 C functions (`SwiftailHost.md` §4) touch lock.
 
-| 함수 | Go 코어가 하는 일 | 바뀐 뒤 |
+| Function | Go core behavior | After the change |
 | --- | --- | --- |
-| `rd_start` | 설정의 `AuthKey`를 tsnet에 넘긴다. `--TL`이 붙은 키면 tsnet이 서명을 만들어 등록한다 | `NodeConfiguration.authKey`에 같은 문자열을 넘긴다(동작 R3~R5). 형식이 틀리면 `run()`이 `NodeError.invalidConfiguration`을 던진다 |
-| `rd_status` | lock 상태를 싣지 않는다. 시작마다 한 번 `LocalClient.NetworkLockStatus`를 불러 켜짐·머리 유무·자기 서명 여부·신뢰 키 수·거른 피어 수를 로그에 남긴다(RemoteDebug `core/internal/node/node.go:492-504`) | `node.status.tailnetLock`(`mode`, `head`, `filteredPeerCount`, `signingRequest`). 신뢰 키 수는 싣지 않는다 |
-| `rd_next_event` | lock에 관한 사건이 없다 | `NodeEvent.tailnetLockChanged` |
+| `rd_start` | Passes configuration `AuthKey` to tsnet. For a key with `--TL`, tsnet creates a signature and registers | Pass the same string to `NodeConfiguration.authKey` (behaviors R3–R5). For invalid format, `run()` throws `NodeError.invalidConfiguration` |
+| `rd_status` | Omits lock state. Calls `LocalClient.NetworkLockStatus` once per startup to log whether enabled, whether a head exists, whether the node is signed, the trusted key count, and the filtered peer count (RemoteDebug `core/internal/node/node.go:492-504`) | `node.status.tailnetLock` (`mode`, `head`, `filteredPeerCount`, `signingRequest`). Omits the trusted key count |
+| `rd_next_event` | No lock events | `NodeEvent.tailnetLockChanged` |
 
-Go 함수와 Swiftail의 대응(출처 줄은 노트의 것이고, `tkaSyncLocked`의 시작 줄과 testcontrol은 이 문서가 직접 읽었다):
+Go function mapping to Swiftail (origin lines from the notes, with the starting line of `tkaSyncLocked` and testcontrol read directly for this document):
 
-| Go | 출처 | Swiftail |
+| Go | Origin | Swiftail |
 | --- | --- | --- |
-| `cbor.CTAP2EncOptions`, `cborDecOpts` | `cbor/encode.go:641-660`, `tka/tka.go:22-32` | `CBORWriter`, `CBOR.decode`(동작 E·D) |
+| `cbor.CTAP2EncOptions`, `cborDecOpts` | `cbor/encode.go:641-660`, `tka/tka.go:22-32` | `CBORWriter`, `CBOR.decode` (behaviors E and D) |
 | `AUM.Serialize`·`Unserialize` | `tka/aum.go:249-271` | `AUM.serialized()`, `AUM(decoding:)` |
 | `AUM.Hash`·`SigHash` | `tka/aum.go:273-288` | `AUM.hash`, `AUM.signatureHash` |
-| `AUM.StaticValidate`, `Key.StaticValidate`, `staticValidateCheckpoint` | `tka/aum.go:159-222`, `tka/key.go:107-132`, `tka/state.go:258-316` | `AUM.validate()`, `TrustedKey.validate()`(동작 A1) |
+| `AUM.StaticValidate`, `Key.StaticValidate`, `staticValidateCheckpoint` | `tka/aum.go:159-222`, `tka/key.go:107-132`, `tka/state.go:258-316` | `AUM.validate()`, `TrustedKey.validate()` (behavior A1) |
 | `AUMHash.MarshalText`·`UnmarshalText` | `tka/aum.go:24-51` | `AUMHash.text`, `AUMHash(text:)` |
-| `aumVerify`, `signatureVerify` | `tka/tka.go:421-468`, `tka/verify.go:17-36` | `Authority`의 안쪽(동작 A2~A5) |
-| `State.applyVerifiedAUM` | `tka/state.go:157-254` | `AuthorityState.applying(_:)`(동작 A6) |
-| `AUM.Weight`, `pickNextAUM`, `fastForward`, `computeStateAt` | `tka/aum.go:316-361`, `tka/tka.go:122-331` | `Authority`의 안쪽(동작 F1~F3) |
-| `Bootstrap` | `tka/tka.go:527-565` | `Authority(bootstrappingWith:)`(동작 F5) |
-| `Open`, `computeActiveChain` | `tka/tka.go:68-120`, `:333-419`, `:476-498` | `Authority(opening:bootstrap:)`(동작 F6. 뿌리 하나로 좁혔다) |
-| `Inform` | `tka/tka.go:584-676` | `Authority.inform(_:)`(동작 F4) |
-| `SyncOffer`, `MissingAUMs`, `computeSyncIntersection` | `tka/sync.go:65-261` | `Authority.syncOffer()`, `missingAUMs(for:)`(동작 Y1·Y4) |
-| `NodeKeyAuthorizedWithDetails`, `verifySignature`, `rotationDetails` | `tka/tka.go:685-711`, `tka/sig.go:247-348` | `Authority.authorize(_:keySignature:)`(동작 S) |
-| `DisablementKDF`, `ValidDisablement` | `tka/state.go:114-141` | `Authority.isValidDisablement(secret:)`(동작 X) |
-| `DecodeWrappedAuthkey`, `SignByCredential` | `tka/sig.go:439-498` | `WrappedAuthKey(parsing:)`, `keySignature(for:)`(동작 R3·R5) |
-| `ResignNKS`, `maybeTrimRotationSignatureChain` | `tka/sig.go:350-437` | `NodeKeySignature.resigned(_:for:with:)`(동작 R7) |
-| `doLogin`의 NL 키·서명·감싼 키, `doLoginOrRegen` | `control/controlclient/direct.go:534-545`, `:643`, `:704-747`, `:763-783` | `ControlClient`의 등록(동작 R) |
-| `mapSession`의 `lastTKAInfo`, `TKAEnabled`·`TKAHead` | `control/controlclient/map.go:99`, `:516-518`, `:1039-1047` | `MapSession`의 `serverLock`(동작 N1) |
-| `SetTKAHead`, `MapRequest.TKAHead` | `control/controlclient/auto.go:706-714`, `direct.go:476-489`, `:1103` | `MapRequest.tkaHead`와 상태 올리기(동작 N4) |
-| `tkaSyncIfNeeded` | `ipn/ipnlocal/tailnet-lock.go:340-437` | `TailnetLockPlan`과 `ControlClient`의 절차(동작 N) |
-| `tkaBootstrapFromGenesisLocked` | `ipn/ipnlocal/tailnet-lock.go:536-584` | 동작 N2의 `bootstrap` |
-| `tkaSyncLocked` | `ipn/ipnlocal/tailnet-lock.go:444-511` | 동작 Y |
-| `tkaApplyDisablementLocked` | `ipn/ipnlocal/tailnet-lock.go:513-526` | 동작 O |
-| `tkaFetchBootstrap`, `tkaDoSyncOffer`, `tkaDoSyncSend` | `ipn/ipnlocal/tailnet-lock.go:1377-1516` | `ControlClient.tkaBootstrap`·`tkaSyncOffer`·`tkaSyncSend`(동작 Y7) |
-| `tkaFilterNetmapLocked`, `rotationTracker` | `ipn/ipnlocal/tailnet-lock.go:189-338` | `Authority.admitted(_:)`와 `ControlClient`의 거르기(동작 P) |
-| `tkaFilterDeltaMutsLocked` | `ipn/ipnlocal/tailnet-lock.go:137-183` | 없다. netmap마다 전체를 거른다(결정 L11) |
-| `initTKALocked`, tailchonk(`FS`) | `ipn/ipnlocal/tailnet-lock.go:83-125`, `tka/tailchonk.go` | `TailnetLockStore`(동작 T. 형식이 다르다) |
+| `aumVerify`, `signatureVerify` | `tka/tka.go:421-468`, `tka/verify.go:17-36` | Inside `Authority` (behaviors A2–A5) |
+| `State.applyVerifiedAUM` | `tka/state.go:157-254` | `AuthorityState.applying(_:)` (behavior A6) |
+| `AUM.Weight`, `pickNextAUM`, `fastForward`, `computeStateAt` | `tka/aum.go:316-361`, `tka/tka.go:122-331` | Inside `Authority` (behaviors F1–F3) |
+| `Bootstrap` | `tka/tka.go:527-565` | `Authority(bootstrappingWith:)` (behavior F5) |
+| `Open`, `computeActiveChain` | `tka/tka.go:68-120`, `:333-419`, `:476-498` | `Authority(opening:bootstrap:)` (behavior F6, restricted to one root) |
+| `Inform` | `tka/tka.go:584-676` | `Authority.inform(_:)` (behavior F4) |
+| `SyncOffer`, `MissingAUMs`, `computeSyncIntersection` | `tka/sync.go:65-261` | `Authority.syncOffer()`, `missingAUMs(for:)` (behaviors Y1 and Y4) |
+| `NodeKeyAuthorizedWithDetails`, `verifySignature`, `rotationDetails` | `tka/tka.go:685-711`, `tka/sig.go:247-348` | `Authority.authorize(_:keySignature:)` (behavior S) |
+| `DisablementKDF`, `ValidDisablement` | `tka/state.go:114-141` | `Authority.isValidDisablement(secret:)` (behavior X) |
+| `DecodeWrappedAuthkey`, `SignByCredential` | `tka/sig.go:439-498` | `WrappedAuthKey(parsing:)`, `keySignature(for:)` (behaviors R3 and R5) |
+| `ResignNKS`, `maybeTrimRotationSignatureChain` | `tka/sig.go:350-437` | `NodeKeySignature.resigned(_:for:with:)` (behavior R7) |
+| `doLogin` NL key, signature, and wrapped key, `doLoginOrRegen` | `control/controlclient/direct.go:534-545`, `:643`, `:704-747`, `:763-783` | `ControlClient` registration (behavior R) |
+| `mapSession` `lastTKAInfo`, `TKAEnabled` and `TKAHead` | `control/controlclient/map.go:99`, `:516-518`, `:1039-1047` | `MapSession` `serverLock` (behavior N1) |
+| `SetTKAHead`, `MapRequest.TKAHead` | `control/controlclient/auto.go:706-714`, `direct.go:476-489`, `:1103` | `MapRequest.tkaHead` and status upload (behavior N4) |
+| `tkaSyncIfNeeded` | `ipn/ipnlocal/tailnet-lock.go:340-437` | `TailnetLockPlan` and `ControlClient` procedure (behavior N) |
+| `tkaBootstrapFromGenesisLocked` | `ipn/ipnlocal/tailnet-lock.go:536-584` | `bootstrap` in behavior N2 |
+| `tkaSyncLocked` | `ipn/ipnlocal/tailnet-lock.go:444-511` | Behavior Y |
+| `tkaApplyDisablementLocked` | `ipn/ipnlocal/tailnet-lock.go:513-526` | Behavior O |
+| `tkaFetchBootstrap`, `tkaDoSyncOffer`, `tkaDoSyncSend` | `ipn/ipnlocal/tailnet-lock.go:1377-1516` | `ControlClient.tkaBootstrap`, `tkaSyncOffer`, `tkaSyncSend` (behavior Y7) |
+| `tkaFilterNetmapLocked`, `rotationTracker` | `ipn/ipnlocal/tailnet-lock.go:189-338` | `Authority.admitted(_:)` and `ControlClient` filtering (behavior P) |
+| `tkaFilterDeltaMutsLocked` | `ipn/ipnlocal/tailnet-lock.go:137-183` | Absent. Filters every netmap in full (decision L11) |
+| `initTKALocked`, tailchonk (`FS`) | `ipn/ipnlocal/tailnet-lock.go:83-125`, `tka/tailchonk.go` | `TailnetLockStore` (behavior T, different format) |
 | `NetworkLockStatus` | `ipn/ipnlocal/tailnet-lock.go:641-668` | `TailnetLockStatus` |
-| `Compact` | `tka/tailchonk.go:745-1048` | 없다(결정 L7) |
-| 서명 기기의 것(`TailnetLockSign`·`Init`·`Modify`·`Disable`, `UpdateBuilder`, `MakeRetroactiveRevocation`, `TailnetLockWrapPreauthKey`) | `ipn/ipnlocal/tailnet-lock.go:696-1300`, `tka/builder.go`, `tka/tka.go:750-860` | 없다(1절) |
+| `Compact` | `tka/tailchonk.go:745-1048` | Absent (decision L7) |
+| Signing device features (`TailnetLockSign`, `Init`, `Modify`, `Disable`, `UpdateBuilder`, `MakeRetroactiveRevocation`, `TailnetLockWrapPreauthKey`) | `ipn/ipnlocal/tailnet-lock.go:696-1300`, `tka/builder.go`, `tka/tka.go:750-860` | Absent (§1) |
 
-## 5. 결정
+## 5. Decisions
 
-권고의 기준: **Go와 같은 판정이 기본**이다. Go가 열린 쪽으로 실패하는 곳에서만 닫힌 쪽을 검토했고, 닫힌 쪽으로 바꾸면 가용성이 달라지는 것은 "사용자 확인 필요"로 뺐다.
+**Match Go's decisions by default**. Fail-closed behavior was considered only where Go fails open. Changes to fail-closed behavior that affect availability are listed under "Owner confirmation required."
 
-### 총괄 확인 필요
+### Lead session confirmation required
 
-| # | 무엇 | 선택지 | 권고와 까닭 |
+| # | Item | Options | Recommendation and rationale |
 | --- | --- | --- | --- |
-| L1 | 타깃 구성 | (가) 새 타깃 `SwiftailTKA`(`package`, 제품 아님) + `SwiftailControl`·`Swiftail` 보탬 / (나) `SwiftailControl` 안의 폴더 / (다) CBOR은 `SwiftailBase`, 나머지는 `SwiftailControl` | **(가)**. "타깃과 의존 방향"의 네 까닭. 대가: `Package.swift`에 타깃 둘(시험 포함), `SwiftailControl`의 의존 하나 |
-| L2 | 절차와 거르기를 누가 하는가 | (가) `ControlClient`: 거른 netmap만 낸다 / (나) 노드(`Swiftail`): 제어는 RPC만 내준다 | **(가)**. RPC의 연결과 `TKAHead`를 `ControlClient`가 쥐고 있고, `SwiftailControl`만 쓰는 사용자에게도 거르지 않은 netmap이 나가지 않는다. 사건 버퍼가 넘쳐 오래된 사건이 버려져도 netmap이 lock 상태를 함께 싣고 있어 어긋나지 않는다 |
-| L3 | 절차와 맵 스트림의 차례(동작 N3) | (가) 절차는 따로 돌고, 절차가 필요한 netmap만 끝날 때까지 쥔다 / (나) 맵을 읽는 루프 안에서 차례로 돈다(Go와 같은 모양) | **(가)**. (나)는 RPC 셋(각 60초)을 도는 동안 맵 스트림을 읽지 않아 120초 감시에 걸리고, `.unverified`의 재시도(동작 N6)를 넣을 자리가 없다. 대가: "쥔 netmap"이라는 상태 하나. 어디서 도는지(기존 신호 통로, 따로 둔 Task)는 TL-7이 정하되 상태 올리기의 물러나기에 막히지 않아야 한다 |
-| L4 | 자기 노드의 잠김을 앱에 알리는 길 | (가) `NodeStatus.tailnetLock` + `NodeEvent.tailnetLockChanged`. `NodeState`는 그대로 / (나) `NodeState`에 `.needsLockSignature`를 더한다(`needsMachineAuth`와 같은 자리) | **(가)**. Go의 상태(`ipn.State`)도 잠긴 노드를 `Running`으로 두고 건강 경고로 알린다(노트 4.6 3). (나)는 `.running`에 기대는 곳(`connect(to:port:)`의 `notRunning`, 인증서 발급의 `nodeNotRunning`)이 잠긴 동안 막혀 Go와 달라지고, `.unverified`는 따로 알릴 길이 또 필요하다. 대가: 사건을 듣지 않는 앱은 `.running`인데 통신이 안 되는 까닭을 모른다(첫 사용처 확인 필요 F2) |
-| L5 | `ControlError.tailnetLockEnabled` | (가) 없앤다 / (나) 쓰지 않는 채로 남긴다 | **(가)**. 던지는 곳이 없어진다. 대가: 그 case를 `switch`에 적은 코드가 컴파일되지 않는다(이 저장소 세 곳과 첫 사용처 한 곳. "지금 lock 처리가 있는 곳") |
-| L6 | 저장 형식과 위치(동작 T) | (가) 상태 디렉터리의 파일 하나(`tailnet-lock.cbor`, 0600, 원자적 쓰기, 끝에 해시) / (나) 하위 디렉터리(0700)에 AUM마다 파일 하나(0600)와 뿌리 파일(tailchonk의 모양) | **(가)**. 자료가 작고(체크포인트 하나가 수백 바이트~수십 KiB) 드물게 바뀐다. 파일 하나를 통째로 바꾸면 AUM 집합과 뿌리 기록이 어긋난 채 남는 상태가 없다. Go와 형식을 맞출 까닭이 없다(이관하지 않는다). 대가: 변화마다 전체를 다시 쓴다. (나)는 디렉터리 권한 검사(이미 있는 디렉터리를 남이 쓸 수 있는지)와 파일 사이의 일관성 검사가 더 든다 |
-| L7 | 압축 | (가) 하지 않는다. 한도(4,096개·16MiB)로 묶는다 / (나) Go처럼 동기화마다(`MinChain` 24, `MinAge` 14일) | **(가)**. 저장이 자라는 양: 키 변경 하나에 AUM 하나(약 100~200바이트), 50개마다 체크포인트 하나(키 10개면 약 0.6KiB, 512개면 수십 KiB). 키 10개인 tailnet의 변경 1,000번이 약 160KiB다. 압축하지 않으면 저장소의 뿌리가 늘 부트스트랩 AUM 하나라, Go `Open`의 조상 고르기(노트 8.2의 미확인 항목)를 구현하지 않아도 된다. **판정의 차이**: 압축한 Go 노드는 오래된 갈래의 부모를 잊어 그 갈래의 AUM이 든 묶음을 거절하지만, Swiftail은 받아들인다. 받은 지 14일이 안 된 Go 노드와 같은 판정이다(노트 4.11). 한도에 닿으면 새 AUM을 받지 못해 상태가 멈춘다(닫힌 쪽) |
-| L8 | `MissingAUMs` 계산(동작 Y4) | (가) 구현한다(약 150줄) / (나) 늘 빈 목록을 보낸다 | **(가)**. 생략하면 Go가 동기화를 멈추는 조건(교차 계산 실패 → `Inform`도 send도 하지 않음, 노트 4.8 4)이 달라지고, 모든 경우에 결과가 같은지 노트가 확인하지 못했다(6.3). 같은 판정이 기준이므로 넣는다 |
-| L9 | 재서명과 검증되지 않는 서명(동작 R7) | (가) Go와 같이 만들어 보낸다. 검증되지 않을 것을 알면 로그에 남긴다 / (나) 회전 키가 자기 NL 키가 아니면 서명 없이 등록한다 / (다) 그때 감싼 인증 키가 있으면 `SignByCredential`로 새 서명을 만든다 | **(가)**. 재서명은 넣는다(노트 6.3 필수). 다른 노드의 판정은 (가)와 (나)가 같고(둘 다 잠긴다), 운영 서버가 검증되지 않는 서명과 빈 서명을 달리 다루는지 모르므로(9절) 선에 나가는 것을 Go와 같게 둔다. (다)는 Go보다 나은 결과를 내지만 Go에 없는 등록 경로다. 필요해지는 시점: `--TL`로 등록한 노드의 키 교체가 실제로 잠김을 일으킬 때 |
-| L10 | 종류 0(`AUMInvalid`)의 AUM | (가) Go처럼 부모 없는 자리가 아니면 받아들인다 / (나) 거절한다 | **(가)**. 거절하면 그런 AUM이 든 사슬에서 Swiftail의 상태가 그 앞에 멈추고, 그 뒤의 키 제거를 따라가지 못해 Go보다 **더 많은** 키를 믿게 된다(노트 6.1의 CryptoKit 경로와 같은 실패 모양). 엄격해 보이는 쪽이 열린 쪽이다. 이런 AUM은 신뢰 키를 가진 쪽만 만든다 |
-| L11 | 증분에서의 거르기 | (가) netmap마다 전체를 거른다(낡은 키 포함) / (나) Go처럼 증분에서는 서명 검증만 | **(가)**. `MapSession`이 응답마다 전체 netmap을 내므로 증분 경로가 따로 없다. Go는 증분으로 들어온 낡은 키의 피어를 다음 전체 netmap까지 남긴다(노트 4.9). Swiftail은 곧바로 뺀다. Go가 전체 netmap에서 내리는 판정과 같고, 그 사이에만 더 닫혀 있다 |
-| L12 | `--TL` 뒤가 해석되지 않는 인증 키(동작 R3) | (가) 등록 전에 `invalidConfiguration` / (나) Go처럼 원문 전체를 인증 키로 보낸다 / (다) 지금처럼 앞부분만 보내고 서명 없이 등록 | **(가)**. (나)는 감싼 개인 키를 서버로 보낸다. (다)는 사용자가 서명된 키를 넘겼는데 조용히 잠긴 노드가 된다 |
-| L13 | 감싼 개인 키의 검사(동작 R3) | (가) 64바이트, 시드의 공개 키 = 뒤 32바이트 = credential의 `WrappingPubkey` / (나) 길이만 | **(가)**. Go는 길이가 틀리면 panic하고, 뒤 32바이트를 다시 계산하지 않는다(노트 3.8). 어긋난 키로 만든 서명은 검증되지 않으므로 등록 전에 알린다 |
-| L14 | 저장소를 열 때의 재검증(동작 F6) | (가) 정적 검사와 서명 검증을 다시 한다 / (나) Go처럼 적용만 다시 한다 | **(가)**. 받아들일 때와 같은 규칙이라 판정은 같고, 파일이 바뀌어 든 것을 서명까지 본다. 비용은 시작할 때 AUM 수만큼의 Ed25519 검증이다 |
-| L15 | 관문 (가)의 testcontrol 보탬(7절) | (가) testcontrol을 `Tools/interop/internal/testcontrol`로 옮겨 적고(약 2,000줄, BSD-3-Clause 머리말) sync/send·disable·끄기 비밀·등록 서명을 더한다 / (나) 빌드할 때 `-overlay`로 파일 하나를 testcontrol 패키지에 얹는다(`mapfixtures`의 방식) / (다) 더하지 않고 genesis 하나뿐인 lock만 관문에서 본다 | **(가)**. testcontrol의 TKA 저장소(`tkaStorage`)와 Noise 안쪽 mux는 밖에서 닿지 않는다(`tstest/integration/testcontrol/testcontrol.go:199-201`, `:476-503`). 처리기 없는 `/machine/tka/sync/send`는 프로세스를 panic시킨다(노트 7.3). (나)는 줄 수가 적지만 `tailnet` 도구의 빌드가 모듈 사본과 overlay에 묶이고 `go vet ./...`가 깨지지 않게 빌드 태그로 갈라야 한다. (다)는 사슬이 자란 뒤의 동기화와 끄기를 관문에서 볼 수 없다. 대가: 기준 버전을 올릴 때 사본을 다시 맞춘다 |
-| L16 | Go보다 낮춘 한도(동작 M) | sync/offer 응답 8MiB(Go 512MiB), AUM 512KiB, 쥐는 AUM 4,096개·16MiB | 표의 값으로 시작한다. iOS 확장의 메모리 한도 때문이다. 넘으면 받지 않을 뿐 거르기를 풀지 않는다. 대가: 아주 오래 떨어져 있던 노드가 한 번에 받을 AUM이 한도를 넘으면 따라잡지 못한다 |
-| L17 | Go에 없는 보탬 | `.unverified`의 재시도(동작 N6), 같은 끄기 비밀의 재계산 생략(동작 O6), 첫 요청부터 `TKAHead`(동작 N4), 두 번째 재서명 요청의 처리(동작 R6), `LastAUMHash`가 있는 체크포인트를 디코딩에서 거절(동작 D8) | 넣는다. 판정을 바꾸지 않거나 닫힌 쪽이다. N6은 U1이 Go와 같은 쪽으로 정해지면 뺀다 |
+| L1 | Target layout | (a) New `SwiftailTKA` target (`package`, outside exported products) + additions to `SwiftailControl` and `Swiftail` / (b) A folder in `SwiftailControl` / (c) CBOR in `SwiftailBase`, the rest in `SwiftailControl` | **(a)** for the four reasons under "Targets and dependency direction." Cost is two `Package.swift` targets (including tests) and one `SwiftailControl` dependency |
+| L2 | Who runs the procedure and filters | (a) `ControlClient` emits only filtered netmaps / (b) The node (`Swiftail`) does it, with control exposing only RPCs | **(a)**. `ControlClient` owns the RPC connection and `TKAHead`, and even users of `SwiftailControl` alone receive no unfiltered netmap. If the event buffer overflows and discards old events, the netmap carries lock state and remains consistent |
+| L3 | Procedure and map stream order (behavior N3) | (a) Run the procedure separately and hold only netmaps requiring it until completion / (b) Run it in sequence in the map read loop (like Go) | **(a)**. (b) stops reading the map stream while running three RPCs (60 seconds each), triggering the 120-second watchdog, and has no place for `.unverified` retries (behavior N6). The cost is one piece of state, the "held netmap." TL-7 chooses where the procedure runs (existing signal channel or separate Task). Status upload backoff must never block it |
+| L4 | How to report local node lockout to the app | (a) `NodeStatus.tailnetLock` + `NodeEvent.tailnetLockChanged`, with `NodeState` unchanged / (b) Add `.needsLockSignature` to `NodeState` (alongside `needsMachineAuth`) | **(a)**. Go's `ipn.State` also keeps locked-out nodes `Running` and reports a health warning (notes §4.6 item 3). With (b), code depending on `.running` would be blocked during lockout (`notRunning` in `connect(to:port:)`, `nodeNotRunning` in certificate issuance), diverging from Go. Reporting `.unverified` would still need a separate mechanism. Cost is that an app ignoring events cannot tell why a `.running` node cannot communicate (first adopter confirmation required F2) |
+| L5 | `ControlError.tailnetLockEnabled` | (a) Remove it / (b) Keep it unused | **(a)**. Nothing will throw it. Cost is that code listing this case in a `switch` will fail compilation (three places in this repository and one in the first adopter, see "Where lock is currently handled") |
+| L6 | Storage format and location (behavior T) | (a) One file in the state directory (`tailnet-lock.cbor`, 0600, atomic writes, trailing hash) / (b) A subdirectory (0700) with a file per AUM (0600) and a root file (tailchonk layout) | **(a)**. Data is small (hundreds of bytes to tens of KiB per checkpoint) and changes rarely. Replacing one entire file prevents a persisted mismatch between the AUM set and root record. There is no reason to match Go's format because migration is out of scope. Cost is a full rewrite on every change. (b) adds checks for directory permissions (whether others can write to an existing directory) and consistency across files |
+| L7 | Compaction | (a) Omit it and enforce limits (4,096 entries and 16MiB) / (b) On every sync as in Go (`MinChain` 24, `MinAge` 14 days) | **(a)**. Storage grows by one AUM per key change (about 100–200 bytes) and one checkpoint per 50 AUMs (about 0.6KiB for 10 keys, tens of KiB for 512). A tailnet with 10 keys and 1,000 changes uses about 160KiB. Without compaction the bootstrap AUM remains the only root, so Go `Open`'s ancestor selection (unverified in notes §8.2) is unnecessary. **Decision difference**. A compacted Go node forgets old fork parents and rejects a group containing AUMs from such a fork, while Swiftail accepts it. This matches a Go node that received them less than 14 days ago (notes §4.11). At the limit no new AUMs are accepted and state stops advancing (fail closed) |
+| L8 | `MissingAUMs` computation (behavior Y4) | (a) Implement (about 150 lines) / (b) Always send an empty list | **(a)**. Omitting it changes when Go stops synchronization (intersection computation failure → neither `Inform` nor send, notes §4.8 item 4), and the notes did not verify the outcome matches in every case (6.3). Implement it to match decisions |
+| L9 | Re-signing and signatures that fail verification (behavior R7) | (a) Create and send as Go does, and log if known to fail verification / (b) Register without a signature if the rotation key differs from the local NL key / (c) In that case, if there is a wrapped auth key, create a new signature with `SignByCredential` | **(a)**. Implement re-signing (required by notes §6.3). Other nodes decide the same for (a) and (b), locking the node out either way. Production server handling of a signature that fails verification versus an empty signature is unknown (§9), so match Go on the wire. (c) gives a better result than Go but adds a registration path absent from Go. Revisit if key rotation actually locks out a node registered with `--TL` |
+| L10 | AUM kind 0 (`AUMInvalid`) | (a) Accept as Go does unless it is in a position without a parent / (b) Reject | **(a)**. Rejecting such an AUM stalls Swiftail before it in the chain. Later key removals would be missed, leaving Swiftail trusting **more** keys than Go (the same failure mode as the CryptoKit path in notes §6.1). The apparently stricter choice fails open. Only a holder of a trusted key can create such an AUM |
+| L11 | Filtering deltas | (a) Filter every full netmap (including obsolete keys) / (b) Verify only signatures on deltas, as Go does | **(a)**. `MapSession` emits a full netmap for each response, so there is no separate delta path. Go retains a peer with an obsolete key added by a delta until the next full netmap (notes §4.9). Swiftail removes it immediately. This matches Go's decision on a full netmap and is more closed only in the interim |
+| L12 | Auth key with an unparseable suffix after `--TL` (behavior R3) | (a) `invalidConfiguration` before registration / (b) Send the full original text as the auth key like Go / (c) Send only the prefix as today and register without a signature | **(a)**. (b) sends the wrapped private key to the server. In (c), supplying a signed key silently produces a locked-out node |
+| L13 | Wrapped private key validation (behavior R3) | (a) 64 bytes, seed-derived public key = last 32 bytes = credential `WrappingPubkey` / (b) Length only | **(a)**. Go panics on the wrong length and does not recompute the last 32 bytes (notes §3.8). Signatures made with mismatched keys fail verification, so report the problem before registration |
+| L14 | Reverification on open (behavior F6) | (a) Repeat static validation and signature verification / (b) Only reapply, like Go | **(a)**. Using the admission rules gives the same decision and checks signatures even if the file was replaced. The startup cost is Ed25519 verification for each AUM |
+| L15 | testcontrol additions for gate (a) (§7) | (a) Copy testcontrol to `Tools/interop/internal/testcontrol` (about 2,000 lines, BSD-3-Clause header) and add sync/send, disable, disablement secrets, and registration signatures / (b) Add a file to the testcontrol package at build time with `-overlay` (the `mapfixtures` approach) / (c) Add nothing and use only genesis-only lock at the gate | **(a)**. testcontrol's TKA store (`tkaStorage`) and inner Noise mux are inaccessible externally (`tstest/integration/testcontrol/testcontrol.go:199-201`, `:476-503`). With no handler, `/machine/tka/sync/send` panics the process (notes §7.3). (b) takes fewer lines, but ties the `tailnet` tool build to a module copy and overlay, and requires build tags to keep `go vet ./...` working. (c) cannot test synchronization after chain growth or disablement at the gate. Cost is resynchronizing the copy when upgrading the reference version |
+| L16 | Limits lower than Go's (behavior M) | sync/offer response 8MiB (Go 512MiB), AUM 512KiB, retained AUMs 4,096 and 16MiB | Start with the table values because of the iOS extension memory limit. Excess input is rejected and filtering remains active. Cost is that a long-disconnected node cannot catch up if the AUMs it would receive at once exceed a limit |
+| L17 | Additions absent from Go | `.unverified` retries (behavior N6), skipping recomputation of the same disablement secret (behavior O6), `TKAHead` from the first request (behavior N4), handling a second re-signing request (behavior R6), rejecting a checkpoint with `LastAUMHash` at decode time (behavior D8) | Include them. They preserve decisions or fail closed. Drop N6 if U1 is decided in favor of matching Go |
 
-### 사용자 확인 필요
+### Owner confirmation required
 
-닫힌 쪽으로 바꾸면 "Go 노드는 통신되는데 Swiftail 노드는 안 되는" 때가 생기는 것들이다.
+Failing closed in these cases can leave Go nodes able to communicate while Swiftail nodes cannot.
 
-| # | 무엇 | 선택지와 영향 | 권고 |
+| # | Item | Options and impact | Recommendation |
 | --- | --- | --- | --- |
-| U1 | lock이 켜졌는데 검증된 상태가 없을 때(동작 N6·T4) | **(가) Go와 같이 통과(fail-open)**: 부트스트랩이 실패하거나 저장된 상태를 열지 못하면 거르지 않고 모든 피어를 받아들인다. 저장소가 깨진 경우는 고칠 때까지 계속된다(노트 4.7 끝). 가용성은 Go와 같다. 그동안 lock의 보호가 없다: 제어 서버가 부트스트랩을 실패시키기만 하면 서명 없는 노드를 netmap에 넣을 수 있다. / **(나) 피어를 올리지 않음(fail-closed)**: 그동안 `mode`가 `.unverified`이고 피어가 없다. 부트스트랩 실패는 5초~5분 간격으로 다시 시도한다. 저장소를 열지 못한 경우는 앱이 `tailnet-lock.cbor`를 지워야 풀린다(지우면 다시 TOFU로 시작한다). 영향: 제어 서버의 TKA RPC가 일시적으로 실패하는 동안, 그리고 파일이 깨졌을 때 Go 노드는 통신되고 Swiftail 노드는 안 된다. 이것이 운영에서 얼마나 일어나는지는 모른다(노트 8.2) | **(나)**. lock을 켠 tailnet의 관리자가 기대하는 것은 "서명 없는 노드와 통신하지 않는다"이고, Go의 이 동작은 그것이 깨지는 길이다. 처음 등록할 때의 부트스트랩은 한 번이고, 그 뒤로는 저장된 상태로 거른다(동기화 실패는 예전 상태로 계속 거르므로 가용성이 줄지 않는다) |
-| U2 | `tailnet-lock` capability가 없는 노드(동작 N2의 첫 줄) | **(가) Go와 같이**: 로컬 상태가 없고 capability가 없으면 서버가 lock이 켜졌다고 알려도 부트스트랩하지 않고 거르지 않는다(노트 4.12). / **(나)** capability와 무관하게 서버가 켜졌다고 알리면 부트스트랩하고 거른다. 영향: 운영 서버가 capability를 어느 노드에 주는지 모른다(노트 8.2). 일부 노드에만 준다면 (나)에서 그 밖의 노드가 부트스트랩 RPC를 거절당할 수 있고, U1이 (나)면 그 노드는 피어가 없다 | **(가)**. 서버의 뜻을 모르는 채로 닫으면 lock을 쓰지 않는 노드까지 멈출 수 있다. 관문 (나)에서 실제 tailnet의 노드가 capability를 받는지 기록하고 다시 본다 |
-| U3 | 실제 tailnet 관문에 내줄 것 | 7절 관문 (나)의 "사용자에게 받을 것": lock이 켜진 tailnet, 서명 기기에서 만든 서명된 인증 키, 서명 기기에서의 `tailscale lock sign` 한 번 | — |
+| U1 | Lock enabled with no verified state (behaviors N6 and T4) | **(a) Pass through like Go (fail-open)**. If bootstrap fails or persisted state cannot be opened, accept all peers without filtering. If the store is corrupt, this continues until repair (end of notes §4.7). Availability matches Go. Lock offers no protection during this period. The control server can put unsigned nodes into the netmap simply by failing bootstrap. / **(b) Install no peers (fail-closed)**. During this period, `mode` is `.unverified` and there are no peers. Retry bootstrap failures at 5-second to 5-minute intervals. If the store cannot be opened, the app must delete `tailnet-lock.cbor` to recover (deletion restarts with TOFU). Impact is that Go nodes can communicate while Swiftail nodes cannot during transient control server TKA RPC failures or when the file is corrupt. How often this happens in production is unknown (notes §8.2) | **(b)**. Administrators enabling lock expect no communication with unsigned nodes. This Go behavior can break that expectation. Bootstrap happens once at initial registration, after which persisted state is used to filter (failed synchronization keeps filtering with the old state, so availability does not decrease) |
+| U2 | Node without the `tailnet-lock` capability (first row of behavior N2) | **(a) Match Go**. With neither local state nor capability, skip bootstrap and filtering even if the server reports lock enabled (notes §4.12). / **(b)** Bootstrap and filter whenever the server reports enabled, regardless of capability. Impact depends on which nodes the production server gives the capability to, which is unknown (notes §8.2). If it grants it to only some nodes, (b) may cause other nodes' bootstrap RPCs to be rejected. If U1 is (b), those nodes have no peers | **(a)**. Failing closed without knowing the server's intent could stop nodes that do not use lock. Record whether nodes on a real tailnet receive the capability at gate (b) and revisit |
+| U3 | What to provide for the real tailnet gate | §7 gate (b) "What to obtain from the owner." A tailnet with lock enabled, a signed auth key made on a signing device, and one `tailscale lock sign` on a signing device | — |
 
-**사용자의 답(2026-11-15)**:
+**Owner's answers (2026-11-15)**:
 
-- U1: **(나) 피어를 올리지 않는다.** 검증된 상태가 생길 때까지 `mode`는 `.unverified`이고 피어가 없다. 동작 N6의 재시도가 선다(L17).
-- U2: **(가) Go와 같이.** 관문 (나)에서 lock이 켜진 실제 tailnet의 노드가 `tailnet-lock` capability를 받는지 기록하고, 늘 받는다면 닫힌 쪽으로 바꿀지 다시 묻는다.
-- U3: 관문 (나) 때 요청한다. 첫 사용처의 Mac 호스트가 속한 tailnet은 lock이 켜져 있다(plan 7절 M8)(바로잡음, RemoteDebug 세션의 진단 로그: Mac이 그때까지 있던 tailnet은 줄곧 lock이 꺼져 있었고, 사용자가 2026-11-15 13:26 UTC쯤 Mac을 새 계정의 새 tailnet으로 옮겨 lock을 켜고 서명했다. 이 문장은 그때부터 참이다. iPhone 앱의 노드는 아직 예전 tailnet에 있다). 관문 (나)는 이 새 tailnet에서 본다(서명 기기 둘).
-- 그에 앞선 결정: Ed25519 검증은 순수 Swift로 직접 구현한다(노트 6.1의 (나). `SwiftailCrypto`의 `Ed25519Verification`).
+- U1. **(b) Install no peers.** Until verified state exists, `mode` is `.unverified` and there are no peers. Behavior N6 retries apply (L17).
+- U2. **(a) Match Go.** At gate (b), record whether the node on a real tailnet with lock enabled receives the `tailnet-lock` capability. If it always does, ask again whether to fail closed.
+- U3. Request it at gate (b). The first adopter's Mac host tailnet has lock enabled (plan §7 M8) (correction from RemoteDebug session diagnostics. The Mac's prior tailnet had always had lock disabled. Around 2026-11-15 13:26 UTC, the owner moved the Mac to a new tailnet under a new account, enabled lock, and signed it. The statement has been true since then. The iPhone app node remains in the old tailnet). Run gate (b) in this new tailnet (two signing devices).
+- Earlier decision. Implement Ed25519 verification directly in pure Swift (notes §6.1 (b), `Ed25519Verification` in `SwiftailCrypto`).
 
-**총괄 확정(2026-11-15)**: L1~L17은 모두 권고대로 간다. 덧붙이는 것:
+**Lead session confirmation (2026-11-15)**. L1–L17 follow the recommendations. Additional decisions:
 
-- TL-0에서 2절 선언의 빈 껍데기는 만들지 않는다. 단위가 순서대로(TL-1 → TL-2 → TL-3·4) 들어오므로 앞 단위의 실제 선언이 뒤 단위의 접점이 된다. `Package.swift`의 타깃과 자리표 파일만 둔다.
-- L16의 한도를 넘어 따라잡지 못하는 노드는 예전 상태로 계속 거른다(열리지 않는다). 그 경우를 로그에 남긴다(동작 K5의 "절차의 종류와 실패의 종류").
-- F1~F3은 첫 사용처 세션에 보냈다. 답이 오기 전에도 `SwiftailTKA`(TL-1~TL-5)는 진행한다. F의 답이 바꾸는 것은 `Swiftail`의 표면(TL-8)뿐이다.
+- TL-0 does not create stubs for the §2 declarations. Units land in order (TL-1 → TL-2 → TL-3 and TL-4), so the earlier unit's real declarations are the interfaces for the later one. Include only the `Package.swift` targets and placeholder files.
+- Nodes that cannot catch up because they exceed L16 limits keep filtering with the old state (fail closed). Log the case (behavior K5 "procedure and failure types").
+- F1–F3 were sent to the first adopter session. `SwiftailTKA` (TL-1–TL-5) proceeds before the answers arrive. The F answers affect only the `Swiftail` surface (TL-8).
 
-### 첫 사용처 확인 필요
+### First adopter confirmation required
 
-| # | 질문 | 초안의 가정 | 답에 따라 달라지는 것 |
+| # | Question | Draft assumption | What depends on the answer |
 | --- | --- | --- | --- |
-| F1 | `ControlError.tailnetLockEnabled`가 없어진다. iPhone 터널 앱의 `Apps/iOSTunnel/SwiftailTunnelEngine.swift:180`이 그 case에 문구를 붙이고 있다. 지워도 되는가 | 된다(그 줄만 지우면 된다) | L5. 남겨야 하면 쓰지 않는 case로 둔다 |
-| F2 | 잠긴 노드는 `.running`이고 `tailnetLock.signingRequest`가 있다. Mac 호스트와 터널 앱이 `tailnetLockChanged`를 듣고 "서명 기기에서 `tailscale lock sign <nodeKey> <lockKey>`를 돌리라"는 안내를 띄울 수 있는가. `.unverified`(피어 없음)에도 문구가 필요하다 | 띄운다 | L4. 상태 하나로 받고 싶으면 (나)를 다시 본다 |
-| F3 | Mac 호스트를 새 노드로 등록할 때(`SwiftailHost.md` U1) 어느 길을 쓰는가: 서명된 인증 키(`--TL`)인가, 로그인한 뒤 서명 기기에서 서명하는 것인가 | 둘 다 된다 | 관문 (나)의 차례. 서명된 인증 키는 1회용이면 다시 등록할 때마다 새로 만들어야 한다 |
+| F1 | `ControlError.tailnetLockEnabled` is being removed. The iPhone tunnel app associates text with that case in `Apps/iOSTunnel/SwiftailTunnelEngine.swift:180`. Can it be removed? | Yes, remove only that line | L5. If it must stay, keep it as an unused case |
+| F2 | A locked-out node is `.running` and has `tailnetLock.signingRequest`. Can the Mac host and tunnel app listen for `tailnetLockChanged` and tell the user to run `tailscale lock sign <nodeKey> <lockKey>` on a signing device? `.unverified` (no peers) also needs a message | Show them | L4. Revisit (b) if a single state is preferred |
+| F3 | Which path is used when registering the Mac host as a new node (`SwiftailHost.md` U1), a signed auth key (`--TL`) or a signing device signing after login? | Both work | Gate (b) order. If the signed auth key is single-use, make a new one each time the node registers again |
 
-### 구현하며 정해진 것
+### Decisions made during implementation
 
-- **TL-1(CBOR, 2026-11-15)**: `CBORValue.null`이 undefined(0xf7)도 담는다(위 선언). `CBOR.decode`는 중복 키를 거절하지 않는다: 모르는 필드의 값 안쪽 중복은 Go도 받아들이므로, 구조 맵과 `Meta`의 중복(동작 D4)은 자료 형식(TL-2)이 거절한다. 맵은 받은 순서와 중복을 그대로 쥔다. 쓰기는 쌍의 순서를 부르는 쪽에 맡긴다(동작 E3의 `Meta` 순서는 TL-2). AUM 512KiB·NKS 8KiB 한도(동작 D9·M)는 구조마다 달라 TL-2가 `CBOR.decode`를 부르기 전에 본다. 거절의 까닭이 Go와 갈래가 다른 곳 둘(2^63 이상의 길이·원소 수. 둘 다 거절)은 판정에 영향이 없다. 실행으로 확정하지 않은 디코더 입력(예약된 추가 정보 28~30, major 0·1·6의 31, 짝 없는 `ff`, 두 바이트로 쓴 32 미만 단순값, undefined 키)은 TL-5의 도구가 확정한다.
+- **TL-1 (CBOR, 2026-11-15)**. `CBORValue.null` also holds undefined (0xf7) (see declaration above). `CBOR.decode` accepts duplicate keys. Go also accepts duplicates inside values of unknown fields, so data format handling (TL-2) rejects duplicates in structure maps and `Meta` (behavior D4). Maps preserve input order and duplicates. When writing, callers choose pair order (TL-2 handles `Meta` order in behavior E3). The AUM 512KiB and NKS 8KiB limits (behaviors D9 and M) depend on the structure, so TL-2 checks them before calling `CBOR.decode`. Two cases report a different rejection reason than Go (lengths and element counts at or above 2^63, both rejected), without affecting decisions. The TL-5 tool will confirm decoder inputs still unverified by execution (reserved additional information 28–30, 31 for major types 0, 1, and 6, unmatched `ff`, simple values below 32 encoded in 2 bytes, and undefined keys).
 
-- **TL-5 도구(`tkafixtures`, 2026-11-15)**: Go `tka`의 판정 426개를 `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json`에 넣었다(go1.27.3, `tailscale.com` v1.104.6). 실행해 보니 초안과 다르게 Go가 받아들이는 디코더 입력이 있어 동작 D1·D2·D4·D5·D7과 E6을 고쳤다(맨 바깥 null, 바이트열 자리의 정수 배열, `Meta`의 null, null 공개 키와 빈 공개 키의 KeyID). 그 밖의 확정: 음수 키는 −2^63까지 받고 그 아래는 거절, 중첩 16단·맨 바깥 맵 1,024쌍까지, `AUMHash` 텍스트의 끝 글자는 남는 비트를 검사하지 않는다(`A`·`B`·`P`는 같은 해시). 의도된 차이로 남는 것: Go는 `nlpriv:`의 뒤 32바이트를 검사하지 않고 Swiftail은 검사한다(동작 R1). 감싼 키가 63바이트일 때 Go는 panic한다(노트가 적은 메시지와 문구만 다르다). 도구가 뽑지 못한 것: 부모 없는 자리의 RemoveKey(공개 API로 닿지 않는다).
+- **TL-5 tool (`tkafixtures`, 2026-11-15)**. Added 426 Go `tka` decisions to `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json` (go1.27.3, `tailscale.com` v1.104.6). Running it found inputs Go's decoder accepts despite the draft, so behaviors D1, D2, D4, D5, D7, and E6 were updated (top-level null, integer arrays in place of byte strings, null in `Meta`, and KeyIDs of null and empty public keys). Also confirmed that negative keys are accepted down to −2^63, nesting up to 16 levels and up to 1,024 top-level map pairs are accepted, and spare bits of the last `AUMHash` text character are unchecked (`A`, `B`, and `P` give the same hash). Remaining intentional differences include Go skipping validation of the last 32 bytes of `nlpriv:` while Swiftail checks them (behavior R1). Go panics for a 63-byte wrapped key (only the wording differs from the message in the notes). The tool could not generate RemoveKey in a position with no parent (unreachable through the public API).
 
-- **TL-2(자료 형식, 2026-11-15)**: `tka-fixtures.json`의 `cbor` 255개 모두에서 최종 판정이 Go와 같고, Go가 받아들인 것은 다시 쓴 바이트·해시·SigHash가 같다. 2절의 선언에서 달라진 것: ① `AUM.keyID`는 `[UInt8]?`다. Go의 AddKey·Checkpoint 정적 검사가 `KeyID != nil`을 보므로 빈 바이트열(`0440`)은 거절되고 null·생략은 통과한다(`tka/aum.go:189`, `:207`). 인코딩은 셋이 같다. ② `CBORValue`에 `case simple(UInt8)`을 더했다(단순값 0~19·32~255). Go는 정수 필드에 단순값을 그 수로 넣는다(`fxamacker/cbor` `decode.go`의 `parseToValue`). ③ `AuthorityState.applying(_:)`은 TL-3이 `Authority/`에 둔다. 디코딩 단계가 Go와 다른 것은 동작 D8의 둘뿐이고(최종 판정은 같다), 정적 검사에서 떨어지는 AUM 다섯은 다시 쓴 바이트가 다르다(동작 E6: Go의 nil을 빈 값으로 쓴다. 받아들여지는 체크포인트는 끄기 값이 비지 않으므로 해시에 닿지 않는다. `tka/state.go:262`). **Go 원본을 읽어 정했지만 실행으로 확정하지 않은 것**(TL-5의 대조 시험 세션이 도구에 더해 확정한다): 정수 필드의 단순값(`MessageKind`가 `e3`·`f863` 등), 정수 배열 원소의 단순값·null, 단순값이나 undefined로 쓴 `Meta`의 키, 그리고 `AUMHash` 텍스트 안의 `\r`·`\n`(Go의 `base32.Decode`는 지우고 읽고 Swiftail은 거절한다. Go와 맞출지 대조 뒤에 정한다).
+- **TL-2 (data formats, 2026-11-15)**. All 255 `cbor` cases in `tka-fixtures.json` match Go's final decision. Re-encoded bytes, hashes, and SigHash match for inputs Go accepts. Changes from the §2 declarations are ① `AUM.keyID` is `[UInt8]?`. Go's AddKey and Checkpoint static validation checks `KeyID != nil`, so empty byte strings (`0440`) fail and null or omission passes (`tka/aum.go:189`, `:207`). All three encode the same way. ② Added `case simple(UInt8)` to `CBORValue` (simple values 0–19 and 32–255). Go puts simple values into integer fields as those numbers (`parseToValue` in `fxamacker/cbor` `decode.go`). ③ TL-3 places `AuthorityState.applying(_:)` in `Authority/`. Only the two behavior D8 cases differ from Go at decoding (final decisions match). Five AUMs that fail static validation re-encode differently (behavior E6 encodes Go nil as empty. Accepted checkpoints have nonempty disablement values, so hashes are unaffected. `tka/state.go:262`). **Decisions based on Go source but unverified by execution** (the TL-5 comparison test session will add them to the tool and confirm them) cover simple values in integer fields (`MessageKind` such as `e3` or `f863`), simple and null integer array elements, `Meta` keys encoded as simple values or undefined, and `\r` and `\n` in `AUMHash` text (Go's `base32.Decode` strips them and decodes, while Swiftail rejects them. Decide whether to match Go after comparison).
 
-- **TL-9(관문 도구, 2026-11-15)**: testcontrol(v1.104.6)을 `Tools/interop/internal/testcontrol`로 옮겨 적고 `tka.go`에 보탰다: `sync/send`, `disable`과 끈 뒤의 bootstrap(끄기 비밀), 등록 요청의 서명 검증과 붙이기, 재서명 요청, lock capability를 자기 노드의 `CapMap`에 싣기, 깨진 bootstrap. `tailnet` 도구의 명령: `setLockCapability`, `lockInit`, `lockStatus`, `lockSign`, `lockWrapAuthKey`, `lockModify`, `lockDisable`, `lockRegistrations`와 계약에 없던 `setLockBootstrapFault`, `lockRequestResign`, `lockRequests`(README의 `tailnet` 절). Go 피어끼리의 흐름(`TestTailnetLock`)과 기존 Swift 관문 43개가 통과한다. 운영 서버의 동작을 모르고 지은 곳(disable의 검사, 끈 뒤 맵 응답의 모양, 서명 검증에 실패한 등록의 처리, 재서명을 요청하는 시점과 옛 키의 처리)은 코드에 "추측"으로 표시했다. 관문 (가)에 걸리는 것: ① 항목 9의 "옛 키는 낡은 키로 빠진다"는 이 서버에서는 "서버가 옛 키 항목을 지운다"로 보인다. 낡은 키 판정 자체는 `tkafixtures`의 `peerSets`와 `verify-nks`로 본다. ② 항목 7(꺼짐)은 Swift 시험이 맵 스트림을 다시 잇게 해야 하고, `injectMapResponse`로 한 번 주입한 노드는 그 뒤 자동 맵을 받지 않는다(도중 주입은 마지막에 하거나 다른 노드로). ③ AUM 갈래가 생기면 원본이 `TKAInfo`를 싣지 않아 새 세션은 lock이 꺼진 것처럼 본다(손대지 않았다. 갈래는 단위 시험과 Go 대조로 본다).
+- **TL-9 (gate tool, 2026-11-15)**. Copied testcontrol (v1.104.6) to `Tools/interop/internal/testcontrol` and added to `tka.go` the `sync/send` and `disable` endpoints, bootstrap after disablement (disablement secret), verification and attachment of registration request signatures, re-signing requests, lock capability in the local node's `CapMap`, and broken bootstrap. `tailnet` commands are `setLockCapability`, `lockInit`, `lockStatus`, `lockSign`, `lockWrapAuthKey`, `lockModify`, `lockDisable`, and `lockRegistrations`, plus `setLockBootstrapFault`, `lockRequestResign`, and `lockRequests` beyond the contract (README `tailnet` section). The flow between Go peers (`TestTailnetLock`) and the 43 existing Swift gates pass. Code labels behavior inferred without knowing the production server's behavior as "speculation" (disable checks, map response shape after disablement, handling registration with failed signature verification, when re-signing is requested, and handling old keys). Implications for gate (a) are ① Item 9's "old key is removed as obsolete" appears on this server as "the server deletes the old key entry." Verify the obsolete-key decision itself with `tkafixtures` `peerSets` and `verify-nks`. ② For item 7 (disablement), the Swift test must reconnect the map stream. A node injected once with `injectMapResponse` receives no automatic maps afterward (inject at the end or use a different node). ③ When an AUM fork exists, the original implementation omits `TKAInfo`, so a new session sees lock as disabled (left alone. Unit tests and Go comparison cover forks).
 
-- **TL-4(서명, 2026-11-15)**: `tka-fixtures.json`의 `signatures` 51개·`peerSets` 8개·`resign` 10개에서 Go와 판정이 같다. `authKeys` 16개는 4개가 같고 12개는 의도된 차이로 Swiftail이 해석 단계에서 거절한다(L12 6개, L13 4개, 동작 R3 2개). Swift(CryptoKit)가 만든 서명 10개를 Go의 `tkafixtures verify-nks`로 판정시켜 모두 기대와 같았다. 2절의 선언에서 달라진 것: ① `authorize`·`admitted`는 `Authority`가 아니라 `AuthorityState`의 확장이다(`Authority`가 얇게 잇는다). ② `PeerCredential`에 `unsignedPeerAPIOnly`가 있다(동작 P1). ③ `WrappedAuthKey`는 `description`·`dump`에서 가려진다(`controlValue`도 인증 키라 함께). ④ `authorize`는 디코딩 실패를 포함해 `.unauthorized`만 던지고, `WrappedAuthKey(parsing:)`는 한도 초과도 `.invalidAuthKey`다. L12의 의도된 차이에 더하는 것: `--TL` 뒤의 base64는 정규형만 받는다(Go `RawStdEncoding`은 0이 아닌 남는 비트와 줄바꿈을 받는다). 재서명의 입력인 옛 서명이 8KiB를 넘으면(모르는 필드로 부풀린 경우뿐) Swiftail은 거절하고 서명 없이 등록한다(동작 M·R5 ①). **Go 원본을 읽어 정했지만 실행으로 확정하지 않은 것**(대조 시험 세션이 도구에 더해 확정한다): Go `State.GetKey`가 `Key25519`가 아닌 키를 만나면 거기서 실패하는 것, rotation 안쪽 direct의 빈 `Pubkey`, API 전용 피어의 낡은 키. Go에서 순서가 정해지지 않는 것 하나: 같은 node 키가 서로 다른 회전 키의 묶음에 함께 들 때 어느 묶음을 먼저 보는가(Go는 맵 순회, Swiftail은 묶음이 처음 나온 피어의 순서).
+- **TL-4 (signatures, 2026-11-15)**. Decisions match Go for 51 `signatures`, 8 `peerSets`, and 10 `resign` cases in `tka-fixtures.json`. Of 16 `authKeys` cases, 4 match and Swiftail intentionally rejects 12 at parse time (6 for L12, 4 for L13, and 2 for behavior R3). Go's `tkafixtures verify-nks` classified 10 signatures from Swift (CryptoKit) as expected. Changes from the §2 declarations are ① `authorize` and `admitted` extend `AuthorityState`. They are outside `Authority` (`Authority` forwards to them). ② `PeerCredential` includes `unsignedPeerAPIOnly` (behavior P1). ③ `WrappedAuthKey` is hidden in `description` and `dump`, including `controlValue` because it is also an auth key. ④ `authorize` throws only `.unauthorized`, including on decode failure, and `WrappedAuthKey(parsing:)` uses `.invalidAuthKey` for limit breaches too. Another intentional L12 difference is accepting only canonical base64 after `--TL` (Go `RawStdEncoding` accepts nonzero spare bits and line breaks). When the old signature supplied to re-signing exceeds 8KiB (only possible if inflated with unknown fields), Swiftail rejects it and registers unsigned (behaviors M and R5 ①). **Decisions based on Go source but unverified by execution** (the comparison test session will add them to the tool and confirm them) cover failure when Go `State.GetKey` encounters a key other than `Key25519`, an empty `Pubkey` in a direct signature nested in rotation, and obsolete keys of API-only peers. Go leaves one ordering unspecified when the same node key belongs to groups for multiple rotation keys. Go iterates a map, and Swiftail uses the peer order in which groups first appeared.
 
-- **TL-3(`Authority`, 2026-11-15)**: `tka-fixtures.json`의 `chains` 19개 사슬 82단계(부트스트랩 판정, 단계마다 판정·머리·상태), `sync` 14사례의 양쪽(제안, `MissingAUMs`, 들인 뒤 머리), `disablement` 9개에서 Go와 어긋난 것이 없다. 2절의 선언에서 달라진 것: `syncOffer()`는 던지지 않는다(저장소 읽기가 없다), `SyncOffer.init(head:ancestors:)`가 `package`다(TL-7이 서버 응답으로 만든다). 구현하며 정한 것: 한도(4,096개·16MiB·묶음 4,096개)는 서명 검증 **전에** 본다(판정은 같다), 한 묶음 안의 같은 AUM은 두 번째를 건너뛴다(Go는 다시 처리한다. 결과는 같다고 원본을 읽어 판단). TL-7이 알 것: `missingAUMs`가 던지면 동기화 전체를 끝낸다, 빈 목록으로 `inform`을 부르지 않는다, `inform`은 원자적이다, 저장은 `aums`와 `bootstrap`이고 `opening`의 실패는 무엇이든 `.unverified`다, `isValidDisablement`는 부를 때마다 Argon2i를 돈다(같은 비밀의 재계산 생략은 TL-7). **Go 원본을 읽어 정했지만 실행으로 확정하지 않은 것**(대조 시험 세션이 도구에 더해 확정한다): 들이기에서 부모 상태를 찾는 한도의 경계(체크포인트를 포함해 2,000개는 되고 2,001개는 실패), 머리 교차 1,000회를 넘어 꼬리 교차로 넘어가는 경우, 묶음 안의 중복 AUM, 뿌리에서 머리까지 2,000개가 넘는 사슬(동작 F7의 의도된 차이). 디버그 빌드에서는 순수 Swift Ed25519 검증이 한 번에 6~10ms라 4,096개 한도 시험이 약 44초 걸린다(릴리스의 다시 열기 시간은 재지 않았다).
+- **TL-3 (`Authority`, 2026-11-15)**. Go matches all 19 `chains` in `tka-fixtures.json` across 82 steps (bootstrap decision and each step's decision, head, and state), both sides of 14 `sync` cases (offer, `MissingAUMs`, and head after admission), and 9 `disablement` cases. Changes from §2 are that `syncOffer()` does not throw (no store read) and `SyncOffer.init(head:ancestors:)` is `package` (TL-7 builds it from the server response). Implementation decisions check limits (4,096 entries, 16MiB, and 4,096 per group) **before** signature verification (same decision) and skip repeated AUMs in a group (Go processes them again. Reading the source indicates the outcome matches). TL-7 needs to know that a throw from `missingAUMs` aborts the entire sync, empty lists must not be passed to `inform`, `inform` is atomic, persistence uses `aums` and `bootstrap`, any `opening` failure gives `.unverified`, and `isValidDisablement` runs Argon2i on every call (TL-7 skips recomputing the same secret). **Decisions based on Go source but unverified by execution** (the comparison test session will add them to the tool and confirm them) cover the parent state search limit during admission (2,000 including checkpoint succeeds, 2,001 fails), falling back to tail intersection after exceeding 1,000 head intersection iterations, duplicate AUMs in a group, and chains over 2,000 from root to head (intentional behavior F7 difference). Pure Swift Ed25519 verification takes 6–10ms each in debug, so the 4,096-entry limit test takes about 44 seconds (release reopen time was unmeasured).
 
-- **TL-6(등록, 2026-11-15)**: 신원 파일에 `NLKey`(`nlpriv:` + 시드 ‖ 공개 키)가 생겼고, 옛 파일은 `run()`이 첫 연결 전에 NL 키를 채워 다시 쓴다(저장은 `run()`에서만 한다: `load()`를 부르는 곳이 둘이라 서로 다른 키를 만들어 쓰는 경쟁을 막는다). 모든 등록 요청이 `NLKey`로 자기 NL 공개 키를 싣는다(0이 아니다). 서명된 인증 키면 서버로 가는 것은 `--TL` 앞부분이고 `NodeKeySignature`는 감싼 키로 만든 회전 서명이다(요청의 본문·머리·경로에 접미사와 감싼 키·시드가 어떤 표기로도 없는 것을 시험이 본다). 해석되지 않는 `--TL`이면 요청이 하나도 나가지 않는다(`GET /key`도). 2절에 없던 선언: `NodeIdentity.lockPublicKey`, `NLPublicKey.commandLineDescription`(`tlpub:` 표기. `SigningRequest.lockKey`가 쓴다), `ControlClient.wrappedAuthKey`. Go를 읽고 정한 것(`control/controlclient/direct.go:534-545`, `:643`, `:704-768`, `:857`): 감싼 키의 서명은 인증 키를 싣는 요청마다 만든다, 재서명 입력은 그다음 요청 하나에만 쓴다, 옛 node 키가 0이면 재서명 요청이 와도 재서명하지 않는다, 0이던 `NLKey`를 새 키로 바꿔 다시 붙는 기존 노드는 그대로 새 키를 싣는다(Go도 그렇다). `tka-fixtures.json`의 NL 키 표기 14개 가운데 12개가 Go와 같고 2개는 의도된 차이다(`nlpriv:`의 뒤 32바이트 검사 = 동작 R1, `tlpub:` 읽기는 두지 않음: Swiftail은 `tlpub:`를 쓰기만 한다). 기존 상호 운용 시험 하나(`ControlFaultsTests`의 인증 키 가림)가 해석되지 않는 `--TL` 키를 쓰고 있어 L12에 맞게 평범한 키로 고쳤다.
+- **TL-6 (registration, 2026-11-15)**. Identity files gained `NLKey` (`nlpriv:` + seed ‖ public key). Before its first connection, `run()` fills in the NL key and rewrites old files (only `run()` saves, because there are two callers of `load()` and this avoids a race where they generate and use different keys). Every registration request contains the local NL public key in `NLKey` (nonzero). With a signed auth key, send the prefix before `--TL` to the server and a rotation signature made with the wrapped key as `NodeKeySignature` (a test checks that the suffix, wrapped key, and seed are absent from the request body, headers, and path in any representation). An unparseable `--TL` sends no requests, even `GET /key`. Declarations absent from §2 are `NodeIdentity.lockPublicKey`, `NLPublicKey.commandLineDescription` (`tlpub:` form, used by `SigningRequest.lockKey`), and `ControlClient.wrappedAuthKey`. Decisions from reading Go (`control/controlclient/direct.go:534-545`, `:643`, `:704-768`, `:857`) are to sign with the wrapped key on each request carrying the auth key, use re-signing input only for the next request, skip re-signing with a zero old node key even if requested, and send the new key when an existing node reconnects after changing its former zero `NLKey` to a new key (like Go). Of 14 NL key representation cases in `tka-fixtures.json`, 12 match Go and 2 intentionally differ (checking the last 32 bytes of `nlpriv:` = behavior R1, and no `tlpub:` reader because Swiftail only writes `tlpub:`). An existing interop test (auth key redaction in `ControlFaultsTests`) used an unparseable `--TL` key and was changed to an ordinary key to match L12.
 
-- **TL-5 대조 시험(2026-11-15)**: 구현 세션들과 다른 세션이 `tka-fixtures.json`의 모든 줄을 `package` 표면으로 견줬다(`GoComparisonTests`). 미확정이던 판정을 도구에 더해 Go 실행으로 확정했다(자료 426 → 486개). **Swift 구현의 결함은 없었다.** 확정된 것: 정수 필드의 단순값은 그 수로 받는다, 정수 배열의 단순값·null·undefined 원소는 바이트로 받는다, `Meta`의 undefined 키는 빈 문자열이고 단순값 키는 거절한다, `GetKey`는 `Key25519`가 아닌 키가 서명 키보다 앞에 있으면 거절한다, rotation 안쪽의 빈 `Pubkey`는 거절한다, API 전용 피어는 낡은 키면 빠지고 그 피어의 rotation은 다른 피어를 낡은 키로 만들지 않는다, 머리 교차는 거리 999까지이고 1,000부터 꼬리 교차다, 한 묶음 안의 같은 AUM은 모두 받는다. 의도된 차이로 굳힌 것: `AUMHash` 텍스트의 줄바꿈(동작 D10), 뿌리에서 2,000개가 넘는 사슬(동작 F7: Go는 갈래나 이미 쥔 AUM이 섞이면 실패하고 그 AUM이 저장소에 남아 다음 묶음도 실패한다. Swiftail은 받는다), Swiftail 한도의 경계(동작 M: NKS 8,193바이트, AUM 524,289바이트, 재서명 입력 8,193바이트는 Go가 받고 Swiftail이 거절한다. 모르는 필드는 해시에 들지 않으므로 전달하는 쪽이 AUM을 부풀릴 수 있지만, 그쪽은 AUM을 주지 않을 수도 있어 새 능력이 아니다). Go의 답이 실행마다 흔들리는 것 하나: 같은 node 키가 두 회전 키 묶음에 드는 피어 집합(256번에 두 가지 답. Swiftail은 그 가운데 하나를 늘 낸다). 넣지 못한 것: 한 번에 4,097개를 들이는 경계(자료가 2MB를 넘는다. 단위 시험이 본다).
+- **TL-5 comparison tests (2026-11-15)**. A session separate from the implementers compared all rows of `tka-fixtures.json` through the `package` surface (`GoComparisonTests`). Previously unsettled decisions were added to the tool and confirmed by running Go (426 → 486 fixtures). **No Swift implementation defects were found.** Confirmed that simple values in integer fields are accepted as those numbers, simple, null, and undefined elements in integer arrays are accepted as bytes, an undefined `Meta` key is an empty string and a simple value key is rejected, `GetKey` rejects when a key other than `Key25519` precedes the signing key, empty `Pubkey` within rotation is rejected, API-only peers are removed if their keys are obsolete and their rotations do not obsolete other peers, head intersection covers distances up to 999 and tail intersection begins at 1,000, and duplicate AUMs within a group are all accepted. Confirmed intentional differences are line breaks in `AUMHash` text (behavior D10), chains over 2,000 from the root (behavior F7. Go fails when forks or already-held AUMs are mixed in, and the AUMs remain in the store, causing the next group to fail too. Swiftail accepts), and Swiftail's limit boundaries (behavior M. Go accepts and Swiftail rejects NKS of 8,193 bytes, AUM of 524,289 bytes, and re-signing input of 8,193 bytes. Unknown fields do not affect hashes, so the sender can inflate an AUM, but could also withhold it, so this adds no new capability). One Go result varies between runs for a peer set where the same node key belongs to two rotation key groups (two answers over 256 runs. Swiftail always produces one of them). The 4,097-AUM admission boundary was omitted (fixtures exceed 2MB, and a unit test covers it).
 
-- **TL-7(맵, 2026-11-15)**: `ControlClient`가 내는 netmap은 이미 걸러져 있고 `tailnetLock`을 함께 싣는다. `ControlError.tailnetLockEnabled`를 던지는 곳이 없어졌다(case는 TL-8이 지운다). **절차의 구조**: 맵 응답마다 `receivedLock`이 할 일을 판정해, 없으면 그 자리에서 걸러 내고 있으면 netmap을 쥔 채 절차를 깨운다(스트림 읽기는 멈추지 않는다). 절차(`runLockProcedures`)는 `serve`의 TaskGroup의 자식 하나이고 한 번에 하나만 돈다. 쥔 netmap은 거르기 전의 가장 새것 하나이고 연결을 새로 맺을 때 비운다. 절차가 끝나면(성공이든 실패든) 그때의 상태로 한 번 걸러 내고, netmap이 새로 오지 않았어도 lock 모습이 달라졌으면 다시 낸다. 계기는 새 netmap, 서버가 알린 상태의 변화, `.unverified`의 재시도 타이머(5초~300초)다. 절차 뒤 머리가 달라졌으면 상태 올리기를 한 번 더 건다(`MapRequest.tkaHead`). **저장 파일**: `<상태 디렉터리>/tailnet-lock.cbor`, 0600, `{1: 1, 2: 부트스트랩 해시, 3: [AUM 정준 바이트…]}` ‖ BLAKE2s-256. 쓰기는 신원 파일과 같은 차례(임시 파일 → fsync → rename, iOS 보호 등급과 백업 제외). 열지 못하면 "상태 없음"이 아니라 `.unverified`다. 저장에 실패해도 메모리의 상태로 계속 거른다(동작 T2. 다시 시작하면 부트스트랩부터 한다). **끄기 비밀**: KDF는 actor 위에서 멈춤 없이 돌아 맵 해독과 16MiB가 겹치지 않는다(그동안 actor가 막힌다: 디버그에서 약 2초). 거절한 비밀은 그 BLAKE2s-256과 그때의 머리로 기억해 다시 계산하지 않는다(연결 너머로도). 2절의 선언에서 달라진 것: RPC는 `throws(ControlError)`, `TailnetLockStatus`와 `SigningRequest`에 `public init`(기본값 `.disabled`), `ServerLockState.head`는 `Disabled`여도 읽는다, `filteredPeerCount`는 `.unverified`에서 서버가 알린 피어 전부의 수다. Go를 읽고 정한 것(`ipn/ipnlocal/tailnet-lock.go`, `control/controlclient/map.go:1039-1047`): 부트스트랩 뒤에는 머리가 같아도 sync/offer를 부르고 머리가 같으면 send는 보내지 않는다, 응답의 `Head`·`Ancestors`가 하나라도 읽히지 않으면 동기화 실패다, 빈 `GenesisAUM`은 디코딩 실패다, 실패한 절차는 다음 netmap마다 다시 시도한다, 첫 netmap 전의 KeepAlive로는 "처음부터 `TKAInfo` 없음"을 판정하지 않는다. `MapSession`을 직접 쓰는 코드의 netmap은 거르기 전의 것이다(`tailnetLock`이 기본값). 남긴 것: 피어가 많은 tailnet에서 netmap마다 전체 서명을 다시 검증하는 비용은 재지 않았다(`shortcut:`), 원자적 쓰기 코드가 신원 저장소와 lock 저장소에 같은 모양으로 둘 있다, 시험용 가짜 제어 서버가 둘이다(`SetDNSFakeControlServer`, `LockFakeControlServer`).
+- **TL-7 (maps, 2026-11-15)**. Netmaps from `ControlClient` are already filtered and carry `tailnetLock`. Nothing throws `ControlError.tailnetLockEnabled` anymore (TL-8 removes the case). **Procedure structure**. For each map response, `receivedLock` chooses an action. With none, it filters and emits immediately. Otherwise it holds the netmap and wakes the procedure (stream reading continues). The procedure (`runLockProcedures`) is one child of the `serve` TaskGroup and runs one at a time. The held netmap is the latest unfiltered one and is cleared on reconnection. When the procedure succeeds or fails, filter and emit once using current state. Emit again if lock status changes even without a new netmap. Triggers are a new netmap, a change in server-reported state, and the `.unverified` retry timer (5 seconds–300 seconds). If the head changed after the procedure, request another status upload (`MapRequest.tkaHead`). **Store file**. `<state directory>/tailnet-lock.cbor`, 0600, `{1: 1, 2: bootstrap hash, 3: [canonical AUM bytes…]}` ‖ BLAKE2s-256. Writes follow the identity file order (temporary file → fsync → rename, with iOS protection class and backup exclusion). Open failure gives `.unverified` rather than "no state." On save failure continue filtering with in-memory state (behavior T2. Restart from bootstrap). **Disablement secret**. The KDF runs without suspension on the actor, keeping map decoding from overlapping the 16MiB cost (the actor is blocked for about 2 seconds in debug). Remember a rejected secret by its BLAKE2s-256 and the head at the time to avoid recomputation, including across connections. Changes from §2 are RPCs using `throws(ControlError)`, `public init` on `TailnetLockStatus` and `SigningRequest` (default `.disabled`), reading `ServerLockState.head` even when `Disabled`, and `filteredPeerCount` counting all server-reported peers in `.unverified`. Decisions from Go source (`ipn/ipnlocal/tailnet-lock.go`, `control/controlclient/map.go:1039-1047`) are to call sync/offer after bootstrap even with equal heads and omit send when heads match, fail sync when any response `Head` or `Ancestors` entry cannot be read, treat empty `GenesisAUM` as decode failure, retry failed procedures on each subsequent netmap, and avoid interpreting KeepAlive before the first netmap as "no `TKAInfo` from the start." Code using `MapSession` directly gets an unfiltered netmap (default `tailnetLock`). Remaining points are the unmeasured cost of rechecking all signatures on each netmap in large tailnets (`shortcut:`), two matching atomic write implementations in the identity and lock stores, and two fake test control servers (`SetDNSFakeControlServer`, `LockFakeControlServer`).
 
-- **TL-8(노드, 2026-11-15)**: `NodeStatus.tailnetLock`, `NodeEvent.tailnetLockChanged`가 들어왔고 `ControlError.tailnetLockEnabled`가 없어졌다. 한 netmap에서의 차례(`apply(netmap)`, actor 위에서 멈춤 없이 한 번에 돈다): ① 마지막 netmap을 고친다(이때 `status`가 바뀐다) ② lock 모습이 이전과 다르면 `tailnetLockChanged`(처음의 `.disabled`는 내지 않는다) ③ 데이터면(`peerPathChanged`) ④ netstack ⑤ 터널 설정 ⑥ 상태 기계(`stateChanged`) ⑦ 인증서 사실. 그래서 어느 사건을 받은 뒤 읽은 `status`든 그 netmap 전체를 담고, 잠긴 노드의 `tailnetLockChanged`는 `stateChanged(.running)`보다 먼저다(F2의 요구 1). 이 보장은 "`apply` 안에 `await`가 없다"는 구조에 기댄다(시험은 사건의 차례와 사건 뒤의 `status`를 본다. 차례 안에서 상태를 먼저 고치는지는 밖에서 볼 수 없다). `.unverified`는 피어 없이 `.running`까지 간다(`peerCount` 0, `filteredPeerCount`는 서버가 알린 피어 수). `run()`이 끝난 뒤에도 `tailnetLock`은 마지막 값이 남는다(다른 필드와 같다). 피어 수만 바뀌어도 `filteredPeerCount`가 다르면 사건이 나온다. `TailnetLockStatus`는 `SwiftailControl`의 타입 그대로다(`import SwiftailControl`). 첫 사용처가 고칠 것: `Apps/iOSTunnel/SwiftailTunnelEngine.swift`의 `.control(.tailnetLockEnabled)` 갈래 둘과, `NodeEvent`를 전부 나열하는 `switch` 하나(새 case).
+- **TL-8 (node, 2026-11-15)**. Added `NodeStatus.tailnetLock` and `NodeEvent.tailnetLockChanged` and removed `ControlError.tailnetLockEnabled`. Order for one netmap (`apply(netmap)`, one uninterrupted run on the actor) is ① update the last netmap (updating `status`), ② `tailnetLockChanged` if lock status changed (omit initial `.disabled`), ③ data plane (`peerPathChanged`), ④ netstack, ⑤ tunnel settings, ⑥ state machine (`stateChanged`), ⑦ certificate facts. Thus `status` read after any event contains the entire netmap, and a locked-out node's `tailnetLockChanged` precedes `stateChanged(.running)` (F2 requirement 1). This guarantee depends on no `await` in `apply` (the test checks event order and `status` after events. Whether state is updated first within the sequence is not externally visible). `.unverified` reaches `.running` without peers (`peerCount` 0, `filteredPeerCount` is the server-reported peer count). `tailnetLock` retains its last value after `run()` ends, like other fields. A change in peer count alone emits an event if `filteredPeerCount` changes. `TailnetLockStatus` is the `SwiftailControl` type as is (`import SwiftailControl`). The first adopter needs to update two `.control(.tailnetLockEnabled)` branches and one exhaustive `NodeEvent` `switch` (new case) in `Apps/iOSTunnel/SwiftailTunnelEngine.swift`.
 
-- **TL-10(관문 (가)의 시험, 2026-11-15)**: `Tests/SwiftailInteropTests/TailnetLockTests.swift`(7개 시험이 항목 1~11을 본다). Go 피어의 `lockStatus`와 Swift 노드의 판정(머리 텍스트, 보이는 피어·거른 피어의 node 키 집합, 자기 잠김)을 11곳에서 견줘 모두 같았고, "보인다/빠진다"를 UDP 에코와 TCP SYN으로도 봤다(서명 없는 피어와는 6초 동안 오가지 않는다). **관문이 찾은 결함 하나**: 서버가 끄기 비밀만 바꾸고 내용이 같은 맵을 다시 보내면, Go는 그 맵에서 절차를 다시 돌아 끄는데(`tkaSyncIfNeeded`는 맵 응답마다 돈다) Swiftail은 바뀐 것이 없는 netmap이라며 다시 돌지 않았다. 고침: 할 일이 남아 있으면(`lockPlan`이 비지 않으면) KeepAlive가 아닌 맵 응답은 내용이 같아도 절차의 계기다(`MapSession.Update.isMapResponse`. 동작 N5의 "다음 netmap마다 다시 시도"가 이제 내용이 같은 맵에도 선다. 동기화가 실패한 `.enforcing` 노드도 같다). 통과 기준 가운데 이 도구로는 다르게 본 것: 항목 9의 "옛 키는 낡은 키로 빠진다"는 "새 키가 보이고 옛 키가 안 보인다"로(이 서버가 옛 항목을 지운다), 항목 7의 "다시 이은 스트림"은 노드를 다시 띄워서(Go 피어를 다시 띄우는 명령이 없어 그 뒤의 판정은 Go와 견주지 못했다). Swift 노드의 피어 집합은 시험이 내부의 마지막 netmap을 읽어 얻는다(공개 API에는 `peerCount`만 있다).
+- **TL-10 (gate (a) tests, 2026-11-15)**. `Tests/SwiftailInteropTests/TailnetLockTests.swift` (7 tests cover items 1–11). The Go peer's `lockStatus` and Swift node decisions matched at 11 points (head text, sets of visible and filtered peer node keys, and local lockout). UDP echo and TCP SYN also verified "visible/removed" (no traffic with unsigned peers for 6 seconds). **One defect found by the gate**. If the server changes only the disablement secret and resends an identical map, Go runs the procedure again on that map and disables lock (`tkaSyncIfNeeded` runs on every map response). Swiftail treated the netmap as unchanged and skipped the procedure. Fix. When work remains (`lockPlan` is nonempty), a non-KeepAlive map response triggers the procedure even if the content is unchanged (`MapSession.Update.isMapResponse`. Behavior N5's "retry on each subsequent netmap" now applies to maps with identical content. The same applies to an `.enforcing` node whose sync failed). Criteria checked differently with this tool were item 9's "old key is removed as obsolete," checked as "the new key is visible and the old one is absent" (this server deletes the old entry), and item 7's "reconnected stream," checked by restarting the node (there is no command to restart the Go peer, so the resulting decision was not compared with Go). The test reads the Swift node's internal last netmap to obtain its peer set (the public API only exposes `peerCount`).
 
-### 독립 검토에서 고치는 것: 제어의 절차 (TL-11b, 2026-11-15)
+### Independent review fixes for the control procedure (TL-11b, 2026-11-15)
 
-다른 세션이 등록과 맵 쪽의 절차를 "제어 서버를 믿지 않는다"는 전제로 검토했다. 로컬 상태를 쥔 노드의 거르기를 서버가 푸는 길, 서명 없는 피어가 `ControlClient` 밖으로 나가는 길은 찾지 못했다(읽히지 않는 머리, 빈 `TKAInfo`, 다른 머리, capability 제거, `Disabled`, RPC 실패, 절차 중 재연결을 시험으로 돌렸다). 재현된 결함 둘과 계약이 빠뜨린 것 넷을 아래처럼 고친다. 이 항목들이 3절의 해당 동작보다 앞선다.
+Another session reviewed registration and map procedures on the premise that the control server is untrusted. It found no path for the server to disable filtering on a node holding local state or for unsigned peers to leave `ControlClient` (tests exercised an unparseable head, empty `TKAInfo`, a different head, capability removal, `Disabled`, RPC failure, and reconnection during the procedure). Fix the two reproduced defects and four contract omissions as follows. These items take precedence over the corresponding behavior in §3.
 
-1. **재서명은 서명 오라클이었다(치명. Go에서 물려받은 것)**. 서버가 `RegisterResponse.NodeKeySignature`에 가짜 rotation을 **정확히 15겹**(디코더의 중첩 한도 16단에서 가능한 최대. 이때 이전 키가 16개라 줄이기가 일어난다. 처음 적은 "15겹 넘게"는 틀렸다. 2026-11-16 재검증) 얹어 보내면, 재서명이 사슬을 줄이면서 **서버가 고른 node 키들**을 NL 키로 다시 서명해 돌려주었다(동작 R7의 "가장 최근 키 14개만 NL 키로 다시 서명"). 피해 노드의 direct 서명에 `WrappingPubkey`로 자기 NL 키가 있으면(서명 기기에서 `tailscale lock sign <nodeKey> <lockKey>`로 서명받은 노드가 모두 그렇다) 그 사슬은 신뢰 키에서 시작해 lock을 지키는 모든 노드의 인가를 통과하고, 진짜 노드는 회전으로 낡은 키가 된다. Go도 같은 코드다: `ResignNKS`와 `maybeTrimRotationSignatureChain`은 받은 서명을 검증하지 않고(`tailscale.com/tka/sig.go:359-437`), 입력은 서버의 응답이다(`control/controlclient/direct.go:734-737`, `:857-858`). 원본을 읽어 확인했고 Go로 실행하지는 않았다. **고침(동작 R7을 바꾼다. 결정 L9의 (가)를 거둔다)**: 재서명은 **이미 자기 NL 키로 서명한 것만 다시 서명한다**. 받은 사슬의 모든 rotation 겹의 서명이 자기 NL 공개 키로 검증되고(표준 규칙), 맨 안쪽 서명(rotation이 아닌 것)의 `WrappingPubkey`가 자기 NL 공개 키일 때만 재서명한다. 아니면 재서명하지 않고 서명 없이 등록한다(노드는 잠기고 `signingRequest`가 뜬다. 종류를 로그에 남긴다). 이 검사는 `SwiftailTKA`의 재서명 함수 안에 둔다(부르는 쪽이 잊을 수 없게). Go와의 차이: Go가 만들던 "검증되지 않는 서명"(`--TL`로 등록한 노드, `WrappingPubkey` 없는 direct)을 Swiftail은 만들지 않는다. 다른 노드가 보는 판정은 같다(둘 다 잠긴다).
-2. **끄기 비밀의 거절 기억이 하나뿐이었다(낮음)**. 서버가 틀린 비밀 둘을 번갈아 보내면 Argon2i를 매번 다시 돌았다(동작 O6·X4와 어긋남). 고침: 거절한 비밀의 다이제스트를 머리마다 작은 집합(8개, 넘치면 오래된 것부터 버린다)으로 쥔다.
-3. **읽히지 않는 `Head`를 "lock 없음"으로 읽었다(낮음. 동작 N1을 바꾼다)**. `TKAInfo`가 있고 `Disabled`가 아닌데 `Head`가 읽히지 않으면 **켜짐, 머리 모름**으로 읽는다: 로컬 상태가 없으면 부트스트랩으로, 있으면 동기화로 간다. 이전에는 로컬 상태가 없을 때 거르지 않고 모든 피어를 냈고, 동작 D10(줄바꿈이 섞인 텍스트) 때문에 Go는 거르는데 Swiftail은 거르지 않는 경우가 있었다.
-4. **`.unverified`의 까닭을 앱이 가르지 못했고 푸는 길이 없었다(중간)**. `TailnetLockStatus`에 까닭을 더한다: 검증된 상태를 얻는 중(스스로 재시도한다) / 저장된 상태를 열지 못함(스스로 풀리지 않는다) / 저장된 상태가 서버가 알린 사슬과 이어지지 않음(다른 tailnet의 상태가 남은 경우. 이때 `mode`는 `.enforcing`이고 서명해도 풀리지 않는다). 그리고 **lock 상태 파일만 지우는 공개 함수**를 둔다(상태 디렉터리를 통째로 지우면 NL 키를 잃어 다시 서명받아야 한다). 지우면 다음 시작에 새로 TOFU로 시작하므로, 문서 주석에 "사용자가 고른 행동이어야 한다"를 적는다.
-5. **sync/offer 응답의 `MissingAUMs`를 개수 한도 전에 모두 디코딩했다(낮음)**. 8MiB 본문은 몇 바이트짜리 항목 백만 개를 담는다. 고침: 디코딩 전에 개수(4,096)를 본다.
+1. **Re-signing was a signing oracle (critical, inherited from Go)**. If the server sent a fake rotation with **exactly 15 layers** in `RegisterResponse.NodeKeySignature` (the maximum within the decoder's 16-level nesting limit, yielding 16 previous keys and triggering trimming. The initial "more than 15 layers" was wrong, as reverified on 2026-11-16), trimming would use the NL key to re-sign and return **node keys chosen by the server** (behavior R7, "re-sign only the 14 most recent keys with the NL key"). If the victim node's direct signature has its own NL key as `WrappingPubkey` (as all nodes signed with `tailscale lock sign <nodeKey> <lockKey>` on a signing device do), the chain starts at a trusted key and passes authorization on all nodes enforcing lock. Rotation makes the genuine node's key obsolete. Go has the same code. `ResignNKS` and `maybeTrimRotationSignatureChain` do not verify received signatures (`tailscale.com/tka/sig.go:359-437`), and input comes from the server response (`control/controlclient/direct.go:734-737`, `:857-858`). Verified by reading the source, without running Go. **Fix (changes behavior R7 and withdraws decision L9 (a))**. Re-sign **only what the local NL key already signed**. Re-sign only when the local NL public key verifies every rotation layer's signature (standard rules) and matches the innermost non-rotation signature's `WrappingPubkey`. Otherwise register without re-signing or a signature (the node is locked out and exposes `signingRequest`. Log the failure type). Put the check in the `SwiftailTKA` re-signing function so callers cannot forget it. Unlike Go, Swiftail no longer creates "signatures that fail verification" (nodes registered with `--TL`, direct signatures without `WrappingPubkey`). Other nodes see the same decision (both lock out).
+2. **Only one rejected disablement secret was remembered (low)**. If the server alternated two wrong secrets, Argon2i ran every time (contrary to behaviors O6 and X4). Fix by retaining a small set of rejected secret digests per head (8 entries, evict the oldest on overflow).
+3. **Unreadable `Head` was interpreted as "no lock" (low, changes behavior N1)**. If `TKAInfo` is present and not `Disabled` but `Head` is unreadable, interpret it as **enabled with unknown head**. Bootstrap if local state is absent and synchronize if present. Previously, absent local state meant emitting all peers without filtering, and behavior D10 (text containing line breaks) meant Go filtered cases Swiftail did not.
+4. **The app could not distinguish the cause of `.unverified` and had no recovery path (medium)**. Add reasons to `TailnetLockStatus` for acquiring verified state (automatic retries), inability to open persisted state (no automatic recovery), and persisted state disconnected from the chain reported by the server (state from another tailnet. `mode` is `.enforcing` in this case and signing does not resolve it). Add a **public function to delete only the lock state file** (deleting the entire state directory loses the NL key and requires signing again). Deletion leads to fresh TOFU on next startup, so document that it "must be an action chosen by the user."
+5. **The sync/offer response decoded all `MissingAUMs` before checking the count limit (low)**. An 8MiB body holds a million entries of a few bytes each. Fix by checking the count (4,096) before decoding.
 
-**고친 결과(2026-11-15)**: 다섯 항목이 모두 들어갔다. ① 재서명 함수가 재서명 전에 받은 사슬을 검사한다(rotation 겹마다 자기 NL 키의 서명을 표준 규칙으로 검증: 아니면 `.invalidSignature`. 맨 안쪽 서명이 없거나 그 `WrappingPubkey`가 자기 NL 키가 아니면 `.untrustedSigner`). 던지면 등록 쪽은 종류만 로그에 남기고 서명 없이 등록한다. 옛 서명의 `Pubkey`가 새 키와 같을 때 옛 바이트를 그대로 돌려주는 지름길은 서명을 만들지 않으므로 그대로다. Go 기준값 `resign` 10줄 가운데 3줄(`direct-wrapping-is-other-key`, `direct-no-wrapping`, `credential-chain`)이 의도된 차이가 됐다: Go는 서명을 만들지만 그 서명도 인가되지 않는다. ② 거절한 끄기 비밀은 머리마다 다이제스트 8개까지 쥔다. ③ `ServerLockState`는 읽히지 않는 `Head`를 켜짐·머리 없음으로 읽는다. N2의 표의 모든 칸을 `TKAInfo` JSON에서부터 다시 시험했다. ④ `TailnetLockStatus.issue: Issue?`(`.acquiringState` / `.unreadableStoredState` / `.storedStateDiverged`). "이어지지 않음"은 동기화의 `missingAUMs`가 교차 없음을 낼 때만 켠다(RPC 실패와 섞이지 않는다). 풀리는 때: 머리가 같아짐, 교차 계산 성공, lock이 꺼짐. **lock 상태 파일만 지우는 함수**는 `ControlClient.removeTailnetLockState(inDirectory:)`다. 넘기는 디렉터리는 노드의 `configuration.stateDirectory`와 같다(노드 쪽 감싸개는 두지 않는다: 앱은 이미 `SwiftailControl`의 타입을 쓴다). 노드가 돌고 있지 않을 때 부른다. ⑤ `TKASyncOfferResponse`가 `MissingAUMs`의 개수(4,096)를 base64 디코딩 전에 본다.
+**Fix results (2026-11-15)**. All five items landed. ① The re-signing function checks the received chain before re-signing (verify each rotation layer with the local NL key using standard rules, or return `.invalidSignature`. Return `.untrustedSigner` when the innermost signature is missing or its `WrappingPubkey` differs from the local NL key). If it throws, registration logs only the type and proceeds unsigned. The shortcut returning the old bytes when the old signature's `Pubkey` matches the new key remains because it does not create a signature. Three of 10 Go `resign` reference rows (`direct-wrapping-is-other-key`, `direct-no-wrapping`, `credential-chain`) became intentional differences. Go creates a signature, but that signature also fails authorization. ② Keep up to 8 rejected disablement secret digests per head. ③ `ServerLockState` interprets an unreadable `Head` as enabled with no head. Retested all entries in the N2 table starting from `TKAInfo` JSON. ④ Added `TailnetLockStatus.issue: Issue?` (`.acquiringState` / `.unreadableStoredState` / `.storedStateDiverged`). Divergence is set only when synchronization's `missingAUMs` finds no intersection (distinct from RPC failure). It clears when heads match, intersection computation succeeds, or lock is disabled. **The function that deletes only the lock state file** is `ControlClient.removeTailnetLockState(inDirectory:)`. Pass the node's `configuration.stateDirectory` (no node wrapper because the app already uses `SwiftailControl` types). Call it while the node is stopped. ⑤ `TKASyncOfferResponse` checks the `MissingAUMs` count (4,096) before base64 decoding.
 
-남는 것(고치지 않는다): 로컬 상태가 없는 동안에는 서버의 말이 곧 판정이다(`.unverified`도 서버가 `Disabled`를 알리면 풀린다. 처음 신뢰가 TOFU이기 때문이고 Go도 같다). 공격자가 만든 genesis로 통째로 바꿔 넣은 저장 파일은 재검증을 통과한다(그 권한이면 같은 디렉터리의 신원 파일도 읽는다. 동작 K6의 0600이 다룬다). netmap마다 전체 피어의 서명을 다시 검증하는 비용은 재지 않았다(`shortcut:`).
+Remaining items (left as is). Without local state the server's report determines the decision (`.unverified` also clears if the server reports `Disabled`. Initial trust is TOFU, as in Go). A wholesale replacement store containing an attacker-created genesis passes reverification (with that access the attacker can also read the identity file in the same directory. Behavior K6 covers this with 0600). The cost of reverifying all peer signatures on each netmap was unmeasured (`shortcut:`).
 
-### 독립 검토에서 고치는 것: 순수 로직 (TL-11a, 2026-11-15)
+### Independent review fixes for pure logic (TL-11a, 2026-11-15)
 
-다른 세션이 `SwiftailTKA`를 Go 원본과 줄 단위로 대조하고, 대조 시험 밖의 입력을 새로 뽑아 견줬다(새 Go 기준값: 사슬 22개 63단계, 서명 15개. 판정 차이 0. 퍼저: 릴리스에서 AUM·NKS 각 20만, 트랩 0). 서명 없는 node 키가 인가되는 길, 믿지 않을 키가 상태에 들어가는 길은 찾지 못했다. Go와 결과가 갈리는 입력 둘을 임시 Go 프로그램과 함께 재현했고, 아래처럼 고친다. 이 항목들이 3절의 해당 동작과 결정 L7·L14·L16보다 앞선다.
+Another session compared `SwiftailTKA` line by line with the Go source and generated new inputs outside the comparison tests (new Go reference cases were 22 chains with 63 steps and 15 signatures, with 0 decision differences. Release fuzzer ran 200,000 each for AUM and NKS, with 0 traps). It found no way to authorize an unsigned node key or introduce an untrusted key into state. It reproduced two inputs with results differing from Go using temporary Go programs and fixes them as follows. These items take precedence over corresponding behaviors in §3 and decisions L7, L14, and L16.
 
-1. **저장 한도가 서버 혼자서 채워진다(높음. 결정 L7·L16의 한도를 바꾼다)**. AUM의 해시에는 서명 목록이 들어가고, 같은 서명을 되풀이하거나 일부만 남기거나 순서를 바꿔도 검증을 통과한다(`tailscale.com/tka/tka.go:433-445`, `tka/aum.go:168-172`). 그래서 서명 키 없이도 받아들여지는 형제 AUM을 얼마든지 만들 수 있다(Go도 받는다). Swiftail은 쥐는 AUM이 4,096개·16MiB에 닿으면 묶음을 통째로 거절했으므로, 서버가 변종으로 한도를 채우면 그 뒤의 RemoveKey와 체크포인트까지 모두 떨어져 **지워진 키를 계속 믿었다**. 서버가 정상으로 돌아와도 풀리지 않고, 같은 서버를 쓰는 Go 노드는 영향을 받지 않는다(Go는 쥐는 수에 한도가 없다). 고침: **한도는 활성 사슬(뿌리에서 머리까지)에만 건다.** 활성 사슬 밖의 AUM(진 갈래)은 한도에 닿으면 버린다(상태에 영향이 없다. Go의 압축도 버린다). 갈래 해소는 갈림길마다 형제들 사이에서 정해지므로(동작 F1) 진 형제를 버려도 뒤의 판정이 바뀌지 않는다. 버린 AUM을 부모로 하는 AUM이 오면 지금처럼 "부모를 모르는 AUM"이다.
-2. **받아들인 사슬을 다시 열지 못하는 경우가 있었다(중간. 결정 L14를 좁힌다)**. 빈 `Meta`(`07a0`)만 있는 UpdateKey는 정적 검사를 통과하고 Go도 받는다. 그런데 정준 쓰기에서 빈 맵은 빠지므로, 저장했다 다시 읽은 AUM은 Votes도 Meta도 없어 정적 검사에서 떨어졌다. 다시 시작한 노드는 `.unverified`(피어 없음)에 갇혔다. Go의 `Open`은 다시 검증하지 않는다. 고침: **다시 열 때는 부모와 서명만 다시 본다**(정적 검사는 받아들일 때만 한다). 정준 쓰기는 바꾸지 않는다(해시가 Go와 달라진다).
-3. **서버가 보낸 조상 목록이 `missingAUMs`의 계산을 부풀렸다(낮음)**. 진 갈래의 AUM을 조상 목록에 되풀이해 넣으면 조상마다 체크포인트까지 거꾸로 걸었다(릴리스에서 8MiB 응답 하나에 최악 71초, 그동안 `ControlClient`가 막힌다). 고침: 조상의 중복을 지우고 1,001개(Go가 내는 제안의 최대)까지만 본다.
-4. **들이기의 메모리가 묶음 크기의 제곱으로 늘었다(낮음)**. AUM마다 상태 전체를 쥐었다(릴리스에서 AddKey 4,095개 한 묶음에 약 290MiB). 고침: 묶음 안에서 더는 부모로 쓰이지 않는 상태를 버린다.
-5. 그 밖: 문서 주석이 없는 `package` 선언에 주석을 단다, Go에서 옮겨 적은 `Model/`·`CBOR/` 파일에 라이선스 표기를 단다.
+1. **The server alone could fill the storage limit (high, changes decision L7 and L16 limits)**. AUM hashes include the signature list, and repeating a signature, retaining a subset, or reordering signatures still passes verification (`tailscale.com/tka/tka.go:433-445`, `tka/aum.go:168-172`). Thus arbitrarily many sibling AUMs can be accepted without a signing key (Go accepts them too). Swiftail rejected entire groups once retained AUMs reached 4,096 or 16MiB. If the server filled the limit with variants, later RemoveKey and checkpoint AUMs were rejected and **removed keys remained trusted**. This did not resolve when the server recovered, and Go nodes on the same server were unaffected (Go has no retention count limit). Fix. **Apply the limit only to the active chain from root to head.** Drop AUMs outside it (losing forks) at the limit (state is unaffected, and Go compaction also discards them). Fork resolution selects among siblings at each branch point (behavior F1), so dropping a losing sibling leaves later decisions unchanged. An incoming AUM whose parent was discarded is still an "AUM with an unknown parent."
+2. **An accepted chain could fail to reopen (medium, narrows decision L14)**. An UpdateKey with only empty `Meta` (`07a0`) passes static validation and Go accepts it. Canonical writing omits the empty map, so after saving and rereading, the AUM has neither Votes nor Meta and fails static validation. The restarted node was stuck in `.unverified` (no peers). Go's `Open` skips reverification. Fix. **On reopen, check only parents and signatures again** (perform static validation only at admission). Keep canonical writing unchanged because changes would make hashes differ from Go.
+3. **Server-supplied ancestor lists amplified `missingAUMs` computation (low)**. Repeating a losing-fork AUM in the ancestor list caused a walk back to the checkpoint for each ancestor (worst case 71 seconds in release for one 8MiB response, blocking `ControlClient` throughout). Fix by deduplicating ancestors and considering only up to 1,001 (the maximum in Go's offer).
+4. **Admission memory grew quadratically with group size (low)**. It held the full state per AUM (about 290MiB for one group of 4,095 AddKey updates in release). Fix by discarding states no longer used as parents within the group.
+5. Also add documentation comments to `package` declarations lacking them and license notices to `Model/` and `CBOR/` files ported from Go.
 
-**고친 결과(2026-11-15)**: 다섯 항목이 모두 들어갔다. ① 들이기 앞의 전체 수 검사를 없앴다. 머리를 다시 계산한 뒤 활성 사슬의 개수·바이트를 보고, 넘으면 `limitExceeded`로 거절한다(상태는 예전대로). 쥔 것 전체만 넘으면 활성 사슬 밖의 AUM을 **나중에 들인 것부터** 버린다(자식은 늘 부모보다 뒤에 들어오므로 남는 AUM의 부모가 늘 남는다). "진 갈래를 버려도 뒤의 판정이 바뀌지 않는다"는 Go 원본에서 맞다: 형제끼리는 부모 상태로만 견주고(가중치 → RemoveKey → 해시의 전순서. 후손을 보지 않는다, `tailscale.com/tka/tka.go:134-167`), 활성 사슬은 뿌리에서 갈림길마다 그 규칙으로 내려가며(`:200-242`, `:385-420`), 동기화의 교차도 활성 사슬에서만 나온다(`tka/sync.go:160-209`). 새 형제가 오면 이기는 것은 지금 것이거나 새것이고, 진 갈래에 후손이 붙어도 견주기에 들지 않는다. 한도를 서명 검증 **앞에서** 보던 것은 그만뒀다(활성 사슬은 검증 뒤에야 안다. 검증 비용의 상한은 묶음 4,096개와 응답 본문 한도다). ② 다시 열 때는 부모와 서명만 본다. Go의 `Open`은 서명도 정적 검사도 다시 보지 않으므로(`tka/tka.go:482-505`), 신뢰 키가 서명했지만 정적 검사에서만 떨어지는 AUM이 파일에 있으면 둘 다 연다(판정이 같다). 정적 검사를 거치지 않은 값에서 트랩이 나지 않게 가중치 덧셈이 Go의 `uint`처럼 감기게 했고, `key(withID:)`를 Go `GetKey`와 같게 맞췄다. **빈 `Meta`의 UpdateKey를 들였다 다시 열면 머리는 같고 그 키의 `Meta`만 옛 값이다**(받은 빈 `Meta`는 키의 `Meta`를 비우지만 정준 저장에서는 빠진다. Go도 같다고 원본을 읽어 판단: `tka/state.go:206`, `tka/tailchonk.go:658-673`. `Meta`는 판정에 쓰이지 않는다). ③ `missingAUMs`가 조상의 중복을 지우고 1,001개까지만 본다(`tka/sync.go:88-109`: 1,000번 거꾸로 보며 만난 체크포인트와 가장 오래된 AUM). ④ 묶음 안에서 더는 부모로 쓰이지 않는 상태를 놓는다. ⑤ 주석 18곳과 라이선스 표기(Tailscale BSD-3-Clause, `fxamacker/cbor` MIT). 릴리스 측정(같은 입력, 전 → 후): AddKey 4,095개 한 묶음의 RSS 330MiB → 44MiB, 조상 증폭(8MiB, 깊이 1,999) 약 58초 → 0.01초, 새 최악(서로 다른 진 갈래 조상 1,001개) 0.22초, 4,096개 다시 열기 0.35초. Go 대조는 523줄에서 어긋남이 없다.
+**Fix results (2026-11-15)**. All five items landed. ① Removed the total-count check before admission. After recomputing the head, check active chain count and bytes and reject excess as `limitExceeded` (state stays as before). If only the overall retained data exceeds limits, drop non-active AUMs **from the most recently admitted first** (children always arrive after parents, so every retained AUM keeps its parent). Go source confirms that dropping losing forks does not change later decisions. Siblings are compared only using parent state (total order of weight → RemoveKey → hash, without consulting descendants, `tailscale.com/tka/tka.go:134-167`). The active chain descends from the root with that rule at each fork (`:200-242`, `:385-420`), and sync intersections come only from the active chain (`tka/sync.go:160-209`). A new sibling can leave the current winner in place or become the winner, and descendants of a losing fork do not enter the comparison. Limit checks no longer run **before** signature verification (the active chain is only known after verification. The 4,096-entry group limit and response body limit bound verification cost). ② On reopen, check only parents and signatures. Go's `Open` checks neither signatures nor static validation again (`tka/tka.go:482-505`), so both open a file containing a trusted-key-signed AUM that fails only static validation (same decision). To prevent traps on values that did not undergo static validation, weight addition wraps like Go's `uint`, and `key(withID:)` matches Go `GetKey`. **Admitting and reopening an UpdateKey with empty `Meta` preserves the head, but that key's `Meta` alone reverts to its old value** (received empty `Meta` clears the key's `Meta`, but canonical storage omits it. Source inspection indicates Go behaves the same, `tka/state.go:206`, `tka/tailchonk.go:658-673`. `Meta` is not used in decisions). ③ `missingAUMs` deduplicates ancestors and examines only up to 1,001 (`tka/sync.go:88-109`, checkpoints encountered while walking back 1,000 times and the oldest AUM). ④ Release states no longer used as parents in the group. ⑤ Added 18 comments and license notices (Tailscale BSD-3-Clause, `fxamacker/cbor` MIT). Release measurements (same input, before → after) were RSS of 330MiB → 44MiB for one group of 4,095 AddKey updates, ancestor amplification (8MiB, depth 1,999) about 58 seconds → 0.01 seconds, new worst case (1,001 distinct losing-fork ancestors) 0.22 seconds, and reopening 4,096 AUMs 0.35 seconds. Go comparison matches on all 523 rows.
 
-남는 것(고치지 않는다): **활성 사슬 자체가 4,096개를 넘는 tailnet은 따라가지 못한다**(압축이 없다, 결정 L7. 키 변경이 4,096번을 넘은 tailnet이다. 그때는 예전 상태로 계속 거른다). Go와 같은 프로토콜 쪽 약점 둘: 해시가 더 작은 서명 변종이 원본을 이기면 원본에 붙은 RemoveKey가 진 갈래에 남는다, 표가 더 많은 키는 지워진 뒤에도 옛 부모에서 형제를 만들어 이긴다(둘 다 Go 기준값 `reviewChains`에 넣어 같은 판정임을 본다). `AuthorityState.authorize`·`admitted`·`applying`은 검증되지 않은 상태 값에도 부를 수 있다(지금 `SwiftailControl`은 `authority.state`만 쓴다).
+Remaining items (left as is). **The node cannot catch up on a tailnet whose active chain itself exceeds 4,096 AUMs** (no compaction, decision L7. This is a tailnet with more than 4,096 key changes. Keep filtering with old state). Two protocol weaknesses match Go. If a signature variant with a smaller hash beats the original, a RemoveKey attached to the original remains in the losing fork. A key with more votes can create a sibling from an old parent and win even after removal (both are in Go reference `reviewChains` to check for matching decisions). `AuthorityState.authorize`, `admitted`, and `applying` can also be called on unverified state values (`SwiftailControl` currently uses only `authority.state`).
 
-### 첫 사용처 검토 결과 (2026-11-15)
+### First adopter review results (2026-11-15)
 
-첫 사용처 세션(RemoteDebug)이 L4·L5와 "지금 lock 처리가 있는 곳"을 읽고 답했다.
+The first adopter session (RemoteDebug) read L4, L5, and "Where lock is currently handled" and answered.
 
-- **F1**: 지운다(L5 (가)). 그쪽에서 그 case를 적은 곳은 `Apps/iOSTunnel/SwiftailTunnelEngine.swift`의 두 군데(`kind(of:)`, `message(for:)`)이고, TL-8의 커밋으로 올릴 때 그쪽이 두 갈래를 지운다.
-- **F2**: (가)로 받는다. `NodeState`의 새 case는 필요 없다. 그쪽 어댑터는 `node.events`의 사건마다 `node.status`를 읽어 앱에 넘기므로, 새 안내 화면("서명 기기에서 서명 필요", "lock 상태를 확인하지 못해 연결을 열지 않음")은 그쪽이 만든다(Go 코어에는 없던 화면이다). 그 대신 계약이 지켜야 하는 것 넷(TL-7·TL-8의 요구이고 시험 21·22와 관문 (가) 2·3이 본다):
-  1. **첫 `.running`과 lock 정보 사이에 틈이 없다.** 잠긴 노드가 `.running`이 되는 시점에 `NodeStatus.tailnetLock`이 이미 채워져 있다: 같은 netmap에서 나오는 사건은 `tailnetLockChanged`가 `stateChanged(.running)`보다 먼저이고, 어느 사건을 받은 시점에 읽은 `status`도 그 netmap의 lock 모습을 담고 있다. "연결됨"이 잠깐 보였다 안내로 바뀌지 않는다.
-  2. **`status` 하나로 네 경우를 가른다**: lock 꺼짐(`mode == .disabled`) / 켜짐·내 노드 서명됨(`.enforcing`, `signingRequest == nil`) / 켜짐·서명 기다림(`.enforcing`, `signingRequest != nil`) / `.unverified`.
-  3. **두 값은 `tailscale lock sign`에 그대로 붙여 넣는 문자열**이다(`nodekey:…`, `tlpub:…`. 2절의 선언대로 `String`). 둘 다 공개 키이므로 화면과 클립보드에 내도 된다. Swiftail은 로그에 남기지 않는다(동작 K5). 첫 사용처도 기기 로그에 올리지 않는다.
-  4. **서명이 끝나면 다시 시작 없이 풀린다.** 서명 기기가 서명한 뒤의 netmap에서 `tailnetLockChanged`가 오고 `signingRequest`가 nil이 된다. 그 뒤 피어가 올라오는 것은 기존 사건으로 안다.
-- **F3**: **답(2026-11-15, RemoteDebug 세션이 전함): Mac 호스트는 브라우저 로그인 뒤 서명 기기에서 서명하는 길로 등록한다.** 서명된 인증 키(`--TL`)의 길은 쓰지 않는다. 그래서 관문 (나)에서는 2(서명 기기가 뒤에 서명)가 첫 사용처의 길이고 1은 Swiftail의 지원 확인이다. lock 안내 화면(서명 요청의 두 값, `.unverified` 문구, 저장 상태 지우기)은 Mac을 Swiftail로 바꿀 때 함께 만든다. Mac 앱의 tailnet 로그아웃은 상태 폴더를 통째로 비운다: `run()`이 끝난 뒤에만 지울 것, Swiftail에는 서버 쪽 로그아웃(node 키 만료 요청)이 없어 옛 노드가 남는 것, lock이 켜진 tailnet에서는 새 키라 다시 서명이 필요한 것, 인증서가 다시 발급되는 것을 알렸다. 참고(2026-11-15 그쪽이 바로잡음. 처음 적은 "Mac에는 인증 키 입력 화면이 없다"는 틀렸다): Mac 앱 네트워크 화면에 인증 키 입력란이 있다(저장하지 않고 다음 공유 시작에 한 번만 쓴다. 공유가 꺼져 있거나 tailnet에 오르지 못한 상태에서 보인다). 그래서 서명된 인증 키(`--TL`)의 길도 새 화면 없이 쓸 수 있다(입력란이 `--TL`이 붙은 긴 키를 그대로 넘기는지는 이식 때 확인). 두 길의 차이는 비밀 값을 옮기느냐와 F2의 서명 안내 화면이 꼭 필요하냐다. Mac 앱에는 로그아웃·다시 로그인과 노드 상태 폴더를 지우는 기능이 없다(`removeTailnetLockState`를 쓸 자리와 U1 "새 노드로 다시 등록"의 길을 이식 때 정해야 한다). Swiftail은 둘 다 지원한다(관문 (나) 1·2).
+- **F1**. Remove it (L5 (a)). That case appears in two places in `Apps/iOSTunnel/SwiftailTunnelEngine.swift` (`kind(of:)`, `message(for:)`). The first adopter will remove both branches when upgrading to the TL-8 commit.
+- **F2**. Use (a). No new `NodeState` case is needed. The adopter's adapter reads `node.status` for every `node.events` event and passes it to the app, so the adopter will build new screens ("Signing required on a signing device," "Connection left closed because lock status could not be verified") that the Go core did not have. The contract must meet four requirements from TL-7 and TL-8, covered by tests 21 and 22 and gate (a) items 2 and 3:
+  1. **There is no gap between first `.running` and lock information.** `NodeStatus.tailnetLock` is already populated when a locked-out node becomes `.running`. For events from the same netmap, `tailnetLockChanged` precedes `stateChanged(.running)`, and `status` read at any event already shows that netmap's lock status. "Connected" never appears briefly before changing to the notice.
+  2. **`status` alone distinguishes four cases**. Lock disabled (`mode == .disabled`) / enabled and local node signed (`.enforcing`, `signingRequest == nil`) / enabled and awaiting signature (`.enforcing`, `signingRequest != nil`) / `.unverified`.
+  3. **The two values are strings that can be pasted as is into `tailscale lock sign`** (`nodekey:…`, `tlpub:…`, `String` as declared in §2). Both are public keys and may appear on screen and on the clipboard. Swiftail does not log them (behavior K5). The first adopter also keeps them out of device logs.
+  4. **Signing clears lockout without restarting.** The netmap after a signing device signs causes `tailnetLockChanged` and `signingRequest` becomes nil. The existing events report peers being installed afterward.
+- **F3**. **Answer (2026-11-15, relayed by the RemoteDebug session). The Mac host registers by signing in through the browser and then having a signing device sign it.** It does not use the signed auth key (`--TL`) path. Thus gate (b) item 2 (signing device signs later) is the first adopter path, and item 1 confirms Swiftail support. The lock screen (two signing request values, `.unverified` message, clearing persisted state) will be built when migrating the Mac to Swiftail. Tailnet logout for the Mac app clears the entire state directory. The adopter was told to delete only after `run()` ends, that Swiftail has no server-side logout (node key expiration request) so the old node remains, that a new key on a tailnet with lock enabled requires signing again, and that certificates are reissued. Note (corrected by the adopter on 2026-11-15. The initial statement "The Mac has no auth key input screen" was wrong). The Mac app's network screen has an auth key field (unsaved, used only once when sharing next starts. Visible when sharing is off or the app has not joined the tailnet). The signed auth key (`--TL`) path thus works without a new screen (verify at migration whether the field passes the long key with `--TL` intact). The paths differ in whether they move a secret and whether F2's signing instructions are required. The Mac app has no logout and login-again feature or way to delete the node state directory (decide where to use `removeTailnetLockState` and how to provide U1's "register again as a new node" during migration). Swiftail supports both paths (gate (b) items 1 and 2).
 
-## 6. 첫 사용처가 고칠 것
+## 6. First adopter changes
 
-계약의 일부가 아니라 F1~F3의 근거로 적는다. 저장소를 바꾸는 일은 별도 승인 뒤에 한다(plan 7절 M7).
+These are recorded as context for F1–F3, outside the contract. Changes to the repository require separate approval (plan §7 M7).
 
-- `switch`에서 `.control(.tailnetLockEnabled)` 갈래를 지운다.
-- `node.events`에서 `.tailnetLockChanged`를 받는다. `signingRequest`가 있으면 두 값을 보여 준다(복사할 수 있게). `mode == .unverified`면 "tailnet lock 상태를 확인하지 못해 연결을 열지 않았다"는 뜻의 문구를 보인다.
-- 상태 디렉터리를 지우는 "로그인 초기화"는 `tailnet-lock.cbor`도 함께 지운다(같은 디렉터리라 저절로 그렇게 된다).
-- Go 코어의 lock 진단 로그(`core/internal/node/node.go:492-504`)는 Swiftail의 로그(동작 K5)가 대신한다.
+- Remove the `.control(.tailnetLockEnabled)` branch from the `switch`.
+- Receive `.tailnetLockChanged` from `node.events`. If there is a `signingRequest`, show both values and make them copyable. For `mode == .unverified`, show a message conveying "the connection was left closed because tailnet lock status could not be verified."
+- "Reset login" that deletes the state directory also deletes `tailnet-lock.cbor`, since it is in the same directory.
+- Swiftail logs (behavior K5) replace the Go core's lock diagnostic logs (`core/internal/node/node.go:492-504`).
 
-## 7. 시험과 관문
+## 7. Tests and gates
 
-### 단위 시험(소켓 없음, 시각 없음)
+### Unit tests (no sockets or time)
 
-`Tests/SwiftailTKATests`(새 시험 타깃):
+`Tests/SwiftailTKATests` (new test target):
 
-1. **CBOR 쓰기**: 정수 0·23·24·255·256·65,535·65,536·2^32−1·2^32·2^64−1의 최단 인코딩, 길이의 경계, null. 동작 E4의 기준 바이트 셋. `Meta{"bb","a","c"}`의 순서.
-2. **CBOR 읽기의 받아들임·거절 표**(노트 8.1의 두 표가 기준값이다): 받아들임은 모르는 정수 키(값이 정수·실수·음수·true·undefined·잘못된 UTF-8 텍스트·중첩 맵), 모르는 음수 키, 모르는 텍스트 키(`"MessageKind"`·`"messagekind"`·`"1"`), 모르는 값 안쪽의 중복 키, 비최단 정수(값·키), 정렬 안 된 키, `PrevAUMHash` 생략, 종류 9, `MessageKind` null, 빈 `Meta`, 2^63−1 정수 키, 단순값 99·float64 값. 거절은 구조·`Meta`의 중복 키(알려진·모르는 정수·텍스트·음수), 길이 미정 맵과 바이트열, 태그(모르는 값 안의 `c24101` 포함), 뒤에 남은 바이트, 빈 입력, 맨 바깥 배열, 종류 256·음수·실수, `PrevAUMHash` 텍스트, `Meta`의 bstr 키·정수 키·bstr 값·정수 값·잘못된 UTF-8, 잘린 바이트열, bstr·실수(`f93c00`)·true·null·배열 키, 잘못된 UTF-8 텍스트 키(`61ff`), 2^64−1 정수 키, `Signatures`의 맵 아닌 원소, 중첩 16단(받음)과 17단, 배열 4,096개(받음)와 4,097개, 맵 1,024쌍(받음)과 1,025쌍. 한 바이트씩 자른 모든 접두와 임의 바이트로 죽지 않음.
-3. **해시**: genesis 체크포인트(노트 7.1, 558바이트)의 재인코딩이 원본과 같고 `hash`가 `4a6313e0…eea8`, `signatureHash`가 `f34f12d8…f325`(8.1). 정준이 아닌 입력은 `hash ≠ BLAKE2s(원본)`. `AUMHash(text:)`: 소문자·패딩·51자·53자 거절, 끝 글자 `A`·`B`·`P`가 같은 해시이고 `Q`는 다른 해시.
-4. **정적 검사**(동작 A1): 종류마다 필수·금지 필드, `Votes` 0·1·4,096·4,097, `Meta` 512·513바이트, 서명의 KeyID 31·33바이트와 서명 63·65바이트, 체크포인트의 끄기 값 0·1·32·33개와 31바이트·중복, 키 0·1·512·513개와 중복, 길이 0인 `PrevAUMHash`, 빈 맵 `Meta`의 UpdateKey.
-5. **검증과 적용**(동작 A2~A7): 서명 없음, 모르는 키의 서명이 섞임, 틀린 서명, 33바이트 `PrevAUMHash`, 이미 있는 키의 AddKey, 없는 키의 RemoveKey·UpdateKey, 마지막 키 제거, StateID가 다른 체크포인트, 종류 0과 9가 머리를 옮김, 부모 없는 자리의 RemoveKey.
-6. **갈래 해소**(동작 F1): 가중치가 큰 쪽, 같은 키의 서명 둘은 한 번, 같으면 RemoveKey, 같으면 해시가 작은 쪽. 갈래의 진 쪽에 자식이 붙어도 머리가 바뀌지 않음.
-7. **들이기**(동작 F4): 빈 묶음, 부모 없는 AUM, 부모를 모르는 AUM, 이미 쥔 AUM, 묶음 가운데 하나가 틀리면 아무것도 들지 않음, 순서가 뒤바뀐 묶음, 갈래를 만드는 묶음 뒤의 머리.
-8. **부트스트랩과 다시 열기**(동작 F5·F6): 체크포인트가 아닌 AUM, 자기 상태의 키로 서명되지 않은 체크포인트, 저장한 것을 다시 열면 같은 머리와 상태, 뿌리가 둘인 저장, 부모가 빠진 저장, 서명이 바뀐 저장.
-9. **동기화 계산**(동작 Y1·Y4): 제안의 조상 목록(체크포인트 0·1·여럿, 1,000 너머), 머리가 같음, 머리 교차, 꼬리 교차, 교차 없음, 반복 한도.
-10. **NKS**(동작 S): direct, rotation 1·15겹(통과)과 16겹, credential 혼자(거절), credential → rotation, 중간 `WrappingPubkey` 생략, 회전 키 없음, 다른 node 키, 신뢰 키가 아닌 KeyID, 지워진 키, `Nested`가 붙은 direct, 31바이트 신뢰 키, `np` 형식이 아닌 안쪽 `Pubkey`, 내력의 `previousNodeKeys` 순서. ZIP-215에서만 통과하는 서명(R에 위수 2인 점을 더한 것)이 direct에서는 통과하고 rotation의 바깥에서는 거절됨(노트 8.1).
-11. **피어 집합**(동작 P2~P5): 서명 없음, 낡은 키, 같은 `WrappingPubkey` 묶음에서 내력이 긴 것만 남음, 길이가 같으면 모두 빠짐, credential 사슬은 묶이지 않음.
-12. **끄기 비밀**(동작 X): 기준값, 틀린 비밀, 빈 비밀, 끄기 값 여럿 가운데 하나와 맞음.
-13. **서명 만들기**(동작 R3·R5·R7): Go 시험의 감싼 인증 키 문자열(노트 7.1)의 해석. 거절: `-` 없음, 패딩 붙은 base64, URL 알파벳, credential이 아닌 A, 63·65바이트 B, 뒤 32바이트가 다른 B, `WrappingPubkey`가 다른 A, 한도 초과. 만든 서명이 `authorize`를 통과함. 재서명: 같은 키면 그대로, 회전 키가 NL 키인 direct는 통과, credential 사슬과 `WrappingPubkey` 없는 direct는 만들어지되 검증되지 않음, 16번째에서 줄어듦.
-14. **한도와 비밀**: 동작 M의 Swiftail 한도 경계. `WrappedAuthKey`의 `description`·`dump`에 키 바이트가 없음.
+1. **CBOR writing**. Shortest encoding of integers 0, 23, 24, 255, 256, 65,535, 65,536, 2^32−1, 2^32, and 2^64−1, length boundaries, and null. The three reference byte strings in behavior E4. Ordering of `Meta{"bb","a","c"}`.
+2. **CBOR read acceptance and rejection table** (the two tables in notes §8.1 are reference values). Acceptance covers unknown integer keys (with integer, float, negative integer, true, undefined, invalid UTF-8 text, and nested map values), unknown negative keys, unknown text keys (`"MessageKind"`, `"messagekind"`, `"1"`), duplicate keys inside unknown values, non-shortest integers (values and keys), unsorted keys, omitted `PrevAUMHash`, kind 9, null `MessageKind`, empty `Meta`, integer key 2^63−1, and simple value 99 and float64 values. Rejection covers duplicate keys in structures and `Meta` (known, unknown integer, text, and negative keys), indefinite-length maps and byte strings, tags (including `c24101` inside an unknown value), trailing bytes, empty input, a top-level array, kind 256, negative and float kinds, text `PrevAUMHash`, `Meta` bstr keys, integer keys, bstr values, integer values, and invalid UTF-8, truncated byte strings, bstr, float (`f93c00`), true, null, and array keys, invalid UTF-8 text keys (`61ff`), integer key 2^64−1, non-map `Signatures` elements, nesting at level 16 (accepted) and 17, arrays of 4,096 (accepted) and 4,097 elements, and maps of 1,024 (accepted) and 1,025 pairs. No crash on any prefix cut at a byte boundary or on arbitrary bytes.
+3. **Hashes**. Re-encoding the genesis checkpoint (notes §7.1, 558 bytes) matches the original, `hash` is `4a6313e0…eea8`, and `signatureHash` is `f34f12d8…f325` (8.1). For noncanonical input, `hash ≠ BLAKE2s(original)`. `AUMHash(text:)` rejects lowercase, padding, 51 and 53 characters. Final characters `A`, `B`, and `P` yield the same hash and `Q` yields a different hash.
+4. **Static validation** (behavior A1). Required and forbidden fields by kind, `Votes` 0, 1, 4,096, and 4,097, `Meta` of 512 and 513 bytes, signature KeyID of 31 and 33 bytes and signature of 63 and 65 bytes, checkpoint disablement value counts of 0, 1, 32, and 33, 31-byte values and duplicates, key counts of 0, 1, 512, and 513 and duplicates, length-0 `PrevAUMHash`, and UpdateKey with an empty `Meta` map.
+5. **Verification and application** (behaviors A2–A7). No signature, an unknown key's signature mixed in, bad signature, 33-byte `PrevAUMHash`, AddKey of an existing key, RemoveKey and UpdateKey of missing keys, removal of the last key, checkpoint with different StateID, kinds 0 and 9 advancing the head, and RemoveKey in a position with no parent.
+6. **Fork resolution** (behavior F1). Higher weight wins, two signatures by the same key count once, RemoveKey wins ties, and the smaller hash wins remaining ties. Adding a child to a losing fork leaves the head unchanged.
+7. **Admission** (behavior F4). Empty group, parentless AUM, AUM with unknown parent, AUM already held, rejecting the whole group if one update fails, group in the wrong order, and head after a group creates a fork.
+8. **Bootstrap and reopen** (behaviors F5 and F6). Non-checkpoint AUM, checkpoint without a signature from a key in its own state, same head and state after reopening persisted data, store with two roots, store missing a parent, and store with a changed signature.
+9. **Sync computation** (behaviors Y1 and Y4). Offer ancestor lists (0, 1, and multiple checkpoints, beyond 1,000), equal heads, head intersection, tail intersection, no intersection, and iteration limits.
+10. **NKS** (behavior S). Direct, 1 and 15 rotation layers (pass) and 16 layers, credential alone (rejected), credential → rotation, omitted intermediate `WrappingPubkey`, missing rotation key, different node key, untrusted KeyID, removed key, direct with `Nested`, 31-byte trusted key, nested `Pubkey` outside `np` format, and order of `previousNodeKeys` in history. A signature valid only under ZIP-215 (with a point of order 2 added to R) is valid for direct and rejected for the outer layer of rotation (notes §8.1).
+11. **Peer sets** (behaviors P2–P5). Missing signatures, obsolete keys, only the longest history surviving a `WrappingPubkey` group, all removed on tied lengths, and no grouping of credential chains.
+12. **Disablement secret** (behavior X). Reference value, wrong secret, empty secret, and a match among multiple disablement values.
+13. **Signature creation** (behaviors R3, R5, and R7). Parse the wrapped auth key string in the Go tests (notes §7.1). Rejections cover missing `-`, padded base64, URL alphabet, non-credential A, 63- and 65-byte B, B with different last 32 bytes, A with a different `WrappingPubkey`, and exceeded limits. Created signatures pass `authorize`. Re-signing reuses the signature for the same key, passes for direct with the NL key as rotation key, produces signatures that fail verification for credential chains and direct signatures without `WrappingPubkey`, and trims on the 16th.
+14. **Limits and secrets**. Swiftail limit boundaries from behavior M. Key bytes are absent from `WrappedAuthKey` `description` and `dump`.
 
 `Tests/SwiftailControlTests`:
 
-15. **신원**: NL 키의 왕복, `NLKey` 없는 옛 파일(새 키가 생기고 저장됨), 뒤 32바이트가 틀린 `nlpriv:`, `dump`에 NL 개인 키가 없음.
-16. **등록 요청**(동작 R): `NLKey`가 0이 아님, 감싼 키로 만든 요청의 `Auth.AuthKey`가 앞부분뿐이고 **요청 바이트 어디에도 감싼 개인 키의 base64·16진이 없음**, `NodeKeySignature`가 base64인 NKS, 서명 없는 요청은 null, 잘못된 `--TL`은 요청이 나가기 전에 `invalidConfiguration`.
-17. **`MapSession`의 `serverLock`**(동작 N1·O1): 첫 응답에 `TKAInfo` 없음(꺼짐), 있음, 도중에 빠짐(유지), `Disabled`, 읽히지 않는 `Head`(꺼짐), 빈 `Head`(켜짐·머리 없음), netmap은 그대로인데 `Head`만 바뀜.
-18. **`TailnetLockPlan`**(동작 N2): 표의 여섯 줄과 머리의 바이트 비교.
-19. **TKA RPC의 JSON**(동작 Y7): 요청 셋의 키 이름과 `"Head":""`·`"MissingAUMs":[]`, 응답의 base64 해독, 한도를 넘는 본문, 200이 아닌 응답. 메서드가 `GET`이고 `Content-Type`이 없음.
-20. **저장**(동작 T): 쓰고 읽기, 0600, 끝 해시가 틀림, 잘린 파일, 모르는 형식 버전, 17MiB 초과, 쓰기 실패 뒤에도 메모리의 상태로 거름, 지우기.
-21. **거르기와 상태**(동작 P·N6): `.disabled`·`.enforcing`·`.unverified`의 `peers`와 `filteredPeerCount`, `UnsignedPeerAPIOnly` 피어가 남음, 자기 서명이 없을 때의 `signingRequest`(`nodekey:`·`tlpub:` 텍스트).
+15. **Identity**. NL key round trip, old file lacking `NLKey` (generates and saves a new key), `nlpriv:` with wrong last 32 bytes, and no NL private key in `dump`.
+16. **Registration requests** (behavior R). Nonzero `NLKey`, only the prefix in `Auth.AuthKey` for a request made with a wrapped key, **no base64 or hexadecimal wrapped private key anywhere in request bytes**, `NodeKeySignature` as base64 NKS, null for unsigned requests, and `invalidConfiguration` for invalid `--TL` before any request is sent.
+17. **`MapSession` `serverLock`** (behaviors N1 and O1). No `TKAInfo` in first response (disabled), present, omitted mid-session (retained), `Disabled`, unreadable `Head` (disabled), empty `Head` (enabled with no head), and a changed `Head` with the same netmap.
+18. **`TailnetLockPlan`** (behavior N2). Six table rows and byte comparisons of heads.
+19. **TKA RPC JSON** (behavior Y7). Key names of all three requests and `"Head":""` and `"MissingAUMs":[]`, response base64 decoding, body over the limit, and non-200 response. Method is `GET` with no `Content-Type`.
+20. **Persistence** (behavior T). Write and read, 0600, bad trailing hash, truncated file, unknown format version, more than 17MiB, continued filtering with in-memory state after write failure, and deletion.
+21. **Filtering and status** (behaviors P and N6). `peers` and `filteredPeerCount` in `.disabled`, `.enforcing`, and `.unverified`, retention of an `UnsignedPeerAPIOnly` peer, and `signingRequest` (`nodekey:` and `tlpub:` text) when local signature is missing.
 
 `Tests/SwiftailTests`:
 
-22. **노드**: `status.tailnetLock`이 netmap을 따라감, `tailnetLockChanged`가 바뀔 때만 나옴, 잠긴 노드의 상태가 `.running`까지 감.
+22. **Node**. `status.tailnetLock` follows the netmap, `tailnetLockChanged` emits only on changes, and a locked-out node reaches `.running`.
 
-### Go 기준값 대조
+### Comparison against Go reference values
 
-`Tools/interop/cmd/tkafixtures`(새 도구). `Tools/interop/README.md`의 기존 기준값 도구와 같은 규약이다: `sh Scripts/build-interop-tools.sh tkafixtures`로 빌드하고, 폴더 인자가 있으면 `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json`을 쓰고 없으면 같은 JSON을 표준 출력에 쓴다. `reference`에 `go`·`tailscale` 버전을 적고 버전이 다르면 거절한다. Swift 소스는 읽거나 실행하지 않는다. 네트워크·현재 시각·외부 난수를 쓰지 않는다. 키는 `SHA-256("swiftail-fixtures/tka/<역할>/<번호>")`를 Ed25519 시드와 node 키 입력으로 쓴다(공개된 시험 전용 값). Go의 Ed25519 서명은 결정적이라 다시 만들면 같은 바이트가 나온다. 판정은 모두 Go `tka` 패키지의 공개 함수가 낸다(노트 7.2). 대조 시험(`GoComparisonTests.swift`)은 구현한 세션과 **다른 세션**이 쓴다.
+`Tools/interop/cmd/tkafixtures` (new tool). Follow the existing reference tool conventions in `Tools/interop/README.md`. Build with `sh Scripts/build-interop-tools.sh tkafixtures`. With a directory argument, write `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json`, otherwise write the same JSON to stdout. Record `go` and `tailscale` versions under `reference` and reject version mismatches. Do not read or run Swift source. Use no network, current time, or external randomness. For keys, use `SHA-256("swiftail-fixtures/tka/<role>/<number>")` as Ed25519 seeds and node key inputs (public, test-only values). Go Ed25519 signatures are deterministic, so regenerating yields the same bytes. All decisions come from public functions in Go's `tka` package (notes §7.2). A **different session** from the implementer writes the comparison tests (`GoComparisonTests.swift`).
 
-| 배열 | 뽑는 것 | Swift가 견주는 것 |
+| Array | Generated data | What Swift compares |
 | --- | --- | --- |
-| `cbor` | 입력 hex마다 종류(AUM·NKS), `Unserialize`의 성공 여부, `StaticValidate`의 성공 여부, 성공하면 다시 인코딩한 바이트·`Hash`·`SigHash` | 정적 검사까지 통과한 입력은 바이트와 해시가 같다. 그 밖은 거절이라는 판정만(동작 E6·D8) |
-| `chains` | 시나리오마다 부트스트랩 AUM과 단계(`Inform`에 넣는 AUM hex 목록, 성공 여부, 뒤의 머리, 뒤의 상태: 키의 KeyID·`Votes`·`Meta`, 끄기 값, StateID) | 단계마다 성공 여부와 머리·상태 |
-| `sync` | 양쪽 저장소의 AUM 목록, 각자의 `SyncOffer`, 상대 제안에 대한 `MissingAUMs`(해시 목록 또는 오류), 받은 뒤의 머리 | 제안, 목록, 오류 여부, 머리 |
-| `signatures` | (사슬의 어느 단계, node 키, NKS hex)마다 `NodeKeyAuthorizedWithDetails`의 판정과 내력(`PrevNodeKeys`, 처음 서명의 종류와 `WrappingPubkey`) | 판정과 내력 |
-| `peerSets` | 피어 목록(node 키, NKS)과 남는 피어. `rotationTracker`는 내보내지 않은 타입이라 `mapfixtures`처럼 실행할 때 임시 사본에 파일 하나를 얹어 부른다. 그것이 되지 않으면 `TestRotationTracker`(`ipn/ipnlocal/tailnet-lock_test.go:1088`)의 표를 출처와 함께 옮겨 적는다 | 남는 피어 |
-| `disablement` | 비밀과 `DisablementKDF`의 값, 상태에 대한 `ValidDisablement` | 값과 판정 |
-| `authKeys` | 감싼 인증 키 문자열과 `DecodeWrappedAuthkey`의 결과(인증 키 부분, credential hex, 키 길이), 깨뜨린 변형마다 Go의 동작("원문 전체를 돌려줌", "panic") | 정상은 같은 부분들. 변형은 Swiftail이 모두 거절(동작 R3) |
-| `resign` | 옛 서명·NL 시드·새 node 키와 `ResignNKS`의 결과, 그것의 판정 | 만든 서명의 `signatureHash`가 Go 것과 같고, Go의 서명을 Swift가 같은 판정으로 검증 |
+| `cbor` | For each input hex string, the kind (AUM or NKS), whether `Unserialize` and `StaticValidate` succeeded, and on success the re-encoded bytes, `Hash`, and `SigHash` | Bytes and hashes match for inputs that pass static validation. Otherwise compare only the rejection decision (behaviors E6 and D8) |
+| `chains` | Per scenario, bootstrap AUM and steps (AUM hex list for `Inform`, success, resulting head, resulting state with key KeyID, `Votes`, and `Meta`, disablement values, and StateID) | Success, head, and state at each step |
+| `sync` | AUM lists from both stores, each side's `SyncOffer`, `MissingAUMs` against the other side's offer (hash list or error), and head after receipt | Offer, list, error status, and head |
+| `signatures` | Per (chain step, node key, NKS hex), `NodeKeyAuthorizedWithDetails` decision and history (`PrevNodeKeys`, initial signature kind and `WrappingPubkey`) | Decision and history |
+| `peerSets` | Peer list (node key, NKS) and surviving peers. `rotationTracker` is an unexported type, so call it by overlaying a file on a temporary copy at execution as `mapfixtures` does. If that fails, copy the table in `TestRotationTracker` (`ipn/ipnlocal/tailnet-lock_test.go:1088`) with its origin | Surviving peers |
+| `disablement` | Secret, `DisablementKDF` value, and `ValidDisablement` against state | Value and decision |
+| `authKeys` | Wrapped auth key string and `DecodeWrappedAuthkey` result (auth key portion, credential hex, key length), and Go behavior for each malformed variant ("return the full original," "panic") | Matching parts for valid inputs. Swiftail rejects every variant (behavior R3) |
+| `resign` | Old signature, NL seed, new node key, `ResignNKS` result, and its decision | The created signature's `signatureHash` matches Go's, and Swift verifies Go's signature with the same result |
 
-뽑을 시나리오:
+Scenarios to generate:
 
-1. 직선 사슬: genesis 체크포인트 → AddKey → UpdateKey(`Votes`, `Meta`) → RemoveKey → NoOp → Checkpoint → 그 뒤의 AddKey. 체크포인트를 51개째에 두는 긴 사슬 하나(조상 목록).
-2. 갈래: 가중치 차이, 같은 가중치의 RemoveKey 대 AddKey, 해시 비교로 갈리는 것, 진 갈래의 자손, 오래된 지점에서 갈라져 이기는 갈래(복구 AUM의 모양).
-3. 거절: 서명 없음, 모르는 키 서명 섞임, 틀린 서명, 마지막 키 제거, 중복 AddKey, StateID가 다른 체크포인트, 부모 없는 AUM, 부모를 모르는 AUM, 33바이트 `PrevAUMHash`, 틀린 AUM이 든 묶음 전체.
-4. 받아들여지는 이상한 것: 종류 0과 9, 필드를 더 실은 NoOp, `Public`이 null·길이 0·31바이트·33바이트인 AddKey와 그 뒤의 사슬, 모르는 필드와 비최단 정수가 든 AUM(해시는 정준 바이트의 것).
-5. ZIP-215에서만 통과하는 서명: 그 서명의 AUM(받아들임), direct NKS(통과), rotation의 바깥(거절). 비정준 공개 키의 신뢰 키.
-6. NKS: direct, rotation 1~15겹과 16겹, credential → rotation, 줄인 사슬, 키가 제거된 뒤의 판정, 같은 서명의 다른 node 키.
-7. 디코더: 노트 8.1의 입력 전부와, 노트에 없는 것(예약된 추가 정보, 두 바이트로 쓴 32 미만의 단순값, 비최단으로 쓴 같은 키의 중복, 정수 아닌 필드의 null, `Signatures`의 null 원소, 음수 키의 끝값).
-8. 동기화: 뒤처진 노드, 앞선 노드(서버가 모르는 AUM), 갈라진 양쪽, 교차 없음.
+1. Linear chain. Genesis checkpoint → AddKey → UpdateKey (`Votes`, `Meta`) → RemoveKey → NoOp → Checkpoint → subsequent AddKey. One long chain with a checkpoint at the 51st position (ancestor list).
+2. Forks. Different weights, equal-weight RemoveKey versus AddKey, a tie broken by hash, descendants of losing forks, and a winning fork diverging at an old point (shape of recovery AUM).
+3. Rejection. No signature, mixed unknown-key signature, invalid signature, removal of the last key, duplicate AddKey, checkpoint with different StateID, parentless AUM, AUM with an unknown parent, 33-byte `PrevAUMHash`, and the entire group containing an invalid AUM.
+4. Unusual accepted input. Kinds 0 and 9, NoOp carrying extra fields, AddKey with `Public` null, length 0, 31 bytes, or 33 bytes followed by a chain, and AUM with unknown fields and non-shortest integers (hash uses canonical bytes).
+5. Signature valid only under ZIP-215. AUM with that signature (accepted), direct NKS (passes), and the outer layer of rotation (rejected). Trusted key with a noncanonical public key.
+6. NKS. Direct, 1–15 rotation layers and 16 layers, credential → rotation, trimmed chain, decision after key removal, and a different node key with the same signature.
+7. Decoder. All inputs in notes §8.1 and cases absent from the notes (reserved additional information, simple values below 32 encoded in 2 bytes, duplicate keys with non-shortest encoding, null in a noninteger field, null `Signatures` elements, and negative key boundary).
+8. Synchronization. Node behind, node ahead (AUMs unknown to the server), two divergent sides, and no intersection.
 
-검증 명령(표준 입력으로 JSON 객체 하나, 출력은 JSON 한 줄, 실패는 종료 코드 1): `tkafixtures verify-nks`는 사슬의 AUM들·node 키·NKS를 받아 Go의 판정과 내력을 돌려준다. Swift가 만든 서명(`SignByCredential`·재서명)은 바이트가 매번 다르므로 이것으로 확인한다.
+Verification command (one JSON object on stdin, one JSON line on stdout, exit code 1 on failure). `tkafixtures verify-nks` takes a chain of AUMs, node key, and NKS and returns Go's decision and history. Use it to check Swift-created signatures (`SignByCredential` and re-signing), whose bytes differ each time.
 
-### 관문 (가): 계정 없이
+### Gate (a) without an account
 
-`Tools/interop`의 `tailnet`(testcontrol + DERP + STUN + Go tsnet 피어)을 상대로 한다. 시험은 `Tests/SwiftailInteropTests/TailnetLockTests.swift`에 두고 `SWIFTAIL_TAILNET`이 없으면 건너뛴다.
+Test against `tailnet` in `Tools/interop` (testcontrol + DERP + STUN + Go tsnet peer). Put the tests in `Tests/SwiftailInteropTests/TailnetLockTests.swift` and skip when `SWIFTAIL_TAILNET` is absent.
 
-testcontrol이 하는 것과 못 하는 것(노트 7.3): lock 켜기(`init/begin`·`finish`), `bootstrap`(genesis만), `sync/offer`, `sign`, 맵 응답의 `TKAInfo{Head}`, `tailnet-lock` capability(`DefaultNodeCapabilities`)는 있다. **`sync/send`, `disable`, 끄기 비밀을 주는 `bootstrap`, `TKAInfo.Disabled`, 등록 요청의 `NodeKeySignature` 저장은 없다.**
+testcontrol capabilities and gaps (notes §7.3). Available are enabling lock (`init/begin` and `finish`), `bootstrap` (genesis only), `sync/offer`, `sign`, map response `TKAInfo{Head}`, and the `tailnet-lock` capability (`DefaultNodeCapabilities`). **Absent are `sync/send`, `disable`, `bootstrap` with a disablement secret, `TKAInfo.Disabled`, and storage of registration request `NodeKeySignature`.**
 
-도구에 더할 것(결정 L15의 (가)):
+Tool additions (decision L15 (a)):
 
-- testcontrol 사본에: `sync/send`(`tkatest.HandleTKASyncSend`), `disable`(저장소를 비우고 받은 비밀을 기억), 끄기 뒤의 `bootstrap`이 `DisablementSecret`을 줌(맞는 것 또는 일부러 틀린 것), 맵 응답의 `TKAInfo{Disabled: true}`, 등록 요청의 `NodeKeySignature`를 Go `NodeKeyAuthorized`로 검증해 통과하면 그 노드의 `KeySignature`로 둠.
-- `tailnet` 명령: `setLockCapability`(첫 등록 전에. 기존 capability에 `tailnet-lock`을 더한다), `lockInit`(Go 피어들을 서명 기기로 lock을 켠다), `lockStatus`(그 Go 피어의 `NetworkLockStatus`: 켜짐, 머리, 자기 서명 여부, 남은 피어와 거른 피어의 node 키), `lockSign`(node 키와 회전 키에 서명), `lockWrapAuthKey`(인증 키를 감싼다. 시험 전용 값이다), `lockModify`(서명 키를 더하거나 뺀다), `lockDisable`(끈다. `wrongSecret`이면 서버가 틀린 비밀을 준다), `lockRegistrations`(testcontrol이 받은 등록 요청의 `NLKey`·`NodeKeySignature` 유무와 Go의 판정, 그리고 요청 본문에서 찾은 감싼 키 흔적의 유무).
+- In the testcontrol copy, add `sync/send` (`tkatest.HandleTKASyncSend`), `disable` (clear the store and remember the received secret), post-disablement `bootstrap` returning `DisablementSecret` (correct or deliberately wrong), and `TKAInfo{Disabled: true}` in map responses. Verify the registration request's `NodeKeySignature` with Go `NodeKeyAuthorized` and store it as that node's `KeySignature` if it passes.
+- `tailnet` commands are `setLockCapability` (before first registration, adds `tailnet-lock` to existing capabilities), `lockInit` (enables lock with Go peers as signing devices), `lockStatus` (the Go peer's `NetworkLockStatus` with enabled status, head, whether it is signed, and node keys of remaining and filtered peers), `lockSign` (signs the node key and rotation key), `lockWrapAuthKey` (wraps an auth key, a test-only value), `lockModify` (adds or removes signing keys), `lockDisable` (disables lock, with `wrongSecret` causing the server to supply a wrong secret), and `lockRegistrations` (presence of `NLKey` and `NodeKeySignature` in registration requests received by testcontrol, Go's decision, and whether the request body contains traces of the wrapped key).
 
-| # | 확인할 것 | 통과 기준 |
+| # | Check | Pass criteria |
 | --- | --- | --- |
-| 1 | 부트스트랩 | lock이 켜진 시험 tailnet에 Swift 노드가 등록하면 `mode`가 `.enforcing`이고 `head`가 Go 서명 기기의 `lockStatus` 머리와 같다. 등록 요청의 `NLKey`가 0이 아니다 |
-| 2 | 서명 전의 잠김 | `signingRequest`가 있고 그 `nodeKey`·`lockKey`가 등록한 값과 같다. `tailnetLockChanged`가 나왔다. Go 피어들의 `lockStatus`에서 Swift 노드가 거른 피어다. Swift 노드의 netmap에는 서명된 Go 피어가 남아 있다 |
-| 3 | 서명 뒤 | `lockSign`에 2의 두 값을 넣으면 `signingRequest`가 nil이 되고, Go 피어의 netmap에 Swift 노드가 나타나고, 양쪽의 UDP 에코와 TCP가 된다 |
-| 4 | 서명된 인증 키 | `lockWrapAuthKey`로 만든 키로 새 Swift 노드를 등록하면 처음부터 잠기지 않는다. `lockRegistrations`: 요청의 서명을 Go가 통과시켰고, 요청 본문에 감싼 개인 키의 흔적이 없다 |
-| 5 | 서명 없는 Go 피어 | 서명하지 않은 Go 피어를 더하면 Swift 노드의 `peers`에 없고 `filteredPeerCount`가 는다. 같은 시점의 Go 서명 기기가 남긴 피어·거른 피어와 Swift 노드의 것이 node 키로 같다(Swift 노드 자신과 `UnsignedPeerAPIOnly` 피어는 견주지 않는다). 그 피어가 보낸 패킷에 Swift 노드가 답하지 않는다 |
-| 6 | 사슬이 자란 뒤 | `lockModify`로 키를 더하고 빼면 Swift 노드의 `head`가 Go의 머리를 따라온다. 뺀 키로만 서명된 피어가 Swift 노드와 Go 노드에서 함께 빠진다 |
-| 7 | lock 꺼짐 | `lockDisable` 뒤 `mode`가 `.disabled`이고 서명 없는 피어가 다시 보이며 `tailnet-lock.cbor`가 없다. `wrongSecret`이면 `.enforcing`에 머물고 파일이 남는다. 도중에 주입한 `TKAInfo` 없는 응답으로는 바뀌지 않고, 다시 이은 스트림의 첫 응답에 `TKAInfo`가 없으면 끄기 절차로 간다 |
-| 8 | 다시 시작 | 같은 상태 디렉터리로 다시 띄우면 부트스트랩 RPC 없이 같은 `head`로 거른다(testcontrol이 받은 요청으로 확인). 그사이 사슬이 자랐으면 동기화로 따라온다. 같은 NL 키다 |
-| 9 | node 키 교체 | 서명된 Swift 노드가 새 로그인으로 node 키를 바꾼 뒤 testcontrol이 재서명을 요청하면, 재서명한 요청의 서명을 Go가 통과시키고 옛 키는 Go 피어에서 낡은 키로 빠진다(testcontrol이 재서명을 요청하게 하는 보탬이 필요하다. 넣기 어려우면 이 항목은 `tkafixtures verify-nks`의 대조로 대신하고 그렇게 적는다) |
-| 10 | 닫힌 쪽(U1이 (나)일 때) | 부트스트랩 응답을 깨뜨리면 `mode`가 `.unverified`이고 `peers`가 비어 있다. 되돌리면 다음 재시도에 `.enforcing`이 된다. 저장 파일을 깨뜨리고 다시 띄우면 `.unverified`다 |
-| 11 | lock 없는 tailnet | 기존 관문(M2~M7)이 그대로 통과한다. `mode`는 `.disabled`이고 TKA RPC가 나가지 않는다 |
-| 12 | 전체 | `eyebuild swift <용도> -- test` 전체 통과, 경고 0 |
+| 1 | Bootstrap | When the Swift node registers on a test tailnet with lock enabled, `mode` is `.enforcing` and `head` matches the Go signing device's `lockStatus` head. Registration request `NLKey` is nonzero |
+| 2 | Lockout before signing | `signingRequest` is present and its `nodeKey` and `lockKey` match the registered values. `tailnetLockChanged` was emitted. Go peers' `lockStatus` lists the Swift node as filtered. The Swift node's netmap retains signed Go peers |
+| 3 | After signing | Passing the two values from item 2 to `lockSign` makes `signingRequest` nil, brings the Swift node into the Go peer's netmap, and enables UDP echo and TCP on both sides |
+| 4 | Signed auth key | A new Swift node registered with a key made by `lockWrapAuthKey` is unlocked from the start. `lockRegistrations` shows that Go accepted the request's signature and that the body contains no trace of the wrapped private key |
+| 5 | Unsigned Go peer | Adding an unsigned Go peer leaves it out of the Swift node's `peers` and increases `filteredPeerCount`. At the same point, the Go signing device and the Swift node retain and filter the same peer node keys (exclude the Swift node itself and `UnsignedPeerAPIOnly` peers from comparison). The Swift node does not answer packets from that peer |
+| 6 | After chain growth | Adding and removing keys with `lockModify` advances the Swift node's `head` to match Go's. Swift and Go nodes both remove peers signed only by a removed key |
+| 7 | Lock disabled | After `lockDisable`, `mode` is `.disabled`, unsigned peers are visible again, and `tailnet-lock.cbor` is absent. With `wrongSecret`, mode stays `.enforcing` and the file remains. A response without `TKAInfo` injected midstream does not change the state. If the first response on the reconnected stream lacks `TKAInfo`, start the disablement procedure |
+| 8 | Restart | Restarting with the same state directory filters with the same `head` without a bootstrap RPC (verify against requests received by testcontrol). If the chain grew in the meantime, synchronization catches up. The NL key is unchanged |
+| 9 | Node key rotation | After a signed Swift node changes its node key through a new login and testcontrol requests re-signing, Go accepts the re-signed request's signature and the Go peer removes the old key as obsolete (requires testcontrol to request re-signing. If difficult to add, substitute comparison using `tkafixtures verify-nks` and record that) |
+| 10 | Fail closed (U1 is (b)) | Corrupting the bootstrap response gives `mode` `.unverified` and empty `peers`. Restoring it gives `.enforcing` on the next retry. Corrupting the store file and restarting gives `.unverified` |
+| 11 | Tailnet without lock | Existing gates (M2–M7) still pass. `mode` is `.disabled` and no TKA RPCs are sent |
+| 12 | Entire suite | All of `eyebuild swift <purpose> -- test` passes with 0 warnings |
 
-### 관문 (나): 실제 tailnet
+### Gate (b) on a real tailnet
 
-로컬에서는 볼 수 없는 것만 본다. 매번 사용자에게 먼저 알린다(plan 4절(b)).
+Check only what cannot be observed locally. Notify the owner first each time (plan §4(b)).
 
-| # | 확인할 것 | 통과 기준 |
+| # | Check | Pass criteria |
 | --- | --- | --- |
-| 1 | 서명된 인증 키로 등록 | lock이 켜진 실제 tailnet에 임시 노드로 등록하면 `mode`가 `.enforcing`이고 잠기지 않는다. 서명된 다른 기기가 이 노드를 보고(그 기기의 `tailscale status`·`tailscale lock status`) ping이 된다 |
-| 2 | 서명 기기가 뒤에 서명 | 서명 없는 인증 키(또는 로그인)로 등록하면 `signingRequest`가 나온다. 서명 기기에서 `tailscale lock sign`에 그 두 값을 넣으면 풀리고 통신된다 |
-| 3 | 운영 서버의 동작 기록 | 이 노드가 `tailnet-lock` capability를 받는지(U2), 부트스트랩이 genesis를 주는지 나중 체크포인트를 주는지, `MissingAUMs`의 수와 응답 크기, 서명 없는 등록에 서버가 무엇을 답하는지, sync/send의 응답을 기록한다 |
-| 4 | 다시 시작과 동기화 | 다시 띄우면 저장된 상태로 이어 가고, 그사이 서명 기기에서 키를 하나 더하면(사용자가 허락할 때만) 머리가 따라온다 |
-| 5 | iPhone 터널 | M5 터널 빌드의 노드가 같은 tailnet에서 잠기지 않고 Mac의 tailnet HTTPS에 닿는다. 끄기 비밀 검증은 돌리지 않으므로 메모리는 평소 값을 기록한다 |
+| 1 | Registration with a signed auth key | Register an ephemeral node in a real tailnet with lock enabled. `mode` is `.enforcing` and the node is unlocked. Another signed device sees this node (its `tailscale status` and `tailscale lock status`) and ping works |
+| 2 | Signing device signs later | Register with an unsigned auth key (or sign in) to get a `signingRequest`. Use its two values with `tailscale lock sign` on the signing device to clear lockout and enable communication |
+| 3 | Record production server behavior | Record whether this node gets the `tailnet-lock` capability (U2), whether bootstrap supplies genesis or a later checkpoint, the count of `MissingAUMs` and response size, the server response to unsigned registration, and the sync/send response |
+| 4 | Restart and synchronization | Restart resumes from persisted state. If a signing device adds a key in the interim (only with the owner's permission), the head catches up |
+| 5 | iPhone tunnel | The M5 tunnel build's node is unlocked in the same tailnet and reaches the Mac's tailnet HTTPS. Disablement secret verification does not run, so record normal memory use |
 
-사용자에게 받을 것:
+What to obtain from the owner:
 
-- lock이 켜진 tailnet과, 그 tailnet의 서명 기기 한 대(사용자가 직접 명령을 돌린다).
-- 서명 기기에서 `tailscale lock sign <인증 키>`로 만든 **서명된 인증 키**(임시 노드용). 채팅이 아닌 비밀 입력으로 받는다. 호스트 이름은 가짜 값(`rd-mac-1a2b3c4d` 꼴)으로 정한다.
-- 2를 위한 서명 없는 인증 키 하나와, 서명 기기에서 `tailscale lock sign <node 키> <lock 키>`를 한 번 돌려 주는 것.
-- lock을 끄는 것은 실제 tailnet에서 하지 않는다(관문 (가) 7로만 본다).
+- A tailnet with lock enabled and one signing device on that tailnet (the owner runs the commands directly).
+- A **signed auth key** for an ephemeral node, created with `tailscale lock sign <auth key>` on a signing device. Receive it through secret input outside chat. Use a fake hostname in the form `rd-mac-1a2b3c4d`.
+- One unsigned auth key for item 2 and one run of `tailscale lock sign <node key> <lock key>` on a signing device.
+- Leave lock enabled on the real tailnet (check disablement only under gate (a) item 7).
 
-#### lock이 켜진 tailnet의 결과 (2026-11-15)
+#### Results on a tailnet with lock enabled (2026-11-15)
 
-Mac(명령줄 시험)에서 2와 4의 앞 절반을 봤다. 기록은 `SwiftailHost.md` "관문 1·2의 결과": 서명 없는 인증 키로 등록하면 `enforcing`·잠김으로 `.running`이 되고 `signingRequest`가 나온다. 서명 기기에서 그 두 값으로 `tailscale lock sign`을 돌리면 **다시 시작 없이 풀린다.** 다시 띄우면 저장된 상태로 첫 netmap부터 잠기지 않은 `enforcing`이다. 3 가운데 본 것: 이 노드는 `tailnet-lock` capability를 받는다, 잠긴 노드의 `set-dns`를 서버가 받는다. 남은 것: 1(서명된 인증 키. 첫 사용처는 이 길을 쓰지 않는다, F3), 3의 나머지(`MissingAUMs`의 수, sync/send의 응답), 4의 뒤 절반(키를 더했을 때 머리가 따라오는지).
+The Mac command-line test covered item 2 and the first half of item 4. See `SwiftailHost.md` "Results of gates 1 and 2." Registration with an unsigned auth key reaches `.running` with `enforcing`, lockout, and `signingRequest`. Running `tailscale lock sign` with those two values on the signing device **clears lockout without restarting**. Restarting resumes from persisted state with unlocked `enforcing` from the first netmap. Item 3 observations were that the node receives the `tailnet-lock` capability and the server accepts `set-dns` from a locked-out node. Remaining are item 1 (signed auth key. The first adopter does not use this path, F3), the rest of item 3 (count of `MissingAUMs` and sync/send response), and the latter half of item 4 (whether the head catches up when a key is added).
 
-iPhone 터널(5. 첫 사용처 세션, 2026-11-15, iPhone 14 Pro iOS 27.2, Swiftail 터널 변형): 다른 tailnet에 있던 노드를 앱의 "다른 계정으로 로그인"으로 이 tailnet에 새로 등록했다. 등록 1초 뒤 `부트스트랩함` 한 번, 곧바로 `enforcing`·잠김·거른 피어 0, 1초 뒤 `.running`. 서명 전에 `disabled`나 `unverified`는 없었다. 동기화 줄(`AUM … 받아 들임`)은 없었다(부트스트랩이 지금의 상태를 주면 동기화할 것이 없다). 서명 뒤 Mac 쪽에서 이 노드가 거른 피어에서 빠졌다. **다시 시작 없이 풀렸는지는 판정하지 못했다**(서명 무렵 터널이 다른 까닭으로 한 번 다시 켜졌고, 그 실행의 첫 줄이 이미 풀린 상태였다). 두 번째 실행부터는 부트스트랩 없이 곧바로 풀린 `enforcing`. 확장 메모리는 부트스트랩 직후 7.9MiB, 유휴 7.3~9.0MiB(끄기 비밀 검증은 돌지 않았다). Mac의 tailnet HTTPS에 닿아 100MiB를 받았다(`SwiftailNetstack.md` "(나) 6의 첫 값").
+iPhone tunnel (item 5, first adopter session, 2026-11-15, iPhone 14 Pro iOS 27.2, Swiftail tunnel variant). A node from another tailnet registered in this tailnet via the app's "Sign in with a different account." One second after registration, "bootstrapped" appeared once, immediately followed by `enforcing`, lockout, and 0 filtered peers, then `.running` 1 second later. Neither `disabled` nor `unverified` appeared before signing. There was no sync line ("admitted … AUMs") because bootstrap with current state leaves nothing to synchronize. After signing, the Mac no longer listed this node as a filtered peer. **Whether lockout cleared without a restart could not be determined** (around signing time, the tunnel restarted once for another reason, and the first line of that run already showed it unlocked). Starting with the second run, it entered unlocked `enforcing` immediately without bootstrap. Extension memory was 7.9MiB immediately after bootstrap and 7.3–9.0MiB idle (disablement secret verification did not run). The node reached the Mac's tailnet HTTPS and received 100MiB (`SwiftailNetstack.md` "first value in (b) 6").
 
-#### 앞 단계의 결과: lock이 꺼진 tailnet (2026-11-15)
+#### Earlier results on a tailnet with lock disabled (2026-11-15)
 
-lock이 켜진 tailnet에 가기 전에, lock과 상관없이 모든 노드가 지나는 두 경로를 운영 서버에서 봤다(lock이 꺼진 tailnet, 임시 노드, 총괄이 직접 실행). 시험은 `Tests/SwiftailControlInteropTests/RealTailnetGateTests.swift`.
+Before using a tailnet with lock enabled, the lead session directly tested two paths that all nodes take regardless of lock on the production server (lock disabled in the tailnet, ephemeral node). Tests are in `Tests/SwiftailControlInteropTests/RealTailnetGateTests.swift`.
 
-| 확인한 것 | 결과 |
+| Check | Result |
 | --- | --- |
-| NL 키를 실은 새 등록(`RealTailnetGateTests`) | 통과. 등록되고 맵 스트림이 90초 끊김 없이 유지됐다. 서버는 lock이 켜졌다고 알리지 않았고 `mode`는 `.disabled`, 거른 피어 0 |
-| 올림 경로(`RealTailnetUpgradeTests`): M8 전 커밋(`6f30600`, 등록 요청의 `NLKey`가 0)으로 등록한 노드의 상태 폴더를 그대로 두고 지금 버전으로 다시 붙음. 인증 키는 주지 않음 | 통과. 로그인 요구 없이 같은 node 키로 등록되고 netmap을 받았다(끊김 0). 신원 파일에 `NLKey`가 저장됐다 |
+| Fresh registration carrying an NL key (`RealTailnetGateTests`) | Passed. Registration succeeded and the map stream stayed uninterrupted for 90 seconds. The server did not report lock enabled, `mode` was `.disabled`, and 0 peers were filtered |
+| Upgrade path (`RealTailnetUpgradeTests`). Reconnect with the current version using the existing state directory of a node registered on a pre-M8 commit (`6f30600`, registration request `NLKey` was 0). No auth key supplied | Passed. Registered with the same node key and received a netmap without requiring login (0 interruptions). `NLKey` was saved to the identity file |
 
-뜻: **lock이 꺼진 tailnet에서는** 운영 서버가 0이던 `NLKey`가 값으로 바뀌는 재등록을 받는다. 기존 Swiftail 노드를 새 버전으로 올려도 다시 로그인하지 않는다.
+**On a tailnet with lock disabled**, the production server accepts re-registration that changes a zero `NLKey` to a value. Upgrading an existing Swiftail node does not require signing in again.
 
-실기기의 올림(RemoteDebug 세션, 2026-11-15): iPhone 14 Pro(iOS 27.2)의 기존 Swiftail 노드(임시가 아닌 보통 노드, M8 전 버전 `98cbbf0`으로 등록, lock이 꺼진 tailnet)를 약 6시간 뒤 `a58cc40`으로 올렸다. 상태 폴더 그대로, 인증 키 없음. **통과**: 로그인 요구 없이 2초에 등록되고, lock은 `disabled`·거른 피어 0·잠기지 않음, 연결 시작부터 `.running`까지 약 4초, 공유 피어까지 직접 경로가 섰다. 이로써 "임시가 아닌 노드"와 "간격이 긴 경우"도 봤다. 그 실행에서 보지 않은 것: 신원 파일에 `NLKey`가 저장됐는지(기기 파일을 읽지 않음), 두 번째 실행.
+Upgrade on a real device (RemoteDebug session, 2026-11-15). An existing Swiftail node on iPhone 14 Pro (iOS 27.2), an ordinary non-ephemeral node registered with pre-M8 `98cbbf0` on a tailnet with lock disabled, was upgraded about 6 hours later to `a58cc40`. It kept the state directory and had no auth key. **Passed**. Registration took 2 seconds without requiring login. Lock was `disabled`, with 0 filtered peers and no lockout. Connection start to `.running` took about 4 seconds, and a direct path to the sharing peer formed. This also covered a "non-ephemeral node" and a "long interval." This run did not verify whether `NLKey` was saved to the identity file (device files were not read) or a second run.
 
-보지 못한 것: lock이 **켜진** tailnet에서의 같은 올림(M8 전 버전은 그런 tailnet에서 `tailnetLockEnabled`로 끝났으므로 그 상태로 등록돼 남은 Swiftail 노드는 없을 것이다. 다만 등록 뒤에 lock이 켜진 tailnet의 노드는 이 경우에 해당한다).
+Unverified is the same upgrade on a tailnet with lock **enabled** (pre-M8 ended with `tailnetLockEnabled` on such a tailnet, so there would be no Swiftail node still registered in that state. A node on a tailnet that enabled lock after it registered does fall into this case).
 
-## 8. 구현 단위
+## 8. Implementation units
 
-소유 파일이 겹치지 않게 나눈다. 단위 사이의 접점은 2절의 선언이 정하고 TL-0이 확정한다.
+Divide ownership so no files overlap. §2 declarations define interfaces between units, and TL-0 finalizes them.
 
-| 단위 | 내용 | 소유 파일 | 선후 | 추정 크기(라이브러리 / 시험) |
+| Unit | Work | Owned files | Order | Estimated size (library / tests) |
 | --- | --- | --- | --- | --- |
-| TL-0 | 총괄: 이 계약 확정(L·U·F의 답), `Package.swift`에 `SwiftailTKA`·`SwiftailTKATests`와 `SwiftailControl`의 의존, 2절 `package` 선언의 빈 껍데기, plan·`SwiftailControl.md`·`SwiftailHost.md`의 해당 줄 | `docs/`, `Package.swift` | 먼저 | — |
-| TL-P1 | (선행, 진행 중) Ed25519 검증 | `Sources/SwiftailCrypto/Ed25519Verification.swift`와 시험 | 다른 세션 | — |
-| TL-P2 | (선행, 진행 중) BLAKE2b, Argon2i | `Sources/SwiftailCrypto/BLAKE2b.swift`·`Argon2i.swift`와 시험 | 다른 세션 | — |
-| TL-1 | CBOR 읽기·쓰기(동작 E1·D1·D2·D9, 시험 1·2의 항목 수준) | `Sources/SwiftailTKA/CBOR/*`, `Tests/SwiftailTKATests/CBOR/*` | **병렬** | 350 / 500 |
-| TL-2 | 자료 형식: `AUMHash`와 base32, `TrustedKey`·`AUMSignature`·`AUM`·`AuthorityState`·`NodeKeySignature`의 읽기·정준 쓰기·해시·정적 검사(동작 E2~E6·D3~D8·A1, 시험 2~4) | `Sources/SwiftailTKA/Model/*`, `Tests/SwiftailTKATests/Model/*` | TL-1의 선언 뒤. TL-3·4와 **병렬**(선언을 먼저 맞춘다) | 550 / 700 |
-| TL-3 | `Authority`: 검증·적용·갈래·들이기·부트스트랩·다시 열기·동기화 계산·끄기 비밀(동작 A2~A7·F·X·Y1·Y4, 시험 5~9·12) | `Sources/SwiftailTKA/Authority/*`, `Tests/SwiftailTKATests/Authority/*` | TL-2 뒤. TL-P1이 있어야 서명 시험이 돈다. 끄기 비밀만 TL-P2 | 650 / 900 |
-| TL-4 | 서명: `authorize`·내력·피어 집합, `WrappedAuthKey`, 재서명(동작 S·P2~P5·R3·R5·R7, 시험 10·11·13·14) | `Sources/SwiftailTKA/Signatures/*`, `Tests/SwiftailTKATests/Signatures/*` | TL-2 뒤. TL-3과 **병렬** | 450 / 700 |
-| TL-5 | Go 기준값 도구와 자료, 대조 시험 | `Tools/interop/cmd/tkafixtures/*`, `Scripts/build-interop-tools.sh`의 도구 이름 한 줄, `Tools/interop/README.md`의 새 절, `Tests/SwiftailTKATests/Fixtures/*`, `Tests/SwiftailTKATests/GoComparisonTests.swift` | 도구는 **병렬**(TL-1과 함께 시작). 대조 시험은 TL-2~4 뒤, 그것을 쓴 세션과 **다른 세션** | Go 900 / 500 |
-| TL-6 | 제어의 등록 쪽: NL 키와 신원 파일, 인증 키 해석의 연결, 요청의 서명, 재서명 요청(동작 R, 시험 15·16) | `Sources/SwiftailControl/Client/NodeIdentity.swift`·`NodeIdentityStore.swift`·`AuthKey.swift`·`ControlClient+Registration.swift`, `Sources/SwiftailControl/Tailcfg/NLPublicKey.swift`, 해당 시험 | TL-4의 선언 뒤. TL-7과 **병렬** | 220 / 350 |
-| TL-7 | 제어의 맵 쪽: `serverLock`, `TailnetLockPlan`, TKA RPC와 tailcfg, `TailnetLockStore`, 절차·거르기·`TailnetLockStatus`, `MapRequest.tkaHead`, `Netmap.tailnetLock`(동작 N·Y·P·O·T·K, 시험 17~21) | `Sources/SwiftailControl/Client/ControlClient+TailnetLock.swift`·`TailnetLockStore.swift`·`TailnetLockStatus.swift`·`ControlClient+MapPoll.swift`·`ControlClient.swift`, `Sources/SwiftailControl/Tailcfg/TKA*.swift`·`MapRequest.swift`, `Sources/SwiftailControl/Netmap/*`, 해당 시험 | TL-3·4 뒤. 가장 크다 | 600 / 900 |
-| TL-8 | 노드와 마무리: `NodeStatus.tailnetLock`, `NodeEvent.tailnetLockChanged`, `ControlError.tailnetLockEnabled`와 그것을 가리키는 갈래 지우기(시험 22) | `Sources/Swiftail/NodeStatus.swift`·`NodeEvent.swift`·`NodeError.swift`·`TailnetNode.swift`·`TailnetNode+Control.swift`, `Sources/SwiftailControl/Client/ControlError.swift`, `Sources/SwiftailCertificates/CertificateManager.swift`의 그 한 줄, 해당 시험 | TL-6·7 뒤 | 120 / 200 |
-| TL-9 | 관문 (가)의 도구: testcontrol 사본과 보탬, `tailnet`의 lock 명령 | `Tools/interop/internal/testcontrol/*`, `Tools/interop/cmd/tailnet/lock.go`·`lock_test.go`와 `main.go`의 분기, `Tools/interop/README.md`의 `tailnet` 절 | **병렬**(TL-5와 README의 절이 다르다) | Go 500(옮겨 적는 2,000줄은 따로) |
-| TL-10 | 관문 (가)의 시험 | `Tests/SwiftailInteropTests/TailnetLockTests.swift` | TL-8·9 뒤 | — / 500 |
-| TL-11 | 독립 검토: `SwiftailTKA` 전체와 제어의 절차(암호·프로토콜 코드. plan 10절) | — | TL-5의 대조가 통과한 뒤, 총괄이 관문 (가)를 다시 돌리기 전. 작성한 세션과 **다른 세션** | — |
-| TL-12 | 관문 (나) | 사용자와 함께 | U3 뒤 | — |
+| TL-0 | Lead session finalizes this contract (L, U, and F answers), adds `SwiftailTKA`, `SwiftailTKATests`, and the `SwiftailControl` dependency to `Package.swift`, stubs the §2 `package` declarations, and updates the relevant lines in the plan, `SwiftailControl.md`, and `SwiftailHost.md` | `docs/`, `Package.swift` | First | — |
+| TL-P1 | (Prerequisite, in progress) Ed25519 verification | `Sources/SwiftailCrypto/Ed25519Verification.swift` and tests | Another session | — |
+| TL-P2 | (Prerequisite, in progress) BLAKE2b, Argon2i | `Sources/SwiftailCrypto/BLAKE2b.swift`, `Argon2i.swift`, and tests | Another session | — |
+| TL-1 | CBOR reading and writing (behaviors E1, D1, D2, and D9, item-level tests 1 and 2) | `Sources/SwiftailTKA/CBOR/*`, `Tests/SwiftailTKATests/CBOR/*` | **Parallel** | 350 / 500 |
+| TL-2 | Data formats. `AUMHash` and base32, reading, canonical writing, hashing, and static validation of `TrustedKey`, `AUMSignature`, `AUM`, `AuthorityState`, and `NodeKeySignature` (behaviors E2–E6, D3–D8, and A1, tests 2–4) | `Sources/SwiftailTKA/Model/*`, `Tests/SwiftailTKATests/Model/*` | After TL-1 declarations. **Parallel** with TL-3 and TL-4 (agree on declarations first) | 550 / 700 |
+| TL-3 | `Authority` verification, application, forks, admission, bootstrap, reopen, sync computation, and disablement secret (behaviors A2–A7, F, X, Y1, and Y4, tests 5–9 and 12) | `Sources/SwiftailTKA/Authority/*`, `Tests/SwiftailTKATests/Authority/*` | After TL-2. Signature tests need TL-P1. Only disablement secret needs TL-P2 | 650 / 900 |
+| TL-4 | Signatures. `authorize`, history, peer sets, `WrappedAuthKey`, and re-signing (behaviors S, P2–P5, R3, R5, and R7, tests 10, 11, 13, and 14) | `Sources/SwiftailTKA/Signatures/*`, `Tests/SwiftailTKATests/Signatures/*` | After TL-2. **Parallel** with TL-3 | 450 / 700 |
+| TL-5 | Go reference value tool, fixtures, and comparison tests | `Tools/interop/cmd/tkafixtures/*`, the tool name line in `Scripts/build-interop-tools.sh`, a new section in `Tools/interop/README.md`, `Tests/SwiftailTKATests/Fixtures/*`, `Tests/SwiftailTKATests/GoComparisonTests.swift` | Tool in **parallel** (start with TL-1). Comparison tests after TL-2–4, by a **different session** from the implementer | Go 900 / 500 |
+| TL-6 | Control registration. NL key and identity file, wiring auth key parsing, request signatures, and re-signing requests (behavior R, tests 15 and 16) | `Sources/SwiftailControl/Client/NodeIdentity.swift`, `NodeIdentityStore.swift`, `AuthKey.swift`, `ControlClient+Registration.swift`, `Sources/SwiftailControl/Tailcfg/NLPublicKey.swift`, and corresponding tests | After TL-4 declarations. **Parallel** with TL-7 | 220 / 350 |
+| TL-7 | Control maps. `serverLock`, `TailnetLockPlan`, TKA RPC and tailcfg, `TailnetLockStore`, procedures, filtering, `TailnetLockStatus`, `MapRequest.tkaHead`, and `Netmap.tailnetLock` (behaviors N, Y, P, O, T, and K, tests 17–21) | `Sources/SwiftailControl/Client/ControlClient+TailnetLock.swift`, `TailnetLockStore.swift`, `TailnetLockStatus.swift`, `ControlClient+MapPoll.swift`, `ControlClient.swift`, `Sources/SwiftailControl/Tailcfg/TKA*.swift`, `MapRequest.swift`, `Sources/SwiftailControl/Netmap/*`, and corresponding tests | After TL-3 and TL-4. Largest unit | 600 / 900 |
+| TL-8 | Node and wrap-up. `NodeStatus.tailnetLock`, `NodeEvent.tailnetLockChanged`, and removing `ControlError.tailnetLockEnabled` and branches that refer to it (test 22) | `Sources/Swiftail/NodeStatus.swift`, `NodeEvent.swift`, `NodeError.swift`, `TailnetNode.swift`, `TailnetNode+Control.swift`, `Sources/SwiftailControl/Client/ControlError.swift`, the relevant line in `Sources/SwiftailCertificates/CertificateManager.swift`, and corresponding tests | After TL-6 and TL-7 | 120 / 200 |
+| TL-9 | Gate (a) tool. testcontrol copy and additions, and `tailnet` lock commands | `Tools/interop/internal/testcontrol/*`, `Tools/interop/cmd/tailnet/lock.go`, `lock_test.go` and the branch in `main.go`, and the `tailnet` section in `Tools/interop/README.md` | **Parallel** (different README section from TL-5) | Go 500 (excluding 2,000 copied lines) |
+| TL-10 | Gate (a) tests | `Tests/SwiftailInteropTests/TailnetLockTests.swift` | After TL-8 and TL-9 | — / 500 |
+| TL-11 | Independent review. All of `SwiftailTKA` and control procedures (cryptography and protocol code, plan §10) | — | After TL-5 comparison passes, before the lead session reruns gate (a). A **different session** from the implementer | — |
+| TL-12 | Gate (b) | With the owner | After U3 | — |
 
-순서: TL-0 → (TL-1, TL-5의 도구, TL-9) 병렬 → TL-2 → (TL-3, TL-4) 병렬 → (TL-5의 대조 시험, TL-6, TL-7) → TL-8 → TL-10 → TL-11 → 총괄이 관문 (가)를 다시 돌림 → TL-12. TL-P1·P2는 TL-3·4의 시험이 돌기 전에 끝나 있어야 한다.
+Order is TL-0 → (TL-1, TL-5 tool, TL-9) in parallel → TL-2 → (TL-3, TL-4) in parallel → (TL-5 comparison tests, TL-6, TL-7) → TL-8 → TL-10 → TL-11 → lead session reruns gate (a) → TL-12. TL-P1 and TL-P2 must be done before TL-3 and TL-4 tests run.
 
-### 예상 규모
+### Estimated size
 
-라이브러리 약 2,900줄(`SwiftailTKA` 2,000, `SwiftailControl` 820, `Swiftail` 120. 선행 단위의 암호는 빼고), Swift 시험 약 5,250줄, Go 약 1,400줄(옮겨 적는 testcontrol 약 2,000줄은 따로). M7(라이브러리 약 3,200줄)과 비슷하다. 어려움은 양이 아니라 "받아들이되 해시는 정준 바이트로"라는 디코더의 정확성에 있다.
+About 2,900 library lines (`SwiftailTKA` 2,000, `SwiftailControl` 820, `Swiftail` 120, excluding cryptography prerequisites), about 5,250 Swift test lines, and about 1,400 Go lines (excluding about 2,000 copied testcontrol lines). Similar to M7 (about 3,200 library lines). The difficulty is decoder correctness, "accept the input and hash canonical bytes," more than size.
 
-### 가장 큰 위험
+### Largest risks
 
-1. **디코더가 Go와 한 바이트라도 다르게 다시 인코딩하면 보호가 약해진다.** 해시가 달라져 서명이 검증되지 않고, 그 AUM이 든 묶음 전체가 거절되어 상태가 그 앞에서 멈춘다. 그 뒤의 키 제거를 따라가지 못하면 Go 노드가 더는 믿지 않는 키를 Swiftail만 믿는다(노트 6.1의 실패 모양). null과 빈 값, `Meta`의 바이트, 모르는 필드의 처리가 모두 여기에 걸린다. 대응: 기준값 도구의 `cbor`·`chains`를 다른 세션이 대조하고, 받아들여지는 이상한 입력(시나리오 4·5)을 사슬 안에 넣어 "그 뒤의 AUM까지 따라간다"를 본다. 노트가 열거하지 못한 입력(9절)이 남는다.
-2. **운영 제어 서버의 TKA 동작은 소스에 없다.** capability를 누가 받는지, 부트스트랩이 무엇을 주는지, 서명 없는 등록과 검증되지 않는 서명을 어떻게 다루는지, sync/send를 어떻게 검사하는지 모른다(노트 8.2). testcontrol은 시험용이고 그 보탬은 우리가 쓴다. 대응: 관문 (나) 3에서 기록하고, U1·U2를 그 기록으로 다시 본다. U1이 (나)면 서버의 일시 오류가 곧 "피어 없음"이 되므로 재시도(동작 N6)의 값이 중요하다.
-3. **끄기 비밀 검증의 16MiB.** iOS 확장의 유휴 상주가 약 8.7MiB이고 한도가 50MiB다. 큰 맵 프레임의 해독(최고 약 14MB)과 겹치면 약 39MiB가 된다. 순수 Swift Argon2i의 실기기 속도도 재지 않았다. 대응: 한 번에 하나만 돌고, 같은 비밀은 다시 계산하지 않고(동작 O6), 맵 해독과 겹치지 않게 절차를 차례로 돈다. 실기기에서 한 번 잰다(관문 (가) 7을 터널 시험 앱으로).
-4. **직접 구현한 Ed25519 검증과 Argon2i**(선행 단위). 판정이 Go와 다르면 1과 같은 결과다. 대응: 그 단위의 벡터(ZIP-215 196개, RFC 9106)와 다른 세션의 검토, 그리고 이 계약의 시나리오 5.
+1. **If the decoder re-encodes even one byte differently from Go, protection weakens.** The hash changes and the signature fails verification. The entire group containing that AUM is rejected and state stalls before it. If later key removals cannot be followed, only Swiftail trusts keys that Go nodes no longer trust (failure mode in notes §6.1). Null versus empty, `Meta` bytes, and unknown field handling all affect this. A separate session compares the reference tool's `cbor` and `chains`, and accepted unusual inputs (scenarios 4 and 5) go inside the chain to verify that "subsequent AUMs are followed too." Inputs not enumerated by the notes (§9) remain.
+2. **Production control server TKA behavior is absent from the source.** Who receives the capability, what bootstrap supplies, how unsigned registrations and signatures that fail verification are handled, and how sync/send is validated are unknown (notes §8.2). testcontrol is for tests and we write its additions. Record behavior in gate (b) item 3 and revisit U1 and U2 using that record. With U1 (b), a transient server error immediately means "no peers," making retry values (behavior N6) important.
+3. **The 16MiB for disablement secret verification.** The iOS extension's idle resident memory is about 8.7MiB and the limit is 50MiB. Overlapping large map frame decoding (peak about 14MB) brings it to about 39MiB. Pure Swift Argon2i speed on a real device is unmeasured. Run one at a time, skip recomputation of the same secret (behavior O6), and sequence procedures so they do not overlap map decoding. Measure once on a real device (gate (a) item 7 using the tunnel test app).
+4. **In-house Ed25519 verification and Argon2i** (prerequisite units). A decision differing from Go has the same consequence as item 1. Use those units' vectors (196 ZIP-215, RFC 9106), review by another session, and scenario 5 of this contract.
 
-그 밖: 한 상태 디렉터리로 tailnet을 바꾸면 옛 상태가 남는다(동작 T6). 압축하지 않아 오래된 갈래에 대한 판정이 압축한 Go 노드와 다르다(결정 L7).
+Other risks are old state remaining when switching tailnets with one state directory (behavior T6), and a difference in decisions for old forks compared with compacted Go nodes because Swiftail does not compact (decision L7).
 
-### `shortcut:`으로 남길 것
+### Items to leave as `shortcut:`
 
-| 남기는 것 | 필요해지는 시점 |
+| Deferred item | When needed |
 | --- | --- |
-| 압축(L7) | 저장이 한도에 닿는 tailnet이 보고될 때 |
-| 감싼 인증 키로 다시 서명(L9의 (다)) | `--TL`로 등록한 노드의 키 교체가 잠김을 일으킬 때 |
-| 상태 디렉터리 하나에서 tailnet 바꾸기(동작 T6) | 그런 사용처가 생길 때 |
-| `UnsignedPeerAPIOnly` 피어 올리기 | Funnel 진입 같은 기능을 넣을 때 |
-| 변화마다 저장 파일 전체를 다시 씀 | 사슬이 길어 쓰기가 눈에 띌 때 |
-| 열지 못한 저장소를 앱이 파일을 지워서만 푼다 | 그 일이 실제로 보고될 때(초기화 API를 검토한다) |
+| Compaction (L7) | A tailnet reports storage reaching its limit |
+| Re-sign with a wrapped auth key (L9 (c)) | Rotation locks out a node registered with `--TL` |
+| Switch tailnets in one state directory (behavior T6) | An adopter needs it |
+| Install `UnsignedPeerAPIOnly` peers | When adding a feature such as Funnel ingress |
+| Rewrite the entire store on every change | Writes become noticeable as the chain grows |
+| The app recovers from an unreadable store only by deleting the file | When this is reported in practice (consider a reset API) |
 
-## 9. 확인하지 못한 것
+## 9. Unverified items
 
-노트 8.2에서 이 계약에 걸리는 것:
+Items from notes §8.2 that affect this contract:
 
-- **운영 제어 서버의 동작**: `tailnet-lock` capability를 어느 노드에 주는지, 부트스트랩이 genesis와 나중 체크포인트 가운데 무엇을 주는지, `RegisterResponse.NodeKeySignature`를 언제 보내는지, 서명된 인증 키로 등록한 노드의 서명을 어떻게 저장·배포하는지, 서명 없는 등록에 무엇을 답하는지, 관리 콘솔의 서명이 회전 키로 등록 요청의 `NLKey`를 쓰는지, `UnsignedPeerAPIOnly`를 언제 주는지, sync/send의 `Interactive=false` 요청을 어떻게 검사하는지, TKA RPC에 429·503을 쓰는지, 응답 크기의 분포. 관문 (나) 3이 일부를 기록한다.
-- **부트스트랩 실패가 운영에서 실제로 일어나는지**(U1의 가용성 영향의 크기).
-- **CBOR 디코더가 받아들이는 입력 전체**는 열거되지 않았다. 노트의 표는 시험한 입력에 대한 것이다. 이 계약이 더한 것 가운데 Go의 판정을 실행으로 확인하지 않은 것: 예약된 추가 정보와 두 바이트로 쓴 32 미만 단순값의 거절(동작 D1), 비최단으로 쓴 같은 키의 중복이 중복으로 잡히는지(D4), 정수가 아닌 알려진 필드의 null(D5), `Signatures`의 null 원소, `Public`이 null이거나 길이가 32가 아닌 AddKey가 받아들여지고 그 KeyID가 무엇으로 견줘지는지(동작 E6. `StaticValidate`가 길이를 보지 않는다는 노트 3.2에서 끌어낸 것이다). 모두 `tkafixtures`의 시나리오 4·7로 확정하고, 다르면 이 계약을 고친다.
-- **압축이 판정에 영향이 없다는 것**은 노트도 확인하지 못했다. 결정 L7은 압축을 하지 않으므로 그 미확인에 기대지 않지만, "받은 지 14일이 안 된 Go 노드와 같다"는 설명은 노트 4.11의 요약에서 끌어낸 것이고 Go의 `Compact`를 돌려 견주지 않았다.
-- **`computeActiveAncestor`의 결정성**(노트 8.2): 뿌리 하나로 좁혀 닿지 않게 했다(동작 F6). Go 노드의 저장소에 뿌리가 여럿일 때의 머리와 Swiftail의 머리가 같은지는 견주지 않는다.
-- **읽은 소스는 v1.104.7, 실행은 v1.104.6**이고 Go의 `tka`·`ipnlocal` 시험은 돌리지 않았다(노트 8.2). 이 계약이 직접 읽은 Go 줄(`direct.go:534-545`·`:704-747`, `auto.go:706-714`, `tailnet-lock.go:340-437`, testcontrol)도 v1.104.7의 것이다.
+- **Production control server behavior**. Which nodes get the `tailnet-lock` capability, whether bootstrap supplies genesis or a later checkpoint, when `RegisterResponse.NodeKeySignature` is sent, how signatures of nodes registered with signed auth keys are stored and distributed, what responses unsigned registration gets, whether admin console signing uses registration request `NLKey` as rotation key, when `UnsignedPeerAPIOnly` is granted, how sync/send `Interactive=false` requests are checked, whether TKA RPCs use 429 or 503, and response size distribution. Gate (b) item 3 records some of this.
+- **Whether bootstrap actually fails in production** (magnitude of U1's availability impact).
+- **The full set of CBOR decoder inputs accepted** has not been enumerated. The notes' tables cover tested inputs. Go decisions for these contract additions are unverified by execution. Rejection of reserved additional information and simple values below 32 encoded in 2 bytes (behavior D1), whether a duplicate of the same key encoded non-minimally is detected (D4), null in a noninteger known field (D5), null `Signatures` elements, and whether AddKey with null `Public` or a length other than 32 is accepted and what its KeyID is compared as (behavior E6, inferred from notes §3.2 saying `StaticValidate` does not check length). Confirm all with `tkafixtures` scenarios 4 and 7 and update the contract if they differ.
+- **Whether compaction leaves decisions unchanged** is unverified in the notes as well. Decision L7 omits compaction and does not depend on this unverified claim, but "matches a Go node that received them less than 14 days ago" comes from the notes §4.11 summary without running Go's `Compact` for comparison.
+- **`computeActiveAncestor` determinism** (notes §8.2). Restricted to one root to avoid this path (behavior F6). There is no comparison of Swiftail's head with the head of a Go node whose store has multiple roots.
+- **Source read was v1.104.7 and execution used v1.104.6**, without running Go `tka` and `ipnlocal` tests (notes §8.2). Go lines read directly for this contract (`direct.go:534-545` and `:704-747`, `auto.go:706-714`, `tailnet-lock.go:340-437`, testcontrol) are also from v1.104.7.
 
-설계에서 새로 생긴 것:
+Unverified items arising from the design:
 
-- **두 번째 재서명 요청 뒤의 Go 상태**(동작 R6): `doLoginOrRegen`이 두 번째 응답의 재서명 요청을 버린다는 것만 읽었다. 그 뒤 Go가 등록된 것으로 보는지는 따라가지 않았다.
-- **Go의 첫 맵 요청이 `TKAHead`를 싣는지**(동작 N4): 머리를 정하는 곳(`SetTKAHead`)만 읽었고, 시작할 때 저장된 머리가 첫 요청 전에 정해지는지는 확인하지 않았다.
-- **이미 등록된 Swiftail 노드가 0이던 `NLKey`를 새 키로 바꿔 다시 붙을 때의 서버 동작**(동작 R1). M2~M7의 노드는 0을 보냈다.
-- **등록된 키로 다시 붙을 때(인증 키 없이) 서명을 싣지 않아도 서버가 예전 서명을 유지하는지**(동작 R5 ③).
-- **testcontrol 사본의 보탬이 실제로 서는지**: `tkatest.HandleTKASyncSend`와 사본의 맵 응답·등록 처리기를 읽었을 뿐 빌드해 보지 않았다. 끄기와 재서명 요청은 testcontrol에 본이 없어 운영 서버의 동작을 짐작해 쓰는 것이다(관문 (가) 7·9는 "Swiftail과 Go 클라이언트가 같은 서버 동작에 같이 반응한다"까지만 보인다).
-- **`rotationTracker`를 기준값 도구에서 부를 수 있는지**(7절 `peerSets`): `mapfixtures`의 방식이 `ipn/ipnlocal`에도 통하는지 해 보지 않았다.
-- **순수 Swift Argon2i의 시간과 최고 메모리**, 맵 해독과 겹칠 때의 `phys_footprint`.
-- **`MapSession`이 응답마다 전체 netmap을 내는 것에 기댄 결정 L11**: `Sources/SwiftailControl/Netmap/MapSession.swift`와 `ControlClient+MapPoll.swift:81-96`을 읽어 확인했다. 증분만 노드로 넘기는 경로가 생기면 다시 본다.
-- **첫 사용처의 Swift 코드**는 `tailnetLockEnabled`를 쓰는 한 줄과 Go 코어의 진단 로그만 찾아 읽었다. 상태 화면이 새 사건을 어떻게 받을지는 F2의 답에 달려 있다.
-- 이 계약의 선언은 컴파일해 보지 않았다(코드를 쓰지 않는 세션이다). 빌드와 시험은 돌리지 않았다.
+- **Go state after a second re-signing request** (behavior R6). Only verified by reading that `doLoginOrRegen` discards the second response's re-signing request. Whether Go considers itself registered afterward was not traced.
+- **Whether Go's first map request includes `TKAHead`** (behavior N4). Only the head setter (`SetTKAHead`) was read. Whether a stored head is set at startup before the first request is unverified.
+- **Server behavior when an already registered Swiftail node reconnects with a new key replacing its zero `NLKey`** (behavior R1). M2–M7 nodes sent zero.
+- **Whether the server retains the old signature on reconnection with a registered key (without an auth key) when the request omits the signature** (behavior R5 ③).
+- **Whether the testcontrol additions work**. Only `tkatest.HandleTKASyncSend` and the copy's map response and registration handlers were read, with no build. testcontrol has no precedent for disablement or re-signing requests, so production server behavior is inferred (gate (a) items 7 and 9 only show that "Swiftail and Go clients react alike to the same server behavior").
+- **Whether `rotationTracker` can be called by the reference value tool** (§7 `peerSets`). The `mapfixtures` approach was not tried with `ipn/ipnlocal`.
+- **Pure Swift Argon2i time and peak memory**, and `phys_footprint` when overlapping map decoding.
+- **Decision L11 relies on `MapSession` emitting a full netmap per response**. Verified by reading `Sources/SwiftailControl/Netmap/MapSession.swift` and `ControlClient+MapPoll.swift:81-96`. Revisit if a path delivering only deltas to the node is added.
+- For **the first adopter's Swift code**, only the line using `tailnetLockEnabled` and the Go core's diagnostic log were located and read. How the status screen receives the new event depends on F2's answer.
+- This contract's declarations were not compiled (this was a session without code changes). No builds or tests ran.
