@@ -1,31 +1,31 @@
-// 홈 지역 선택은 Tailscale의 `net/netcheck/netcheck.go`(`addReportHistoryAndSetPreferredDERP`, :1426-1531)와
-// `wgengine/magicsock/derp.go`(`pickDERPFallback`)(BSD-3-Clause, Copyright (c) Tailscale Inc & contributors)를
-// 따른다. 코드는 Swift로 새로 썼다.
+// Home region selection follows Tailscale's `net/netcheck/netcheck.go` (`addReportHistoryAndSetPreferredDERP`, :1426-1531) and
+// `wgengine/magicsock/derp.go` (`pickDERPFallback`) (BSD-3-Clause, Copyright (c) Tailscale Inc & contributors).
+// The code was written from scratch in Swift.
 
 import SwiftailBase
 
 extension Netcheck {
-    /// 한 회차가 끝났을 때 잰 지역별 최소 지연(나노초).
+    /// Minimum latency measured per region when a round completed (nanoseconds).
     struct LatencyRecord: Sendable, Equatable {
         var at: ContinuousClock.Instant
         var latency: [Int64: Int64]
     }
 
-    /// 회차가 끝났을 때 홈 지역을 고른다(DERP 노트 4.10 5, 계약 E6).
+    /// Chooses the home region at the end of a round (DERP notes 4.10 5, contract E6).
     ///
-    /// 1. 최근 5분 5초의 회차 기록에서 지역별 최소 지연을 구하고, 양수인 `score`를 곱한다. 이번 회차에 답한 지역 가운데
-    ///    가장 작은 것이 후보다(같으면 ID가 작은 쪽).
-    /// 2. **측정해서 고른 옛 홈**(`measuredHome`)이 바뀌려 하는데 아직 닿으면 옛 홈을 유지한다. "닿는다"는 이번 회차에
-    ///    지연이 있거나, 회차 시작 뒤 또는 8초 안에 그 지역에서 DERP 패킷을 받았다는 뜻이다. 유지 조건은 새 후보와의
-    ///    차이가 10 ms 미만이거나, 새 후보가 옛 홈 지연의 2/3보다 크다.
-    ///    유지의 기준은 지금 홈(`homeRegion`)이 아니다. 측정 없이 정한 대체 홈(지역 ID가 가장 작은 것)은 기준이 되지
-    ///    않으므로, 처음 측정한 회차는 유지 조건 없이 가장 빠른 지역을 고른다. Go가 유지의 기준을 앞 보고서의
-    ///    `PreferredDERP`로 잡고(`netcheck.go:1431`), magicsock의 대체 홈은 거기에 되들어가지 않는 것과 같다.
-    /// 3. 측정이 하나도 없으면(후보가 없으면) 지금 홈을 유지한다. 지금 홈도 없으면 지역 ID가 가장 작은 것이다(DERP 노트
-    ///    4.8 1). 이때 `measuredHome`은 그 지역의 마지막 DERP 패킷이 120초 안일 때만 이어지고 아니면 0이 된다(Go
-    ///    `PreferredDERPKeepAliveTimeout`). 0이 되면 다음에 측정한 회차가 유지 조건 없이 고른다.
+    /// 1. Finds each region's minimum latency in the last 5 minutes 5 seconds of round history and multiplies it by `score` if positive. Among regions that replied this round,
+    ///    the lowest result is the candidate (ties go to the smaller ID).
+    /// 2. If the **previous measured home** (`measuredHome`) would change and is still reachable, keep it when the retention condition below holds. "Reachable" means there is a latency for this
+    ///    round or a DERP packet was received from that region after the round started or within 8 seconds. Retention requires the difference from the new candidate
+    ///    to be under 10 ms or the new candidate's latency to be greater than 2/3 of the previous home's latency.
+    ///    The current home (`homeRegion`) is not the reference for retention. A fallback home selected without measurements (the lowest region ID) does not qualify,
+    ///    so the first round with measurements chooses the fastest region without applying the retention condition. This matches Go, which bases retention on the previous report's
+    ///    `PreferredDERP` (`netcheck.go:1431`), without feeding magicsock's fallback home back into that report.
+    /// 3. With no measurements (no candidate), keep the current home. If there is no current home, choose the lowest region ID (DERP notes
+    ///    4.8 1). In this case, `measuredHome` is retained only if the last DERP packet from that region arrived within 120 seconds, and reset to 0 otherwise (Go
+    ///    `PreferredDERPKeepAliveTimeout`). Once it is 0, the next round with measurements chooses without applying the retention condition.
     ///
-    /// 계산은 나노초 `Int64`로 하고, 점수를 곱한 값은 넘치지 않게 막는다.
+    /// Calculates with `Int64` nanoseconds and caps the weighted value to prevent overflow.
     mutating func selectHome(after round: Round, at now: ContinuousClock.Instant) -> Int64 {
         history.append(LatencyRecord(at: now, latency: round.latency))
         history.removeAll { $0.at.duration(to: now) > Self.historyRetention }
@@ -65,7 +65,7 @@ extension Netcheck {
         return measuredHome
     }
 
-    /// 2의 유지 조건. 옛 홈을 유지하면 `previous`, 아니면 `candidate`.
+    /// The retention condition from step 2. Returns `previous` if retaining the old home, or `candidate` otherwise.
     private func keptHome(
         previous: Int64, candidate: Int64, bestRecent: Int64, currentLatencyOfPrevious: Int64?, heardRecently: Bool
     ) -> Int64 {
@@ -78,7 +78,7 @@ extension Netcheck {
         return candidate
     }
 
-    /// 지연에 DERPMap의 지역 점수를 곱한다. 점수가 양수일 때만 곱하고, 결과는 0 이상 `Int64.max` 이하로 막는다.
+    /// Multiplies latency by the region score from DERPMap only when positive, and clamps the result to 0 through `Int64.max`.
     static func scaled(_ nanoseconds: Int64, by score: Double) -> Int64 {
         guard score > 0 else { return nanoseconds }
         let value = Double(nanoseconds) * score

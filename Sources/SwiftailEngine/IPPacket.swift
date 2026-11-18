@@ -1,68 +1,68 @@
 import SwiftailBase
 
-/// 검증을 마친 IP 패킷 하나의 머리. 필터와 경로 선택이 읽는 필드만 담는다.
+/// The validated header of an IP packet. Holds only fields read by the filter and path selection.
 ///
-/// 피어가 보냈거나 위층이 내려보낸 바이트열은 신뢰하지 않는다. 경계에서 한 번 길이와 머리를 검사하고,
-/// 선언된 길이로 잘라 이 값으로 바꾼다. 그 뒤의 코드는 인덱스 범위를 다시 따지지 않는다.
+/// Bytes from a peer or upper layer are untrusted. At the boundary, validate the length and header once,
+/// trim to the declared length, and convert to this value. Later code does not recheck index bounds.
 ///
-/// Go의 `packet.Parsed`보다 엄격하다. IHL의 최솟값과 TCP 머리 길이를 검사하고, 조각과 IPv6 확장 헤더는
-/// 해석하지 않고 거절한다(재조립하는 스택이 없다). 매 패킷을 새 값으로 만들므로 이전 패킷의 필드가 남지 않는다.
+/// Stricter than Go's `packet.Parsed`. Validates the minimum IHL and TCP header length, and rejects fragments and IPv6 extension headers
+/// without parsing them (there is no reassembly stack). A fresh value for each packet prevents fields from a prior packet from carrying over.
 ///
-/// `docs/protocol-notes/netmap-engine.md` 3.1·3.2, `docs/contracts/SwiftailEngine.md` 동작 1.
+/// `docs/protocol-notes/netmap-engine.md` 3.1 and 3.2, and `docs/contracts/SwiftailEngine.md` behavior 1.
 public struct IPPacket: Sendable, Equatable {
-    /// 전송 계층 프로토콜. 번호는 IP 머리의 protocol(IPv4)·next-header(IPv6) 필드다.
+    /// The transport-layer protocol. Its number is the IP header's protocol (IPv4) or next-header (IPv6) field.
     public enum TransportProtocol: Sendable, Equatable {
-        /// 6. 포트가 있고, 새 연결의 시작(SYN)만 필터 규칙을 본다.
+        /// 6. Has ports. Only the start of a new connection (SYN) consults filter rules.
         case tcp
-        /// 17. 포트가 있고, 먼저 보낸 흐름의 응답은 규칙 없이 받는다.
+        /// 17. Has ports. Replies to previously sent flows are accepted without rules.
         case udp
-        /// 132. 필터에서는 UDP와 같다.
+        /// 132. Treated like UDP by the filter.
         case sctp
         /// 1.
         case icmpv4
         /// 58.
         case icmpv6
-        /// 99. Tailscale이 터널 안에서 주고받는 제어 메시지. 엔진이 소비한다.
+        /// 99. Tailscale control messages exchanged through the tunnel and consumed by the engine.
         case tsmp
-        /// 그 밖의 번호. 포트가 없다.
+        /// Any other number. Has no ports.
         case other(UInt8)
     }
 
-    /// 해석할 수 없거나 M3에서 받지 않는 패킷.
+    /// A packet that cannot be parsed or is unsupported in M3.
     public enum ParseError: Error, Sendable, Equatable {
-        /// 길이·버전·머리 길이가 맞지 않음.
+        /// Invalid length, version, or header length.
         case malformed
-        /// 조각(첫 조각 포함).
+        /// A fragment, including the first fragment.
         case fragment
-        /// IPv6 확장 헤더.
+        /// An IPv6 extension header.
         case extensionHeader
     }
 
-    /// 선언된 길이로 자른 패킷 전체.
+    /// The entire packet truncated to the declared length.
     public let bytes: [UInt8]
-    /// IP 머리의 출발 주소.
+    /// The source address in the IP header.
     public let source: IPAddress
-    /// IP 머리의 목적 주소.
+    /// The destination address in the IP header.
     public let destination: IPAddress
-    /// 전송 계층 프로토콜.
+    /// The transport-layer protocol.
     public let transportProtocol: TransportProtocol
-    /// TCP·UDP·SCTP의 출발 포트. 그 밖에는 0.
+    /// The source port for TCP, UDP, or SCTP. Otherwise 0.
     public let sourcePort: UInt16
-    /// TCP·UDP·SCTP의 목적 포트. 그 밖에는 0.
+    /// The destination port for TCP, UDP, or SCTP. Otherwise 0.
     public let destinationPort: UInt16
-    /// TCP에서 SYN이 켜지고 ACK가 꺼진 패킷(새 연결의 시작).
+    /// A TCP packet with SYN set and ACK clear (the start of a new connection).
     public let isTCPSYN: Bool
 
-    /// IP 머리의 프로토콜 번호. 필터 규칙의 `IPProto`와 견준다.
+    /// The protocol number in the IP header. Compared with the filter rule's `IPProto`.
     let protocolNumber: UInt8
-    /// 전송 머리가 시작하는 위치(IP 머리의 길이).
+    /// The transport header offset (the IP header length).
     let transportOffset: Int
 
-    /// 바이트열을 IP 패킷으로 해석한다.
+    /// Parses a sequence of bytes as an IP packet.
     ///
-    /// - Throws: 길이·버전·머리 길이가 맞지 않거나 전송 머리가 최소 길이보다 짧으면 `malformed`,
-    ///   IPv4 프로토콜 번호나 IPv6 next-header가 255이거나 IPv4 프로토콜 번호가 0이면 `malformed`,
-    ///   조각이면 `fragment`, IPv6 확장 헤더면 `extensionHeader`.
+    /// - Throws: `malformed` if the length, version, or header length is invalid, or the transport header is below its minimum length,
+    ///   `malformed` if the IPv4 protocol number or IPv6 next-header is 255, or the IPv4 protocol number is 0,
+    ///   `fragment` for a fragment, or `extensionHeader` for an IPv6 extension header.
     public init(parsing bytes: [UInt8]) throws(ParseError) {
         guard let first = bytes.first else { throw .malformed }
         let header: Header
@@ -75,7 +75,7 @@ public struct IPPacket: Sendable, Equatable {
               let destination = IPAddress(bytes: bytes[header.destinationRange])
         else { throw .malformed }
 
-        // 선언 길이 뒤의 바이트(링크 계층 패딩 등)는 떼어 낸다. 이후의 검사는 모두 잘린 패킷 안에서 한다.
+        // Strips bytes beyond the declared length (such as link-layer padding). All further checks use the truncated packet.
         let packet = Array(bytes[..<header.totalLength])
         let offset = header.length
         let transportLength = packet.count - offset
@@ -87,13 +87,13 @@ public struct IPPacket: Sendable, Equatable {
         let transportProtocol: TransportProtocol
         switch header.protocolNumber {
         case 6:
-            // TCP 머리는 20바이트 이상이고, data offset이 가리키는 머리 끝이 패킷 안에 있어야 한다.
+            // The TCP header must be at least 20 bytes, and the header end indicated by data offset must lie within the packet.
             guard transportLength >= 20 else { throw .malformed }
             let dataOffset = Int(packet[offset + 12] >> 4) * 4
             guard dataOffset >= 20, dataOffset <= transportLength else { throw .malformed }
             sourcePort = Self.uint16(packet, at: offset)
             destinationPort = Self.uint16(packet, at: offset + 2)
-            // SYN(0x02)이 켜지고 ACK(0x10)가 꺼진 것. Go `Parsed.IsTCPSyn`.
+            // SYN (0x02) set and ACK (0x10) clear. Go `Parsed.IsTCPSyn`.
             isTCPSYN = packet[offset + 13] & 0x12 == 0x02
             transportProtocol = .tcp
         case 17:
@@ -102,22 +102,22 @@ public struct IPPacket: Sendable, Equatable {
             destinationPort = Self.uint16(packet, at: offset + 2)
             transportProtocol = .udp
         case 132:
-            // SCTP 공통 머리 12바이트. 포트는 UDP와 같은 자리다.
+            // The 12-byte SCTP common header. Ports are in the same positions as UDP.
             guard transportLength >= 12 else { throw .malformed }
             sourcePort = Self.uint16(packet, at: offset)
             destinationPort = Self.uint16(packet, at: offset + 2)
             transportProtocol = .sctp
         case 1 where isIPv4, 58 where !isIPv4:
-            // ICMP 머리는 type·code·checksum과 4바이트 나머지로 8바이트다. echo·오류 판별이 이 길이를 쓴다.
+            // The 8-byte ICMP header contains type, code, checksum, and a 4-byte remainder. Echo and error detection use this length.
             guard transportLength >= 8 else { throw .malformed }
             transportProtocol = isIPv4 ? .icmpv4 : .icmpv6
         case 99:
             transportProtocol = .tsmp
         case 0, 255:
-            // Go 파서는 둘을 Unknown으로 바꿔 규칙과 상관없이 버린다. IPv6의 0(hop-by-hop)은 앞에서 걸렀다.
+            // The Go parser maps both to Unknown and discards them regardless of rules. IPv6 0 (hop-by-hop) was already filtered.
             throw .malformed
         case let number:
-            // 다른 계열의 ICMP 번호(IPv4 안의 58 등)도 Go처럼 그 밖의 프로토콜로 본다.
+            // Treats an ICMP number from another family (such as 58 in IPv4) as another protocol, as Go does.
             transportProtocol = .other(number)
         }
 
@@ -132,7 +132,7 @@ public struct IPPacket: Sendable, Equatable {
         self.transportOffset = offset
     }
 
-    /// ICMP 메시지의 type과 code. ICMP가 아니면 `nil`. 해석할 때 ICMP 머리 8바이트를 확인했다.
+    /// The type and code of an ICMP message, or `nil` for a non-ICMP message. Parsing validated the 8-byte ICMP header.
     var icmpTypeAndCode: (type: UInt8, code: UInt8)? {
         switch transportProtocol {
         case .icmpv4, .icmpv6: (bytes[transportOffset], bytes[transportOffset + 1])
@@ -140,29 +140,29 @@ public struct IPPacket: Sendable, Equatable {
         }
     }
 
-    /// 머리 길이를 확인한 뒤에만 부른다.
+    /// Call only after checking the header length.
     private static func uint16(_ bytes: [UInt8], at offset: Int) -> UInt16 {
         UInt16(bytes[offset]) << 8 | UInt16(bytes[offset + 1])
     }
 
-    /// IP 머리에서 읽은 값. 만들 때 모든 범위가 버퍼 안에 있음을 확인한다.
+    /// Values read from the IP header. All ranges are checked against the buffer at construction.
     private struct Header {
         let isIPv4: Bool
-        /// IP 머리의 길이(IPv4 옵션 포함).
+        /// The IP header length, including IPv4 options.
         let length: Int
-        /// 선언된 패킷 전체 길이. `length` 이상이고 버퍼 길이 이하다.
+        /// The declared total packet length, at least `length` and no more than the buffer length.
         let totalLength: Int
         let protocolNumber: UInt8
         let sourceRange: Range<Int>
         let destinationRange: Range<Int>
 
-        /// IPv4: 20바이트 이상, IHL 5 이상, IHL ≤ 선언 길이 ≤ 버퍼. MF나 오프셋이 있으면 조각이다.
+        /// IPv4 requires at least 20 bytes, IHL at least 5, and IHL ≤ declared length ≤ buffer. MF or an offset indicates a fragment.
         init(ipv4 bytes: [UInt8]) throws(ParseError) {
             guard bytes.count >= 20 else { throw .malformed }
             let headerLength = Int(bytes[0] & 0x0F) * 4
             let totalLength = Int(IPPacket.uint16(bytes, at: 2))
             guard headerLength >= 20, headerLength <= totalLength, totalLength <= bytes.count else { throw .malformed }
-            // 6:2의 MF 비트(0x2000)와 13비트 조각 오프셋. 첫 조각(MF만 켜짐)도 조각이다.
+            // The MF bit (0x2000) and 13-bit fragment offset at 6:2. The first fragment (only MF set) is also a fragment.
             let flagsAndOffset = IPPacket.uint16(bytes, at: 6)
             guard flagsAndOffset & 0x3FFF == 0 else { throw .fragment }
 
@@ -174,7 +174,7 @@ public struct IPPacket: Sendable, Equatable {
             destinationRange = 16..<20
         }
 
-        /// IPv6: 40바이트 이상, 40 + payload length ≤ 버퍼. next-header 44는 조각, 확장 헤더는 거절한다.
+        /// IPv6 requires at least 40 bytes and 40 + payload length ≤ buffer. Next-header 44 indicates a fragment. Extension headers are rejected.
         init(ipv6 bytes: [UInt8]) throws(ParseError) {
             guard bytes.count >= 40 else { throw .malformed }
             let totalLength = 40 + Int(IPPacket.uint16(bytes, at: 4))
@@ -182,7 +182,7 @@ public struct IPPacket: Sendable, Equatable {
             let nextHeader = bytes[6]
             guard nextHeader != 44 else { throw .fragment }
             // hop-by-hop(0), routing(43), ESP(50), AH(51), destination options(60), mobility(135),
-            // HIP(139), shim6(140). 체인을 따라가 안쪽 전송 머리를 읽지 않는다.
+            // HIP (139) and shim6 (140). Does not follow the chain to read the inner transport header.
             guard ![0, 43, 50, 51, 60, 135, 139, 140].contains(nextHeader) else { throw .extensionHeader }
 
             isIPv4 = false

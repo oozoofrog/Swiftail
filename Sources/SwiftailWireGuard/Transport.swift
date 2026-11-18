@@ -1,16 +1,16 @@
-/// transport 메시지의 암복호화와 패딩.
+/// Encryption, decryption, and padding for transport messages.
 ///
-/// IP 패킷을 16바이트 배수로 0 패딩해 길이 정보를 흐린 뒤 keypair의 송신 키와 counter로 암호화한다.
-/// 평문이 빈 transport는 keepalive다.
+/// Pad each IP packet with 0 to a multiple of 16 bytes to obscure its length, then encrypt it with the keypair's send key and counter.
+/// A transport message with empty plaintext is a keepalive.
 ///
-/// 백서 §5.4.6, `docs/protocol-notes/wireguard.md` "전송 데이터: 보내기"·"전송 데이터: 받기"
-/// (출처: wireguard-go `device/send.go`, `device/receive.go`).
+/// Whitepaper §5.4.6, `docs/protocol-notes/wireguard.md` "Transport data: sending" and "Transport data: receiving"
+/// (origin: wireguard-go `device/send.go`, `device/receive.go`).
 extension Keypair {
-    /// 다음 counter로 패킷을 암호화한다. 호출하는 쪽은 먼저 `canSend(at:)`을 확인한다.
+    /// Encrypts the packet with the next counter. The caller checks `canSend(at:)` first.
     ///
-    /// - Returns: 보낼 데이터그램 전체(머리 16 + 암호문 + 태그). 배열 하나를 한 번만 할당해 채운다.
-    ///   패딩이 필요 없으면(16의 배수) 패킷을 복사하지 않고 그대로 암호화한다.
-    // shortcut: CryptoKit이 돌려주는 `SealedBox`에서 데이터그램으로 한 번 복사한다. 호출하는 쪽 버퍼에 직접 암호화하는 API가 없다. 실기기 측정에서 병목이면 올린다.
+    /// - Returns: The complete outgoing datagram (16-byte header + ciphertext + tag). One array is allocated once and filled.
+    ///   If no padding is needed (a multiple of 16), encrypts the packet directly without copying it.
+    // shortcut: Copies once from the `SealedBox` returned by CryptoKit into the datagram. There is no API to encrypt directly into the caller's buffer. Upgrade if measurements on a real device identify this as a bottleneck.
     mutating func seal(_ packet: [UInt8]) -> [UInt8] {
         let counter = sendNonce
         sendNonce += 1
@@ -25,13 +25,13 @@ extension Keypair {
         return datagram
     }
 
-    /// 복호화만 한다. 재전송 검사는 인증된 뒤 `replayFilter`로 따로 한다.
+    /// Decrypts the message. After authentication, `replayFilter` checks for replays separately.
     func open(_ message: TransportData) -> [UInt8]? {
         AEAD.open(message.encryptedPacket, key: receiveKey, counter: message.counter)
     }
 
-    /// wireguard-go `calculatePaddingSize`. MTU를 넘는 패킷은 MTU로 나눈 나머지 기준으로 패딩하고,
-    /// 패딩한 길이가 MTU를 넘지 않게 한다. keepalive(0바이트)는 패딩하지 않는다.
+    /// Implements wireguard-go's `calculatePaddingSize`. For packets larger than the MTU, base padding on the remainder after dividing by the MTU
+    /// and cap the padded length at the MTU. A keepalive (0 bytes) needs no padding.
     static func paddingSize(for packetSize: Int, mtu: Int) -> Int {
         let multiple = Constants.paddingMultiple
         let lastUnit = packetSize > mtu ? packetSize % mtu : packetSize

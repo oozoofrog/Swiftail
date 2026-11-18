@@ -1,21 +1,21 @@
-/// WireGuard 메시지 4종의 바이트 배치.
+/// The byte layout of the 4 WireGuard message types.
 ///
-/// 네트워크에서 받은 데이터그램은 여기서 한 번 해석해 검증된 타입(`Message`)이 된다. 이후 단계는
-/// 바이트 오프셋을 다시 다루지 않는다. 모든 정수는 little-endian이고, 첫 4바이트는 type 1바이트와
-/// 0 세 바이트를 LE `uint32` 하나로 읽는다. 그래서 예약 바이트가 0이 아니면 모르는 type이 된다.
+/// Each datagram received from the network is parsed here once into a validated type (`Message`). Later stages
+/// do not revisit byte offsets. All integers are little-endian. The first 4 bytes are read as one LE `uint32` consisting of 1 type byte and
+/// three bytes of 0. As a result, any reserved byte other than 0 produces an unknown type.
 ///
-/// 백서 §5.4, `docs/protocol-notes/wireguard.md` "와이어 형식"
-/// (출처: wireguard-go `device/noise-protocol.go`, `device/receive.go`).
+/// Whitepaper §5.4, `docs/protocol-notes/wireguard.md` "Wire format"
+/// (origin: wireguard-go `device/noise-protocol.go`, `device/receive.go`).
 enum Message {
     case initiation(Initiation, MessageMACs)
     case response(Response, MessageMACs)
     case cookieReply(CookieReply)
     case transportData(TransportData)
 
-    /// 데이터그램 하나를 해석한다. 32바이트보다 짧거나, 모르는 type이거나,
-    /// 핸드셰이크 메시지의 크기가 정확하지 않으면 `malformed`.
+    /// Parses a datagram. Returns `malformed` if it is shorter than 32 bytes, has an unknown type,
+    /// or is a handshake message with an incorrect size.
     init(parsing datagram: [UInt8]) throws(WireGuardError) {
-        // wireguard-go는 MinMessageSize(32)보다 짧으면 type도 보지 않고 버린다.
+        // wireguard-go discards messages shorter than MinMessageSize (32) before checking the type.
         guard datagram.count >= TransportData.minimumSize else { throw .malformed }
         var reader = ByteReader(datagram)
         switch reader.uint32() {
@@ -48,7 +48,7 @@ enum Message {
     }
 }
 
-/// 핸드셰이크 메시지 끝의 두 MAC. mac1은 늘, mac2는 받은 cookie가 있을 때만 0이 아니다.
+/// The two MACs at the end of a handshake message. mac1 always differs from 0, and mac2 differs from 0 only when a cookie has been received.
 struct MessageMACs: Equatable {
     var mac1: [UInt8]
     var mac2: [UInt8]
@@ -56,35 +56,35 @@ struct MessageMACs: Equatable {
     var bytes: [UInt8] { mac1 + mac2 }
 }
 
-/// Handshake initiation(type 1, 148바이트). 초기자 → 응답자.
+/// Handshake initiation (type 1, 148 bytes). Initiator → responder.
 struct Initiation: Equatable {
     static let type: UInt32 = 1
     static let size = 148
 
     var sender: UInt32
-    /// 초기자의 임시 공개 키(평문).
+    /// The initiator's ephemeral public key (plaintext).
     var ephemeral: [UInt8]
-    /// 초기자의 정적 공개 키 32 + 태그 16.
+    /// The initiator's 32-byte static public key + 16-byte tag.
     var encryptedStatic: [UInt8]
-    /// TAI64N 12 + 태그 16.
+    /// 12-byte TAI64N + 16-byte tag.
     var encryptedTimestamp: [UInt8]
 
-    /// mac1·mac2 앞까지의 바이트. MAC은 이 바이트 위에서 계산한다.
+    /// The bytes preceding mac1 and mac2. The MAC is computed over these bytes.
     var bytesBeforeMACs: [UInt8] {
         Self.type.littleEndianBytes + sender.littleEndianBytes + ephemeral + encryptedStatic + encryptedTimestamp
     }
 }
 
-/// Handshake response(type 2, 92바이트). 응답자 → 초기자.
+/// Handshake response (type 2, 92 bytes). Responder → initiator.
 struct Response: Equatable {
     static let type: UInt32 = 2
     static let size = 92
 
     var sender: UInt32
-    /// 응답을 부른 initiation의 sender.
+    /// The sender field of the initiation that prompted the response.
     var receiver: UInt32
     var ephemeral: [UInt8]
-    /// 빈 평문의 AEAD 태그 16바이트. 응답자가 핸드셰이크 전체를 인증했다는 증거다.
+    /// The 16-byte AEAD tag for empty plaintext. It proves that the responder authenticated the entire handshake.
     var encryptedNothing: [UInt8]
 
     var bytesBeforeMACs: [UInt8] {
@@ -92,16 +92,16 @@ struct Response: Equatable {
     }
 }
 
-/// Cookie reply(type 3, 64바이트). 부하 상태의 응답자가 mac2를 요구할 때 보낸다.
+/// Cookie reply (type 3, 64 bytes). The responder sends it under load when it requires mac2.
 struct CookieReply: Equatable {
     static let type: UInt32 = 3
     static let size = 64
 
-    /// 거절된 핸드셰이크 메시지의 sender.
+    /// The sender field of the rejected handshake message.
     var receiver: UInt32
-    /// XChaCha20 nonce 24바이트.
+    /// The 24-byte XChaCha20 nonce.
     var nonce: [UInt8]
-    /// cookie 16 + 태그 16.
+    /// 16-byte cookie + 16-byte tag.
     var encryptedCookie: [UInt8]
 
     var bytes: [UInt8] {
@@ -109,22 +109,22 @@ struct CookieReply: Equatable {
     }
 }
 
-/// Transport data(type 4). 머리 16바이트 뒤에 패딩한 IP 패킷의 암호문과 태그가 온다.
+/// Transport data (type 4). The 16-byte header is followed by the ciphertext of the padded IP packet and the tag.
 struct TransportData: Equatable {
     static let type: UInt32 = 4
     static let headerSize = 16
-    /// 머리 16 + 태그 16. 평문이 비어 있는 keepalive의 크기이기도 하다.
+    /// 16-byte header + 16-byte tag. This is also the size of a keepalive, which has empty plaintext.
     static let minimumSize = headerSize + 16
 
-    /// 받는 쪽이 핸드셰이크 때 보낸 sender index.
+    /// The sender index the receiving side sent during the handshake.
     var receiver: UInt32
-    /// 패킷 번호. AEAD nonce이자 재전송 방지 창의 입력이다.
+    /// The packet number. It is both the AEAD nonce and the input to the replay protection window.
     var counter: UInt64
-    /// 암호문 ‖ 태그. 받은 데이터그램의 저장소를 그대로 가리키며 복사하지 않는다.
+    /// Ciphertext ‖ tag. References the received datagram's storage without copying it.
     var encryptedPacket: ArraySlice<UInt8>
 
-    /// 머리 16바이트(type, receiver, counter)를 쓴 배열. 뒤에 암호문과 태그를 붙여 메시지를 완성한다.
-    /// - Parameter capacity: 완성한 메시지의 크기. 한 번만 할당하도록 미리 잡아 둔다.
+    /// An array containing the 16-byte header (type, receiver, counter). Append the ciphertext and tag to complete the message.
+    /// - Parameter capacity: The size of the complete message. Reserve it up front so there is only one allocation.
     static func header(receiver: UInt32, counter: UInt64, capacity: Int) -> [UInt8] {
         var header: [UInt8] = []
         header.reserveCapacity(capacity)
@@ -135,9 +135,9 @@ struct TransportData: Equatable {
     }
 }
 
-/// 길이를 이미 확인한 메시지를 앞에서부터 읽는다.
+/// Reads a message of already validated length from the beginning.
 ///
-/// 호출하는 쪽이 메시지 전체 길이를 먼저 확인하므로 범위 밖을 읽지 않는다.
+/// The caller checks the full message length first, which prevents out-of-bounds reads.
 private struct ByteReader {
     private let bytes: [UInt8]
     private var offset = 0
@@ -149,7 +149,7 @@ private struct ByteReader {
         return Array(bytes[offset..<offset + count])
     }
 
-    /// 남은 바이트 전부. 복사하지 않고 같은 저장소를 가리킨다.
+    /// All remaining bytes. References the same storage without copying it.
     mutating func rest() -> ArraySlice<UInt8> {
         defer { offset = bytes.count }
         return bytes[offset...]
@@ -170,7 +170,7 @@ private struct ByteReader {
 }
 
 extension [UInt8] {
-    /// little-endian으로 덧붙인다.
+    /// Appends in little-endian order.
     mutating func appendLittleEndian<Integer: FixedWidthInteger>(_ value: Integer) {
         for offset in 0..<(Integer.bitWidth / 8) {
             append(UInt8(truncatingIfNeeded: value >> (offset * 8)))
@@ -179,7 +179,7 @@ extension [UInt8] {
 }
 
 extension FixedWidthInteger {
-    /// little-endian 바이트열.
+    /// A little-endian byte sequence.
     var littleEndianBytes: [UInt8] {
         (0..<(Self.bitWidth / 8)).map { UInt8(truncatingIfNeeded: self >> ($0 * 8)) }
     }

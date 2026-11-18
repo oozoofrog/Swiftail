@@ -1,23 +1,23 @@
 import SwiftailBase
 import SwiftailWireGuard
 
-/// 패킷의 송수신: 위에서 내려온 IP 패킷을 피어에게, 받은 WireGuard 데이터그램을 필터를 거쳐 위로.
+/// Sends down-stack IP packets to peers and delivers incoming WireGuard datagrams up the stack through the filter.
 ///
-/// 받는 쪽의 층 순서는 Go와 같다. WireGuard의 인증·재전송 방지 → 그 인증된 피어의 AllowedIPs로 출발지 검사 →
-/// TSMP 소비(disco 키 광고는 위로 알림) → 수신 필터. 보낸 피어는 WireGuard 세션이 정하고, 데이터그램의 출처(주소나 DERP 보낸 쪽)는 피어를
-/// 정하는 데 쓰지 않는다. 출처는 WireGuard의 부하 방어(cookie, 출처별 속도 제한)에만 넘긴다.
+/// The receive layers follow Go's order. WireGuard authentication and replay protection → source validation against the authenticated peer's AllowedIPs →
+/// TSMP consumption (reports disco key advertisements up the stack) → inbound filtering. The WireGuard session identifies the sending peer. The datagram source (address or DERP sender)
+/// is not used to identify that peer. Its only use is WireGuard's load defense (cookies and per-source rate limiting).
 ///
-/// `docs/protocol-notes/netmap-engine.md` 4.2·4.6·6.1, `docs/contracts/SwiftailEngine.md` 동작 4·5와 M-E1·M-E2,
-/// `docs/contracts/SwiftailTunnel.md` 동작 L.
+/// `docs/protocol-notes/netmap-engine.md` 4.2, 4.6, and 6.1, `docs/contracts/SwiftailEngine.md` behaviors 4 and 5 and M-E1 and M-E2,
+/// and `docs/contracts/SwiftailTunnel.md` behavior L.
 extension TailnetEngine {
 
-    /// 위에서 내려온 IP 패킷 하나를 보낸다.
+    /// Sends an IP packet received from the upper layer.
     ///
-    /// 서비스 IP로 가는 패킷과 자기 주소로 가는 패킷, 장치에서 온 TSMP는 WireGuard로 보내지 않고 엔진이 처리한다
-    /// (`TailnetEngine+LocalDelivery.swift`). 나머지는 목적지 주소를 AllowedIPs로 가진 피어에게 보낸다.
-    /// 나가는 패킷에는 ACL을 적용하지 않고(Go와 같다) UDP 응답을 받으려고 흐름만 기록한다.
+    /// The engine handles packets destined for the service IP or a local address, and TSMP from the device, without sending them through WireGuard
+    /// (`TailnetEngine+LocalDelivery.swift`). Sends all other packets to the peer whose AllowedIPs contain the destination.
+    /// Outgoing packets bypass the ACL (as in Go). Only flow state is recorded for UDP replies.
     ///
-    /// 로컬 응답은 `.ipPacket`으로 나온다. 장치로 되써야 할 패킷이다.
+    /// Local responses come out as `.ipPacket`. Write these packets back to the device.
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output] {
         let packet: IPPacket
         do {
@@ -39,10 +39,10 @@ extension TailnetEngine {
         }
     }
 
-    /// `Magicsock`이 WireGuard로 분류한 데이터그램 하나를 처리한다(`.wireGuard` 출력).
+    /// Processes a datagram classified as WireGuard by `Magicsock` (its `.wireGuard` output).
     ///
-    /// disco·STUN은 여기에 오지 않는다. 보낸 피어는 WireGuard 세션이 인증하고, 출발 주소는 그 피어의 AllowedIPs가
-    /// 검사한다. `source`는 WireGuard가 부하 상태일 때만 쓴다. 그때 나오는 `.cookieReply`는 `source`로 되돌린다.
+    /// Disco and STUN do not reach this entry point. The WireGuard session authenticates the sending peer, and the peer's AllowedIPs
+    /// validate the source address. `source` is used only when WireGuard is under load. Return any resulting `.cookieReply` to `source`.
     public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) -> [Output] {
         do {
             return route(try device.receive(datagram, from: source, at: now))
@@ -51,8 +51,8 @@ extension TailnetEngine {
         }
     }
 
-    /// 장치의 출력을 엔진의 출력으로 바꾼다. 데이터그램은 그대로 내보내고(경로는 `Magicsock`이 고른다), 올라온 IP
-    /// 패킷은 필터에 건다. 핸드셰이크 응답·재시도·keepalive도 같은 길이다.
+    /// Converts device outputs to engine outputs. Emits datagrams as is (`Magicsock` chooses the path) and filters incoming IP
+    /// packets. Handshake responses, retries, and keepalives follow the same path.
     mutating func route(_ outputs: [WireGuardDevice.Output]) -> [Output] {
         outputs.map { output in
             switch output {
@@ -68,11 +68,11 @@ extension TailnetEngine {
         }
     }
 
-    /// 복호화와 AllowedIPs 출발지 검사를 통과한 패킷을 해석하고 필터에 건다. `peer`는 그 패킷을 보낸 WireGuard 피어다.
+    /// Parses and filters a packet that passed decryption and the AllowedIPs source check. `peer` is the WireGuard peer that sent it.
     ///
-    /// TSMP는 위로 올리지 않는다. 그 가운데 0이 아닌 disco 키 광고는 보낸 피어와 함께 `.discoKeyAdvertised`로 낸다(Go
-    /// `net/tstun/wrap.go`가 광고를 버리면서 알리는 것과 같다. Go는 출발 주소로 피어를 찾고, 여기서는 출발지 검사를 이미
-    /// 통과했으므로 그 주소의 주인인 WireGuard 피어를 바로 쓴다).
+    /// TSMP is withheld from the upper layer. Emits a disco key advertisement with a key other than 0 as `.discoKeyAdvertised` along with the sending peer (like Go
+    /// `net/tstun/wrap.go`, which reports the advertisement as it discards it). Go looks up the peer by source address. Here the source check has already
+    /// passed, so use the WireGuard peer that owns the address directly.
     private mutating func deliverInbound(_ bytes: [UInt8], from peer: NodePublicKey) -> Output {
         let packet: IPPacket
         do {
@@ -80,7 +80,7 @@ extension TailnetEngine {
         } catch {
             return .dropped(Drop(error))
         }
-        // shortcut: TSMP의 ping에 pong을 보내지 않고 거절도 보내지 않는다. disco 광고 밖의 TSMP는 소비만 한다.
+        // shortcut: Does not send a pong or rejection for a TSMP ping. TSMP other than disco advertisements is consumed without further action.
         if packet.transportProtocol == .tsmp {
             if let advertisement = TSMPDiscoKeyAdvertisement(parsing: packet), !advertisement.key.isZero {
                 return .discoKeyAdvertised(advertisement.key, from: peer)

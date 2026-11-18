@@ -1,13 +1,13 @@
 import SwiftailBase
 
-/// 양 끝을 포함하는 주소 범위. 필터 규칙의 주소 표현(`*`, CIDR, `a-b`, 단일 주소)을 모두 이 하나로 나타낸다.
+/// An inclusive address range. Represents every filter rule address expression (`*`, CIDR, `a-b`, and single addresses).
 ///
-/// Go는 `a-b` 범위를 접두 목록으로 풀지만, 여기서는 범위 그대로 견준다. 넓은 범위를 풀 때 생기는
-/// 접두 수의 폭증이 없고, 포함 여부의 답은 같다.
+/// Go expands an `a-b` range into a list of prefixes. Here the range is compared directly, avoiding the explosion in
+/// prefix count when expanding a wide range while giving the same membership result.
 ///
-/// `docs/protocol-notes/netmap-engine.md` 4.4의 주소 문자열 표.
+/// The address string table in `docs/protocol-notes/netmap-engine.md` 4.4.
 struct AddressRange: Sendable, Equatable {
-    /// 네트워크 바이트 순서의 아래 끝과 위 끝. 길이(4 또는 16)가 같고 `lower ≤ upper`다.
+    /// The lower and upper endpoints in network byte order. They have the same length (4 or 16) and `lower ≤ upper`.
     private let lower: [UInt8]
     private let upper: [UInt8]
 
@@ -16,13 +16,13 @@ struct AddressRange: Sendable, Equatable {
         self.upper = upper
     }
 
-    /// 주소 하나.
+    /// A single address.
     init(_ address: IPAddress) {
         lower = address.bytes
         upper = address.bytes
     }
 
-    /// 접두가 덮는 범위: 호스트 비트를 모두 0으로 한 주소부터 모두 1로 한 주소까지.
+    /// The range covered by a prefix, from the address with all host bits set to 0 to the one with all host bits set to 1.
     init(_ prefix: IPPrefix) {
         lower = prefix.address.bytes
         upper = prefix.address.bytes.enumerated().map { index, byte in
@@ -31,7 +31,7 @@ struct AddressRange: Sendable, Equatable {
         }
     }
 
-    /// 두 주소 사이. 주소 종류가 다르거나 역순이면 `nil`.
+    /// The range between two addresses. Returns `nil` if they are from different families or reversed.
     init?(from lower: IPAddress, through upper: IPAddress) {
         guard lower.bytes.count == upper.bytes.count,
               !upper.bytes.lexicographicallyPrecedes(lower.bytes)
@@ -40,7 +40,7 @@ struct AddressRange: Sendable, Equatable {
         self.upper = upper.bytes
     }
 
-    /// 주소가 범위 안에 있는지. 주소 종류가 다르면 `false`.
+    /// Whether the address is in the range. Returns `false` for a different address family.
     func contains(_ address: IPAddress) -> Bool {
         address.bytes.count == lower.count
             && !address.bytes.lexicographicallyPrecedes(lower)
@@ -49,15 +49,15 @@ struct AddressRange: Sendable, Equatable {
 }
 
 extension AddressRange {
-    /// 필터 규칙의 주소 표현 하나를 해석한다. 해석할 수 없으면 빈 목록이다(그 항목만 버린다).
+    /// Parses one filter rule address expression. If it cannot be parsed, returns an empty list, dropping only that item.
     ///
-    /// Go `parseIPSet`과 같은 순서로 본다: `*` → `cap:` → `/`가 있으면 CIDR → `-`가 정확히 하나면 범위 →
-    /// 단일 주소. CIDR의 호스트 비트가 남아 있으면 조용히 지우지 않고 버린다.
+    /// Uses the same order as Go `parseIPSet`. `*` → `cap:` → CIDR if `/` is present → range if exactly one `-` is present →
+    /// single address. Rejects a CIDR with host bits set instead of silently clearing them.
     static func ranges(parsing text: String) -> [AddressRange] {
         if text == "*" {
             return [everything(byteCount: 4), everything(byteCount: 16)]
         }
-        // shortcut: `cap:` 출발지(노드 capability로 맞추기)는 M3에서 지원하지 않는다. 목적지의 `cap:`는 Go도 오류다.
+        // shortcut: M3 does not support `cap:` sources (matching by node capability). A `cap:` destination is also an error in Go.
         if text.hasPrefix("cap:") {
             return []
         }
@@ -79,7 +79,7 @@ extension AddressRange {
         return [AddressRange(address)]
     }
 
-    /// 한 주소 종류의 모든 주소. `*`의 절반이다.
+    /// All addresses in one address family. Half of `*`.
     private static func everything(byteCount: Int) -> AddressRange {
         AddressRange(lower: [UInt8](repeating: 0, count: byteCount), upper: [UInt8](repeating: 0xFF, count: byteCount))
     }

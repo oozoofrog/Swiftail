@@ -1,34 +1,34 @@
-// 이름 읽기는 golang.org/x/net의 `dns/dnsmessage/message.go` `Name.unpack`(BSD-3-Clause, Copyright 2009 The Go Authors),
-// 문자열 이름의 검사는 Tailscale의 `util/dnsname/dnsname.go` `ToFQDN`(BSD-3-Clause, Copyright (c) Tailscale Inc &
-// contributors)을 따른다. 규칙과 상수만 옮겼고 코드는 Swift로 새로 썼다.
+// Name parsing follows `Name.unpack` in golang.org/x/net `dns/dnsmessage/message.go` (BSD-3-Clause, Copyright 2009 The Go Authors).
+// String name validation follows `ToFQDN` in Tailscale's `util/dnsname/dnsname.go` (BSD-3-Clause, Copyright (c) Tailscale Inc &
+// contributors). Only the rules and constants were ported. The code was written from scratch in Swift.
 
 extension DNSMessage {
-    /// DNS 이름. 레이블의 바이트를 받은 그대로(대소문자 포함) 들고 있다.
+    /// A DNS name that retains the label bytes as received, including case.
     ///
-    /// 질의에서 읽은 이름은 응답의 질문·답변에 그대로 다시 쓰고, 비교는 `lowercased()`로 한다(노트 3.1).
-    /// 레이블은 1…63바이트이고 `.`이 없으며, 끝 점을 포함한 표기 길이는 254바이트 이하다(선 형식 255바이트, RFC 1035 3.1).
+    /// A name read from a query is written unchanged in the response question and answer. Comparisons use `lowercased()` (notes 3.1).
+    /// Labels are 1…63 bytes with no `.`, and the presentation length including the trailing dot is at most 254 bytes (255 bytes on the wire, RFC 1035 3.1).
     struct Name: Hashable, Sendable {
-        /// 레이블. 빈 배열은 루트(`.`)다.
+        /// The labels. An empty array is the root (`.`).
         let labels: [[UInt8]]
 
-        /// 끝 점을 포함한 표기 길이의 최대. Go `nonEncodedNameMax`, `dnsname.maxNameLength`.
+        /// The maximum presentation length including the trailing dot. Go `nonEncodedNameMax` and `dnsname.maxNameLength`.
         static let maxPresentationLength = 254
-        /// 레이블 길이의 최대. 길이 바이트의 상위 두 비트는 포인터·예약 표지다.
+        /// The maximum label length. The top two bits of the length byte mark pointers or reserved values.
         static let maxLabelLength = 63
-        /// 한 이름에서 따라가는 압축 포인터의 최대. Go `dnsmessage`의 값이다(노트 5장).
+        /// The maximum number of compression pointers followed in one name. Uses the Go `dnsmessage` value (notes §5).
         static let maxPointers = 10
 
-        /// 이름을 읽지 못한 이유. 모두 질의의 FORMERR로 이어진다.
+        /// A reason a name could not be read. All reasons yield FORMERR for the query.
         enum ParseError: Error, Equatable, Sendable {
-            /// 레이블이나 포인터가 메시지 끝을 넘는다.
+            /// A label or pointer extends past the end of the message.
             case truncated
-            /// 길이 바이트의 상위 두 비트가 01 또는 10이다(RFC 6891이 없앤 확장 레이블 포함).
+            /// The top two bits of the length byte are 01 or 10 (including extended labels removed by RFC 6891).
             case reservedLabelType
-            /// 레이블 안에 `.` 바이트가 있다. 표기로 옮기면 다른 이름이 되므로 받지 않는다(Go 이슈 56246).
+            /// A label contains a `.` byte. Rejects it because presentation format would produce a different name (Go issue 56246).
             case labelContainsDot
-            /// 끝 점을 포함한 표기 길이가 254바이트를 넘는다.
+            /// The presentation length including the trailing dot exceeds 254 bytes.
             case tooLong
-            /// 포인터를 10번 넘게 따라갔다. 고리를 이루는 포인터가 여기서 끝난다.
+            /// Followed more than 10 pointers. This stops pointer loops.
             case tooManyPointers
         }
 
@@ -36,17 +36,17 @@ extension DNSMessage {
             labels = validatedLabels
         }
 
-        /// 표기 문자열(`rd-mac-1a2b3c4d.tail0001.ts.net.`)을 이름으로 바꾼다. Go `dnsname.ToFQDN`의 검사를 한다.
+        /// Converts a presentation string (`rd-mac-1a2b3c4d.tail0001.ts.net.`) to a name. Uses Go's `dnsname.ToFQDN` checks.
         ///
-        /// 끝 점은 있어도 없어도 되고, 앞 점 하나는 떼어 낸다. 빈 문자열과 `.`은 루트다. 레이블이 비었거나 63바이트를 넘거나,
-        /// 공백·제어 문자(0x20 이하, 0x7F)가 있거나, 끝 점을 더해 254바이트를 넘으면 nil.
-        /// netmap의 노드 이름, `ExtraRecords` 이름, 응답기의 영역을 읽을 때 쓴다.
+        /// The trailing dot is optional. Removes one leading dot. The empty string and `.` are the root. If a label is empty or over 63 bytes,
+        /// the name contains a space or control character (0x20 or below, or 0x7F), or adding the trailing dot would exceed 254 bytes, returns nil.
+        /// Used to read netmap node names, `ExtraRecords` names, and responder zones.
         init?(_ text: String) {
             var bytes = Array(text.utf8)
             if bytes.first == Self.dot { bytes.removeFirst() }
             if bytes.last == Self.dot { bytes.removeLast() }
             guard !bytes.isEmpty else {
-                // "", ".", ".."은 Go에서도 루트다.
+                // "", ".", and ".." are also the root in Go.
                 self.init(validatedLabels: [])
                 return
             }
@@ -56,13 +56,13 @@ extension DNSMessage {
             self.init(validatedLabels: labels)
         }
 
-        /// 메시지의 `offset`에서 이름 하나를 읽는다. Go `Name.unpack`과 같은 규칙이다(노트 3.1).
+        /// Reads one name from `offset` in the message. Follows the same rules as Go `Name.unpack` (notes 3.1).
         ///
-        /// 포인터(상위 두 비트 11)는 앞뒤 어느 쪽을 가리켜도 따라가되 10번까지만 따라간다. Go와 같고, 고리는 이 횟수로 끝난다.
-        /// 포인터 사이에서는 읽는 위치가 늘 앞으로 가므로 어떤 입력에서도 반복이 메시지 길이의 11배를 넘지 않고,
-        /// 길이 검사가 레이블 수를 묶는다.
+        /// Follows a pointer (top two bits 11) in either direction, at most 10 times. This matches Go and bounds loops by the pointer count.
+        /// Between pointers, the read position always moves forward, so the loop never exceeds 11 times the message length for any input,
+        /// and the length check bounds the label count.
         ///
-        /// - Returns: 이름과 이름 다음 바이트의 위치. 포인터가 있으면 첫 포인터 바로 뒤다.
+        /// - Returns: The name and the offset of the byte after it. If there is a pointer, the offset is immediately after the first pointer.
         static func read(from message: [UInt8], at offset: Int) throws(ParseError) -> (name: Name, end: Int) {
             var labels: [[UInt8]] = []
             var presentationLength = 0
@@ -82,7 +82,7 @@ extension DNSMessage {
                     guard labelEnd <= message.count else { throw .truncated }
                     let label = message[cursor..<labelEnd]
                     guard !label.contains(dot) else { throw .labelContainsDot }
-                    // 이 레이블과 그 끝 점을 더한 표기 길이가 254를 넘으면 안 된다.
+                    // The presentation length must stay at or below 254 after adding this label and its trailing dot.
                     guard presentationLength + label.count < maxPresentationLength else { throw .tooLong }
                     labels.append(Array(label))
                     presentationLength += label.count + 1
@@ -101,7 +101,7 @@ extension DNSMessage {
             }
         }
 
-        /// 압축 없는 선 형식: 레이블마다 길이 바이트와 내용, 끝에 0.
+        /// Uncompressed wire format, with each label's length byte and contents, then a final 0.
         var wireFormat: [UInt8] {
             var bytes: [UInt8] = []
             for label in labels {
@@ -112,18 +112,18 @@ extension DNSMessage {
             return bytes
         }
 
-        /// ASCII `A`-`Z`만 소문자로 바꾼 이름. 이름 비교는 이것으로 한다(Go `rawNameToLower`).
+        /// A name with only ASCII `A`-`Z` converted to lowercase. Used for name comparisons (Go `rawNameToLower`).
         func lowercased() -> Name {
             Name(validatedLabels: labels.map { $0.map(Self.lowercased) })
         }
 
-        /// 공백·제어 문자(0x20 이하, 0x7F)가 없다. 질의 이름이 Go `dnsname.ToFQDN`을 통과하는 조건이다.
-        /// 선 형식에서 읽은 이름은 레이블 길이와 전체 길이를 이미 지키므로 이것만 더 보면 된다.
+        /// Contains no spaces or control characters (0x20 or below, or 0x7F). This is required for a query name to pass Go `dnsname.ToFQDN`.
+        /// A name read from the wire already meets the label and total length limits, so only this additional check is needed.
         var isPrintable: Bool {
             labels.allSatisfy(Self.isPrintable)
         }
 
-        /// `zone`과 같거나 그 아래의 이름이다. 레이블 단위로 견준다(Go `FQDN.Contains`). 둘 다 소문자여야 한다.
+        /// Whether the name equals `zone` or is below it. Compares whole labels (Go `FQDN.Contains`). Both must be lowercase.
         func isWithin(_ zone: Name) -> Bool {
             labels.count >= zone.labels.count && labels.suffix(zone.labels.count).elementsEqual(zone.labels)
         }

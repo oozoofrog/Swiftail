@@ -1,42 +1,42 @@
-/// WireGuard 프로토콜 상수.
+/// WireGuard protocol constants.
 ///
-/// 값은 `docs/protocol-notes/wireguard.md`의 "상수와 타이머" 표를 따른다
-/// (출처: wireguard-go `device/constants.go`, `device/tun.go`).
+/// Values follow the "Constants and timers" table in `docs/protocol-notes/wireguard.md`
+/// (origin: wireguard-go `device/constants.go`, `device/tun.go`).
 enum Constants {
-    /// 이 수를 넘게 보낸 keypair는 송신 뒤 새 핸드셰이크를 시작한다. 2^60.
+    /// A keypair that has sent more than this starts a new handshake after sending. 2^60.
     static let rekeyAfterMessages: UInt64 = 1 << 60
-    /// 이 값 이상의 counter는 보내지도 받지도 않는다. 2^64 − 2^13 − 1.
+    /// Counters at or above this value are neither sent nor received. 2^64 − 2^13 − 1.
     static let rejectAfterMessages: UInt64 = .max - (1 << 13)
-    /// 초기자 keypair가 이보다 오래되면 송신 뒤 새 핸드셰이크를 시작한다.
+    /// If the initiator's keypair is older than this, starts a new handshake after sending.
     static let rekeyAfterTime: Duration = .seconds(120)
-    /// 핸드셰이크 메시지 송신 사이의 최소 간격이자 재시도 간격.
+    /// The minimum interval between handshake messages and the retry interval.
     static let rekeyTimeout: Duration = .seconds(5)
-    /// 재시도·새 핸드셰이크 타이머에 더하는 지터의 상한(ms, 미포함).
+    /// The exclusive upper bound of jitter added to retry and new-handshake timers (ms).
     static let rekeyTimeoutJitterMaxMilliseconds = 334
-    /// 재시도 횟수가 이 값을 넘으면 포기한다. RekeyAttemptTime(90초) / RekeyTimeout(5초).
+    /// Gives up when the retry count exceeds this value. RekeyAttemptTime (90 seconds) / RekeyTimeout (5 seconds).
     static let maxTimerHandshakes = 18
-    /// 이보다 오래된 keypair로는 보내지도 받지도 않는다.
+    /// Keypairs older than this cannot be used to send or receive.
     static let rejectAfterTime: Duration = .seconds(180)
-    /// 데이터를 받고 이 시간 동안 보낼 것이 없으면 keepalive를 보낸다.
+    /// Sends a keepalive if there is nothing to send for this long after receiving data.
     static let keepaliveTimeout: Duration = .seconds(10)
-    /// 받은 cookie를 mac2에 쓰는 기간. 받는 쪽이 cookie를 만드는 비밀도 이 주기로 바꾼다.
+    /// How long a received cookie can be used for mac2. The receiver rotates the cookie-generating secret at the same interval.
     static let cookieRefreshTime: Duration = .seconds(120)
-    /// 부하를 감지한 뒤 부하 상태로 머무는 시간(`UnderLoadAfterTime`).
+    /// How long the receiver stays under load after detecting load (`UnderLoadAfterTime`).
     static let underLoadAfterTime: Duration = .seconds(1)
-    /// 한 피어의 initiation을 이보다 짧은 간격으로 다시 소비하지 않는다(flood 방지).
+    /// The minimum interval before consuming another initiation from the same peer (flood protection).
     static let handshakeInitiationRate: Duration = .milliseconds(20)
-    /// 전송 평문을 이 배수로 패딩한다.
+    /// Pads transport plaintext to a multiple of this value.
     static let paddingMultiple = 16
-    /// UDP 페이로드 상한(wireguard-go 기본 플랫폼의 `MaxSegmentSize`).
+    /// The UDP payload limit (`MaxSegmentSize` for wireguard-go's default platform).
     static let maxSegmentSize = 65535
-    /// 보낼 IP 패킷의 상한. 머리 16 + 태그 16 + 여유 8을 뺀다(`MaxContentSize`).
+    /// The outgoing IP packet size limit. Subtract 16 for the header + 16 for the tag + 8 of headroom (`MaxContentSize`).
     static let maxContentSize = maxSegmentSize - 32 - 8
-    /// 패딩 계산에 쓰는 MTU. TUN이 MTU를 주지 못할 때 wireguard-go가 쓰는 값(`DefaultMTU`).
+    /// The MTU for padding calculations. wireguard-go uses this value when the TUN cannot provide an MTU (`DefaultMTU`).
     static let defaultMTU = 1420
-    /// 세션이 서기 전 피어마다 쌓아 두는 IP 패킷 수. 넘치면 가장 오래된 것을 버린다(계약 값).
+    /// The number of IP packets queued per peer before a session is established. Discards the oldest on overflow (contract value).
     static let maxStagedPackets = 64
-    /// 내린 피어의 마지막 initiation timestamp를 기억해 두는 수. 넘치면 먼저 내린 것부터 잊는다(계약 값).
+    /// The number of last initiation timestamps retained for removed peers. Forgets the earliest removals on overflow (contract value).
     static let maxRetiredTimestamps = 1024
-    /// 세션이 설 때 먼저 보내는 priority message의 상한(Tailscale 포크 wireguard-go `MaxPriorityMessageContentSize`).
+    /// The limit for the priority message sent first when a session is established (Tailscale fork of wireguard-go `MaxPriorityMessageContentSize`).
     static let maxPriorityMessageSize = 512
 }

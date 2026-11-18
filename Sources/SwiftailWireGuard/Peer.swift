@@ -1,55 +1,55 @@
 import SwiftailBase
 
-/// 장치가 아는 피어 하나의 상태 전체.
+/// The complete state of a peer known to the device.
 ///
-/// 이 값을 지우면 그 피어의 키 재료도 함께 사라진다. 전송 키는 CryptoKit `SymmetricKey`에 있어
-/// 해제될 때 메모리가 지워진다. chaining key 같은 `[UInt8]` 재료는 Swift가 해제 시 지움을 보장하지 않는다.
+/// Removing this value discards the peer's key material. Transport keys are in CryptoKit `SymmetricKey`,
+/// which clears their memory on deallocation. Swift does not guarantee clearing `[UInt8]` material such as the chaining key on deallocation.
 ///
-/// `docs/protocol-notes/wireguard.md` "절차와 상태 기계" (출처: wireguard-go `device/peer.go`).
+/// `docs/protocol-notes/wireguard.md` "Procedure and state machine" (origin: wireguard-go `device/peer.go`).
 struct Peer {
     let publicKey: PublicKey
     var allowedIPs: [IPPrefix]
-    /// 미리 계산한 DH(우리 정적 키, 피어 정적 키). 저차 점이라 0이면 `nil`이고, 그 피어와는 핸드셰이크할 수 없다.
+    /// Precomputed DH (our static key, the peer's static key). A low-order point produces 0, yielding `nil` and preventing a handshake with the peer.
     let staticStaticSecret: [UInt8]?
     var cookieGenerator: CookieGenerator
 
-    /// 우리가 보낸 initiation이 response를 기다리는 중.
+    /// The initiation we sent that is awaiting a response.
     var pendingHandshake: PendingHandshake?
     var keypairs = Keypairs()
-    /// 세션이 서기 전에 보내려 한 IP 패킷. 빈 배열은 keepalive다.
+    /// IP packets intended for sending before the session is established. An empty array is a keepalive.
     var staged: [[UInt8]] = []
-    /// 이 피어와의 세션이 설 때마다 대기열보다 먼저 보낼 평문 IP 패킷. nil이면 보내지 않는다.
+    /// The plaintext IP packet to send ahead of the queue whenever a session is established with this peer. If nil, sends nothing.
     var priorityMessage: [UInt8]?
     var timers = PeerTimers()
 
-    /// 마지막으로 받아들인 initiation timestamp. 키 재료를 지워도 남긴다(옛 initiation 재전송 방지).
+    /// The last accepted initiation timestamp. Retained after key material is erased to prevent replays of old initiations.
     var lastAcceptedTimestamp: TAI64N?
     var lastInitiationConsumed: ContinuousClock.Instant?
-    /// 마지막으로 initiation이나 response를 보낸 시각. `rekeyTimeout` 안에는 initiation을 또 보내지 않는다.
+    /// The last time an initiation or response was sent. No new initiation is sent within `rekeyTimeout`.
     var lastSentHandshake: ContinuousClock.Instant?
 
-    /// 이 피어가 장치의 index 표에 차지한 index들.
+    /// The indices this peer occupies in the device's index table.
     var localIndices: Set<UInt32> {
         var indices = Set(keypairs.localIndices)
         if let pendingHandshake { indices.insert(pendingHandshake.localIndex) }
         return indices
     }
 
-    /// `localIndices`를 집합 없이 칸별로 쥔 값. 패킷마다 "index가 바뀌었는가"만 비교하는 데 쓴다.
+    /// Holds `localIndices` in individual slots without a set. Used on each packet only to check whether the indices changed.
     struct IndexSlots: Equatable {
         var previous: UInt32?
         var current: UInt32?
         var next: UInt32?
         var pending: UInt32?
 
-        /// 값이 있는 칸의 index.
+        /// The indices in occupied slots.
         var all: [UInt32] { [previous, current, next, pending].compactMap { $0 } }
     }
 
-    /// 장치의 index 표에 올려 둔 칸. 장치가 피어를 고치고 나면(`edit`) `indexSlots`와 맞춘다.
+    /// The slots recorded in the device's index table. After the device updates the peer (`edit`), it synchronizes them with `indexSlots`.
     var tabledIndexSlots = IndexSlots()
 
-    /// `tabledIndexSlots`를 지금의 `indexSlots`로 맞추고 (이전, 지금)을 돌려준다.
+    /// Synchronizes `tabledIndexSlots` with the current `indexSlots` and returns (previous, current).
     mutating func syncTabledIndexSlots() -> (before: IndexSlots, after: IndexSlots) {
         let before = tabledIndexSlots
         let after = indexSlots
@@ -66,12 +66,12 @@ struct Peer {
         )
     }
 
-    /// 출발 주소가 이 피어의 AllowedIPs 안인지.
+    /// Whether the source address is within this peer's AllowedIPs.
     func allows(source: IPAddress) -> Bool {
         allowedIPs.contains { $0.contains(source) }
     }
 
-    /// 대기열에 넣는다. 넘치면 가장 오래된 것을 버린다.
+    /// Adds a packet to the queue. Discards the oldest packet on overflow.
     mutating func stage(_ packet: [UInt8]) {
         staged.append(packet)
         if staged.count > Constants.maxStagedPackets {
@@ -79,7 +79,7 @@ struct Peer {
         }
     }
 
-    /// keypair·진행 중인 핸드셰이크·대기열을 모두 지운다(wireguard-go `ZeroAndFlushAll`).
+    /// Clears all keypairs, the in-progress handshake, and the queue (wireguard-go `ZeroAndFlushAll`).
     mutating func zeroKeyMaterial() {
         keypairs = Keypairs()
         pendingHandshake = nil
@@ -87,8 +87,8 @@ struct Peer {
     }
 }
 
-/// `print`·`dump`·디버거가 기본 반영(reflection)으로 키 재료(chaining key, static-static DH, cookie)를
-/// 펼쳐 보이지 않게 공개 정보만 드러낸다.
+/// Exposes only public information to keep key material (chaining key, static-static DH, cookie) out of
+/// default reflection in `print`, `dump`, and the debugger.
 extension Peer: CustomReflectable {
     var customMirror: Mirror {
         Mirror(self, children: ["publicKey": publicKey, "allowedIPs": allowedIPs], displayStyle: .struct)

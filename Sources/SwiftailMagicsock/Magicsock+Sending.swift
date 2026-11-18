@@ -1,29 +1,29 @@
-// CallMeMaybe를 보내는 조건과 미루기는 Go 구현을 따랐다.
-// 출처: tailscale.com v1.104.6 `wgengine/magicsock/magicsock.go` (`enqueueCallMeMaybe`, `endpointsFreshEnoughDuration`),
+// The conditions for sending and deferring CallMeMaybe follow the Go implementation.
+// Origin: tailscale.com v1.104.6 `wgengine/magicsock/magicsock.go` (`enqueueCallMeMaybe`, `endpointsFreshEnoughDuration`),
 // `wgengine/magicsock/endpoint.go` (`send`). Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
 import SwiftailBase
 
-/// WireGuard 데이터그램 보내기와 disco 메시지 보내기(계약 동작 D3·D4·F, 노트 4.5·4.8 4).
+/// Sending WireGuard datagrams and disco messages (contract behaviors D3, D4, and F, notes 4.5 and 4.8 4).
 ///
-/// 경로는 피어의 `PeerPathState`가 고른다. 신뢰된 직접 주소면 UDP로만, 아니면 직접 주소(있으면)와 피어의 홈 DERP로
-/// 함께 보내며 다시 찾는다. 이 파일은 그 계획을 출력으로 바꾸고, 계획에 딸린 disco Ping을 봉하고, CallMeMaybe에
-/// 자기 엔드포인트를 채운다. 엔드포인트가 낡았으면 CallMeMaybe를 미루고 STUN 회차를 돌려 끝난 뒤에 보낸다.
+/// The peer's `PeerPathState` selects the path. A trusted direct address gets UDP only. Otherwise sends to both the direct address (if any) and the peer's home DERP
+/// while rediscovering the path. This file converts that plan into output, seals any disco Pings in the plan, and fills CallMeMaybe with
+/// local endpoints. If the endpoints are stale, defers CallMeMaybe and sends it after a STUN round completes.
 extension Magicsock {
-    /// CallMeMaybe에 담을 자기 엔드포인트가 이보다 오래됐으면 회차를 다시 돌린 뒤에 보낸다.
-    /// `endpointsFreshEnoughDuration`(`magicsock.go:4112`, 노트 4.8 4.1).
+    /// If the local endpoints to put in CallMeMaybe are older than this, rerun the round before sending.
+    /// `endpointsFreshEnoughDuration` (`magicsock.go:4112`, notes 4.8 4.1).
     static let endpointsFreshness: Duration = .seconds(27)
 
-    /// 엔진이 낸 WireGuard 데이터그램 하나를 피어에게 보낸다. 경로를 고른다.
+    /// Sends a WireGuard datagram from the engine to a peer, choosing its path.
     public mutating func send(_ datagram: [UInt8], to peer: NodePublicKey, at now: ContinuousClock.Instant) -> [Output] {
         var random = SystemRandomNumberGenerator()
         return send(datagram, to: peer, at: now, using: &random)
     }
 
-    /// `send(_:to:at:)`과 같다. 난수를 `generator`에서 뽑는다.
+    /// Equivalent to `send(_:to:at:)`, drawing random values from `generator`.
     ///
-    /// 출력은 데이터그램(UDP, DERP 순), 딸린 disco Ping과 CallMeMaybe, 멈춘 주기를 다시 건 STUN 요청, 경로 사건 순이다.
-    /// 직접 주소도 DERP 지역도 없으면 데이터그램은 `noRouteToPeer`로 버리고 Ping은 그대로 보낸다.
+    /// Outputs in order are the datagram (UDP, then DERP), associated disco Pings and CallMeMaybe, STUN requests from restarting the paused periodic round, and path events.
+    /// If there is no direct address or DERP region, discards the datagram with `noRouteToPeer` and sends the Pings as usual.
     mutating func send(
         _ datagram: [UInt8],
         to peer: NodePublicKey,
@@ -43,7 +43,7 @@ extension Magicsock {
             outputs.append(.dropped(.noRouteToPeer))
         }
         outputs += handle(plan.actions, for: peer, at: now, using: &generator)
-        // 유휴로 멈춘 주기 회차는 다음 송신이 다시 건다(동작 E5).
+        // The next send re-arms periodic rounds paused due to idleness (behavior E5).
         if netcheck.nextDeadline == nil {
             outputs += handle(netcheck.reSTUN(at: now, using: &generator), at: now, using: &generator)
         }
@@ -51,7 +51,7 @@ extension Magicsock {
         return outputs
     }
 
-    /// 피어의 경로 상태 기계가 낸 일을 출력으로 바꾼다. Ping은 봉해 UDP로, CallMeMaybe는 `callMeMaybe(to:)`로.
+    /// Converts a peer path state machine's actions into outputs. Seals Pings and sends them over UDP, and handles CallMeMaybe via `callMeMaybe(to:)`.
     mutating func handle(
         _ actions: [PeerPathState.Action],
         for peer: NodePublicKey,
@@ -73,10 +73,10 @@ extension Magicsock {
         return outputs
     }
 
-    /// 피어의 홈 DERP로 자기 엔드포인트 전체를 담은 CallMeMaybe를 보낸다(동작 F1).
+    /// Sends a CallMeMaybe containing all local endpoints to the peer over its home DERP (behavior F1).
     ///
-    /// 엔드포인트를 정한 지 27초가 지났거나 아직 정하지 않았으면 피어를 미룬 목록에 넣고(피어당 한 칸) 회차를 시작한다.
-    /// 회차가 끝나면 `sendPendingCallMeMaybe`가 보낸다(동작 F2). 엔드포인트 종류는 담지 않는다(노트 4.8 4.2).
+    /// If 27 seconds have passed since endpoints were set or none were ever set, adds the peer to the deferred list (one slot per peer) and starts a round.
+    /// When the round ends, `sendPendingCallMeMaybe` sends it (behavior F2). Endpoint types are omitted (notes 4.8 4.2).
     mutating func callMeMaybe(
         to peer: NodePublicKey,
         at now: ContinuousClock.Instant,
@@ -94,7 +94,7 @@ extension Magicsock {
         return [.derp(packet, to: peer, region: entry.path.homeDERP)]
     }
 
-    /// 엔드포인트를 다시 정했다. 미뤄 둔 CallMeMaybe를 보낸다.
+    /// Sends deferred CallMeMaybe messages once endpoints have been refreshed.
     mutating func sendPendingCallMeMaybe(at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Output] {
         let waiting = pendingCallMeMaybe
         pendingCallMeMaybe = []

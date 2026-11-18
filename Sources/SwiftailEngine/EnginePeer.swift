@@ -1,5 +1,5 @@
-// 피어 자격과 AllowedIPs 분류는 Go 구현을 따라 옮겼다.
-// 출처: tailscale.com v1.104.6 `net/routemanager/routemanager.go` (`peerPrefixes`, `isSelfPrefix`),
+// Peer eligibility and AllowedIPs classification are ported from the Go implementation.
+// Origin: tailscale.com v1.104.6 `net/routemanager/routemanager.go` (`peerPrefixes`, `isSelfPrefix`),
 // `net/tsaddr/tsaddr.go` (`IsTailscaleIP`), `ipn/ipnlocal/expiry.go`.
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
@@ -7,42 +7,42 @@ import Foundation
 import SwiftailBase
 import SwiftailControl
 
-/// netmap의 피어 하나를 데이터면에 올린 모습.
+/// A netmap peer installed in the data plane.
 ///
-/// M3은 서브넷 경로와 exit node를 받지 않는다(Go의 `RouteAll=false`, exit node 없음과 같다). 그래서 피어가
-/// 출발지로 쓸 수 있는 주소는 피어 자신의 주소, 곧 한 주소짜리 접두뿐이다. 지원하지 않는 피어는 올리지 않는다(닫힌 쪽).
+/// M3 does not accept subnet routes or exit nodes (equivalent to Go's `RouteAll=false` and no exit node). A peer can therefore
+/// use only its own addresses as sources, which are single-address prefixes. Unsupported peers are not installed (fail closed).
 ///
-/// `docs/protocol-notes/netmap-engine.md` 4.1·4.3, `docs/contracts/SwiftailEngine.md` 동작 2.
+/// `docs/protocol-notes/netmap-engine.md` 4.1 and 4.3, and `docs/contracts/SwiftailEngine.md` behavior 2.
 public struct EnginePeer: Sendable, Equatable {
-    /// 피어의 node 키. WireGuard 공개 키와 같다.
+    /// The peer's node key, which is its WireGuard public key.
     public var key: NodePublicKey
-    /// netmap의 `Name` 그대로(끝에 점이 붙은 FQDN). 비어 있을 수 있다. 같은 키를 여러 노드가 내세워도 데이터면에 오른
-    /// 바로 그 노드의 이름이다.
+    /// The netmap `Name` verbatim (an FQDN with a trailing dot). May be empty. If multiple nodes claim the same key, this is the name
+    /// of the particular node installed in the data plane.
     public var name: String
-    /// 이 피어가 출발지로 쓸 수 있는 주소. WireGuard AllowedIPs가 된다.
+    /// Addresses this peer can use as sources. Become WireGuard AllowedIPs.
     public var allowedIPs: [IPPrefix]
-    /// 이 피어에게 보낼 때 쓸 DERP 지역. 0이면 모른다.
+    /// The DERP region to use when sending to this peer, or 0 if unknown.
     public var homeDERP: Int64
-    /// netmap의 `DiscoKey`. 0이면 이 피어와 disco를 하지 않는다(DERP만).
+    /// The netmap's `DiscoKey`. A key of 0 disables disco with this peer (DERP only).
     public var discoKey: DiscoPublicKey
-    /// netmap의 `Endpoints` 그대로. 후보로 쓸 주소를 거르는 일은 `Magicsock`이 한다.
+    /// The netmap's `Endpoints` verbatim. `Magicsock` filters addresses for candidate use.
     public var endpoints: [IPEndpoint]
 
-    /// netmap에서 데이터면에 올릴 피어들을 고른다. 순서는 node ID 오름차순이다.
+    /// Selects peers to install in the data plane from the netmap, in ascending node ID order.
     ///
-    /// 키 하나는 피어 하나에만, 접두 하나도 피어 하나에만 준다. 같은 키나 같은 접두를 여러 노드가 내세우면
-    /// node ID가 작은 쪽이 갖는다. 접두의 주인이 하나여야 "이 출발 주소는 이 피어"가 성립한다
-    /// (wireguard-go의 AllowedIPs도 접두마다 주인이 하나다). 이 노드 자신의 주소는 어느 피어에게도 주지 않는다.
+    /// Assigns each key and each prefix to only one peer. If multiple nodes claim the same key or prefix,
+    /// the lower node ID owns it. Each prefix must have one owner for "this source address is this peer" to hold
+    /// (wireguard-go AllowedIPs also have one owner per prefix). The local node's addresses are assigned to no peer.
     ///
-    /// - Parameter now: 키 만료를 판단할 지금 시각(로컬 벽시계).
+    /// - Parameter now: The current time (local wall clock) for checking key expiration.
     public static func peers(in netmap: Netmap, at now: Date) -> [EnginePeer] {
         eligibleNodes(in: netmap, at: now).map(\.peer)
     }
 
-    /// 올릴 피어와 그 노드. 엔진이 노드의 주소로 송신 경로 색인을 만들 때 쓴다.
+    /// A peer to install and its node. The engine uses the node's addresses to build the outbound route index.
     static func eligibleNodes(in netmap: Netmap, at now: Date) -> [(node: Node, peer: EnginePeer)] {
         var claimedKeys: Set<NodePublicKey> = []
-        // 자기 주소를 먼저 차지해 둔다. 피어가 그 주소를 내세워도 이 노드를 출발지로 한 패킷을 보낼 수 없다.
+        // Reserve local addresses first. A peer claiming one still cannot send packets presenting this node as the source.
         var claimedPrefixes = Set(netmap.selfNode.addresses)
         var result: [(node: Node, peer: EnginePeer)] = []
         for node in netmap.peers.sorted(by: { $0.id < $1.id }) {
@@ -56,22 +56,22 @@ public struct EnginePeer: Sendable, Equatable {
         return result
     }
 
-    /// 노드를 올릴 수 없으면 `nil`.
+    /// Returns `nil` if the node cannot be installed.
     private init?(node: Node, at now: Date) {
         guard node.id != 0, !node.key.isZero,
               !Self.isExpired(node, at: now),
-              // disco 키도 홈 DERP도 없으면 닿을 길이 없다.
+              // A peer without a disco key or home DERP has no reachable path.
               !(node.discoKey.isZero && node.homeDERP == 0),
               Self.isSupported(node)
         else { return nil }
 
-        // AllowedIPs 가운데 피어 자신의 주소만 남긴다: 한 주소짜리(/32, /128)이고, tailnet 주소이거나 `addresses`에 있는 것.
-        // 서브넷 경로와 /0은 여기서 빠진다. `addresses`에 있다고 새로 더하지는 않는다.
-        // Go(`peerViewOf`)는 `addresses`에 있는 접두를 길이와 무관하게 자기 주소로 본다. 여기서는 넓은 접두를 받지 않는다:
-        // WireGuard의 출발지 검사는 피어마다 따로라, 넓은 접두를 가진 피어는 다른 피어의 주소를 출발지로 쓸 수 있다.
-        // IPv4-mapped IPv6 주소(`::ffff:a.b.c.d`)도 받지 않는다: 주소로 신원을 찾는 쪽(`whoIs`)은 그것을 IPv4로 바꿔 찾으므로,
-        // 그 IPv4 주소의 주인이 아닌 피어가 mapped 주소를 출발지로 쓰면 다른 노드의 신원으로 보인다.
-        // shortcut: Go는 호스트 비트가 남은 원문 접두를 빼지만, 여기서는 구분하지 못한다(`IPPrefix`가 해독할 때 지운다).
+        // Keeps only the peer's own addresses from AllowedIPs, meaning single-address entries (/32 or /128) that are tailnet addresses or in `addresses`.
+        // Subnet routes and /0 are excluded here. Presence in `addresses` alone does not add an entry.
+        // Go (`peerViewOf`) treats prefixes in `addresses` as the peer's own addresses regardless of length. This implementation rejects broad prefixes because
+        // WireGuard checks sources per peer, so a peer with a broad prefix could use another peer's address as its source.
+        // Also rejects IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) because address-based identity lookup (`whoIs`) converts them to IPv4 before searching.
+        // If a peer that does not own the IPv4 address uses its mapped form as the source, it would appear under another node's identity.
+        // shortcut: Go excludes original prefixes that still have host bits set. This implementation cannot distinguish them (`IPPrefix` clears the bits during decoding).
         var allowedIPs: [IPPrefix] = []
         for prefix in node.allowedIPs
         where Self.isSingleAddress(prefix) && !Self.isIPv4Mapped(prefix.address) && !allowedIPs.contains(prefix) {
@@ -89,17 +89,17 @@ public struct EnginePeer: Sendable, Equatable {
         endpoints = node.endpoints
     }
 
-    /// 만료 표지가 있거나 키 만료 시각이 지났다(같은 시각 포함).
-    // shortcut: 로컬 시계로 판단한다. Go는 ControlTime과 1분 넘게 어긋난 시계를 보정한다.
+    /// An expiration flag is set or the key expiration time has passed (including the exact time).
+    // shortcut: Uses the local clock. Go corrects a clock that differs from ControlTime by more than 1 minute.
     private static func isExpired(_ node: Node, at now: Date) -> Bool {
         if node.expired { return true }
         guard let expiry = node.keyExpiry else { return false }
         return expiry <= now
     }
 
-    /// M3이 지원하지 않는 피어: WireGuard 전용, jailed, masquerade 주소가 있는 피어, 그리고 tailnet lock의
-    /// 서명이 없어 PeerAPI만 허용되는 피어(`UnsignedPeerAPIOnly`). 마지막 것은 Go가 필터의 패킷 규칙과
-    /// 겹치면 규칙 전체를 비우는 안전장치를 두는 피어다(노트 4.5의 4). 여기서는 아예 올리지 않는다.
+    /// Peers unsupported in M3 include WireGuard-only peers, jailed peers, peers with masquerade addresses, and peers with no tailnet lock
+    /// signature that can use only PeerAPI (`UnsignedPeerAPIOnly`). Go has a safeguard that clears all filter rules if the latter peers overlap
+    /// with the filter's packet rules (notes 4.5 item 4). This implementation excludes them from the data plane entirely.
     private static func isSupported(_ node: Node) -> Bool {
         !node.isWireGuardOnly
             && !node.isJailed
@@ -108,12 +108,12 @@ public struct EnginePeer: Sendable, Equatable {
             && node.selfNodeV6MasqAddrForThisPeer == nil
     }
 
-    /// /32 또는 /128.
+    /// /32 or /128.
     static func isSingleAddress(_ prefix: IPPrefix) -> Bool {
         prefix.length == prefix.address.bytes.count * 8
     }
 
-    /// IPv4-mapped IPv6 주소(`::ffff:a.b.c.d`).
+    /// An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`).
     static func isIPv4Mapped(_ address: IPAddress) -> Bool {
         address.bytes.count == 16 && address.bytes.starts(with: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF])
     }

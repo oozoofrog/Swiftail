@@ -1,47 +1,47 @@
-// 응답의 배치와 TTL·SOA 값은 Tailscale의 `net/dns/resolver/tsdns.go` `marshalResponse`·`marshalSOA`와
-// `forwarder.go` `checkResponseSizeAndSetTC`(BSD-3-Clause, Copyright (c) Tailscale Inc & contributors)를 따른다.
-// 상수와 배치만 옮겼고 코드는 Swift로 새로 썼다.
+// The response layout and TTL and SOA values follow `marshalResponse` and `marshalSOA` in Tailscale's `net/dns/resolver/tsdns.go` and
+// `checkResponseSizeAndSetTC` in `forwarder.go` (BSD-3-Clause, Copyright (c) Tailscale Inc & contributors).
+// Only the constants and layout were ported. The code was written from scratch in Swift.
 
 import SwiftailBase
 
 extension DNSMessage {
-    /// 응답기가 내는 응답 하나: 질문 0·1개, 답변 0·1개, 권한 구역의 SOA 0·1개. 추가 구역(EDNS OPT 포함)은 싣지 않는다.
+    /// One response from the responder, with 0 or 1 questions, 0 or 1 answers, and 0 or 1 SOA records in the authority section. Omits the additional section, including EDNS OPT.
     ///
-    /// 이름은 압축하지 않는다(노트 3.1 "쓰기"). 머리 플래그를 어떻게 정할지는 부르는 쪽(응답기)의 몫이다.
+    /// Does not compress names (notes 3.1 "Writing"). The caller (the responder) chooses the header flags.
     struct Response: Sendable {
         var header: Header
-        /// 응답에 되돌릴 질문. FORMERR 가운데 질문을 읽지 못한 것은 nil이다.
+        /// The question to echo in the response. Nil for FORMERR when the question could not be read.
         var question: Question?
-        /// 답변 레코드. 소유자 이름은 질문 이름이므로 `question`이 있을 때만 쓴다.
+        /// The answer record. Its owner name is the question name, so it is written only when `question` is present.
         var answer: Answer?
-        /// 부정 응답(NXDOMAIN, 그 타입의 레코드가 없는 NOERROR)의 권한 구역에 실을 SOA.
+        /// The SOA to include in the authority section of a negative response (NXDOMAIN or NOERROR with no record of that type).
         var authority: StartOfAuthority?
 
-        /// 답변 레코드의 RDATA.
+        /// RDATA for the answer record.
         enum Answer: Equatable, Sendable {
-            /// IPv4면 A, IPv6면 AAAA.
+            /// A for IPv4, AAAA for IPv6.
             case address(IPAddress)
-            /// PTR. 대상 이름(끝 점 포함 FQDN).
+            /// PTR with a target name (FQDN with trailing dot).
             case pointer(Name)
         }
 
-        /// 권한 구역의 SOA. 받은 쪽 캐시가 부정 응답을 10초만 두게 하는 것이 목적이고 나머지 필드는 자리 채움이다(RFC 2308).
+        /// The authority section's SOA. It makes the receiver's cache keep a negative response for only 10 seconds. The remaining fields are placeholders (RFC 2308).
         struct StartOfAuthority: Equatable, Sendable {
-            /// 이름을 포함하는 응답기의 영역. 소유자, MNAME, RNAME에 모두 쓴다.
+            /// The responder zone containing the name. Used for the owner, MNAME, and RNAME.
             var zone: Name
-            /// SERIAL. Go는 지금 시각의 유닉스 초를 쓴다.
+            /// SERIAL. Go uses the current time in Unix seconds.
             var serial: UInt32
         }
 
-        /// A·AAAA·PTR 답변의 TTL(초). 원본이 메모리의 netmap이라 다시 묻는 비용이 거의 없다. Go `defaultTTL`.
+        /// The TTL for A, AAAA, and PTR answers (seconds). The source is the in-memory netmap, so querying again has almost no cost. Go `defaultTTL`.
         static let answerTTL: UInt32 = 5
-        /// SOA의 TTL과 REFRESH·RETRY·EXPIRE·MINIMUM(초). Go `negativeTTL`.
+        /// The SOA TTL and REFRESH, RETRY, EXPIRE, and MINIMUM (seconds). Go `negativeTTL`.
         static let negativeTTL: UInt32 = 10
 
-        /// 응답을 바이트로 쓴다.
+        /// Writes the response as bytes.
         ///
-        /// - Parameter limit: UDP 응답의 최대 크기(`DNSMessage.udpPayloadLimit(ofQuery:)`). 응답이 이보다 길면 TC 비트만 켜고
-        ///   자르지는 않는다(노트 4.2.4, Go와 같다). nil이면 크기를 보지 않는다.
+        /// - Parameter limit: The maximum UDP response size (`DNSMessage.udpPayloadLimit(ofQuery:)`). If the response is larger, sets only the TC bit
+        ///   without truncating it (notes 4.2.4, as in Go). Nil skips the size check.
         func encoded(udpPayloadLimit limit: Int? = nil) -> [UInt8] {
             var questionSection: [UInt8] = []
             var answerSection: [UInt8] = []
@@ -85,7 +85,7 @@ extension DNSMessage {
             return record(owner: authority.zone, type: .soa, ttl: Self.negativeTTL, data: data)
         }
 
-        /// 자원 레코드: NAME, TYPE, CLASS IN, TTL, RDLENGTH, RDATA. RDATA는 이름 둘(≤ 255바이트씩)과 20바이트를 넘지 않는다.
+        /// A resource record contains NAME, TYPE, CLASS IN, TTL, RDLENGTH, and RDATA. RDATA cannot exceed two names (≤ 255 bytes each) and 20 bytes.
         private func record(owner: Name, type: RecordType, ttl: UInt32, data: [UInt8]) -> [UInt8] {
             owner.wireFormat
                 + DNSMessage.bigEndian(type.rawValue)

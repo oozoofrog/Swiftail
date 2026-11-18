@@ -1,84 +1,84 @@
-// 경로 선택, 신뢰 기간, 타이머 값은 Go 구현을 따라 옮겼다.
-// 출처: tailscale.com v1.104.6 `wgengine/magicsock/endpoint.go` (`addrForSendLocked`, `send`,
+// Path selection, trust duration, and timer values are ported from the Go implementation.
+// Origin: tailscale.com v1.104.6 `wgengine/magicsock/endpoint.go` (`addrForSendLocked`, `send`,
 // `noteTxActivityExtTriggerLocked`, `updateFromNode`, `changedActiveDiscoLocked`, `populatePeerStatus`,
 // `noteConnectivityChange`, `clearBestAddrLocked`, `endpointState.clear`),
-// `wgengine/magicsock/magicsock.go` (상수).
+// `wgengine/magicsock/magicsock.go` (constants).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
 
 import SwiftailBase
 
-/// 피어 하나와의 직접 UDP 경로를 찾고 유지하는 상태 기계. Go `magicsock.endpoint`의 경로 부분이다.
+/// A state machine that discovers and maintains a direct UDP path to one peer. It corresponds to the path portion of Go's `magicsock.endpoint`.
 ///
-/// 후보 주소에 disco Ping을 보내 Pong이 온 주소 가운데 가장 나은 것을 `bestAddr`로 삼고, 마지막 Pong 뒤
-/// 6.5초 동안은 그 주소로만 보낸다. 신뢰가 지났거나 직접 주소가 없으면 피어의 홈 DERP로도 보내며 다시 찾는다.
+/// Sends disco Pings to candidates and selects the best address that returned a Pong as `bestAddr`. Sends only to that address
+/// for 6.5 seconds after the last Pong. If trust expires or there is no direct address, also sends over the peer's home DERP while rediscovering the path.
 ///
-/// 소켓·시계·암호가 없다. 시각과 난수(TxID)는 인자로 받고 보낼 것은 `Action`으로 돌려준다. disco 메시지를
-/// 봉해 보내는 일과 CallMeMaybe에 자기 엔드포인트를 채우는 일은 `Magicsock`이 한다.
+/// Has no socket, clock, or cryptography. Takes time and randomness (TxID) as arguments and returns items to send as `Action` values.
+/// `Magicsock` seals and sends disco messages and fills CallMeMaybe with local endpoints.
 ///
-/// 파일: 여기는 상태와 경로 선택, `+Candidates`는 후보 표, `+Ping`은 Ping·Pong·heartbeat,
-/// `+BetterAddress`는 두 주소의 비교다.
+/// This file contains state and path selection. `+Candidates` covers the candidate table. `+Ping` covers Ping, Pong, and heartbeat.
+/// `+BetterAddress` compares two addresses.
 ///
-/// `docs/protocol-notes/disco-magicsock.md` 4.4~4.8, `docs/contracts/SwiftailMagicsock.md` 동작 D.
+/// `docs/protocol-notes/disco-magicsock.md` §§4.4~4.8 and `docs/contracts/SwiftailMagicsock.md` behavior D.
 struct PeerPathState: Sendable {
     enum Action: Sendable, Equatable {
-        /// 후보에 disco Ping을 보낸다.
+        /// Sends a disco Ping to a candidate.
         case ping(TransactionID, to: IPEndpoint)
-        /// 피어의 홈 DERP로 CallMeMaybe를 보낸다. 자기 엔드포인트는 `Magicsock`이 채운다.
+        /// Sends CallMeMaybe over the peer's home DERP. `Magicsock` adds local endpoints.
         case callMeMaybe
     }
 
-    /// WireGuard 데이터그램 하나를 보낼 곳(노트 4.5).
+    /// Where to send one WireGuard datagram (notes 4.5).
     struct SendPlan: Sendable, Equatable {
-        /// UDP로 보낼 직접 주소. 없으면 nil.
+        /// The direct address for sending over UDP, or nil if absent.
         var udp: IPEndpoint?
-        /// DERP로도 보낸다면 피어의 홈 지역. 0이면 DERP로 보내지 않는다.
+        /// The peer's home region if also sending over DERP. 0 disables sending over DERP.
         var derpRegion: Int64
-        /// 이 송신과 함께 보낼 disco 메시지.
+        /// Disco messages to send along with this send.
         var actions: [Action]
     }
 
-    // MARK: 상수 (노트 5절. Go 피어의 하강·복귀 시점이 이 값으로 정해지므로 Go와 같게 두고 바꿀 수 없다)
+    // MARK: Constants (notes §5. These values determine when Go peers downgrade and recover, so they must match Go and cannot change)
 
-    /// 보낸 Ping의 Pong을 기다리는 기한. `pingTimeoutDuration`(`magicsock.go:4119`, `tsconst/ping.go:11`).
+    /// The deadline for a Pong to a sent Ping. `pingTimeoutDuration` (`magicsock.go:4119`, `tsconst/ping.go:11`).
     static let pingTimeout: Duration = .seconds(5)
-    /// 같은 후보에 Ping을 다시 보내기까지의 최소 간격. 받은 CallMeMaybe가 풀어 준다.
+    /// The minimum interval before pinging the same candidate again. Receiving CallMeMaybe clears it.
     /// `discoPingInterval`(`magicsock.go:4125`, `tsconst/ping.go:15`).
     static let pingInterval: Duration = .seconds(5)
-    /// 송신이 이어지는 동안 `bestAddr`에 Ping하고 더 나은 길을 찾는 주기. `heartbeatInterval`(`magicsock.go:4099`).
+    /// How often to Ping `bestAddr` and look for a better path while sends continue. `heartbeatInterval` (`magicsock.go:4099`).
     static let heartbeatInterval: Duration = .seconds(3)
-    /// Pong 뒤 `bestAddr`로만 보내는 기간. `trustUDPAddrDuration`(`magicsock.go:4103`).
+    /// How long after a Pong to send exclusively to `bestAddr`. `trustUDPAddrDuration` (`magicsock.go:4103`).
     static let trustDuration: Duration = .milliseconds(6500)
-    /// 마지막 송신 뒤 이만큼 지나면 heartbeat를 멈춘다. Ping으로 배운 후보도 마지막 Ping 뒤 이만큼 지나면 지운다.
+    /// Stops the heartbeat this long after the last send. Also removes candidates learned from Pings this long after the last Ping.
     /// `sessionActiveTimeout`(`magicsock.go:4083`).
     static let sessionActiveTimeout: Duration = .seconds(45)
-    /// `bestAddr`의 지연이 이 값 이하면 더 나은 길을 찾는 전체 Ping을 하지 않는다. `goodEnoughLatency`(`magicsock.go:4107`).
+    /// Skips a full Ping to look for a better path when `bestAddr` latency is at or below this value. `goodEnoughLatency` (`magicsock.go:4107`).
     static let goodEnoughLatency: Duration = .milliseconds(5)
-    /// 지연이 `goodEnoughLatency`보다 큰 직접 경로에서 전체 Ping을 다시 하는 간격.
+    /// The interval between full Pings on a direct path with latency above `goodEnoughLatency`.
     /// `upgradeUDPDirectInterval`(`magicsock.go:4087`).
     static let upgradeInterval: Duration = .seconds(60)
 
-    // MARK: 상태
+    // MARK: State
 
-    /// 피어의 홈 DERP 지역. 0이면 모른다.
+    /// The peer's home DERP region. 0 means unknown.
     private(set) var homeDERP: Int64
-    /// 직접 경로 후보. 들어온 순서를 지켜 같은 입력열에는 같은 순서로 Ping한다(`+Candidates`).
+    /// Direct path candidates. Preserves insertion order so the same input sequence produces the same Ping order (`+Candidates`).
     var candidates: [Candidate] = []
-    /// 최근에 UDP로 받은 Ping의 TxID(받은 차례대로, `recentPingLimit`개까지). 여기 있는 TxID는 어느 출처에서 오든
-    /// 재전송이다(`+Candidates`).
+    /// TxIDs of recent UDP Pings (in receive order, up to `recentPingLimit` entries). A TxID in this list is a replay regardless of
+    /// its source (`+Candidates`).
     var recentPingTxIDs: [TransactionID] = []
-    /// Pong을 기다리는 Ping. TxID → 보낸 곳과 시각(`+Ping`).
+    /// Pings awaiting Pongs. Maps TxID to destination and send time (`+Ping`).
     var sentPings: [TransactionID: SentPing] = [:]
-    /// Pong이 확인한 가장 나은 직접 주소. 언제나 `candidates`에 있는 주소다(지울 때 함께 지운다).
+    /// The best direct address confirmed by a Pong. It is always in `candidates` (removing the candidate also clears it).
     var bestAddr: AddressQuality?
-    /// 이 시각까지(같은 시각 포함) `bestAddr`로만 보낸다. nil이면 신뢰가 없다(Go의 0 시각).
+    /// Sends only to `bestAddr` through this time, inclusive. Nil means no trust (Go's time 0).
     var trustedUntil: ContinuousClock.Instant?
-    /// 마지막 전체 Ping 시각.
+    /// When the last full Ping ran.
     var lastFullPing: ContinuousClock.Instant?
-    /// 다음 heartbeat 시각. nil이면 멈춰 있다.
+    /// When the next heartbeat runs. Nil means it is stopped.
     var heartbeatDeadline: ContinuousClock.Instant?
-    /// 마지막 외부 송신(WireGuard 데이터그램) 시각. 없으면 nil. `Magicsock`이 유휴(ReSTUN 멈춤)를 판단한다.
+    /// When the last external send (WireGuard datagram) occurred, or nil if none. `Magicsock` uses it to detect idleness and stop ReSTUN.
     private(set) var lastSend: ContinuousClock.Instant?
-    /// 마지막으로 `bestAddr`를 지운 까닭. 진단 로그에만 쓴다(`Magicsock.downgrade(of:)`).
+    /// Why `bestAddr` was last cleared. Used only in diagnostic logs (`Magicsock.downgrade(of:)`).
     private(set) var bestAddrLoss: PathDowngrade?
 
     init(homeDERP: Int64, endpoints: [IPEndpoint]) {
@@ -88,17 +88,17 @@ struct PeerPathState: Sendable {
         }
     }
 
-    /// netmap 갱신(노트 4.4 1·2). 홈 DERP를 바꾸고 netmap 후보를 다시 맞춘다.
+    /// Applies a netmap update (notes 4.4 1 and 2). Updates home DERP and synchronizes netmap candidates.
     mutating func update(homeDERP: Int64, endpoints: [IPEndpoint], at now: ContinuousClock.Instant) {
         self.homeDERP = homeDERP
         replaceNetmapCandidates(with: endpoints, at: now)
     }
 
-    /// 피어의 disco 키가 바뀌었다(노트 4.4 3).
+    /// The peer's disco key changed (notes 4.4 3).
     ///
-    /// 옛 키로 보낸 Ping의 Pong은 새 키로 오지 않으므로 기다리던 Ping과 신뢰를 버리고 처음부터 다시 찾는다.
-    /// `bestAddr` 주소는 남겨 새 경로가 설 때까지 UDP로도 함께 보낸다. heartbeat는 다음 기한에 송신 기록이
-    /// 없으면 멈춘다(Go와 같다). 옛 키로 받은 Ping의 TxID도 잊는다.
+    /// Pongs for Pings sent with the old key will not arrive with the new key, so discard outstanding Pings and trust and restart discovery.
+    /// Keep `bestAddr` so sends continue over UDP as well until a new path is established. The heartbeat stops at its next deadline if there is
+    /// no send history (as in Go). Also forget TxIDs of Pings received with the old key.
     mutating func resetForNewDiscoKey() {
         recentPingTxIDs = []
         trustedUntil = nil
@@ -110,19 +110,19 @@ struct PeerPathState: Sendable {
         }
     }
 
-    /// UDP 소켓이 새로 묶여 옛 경로를 믿을 수 없다(노트 4.11 2, Go `noteConnectivityChange`).
+    /// A new UDP socket was bound, so the old path is no longer trustworthy (notes 4.11 2, Go `noteConnectivityChange`).
     ///
-    /// 지우는 것: `bestAddr`와 신뢰, 후보마다의 Ping 기록(마지막 Ping 시각과 받은 Ping의 TxID), 기다리던 Ping.
-    /// 남기는 것: 후보와 그 출처(netmap, 받은 Ping, CallMeMaybe), 마지막 송신 시각, heartbeat(Go는 `lastSendExt`·
-    /// `lastFullPing`을 건드리지 않는다. 그것은 disco 키가 바뀔 때의 `resetForNewDiscoKey`다). 그러므로 다음
-    /// 송신은 신뢰가 없어 DERP로도 보내고, 모든 후보에 Ping하며 CallMeMaybe를 낸다.
+    /// Clears `bestAddr` and trust, each candidate's Ping history (last Ping time and received Ping TxID), and outstanding Pings.
+    /// Retains candidates and their origins (netmap, received Pings, CallMeMaybe), last send time, and heartbeat (Go leaves `lastSendExt` and
+    /// `lastFullPing` alone. Those are affected by `resetForNewDiscoKey` when the disco key changes). The next
+    /// send therefore also uses DERP because trust is absent, Pings all candidates, and emits CallMeMaybe.
     ///
-    /// Go는 기다리던 Ping(`sentPing`)을 지우지 않는다. 여기서는 지운다: 옛 소켓에서 보낸 Ping의 Pong이 뒤늦게 와도
-    /// 새 소켓의 경로 증거가 아니기 때문이다.
+    /// Go retains outstanding Pings (`sentPing`). Discard them here because even a late Pong for a Ping sent on the old socket
+    /// cannot prove a path on the new socket.
     ///
-    /// shortcut: Go는 `endpointState.clear`로 CallMeMaybe 시각도 지워 그 후보가 다음 netmap 갱신에서 지워질 수 있게
-    /// 한다. 여기서는 CallMeMaybe 후보를 다음 CallMeMaybe가 빼 줄 때까지 둔다(출처 표시가 하나다). 필요해지는 시점:
-    /// 재결속 뒤 옛 망의 CallMeMaybe 후보에 Ping이 낭비되는 것이 관문에서 보일 때.
+    /// shortcut: Go also clears CallMeMaybe timestamps via `endpointState.clear`, allowing those candidates to be removed on the next netmap update.
+    /// Here, keep CallMeMaybe candidates until the next CallMeMaybe removes them (there is one origin marker). This will be needed
+    /// if a gate shows wasted Pings to CallMeMaybe candidates from the old network after rebinding.
     mutating func noteConnectivityChange() {
         clearBestAddr(because: .rebind)
         sentPings = [:]
@@ -132,15 +132,15 @@ struct PeerPathState: Sendable {
         }
     }
 
-    /// WireGuard 데이터그램 하나를 보낼 곳을 정한다(노트 4.5 1–5, 4.8 2).
+    /// Selects where to send a WireGuard datagram (notes 4.5 1–5, 4.8 2).
     ///
-    /// 신뢰 기간 안의 `bestAddr`가 있으면 그 주소로만 보낸다. 아니면 `bestAddr`(있으면)와 홈 DERP로 함께
-    /// 보내고 전체 Ping(CallMeMaybe 포함)을 한다. 둘 다 없으면 `udp`가 nil, `derpRegion`이 0이다(`noRouteToPeer`).
+    /// If `bestAddr` is within its trust duration, sends only to that address. Otherwise sends to both `bestAddr` (if present) and home DERP
+    /// and runs a full Ping (including CallMeMaybe). If neither is available, `udp` is nil and `derpRegion` is 0 (`noRouteToPeer`).
     ///
-    /// shortcut: 홈 DERP가 0인 피어를 위한 역방향 DERP 지역(노트 4.5 4)은 쓰지 않는다. 필요해지는 시점: 그런
-    /// 피어가 실제 tailnet 관문에서 보일 때.
+    /// shortcut: Reverse DERP regions (notes 4.5 4) are unused for peers with home DERP 0. This will be needed when such
+    /// a peer is seen at a real tailnet gate.
     mutating func planSend(at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> SendPlan {
-        // Go처럼 보낼 곳을 먼저 정하고 전체 Ping을 한다.
+        // As in Go, choose the send destination before running a full Ping.
         let trusted = isTrusted(at: now)
         let udp = bestAddr?.address
         let derpRegion = trusted ? 0 : homeDERP
@@ -152,9 +152,9 @@ struct PeerPathState: Sendable {
         return SendPlan(udp: udp, derpRegion: derpRegion, actions: actions)
     }
 
-    /// 기한이 지난 Ping을 정리하고 heartbeat를 돌린다(노트 4.6 3, 4.8 3).
+    /// Clears expired Pings and runs the heartbeat (notes 4.6 3, 4.8 3).
     ///
-    /// 같은 시각에 걸린 것은 Ping 기한을 먼저 처리한다. heartbeat는 지운 `bestAddr`에 Ping하지 않는다.
+    /// For equal deadlines, handle Ping expiration first. The heartbeat does not Ping a cleared `bestAddr`.
     mutating func advance(to now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action] {
         expirePings(at: now)
         var actions: [Action] = []
@@ -162,16 +162,16 @@ struct PeerPathState: Sendable {
             actions = heartbeat(at: now, using: &generator)
         }
         if let until = trustedUntil, now > until {
-            // 지난 신뢰는 없는 신뢰와 뜻이 같다. 지워야 `nextDeadline`이 지난 시각을 계속 내지 않는다.
+            // Expired trust is equivalent to no trust. Clear it so `nextDeadline` does not keep returning a past time.
             trustedUntil = nil
         }
         return actions
     }
 
-    /// Ping 기한, heartbeat, 신뢰 만료 가운데 가장 이른 것.
+    /// The earliest of a Ping deadline, heartbeat, and trust expiration.
     ///
-    /// 신뢰는 `trustedUntil`과 같은 시각까지 남으므로 만료 기한은 그보다 1나노초 뒤다. 그 시각의 `advance` 뒤
-    /// `path(at:)`가 `.relayed`로 바뀌어 `Magicsock`이 경로 사건을 낼 수 있다(계약 D7).
+    /// Trust includes the exact time `trustedUntil`, so schedule expiration 1 nanosecond later. After `advance` at that time,
+    /// `path(at:)` changes to `.relayed` so `Magicsock` can emit a path event (contract D7).
     var nextDeadline: ContinuousClock.Instant? {
         var earliest = heartbeatDeadline.earlier(trustedUntil.map { $0 + .nanoseconds(1) })
         for ping in sentPings.values {
@@ -180,7 +180,7 @@ struct PeerPathState: Sendable {
         return earliest
     }
 
-    /// 피어의 지금 경로. Go `curAddr`와 같은 뜻이다(노트 7.1).
+    /// The peer's current path. Equivalent to Go's `curAddr` (notes 7.1).
     func path(at now: ContinuousClock.Instant) -> PeerPath {
         if let bestAddr, isTrusted(at: now) {
             return .direct(bestAddr.address)
@@ -188,13 +188,13 @@ struct PeerPathState: Sendable {
         return .relayed(derpRegion: homeDERP)
     }
 
-    /// `bestAddr`가 있고 `now ≤ trustedUntil`이다(Go `!now.After(trustBestAddrUntil)`).
+    /// `bestAddr` exists and `now ≤ trustedUntil` (Go `!now.After(trustBestAddrUntil)`).
     func isTrusted(at now: ContinuousClock.Instant) -> Bool {
         guard bestAddr != nil, let trustedUntil else { return false }
         return now <= trustedUntil
     }
 
-    /// `bestAddr`와 신뢰를 함께 지운다(Go `clearBestAddrLocked`). 까닭은 진단 로그에 쓰려고 적어 둔다.
+    /// Clears `bestAddr` and trust together (Go `clearBestAddrLocked`). Records the reason for diagnostic logs.
     mutating func clearBestAddr(because loss: PathDowngrade) {
         bestAddr = nil
         trustedUntil = nil

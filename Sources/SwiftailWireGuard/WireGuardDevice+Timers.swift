@@ -1,12 +1,12 @@
-/// 타이머 처리: 기한이 지난 타이머를 이른 순서로 하나씩 처리한다.
+/// Processes expired timers one at a time, in deadline order.
 ///
-/// 만료 처리는 `now` 기준으로 다음 타이머를 다시 건다. 호출이 늦어져도 wireguard-go의 늦게 깬 타이머와
-/// 같은 결과가 된다. 각 처리는 그 타이머를 지우거나 `now`보다 뒤로 다시 걸므로 반복은 끝난다.
+/// Handles expiration by arming the next timer relative to `now`. A late call has the same result as a wireguard-go timer
+/// that wakes late. Each step clears the timer or re-arms it later than `now`, so the loop ends.
 ///
-/// 백서 §6.2–§6.5, `docs/protocol-notes/wireguard.md` "타이머"
-/// (출처: wireguard-go `device/timers.go`).
+/// Whitepaper §6.2–§6.5, `docs/protocol-notes/wireguard.md` "Timers"
+/// (origin: wireguard-go `device/timers.go`).
 extension WireGuardDevice {
-    /// now까지 기한이 지난 타이머를 모두 처리한다.
+    /// Processes all timers due by now.
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
         var outputs: [Output] = []
         while let timer = earliestTimer(), timer.deadline <= now {
@@ -24,8 +24,8 @@ extension WireGuardDevice {
         switch kind {
         case .retransmitHandshake:
             if peer.timers.handshakeAttempts > Constants.maxTimerHandshakes {
-                // 처음 1회 + 재시도 19회 = 20번 보내도 답이 없다. 포기하고 대기열을 버린다.
-                // 남은 핸드셰이크 상태는 540초 뒤 지운다.
+                // No reply after 1 initial send + 19 retries = 20 sends. Give up and discard the queue.
+                // Clear the remaining handshake state after 540 seconds.
                 peer.timers[.sendKeepalive] = nil
                 peer.staged = []
                 if peer.timers[.zeroKeyMaterial] == nil {
@@ -45,7 +45,7 @@ extension WireGuardDevice {
             return outputs
 
         case .newHandshake:
-            // 데이터를 보냈는데 15초 넘게 아무것도 받지 못했다.
+            // Sent data and received nothing for more than 15 seconds.
             return sendHandshakeInitiation(&peer, isRetry: false, at: now)
 
         case .zeroKeyMaterial:

@@ -1,40 +1,40 @@
-// 토큰 규칙은 wireguard-go를 옮겼다.
-// 출처: github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca `ratelimiter/ratelimiter.go`.
+// The token rules are ported from wireguard-go.
+// Origin: github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca `ratelimiter/ratelimiter.go`.
 // Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved. SPDX-License-Identifier: MIT
 
-/// 부하 상태에서 mac2까지 맞은 핸드셰이크 메시지를 출처 호스트별로 제한한다.
+/// Limits handshake messages with valid mac2 per source host under load.
 ///
-/// cookie는 그 출처에서 답장을 받을 수 있음을 증명할 뿐이다. 실제 주소를 가진 공격자는 cookie를 얻은 뒤에도
-/// X25519를 계속 시킬 수 있으므로, 호스트마다 초당 20개(버스트 5)까지만 처리한다.
+/// The cookie proves only that the sender can receive replies at that source. An attacker with a real address can still force
+/// X25519 computations after obtaining a cookie, so process at most 20 per second per host (burst of 5).
 ///
-/// 표는 입력으로 커지는 상태다. wireguard-go는 1초 넘게 쓰지 않은 항목을 1초마다 지우고 개수 상한이 없다.
-/// 여기서는 개수를 `maximumEntries`로 묶고, 표가 찼을 때만 1초 넘게 쓰지 않은 항목을 지운다. 그래도 차 있으면 새
-/// 호스트는 받지 않는다(닫힌 쪽: 이미 표에 있는 호스트의 몫을 지키고, 메모리가 입력만큼 자라지 않는다).
-/// 오래된 항목을 늦게 지워도 결과는 같다: 1초 넘게 쉰 항목의 토큰은 상한까지 차 있으므로, 지우고 새로 만든 항목과
-/// 똑같이 첫 메시지를 받고 버스트 4개분을 남긴다.
+/// The table is state that grows with input. wireguard-go removes entries unused for more than 1 second every 1 second and has no count limit.
+/// Here, the count is capped at `maximumEntries`, and entries unused for more than 1 second are removed only when the table is full. If it remains full,
+/// new hosts are denied (fail closed, preserving existing hosts' allowance and keeping memory from growing with the input).
+/// Delaying removal of old entries gives the same result. An entry idle for more than 1 second is full of tokens, so it accepts its first message
+/// and leaves 4 messages' worth of burst capacity, just like an entry that was removed and recreated.
 ///
-/// `docs/protocol-notes/wireguard.md` "mac1·mac2와 cookie"의 rate limiter.
+/// The rate limiter in "mac1, mac2, and cookies" in `docs/protocol-notes/wireguard.md`.
 struct RateLimiter {
     private struct Bucket {
         var tokens: Duration
         var lastTime: ContinuousClock.Instant
     }
 
-    /// 메시지 하나의 값: 초당 20개(`packetsPerSecond`).
+    /// The cost of one message, at 20 per second (`packetsPerSecond`).
     private static let packetCost: Duration = .seconds(1) / 20
-    /// 쌓을 수 있는 토큰(`packetsBurstable` 5개분).
+    /// The token capacity (`packetsBurstable`, enough for 5 messages).
     private static let maxTokens = packetCost * 5
-    /// 이보다 오래 쓰지 않은 항목은 지울 수 있다(`garbageCollectTime`).
+    /// Entries unused for longer than this can be removed (`garbageCollectTime`).
     private static let idleTime: Duration = .seconds(1)
-    /// 표의 항목 수 상한. 근거는 `docs/contracts/SwiftailWireGuard.md` "cookie reply 보내기".
+    /// The maximum number of table entries. See "Sending a cookie reply" in `docs/contracts/SwiftailWireGuard.md` for the rationale.
     static let maximumEntries = 4096
 
     private var buckets: [[UInt8]: Bucket] = [:]
 
-    /// 호스트 `host`의 메시지 하나를 지금 처리해도 되는가. 되면 그 몫을 쓴다.
+    /// Returns whether a message from `host` can be processed now and consumes its allowance if so.
     ///
-    /// 새 호스트는 첫 메시지를 받고 토큰 `maxTokens − packetCost`로 시작한다. 아는 호스트는 지난 시간만큼 토큰을
-    /// 채우되 `maxTokens`를 넘지 않고, 토큰이 `packetCost`보다 **클 때만** 받는다(Go와 같은 엄격한 비교).
+    /// A new host gets its first message and starts with `maxTokens − packetCost` tokens. For known hosts, replenish tokens based on elapsed time
+    /// up to `maxTokens` and accept only when the balance is **greater than** `packetCost` (the same strict comparison as in Go).
     mutating func allow(_ host: [UInt8], at now: ContinuousClock.Instant) -> Bool {
         guard var bucket = buckets[host] else {
             if buckets.count >= Self.maximumEntries {
@@ -56,7 +56,7 @@ struct RateLimiter {
 }
 
 extension RateLimiter: CustomReflectable {
-    /// 출처 주소가 `print`·`dump`에 펼쳐지지 않게 항목 수만 보인다.
+    /// Shows only the entry count so `print` and `dump` do not expose source addresses.
     var customMirror: Mirror {
         Mirror(self, children: ["count": buckets.count], displayStyle: .struct)
     }

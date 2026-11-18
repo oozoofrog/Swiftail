@@ -1,46 +1,46 @@
 import SwiftailBase
 import SwiftailCrypto
 
-/// disco 메시지의 겉 형식: 알아보기, 보낸 쪽 키 읽기, 봉하기, 열기.
+/// The disco message envelope, including detection, sender key extraction, sealing, and opening.
 ///
-/// 겉 형식은 `magic(6) ‖ 보낸 쪽 disco 공개 키(32) ‖ nonce(24) ‖ secretbox(평문)`이다(노트 3.1). magic과 보낸 쪽 키는
-/// 암호로 묶이지 않는다. 보낸 쪽 키는 어느 공유 키로 열지를 고르는 데만 쓰고, 열린 뒤에야 믿는다.
-/// 난수(nonce)는 인자로 받는다. 시스템 난수는 바깥 층에서만 뽑는다.
+/// The envelope is `magic(6) ‖ sender disco public key(32) ‖ nonce(24) ‖ secretbox(plaintext)` (notes 3.1). The magic and sender key are
+/// not cryptographically bound. The sender key only selects the shared key to open with and becomes trusted after successful opening.
+/// Takes randomness (the nonce) as an argument. Only the outer layer draws system randomness.
 ///
-/// `docs/protocol-notes/disco-magicsock.md` 3.1·3.2절, 4.1 3
-/// (출처: tailscale.com `disco/disco.go`·`types/key/disco.go`, BSD-3-Clause).
+/// `docs/protocol-notes/disco-magicsock.md` §§3.1 and 3.2, 4.1 3
+/// (origin: tailscale.com `disco/disco.go` and `types/key/disco.go`, BSD-3-Clause).
 enum DiscoPacket {
     /// `"TS💬"`.
     static let magic: [UInt8] = [0x54, 0x53, 0xF0, 0x9F, 0x92, 0xAC]
-    /// disco로 알아보는 최소 길이: magic과 보낸 쪽 키(노트 4.1 3). 62바이트 기준의 Go `LooksLikeDiscoWrapper`와 다르다.
+    /// The minimum length for recognizing disco covers the magic and sender key (notes 4.1 3). Go's `LooksLikeDiscoWrapper` uses 62 bytes instead.
     static let classificationLength = 38
 
     private static let senderKeyRange = 6..<38
     private static let nonceRange = 38..<62
     private static let sealedStart = 62
-    /// 열 수 있는 최소 길이: 머리 62바이트와 tag 16바이트.
+    /// The minimum length for opening a packet covers the 62-byte header and 16-byte tag.
     private static let minimumOpenableLength = sealedStart + NaClSecretBox.overhead
 
-    /// 길이 ≥ 38이고 magic으로 시작한다. 열어 보지 않는다.
+    /// Whether the length is ≥ 38 and starts with magic. Does not try to open it.
     static func isDisco(_ bytes: [UInt8]) -> Bool {
         bytes.count >= classificationLength && bytes.starts(with: magic)
     }
 
-    /// 보낸 쪽 disco 공개 키(오프셋 6..<38). `isDisco`가 참일 때만 값이 있다.
+    /// The sender's disco public key (offset 6..<38). Present only if `isDisco` is true.
     static func senderKey(of bytes: [UInt8]) -> DiscoPublicKey? {
         guard isDisco(bytes) else { return nil }
         return DiscoPublicKey(rawValue: bytes[senderKeyRange])
     }
 
-    /// `magic ‖ sender ‖ nonce ‖ secretbox(평문)`을 만든다. nonce는 24바이트여야 한다(어긋나면 프로그래밍 오류로 멈춘다).
+    /// Creates `magic ‖ sender ‖ nonce ‖ secretbox(plaintext)`. The nonce must be 24 bytes (otherwise it traps as a programming error).
     static func seal(_ message: DiscoMessage, sender: DiscoPublicKey, sharedKey: DiscoSharedKey, nonce: [UInt8]) -> [UInt8] {
         magic + sender.rawValue + nonce + sharedKey.seal(message.plaintext, nonce: nonce)
     }
 
-    /// 겉 형식을 열어 메시지로 해석한다. 열린 평문만 해석한다.
+    /// Opens the envelope and parses the message. Parses only plaintext that was successfully opened.
     ///
-    /// - Throws: `malformed` — disco로 알아볼 수 없거나(38바이트 미만, magic 불일치) nonce와 tag를 담기에 짧거나(78바이트 미만)
-    ///   열린 평문의 형식이 틀리다. `authenticationFailed` — 열리지 않는다. `unknownType` — 처리하지 않는 종류.
+    /// - Throws: `malformed` if it is not recognizable as disco (under 38 bytes or magic mismatch), is too short for the nonce and tag (under 78 bytes),
+    ///   or the opened plaintext has the wrong format. `authenticationFailed` if opening fails. `unknownType` for an unsupported type.
     static func open(_ bytes: [UInt8], sharedKey: DiscoSharedKey) throws(DiscoError) -> DiscoMessage {
         guard isDisco(bytes), bytes.count >= minimumOpenableLength else { throw .malformed }
         let plaintext = try sharedKey.open(bytes[sealedStart...], nonce: Array(bytes[nonceRange]))
