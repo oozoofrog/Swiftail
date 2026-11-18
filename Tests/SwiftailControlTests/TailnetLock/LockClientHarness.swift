@@ -112,6 +112,24 @@ func eventually(_ what: String, within duration: Duration = .seconds(30), _ cond
     }
 }
 
+// 실제 Argon2i 검증을 여러 시험에서 겹쳐 돌리면 서로의 netmap 처리가 밀린다. 끄기 비밀 시험끼리만 차례로 돈다.
+@Suite("제어 클라이언트: tailnet lock 끄기 비밀", .serialized, .timeLimit(.minutes(3)))
+struct LockDisablementTests {
+    typealias Server = LockFakeControlServer
+}
+
+/// lock이 켜진 tailnet에 붙어 `.enforcing`이 된 클라이언트로 `body`를 돌린다.
+func withEnforcingClient(
+    _ world: LockWorld, extraPeers: [String] = [], _ body: (LockRun, Netmap) async throws -> Void
+) async throws {
+    try await withLockClient(world, prepare: { server, _ in
+        server.updateLock { $0.authority = world.authority }
+        server.setMapResponse(try world.map(extraPeers: extraPeers))
+    }) { run in
+        try await body(run, try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing })
+    }
+}
+
 /// 가짜 서버와 클라이언트를 띄우고 `body`를 돌린다. 끝나면 `run()`을 취소하고 끝날 때까지 기다린다.
 ///
 /// - Parameters:

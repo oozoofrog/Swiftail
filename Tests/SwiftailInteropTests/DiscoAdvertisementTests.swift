@@ -138,15 +138,22 @@ private struct DirectSnapshot {
     let goCurAddr: String
 }
 
-/// Swift가 Go에게 0.2초마다 UDP를 보내며(`goSends`면 Go도 1초마다 보낸다) Swift의 경로와 Go의 `curAddr`가 모두 직접이
-/// 될 때까지 20초 기다린다. `notSwiftPath`·`notGoCurAddr`와 같은 값(다시 띄우기 전의 경로)은 아직 직접이 아닌 것으로 본다.
+/// UDP를 보내며 Swift의 경로와 Go의 `curAddr`가 모두 직접이 될 때까지 20초 기다린다. `notSwiftPath`·`notGoCurAddr`
+/// 와 같은 값(다시 띄우기 전의 경로)은 인정하지 않는다.
 private func directPath(_ tool: GoTailnet, swift node: TailnetNode, local: GatePeer, go peer: GatePeer, goName: String,
                         stage: String, from start: ContinuousClock.Instant,
                         notSwiftPath: PeerPath? = nil, notGoCurAddr: String? = nil, goSends: Bool = false) async throws -> DirectSnapshot {
     let deadline = start + .seconds(20)
-    var nextGoSend = ContinuousClock.now
+    let probe = Packets.udp(from: try local.address(), port: 43200, to: try peer.address(), payload: [0x54, 0x53])
+    // Swift를 다시 띄운 경우 세션 전 데이터가 몰려 나가며 DERP 큐에서 자신의 TSMP 광고를 밀어낼 수 있다.
+    let swiftSendInterval: Duration = notGoCurAddr == nil ? .milliseconds(200) : .seconds(1)
+    var nextSwiftSend = ContinuousClock.now
+    var nextGoSend = nextSwiftSend
     while ContinuousClock.now <= deadline {
-        await node.send(Packets.udp(from: try local.address(), port: 43200, to: try peer.address(), payload: [0x54, 0x53]))
+        if ContinuousClock.now >= nextSwiftSend {
+            await node.send(probe)
+            nextSwiftSend = .now + swiftSendInterval
+        }
         if goSends, ContinuousClock.now >= nextGoSend {
             _ = try await tool.command(.init(cmd: "peerSend", name: "go-peer-a", to: try local.address().description,
                                              port: 43201, proto: "udp", payload: "5453"), expecting: "peerSend")
@@ -165,21 +172,42 @@ private func directPath(_ tool: GoTailnet, swift node: TailnetNode, local: GateP
     throw GateFailure("\(stage): 20초 안에 양쪽 직접이 되지 않음(Swift \(path.map { "\($0)" } ?? "nil"), 다시 띄우기 전 경로와 같음: \(path == notSwiftPath))")
 }
 
-/// B는 0.2초마다, A는 1초마다 UDP를 보내며 양쪽이 직접이 될 때까지 20초 기다린다. A의 경로가 `notAPath`와 같으면(다시
-/// 띄우기 전 B의 주소) 아직 아니다. A가 본 B의 경로를 돌려준다.
+/// B가 WireGuard 세션을 시작한 뒤 양쪽이 직접이 될 때까지 총 20초 기다린다. A가 본 B의 새 직접 경로를 돌려준다.
 ///
-/// 두 쪽이 같은 순간에 보내면 WireGuard 재시도가 두 쪽에서 같은 송신에 맞춰져(마지막 핸드셰이크 메시지 뒤 5초가 지난 첫
-/// 송신, wireguard-go와 같다) initiation이 거듭 엇갈린다. 시험 송신이 그 충돌을 만들지 않도록 간격을 다르게 둔다.
+/// 양쪽에서 시작하면 initiation이 서로를 지울 수 있다. B의 UDP가 A에 도착하면 세션이 섰으므로 그때 A도 보낸다.
+/// 새 disco 키를 배운 A는 송신 기록을 지우므로 다시 보내야 직접 경로 탐색을 시작한다.
 private func swiftDirect(_ a: TailnetNode, _ b: TailnetNode, a aPeer: GatePeer, b bPeer: GatePeer, aName: String, bName: String,
                          stage: String, from start: ContinuousClock.Instant, notAPath: PeerPath? = nil) async throws -> PeerPath {
     let deadline = start + .seconds(20)
-    var round = 0
-    while ContinuousClock.now <= deadline {
-        if round % 5 == 2 {
-            await a.send(Packets.udp(from: try aPeer.address(), port: 43210, to: try bPeer.address(), destinationPort: 43211, payload: [1]))
+    let aIP = try aPeer.address(), bIP = try bPeer.address()
+    // A의 수신 흐름에 남은 재시작 전 패킷을 이번 세션의 증거로 세지 않는다.
+    let payload: [UInt8] = notAPath == nil ? [1] : [2]
+    let probe = Packets.udp(from: bIP, port: 43211, to: aIP, destinationPort: 43210, payload: payload)
+    let received = try await withThrowingTaskGroup(of: Bool.self) { group in
+        defer { group.cancelAll() }
+        group.addTask {
+            for await bytes in a.inboundPackets {
+                if let packet = try? ReceivedPacket(bytes), packet.proto == 17,
+                   packet.source == bIP, packet.destination == aIP, packet.sourcePort == 43211,
+                   packet.destinationPort == 43210, packet.payload == payload { return true }
+            }
+            return false
         }
-        round += 1
-        await b.send(Packets.udp(from: try bPeer.address(), port: 43211, to: try aPeer.address(), destinationPort: 43210, payload: [2]))
+        group.addTask {
+            // 세션 전의 데이터를 한꺼번에 내보낼 때 TSMP 광고를 포함한 묶음이 DERP의 32개 송신 큐를 넘지 않게 한다.
+            while ContinuousClock.now <= deadline {
+                await b.send(probe)
+                try await Task.sleep(for: .seconds(1))
+            }
+            return false
+        }
+        return try await group.next() ?? false
+    }
+    if received { report("\(stage): B의 첫 UDP를 A에서 수신", since: start) }
+    let reply = Packets.udp(from: aIP, port: 43210, to: bIP, destinationPort: 43211, payload: payload)
+    while received, ContinuousClock.now <= deadline {
+        await a.send(reply)
+        await b.send(probe)
         if let aPath = await a.path(toPeerNamed: bName), case .direct = aPath, aPath != notAPath,
            case .direct = await b.path(toPeerNamed: aName) {
             report(stage, since: start)
@@ -188,7 +216,7 @@ private func swiftDirect(_ a: TailnetNode, _ b: TailnetNode, a aPeer: GatePeer, 
         try await Task.sleep(for: .milliseconds(200))
     }
     let aPath = await a.path(toPeerNamed: bName), bPath = await b.path(toPeerNamed: aName)
-    throw GateFailure("\(stage): 20초 안에 양쪽 직접이 되지 않음(A \(aPath.map { "\($0)" } ?? "nil"), B \(bPath.map { "\($0)" } ?? "nil"), A가 다시 띄우기 전 경로와 같음: \(aPath == notAPath))")
+    throw GateFailure("\(stage): 20초 안에 양쪽 직접이 되지 않음(A \(aPath.map { "\($0)" } ?? "nil"), B \(bPath.map { "\($0)" } ?? "nil"), A가 다시 띄우기 전 경로와 같음: \(aPath == notAPath), B의 UDP 수신: \(received))")
 }
 
 private func report(_ stage: String, since start: ContinuousClock.Instant) {

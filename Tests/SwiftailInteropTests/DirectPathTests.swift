@@ -21,9 +21,8 @@ struct DirectPathTests {
                 }
                 try await observations.requireEchoes(since: initial)
 
-                let blocked = ContinuousClock.now
-                await gate.tool.checkpoint("항목 3: Swift 원격 UDP 포트 차단")
-                await gate.node.setBlockedUDPPorts([context.goEndpoint.port])
+                let (probe, blocked) = try await observations.blockAndSend(gate, context: context)
+                await gate.tool.checkpoint("항목 3: Swift 원격 UDP 포트 차단 및 직접 경로에서 에코 한 번 송신")
                 try await wait("항목 3: 양쪽 중계", from: blocked, for: .milliseconds(9500)) {
                     try await context.isRelayed(gate)
                 }
@@ -32,7 +31,7 @@ struct DirectPathTests {
                 try await until(reliable + .seconds(4))
                 try await observations.requireEchoes(since: reliable)
                 let lost = await observations.missing(since: blocked, before: reliable)
-                #expect(!lost.isEmpty, "항목 3: 차단 직후 UDP 단독 신뢰 기간에는 에코 유실이 있어야 한다")
+                #expect(lost.contains(probe), "항목 3: 신뢰 중인 직접 경로를 차단하면서 보낸 에코는 유실되어야 한다")
                 note("항목 3: 신뢰 기간 유실 \(lost.count)개, +9.5초 이후 에코 수신", since: blocked)
 
                 let unblocked = ContinuousClock.now
@@ -219,6 +218,7 @@ private actor DirectObservations {
     private var paths: [(ContinuousClock.Instant, String, PeerPath?)] = []
     private var sent: [Int: ContinuousClock.Instant] = [:]
     private var received: Set<Int> = []
+    private var nextSequence = 0
     private var paused = false
     private var lastSend = ContinuousClock.now
 
@@ -244,13 +244,44 @@ private actor DirectObservations {
         received.insert(sequence)
     }
 
-    func send(_ sequence: Int, gate: Gate) async throws {
+    func send(gate: Gate) async throws {
         guard !paused else { return }
-        let bytes = Packets.udp(from: try gate.local.address(), port: 43040, to: try gate.peer.address(),
-                                payload: [0x4d, 0x34] + Packets.long(UInt32(sequence)))
+        let (sequence, bytes) = try makeEcho(gate)
         lastSend = .now
         sent[sequence] = lastSend
         await gate.node.send(bytes)
+    }
+
+    /// 주기 송신 작업이 제때 깨어나지 않아도 신뢰 중인 경로에 에코를 한 번 보낸다.
+    func blockAndSend(_ gate: Gate, context: DirectContext) async throws -> (sequence: Int, at: ContinuousClock.Instant) {
+        let (sequence, packet) = try makeEcho(gate)
+        sent[sequence] = .now
+        var blockedAt: ContinuousClock.Instant?
+        try await wait("항목 3: 차단할 직접 경로", deadline: .now + .seconds(10)) {
+            blockedAt = await Self.blockAndSend(gate.node, context: context, packet: packet)
+            return blockedAt != nil
+        }
+        let blocked = try #require(blockedAt)
+        sent[sequence] = blocked
+        return (sequence, blocked)
+    }
+
+    private static func blockAndSend(_ node: isolated TailnetNode, context: DirectContext,
+                                     packet: [UInt8]) -> ContinuousClock.Instant? {
+        guard case .direct(let endpoint) = node.path(toPeerNamed: context.fqdn),
+              endpoint.port == context.goEndpoint.port else { return nil }
+        // 경로 관측·차단·송신 사이에 노드의 타이머나 다른 송신이 끼어들지 않도록 한다.
+        node.setBlockedUDPPorts([endpoint.port])
+        let blocked = ContinuousClock.now
+        node.send(packet)
+        return blocked
+    }
+
+    private func makeEcho(_ gate: Gate) throws -> (sequence: Int, packet: [UInt8]) {
+        let sequence = nextSequence
+        nextSequence += 1
+        return (sequence, Packets.udp(from: try gate.local.address(), port: 43040, to: try gate.peer.address(),
+                                      payload: [0x4d, 0x34] + Packets.long(UInt32(sequence))))
     }
 
     func pause() -> ContinuousClock.Instant { paused = true; return lastSend }
@@ -301,12 +332,12 @@ private func observe(_ gate: Gate, _ body: @escaping @Sendable (DirectObservatio
         }
         group.addTask {
             let started = ContinuousClock.now
-            var sequence = 0
+            var tick = 0
             while true {
                 try Task.checkCancellation()
-                try await observations.send(sequence, gate: gate)
-                sequence += 1
-                try await until(started + .seconds(sequence))
+                try await observations.send(gate: gate)
+                tick += 1
+                try await until(started + .seconds(tick))
             }
         }
         group.addTask { try await body(observations) }

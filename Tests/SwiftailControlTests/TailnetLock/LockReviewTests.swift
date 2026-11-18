@@ -18,16 +18,6 @@ import SwiftailBase
 struct LockReviewTests {
     private typealias Server = LockFakeControlServer
 
-    private func withEnforcingClient(_ world: LockWorld, _ body: (LockRun) async throws -> Void) async throws {
-        try await withLockClient(world, prepare: { server, _ in
-            server.updateLock { $0.authority = world.authority }
-            server.setMapResponse(try world.map())
-        }) { run in
-            _ = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
-            try await body(run)
-        }
-    }
-
     // MARK: 재서명 요청
 
     /// 고침 1: 서버의 재서명 요청이 NL 키의 서명 오라클이 되지 않는다.
@@ -92,14 +82,15 @@ struct LockReviewTests {
         }
     }
 
-    // MARK: 끄기 비밀
+}
 
+extension LockDisablementTests {
     /// 고침 2: 거절한 끄기 비밀을 머리마다 집합(8개)으로 기억한다. 하나뿐이면 서버가 비밀 둘을 번갈아 줄 때 매번
     /// Argon2i(16MiB)를 다시 돈다(동작 O6). KDF는 actor를 막는다.
     @Test("고침 2: 서버가 틀린 끄기 비밀 둘을 번갈아 보내도 KDF는 비밀마다 한 번만 돈다(동작 O6)")
     func alternatingDisablementSecrets() async throws {
         let world = try LockWorld()
-        try await withEnforcingClient(world) { run in
+        try await withEnforcingClient(world) { run, _ in
             let secrets = [[UInt8](repeating: 0x11, count: 32), [UInt8](repeating: 0x22, count: 32)]
             for round in 0..<4 {
                 let domain = "round\(round).example"
@@ -120,7 +111,7 @@ struct LockReviewTests {
     @Test("고침 2: 거절 기억은 머리마다 8개이고 넘치면 가장 오래된 것부터 잊는다")
     func rejectedDisablementCapacity() async throws {
         let world = try LockWorld()
-        try await withEnforcingClient(world) { run in
+        try await withEnforcingClient(world) { run, _ in
             var round = 0
             func disable(_ secret: [UInt8]) async throws {
                 round += 1
@@ -157,7 +148,7 @@ struct LockReviewTests {
     @Test("로컬 상태가 있으면 서버의 어떤 알림·실패·재연결에도 거르지 않은 netmap이 나가지 않는다")
     func serverCannotOpenAnEnforcingNode() async throws {
         let world = try LockWorld()
-        try await withEnforcingClient(world) { run in
+        try await withEnforcingClient(world) { run, _ in
             var step = 0
             /// 응답 하나를 밀어 넣고 그것이 반영된 netmap이 나올 때까지 기다린다.
             func push(lock: String?, selfNode: String? = nil) async throws {
@@ -203,6 +194,9 @@ struct LockReviewTests {
         }
     }
 
+}
+
+extension LockReviewTests {
     // MARK: 로컬 상태가 없을 때
 
     /// Go는 받고(줄바꿈을 지우고 읽는다) Swiftail은 거절하는 머리 텍스트: 50자 + CRLF(동작 D10).
@@ -260,7 +254,7 @@ struct LockReviewTests {
     @Test("고침 3: 로컬 상태가 있으면 읽히지 않는 Head에 동기화로 간다")
     func unreadableHeadWithLocalStateSynchronizes() async throws {
         let world = try LockWorld()
-        try await withEnforcingClient(world) { run in
+        try await withEnforcingClient(world) { run, _ in
             let offers = run.server.requests(to: Server.syncOfferPath).count
             run.server.push(LockTesting.mapJSON(lock: #""TKAInfo":{"Head":"not-a-hash"}"#, #""Domain":"unreadable.example""#))
             let netmap = try await run.latest("netmap") { $0.domain == "unreadable.example" }

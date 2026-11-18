@@ -134,19 +134,23 @@ struct LogoutTests {
 
     @Test("서버가 답하지 않으면 기한에 connection으로 끝난다")
     func deadline() async throws {
-        var timeouts = ControlClient.Timeouts()
-        timeouts.logout = .milliseconds(500)
-        try await withClient(storedIdentity: Self.registeredIdentity(), timeouts: timeouts, prepare: {
+        // 기한에는 키 조회와 Noise 연결도 들어간다. 운영 기한을 써서 요청을 받은 뒤 답을 기다리는 경우를 확인한다.
+        let limit = ControlClient.Timeouts().logout
+        try await withClient(storedIdentity: Self.registeredIdentity(), prepare: {
             $0.setRegisterNeverAnswers(true)
         }) { client, server, _ in
             let start = ContinuousClock.now
-            guard case .connection? = await logOutError(client) else {
+            async let result = logOutError(client)
+            try await server.wait("로그아웃 요청이 도착하지 않았다", within: limit) {
+                $0.requests.contains { $0.path == "/machine/register" }
+            }
+            guard case .connection(let message)? = await result else {
                 Issue.record("connection이 아니다")
                 return
             }
-            let elapsed = ContinuousClock.now - start
-            #expect(elapsed >= .milliseconds(500) && elapsed < .seconds(5), "기한에 끝나야 한다: \(elapsed)")
-            #expect(server.requests.count == 1, "요청은 보냈다")
+            #expect(message == "로그아웃이 \(limit) 안에 끝나지 않았다")
+            #expect(start.duration(to: .now) >= limit)
+            #expect(server.requests.map(\.path) == ["/machine/register"], "요청을 다시 보내지 않는다")
         }
     }
 
