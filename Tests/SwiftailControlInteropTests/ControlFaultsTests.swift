@@ -6,98 +6,98 @@ import Testing
 
 let controlFaultsBinary = ProcessInfo.processInfo.environment["SWIFTAIL_CONTROLFAULTS"].flatMap { $0.isEmpty ? nil : $0 }
 
-/// 일부러 어긋나게 구는 제어 서버(`Tools/interop/cmd/controlfaults`)를 상대로 한 회귀 시험.
-/// 클라이언트의 안쪽 상태는 보지 않고, 서버가 센 요청 수·사건·`run()`의 결과·신원 파일로 확인한다.
-@Suite("제어 클라이언트: 어긋난 서버", .enabled(if: controlFaultsBinary != nil,
-    "SWIFTAIL_CONTROLFAULTS가 없어 건너뜁니다"), .timeLimit(.minutes(2)))
+/// Regression tests against a deliberately misbehaving control server (`Tools/interop/cmd/controlfaults`).
+/// Verifies counts of requests from the server, events, the `run()` result, and the identity file without inspecting client internals.
+@Suite("Control client: Misbehaving server", .enabled(if: controlFaultsBinary != nil,
+    "Skipping because SWIFTAIL_CONTROLFAULTS is missing"), .timeLimit(.minutes(2)))
 struct ControlFaultsTests {
-    @Test("상태 올리기에 서버가 답하지 않으면 기한 뒤 다시 연결한다")
+    @Test("Reconnects after the deadline if the server does not answer the state upload")
     func statusUploadWithoutResponse() async throws {
         let timeouts = ControlClient.Timeouts(request: .seconds(1), followup: .seconds(1))
         try await withFaultClient("initialUploadHang", timeouts: timeouts) { server, client, _ in
-            _ = try await server.wait("기한 뒤 두 번째 연결의 상태 올리기", timeout: .seconds(10)) {
+            _ = try await server.wait("State upload on the second connection after the deadline", timeout: .seconds(10)) {
                 $0.connections >= 2 && $0.maps >= 2
             }
         }
     }
 
-    @Test("등록 도중에 요청한 대화형 로그인은 그 등록이 끝난 뒤 새 키로 다시 등록한다")
+    @Test("Interactive login requested during registration registers again with a new key after that registration finishes")
     func interactiveLoginDuringRegistration() async throws {
         try await withFaultClient("interactiveRace") { server, client, _ in
-            _ = try await server.wait("붙잡힌 첫 등록") { $0.registers == 1 }
+            _ = try await server.wait("Held first registration") { $0.registers == 1 }
             await client.client.startInteractiveLogin()
             try await server.release()
-            let first = try await client.registered("첫 등록 완료")
-            let second = try await client.registered("대화형 로그인의 새 등록")
-            #expect(first != second, "대화형 로그인은 새 node 키로 등록한다")
+            let first = try await client.registered("First registration complete")
+            let second = try await client.registered("New registration for interactive login")
+            #expect(first != second, "Interactive login registers with a new node key")
             let probe = try await server.probe()
             #expect(probe.registers == 2)
             #expect(probe.nodeKeys == 2)
         }
     }
 
-    @Test("Followup 도중 끊겨도 같은 후보 키와 Followup URL로 로그인을 이어서 기다린다")
+    @Test("A disconnect during Followup keeps waiting for login with the same candidate key and Followup URL")
     func followupSurvivesReconnect() async throws {
         try await withFaultClient("followupReconnect") { server, client, directory in
             var loginRequests = 0
             var registered: NodePublicKey?
             while registered == nil {
-                switch try await client.next("loginRequired 뒤 등록 완료") {
+                switch try await client.next("Registration complete after loginRequired") {
                 case .loginRequired: loginRequests += 1
                 case .registered(let key): registered = key
-                case .netmap, .disconnected: throw GateFailure("등록 전에 맵 사건이 왔다")
+                case .netmap, .disconnected: throw GateFailure("A map event arrived before registration")
                 }
             }
-            #expect(loginRequests == 1, "사용자는 로그인 URL 하나만 받아야 한다")
+            #expect(loginRequests == 1, "The user must receive only one login URL")
             let probe = try await server.probe()
             #expect(probe.connections == 2)
-            #expect(probe.followups == 2, "다시 연결한 뒤의 등록도 Followup이어야 한다")
-            #expect(probe.nodeKeys == 1, "다시 연결해도 후보 키를 바꾸지 않는다")
+            #expect(probe.followups == 2, "Registration after reconnecting must also be a Followup")
+            #expect(probe.nodeKeys == 1, "Reconnecting does not change the candidate key")
             #expect(try NodeIdentityStore(directory: directory).load()?.nodePublicKey == registered)
         }
     }
 
-    @Test("새 맵이 오지 않아도 self 키의 만료 시각이 지나면 새 키로 다시 등록한다")
+    @Test("Registers again with a new key when the self key expires, even if no new map arrives")
     func selfKeyExpiresWithoutNewMap() async throws {
         try await withFaultClient("expiryTimer") { _, client, _ in
-            let first = try await client.registered("첫 등록")
-            let second = try await client.registered("만료 뒤 새 등록", timeout: .seconds(10))
+            let first = try await client.registered("First registration")
+            let second = try await client.registered("New registration after expiration", timeout: .seconds(10))
             #expect(first != second)
         }
     }
 
-    @Test("인증 키는 새 node 키를 등록할 때마다 보낸다: 처음과 만료 뒤의 새 등록")
+    @Test("Sends the auth key each time a new node key is registered, both initially and after expiration")
     func authKeyOnEveryRegistration() async throws {
         try await withFaultClient("expiryTimer", authKey: "tskey-auth-EXAMPLE-0000") { server, client, _ in
-            _ = try await client.registered("첫 등록")
-            _ = try await client.registered("만료 뒤 새 등록", timeout: .seconds(10))
+            _ = try await client.registered("First registration")
+            _ = try await client.registered("New registration after expiration", timeout: .seconds(10))
             let probe = try await server.probe()
             #expect(probe.registers >= 2)
             #expect(probe.withAuth == probe.registers)
         }
     }
 
-    @Test("이미 등록된 키로 다시 붙을 때(재시작)는 인증 키를 보내지 않는다")
+    @Test("Does not send the auth key when reconnecting with an already registered key (restart)")
     func authKeyNotResentForStoredKey() async throws {
         try await withFaultServer("basic") { server, directory in
             let authKey = "tskey-auth-EXAMPLE-0000"
             let first = FaultClient(server: server, directory: directory, authKey: authKey, timeouts: .init(), observes: true)
             let firstKey: NodePublicKey
             do {
-                firstKey = try await first.registered("첫 등록")
+                firstKey = try await first.registered("First registration")
                 await first.stop()
             } catch {
                 await first.stop()
                 throw error
             }
-            // 일회용 인증 키는 첫 등록에서 쓰였다. 같은 신원으로 다시 뜰 때 또 보내면 운영 서버가 거절할 수 있다.
+            // The single-use auth key was used during initial registration. The production server may reject it if sent again when starting with the same identity.
             let second = FaultClient(server: server, directory: directory, authKey: authKey, timeouts: .init(), observes: true)
             do {
-                let secondKey = try await second.registered("재시작 뒤 등록")
+                let secondKey = try await second.registered("Registration after restart")
                 #expect(secondKey == firstKey)
                 let probe = try await server.probe()
                 #expect(probe.registers == 2)
-                #expect(probe.withAuth == 1, "저장된 키의 등록에는 인증 키가 없어야 한다")
+                #expect(probe.withAuth == 1, "Registration with the stored key must omit the auth key")
                 #expect(probe.nodeKeys == 1)
                 await second.stop()
             } catch {
@@ -107,85 +107,85 @@ struct ControlFaultsTests {
         }
     }
 
-    @Test("로그인을 기다리는 긴 폴링 중에 새 로그인을 요청하면 곧바로 새 키와 새 URL로 다시 시작한다")
+    @Test("Requesting a new login during a long poll waiting for login immediately restarts with a new key and URL")
     func interactiveLoginDuringFollowup() async throws {
         try await withFaultClient("followupHold") { server, client, _ in
-            guard case .loginRequired(let firstURL) = try await client.next("첫 로그인 URL") else {
-                throw GateFailure("loginRequired가 아니다")
+            guard case .loginRequired(let firstURL) = try await client.next("First login URL") else {
+                throw GateFailure("Expected loginRequired")
             }
-            _ = try await server.wait("붙잡힌 Followup") { $0.followups == 1 }
+            _ = try await server.wait("Held Followup") { $0.followups == 1 }
             await client.client.startInteractiveLogin()
-            // 기본 Followup 기한은 10분이다. 그만두지 않으면 아래가 시간 안에 오지 않는다.
-            guard case .loginRequired(let secondURL) = try await client.next("새 로그인 URL") else {
-                throw GateFailure("새 loginRequired가 아니다")
+            // The default Followup deadline is 10 minutes. Unless it is abandoned, the event below does not arrive in time.
+            guard case .loginRequired(let secondURL) = try await client.next("New login URL") else {
+                throw GateFailure("Expected a new loginRequired")
             }
             #expect(firstURL != secondURL)
-            let probe = try await server.wait("새 후보 키의 Followup") { $0.followups == 2 }
-            #expect(probe.nodeKeys == 2, "새 로그인은 새 후보 키로 시작한다")
+            let probe = try await server.wait("Followup for the new candidate key") { $0.followups == 2 }
+            #expect(probe.nodeKeys == 2, "The new login starts with a new candidate key")
         }
     }
 
-    @Test("같은 AuthURL로 물러나는 동안 요청한 새 로그인은 이전 후보 키를 되살리지 않는다")
+    @Test("A new login requested while backing off with the same AuthURL does not revive the previous candidate key")
     func interactiveLoginDuringRepeatedURLBackoff() async throws {
         try await withFaultClient("sameAuthURL") { server, client, _ in
-            // 같은 URL이 되풀이될수록 물러나는 시간이 길어진다. 일곱 번째 뒤에는 거의 늘 잠들어 있다.
-            _ = try await server.wait("같은 URL의 되풀이", timeout: .seconds(20)) { $0.registers >= 7 }
+            // Backoff grows as the same URL repeats. After the seventh time, it is almost always asleep.
+            _ = try await server.wait("Repeat of the same URL", timeout: .seconds(20)) { $0.registers >= 7 }
             #expect(try await server.probe().nodeKeys == 1)
             await client.client.startInteractiveLogin()
-            _ = try await server.wait("새 후보 키의 등록", timeout: .seconds(20)) { $0.nodeKeys == 2 }
+            _ = try await server.wait("Registration with the new candidate key", timeout: .seconds(20)) { $0.nodeKeys == 2 }
             try await server.release()
             var loginURLs = 0
             registration: while true {
-                switch try await client.next("풀린 뒤의 등록", timeout: .seconds(20)) {
+                switch try await client.next("Registration after release", timeout: .seconds(20)) {
                 case .loginRequired: loginURLs += 1
                 case .registered: break registration
                 case .netmap, .disconnected: continue
                 }
             }
-            #expect(loginURLs == 2, "처음의 URL과 새 로그인의 URL, 두 번 알린다")
-            #expect(try await server.probe().nodeKeys == 2, "확정된 것은 새 후보 키다")
+            #expect(loginURLs == 2, "Notifies twice, once for the initial URL and once for the new login URL")
+            #expect(try await server.probe().nodeKeys == 2, "The new candidate key was committed")
         }
     }
 
-    @Test("새 키로 다시 등록해도 만료면 nodeKeyExpired로 끝난다")
+    @Test("Ends with nodeKeyExpired if registration with the new key also reports expiration")
     func alwaysExpired() async throws {
         try await withFaultClient("alwaysExpired") { server, client, _ in
             let error = try await client.result(timeout: .seconds(10))
             guard case .nodeKeyExpired? = error else {
-                Issue.record("nodeKeyExpired가 아니다: \(String(describing: error))")
+                Issue.record("Expected nodeKeyExpired, got \(String(describing: error))")
                 return
             }
-            #expect(try await server.probe().registers == 2, "만료 뒤 새 키로 한 번만 다시 등록한다")
+            #expect(try await server.probe().registers == 2, "Registers again with a new key only once after expiration")
         }
     }
 
-    @Test("소비하지 않은 사건은 가장 새 것 64개만 남는다")
+    @Test("Retains only the 64 newest unconsumed events")
     func eventBufferKeepsNewest() async throws {
         try await withFaultClient("manyMaps", observes: false) { server, client, _ in
-            // 두 번째 맵 스트림 요청이 왔으면 첫 스트림의 응답 200개와 disconnected를 이미 냈다.
-            _ = try await server.wait("두 번째 맵 스트림", timeout: .seconds(10)) { $0.maps >= 4 }
+            // Once the second map stream request arrives, it has already emitted 200 responses and disconnected for the first stream.
+            _ = try await server.wait("Second map stream", timeout: .seconds(10)) { $0.maps >= 4 }
             _ = try await client.result(cancelling: true)
             var events: [ControlClient.Event] = []
             for await event in client.client.events { events.append(event) }
             #expect(events.count == 64)
             guard events.count >= 2, case .disconnected = events[events.count - 1],
                   case .netmap(let last) = events[events.count - 2] else {
-                Issue.record("마지막 두 사건이 netmap, disconnected가 아니다")
+                Issue.record("The last two events are not netmap and disconnected")
                 return
             }
             #expect(last.domain == "d199")
         }
     }
 
-    @Test("거절 메시지가 되풀이한 인증 키는 오류에 남지 않는다")
+    @Test("An auth key echoed by a rejection message is absent from the error")
     func rejectionHidesEchoedAuthKey() async throws {
         let controlValue = "tskey-auth-" + UUID().uuidString
-        // 해석되지 않는 `--TL` 접미사는 이제 등록 전에 거절하므로(`SwiftailTailnetLock.md` 결정 L12) 평범한 인증 키로 본다.
-        // 접미사와 감싼 키가 서버로 가지 않는 것은 `RegistrationSigningTests`가 본다.
+        // An undecodable `--TL` suffix is now rejected before registration (`SwiftailTailnetLock.md`, decision L12), so use an ordinary auth key here.
+        // `RegistrationSigningTests` checks that the suffix and wrapped key do not reach the server.
         try await withFaultClient("authEcho", authKey: controlValue) { _, client, _ in
             let error = try await client.result(timeout: .seconds(10))
             guard case .authKeyRejected(let message)? = error else {
-                Issue.record("authKeyRejected가 아니다")
+                Issue.record("Expected authKeyRejected")
                 return
             }
             #expect(message.hasPrefix("invalid authkey: "))
@@ -198,9 +198,9 @@ struct ControlFaultsTests {
     }
 }
 
-// MARK: - 도구 실행
+// MARK: - Running the tool
 
-/// controlfaults 프로세스 하나. 표준 출력의 첫 줄이 서버 URL이고, 표준 입력을 닫으면 끝난다.
+/// One controlfaults process. The first stdout line is the server URL, and closing stdin ends it.
 struct FaultServer: Sendable {
     struct Probe: Decodable, Sendable {
         var connections: Int
@@ -218,7 +218,7 @@ struct FaultServer: Sendable {
         return try JSONDecoder().decode(Probe.self, from: data)
     }
 
-    /// 서버가 센 값이 `predicate`를 만족할 때까지 기다린다.
+    /// Waits for the server counters to satisfy `predicate`.
     func wait(
         _ description: String, timeout: Duration = .seconds(5), until predicate: (Probe) -> Bool
     ) async throws -> Probe {
@@ -226,18 +226,18 @@ struct FaultServer: Sendable {
         while true {
             let probe = try await probe()
             if predicate(probe) { return probe }
-            guard ContinuousClock.now < deadline else { throw GateFailure("\(description) 제한 시간 초과 (\(timeout)): \(probe)") }
+            guard ContinuousClock.now < deadline else { throw GateFailure("\(description) timed out (\(timeout)): \(probe)") }
             try await Task.sleep(for: .milliseconds(20))
         }
     }
 
-    /// interactiveRace 모드에서 붙잡은 첫 등록을 놓아 준다.
+    /// Releases the first registration held in interactiveRace mode.
     func release() async throws {
         _ = try await URLSession.shared.data(from: url.appending(path: "release"))
     }
 }
 
-/// 서버를 띄우고 `body`를 부른다. 성공·실패 모두 프로세스와 신원 디렉터리를 회수한다.
+/// Starts the server and calls `body`. Reaps the process and removes the identity directory on success or failure.
 func withFaultServer(_ mode: String, _ body: (FaultServer, URL) async throws -> Void) async throws {
     let binary = try #require(controlFaultsBinary)
     let process = Process()
@@ -261,12 +261,12 @@ func withFaultServer(_ mode: String, _ body: (FaultServer, URL) async throws -> 
         firstLine = line
         break
     }
-    let url = try #require(firstLine.flatMap { URL(string: $0) }, "controlfaults가 주소를 출력하지 않았다")
+    let url = try #require(firstLine.flatMap { URL(string: $0) }, "controlfaults did not print an address")
     try await body(FaultServer(url: url), directory)
 }
 
-/// 서버를 띄우고 그 서버에 붙는 클라이언트의 `run()`을 돌린 채 `body`를 부른다.
-/// 끝나면 `run()`을 취소하고 끝나기를 기다린다.
+/// Starts the server and calls `body` while running `run()` on a client connected to it.
+/// Cancels `run()` afterward and waits for it to finish.
 func withFaultClient(
     _ mode: String, authKey: String? = nil, timeouts: ControlClient.Timeouts = .init(), observes: Bool = true,
     _ body: (FaultServer, FaultClient, URL) async throws -> Void
@@ -283,7 +283,7 @@ func withFaultClient(
     }
 }
 
-/// `run()`을 돌리고 사건을 받는다. 공개 API(사건, `run()`의 결과)만 본다.
+/// Runs `run()` and receives events. Observes only the public API (events and the `run()` result).
 struct FaultClient: Sendable {
     let client: ControlClient
     private let running: Task<ControlError?, Never>
@@ -299,7 +299,7 @@ struct FaultClient: Sendable {
         running = Task {
             do throws(ControlError) { try await client.run(); return nil } catch { return error }
         }
-        // 사건을 다른 흐름으로 옮겨 둔다. 기다림이 시간 초과로 취소되어도 클라이언트의 흐름은 끝나지 않는다.
+        // Moves events into a separate stream. The client stream stays open even if a timeout cancels a wait.
         if observes {
             let (stream, continuation) = AsyncStream.makeStream(of: ControlClient.Event.self)
             observed = stream
@@ -313,17 +313,17 @@ struct FaultClient: Sendable {
     }
 
     func next(_ description: String, timeout: Duration = .seconds(5)) async throws -> ControlClient.Event {
-        guard let observed else { throw GateFailure("사건을 관측하지 않는 클라이언트") }
+        guard let observed else { throw GateFailure("Client without event observation") }
         return try await nextEvent(observed, waitingFor: description, timeout: timeout)
     }
 
-    /// 다음 `registered`까지 기다린다. 그 사이의 netmap·disconnected는 건너뛴다.
+    /// Waits for the next `registered` event. Skips intervening netmap and disconnected events.
     func registered(_ description: String, timeout: Duration = .seconds(5)) async throws -> NodePublicKey {
         let deadline = ContinuousClock.now + timeout
         while true {
             switch try await next(description, timeout: ContinuousClock.now.duration(to: deadline)) {
             case .registered(let key): return key
-            case .loginRequired: throw GateFailure("\(description): 예상하지 않은 loginRequired")
+            case .loginRequired: throw GateFailure("\(description): unexpected loginRequired")
             case .netmap, .disconnected: continue
             }
         }
@@ -334,7 +334,7 @@ struct FaultClient: Sendable {
         case timedOut
     }
 
-    /// `run()`이 끝나기를 기다린다. `cancelling`이면 먼저 취소한다. 끝나지 않으면 실패로 던진다.
+    /// Waits for `run()` to finish. Cancels first if `cancelling` is set. Throws a failure if it does not finish.
     func result(timeout: Duration = .seconds(5), cancelling: Bool = false) async throws -> ControlError? {
         if cancelling { running.cancel() }
         let running = running
@@ -345,16 +345,16 @@ struct FaultClient: Sendable {
                 return .timedOut
             }
             let first = await group.next() ?? .timedOut
-            // 그룹은 남은 자식을 기다리고 끝나므로, 시간 초과면 run()부터 취소해 그 자식을 풀어 준다.
+            // The group waits for remaining children before it ends, so on timeout, cancel run() first to release that child.
             if case .timedOut = first { running.cancel() }
             group.cancelAll()
             return first
         }
-        guard case .ended(let error) = outcome else { throw GateFailure("run()이 \(timeout) 안에 끝나지 않았다") }
+        guard case .ended(let error) = outcome else { throw GateFailure("run() did not finish within \(timeout)") }
         return error
     }
 
-    /// `run()`을 취소하고 끝나기를 기다린다.
+    /// Cancels `run()` and waits for it to finish.
     func stop() async {
         running.cancel()
         _ = await running.value

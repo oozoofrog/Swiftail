@@ -1,5 +1,5 @@
-// tailnet lock의 입출력 없는 부분: 할 일의 판정, 거르기, RPC의 JSON.
-// 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 N2·P·Y7, 단위 시험 18·19·21.
+// Tailnet lock without I/O: deciding what to do, filtering, and RPC JSON.
+// Contract `docs/contracts/SwiftailTailnetLock.md`, behaviors N2, P, and Y7, unit tests 18, 19, and 21.
 
 import CryptoKit
 import Foundation
@@ -9,22 +9,22 @@ import SwiftailBase
 @testable import SwiftailControl
 @testable import SwiftailTKA
 
-@Suite("tailnet lock: 할 일의 판정")
+@Suite("Tailnet lock: Deciding what to do")
 struct TailnetLockPlanTests {
     private static func hash(_ byte: UInt8) -> AUMHash? { AUMHash([UInt8](repeating: byte, count: 32)) }
 
-    /// 서버가 알린 것: 꺼짐, 켜짐(머리 없음), 켜짐(로컬과 같은 머리), 켜짐(다른 머리).
+    /// What the server reports: disabled, enabled (no head), enabled (same head as local), and enabled (different head).
     private static let servers: [(name: String, state: ServerLockState)] = [
-        ("꺼짐", ServerLockState()),
-        ("꺼짐·머리 있음", ServerLockState(isEnabled: false, head: hash(1))),
-        ("켜짐·머리 없음", ServerLockState(isEnabled: true)),
-        ("켜짐·같은 머리", ServerLockState(isEnabled: true, head: hash(1))),
-        ("켜짐·다른 머리", ServerLockState(isEnabled: true, head: hash(2))),
+        ("Disabled", ServerLockState()),
+        ("Disabled with a head", ServerLockState(isEnabled: false, head: hash(1))),
+        ("Enabled without a head", ServerLockState(isEnabled: true)),
+        ("Enabled with the same head", ServerLockState(isEnabled: true, head: hash(1))),
+        ("Enabled with a different head", ServerLockState(isEnabled: true, head: hash(2))),
     ]
 
-    @Test("표의 모든 칸: 로컬 상태 × capability × 서버가 알린 것")
+    @Test("Every table cell: local state × capability × server report")
     func table() {
-        // (로컬 상태가 있는가, capability) → 서버 다섯 가지의 할 일.
+        // (Whether local state exists, capability) → action for each of the five server states.
         let expected: [(hasLocal: Bool, hasCapability: Bool, plans: [TailnetLockPlan])] = [
             (false, false, [.nothing, .nothing, .nothing, .nothing, .nothing]),
             (false, true, [.nothing, .nothing, .bootstrap, .bootstrap, .bootstrap]),
@@ -36,26 +36,26 @@ struct TailnetLockPlanTests {
                 let actual = TailnetLockPlan(
                     localHead: row.hasLocal ? Self.hash(1) : nil, hasCapability: row.hasCapability, server: server.state
                 )
-                #expect(actual == plan, "로컬 \(row.hasLocal), capability \(row.hasCapability), 서버 \(server.name)")
+                #expect(actual == plan, "local \(row.hasLocal), capability \(row.hasCapability), server \(server.name)")
             }
         }
     }
 
-    /// 계약 동작 N2의 표를 서버가 실은 `TKAInfo`에서부터 다시 본다. 읽히지 않는 머리는 "켜짐, 머리 모름"이라 로컬 상태가 없으면
-    /// 부트스트랩(그동안과 실패하면 `.unverified`), 있으면 동기화(그동안 예전 상태로 거른다)로 간다. 어느 칸도 "거르지 않고
-    /// 통과"가 되지 않는다: 할 일이 `.nothing`인 칸은 로컬 상태가 없고 capability가 없거나(Go와 같다) 서버가 꺼졌다고 한 것,
-    /// 또는 로컬 머리와 서버 머리가 같은 것뿐이다(5절 TL-11b 항목 3).
-    @Test("TKAInfo에서 할 일까지: 읽히지 않는 머리는 켜짐·머리 모름이다")
+    /// Rechecks the table from contract behavior N2 starting with the server's `TKAInfo`. An unreadable head means "enabled, head unknown," so without local state
+    /// it bootstraps (`.unverified` during bootstrap and on failure), and with local state it synchronizes (filtering with the old state meanwhile). No cell means
+    /// "pass through without filtering." The only `.nothing` cells have no local state and either no capability (as in Go) or a server report of disabled,
+    /// or have matching local and server heads (§5, TL-11b item 3).
+    @Test("From TKAInfo to action: An unreadable head means enabled with an unknown head")
     func tableFromTKAInfo() throws {
         let local = try #require(Self.hash(1)), other = try #require(Self.hash(2))
-        // (서버가 실은 TKAInfo, [로컬 없음·capability 없음, 로컬 없음·capability 있음, 로컬 있음])
+        // (Server-supplied TKAInfo, [no local state and no capability, no local state with capability, local state present])
         let rows: [(json: String?, plans: [TailnetLockPlan])] = [
             (nil, [.nothing, .nothing, .verifyDisablement]),
             (#"{"Disabled":true}"#, [.nothing, .nothing, .verifyDisablement]),
             (#"{"Disabled":true,"Head":"not-a-hash"}"#, [.nothing, .nothing, .verifyDisablement]),
             ("{}", [.nothing, .bootstrap, .synchronize]),
             (#"{"Head":"not-a-hash"}"#, [.nothing, .bootstrap, .synchronize]),
-            // Go는 줄바꿈을 지우고 읽고 Swiftail은 거절하는 텍스트(동작 D10).
+            // Go strips the newline and reads this text, while Swiftail rejects it (behavior D10).
             (#"{"Head":"\#(local.text.prefix(50))\r\n"}"#, [.nothing, .bootstrap, .synchronize]),
             (#"{"Head":"\#(local.text)"}"#, [.nothing, .bootstrap, .nothing]),
             (#"{"Head":"\#(other.text)"}"#, [.nothing, .bootstrap, .synchronize]),
@@ -68,21 +68,21 @@ struct TailnetLockPlanTests {
                 TailnetLockPlan(localHead: nil, hasCapability: true, server: server),
                 TailnetLockPlan(localHead: local, hasCapability: true, server: server),
             ]
-            #expect(actual == row.plans, "\(row.json ?? "TKAInfo 없음")")
+            #expect(actual == row.plans, "\(row.json ?? "No TKAInfo")")
         }
     }
 
-    @Test("머리는 텍스트가 아니라 32바이트로 견준다")
+    @Test("Compares heads by their 32 bytes instead of their text")
     func headComparison() throws {
         let local = try #require(Self.hash(2))
-        // 끝 글자의 남는 비트만 다른 텍스트는 같은 해시로 읽힌다(마지막 비트가 0인 해시의 끝 글자 `A`와 `B`).
+        // Text differing only in the unused bits of the last character decodes to the same hash (final characters `A` and `B` for a hash whose last bit is 0).
         let sameBytes = try #require(AUMHash(text: String(local.text.dropLast()) + "B"))
         #expect(String(local.text.dropLast()) + "B" != local.text)
         let plan = TailnetLockPlan(localHead: local, hasCapability: false, server: ServerLockState(isEnabled: true, head: sameBytes))
         #expect(plan == .nothing)
     }
 
-    @Test("capability는 CapMap의 키와 옛 Capabilities 목록을 합쳐 본다")
+    @Test("Checks capability by combining the CapMap keys and the legacy Capabilities list")
     func capability() throws {
         let node = { (extra: String) in
             try JSONDecoder().decode(Node.self, from: Data(#"{"ID":1\#(extra)}"#.utf8))
@@ -93,7 +93,7 @@ struct TailnetLockPlanTests {
         #expect(try node(#","CapMap":{"https://tailscale.com/cap/tailnet-lock-alpha":null}"#).hasTailnetLockCapability == false)
     }
 
-    @Test(".unverified의 재시도 간격: 5초에서 두 배씩, 5분까지")
+    @Test(".unverified retry interval doubles from 5 seconds up to 5 minutes")
     func retryDelay() {
         let range = Duration.seconds(5)...Duration.seconds(300)
         let delays = (1...9).map { ControlClient.lockRetryDelay(failures: $0, within: range) }
@@ -105,7 +105,7 @@ struct TailnetLockPlanTests {
     }
 }
 
-@Suite("tailnet lock: netmap 거르기")
+@Suite("Tailnet lock: Netmap filtering")
 struct NetmapLockFilterTests {
     private let signer = LockTesting.Signer()
     private let lockKey = NLPublicKey(Curve25519.Signing.PrivateKey().publicKey)
@@ -120,7 +120,7 @@ struct NetmapLockFilterTests {
         return try #require(update.netmap)
     }
 
-    @Test(".enforcing: 서명된 피어와 UnsignedPeerAPIOnly 피어가 남고, 서명 없는 피어와 틀린 서명의 피어가 순서를 지키며 빠진다")
+    @Test(".enforcing keeps signed peers and UnsignedPeerAPIOnly peers and removes unsigned peers and peers with invalid signatures while preserving order")
     func enforcing() throws {
         let authority = try authority()
         let stranger = LockTesting.Signer()
@@ -131,7 +131,7 @@ struct NetmapLockFilterTests {
             peers: [
                 LockTesting.peerJSON(2, key: keys[0], signature: try signer.signature(for: keys[0])),
                 LockTesting.peerJSON(3, key: keys[1]),
-                // 다른 node 키에 대한 서명과, 신뢰 키가 아닌 키의 서명.
+                // A signature for a different node key and a signature from an untrusted key.
                 LockTesting.peerJSON(4, key: keys[2], signature: try signer.signature(for: keys[0])),
                 LockTesting.peerJSON(5, key: keys[3], signature: try stranger.signature(for: keys[3])),
                 LockTesting.peerJSON(6, key: keys[4], apiOnly: true),
@@ -141,14 +141,14 @@ struct NetmapLockFilterTests {
         #expect(filtered.peers.map(\.id) == [2, 6])
         #expect(filtered.tailnetLock == TailnetLockStatus(mode: .enforcing, head: authority.head.text, filteredPeerCount: 3))
         #expect(!filtered.tailnetLock.isLockedOut)
-        // 피어 말고는 그대로다.
+        // Everything except the peers stays unchanged.
         var expected = raw
         expected.peers = filtered.peers
         expected.tailnetLock = filtered.tailnetLock
         #expect(filtered == expected)
     }
 
-    @Test("회전으로 낡은 키는 UnsignedPeerAPIOnly 피어여도 빠진다")
+    @Test("A key made obsolete by rotation is removed even for an UnsignedPeerAPIOnly peer")
     func obsoleteKeyOfAPIOnlyPeer() throws {
         let authority = try authority()
         let rotationKey = Curve25519.Signing.PrivateKey()
@@ -160,7 +160,7 @@ struct NetmapLockFilterTests {
             selfNode: LockTesting.selfJSON(key: LockTesting.newNodeKey()),
             peers: [
                 LockTesting.peerJSON(2, key: newKey, signature: rotated),
-                // 서명 검사를 받지 않는 피어 둘: 하나는 회전으로 낡은 키를 쓰고, 하나는 무관한 키다.
+                // Two peers exempt from signature checks: one uses a key made obsolete by rotation, and the other uses an unrelated key.
                 LockTesting.peerJSON(3, key: oldKey, apiOnly: true),
                 LockTesting.peerJSON(4, key: bystander, apiOnly: true),
             ]
@@ -170,7 +170,7 @@ struct NetmapLockFilterTests {
         #expect(filtered.tailnetLock.filteredPeerCount == 1)
     }
 
-    @Test("자기 노드: 서명이 없거나 검증되지 않으면 빠지지 않고 signingRequest에 nodekey:·tlpub: 두 값이 실린다")
+    @Test("The self node stays when its signature is missing or unverified, and signingRequest carries both nodekey: and tlpub:")
     func lockedOut() throws {
         let authority = try authority()
         let selfKey = LockTesting.newNodeKey()
@@ -185,7 +185,7 @@ struct NetmapLockFilterTests {
             #expect(filtered.selfNode.key == selfKey)
             #expect(filtered.tailnetLock.signingRequest == request)
             #expect(filtered.tailnetLock.isLockedOut)
-            // 서명된 피어는 남는다(그 피어가 이 노드를 빼므로 통신은 되지 않는다).
+            // The signed peer stays (it excludes this node, so communication fails).
             #expect(filtered.peers.map(\.id) == [2])
         }
         let signed = try netmap(selfNode: LockTesting.selfJSON(key: selfKey, signature: signer.signature(for: selfKey)), peers: peers)
@@ -193,7 +193,7 @@ struct NetmapLockFilterTests {
         #expect(signed.tailnetLock.signingRequest == nil)
     }
 
-    @Test(".unverified: 피어를 모두 뺀다(UnsignedPeerAPIOnly와 서명된 피어 포함). 거르기 전의 netmap은 .disabled다")
+    @Test(".unverified removes all peers, including UnsignedPeerAPIOnly and signed peers. The unfiltered netmap is .disabled")
     func unverified() throws {
         let key = LockTesting.newNodeKey()
         let raw = try netmap(
@@ -211,7 +211,7 @@ struct NetmapLockFilterTests {
     }
 }
 
-@Suite("tailnet lock: RPC와 맵 요청의 JSON")
+@Suite("Tailnet lock: RPC and map request JSON")
 struct TKARequestJSONTests {
     private let nodeKey = NodePublicKey(rawValue: [UInt8](repeating: 0x11, count: 32)) ?? .zero
 
@@ -221,7 +221,7 @@ struct TKARequestJSONTests {
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
-    @Test("요청 셋: Go 필드 이름, Version 148, 빈 Head도 \"\"로, 빈 MissingAUMs도 []로")
+    @Test("Three requests: Go field names, Version 148, empty Head as \"\", and empty MissingAUMs as []")
     func requests() throws {
         let key = keyText("nodekey:", byte: 0x11)
         #expect(try json(TKABootstrapRequest(nodeKey: nodeKey, head: "")) == #"{"Head":"","NodeKey":"\#(key)","Version":148}"#)
@@ -231,12 +231,12 @@ struct TKARequestJSONTests {
             #"{"Ancestors":["A","B"],"Head":"H","NodeKey":"\#(key)","Version":148}"#)
         #expect(try json(TKASyncSendRequest(nodeKey: nodeKey, head: "H", missingAUMs: [])) ==
             #"{"Head":"H","Interactive":false,"MissingAUMs":[],"NodeKey":"\#(key)","Version":148}"#)
-        // AUM은 패딩 있는 표준 base64다.
+        // AUMs use standard base64 with padding.
         #expect(try json(TKASyncSendRequest(nodeKey: nodeKey, head: "H", missingAUMs: [[0xfb, 0xff], [1]])) ==
             #"{"Head":"H","Interactive":false,"MissingAUMs":["+/8=","AQ=="],"NodeKey":"\#(key)","Version":148}"#)
     }
 
-    @Test("응답: base64를 바이트로, 없는 필드와 null은 빈 값으로, base64가 아니면 실패")
+    @Test("Responses decode base64 to bytes and missing fields or null to empty values, and reject invalid base64")
     func responses() throws {
         let decode = { (json: String) in try JSONDecoder().decode(TKABootstrapResponse.self, from: Data(json.utf8)) }
         let bootstrap = try decode(#"{"GenesisAUM":"+/8=","DisablementSecret":"AQID"}"#)
@@ -260,9 +260,9 @@ struct TKARequestJSONTests {
         #expect(try JSONDecoder().decode(TKASyncSendResponse.self, from: Data(#"{"Head":"H"}"#.utf8)).head == "H")
     }
 
-    /// 5절 TL-11b 항목 5: 개수는 항목을 base64로 디코딩하기 전에 본다. 4,097개째에서 첫 항목이 base64가 아니어도 그 오류가
-    /// 아니라 개수 한도로 떨어진다.
-    @Test("sync/offer 응답의 MissingAUMs: 4,096개까지 받고 4,097개는 디코딩 전에 거절한다")
+    /// §5, TL-11b item 5: Check the count before base64-decoding entries. At 4,097 entries, even if the first entry is invalid base64,
+    /// the error is the count limit instead.
+    @Test("MissingAUMs in a sync/offer response accepts up to 4,096 entries and rejects 4,097 before decoding")
     func missingAUMCountLimit() throws {
         let limit = TKASyncOfferResponse.maximumMissingAUMCount
         #expect(limit == 4_096)
@@ -276,18 +276,18 @@ struct TKARequestJSONTests {
             let items = [first] + Array(repeating: "AQ==", count: limit)
             do {
                 _ = try JSONDecoder().decode(TKASyncOfferResponse.self, from: body(items))
-                Issue.record("4,097개를 받았다")
+                Issue.record("Accepted 4,097 entries")
             } catch DecodingError.dataCorrupted(let context) {
                 #expect(context.debugDescription.contains("개수 한도"), "\(first): \(context.debugDescription)")
             }
         }
-        // 한도 안에서 base64가 아닌 항목은 그대로 실패한다.
+        // An invalid base64 entry within the limit still fails.
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(TKASyncOfferResponse.self, from: body(["*"] + Array(repeating: "AQ==", count: limit - 1)))
         }
     }
 
-    @Test("MapRequest.TKAHead: 머리가 있으면 싣고, 없으면 키가 빠진다")
+    @Test("MapRequest.TKAHead includes the head when present and omits the key when absent")
     func mapRequestHead() throws {
         let without = try json(MapRequest(nodeKey: nodeKey, discoKey: .zero, hostinfo: nil))
         #expect(!without.contains("TKAHead"))

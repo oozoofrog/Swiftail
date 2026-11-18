@@ -1,7 +1,7 @@
-// `ControlClient.logOut()`의 독립 검토가 보탠 시험. 계약 `docs/contracts/SwiftailHost.md` "로그아웃" 동작 O.
-// `LogoutTests`가 보지 않는 곳을 본다: 응답 전 단계(`/key`, 업그레이드)에서 멈춘 서버의 기한, 도중 취소, 깨진 신원 파일,
-// 신원 파일이 바이트까지 그대로인지, 거절 메시지의 인증 키 가림, 큰 응답, 그리고 로그아웃한 키로 다시 `run()`했을 때
-// 운영 서버에서 일어날 법한 흐름(만료 → 새 키 등록에 로그인 요구).
+// Tests added by the independent review of `ControlClient.logOut()`. Contract `docs/contracts/SwiftailHost.md`, "Logout," behavior O.
+// Covers cases outside `LogoutTests`: deadline when the server stalls before the response (`/key` or upgrade), cancellation in flight, a corrupt identity file,
+// byte-for-byte preservation of the identity file, auth key redaction in rejection messages, large responses, and calling `run()` again with a logged-out key
+// in the flow likely to occur on the production server (expiration → login required to register a new key).
 
 import CryptoKit
 import Foundation
@@ -12,12 +12,12 @@ import Testing
 import SwiftailBase
 @testable import SwiftailControl
 
-/// 받기만 하고 답하지 않는 서버. `answersKey`면 `GET /key`에는 답하고 그 뒤(업그레이드)에서 멈춘다.
+/// A server that receives requests without answering. If `answersKey` is set, it answers `GET /key` and stalls at the next step (upgrade).
 private final class StallingServer: Sendable {
     private struct State {
         var connections: [NWConnection] = []
         var opened = 0
-        /// 상대가 닫았거나 끊긴 연결 수.
+        /// The number of connections that the peer closed or that dropped.
         var closed = 0
     }
 
@@ -91,7 +91,7 @@ private final class StallingServer: Sendable {
     }
 }
 
-@Suite("제어 클라이언트: 로그아웃(검토)", .timeLimit(.minutes(1)))
+@Suite("Control client: Logout (review)", .timeLimit(.minutes(1)))
 struct LogoutReviewTests {
     static let authKey = "tskey-auth-fake0001"
 
@@ -117,16 +117,16 @@ struct LogoutReviewTests {
         let deadline = ContinuousClock.now + duration
         while !condition() {
             guard ContinuousClock.now < deadline else {
-                Issue.record("\(duration) 안에 \(what)")
+                Issue.record("\(what) within \(duration)")
                 return
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
     }
 
-    // MARK: 기한 (동작 O5)
+    // MARK: Deadline (behavior O5)
 
-    @Test("서버가 /key나 업그레이드에서 멈춰도 기한에 connection으로 끝나고 연결이 남지 않는다", arguments: [false, true])
+    @Test("Even if the server stalls at /key or upgrade, the deadline ends the operation with connection and leaves no open connection", arguments: [false, true])
     func deadlineBeforeRegister(answersKey: Bool) async throws {
         let server = try StallingServer(answersKey: answersKey)
         defer { server.close() }
@@ -142,17 +142,17 @@ struct LogoutReviewTests {
 
         let start = ContinuousClock.now
         guard case .connection? = await logOutError(client) else {
-            Issue.record("connection이 아니다")
+            Issue.record("Expected connection")
             return
         }
         let elapsed = ContinuousClock.now - start
-        #expect(elapsed >= .milliseconds(500) && elapsed < .seconds(3), "기한에 끝나야 한다: \(elapsed)")
+        #expect(elapsed >= .milliseconds(500) && elapsed < .seconds(3), "Must finish by the deadline: \(elapsed)")
         let expected = answersKey ? 2 : 1
         #expect(server.opened == expected)
-        await waitUntil("클라이언트가 연결을 닫는다") { server.closed == server.opened }
+        await waitUntil("The client closes the connection") { server.closed == server.opened }
     }
 
-    @Test("도중에 취소하면 곧 connection으로 끝나고 신원 파일은 그대로다")
+    @Test("Canceling in flight ends promptly with connection and preserves the identity file")
     func cancellation() async throws {
         let server = try SetDNSFakeControlServer()
         defer { server.close() }
@@ -165,20 +165,20 @@ struct LogoutReviewTests {
         let client = ControlClient(configuration: .init(serverURL: url, hostname: "rd-mac-1a2b3c4d", authKey: nil), identityStore: store)
 
         let task = Task { await logOutError(client) }
-        try await server.wait("로그아웃 요청이 온다") { $0.requests.count == 1 }
+        try await server.wait("Logout request arrives") { $0.requests.count == 1 }
         let start = ContinuousClock.now
         task.cancel()
         guard case .connection? = await task.value else {
-            Issue.record("connection이 아니다")
+            Issue.record("Expected connection")
             return
         }
-        #expect(ContinuousClock.now - start < .seconds(3), "기본 기한(10초)을 기다리지 않는다")
+        #expect(ContinuousClock.now - start < .seconds(3), "Does not wait for the default deadline (10 seconds)")
         #expect(try Data(contentsOf: store.fileURL) == before)
     }
 
-    // MARK: 로컬 파일 (동작 O6)
+    // MARK: Local file (behavior O6)
 
-    @Test("성공한 로그아웃은 신원 파일을 바이트까지 그대로 두고, 디렉터리에 다른 파일을 만들지 않는다")
+    @Test("Successful logout preserves the identity file byte for byte and creates no other file in the directory")
     func identityFileUntouched() async throws {
         let server = try SetDNSFakeControlServer()
         defer { server.close() }
@@ -198,7 +198,7 @@ struct LogoutReviewTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [store.fileURL.lastPathComponent])
     }
 
-    @Test("NL 키가 없는 옛 신원 파일: 요청은 가고(NLKey는 0이 아님) 파일에 NL 키를 써넣지 않는다")
+    @Test("An old identity file without an NL key sends the request (with NLKey other than 0) and leaves the file without an NL key")
     func oldIdentityFileWithoutLockKey() async throws {
         let server = try SetDNSFakeControlServer()
         defer { server.close() }
@@ -206,7 +206,7 @@ struct LogoutReviewTests {
         let (store, directory) = Self.temporaryStore()
         defer { try? FileManager.default.removeItem(at: directory) }
         try store.save(Self.registeredIdentity())
-        // 저장된 파일에서 NLKey만 뺀다.
+        // Remove only NLKey from the stored file.
         var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any])
         #expect(object.removeValue(forKey: "NLKey") != nil)
         let old = try JSONSerialization.data(withJSONObject: object)
@@ -221,7 +221,7 @@ struct LogoutReviewTests {
         #expect(try Data(contentsOf: store.fileURL) == old)
     }
 
-    @Test("신원 파일이 깨졌으면 storage이고, 서버에 아무것도 보내지 않으며 파일을 고치지 않는다")
+    @Test("A corrupt identity file yields storage, sends nothing to the server, and leaves the file intact")
     func corruptedIdentity() async throws {
         let server = try SetDNSFakeControlServer()
         defer { server.close() }
@@ -234,7 +234,7 @@ struct LogoutReviewTests {
         let client = ControlClient(configuration: .init(serverURL: url, hostname: "rd-mac-1a2b3c4d", authKey: nil), identityStore: store)
 
         guard case .storage? = await logOutError(client) else {
-            Issue.record("storage가 아니다")
+            Issue.record("Expected storage")
             return
         }
         #expect(server.keyRequests == 0)
@@ -242,9 +242,9 @@ struct LogoutReviewTests {
         #expect(try Data(contentsOf: store.fileURL) == garbage)
     }
 
-    // MARK: 오류 (동작 O4·O7)
+    // MARK: Errors (behaviors O4 and O7)
 
-    @Test("/key가 200이 아니면 http(status:)다")
+    @Test("A /key response other than 200 yields http(status:)")
     func keyStatus() async throws {
         let server = try SetDNSFakeControlServer()
         defer { server.close() }
@@ -255,12 +255,12 @@ struct LogoutReviewTests {
         try store.save(Self.registeredIdentity())
         let client = ControlClient(configuration: .init(serverURL: url, hostname: "rd-mac-1a2b3c4d", authKey: nil), identityStore: store)
         guard case .http(status: 500)? = await logOutError(client) else {
-            Issue.record("http(500)이 아니다")
+            Issue.record("Expected http(500)")
             return
         }
     }
 
-    @Test("거절 메시지에서 인증 키(원문과 --TL 앞부분)를 가리고 200자로 자른다. 오류 문자열에 키가 없다")
+    @Test("Redacts the auth key (the original and the part before --TL) in the rejection message and truncates it to 200 characters. The error string contains no key")
     func rejectionHidesSecrets() async throws {
         let wrapped = Self.authKey + "--TL0001-fakefakefake"
         let identity = Self.registeredIdentity()
@@ -275,7 +275,7 @@ struct LogoutReviewTests {
 
         let error = try #require(await logOutError(client))
         guard case .registrationRejected(let message) = error else {
-            Issue.record("registrationRejected가 아니다: \(error)")
+            Issue.record("Expected registrationRejected, got \(error)")
             return
         }
         #expect(message.count <= ControlClient.maximumRejectionLength + 1)
@@ -283,12 +283,12 @@ struct LogoutReviewTests {
         #expect(!text.contains(Self.authKey))
         #expect(!text.contains("--TL"))
         #expect(!text.contains(try #require(identity.nodePublicKey).description))
-        // 요청에도 인증 키가 없다(감싼 키여도).
+        // The request contains no auth key either, even if the key is wrapped.
         let body = String(decoding: try #require(server.requests.first).body, as: UTF8.self)
         #expect(!body.contains("tskey-") && !body.contains("--TL"))
     }
 
-    @Test("1MiB를 넘는 응답은 connection으로 끝난다")
+    @Test("A response larger than 1MiB ends with connection")
     func oversizedResponse() async throws {
         let server = try SetDNSFakeControlServer()
         defer { server.close() }
@@ -299,17 +299,17 @@ struct LogoutReviewTests {
         try store.save(Self.registeredIdentity())
         let client = ControlClient(configuration: .init(serverURL: url, hostname: "rd-mac-1a2b3c4d", authKey: nil), identityStore: store)
         guard case .connection? = await logOutError(client) else {
-            Issue.record("connection이 아니다")
+            Issue.record("Expected connection")
             return
         }
         #expect(server.requests.count == 1)
     }
 
-    // MARK: 로그아웃한 키로 다시 run() (계약 "시험과 관문"의 운영 서버 쪽 짐작)
+    // MARK: Calling run() again with a logged-out key (expected production server behavior from the contract's "Tests and gates")
 
-    /// 운영 서버에서 일어날 법한 흐름: 저장된(로그아웃한) 키의 등록에 `NodeKeyExpired`, 새 키의 등록에 `AuthURL`(로그인 요구),
-    /// 로그인 뒤 Followup에 성공. testcontrol 사본처럼 만료 시각을 새 키로 옮기지 않는 서버다.
-    @Test("로그아웃한 키로 다시 run(): 만료 → 새 키(OldNodeKey = 옛 키)로 등록 → loginRequired → Followup → 새 키 저장", arguments: [nil, authKey])
+    /// Likely production server flow: `NodeKeyExpired` for registration with the stored (logged-out) key, `AuthURL` (login required) for registration with a new key,
+    /// and success on Followup after login. Unlike the testcontrol copy, this server does not carry the expiry time over to the new key.
+    @Test("Runs run() again with a logged-out key: expiration → registration with a new key (OldNodeKey = old key) → loginRequired → Followup → new key stored", arguments: [nil, authKey])
     func runAfterLogout(authKey: String?) async throws {
         let server = try SetDNSFakeControlServer()
         defer { server.close() }
@@ -348,7 +348,7 @@ struct LogoutReviewTests {
         let bodies = try registers.map { try #require(try JSONSerialization.jsonObject(with: Data($0.body)) as? [String: Any]) }
         try #require(bodies.count == 3)
         #expect(bodies[0]["NodeKey"] as? String == oldKey.description)
-        #expect(bodies[0]["Auth"] == nil, "저장된 키의 등록에는 인증 키를 싣지 않는다")
+        #expect(bodies[0]["Auth"] == nil, "Registration with the stored key omits the auth key")
         let newKey = try #require(bodies[1]["NodeKey"] as? String)
         #expect(newKey != oldKey.description)
         #expect(bodies[1]["OldNodeKey"] as? String == oldKey.description)
@@ -356,12 +356,12 @@ struct LogoutReviewTests {
         #expect(bodies[1]["Followup"] as? String == "")
         #expect(bodies[2]["NodeKey"] as? String == newKey)
         #expect(bodies[2]["Followup"] as? String == authURL)
-        #expect(bodies.allSatisfy { $0["Expiry"] as? String == "0001-01-01T00:00:00Z" }, "등록에는 Expiry가 없다")
+        #expect(bodies.allSatisfy { $0["Expiry"] as? String == "0001-01-01T00:00:00Z" }, "Registration has no Expiry")
         #expect(loginURL?.absoluteString == authURL)
         #expect(registered?.description == newKey)
         #expect(try store.load()?.nodePublicKey?.description == newKey)
 
         run.cancel()
-        #expect(await run.value == nil, "run()은 nodeKeyExpired로 끝나지 않는다")
+        #expect(await run.value == nil, "run() does not end with nodeKeyExpired")
     }
 }

@@ -1,7 +1,7 @@
-// 등록 요청의 tailnet lock 필드: 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 R·K, 단위 시험 15·16.
-// 가짜 제어 서버(`SetDNSFakeControlServer`)와 실제 연결(업그레이드 → Noise → HTTP/2)로 돈다. 서버가 받은 요청의 바이트를 본다.
+// Tailnet lock fields in registration requests: contract `docs/contracts/SwiftailTailnetLock.md`, behaviors R and K, unit tests 15 and 16.
+// Runs against a fake control server (`SetDNSFakeControlServer`) over a real connection (upgrade → Noise → HTTP/2). Inspects the bytes of the requests received by the server.
 //
-// 키는 모두 시험이 그 자리에서 만든다. 서명이 맞는지는 `SwiftailTKA`의 `authorize`(Go 판정과 대조된 것)로 본다.
+// The test generates all keys on the spot. Checks signatures using `SwiftailTKA`'s `authorize`, which was checked against Go's decisions.
 
 import CryptoKit
 import Foundation
@@ -11,9 +11,9 @@ import SwiftailBase
 @testable import SwiftailControl
 @testable import SwiftailTKA
 
-@Suite("제어 클라이언트: 등록의 NL 키와 서명", .timeLimit(.minutes(1)))
+@Suite("Control client: NL key and signature at registration", .timeLimit(.minutes(1)))
 struct RegistrationSigningTests {
-    /// 시험의 tailnet lock: 신뢰 키 하나와, 그 키가 위임한 감싼 키로 만든 서명된 인증 키.
+    /// Tailnet lock for the test: one trusted key and a signed auth key made with a wrapped key that the trusted key delegated.
     struct Lock {
         let trustedKey = Curve25519.Signing.PrivateKey()
         let wrappingKey = Curve25519.Signing.PrivateKey()
@@ -22,12 +22,12 @@ struct RegistrationSigningTests {
             AuthorityState(keys: [TrustedKey(kind: 1, votes: 1, publicKey: Array(trustedKey.publicKey.rawRepresentation))])
         }
 
-        /// 감싼 개인 키(B): 시드 ‖ 공개 키 64바이트.
+        /// Wrapped private key (B): 64 bytes of seed ‖ public key.
         var wrappedPrivateKey: [UInt8] {
             Array(wrappingKey.rawRepresentation) + Array(wrappingKey.publicKey.rawRepresentation)
         }
 
-        /// `tskey-auth-fake--TL<credential>-<B>`(노트 3.8).
+        /// `tskey-auth-fake--TL<credential>-<B>` (notes §3.8).
         func authKey(privateKey: [UInt8]? = nil) throws -> String {
             var credential = NodeKeySignature(
                 kind: 3,
@@ -38,7 +38,7 @@ struct RegistrationSigningTests {
             return "tskey-auth-fake--TL" + rawBase64(credential.serialized()) + "-" + rawBase64(privateKey ?? wrappedPrivateKey)
         }
 
-        /// 신뢰 키로 서명한 direct 서명. `wrappingKey`면 그 키가 이 서명 위에 rotation으로 다시 서명할 수 있다.
+        /// A direct signature signed by the trusted key. If `wrappingKey` is present, it can sign this signature again as a rotation.
         func directSignature(for nodeKey: NodePublicKey, wrappingKey: NLPublicKey?) throws -> [UInt8] {
             var signature = NodeKeySignature(
                 kind: 1,
@@ -55,7 +55,7 @@ struct RegistrationSigningTests {
         Data(bytes).base64EncodedString().replacingOccurrences(of: "=", with: "")
     }
 
-    /// 가짜 서버와 클라이언트를 띄우고 `body`를 돌린다. 클라이언트의 `run()`은 끝나면 취소한다.
+    /// Starts a fake server and client and runs `body`. Cancels the client's `run()` afterward.
     private func withClient<T>(
         authKey: String? = nil,
         prepare: (SetDNSFakeControlServer, NodeIdentityStore, URL) throws -> Void = { _, _, _ in },
@@ -90,16 +90,16 @@ struct RegistrationSigningTests {
     }
 
     private func signature(_ object: [String: Any]) throws -> [UInt8] {
-        let text = try #require(object["NodeKeySignature"] as? String, "서명이 없다")
+        let text = try #require(object["NodeKeySignature"] as? String, "Missing signature")
         return [UInt8](try #require(Data(base64Encoded: text)))
     }
 
-    // MARK: 평범한 인증 키
+    // MARK: Ordinary auth key
 
-    @Test("평범한 인증 키: NLKey는 저장된 자기 NL 공개 키이고 서명은 null이다")
+    @Test("With an ordinary auth key, NLKey is the stored local NL public key and the signature is null")
     func plainAuthKey() async throws {
         try await withClient(authKey: "tskey-auth-fake") { server, store in
-            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            try await server.wait("The map stream did not open") { !$0.openMapStreams.isEmpty }
             let request = try object(try #require(registerRequests(server).first))
             let stored = try #require(try store.load())
             #expect(request["NLKey"] as? String == stored.lockPublicKey.description)
@@ -109,7 +109,7 @@ struct RegistrationSigningTests {
         }
     }
 
-    @Test("NL 키가 없는 옛 신원 파일: 첫 요청 전에 새 NL 키를 저장하고 그 키를 싣는다(동작 R1)")
+    @Test("An old identity file without an NL key stores a new NL key before the first request and includes that key (behavior R1)")
     func oldIdentityFile() async throws {
         let old = NodeIdentity(machineKey: .init(), nodeKey: .init())
         try await withClient(prepare: { _, store, directory in
@@ -120,10 +120,10 @@ struct RegistrationSigningTests {
             ]
             try JSONSerialization.data(withJSONObject: object).write(to: store.fileURL)
         }) { server, store in
-            try await server.wait("등록 요청이 오지 않았다") { !registerRequests($0).isEmpty }
+            try await server.wait("The registration request did not arrive") { !registerRequests($0).isEmpty }
             let request = try object(try #require(registerRequests(server).first))
             let stored = try #require(try store.load())
-            // 같은 노드로 뜬다: 저장된 node 키로 다시 붙는다.
+            // Starts as the same node by reconnecting with the stored node key.
             #expect(try nodeKey(request) == old.nodePublicKey)
             #expect(stored.machinePublicKey == old.machinePublicKey)
             #expect(request["NLKey"] as? String == stored.lockPublicKey.description)
@@ -132,14 +132,14 @@ struct RegistrationSigningTests {
         }
     }
 
-    // MARK: 서명된 인증 키
+    // MARK: Signed auth key
 
-    @Test("서명된 인증 키: 서버로 간 인증 키는 --TL 앞부분이고, 서명은 그 node 키를 인가한다")
+    @Test("With a signed auth key, the server receives the part before --TL and the signature authorizes the node key")
     func signedAuthKey() async throws {
         let lock = Lock()
         let authKey = try lock.authKey()
         try await withClient(authKey: authKey) { server, store in
-            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            try await server.wait("The map stream did not open") { !$0.openMapStreams.isEmpty }
             let requests = registerRequests(server)
             #expect(requests.count == 1)
             let request = try object(try #require(requests.first))
@@ -156,12 +156,12 @@ struct RegistrationSigningTests {
         }
     }
 
-    @Test("서버로 간 어떤 요청에도 --TL 뒤와 감싼 개인 키(base64·16진·바이트)가 없다(동작 R4·K3)")
+    @Test("No request to the server contains the part after --TL or the wrapped private key (base64, base-16, or bytes) (behaviors R4 and K3)")
     func noWrappedKeyOnTheWire() async throws {
         let lock = Lock()
         let authKey = try lock.authKey()
         try await withClient(authKey: authKey) { server, _ in
-            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            try await server.wait("The map stream did not open") { !$0.openMapStreams.isEmpty }
             let seed = Array(lock.wrappingKey.rawRepresentation)
             let secrets: [[UInt8]] = [
                 Array(authKey.utf8),
@@ -179,14 +179,14 @@ struct RegistrationSigningTests {
             for request in server.requests {
                 let wire = request.body + request.headers.flatMap { Array($0.name.utf8) + Array($0.value.utf8) } + Array(request.path.utf8)
                 for secret in secrets {
-                    #expect(wire.firstRange(of: secret) == nil, "\(request.path)에 비밀이 실렸다")
+                    #expect(wire.firstRange(of: secret) == nil, "A secret was included in \(request.path)")
                 }
                 #expect(wire.firstRange(of: Array("--TL".utf8)) == nil)
             }
         }
     }
 
-    @Test("해석되지 않는 --TL: 요청이 하나도 나가지 않고 invalidConfiguration이다(결정 L12·L13)", arguments: [
+    @Test("An undecodable --TL yields invalidConfiguration and sends no request (decisions L12 and L13)", arguments: [
         "missing-dash", "padded-credential", "short-key", "long-key", "wrong-public-half", "other-wrapping-key", "not-credential",
     ])
     func invalidWrappedAuthKey(_ variant: String) async throws {
@@ -226,7 +226,7 @@ struct RegistrationSigningTests {
         }
         defer { timer.cancel() }
         guard case .invalidConfiguration(let message)? = await running.value else {
-            Issue.record("run()이 invalidConfiguration으로 곧바로 끝나지 않았다")
+            Issue.record("run() did not immediately end with invalidConfiguration")
             return
         }
         #expect(server.keyRequests == 0)
@@ -234,9 +234,9 @@ struct RegistrationSigningTests {
         #expect(!message.contains(suffix) && !message.contains(parts[1]) && !message.contains("tskey"))
     }
 
-    // MARK: 재서명 요청
+    // MARK: Re-signing requests
 
-    @Test("재서명 요청: 새 node 키를 만들고, 받은 서명을 NL 키로 이어 서명해 다시 등록한다(동작 R6·R7)")
+    @Test("A re-signing request creates a new node key, extends the received signature chain with the NL key, and registers again (behaviors R6 and R7)")
     func resignRequest() async throws {
         let lock = Lock()
         let identity = NodeIdentity(machineKey: .init(), nodeKey: .init())
@@ -246,7 +246,7 @@ struct RegistrationSigningTests {
             try store.save(identity)
             server.enqueueRegisterReply(#"{"NodeKeySignature":"\#(Data(oldSignature).base64EncodedString())"}"#)
         }) { server, store in
-            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            try await server.wait("The map stream did not open") { !$0.openMapStreams.isEmpty }
             let requests = try registerRequests(server).map(object)
             #expect(requests.count == 2)
             let first = try #require(requests.first), second = try #require(requests.last)
@@ -264,7 +264,7 @@ struct RegistrationSigningTests {
         }
     }
 
-    @Test("재서명하지 못하는 옛 서명이면 서명 없이 새 키로 등록한다(동작 R5 ①)")
+    @Test("If the old signature cannot be re-signed, registers with a new key and no signature (behavior R5 ①)")
     func unreadableResignInput() async throws {
         let identity = NodeIdentity(machineKey: .init(), nodeKey: .init())
         let oldKey = try #require(identity.nodePublicKey)
@@ -272,7 +272,7 @@ struct RegistrationSigningTests {
             try store.save(identity)
             server.enqueueRegisterReply(#"{"NodeKeySignature":"\#(Data([0xff, 0x00]).base64EncodedString())"}"#)
         }) { server, store in
-            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            try await server.wait("The map stream did not open") { !$0.openMapStreams.isEmpty }
             let second = try object(try #require(registerRequests(server).last))
             #expect(registerRequests(server).count == 2)
             #expect(try nodeKey(second) != oldKey)
@@ -282,9 +282,9 @@ struct RegistrationSigningTests {
         }
     }
 
-    /// 계약 5절 TL-11b 항목 1: 이 노드가 NL 키로 서명한 사슬이 아니면 재서명하지 않는다. 서명된 인증 키로 등록한 노드의
-    /// 서명은 감싼 키가 서명한 rotation이라 여기에 든다(Go는 받는 쪽에서 검증되지 않는 서명을 만든다).
-    @Test("서명된 인증 키로 등록한 노드에 재서명 요청이 오면 서명 없이 새 키로 등록한다(TL-11b 항목 1)")
+    /// Contract §5, TL-11b item 1: Re-sign only chains signed by this node with its NL key. A node registered with a signed auth key
+    /// has a rotation signature signed by the wrapped key, so it falls under this rule (Go produces a signature that the recipient cannot verify).
+    @Test("A re-signing request for a node registered with a signed auth key registers with a new key and no signature (TL-11b item 1)")
     func resignRequestForCredentialChain() async throws {
         let lock = Lock()
         let identity = NodeIdentity(machineKey: .init(), nodeKey: .init())
@@ -301,7 +301,7 @@ struct RegistrationSigningTests {
             try store.save(identity)
             server.enqueueRegisterReply(#"{"NodeKeySignature":"\#(Data(registered.serialized()).base64EncodedString())"}"#)
         }) { server, store in
-            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            try await server.wait("The map stream did not open") { !$0.openMapStreams.isEmpty }
             let requests = try registerRequests(server).map(object)
             #expect(requests.count == 2)
             let second = try #require(requests.last)
@@ -312,7 +312,7 @@ struct RegistrationSigningTests {
         }
     }
 
-    @Test("재서명 요청이 거듭 오면 그 등록을 그만두고 다시 이어 저장된 키로 등록한다")
+    @Test("Repeated re-signing requests abandon the registration and reconnect to register with the stored key")
     func repeatedResignRequest() async throws {
         let lock = Lock()
         let identity = NodeIdentity(machineKey: .init(), nodeKey: .init())
@@ -323,18 +323,18 @@ struct RegistrationSigningTests {
             server.enqueueRegisterReply(reply)
             server.enqueueRegisterReply(reply)
         }) { server, store in
-            try await server.wait("맵 스트림이 열리지 않았다") { !$0.openMapStreams.isEmpty }
+            try await server.wait("The map stream did not open") { !$0.openMapStreams.isEmpty }
             let requests = try registerRequests(server).map(object)
             #expect(requests.count == 3)
-            #expect(server.keyRequests == 2, "다시 잇지 않았다")
+            #expect(server.keyRequests == 2, "Did not reconnect")
             #expect(try nodeKey(requests[2]) == oldKey)
             #expect(try #require(try store.load()).nodePublicKey == oldKey)
         }
     }
 
-    // MARK: 비밀
+    // MARK: Secrets
 
-    @Test("서명된 인증 키를 쥔 설정과 오류에 감싼 키가 나오지 않는다(동작 K2)")
+    @Test("Configuration and errors holding a signed auth key do not expose the wrapped key (behavior K2)")
     func secretsInRenderings() throws {
         let lock = Lock()
         let authKey = try lock.authKey()
@@ -354,7 +354,7 @@ struct RegistrationSigningTests {
         }
         do throws(ControlError) {
             _ = try AuthKey.wrapped(in: authKey + "x")
-            Issue.record("깨진 인증 키를 받아들였다")
+            Issue.record("Accepted a malformed auth key")
         } catch {
             #expect(!String(describing: error).contains("tskey") && !String(describing: error).contains(Self.rawBase64(seed)))
         }

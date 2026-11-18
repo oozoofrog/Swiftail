@@ -3,13 +3,13 @@ import Testing
 
 @testable import SwiftailControl
 
-@Suite("run()은 한 번만")
+@Suite("run() runs only once")
 struct ControlClientRunTests {
-    @Test("끝난 뒤 다시 부른 run()은 invalidConfiguration으로 거절한다")
+    @Test("Calling run() again after it finishes yields invalidConfiguration")
     func runAfterCancellation() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-run-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
-        // 아무도 듣지 않는 포트. 두 번째 run()이 거절되지 않으면 연결을 되풀이하며 돌아오지 않는다.
+        // A port with no listener. If the second run() is accepted, it keeps retrying the connection and never returns.
         let client = ControlClient(
             configuration: .init(serverURL: try #require(URL(string: "http://127.0.0.1:1")), hostname: "rd-mac-1a2b3c4d"),
             identityStore: NodeIdentityStore(directory: directory)
@@ -27,7 +27,7 @@ struct ControlClientRunTests {
         }
         defer { timer.cancel() }
         guard case .invalidConfiguration? = await second.value else {
-            Issue.record("두 번째 run()이 invalidConfiguration으로 곧바로 끝나지 않았다")
+            Issue.record("The second run() did not immediately end with invalidConfiguration")
             return
         }
     }

@@ -1,9 +1,9 @@
-// M2 마무리 관문: 운영 제어 서버에 임시(ephemeral) 노드로 등록해 testcontrol과의 차이를 본다.
+// M2 final gate. Registers as an ephemeral node with the production control server to check differences from testcontrol.
 //
-// 사용자가 준 임시 인증 키가 있을 때만 돈다. 키는 환경 변수가 아니라 파일로 받는다(값이 프로세스 목록과
-// 로그에 남지 않게). 출력에는 개수와 참·거짓만 쓴다. 실제 tailnet 이름·기기 이름·주소·키는 쓰지 않는다.
+// Runs only with an ephemeral auth key supplied by the owner. Reads the key from a file instead of an environment variable to keep it out of process listings and
+// logs. Output contains only counts and Booleans. It omits real tailnet names, device names, addresses, and keys.
 //
-//   SWIFTAIL_REAL_AUTHKEY_FILE=<키가 든 파일> eyebuild swift m1-gate -- test --filter RealTailnetGateTests
+//   SWIFTAIL_REAL_AUTHKEY_FILE=<file-containing-the-key> eyebuild swift m1-gate -- test --filter RealTailnetGateTests
 
 import Foundation
 import SwiftailBase
@@ -14,14 +14,14 @@ import Testing
 private let realAuthKeyFile = ProcessInfo.processInfo.environment["SWIFTAIL_REAL_AUTHKEY_FILE"].flatMap { $0.isEmpty ? nil : $0 }
 private let realStateDirectory = ProcessInfo.processInfo.environment["SWIFTAIL_REAL_STATE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
 
-@Suite("M2 마무리 관문: 운영 제어 서버", .enabled(if: realAuthKeyFile != nil,
-    "SWIFTAIL_REAL_AUTHKEY_FILE이 없어 건너뜁니다"), .timeLimit(.minutes(5)))
+@Suite("M2 final gate: Production control server", .enabled(if: realAuthKeyFile != nil,
+    "Skipping because SWIFTAIL_REAL_AUTHKEY_FILE is missing"), .timeLimit(.minutes(5)))
 struct RealTailnetGateTests {
-    @Test("임시 노드로 등록하고 비압축 netmap을 받아 90초 유지한다")
+    @Test("Registers as an ephemeral node, receives an uncompressed netmap, and holds the connection for 90 seconds")
     func registerAndHoldMapStream() async throws {
         let path = try #require(realAuthKeyFile)
         let authKey = try String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        try #require(!authKey.isEmpty, "인증 키 파일이 비었다")
+        try #require(!authKey.isEmpty, "Auth key file is empty")
         let controlURL = try #require(URL(string: "https://controlplane.tailscale.com"))
         let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-real-gate-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -33,7 +33,7 @@ struct RealTailnetGateTests {
         let running = Task<ControlError?, Never> {
             do { try await client.run(); return nil }
             catch let error as ControlError { return error }
-            catch { return .connection("예상하지 않은 run 오류") }
+            catch { return .connection("Unexpected run error") }
         }
         defer { running.cancel() }
 
@@ -48,7 +48,7 @@ struct RealTailnetGateTests {
             for await event in client.events {
                 switch event {
                 case .loginRequired:
-                    return (registered, netmaps, -1, first)   // 인증 키로 등록되지 않고 대화형 로그인을 요구받았다
+                    return (registered, netmaps, -1, first)   // Interactive login required after auth key registration failed
                 case .registered:
                     registered = true
                 case .netmap(let netmap):
@@ -61,56 +61,56 @@ struct RealTailnetGateTests {
             }
             return (registered, netmaps, disconnects, first)
         }
-        // 맵이 조용하면 사건이 오지 않아 위 반복이 끝나지 않는다. 유지 시간이 지나면 run을 끝내 흐름을 닫는다.
+        // If the map is quiet, no events arrive and the loop above does not end. End run after the hold interval to close the stream.
         try await Task.sleep(for: hold + .seconds(5))
         running.cancel()
         let (didRegister, netmapCount, disconnectCount, netmap) = await observing.value
         let failure = await running.value
 
         if let failure {
-            Issue.record("run()이 오류로 끝났다: \(redacted(String(describing: failure)))")
+            Issue.record("run() ended with an error: \(redacted(String(describing: failure)))")
         }
-        // tailnet lock 진단: 서버가 마지막 맵 세션에서 알린 상태만 본다(해시 값은 찍지 않는다).
+        // Tailnet lock diagnostics. Check only the state reported by the server in the last map session and omit hash values.
         let serverLock = await client.lockSession.server
-        print("마무리 관문 진단: 서버가 알린 lock 켜짐 \(serverLock.isEnabled), 머리 있음 \(serverLock.head != nil)")
-        #expect(disconnectCount != -1, "인증 키가 받아들여지지 않아 대화형 로그인을 요구받았다")
-        #expect(didRegister, "등록되지 않았다")
-        let map = try #require(netmap, "netmap을 받지 못했다(비압축 맵 응답을 서버가 주지 않았을 수 있다)")
-        #expect(disconnectCount == 0, "맵 스트림이 유지되지 않았다")
+        print("Final gate diagnostics: server reports lock enabled \(serverLock.isEnabled), head present \(serverLock.head != nil)")
+        #expect(disconnectCount != -1, "Interactive login was required because the auth key was not accepted")
+        #expect(didRegister, "Registration did not complete")
+        let map = try #require(netmap, "Did not receive a netmap (the server may not have sent an uncompressed map response)")
+        #expect(disconnectCount == 0, "The map stream did not stay open")
 
         let tailnetV4 = try #require(IPPrefix("100.64.0.0/10"))
         #expect(map.selfNode.addresses.contains { $0.address.isIPv4 && tailnetV4.contains($0.address) })
         #expect(map.selfNode.machineAuthorized)
         let regionCount = map.derpMap?.regions?.count ?? 0
-        #expect(regionCount > 0, "운영 DERPMap이 비었다")
+        #expect(regionCount > 0, "The production DERPMap is empty")
 
         print("""
-            마무리 관문 요약(개수와 참·거짓만):
-              등록 \(didRegister), netmap 사건 \(netmapCount)개, 끊김 \(disconnectCount)회, 유지 \(hold)
-              자기 주소 \(map.selfNode.addresses.count)개, 피어 \(map.peers.count)명, DERP 지역 \(regionCount)개
-              DNSConfig \(map.dnsConfig != nil), 필터 규칙 \(map.packetFilter.count)개, 사용자 프로필 \(map.userProfiles.count)개
-              tailnet lock \(map.tailnetLock.mode), 거른 피어 \(map.tailnetLock.filteredPeerCount)명, 서버 시각 있음 \(map.controlTime != nil), self 키 만료 있음 \(map.selfNode.keyExpiry != nil)
+            Final gate summary (counts and Booleans only):
+              registered \(didRegister), \(netmapCount) netmap events, \(disconnectCount) disconnects, hold \(hold)
+              \(map.selfNode.addresses.count) own addresses, \(map.peers.count) peers, \(regionCount) DERP regions
+              DNSConfig \(map.dnsConfig != nil), \(map.packetFilter.count) filter rules, \(map.userProfiles.count) user profiles
+              tailnet lock \(map.tailnetLock.mode), \(map.tailnetLock.filteredPeerCount) filtered peers, server time present \(map.controlTime != nil), self key expiry present \(map.selfNode.keyExpiry != nil)
             """)
     }
 }
 
-/// M8 관문 (나)의 앞 단계: tailnet lock 전의 Swiftail(등록 요청의 `NLKey`가 0)로 등록했던 노드가, 같은 신원 파일에 새 NL 키를
-/// 채운 지금의 Swiftail로 다시 붙을 때 운영 서버가 받아들이는지 본다. 기존 사용자의 올림 경로다.
+/// Preceding step for M8 gate (b). Checks whether the production server accepts a node registered with pre-tailnet-lock Swiftail (registration request `NLKey` was 0)
+/// when it reconnects with current Swiftail after filling in a new NL key in the same identity file. This is the upgrade path for existing users.
 ///
-/// 상태 폴더는 M8 전 커밋(`6f30600`)으로 한 번 등록해 만든다(인증 키와 임시 노드). 여기서는 인증 키를 주지 않는다:
-/// 서버가 그 노드를 이미 지웠으면 새 등록이 되어 버려 올림 경로를 보지 못하므로, 그때는 로그인 요구로 드러나게 한다.
+/// Create the state directory by registering once with the pre-M8 commit (`6f30600`), using an auth key and an ephemeral node. Supply no auth key here.
+/// If the server already removed the node, a new registration would bypass the upgrade path, so let a login requirement expose that case.
 ///
-///   SWIFTAIL_REAL_STATE_DIR=<옛 커밋으로 등록한 상태 폴더> eyebuild swift m1-gate -- test --filter RealTailnetUpgradeTests
-@Suite("M8 관문 (나) 앞 단계: 옛 신원의 올림", .enabled(if: realStateDirectory != nil,
-    "SWIFTAIL_REAL_STATE_DIR이 없어 건너뜁니다"), .timeLimit(.minutes(3)))
+///   SWIFTAIL_REAL_STATE_DIR=<state-directory-registered-with-the-old-commit> eyebuild swift m1-gate -- test --filter RealTailnetUpgradeTests
+@Suite("Step before M8 gate (b): Upgrading an old identity", .enabled(if: realStateDirectory != nil,
+    "Skipping because SWIFTAIL_REAL_STATE_DIR is missing"), .timeLimit(.minutes(3)))
 struct RealTailnetUpgradeTests {
-    @Test("NL 키 없이 등록했던 노드가 NL 키를 싣고 다시 붙어 netmap을 받는다")
+    @Test("A node registered without an NL key reconnects with one and receives a netmap")
     func identityWithoutLockKeyReconnects() async throws {
         let directory = URL(filePath: try #require(realStateDirectory), directoryHint: .isDirectory)
         let store = NodeIdentityStore(directory: directory)
         let before = try String(contentsOf: store.fileURL, encoding: .utf8)
-        try #require(!before.contains("NLKey"), "신원 파일에 이미 NL 키가 있다. 올림 경로가 아니다")
-        let previous = try #require(try store.load()?.nodePublicKey, "옛 신원에 node 키가 없다")
+        try #require(!before.contains("NLKey"), "The identity file already has an NL key. This is not the upgrade path")
+        let previous = try #require(try store.load()?.nodePublicKey, "The old identity has no node key")
         let controlURL = try #require(URL(string: "https://controlplane.tailscale.com"))
 
         let client = ControlClient(
@@ -120,7 +120,7 @@ struct RealTailnetUpgradeTests {
         let running = Task<ControlError?, Never> {
             do { try await client.run(); return nil }
             catch let error as ControlError { return error }
-            catch { return .connection("예상하지 않은 run 오류") }
+            catch { return .connection("Unexpected run error") }
         }
         defer { running.cancel() }
 
@@ -142,21 +142,21 @@ struct RealTailnetUpgradeTests {
         running.cancel()
         let outcome = await observing.value
         if let failure = await running.value {
-            Issue.record("run()이 오류로 끝났다: \(redacted(String(describing: failure)))")
+            Issue.record("run() ended with an error: \(redacted(String(describing: failure)))")
         }
 
-        #expect(!outcome.loginRequired, "서버가 로그인을 요구했다: 옛 노드가 이미 지워졌거나 NL 키가 바뀐 등록을 받지 않는다")
-        #expect(outcome.registered == previous, "같은 node 키로 등록되지 않았다")
-        let map = try #require(outcome.netmap, "netmap을 받지 못했다")
-        #expect(outcome.disconnects == 0, "맵 스트림이 유지되지 않았다")
+        #expect(!outcome.loginRequired, "Server required login: The old node was already removed or the server does not accept registration with a changed NL key")
+        #expect(outcome.registered == previous, "Did not register with the same node key")
+        let map = try #require(outcome.netmap, "Did not receive a netmap")
+        #expect(outcome.disconnects == 0, "The map stream did not stay open")
         #expect(map.selfNode.machineAuthorized)
         let after = try String(contentsOf: store.fileURL, encoding: .utf8)
-        #expect(after.contains("NLKey"), "신원 파일에 NL 키가 저장되지 않았다")
+        #expect(after.contains("NLKey"), "The identity file did not store the NL key")
 
         print("""
-            올림 관문 요약(개수와 참·거짓만):
-              로그인 요구 \(outcome.loginRequired), 같은 node 키로 등록 \(outcome.registered == previous), 끊김 \(outcome.disconnects)회
-              피어 \(map.peers.count)명, tailnet lock \(map.tailnetLock.mode), NL 키 저장됨 \(after.contains("NLKey"))
+            Upgrade gate summary (counts and Booleans only):
+              login required \(outcome.loginRequired), registered with the same node key \(outcome.registered == previous), \(outcome.disconnects) disconnects
+              \(map.peers.count) peers, tailnet lock \(map.tailnetLock.mode), NL key stored \(after.contains("NLKey"))
             """)
     }
 }

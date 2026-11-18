@@ -4,16 +4,16 @@ import Testing
 
 @testable import SwiftailControl
 
-@Suite("신원 저장")
+@Suite("Identity storage")
 struct NodeIdentityStoreTests {
-    /// 시험마다 새 디렉터리를 만들고 끝나면 지운다.
+    /// Creates a fresh directory for each test and removes it afterward.
     private func withDirectory(_ body: (URL) throws -> Void) throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-identity-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try body(directory)
     }
 
-    @Test("파일이 없으면 nil")
+    @Test("Returns nil if the file is missing")
     func missing() throws {
         try withDirectory { directory in
             let loaded = try NodeIdentityStore(directory: directory).load()
@@ -21,7 +21,7 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    @Test("저장한 신원을 그대로 읽는다(node 키 있음·없음)")
+    @Test("Loads the stored identity unchanged, with or without a node key")
     func roundTrip() throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
@@ -42,7 +42,7 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    /// NL 키가 없는 옛 형식(tailnet lock 전)의 파일을 쓴다.
+    /// Writes a file in the old format (before tailnet lock), without an NL key.
     private func writeOldFormat(_ identity: NodeIdentity, to store: NodeIdentityStore, directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var object = ["MachineKey": "privkey:" + hex(identity.machineKey.rawRepresentation)]
@@ -50,7 +50,7 @@ struct NodeIdentityStoreTests {
         try JSONSerialization.data(withJSONObject: object).write(to: store.fileURL)
     }
 
-    @Test("NL 키가 없는 옛 파일: 같은 machine 키·node 키로 뜨고, 새 NL 키를 저장한 뒤 다시 읽어도 같다(동작 R1)", arguments: [false, true])
+    @Test("An old file without an NL key starts with the same machine and node keys, and they stay the same after storing a new NL key and reloading (behavior R1)", arguments: [false, true])
     func migratesOldFile(withNodeKey: Bool) throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
@@ -58,7 +58,7 @@ struct NodeIdentityStoreTests {
             if withNodeKey { old.nodeKey = Curve25519.KeyAgreement.PrivateKey() }
             try writeOldFormat(old, to: store, directory: directory)
 
-            // `load()`는 저장하지 않는다.
+            // `load()` does not save.
             let unsaved = try #require(try store.load())
             #expect(unsaved.machinePublicKey == old.machinePublicKey)
             #expect(try fileObject(store)["NLKey"] == nil)
@@ -78,7 +78,7 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    @Test("파일이 없으면 loadOrCreate가 새 신원을 저장한다")
+    @Test("If the file is missing, loadOrCreate stores a new identity")
     func createsIdentity() throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
@@ -96,7 +96,7 @@ struct NodeIdentityStoreTests {
 
     private func hex(_ bytes: some DataProtocol) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
 
-    @Test("파일은 소유자만 읽고, 임시 파일을 남기지 않는다")
+    @Test("Only the owner can read the file, and no temporary file remains")
     func permissions() throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
@@ -108,7 +108,7 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    @Test("파일 형식: privkey: + 16진 64자리", arguments: [false, true])
+    @Test("File format: privkey: + 64 base-16 digits", arguments: [false, true])
     func fileFormat(withNodeKey: Bool) throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
@@ -118,13 +118,13 @@ struct NodeIdentityStoreTests {
             let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: String])
             #expect(object["MachineKey"] == "privkey:" + identity.machineKey.rawRepresentation.map { String(format: "%02x", $0) }.joined())
             #expect((object["NodeKey"] != nil) == withNodeKey)
-            // nlpriv: + 시드 ‖ 공개 키.
+            // nlpriv: + seed ‖ public key.
             let seed = hex(identity.lockKey.rawRepresentation), lockPublic = hex(identity.lockKey.publicKey.rawRepresentation)
             #expect(object["NLKey"] == "nlpriv:" + seed + lockPublic)
         }
     }
 
-    @Test("손상된 파일은 storage 오류이고 키를 드러내지 않는다", arguments: [
+    @Test("A corrupt file yields a storage error and does not expose the key", arguments: [
         "",
         "not json",
         #"{}"#,
@@ -132,7 +132,7 @@ struct NodeIdentityStoreTests {
         #"{"MachineKey":"mkey:\#(String(repeating: "ab", count: 32))"}"#,
         #"{"MachineKey":"privkey:\#(String(repeating: "zz", count: 32))"}"#,
         #"{"MachineKey":"privkey:\#(String(repeating: "ab", count: 32))","NodeKey":"privkey:12"}"#,
-        // 깨진 NL 키: 빈 값, 접두사, 시드만, 길이, 16진이 아님, 뒤 32바이트가 시드의 공개 키가 아님(동작 R1).
+        // Invalid NL keys: empty value, prefix, seed alone, length, non-base-16 text, and last 32 bytes that differ from the seed's public key (behavior R1).
         Self.withLockKey(""),
         Self.withLockKey("privkey:" + String(repeating: "ab", count: 64)),
         Self.withLockKey("nlpub:" + Self.validLockKeyHex),
@@ -149,10 +149,10 @@ struct NodeIdentityStoreTests {
             try Data(contents.utf8).write(to: store.fileURL)
             do throws(ControlError) {
                 _ = try store.load()
-                Issue.record("손상된 파일을 받아들였다")
+                Issue.record("Accepted a corrupt file")
             } catch {
                 guard case .storage(let message) = error else {
-                    Issue.record("storage 오류가 아니다: \(error)")
+                    Issue.record("Expected a storage error, got \(error)")
                     return
                 }
                 #expect(!message.contains("ab"))
@@ -160,23 +160,23 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    /// `load()`가 storage 오류로 끝나는가.
+    /// Checks whether `load()` ends with a storage error.
     private func expectStorageError(_ store: NodeIdentityStore, sourceLocation: SourceLocation = #_sourceLocation) {
         do throws(ControlError) {
             _ = try store.load()
-            Issue.record("읽으면 안 되는 파일을 받아들였다", sourceLocation: sourceLocation)
+            Issue.record("Accepted a file that must not be read", sourceLocation: sourceLocation)
         } catch {
             guard case .storage = error else {
-                Issue.record("storage 오류가 아니다: \(error)", sourceLocation: sourceLocation)
+                Issue.record("Expected a storage error, got \(error)", sourceLocation: sourceLocation)
                 return
             }
         }
     }
 
-    @Test("신원 파일이 심볼릭 링크면 따라가지 않는다")
+    @Test("Does not follow a symlink at the identity file path")
     func refusesSymbolicLink() throws {
         try withDirectory { directory in
-            // 올바른 신원 파일이 다른 곳에 있고, 상태 디렉터리의 `identity.json`은 그것을 가리키는 링크다.
+            // A valid identity file is located elsewhere, and `identity.json` in the state directory is a link to it.
             let elsewhere = NodeIdentityStore(directory: directory.appending(path: "elsewhere"))
             try elsewhere.save(NodeIdentity())
             let store = NodeIdentityStore(directory: directory.appending(path: "state"))
@@ -186,13 +186,13 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    @Test("신원 파일은 64KiB까지만 읽는다")
+    @Test("Reads identity files only up to 64KiB")
     func limitsFileSize() throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
             try store.save(NodeIdentity())
             let contents = try Data(contentsOf: store.fileURL)
-            // 뒤에 공백을 채워도 올바른 JSON이다. 한도까지는 읽고, 한 바이트 넘으면 읽지 않는다.
+            // Padding the end with spaces still yields valid JSON. Reads up to the limit and refuses one byte more.
             try (contents + Data(repeating: 0x20, count: 65_536 - contents.count)).write(to: store.fileURL)
             #expect(try store.load() != nil)
             try (contents + Data(repeating: 0x20, count: 65_537 - contents.count)).write(to: store.fileURL)
@@ -200,7 +200,7 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    @Test("신원 파일 자리에 정규 파일이 아닌 것이 있으면 읽지 않는다")
+    @Test("Does not read a non-regular file at the identity file path")
     func refusesNonRegularFile() throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
@@ -209,14 +209,14 @@ struct NodeIdentityStoreTests {
         }
     }
 
-    /// Go 기준값의 NL 개인 키(`tka-fixtures.json`의 `nlpriv-decode`. 시험 전용 공개 값).
+    /// NL private key from the Go reference values (`nlpriv-decode` in `tka-fixtures.json`, a public test-only value).
     static let validLockKeyHex = "d132274d5c925219b42ed925e1b1c8aed8b70c35cd1ba669de00a9f56c9dd5caeea291d210cd96c16600e331c931c130d142e0b0fd9ddcfa1fcfb756e6a00438"
 
     static func withLockKey(_ text: String) -> String {
         #"{"MachineKey":"privkey:\#(String(repeating: "ab", count: 32))","NLKey":"\#(text)"}"#
     }
 
-    @Test("Go 기준값의 NL 키를 담은 파일을 읽는다")
+    @Test("Reads a file containing an NL key from the Go reference values")
     func readsLockKey() throws {
         try withDirectory { directory in
             let store = NodeIdentityStore(directory: directory)
@@ -224,12 +224,12 @@ struct NodeIdentityStoreTests {
             try Data(Self.withLockKey("nlpriv:" + Self.validLockKeyHex.uppercased()).utf8).write(to: store.fileURL)
             let loaded = try store.loadOrCreate()
             #expect(loaded.lockPublicKey.rawValue.hex == String(Self.validLockKeyHex.suffix(64)))
-            // NL 키가 있던 파일은 다시 쓰지 않는다.
+            // Does not rewrite a file that already contained an NL key.
             #expect(try fileObject(store)["NLKey"] == "nlpriv:" + Self.validLockKeyHex.uppercased())
         }
     }
 
-    @Test("description과 dump에 개인 키가 나오지 않는다")
+    @Test("The private key is absent from description and dump output")
     func hidesPrivateKeys() {
         var identity = NodeIdentity()
         identity.nodeKey = Curve25519.KeyAgreement.PrivateKey()

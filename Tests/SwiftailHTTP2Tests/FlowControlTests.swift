@@ -1,5 +1,5 @@
-// 계약 시험 3: 흐름 제어. 창보다 큰 본문이 WINDOW_UPDATE를 기다린다.
-// SETTINGS_INITIAL_WINDOW_SIZE가 열린 스트림의 창을 바꾼다. 받은 DATA만큼 WINDOW_UPDATE를 낸다.
+// Contract test 3: Flow control. A body larger than the window waits for WINDOW_UPDATE.
+// SETTINGS_INITIAL_WINDOW_SIZE changes open stream windows. Send WINDOW_UPDATE for the amount of DATA received.
 
 import Testing
 
@@ -7,7 +7,7 @@ import Testing
 
 private let post = HTTP2ClientConnection.Request(method: "POST", path: "/machine/register", authority: "tail0001")
 
-/// 보낸 프레임 가운데 DATA의 바이트 수 합과 END_STREAM 여부.
+/// Total DATA bytes and whether END_STREAM is present in the sent frames.
 private func dataSent(_ frames: [Frame]) -> (bytes: Int, ended: Bool) {
     var total = 0
     var ended = false
@@ -18,9 +18,9 @@ private func dataSent(_ frames: [Frame]) -> (bytes: Int, ended: Bool) {
     return (total, ended)
 }
 
-@Suite("보내는 쪽 흐름 제어")
+@Suite("Send-side flow control")
 struct SendFlowControlTests {
-    @Test("창(65,535)보다 큰 본문은 연결과 스트림 창이 열릴 때까지 기다린다")
+    @Test("A body larger than the window (65,535) waits for both the connection and stream windows to open")
     func bodyWaitsForWindowUpdate() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(post, body: [UInt8](repeating: 7, count: 100_000))
@@ -28,11 +28,11 @@ struct SendFlowControlTests {
         #expect(sent.bytes == 65_535)
         #expect(!sent.ended)
 
-        // 연결 창만 열어서는 나가지 않는다: 스트림 창이 0이다.
+        // Opening only the connection window sends nothing because the stream window is 0.
         _ = try connection.receive(windowUpdateBytes(stream: 0, increment: 40_000))
         #expect(try connection.takeOutboundFrames().isEmpty)
 
-        // 스트림 창도 열리면 나머지 34,465바이트가 나가고 END_STREAM이 붙는다.
+        // When the stream window also opens, the remaining 34,465 bytes go out with END_STREAM.
         _ = try connection.receive(windowUpdateBytes(stream: 1, increment: 40_000))
         sent = dataSent(try connection.takeOutboundFrames())
         #expect(sent.bytes == 34_465)
@@ -40,7 +40,7 @@ struct SendFlowControlTests {
         _ = id
     }
 
-    @Test("프레임은 상대의 MAX_FRAME_SIZE로 나뉜다")
+    @Test("Frames are split at the peer's MAX_FRAME_SIZE")
     func splitByMaxFrameSize() throws {
         var connection = try HTTP2ClientConnection.established()
         _ = try connection.startRequest(post, body: [UInt8](repeating: 1, count: 40_000))
@@ -59,24 +59,24 @@ struct SendFlowControlTests {
         #expect(largerSizes == [30_000, 10_000])
     }
 
-    @Test("본문이 비어 있으면 빈 DATA로 요청을 끝낸다")
+    @Test("An empty body ends the request with empty DATA")
     func emptyBody() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(post, body: [])
         let frames = try connection.takeOutboundFrames()
         #expect(frames.count == 2)
-        guard case .headers(_, _, let headersEnd, _) = frames[0] else { Issue.record("HEADERS가 아니다"); return }
+        guard case .headers(_, _, let headersEnd, _) = frames[0] else { Issue.record("Expected HEADERS"); return }
         #expect(!headersEnd)
         #expect(frames[1] == .data(id, [], endStream: true, flowControlledLength: 0))
     }
 
-    @Test("SETTINGS_INITIAL_WINDOW_SIZE가 서버 SETTINGS 전에 열린 스트림의 창을 바꾼다")
+    @Test("SETTINGS_INITIAL_WINDOW_SIZE changes the window of a stream opened before server SETTINGS")
     func initialWindowSizeChangesOpenStreams() throws {
         var connection = try HTTP2ClientConnection.established(serverSettings: [(4, 10)])
         _ = try connection.startRequest(post, body: [UInt8](repeating: 1, count: 25))
         #expect(dataSent(try connection.takeOutboundFrames()).bytes == 10)
 
-        // 10 → 30: 열린 스트림의 창이 +20 되어 나머지 15바이트가 나간다.
+        // 10 → 30: The open stream's window grows by +20, sending the remaining 15 bytes.
         _ = try connection.receive(settingsBytes([(4, 30)]))
         let frames = try connection.takeOutboundFrames()
         #expect(frames.first == .settingsAcknowledgement)
@@ -85,30 +85,30 @@ struct SendFlowControlTests {
         #expect(sent.ended)
     }
 
-    @Test("INITIAL_WINDOW_SIZE를 줄이면 창이 음수가 되고, 0 이하일 때는 보내지 않는다")
+    @Test("Reducing INITIAL_WINDOW_SIZE makes the window negative, and nothing is sent while it is 0 or less")
     func windowCanGoNegative() throws {
         var connection = try HTTP2ClientConnection.established(serverSettings: [(4, 100)])
         let id = try connection.startRequest(post, body: [UInt8](repeating: 1, count: 150))
-        #expect(dataSent(try connection.takeOutboundFrames()).bytes == 100)  // 창 0
+        #expect(dataSent(try connection.takeOutboundFrames()).bytes == 100)  // Window 0
 
-        _ = try connection.receive(settingsBytes([(4, 50)]))  // 창 -50
+        _ = try connection.receive(settingsBytes([(4, 50)]))  // Window -50
         _ = connection.takeOutboundBytes()
-        _ = try connection.receive(windowUpdateBytes(stream: 1, increment: 40))  // 창 -10
+        _ = try connection.receive(windowUpdateBytes(stream: 1, increment: 40))  // Window -10
         #expect(dataSent(try connection.takeOutboundFrames()).bytes == 0)
 
-        _ = try connection.receive(windowUpdateBytes(stream: 1, increment: 60))  // 창 50
+        _ = try connection.receive(windowUpdateBytes(stream: 1, increment: 60))  // Window 50
         let sent = dataSent(try connection.takeOutboundFrames())
         #expect(sent.bytes == 50)
         #expect(sent.ended)
         _ = id
     }
 
-    @Test("한 SETTINGS 안에서 열린 스트림 창이 중간에 2^31-1을 넘으면 최종 차이가 0이어도 FLOW_CONTROL_ERROR")
+    @Test("If an open stream window exceeds 2^31-1 partway through one SETTINGS frame, the result is FLOW_CONTROL_ERROR even if the final difference is 0")
     func intermediateWindowOverflowInOneSettings() throws {
         func connectionWithFullStreamWindow() throws -> HTTP2ClientConnection {
             var connection = try HTTP2ClientConnection.established()
             _ = try connection.startRequest(getRequest, body: nil)
-            // 스트림 창을 초깃값 65,535에서 2^31-1까지 올린다.
+            // Increase the stream window from its initial value of 65,535 to 2^31-1.
             _ = try connection.receive(windowUpdateBytes(stream: 1, increment: UInt32(FlowControlWindow.maximum - 65_535)))
             _ = connection.takeOutboundBytes()
             return connection
@@ -118,7 +118,7 @@ struct SendFlowControlTests {
             try overflowing.receive(settingsBytes([(4, UInt32(FlowControlWindow.maximum)), (4, 65_535)]))
         }
 
-        // 같은 값 하나만(차이 0)이면 문제없다. 반대 순서(먼저 줄이고 키우는 것)도 넘치지 않는다.
+        // A single identical value (difference 0) is fine. The reverse order (decrease, then increase) also stays within the limit.
         var unchanged = try connectionWithFullStreamWindow()
         _ = try unchanged.receive(settingsBytes([(4, 65_535)]))
         var decreasing = try connectionWithFullStreamWindow()
@@ -126,16 +126,16 @@ struct SendFlowControlTests {
         #expect(try decreasing.takeOutboundFrames() == [.settingsAcknowledgement])
     }
 
-    @Test("연결 창은 스트림들이 나눠 쓴다")
+    @Test("Streams share the connection window")
     func connectionWindowShared() throws {
         var connection = try HTTP2ClientConnection.established(serverSettings: [(4, 1_000_000)])
         _ = try connection.startRequest(post, body: [UInt8](repeating: 1, count: 50_000))
         _ = try connection.startRequest(post, body: [UInt8](repeating: 2, count: 50_000))
         let sent = dataSent(try connection.takeOutboundFrames())
-        #expect(sent.bytes == 65_535)  // 두 스트림이 연결 창 하나를 나눈다
+        #expect(sent.bytes == 65_535)  // Two streams share one connection window
     }
 
-    @Test("창을 2^31-1 넘게 키우면 연결은 FLOW_CONTROL_ERROR, 스트림은 RST_STREAM")
+    @Test("Increasing a window beyond 2^31-1 produces FLOW_CONTROL_ERROR for the connection window or RST_STREAM for a stream window")
     func windowOverflow() throws {
         var connection = try HTTP2ClientConnection.established()
         #expect(throws: HTTP2Error.connection(.flowControlError)) { try connection.receive(windowUpdateBytes(stream: 0, increment: 0x7fff_ffff)) }
@@ -151,7 +151,7 @@ struct SendFlowControlTests {
         #expect(throws: HTTP2Error.connection(.flowControlError)) { try settings.receive(settingsBytes([(4, 0x8000_0000)])) }
     }
 
-    @Test("증가량 0은 연결이면 PROTOCOL_ERROR, 스트림이면 RST_STREAM")
+    @Test("An increment of 0 produces PROTOCOL_ERROR for the connection window or RST_STREAM for a stream window")
     func zeroIncrement() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -161,9 +161,9 @@ struct SendFlowControlTests {
     }
 }
 
-@Suite("받는 쪽 흐름 제어")
+@Suite("Receive-side flow control")
 struct ReceiveFlowControlTests {
-    @Test("받은 DATA만큼 연결과 스트림 창을 곧바로 돌려준다")
+    @Test("Immediately restores the connection and stream windows by the amount of DATA received")
     func windowUpdatesForData() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -175,7 +175,7 @@ struct ReceiveFlowControlTests {
         #expect(try connection.takeOutboundFrames() == [.windowUpdate(.connection, increment: 1_000), .windowUpdate(id, increment: 1_000)])
     }
 
-    @Test("END_STREAM이 붙은 DATA는 연결 창만 돌려준다")
+    @Test("DATA with END_STREAM restores only the connection window")
     func finalData() throws {
         var connection = try HTTP2ClientConnection.established()
         _ = try connection.startRequest(getRequest, body: nil)
@@ -185,7 +185,7 @@ struct ReceiveFlowControlTests {
         #expect(try connection.takeOutboundFrames() == [.windowUpdate(.connection, increment: 3)])
     }
 
-    @Test("취소한 스트림에 늦게 도착한 DATA도 연결 창은 돌려준다")
+    @Test("Late DATA on a canceled stream still restores the connection window")
     func dataAfterCancel() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -196,7 +196,7 @@ struct ReceiveFlowControlTests {
         #expect(try connection.takeOutboundFrames() == [.windowUpdate(.connection, increment: 500)])
     }
 
-    @Test("빈 DATA는 창을 돌려주지 않는다")
+    @Test("Empty DATA does not restore window credit")
     func emptyData() throws {
         var connection = try HTTP2ClientConnection.established()
         _ = try connection.startRequest(getRequest, body: nil)

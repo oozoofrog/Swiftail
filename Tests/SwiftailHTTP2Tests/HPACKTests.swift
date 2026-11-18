@@ -1,11 +1,11 @@
-// 계약 시험 1: HPACK. RFC 7541 부록 C의 예제를 원문의 16진 값 그대로 쓴다.
-// 출처: https://www.rfc-editor.org/rfc/rfc7541#appendix-C
+// Contract test 1: HPACK. Uses the examples from RFC 7541 Appendix C verbatim in base-16.
+// Origin: https://www.rfc-editor.org/rfc/rfc7541#appendix-C
 
 import Testing
 
 @testable import SwiftailHTTP2
 
-@Suite("HPACK 정수 (RFC 7541 C.1)")
+@Suite("HPACK integers (RFC 7541 C.1)")
 struct HPACKIntegerTests {
     private func decode(_ bytes: [UInt8], prefixBits: Int) throws(HPACKError) -> Int {
         var reader = ByteReader(bytes)
@@ -18,33 +18,33 @@ struct HPACKIntegerTests {
         return output
     }
 
-    @Test("C.1.1: 5비트 prefix에 10")
+    @Test("C.1.1: 10 with a 5-bit prefix")
     func tenInFiveBits() throws {
         #expect(encode(10, prefixBits: 5) == [0x0a])
-        // 윗 3비트는 표현 형식이므로 값에 영향이 없다.
+        // The top 3 bits indicate the representation and have no effect on the value.
         #expect(try decode([0b1110_1010], prefixBits: 5) == 10)
     }
 
-    @Test("C.1.2: 5비트 prefix에 1337")
+    @Test("C.1.2: 1337 with a 5-bit prefix")
     func fiveBitsLarge() throws {
         #expect(encode(1337, prefixBits: 5) == [0x1f, 0x9a, 0x0a])
         #expect(try decode([0x1f, 0x9a, 0x0a], prefixBits: 5) == 1337)
     }
 
-    @Test("C.1.3: 옥텟 경계에서 시작하는 42")
+    @Test("C.1.3: 42 starting at an octet boundary")
     func fortyTwoInEightBits() throws {
         #expect(encode(42, prefixBits: 8) == [0x2a])
         #expect(try decode([0x2a], prefixBits: 8) == 42)
     }
 
-    @Test("prefix 최댓값 경계와 표현 형식 비트")
+    @Test("Maximum prefix value boundary and representation bits")
     func boundary() throws {
         #expect(encode(31, prefixBits: 5, flags: 0x20) == [0x3f, 0x00])
         #expect(try decode([0x1f, 0x00], prefixBits: 5) == 31)
         #expect(encode(30, prefixBits: 5, flags: 0x20) == [0x3e])
     }
 
-    @Test("모든 값은 왕복한다")
+    @Test("All values round-trip")
     func roundTrip() throws {
         for value in [0, 1, 126, 127, 128, 254, 255, 256, 16_383, 16_384, 65_535, 1 << 20, 1 << 28] {
             for prefixBits in 1...8 {
@@ -53,50 +53,50 @@ struct HPACKIntegerTests {
         }
     }
 
-    @Test("잘린 정수와 넘치는 정수")
+    @Test("Truncated and overflowing integers")
     func malformed() {
         #expect(throws: HPACKError.truncated) { try decode([], prefixBits: 5) }
         #expect(throws: HPACKError.truncated) { try decode([0x1f, 0x80], prefixBits: 5) }
-        // 이어짐 비트가 끝없이 켜진 정수는 넘침 없이 거절한다.
+        // Reject integers with endlessly set continuation bits without overflowing.
         #expect(throws: HPACKError.integerOverflow) { try decode([0x1f] + [UInt8](repeating: 0xff, count: 20), prefixBits: 5) }
     }
 }
 
-@Suite("HPACK 헤더 표현 (RFC 7541 C.2)")
+@Suite("HPACK header representations (RFC 7541 C.2)")
 struct HPACKRepresentationTests {
-    @Test("C.2.1: 색인하는 리터럴, 새 이름")
+    @Test("C.2.1: Literal with indexing and a new name")
     func literalWithIndexing() throws {
         var decoder = HPACKDecoder()
         let block = hex("400a 6375 7374 6f6d 2d6b 6579 0d63 7573 746f 6d2d 6865 6164 6572")
         #expect(try decoder.decode(block) == [HeaderField("custom-key", "custom-header")])
-        // 동적 표 색인 62에 들어갔다.
+        // The entry went into dynamic table index 62.
         #expect(try decoder.decode([0xbe]) == [HeaderField("custom-key", "custom-header")])
     }
 
-    @Test("C.2.2: 색인 없는 리터럴, 색인된 이름")
+    @Test("C.2.2: Literal without indexing and with an indexed name")
     func literalWithoutIndexing() throws {
         var decoder = HPACKDecoder()
         #expect(try decoder.decode(hex("040c 2f73 616d 706c 652f 7061 7468")) == [HeaderField(":path", "/sample/path")])
-        // 표는 비어 있다.
+        // The table is empty.
         #expect(throws: HPACKError.invalidIndex) { try decoder.decode([0xbe]) }
     }
 
-    @Test("C.2.3: 색인되지 않는 리터럴")
+    @Test("C.2.3: Never-indexed literal")
     func literalNeverIndexed() throws {
         var decoder = HPACKDecoder()
         #expect(try decoder.decode(hex("1008 7061 7373 776f 7264 0673 6563 7265 74")) == [HeaderField("password", "secret")])
         #expect(throws: HPACKError.invalidIndex) { try decoder.decode([0xbe]) }
     }
 
-    @Test("C.2.4: 색인된 필드")
+    @Test("C.2.4: Indexed field")
     func indexed() throws {
         var decoder = HPACKDecoder()
         #expect(try decoder.decode(hex("82")) == [HeaderField(":method", "GET")])
     }
 }
 
-/// 요청 세 개가 한 연결의 동적 표를 공유한다. 허프만을 쓰지 않는 것(C.3)과 쓰는 것(C.4)이 같은 목록을 낸다.
-@Suite("HPACK 요청 (RFC 7541 C.3, C.4)")
+/// Three requests share the dynamic table of one connection. The examples without Huffman coding (C.3) and with it (C.4) yield the same list.
+@Suite("HPACK requests (RFC 7541 C.3, C.4)")
 struct HPACKRequestTests {
     private let first = [
         HeaderField(":method", "GET"), HeaderField(":scheme", "http"), HeaderField(":path", "/"),
@@ -111,7 +111,7 @@ struct HPACKRequestTests {
         HeaderField(":authority", "www.example.com"), HeaderField("custom-key", "custom-value"),
     ]
 
-    @Test("C.3: 허프만 없음")
+    @Test("C.3: Without Huffman coding")
     func withoutHuffman() throws {
         var decoder = HPACKDecoder()
         #expect(try decoder.decode(hex("8286 8441 0f77 7777 2e65 7861 6d70 6c65 2e63 6f6d")) == first)
@@ -119,7 +119,7 @@ struct HPACKRequestTests {
         #expect(try decoder.decode(hex("8287 85bf 400a 6375 7374 6f6d 2d6b 6579 0c63 7573 746f 6d2d 7661 6c75 65")) == third)
     }
 
-    @Test("C.4: 허프만")
+    @Test("C.4: With Huffman coding")
     func withHuffman() throws {
         var decoder = HPACKDecoder()
         #expect(try decoder.decode(hex("8286 8441 8cf1 e3c2 e5f2 3a6b a0ab 90f4 ff")) == first)
@@ -128,8 +128,8 @@ struct HPACKRequestTests {
     }
 }
 
-/// SETTINGS_HEADER_TABLE_SIZE를 256으로 알린 연결. 동적 표가 가득 차 항목이 밀려난다.
-@Suite("HPACK 응답과 표 축출 (RFC 7541 C.5, C.6)")
+/// The connection advertised SETTINGS_HEADER_TABLE_SIZE of 256. The dynamic table fills up and evicts entries.
+@Suite("HPACK responses and table eviction (RFC 7541 C.5, C.6)")
 struct HPACKResponseTests {
     private let first = [
         HeaderField(":status", "302"), HeaderField("cache-control", "private"),
@@ -146,7 +146,7 @@ struct HPACKResponseTests {
         HeaderField("set-cookie", "foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1"),
     ]
 
-    @Test("C.5: 허프만 없음")
+    @Test("C.5: Without Huffman coding")
     func withoutHuffman() throws {
         var decoder = HPACKDecoder(tableSizeLimit: 256)
         #expect(try decoder.decode(hex("""
@@ -163,7 +163,7 @@ struct HPACKResponseTests {
             """)) == third)
     }
 
-    @Test("C.6: 허프만")
+    @Test("C.6: With Huffman coding")
     func withHuffman() throws {
         var decoder = HPACKDecoder(tableSizeLimit: 256)
         #expect(try decoder.decode(hex("""
@@ -179,18 +179,18 @@ struct HPACKResponseTests {
     }
 }
 
-@Suite("HPACK 해제기의 규칙")
+@Suite("HPACK decoder rules")
 struct HPACKDecoderRuleTests {
-    @Test("색인 0과 표 밖 색인")
+    @Test("Index 0 and out-of-table indexes")
     func invalidIndex() {
         var decoder = HPACKDecoder()
         #expect(throws: HPACKError.invalidIndex) { try decoder.decode([0x80]) }
         #expect(throws: HPACKError.invalidIndex) { try decoder.decode([0xbe]) }
-        // 정적 표의 끝(61)은 유효하고 62는 동적 표다.
+        // The end of the static table (61) is valid and 62 belongs to the dynamic table.
         #expect((try? decoder.decode([0xbd])) == [HeaderField("www-authenticate", "")])
     }
 
-    @Test("동적 표 크기 갱신은 블록 맨 앞에서만, 알린 한도 이하로만")
+    @Test("Dynamic table size updates are allowed only at the start of a block and within the advertised limit")
     func tableSizeUpdate() throws {
         var decoder = HPACKDecoder(tableSizeLimit: 256)
         #expect(try decoder.decode([0x3f, 0xe1, 0x01]) == [])  // 0x20 | 31, 31 + 225 = 256
@@ -199,7 +199,7 @@ struct HPACKDecoderRuleTests {
         #expect(try decoder.decode([0x20, 0x82]) == [HeaderField(":method", "GET")])
     }
 
-    @Test("크기를 0으로 줄이면 표가 비고, 표보다 큰 항목은 표를 비우기만 한다")
+    @Test("Reducing the size to 0 empties the table, and an entry larger than the table only empties it")
     func eviction() throws {
         var decoder = HPACKDecoder()
         _ = try decoder.decode(hex("400a 6375 7374 6f6d 2d6b 6579 0d63 7573 746f 6d2d 6865 6164 6572"))
@@ -208,41 +208,41 @@ struct HPACKDecoderRuleTests {
         #expect(throws: HPACKError.invalidIndex) { try decoder.decode([0xbe]) }
 
         var small = HPACKDecoder(tableSizeLimit: 40)
-        _ = try small.decode(hex("400a 6375 7374 6f6d 2d6b 6579 0d63 7573 746f 6d2d 6865 6164 6572"))  // 55바이트 > 40
+        _ = try small.decode(hex("400a 6375 7374 6f6d 2d6b 6579 0d63 7573 746f 6d2d 6865 6164 6572"))  // 55 bytes > 40
         #expect(throws: HPACKError.invalidIndex) { try small.decode([0xbe]) }
     }
 
-    @Test("문자열이 블록 끝에서 잘리면 오류")
+    @Test("A string truncated at the end of a block is an error")
     func truncatedString() {
         var decoder = HPACKDecoder()
         #expect(throws: HPACKError.truncated) { try decoder.decode(hex("4005 6162")) }
     }
 
-    @Test("UTF-8이 아닌 문자열")
+    @Test("Non-UTF-8 string")
     func invalidUTF8() {
         var decoder = HPACKDecoder()
         #expect(throws: HPACKError.invalidUTF8) { try decoder.decode(hex("4001 61 01 ff")) }
     }
 
-    @Test("해제 결과가 한도를 넘으면 오류")
+    @Test("Exceeding the decoded size limit is an error")
     func headerListLimit() throws {
         var decoder = HPACKDecoder(headerListSizeLimit: 100)
-        // 이름 1바이트 + 값 40바이트 = 73바이트가 한 항목.
+        // One entry is 73 bytes = 1 name byte + 40 value bytes.
         var block: [UInt8] = [0x40, 0x01, 0x61, 40] + [UInt8](repeating: 0x62, count: 40)
         #expect(try decoder.decode(block).count == 1)
-        block += [0xbe]  // 같은 항목을 한 번 더 부른다: 146 > 100
+        block += [0xbe]  // Refer to the same entry again. 146 > 100.
         #expect(throws: HPACKError.headerListTooLarge) { try decoder.decode(block) }
     }
 }
 
-@Suite("HPACK 압축기")
+@Suite("HPACK encoder")
 struct HPACKEncoderTests {
-    @Test("색인 없는 리터럴, 새 이름, 허프만 없이")
+    @Test("Literal without indexing, with a new name and no Huffman coding")
     func literalEncoding() {
         #expect(HPACKEncoder.encode([HeaderField(":path", "/sample/path")]) == hex("00 05 3a70617468 0c 2f73616d706c652f70617468"))
     }
 
-    @Test("해제기가 원래 목록으로 되돌린다. 127바이트 이상의 문자열 길이도")
+    @Test("The decoder recovers the original list, including strings at least 127 bytes long.")
     func roundTrip() throws {
         let fields = [
             HeaderField(":method", "POST"), HeaderField("content-type", "application/json"),

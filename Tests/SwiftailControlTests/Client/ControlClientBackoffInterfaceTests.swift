@@ -5,16 +5,16 @@ import Testing
 
 @testable import SwiftailControl
 
-/// 물러나는 동안(`run()`의 재시도 대기)에 `setNetworkInterface`가 오면 기다리지 않고 곧바로 다시 잇는지.
-/// 서버가 살아 있는 연결 위의 재연결은 `Tests/SwiftailControlInteropTests/ControlNetworkInterfaceTests.swift`가 본다.
-@Suite("제어 클라이언트: 물러나는 중의 인터페이스 변경", .timeLimit(.minutes(1)))
+/// Checks that `setNetworkInterface` during backoff (the retry wait in `run()`) reconnects immediately without waiting.
+/// `Tests/SwiftailControlInteropTests/ControlNetworkInterfaceTests.swift` covers reconnecting over a live server connection.
+@Suite("Control client: Interface change during backoff", .timeLimit(.minutes(1)))
 struct ControlClientBackoffInterfaceTests {
-    /// 고치기 전에는 대기 시간(연속 12번째 실패 뒤 0.72초 이상)이 끝날 때까지 다시 잇지 않았다.
-    @Test("실패해서 물러나는 중에 인터페이스가 바뀌면 대기를 마치지 않고 곧바로 다시 잇는다")
+    /// Before the fix, reconnection waited for the backoff to expire (at least 0.72 seconds after the 12th consecutive failure).
+    @Test("An interface change during backoff after a failure reconnects immediately without finishing the wait")
     func interfaceChangeInterruptsBackoff() async throws {
         let server = try FailingKeyServer()
         defer { server.close() }
-        let interface = try #require(await loopbackInterface(), "루프백 인터페이스가 없다")
+        let interface = try #require(await loopbackInterface(), "No loopback interface")
         let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-backoff-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let client = ControlClient(
@@ -24,14 +24,14 @@ struct ControlClientBackoffInterfaceTests {
         let running = Task { try await client.run() }
         defer { running.cancel() }
 
-        // 연속 n번째 실패 뒤의 대기는 n² × 10ms × [0.5, 1.5)이다. 12번째 시도 뒤에는 0.72초 이상 기다린다.
+        // The wait after the nth consecutive failure is n² × 10ms × [0.5, 1.5). After the 12th attempt, the wait is at least 0.72 seconds.
         try await server.waitForAttempts(12, within: .seconds(30))
         let before = server.attempts
         await client.setNetworkInterface(interface)
         let start = ContinuousClock.now
         try await server.waitForAttempts(before + 1, within: .seconds(10))
         let elapsed = ContinuousClock.now - start
-        #expect(elapsed < .milliseconds(400), "물러나던 대기를 끝까지 기다렸다: \(elapsed)")
+        #expect(elapsed < .milliseconds(400), "Waited for the entire backoff: \(elapsed)")
     }
 }
 
@@ -42,7 +42,7 @@ private func loopbackInterface() async -> NWInterface? {
     return nil
 }
 
-/// `GET /key`에 500으로 답하고 연결을 닫는 루프백 서버. 연결을 받은 횟수를 센다(시도마다 하나다).
+/// A loopback server that answers `GET /key` with 500 and closes the connection. Counts accepted connections (one per attempt).
 private final class FailingKeyServer: Sendable {
     private final class Counter: Sendable {
         let value = Mutex(0)
@@ -91,7 +91,7 @@ private final class FailingKeyServer: Sendable {
         let deadline = ContinuousClock.now + duration
         while attempts < expected {
             guard ContinuousClock.now < deadline else {
-                Issue.record("\(duration) 안에 시도가 \(expected)번에 이르지 않았다: \(attempts)")
+                Issue.record("Attempts did not reach \(expected) within \(duration): \(attempts)")
                 throw CancellationError()
             }
             try await Task.sleep(for: .milliseconds(10))

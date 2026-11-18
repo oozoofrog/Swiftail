@@ -1,17 +1,17 @@
-// 맵 스트림 프레임(4바이트 리틀엔디언 길이 + JSON)과 임의 입력. docs/protocol-notes/control-map.md 3.1, 3.5.
-// 무작위 입력은 고정 시드라 실패하면 그대로 재현된다.
+// Map stream frames (4-byte little-endian length + JSON) and arbitrary input. docs/protocol-notes/control-map.md §3.1, §3.5.
+// Random input uses a fixed seed so failures can be reproduced exactly.
 
 import Foundation
 import Testing
 
 @testable import SwiftailControl
 
-@Suite("맵 응답 프레이머")
+@Suite("Map response framer")
 struct MapResponseFramerTests {
     private let first = #"{"Node":{"ID":1},"Domain":"tail0001.ts.net"}"#
     private let second = #"{"KeepAlive":true}"#
 
-    @Test("한 바이트씩 넣어도 프레임이 다 찬 순간에 하나씩 나온다")
+    @Test("Emits one frame as soon as it is complete, even one byte at a time")
     func byteByByte() throws {
         var framer = MapResponseFramer()
         let stream = frame(first) + frame(second)
@@ -19,9 +19,9 @@ struct MapResponseFramerTests {
         for (index, byte) in stream.enumerated() {
             let output = try framer.receive([byte])
             if index == frame(first).count - 1 || index == stream.count - 1 {
-                #expect(output.count == 1, "바이트 \(index)")
+                #expect(output.count == 1, "Byte \(index)")
             } else {
-                #expect(output.isEmpty, "바이트 \(index)")
+                #expect(output.isEmpty, "Byte \(index)")
             }
             responses += output
         }
@@ -29,7 +29,7 @@ struct MapResponseFramerTests {
         #expect(responses.first?.domain == "tail0001.ts.net")
     }
 
-    @Test("한 조각에 여러 프레임과 다음 프레임의 일부가 함께 와도 된다")
+    @Test("One chunk can contain multiple frames and part of the next frame")
     func severalFramesInOneChunk() throws {
         var framer = MapResponseFramer()
         let third = frame(#"{"Domain":"x"}"#)
@@ -39,13 +39,13 @@ struct MapResponseFramerTests {
         #expect(try framer.receive([]).isEmpty)
     }
 
-    @Test("길이 접두가 8MiB를 넘으면 페이로드를 기다리지 않고 실패한다")
+    @Test("A length prefix over 8MiB fails without waiting for the payload")
     func frameTooLarge() throws {
         let limit = MapResponseFramer.maximumFrameSize
         #expect(limit == 8 << 20)
         var framer = MapResponseFramer()
         #expect(throws: MapError.frameTooLarge) { try framer.receive(frame(first) + Self.header(limit + 1)) }
-        // 오류 뒤에도 같은 오류다.
+        // Returns the same error after failure.
         #expect(throws: MapError.frameTooLarge) { try framer.receive([]) }
 
         var largest = MapResponseFramer()
@@ -54,13 +54,13 @@ struct MapResponseFramerTests {
         #expect(throws: MapError.frameTooLarge) { try maximum.receive([0xFF, 0xFF, 0xFF, 0xFF]) }
     }
 
-    @Test("JSON이 아니거나 맵 응답이 아니면 malformed", arguments: ["", "{", "not json", "[]", "null", "1", #"{"Node":[]}"#])
+    @Test("Non-JSON input or JSON that is not a map response yields malformed", arguments: ["", "{", "not json", "[]", "null", "1", #"{"Node":[]}"#])
     func malformed(_ payload: String) {
         var framer = MapResponseFramer()
         #expect(throws: MapError.malformed) { try framer.receive(frame(payload)) }
     }
 
-    @Test("Go가 만든 맵 응답 한 프레임을 세션에 적용한다")
+    @Test("Applies one Go-generated map response frame to a session")
     func goMarshaledThroughSession() throws {
         var framer = MapResponseFramer()
         var session = MapSession()
@@ -77,7 +77,7 @@ struct MapResponseFramerTests {
         #expect(netmap.tailnetLock == TailnetLockStatus())
     }
 
-    @Test("무작위 바이트와 망가뜨린 JSON으로 죽지 않는다")
+    @Test("Random bytes and corrupted JSON do not cause a crash")
     func randomInput() throws {
         var random = SeededRandom(seed: 0x5157_1F7A_0000_0002)
         let seeds = [Array(TailcfgJSONTests.goMarshaledMapResponse.utf8), Array(first.utf8), Array(second.utf8)]
@@ -87,7 +87,7 @@ struct MapResponseFramerTests {
             if round.isMultiple(of: 3) {
                 payload = (0..<Int.random(in: 0...64, using: &random)).map { _ in UInt8.random(in: 0...255, using: &random) }
             } else {
-                // 올바른 JSON의 바이트를 몇 개 바꾸거나 지우거나 끼워 넣는다.
+                // Change, delete, or insert a few bytes in valid JSON.
                 payload = seeds[round % seeds.count]
                 for _ in 0..<Int.random(in: 1...4, using: &random) where !payload.isEmpty {
                     let index = Int.random(in: 0..<payload.count, using: &random)
@@ -107,7 +107,7 @@ struct MapResponseFramerTests {
                     decoded += 1
                 }
             } catch {
-                // MapError만 나와야 한다(타입 있는 오류라 컴파일러가 보장한다). 죽지 않는 것이 이 시험의 전부다.
+                // Only MapError is allowed (the compiler guarantees it through typed throws). The test checks only that there is no crash.
             }
         }
         #expect(decoded > 0)

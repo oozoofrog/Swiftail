@@ -1,14 +1,14 @@
-// 계약 단위 2 시험: 빈 레코드, 4,077바이트 경계 분할, 조각난 레코드, 변조된 레코드 뒤 closed, 한도.
+// Contract unit test 2: Empty records, splitting at the 4,077-byte boundary, fragmented records, closed after a tampered record, and limits.
 
 import Testing
 
 @testable import SwiftailControl
 
-@Suite("제어 Noise 레코드")
+@Suite("Control Noise records")
 struct ControlSessionTests {
     private typealias V = TransportVectors
 
-    @Test("빈 평문 레코드는 건너뛰되 nonce를 소비한다(카운터 3의 빈 레코드 뒤 카운터 4)")
+    @Test("Skips empty plaintext records but consumes a nonce (counter 4 after the empty record at counter 3)")
     func emptyRecordConsumesNonce() throws {
         var server = try V.serverSession()
         var received: [UInt8] = []
@@ -18,14 +18,14 @@ struct ControlSessionTests {
         #expect(received == Array("client-0client-1client-2after-empty".utf8))
     }
 
-    @Test("빈 평문은 레코드를 만들지 않고 카운터도 쓰지 않는다")
+    @Test("Empty plaintext creates no record and consumes no counter")
     func sealEmpty() throws {
         var client = try V.clientSession()
         #expect(try client.seal([]).isEmpty)
         #expect(try client.seal(Array("client-0".utf8)) == V.bytes(V.clientRecords[0].record))
     }
 
-    @Test("평문 4,077바이트는 레코드 하나(4,096바이트), 4,078바이트는 둘로 나뉜다")
+    @Test("4,077 plaintext bytes make one record (4,096 bytes), and 4,078 bytes split into two")
     func splitAtMaximumPlaintext() throws {
         var client = try V.clientSession()
         var server = try V.serverSession()
@@ -43,7 +43,7 @@ struct ControlSessionTests {
         #expect(try server.receive(two) == over)
     }
 
-    @Test("레코드가 한 바이트씩 와도 완성된 것만 연다")
+    @Test("Opens only complete records even when they arrive one byte at a time")
     func byteByByte() throws {
         var client = try V.clientSession()
         var received: [UInt8] = []
@@ -54,7 +54,7 @@ struct ControlSessionTests {
         #expect(received == Array("server-0server-1server-2".utf8))
     }
 
-    @Test("변조된 레코드는 authenticationFailed이고, 그 뒤 세션은 양방향 모두 closed다")
+    @Test("A tampered record yields authenticationFailed, after which the session is closed in both directions")
     func tamperedRecordCloses() throws {
         var record = try V.bytes(V.serverRecords[0].record)
         record[record.count - 1] ^= 0x01
@@ -64,32 +64,32 @@ struct ControlSessionTests {
         #expect(throws: ControlTransportError.closed) { try client.seal([1]) }
     }
 
-    @Test("레코드는 카운터 순서대로만 열린다(카운터 1 레코드를 먼저 받으면 실패)")
+    @Test("Opens records only in counter order (receiving counter 1 first fails)")
     func outOfOrder() throws {
         var client = try V.clientSession()
         #expect(throws: ControlTransportError.authenticationFailed) { try client.receive(V.bytes(V.serverRecords[1].record)) }
     }
 
-    @Test("태그보다 짧은 암호문은 authenticationFailed")
+    @Test("Ciphertext shorter than the tag yields authenticationFailed")
     func shorterThanTag() throws {
         var client = try V.clientSession()
         #expect(throws: ControlTransportError.authenticationFailed) { try client.receive([4, 0, 5, 1, 2, 3, 4, 5]) }
     }
 
-    @Test("레코드가 아닌 type은 malformed", arguments: [UInt8(1), 2, 3, 0, 0xFF])
+    @Test("A non-record type yields malformed", arguments: [UInt8(1), 2, 3, 0, 0xFF])
     func wrongType(_ type: UInt8) throws {
         var client = try V.clientSession()
         #expect(throws: ControlTransportError.malformed) { try client.receive([type, 0, 24]) }
         #expect(throws: ControlTransportError.closed) { try client.receive([]) }
     }
 
-    @Test("머리를 포함해 4,096바이트를 넘는 길이는 본문을 기다리지 않고 messageTooLarge")
+    @Test("A length over 4,096 bytes including the header yields messageTooLarge without waiting for the body")
     func tooLarge() throws {
         var client = try V.clientSession()
         #expect(throws: ControlTransportError.messageTooLarge) { try client.receive([4, 0x0F, 0xFE]) }
     }
 
-    @Test("완성된 레코드 뒤의 덜 온 레코드는 다음 receive까지 남겨 둔다")
+    @Test("Keeps the incomplete record after a complete record until the next receive")
     func partialTail() throws {
         var client = try V.clientSession()
         let first = try V.bytes(V.serverRecords[0].record)

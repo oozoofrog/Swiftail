@@ -1,6 +1,6 @@
-// `ControlClient`의 tailnet lock: netmap을 받을 때의 절차, 닫힌 쪽, 동기화, 끄기, 저장과 다시 시작.
-// 가짜 제어 서버(`LockFakeControlServer`)와 실제 연결(업그레이드 → Noise → HTTP/2)로 돈다.
-// 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 N·Y·P·O·T, 사용자의 답 U1·U2, 단위 시험 19~21.
+// `ControlClient` tailnet lock: handling netmap receipt, fail-closed behavior, synchronization, disablement, storage, and restart.
+// Runs against a fake control server (`LockFakeControlServer`) over a real connection (upgrade → Noise → HTTP/2).
+// Contract `docs/contracts/SwiftailTailnetLock.md`, behaviors N, Y, P, O, and T, owner answers U1 and U2, unit tests 19–21.
 
 import CryptoKit
 import Foundation
@@ -11,11 +11,11 @@ import SwiftailCrypto
 @testable import SwiftailControl
 @testable import SwiftailTKA
 
-@Suite("제어 클라이언트: tailnet lock", .timeLimit(.minutes(3)))
+@Suite("Control client: Tailnet lock", .timeLimit(.minutes(3)))
 struct ControlClientLockTests {
     private typealias Server = LockFakeControlServer
 
-    /// 서버의 서명 권한 상태에 서명 기기를 하나 더한다. 새 머리를 돌려준다.
+    /// Adds one signing device to the server's authority state. Returns the new head.
     private func addSigner(_ added: LockTesting.Signer, to server: Server, signedBy signer: LockTesting.Signer) throws -> (head: AUMHash, aum: AUM) {
         var authority = try #require(server.lock.authority)
         let aum = try LockTesting.addKey(added, after: authority.head, signedBy: signer)
@@ -24,21 +24,21 @@ struct ControlClientLockTests {
         return (authority.head, aum)
     }
 
-    // MARK: lock이 없을 때
+    // MARK: Without lock
 
-    @Test("lock이 없는 tailnet: 거르지 않고 .disabled이며 TKA RPC가 하나도 나가지 않는다", arguments: [true, false])
+    @Test("A tailnet without lock skips filtering, is .disabled, and sends no TKA RPCs", arguments: [true, false])
     func noLock(hasCapability: Bool) async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
             server.setMapResponse(try world.map(selfSigned: false, hasCapability: hasCapability, lock: LockWorld.noTKAInfo))
         }) { run in
-            let netmap = try await run.latest("첫 netmap") { _ in true }
+            let netmap = try await run.latest("First netmap") { _ in true }
             #expect(netmap.peers.map(\.id) == [2, 3, 4])
             #expect(netmap.tailnetLock == TailnetLockStatus())
 
-            // 로컬 상태가 없으면 서버가 꺼졌다고 알려도 할 일이 없다.
+            // With no local state, there is nothing to do even if the server reports disabled.
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled, #""Domain":"tail0001.ts.net""#))
-            let next = try await run.latest("증분") { $0.domain == "tail0001.ts.net" }
+            let next = try await run.latest("Delta") { $0.domain == "tail0001.ts.net" }
             #expect(next.tailnetLock == TailnetLockStatus())
             #expect(run.server.tkaPaths.isEmpty)
             #expect(run.uploadedHeads == [""])
@@ -46,39 +46,39 @@ struct ControlClientLockTests {
         }
     }
 
-    @Test("capability가 없으면 서버가 켜졌다고 알려도 부트스트랩하지 않고 거르지 않는다(Go와 같다). capability가 생기면 부트스트랩한다")
+    @Test("Without capability, a server report of enabled triggers neither bootstrap nor filtering (as in Go). Bootstrap when capability becomes available")
     func capabilityRequired() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
             server.updateLock { $0.authority = world.authority }
             server.setMapResponse(try world.map(hasCapability: false))
         }) { run in
-            let open = try await run.latest("첫 netmap") { _ in true }
+            let open = try await run.latest("First netmap") { _ in true }
             #expect(open.peers.map(\.id) == [2, 3, 4])
             #expect(open.tailnetLock == TailnetLockStatus())
             #expect(run.server.tkaPaths.isEmpty)
 
-            // 옛 `Capabilities` 목록으로 와도 capability다.
+            // The legacy `Capabilities` list also conveys capability.
             let selfNode = LockTesting.selfJSON(
                 key: world.selfKey, hasCapability: false, #","Capabilities":["https://tailscale.com/cap/tailnet-lock"]"#
             )
             run.server.push(LockTesting.mapJSON(selfNode: selfNode))
-            let enforced = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
+            let enforced = try await run.latest("Filtered netmap") { $0.tailnetLock.mode == .enforcing }
             #expect(enforced.peers.map(\.id) == [2, 4])
             #expect(run.server.tkaPaths == [Server.bootstrapPath, Server.syncOfferPath])
         }
     }
 
-    // MARK: 부트스트랩과 거르기
+    // MARK: Bootstrap and filtering
 
-    @Test("부트스트랩: 거른 netmap만 나오고, 잠긴 자기 노드의 서명 요청이 실리고, 서명 뒤의 netmap에서 다시 시작 없이 풀린다")
+    @Test("Bootstrap emits only the filtered netmap, includes a signing request for the locked-out self node, and unlocks it in the netmap after signing without restarting")
     func bootstrapAndFilter() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
             server.updateLock { $0.authority = world.authority }
             server.setMapResponse(try world.map(selfSigned: false))
         }) { run in
-            let locked = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
+            let locked = try await run.latest("Filtered netmap") { $0.tailnetLock.mode == .enforcing }
             #expect(locked.peers.map(\.key) == [world.signedPeer, world.apiOnlyPeer])
             #expect(locked.tailnetLock == TailnetLockStatus(
                 mode: .enforcing, head: world.head.text, filteredPeerCount: 1,
@@ -88,10 +88,10 @@ struct ControlClientLockTests {
                 )
             ))
             #expect(locked.tailnetLock.isLockedOut)
-            #expect(run.netmaps.count == 1, "거르기 전의 netmap이 먼저 나갔다")
+            #expect(run.netmaps.count == 1, "The unfiltered netmap was emitted first")
 
-            // RPC의 모양(동작 Y7): Noise 위의 GET, Content-Type과 부하 분산 머리 없음, 본문은 JSON.
-            #expect(run.server.tkaPaths == [Server.bootstrapPath, Server.syncOfferPath], "머리가 같으면 send를 보내지 않는다")
+            // RPC format (behavior Y7): GET over Noise, no Content-Type or load-balancing header, JSON body.
+            #expect(run.server.tkaPaths == [Server.bootstrapPath, Server.syncOfferPath], "Skips the send RPC when the heads match")
             let bootstrap = try #require(run.server.requests(to: Server.bootstrapPath).first)
             #expect(bootstrap.method == "GET")
             #expect(bootstrap.header("content-type") == nil)
@@ -104,21 +104,21 @@ struct ControlClientLockTests {
                 "Version": 148, "NodeKey": world.selfKey.description, "Head": world.head.text, "Ancestors": [world.head.text],
             ])
 
-            // 저장했고(0600), 새 머리를 상태 올리기로 알렸다.
+            // Stored the state (0600) and reported the new head in a state upload.
             #expect(try TailnetLockStore(directory: run.directory).load()?.head == world.head)
             #expect(try FileManager.default.attributesOfItem(atPath: run.storeURL.path)[.posixPermissions] as? Int == 0o600)
-            try await eventually("TKAHead를 올림") { run.uploadedHeads == ["", world.head.text] }
+            try await eventually("Upload TKAHead") { run.uploadedHeads == ["", world.head.text] }
 
-            // 서명 기기가 서명한 뒤의 netmap.
+            // Netmap after the signing device signs.
             run.server.push(try world.map())
-            let signed = try await run.latest("서명 뒤의 netmap") { !$0.tailnetLock.isLockedOut }
+            let signed = try await run.latest("Netmap after signing") { !$0.tailnetLock.isLockedOut }
             #expect(signed.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
             #expect(signed.peers.map(\.id) == [2, 4])
-            #expect(run.server.tkaPaths.count == 2, "머리가 같은 netmap에 RPC를 보냈다")
+            #expect(run.server.tkaPaths.count == 2, "Sent an RPC for a netmap with the same head")
         }
     }
 
-    @Test("절차가 도는 동안 netmap을 내지 않고 쥔다. 맵 스트림은 계속 읽고, 끝나면 가장 새 netmap 하나만 걸러 낸다")
+    @Test("Holds netmaps without emitting them while the procedure runs. Keeps reading the map stream, then filters and emits only the newest netmap")
     func heldUntilProcedureEnds() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
@@ -128,29 +128,29 @@ struct ControlClientLockTests {
             }
             server.setMapResponse(try world.map())
         }) { run in
-            try await eventually("부트스트랩 요청") { !run.server.requests(to: Server.bootstrapPath).isEmpty }
+            try await eventually("Bootstrap request") { !run.server.requests(to: Server.bootstrapPath).isEmpty }
             #expect(run.netmaps.isEmpty)
 
-            // 절차가 걸려 있는 동안에도 맵 스트림은 읽힌다: 새 응답 둘이 세션에 들어간다.
+            // Continues reading the map stream while the procedure is pending. Two new responses reach the session.
             run.server.push(#"{"Domain":"first.example"}"#)
             run.server.push(#"{"Domain":"second.example"}"#)
-            try await eventually("맵 스트림 읽기") { await run.client.lockSession.netmap?.domain == "second.example" }
-            #expect(run.netmaps.isEmpty, "절차가 끝나기 전에 netmap이 나갔다")
+            try await eventually("Read the map stream") { await run.client.lockSession.netmap?.domain == "second.example" }
+            #expect(run.netmaps.isEmpty, "Emitted a netmap before the procedure finished")
             #expect(await run.client.lockSession.isProcedureRunning)
 
             run.server.release(Server.bootstrapPath)
-            let netmap = try await run.latest("거른 netmap") { _ in true }
+            let netmap = try await run.latest("Filtered netmap") { _ in true }
             #expect(netmap.domain == "second.example")
             #expect(netmap.tailnetLock.mode == .enforcing)
             #expect(netmap.peers.map(\.id) == [2, 4])
-            try await eventually("TKAHead를 올림") { run.uploadedHeads.last == world.head.text }
-            #expect(run.netmaps.count == 1, "쥔 netmap을 하나씩 다 냈다")
+            try await eventually("Upload TKAHead") { run.uploadedHeads.last == world.head.text }
+            #expect(run.netmaps.count == 1, "Emitted all held netmaps one by one")
         }
     }
 
-    // MARK: 닫힌 쪽
+    // MARK: Fail-closed behavior
 
-    /// 부트스트랩이 실패하는 길들.
+    /// Ways bootstrap can fail.
     enum BootstrapFault: String, CaseIterable, CustomTestStringConvertible {
         case serverError, notJSON, noCheckpoint, truncatedCheckpoint, notACheckpoint, unverifiableCheckpoint, oversizedBody, noAnswer
 
@@ -167,10 +167,10 @@ struct ControlClientLockTests {
             case .notACheckpoint:
                 return genesis(try LockTesting.addKey(LockTesting.Signer(), after: world.head, signedBy: world.signer).serialized())
             case .unverifiableCheckpoint:
-                // 자기 상태의 키로 서명되지 않은 체크포인트.
+                // A checkpoint with no signature from the keys in its own state.
                 return genesis(try LockTesting.checkpoint(trusting: [world.signer], signedBy: LockTesting.Signer()).serialized())
             case .oversizedBody:
-                // 올바른 응답 뒤에 공백을 채워 한도(1MiB)를 한 바이트 넘긴 것.
+                // A valid response padded with spaces to exceed the limit (1MiB) by one byte.
                 let valid = #"{"GenesisAUM":"\#(Data(checkpoint).base64EncodedString())"}"#
                 return .json(valid + String(repeating: " ", count: ControlClient.maximumTKAResponseSize + 1 - valid.utf8.count))
             case .noAnswer: return .hold
@@ -178,7 +178,7 @@ struct ControlClientLockTests {
         }
     }
 
-    @Test("부트스트랩이 실패하면 피어를 하나도 올리지 않고(.unverified), 다음 netmap을 기다리지 않고 다시 시도해 풀린다", arguments: BootstrapFault.allCases)
+    @Test("A bootstrap failure publishes no peers (.unverified) and recovers by retrying without waiting for the next netmap", arguments: BootstrapFault.allCases)
     func unverifiedUntilBootstrapSucceeds(fault: BootstrapFault) async throws {
         let world = try LockWorld()
         var timeouts = ControlClient.Timeouts.lockTesting
@@ -191,34 +191,34 @@ struct ControlClientLockTests {
             }
             server.setMapResponse(try world.map())
         }) { run in
-            let closed = try await run.latest("첫 netmap") { _ in true }
+            let closed = try await run.latest("First netmap") { _ in true }
             #expect(closed.peers.isEmpty)
             #expect(closed.tailnetLock == TailnetLockStatus(mode: .unverified, filteredPeerCount: 3, issue: .acquiringState))
             #expect(closed.selfNode.key == world.selfKey)
             #expect(run.netmaps.count == 1)
             #expect(await run.client.lockAuthority == nil)
 
-            // 그동안 온 netmap도 피어 없이 나온다.
+            // Netmaps arriving in the meantime also come out without peers.
             run.server.push(#"{"Domain":"tail0001.ts.net"}"#)
-            let still = try await run.latest("증분") { $0.domain == "tail0001.ts.net" }
+            let still = try await run.latest("Delta") { $0.domain == "tail0001.ts.net" }
             #expect(still.peers.isEmpty && still.tailnetLock.mode == .unverified)
-            // netmap이 오지 않아도 물러나며 다시 시도한다.
+            // Backs off and retries even if no netmap arrives.
             let attempts = run.server.requests(to: Server.bootstrapPath).count
-            try await eventually("재시도") { run.server.requests(to: Server.bootstrapPath).count >= attempts + 2 }
+            try await eventually("Retry") { run.server.requests(to: Server.bootstrapPath).count >= attempts + 2 }
             #expect(run.netmaps.allSatisfy { $0.peers.isEmpty && $0.tailnetLock.mode == .unverified })
             #expect(!FileManager.default.fileExists(atPath: run.storeURL.path))
             #expect(Set(run.uploadedHeads) == [""])
             #expect(!run.server.tkaPaths.contains(Server.syncOfferPath))
 
-            // 서버가 고쳐지면 다음 재시도에 풀린다.
+            // Once the server is fixed, the next retry recovers.
             run.server.release(Server.bootstrapPath)
-            let opened = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
+            let opened = try await run.latest("Filtered netmap") { $0.tailnetLock.mode == .enforcing }
             #expect(opened.peers.map(\.id) == [2, 4])
             #expect(opened.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
         }
     }
 
-    @Test("부트스트랩 응답은 한도(1MiB)까지 받는다")
+    @Test("Accepts bootstrap responses up to the limit (1MiB)")
     func bootstrapBodyAtLimit() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
@@ -231,27 +231,27 @@ struct ControlClientLockTests {
             }
             server.setMapResponse(try world.map())
         }) { run in
-            let netmap = try await run.latest("첫 netmap") { _ in true }
+            let netmap = try await run.latest("First netmap") { _ in true }
             #expect(netmap.tailnetLock.mode == .enforcing)
             #expect(run.server.requests(to: Server.bootstrapPath).count == 1)
         }
     }
 
-    /// 열리지 않는 저장 파일의 종류.
+    /// Types of stored files that cannot be opened.
     enum BrokenStore: String, CaseIterable, CustomTestStringConvertible {
         case garbage, forgedSignature
 
         var testDescription: String { rawValue }
     }
 
-    @Test("저장된 상태를 열지 못하면 .unverified에 머문다: 부트스트랩으로 넘어가지 않고, 서버가 꺼졌다고 해도 같고, 파일을 건드리지 않는다", arguments: BrokenStore.allCases)
+    @Test("If stored state cannot be opened, stays .unverified without falling back to bootstrap, even if the server reports disabled, and leaves the file untouched", arguments: BrokenStore.allCases)
     func unreadableStore(kind: BrokenStore) async throws {
         let world = try LockWorld()
         var contents = Data("깨진 파일".utf8)
         try await withLockClient(world, prepare: { server, directory in
             let store = TailnetLockStore(directory: directory)
             if kind == .forgedSignature {
-                // 서명의 마지막 바이트를 바꾸고 끝의 해시를 다시 계산한 것: 무결성 검사는 통과하고 서명 재검증에서 떨어진다.
+                // Changes the last byte of the signature and recomputes the trailing hash. Passes the integrity check and fails signature revalidation.
                 try store.save(world.authority)
                 var body = [UInt8](try Data(contentsOf: store.fileURL).dropLast(32))
                 body[body.count - 1] ^= 0x01
@@ -261,21 +261,21 @@ struct ControlClientLockTests {
             server.updateLock { $0.authority = world.authority }
             server.setMapResponse(try world.map())
         }) { run in
-            let closed = try await run.latest("첫 netmap") { _ in true }
+            let closed = try await run.latest("First netmap") { _ in true }
             #expect(closed.peers.isEmpty)
             #expect(closed.tailnetLock == TailnetLockStatus(mode: .unverified, filteredPeerCount: 3, issue: .unreadableStoredState))
 
-            // 서버가 lock이 꺼졌다고 알려도 끄기 값을 모르므로 확인할 수 없다.
+            // Even if the server reports lock disabled, the client cannot verify it without knowing the disablement value.
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled, #""Domain":"tail0001.ts.net""#))
-            let still = try await run.latest("증분") { $0.domain == "tail0001.ts.net" }
+            let still = try await run.latest("Delta") { $0.domain == "tail0001.ts.net" }
             #expect(still.peers.isEmpty && still.tailnetLock.mode == .unverified && still.tailnetLock.issue == .unreadableStoredState)
-            #expect(run.server.tkaPaths.isEmpty, "열지 못한 저장소를 두고 RPC를 보냈다")
+            #expect(run.server.tkaPaths.isEmpty, "Sent an RPC with a store that could not be opened")
             #expect(Set(run.uploadedHeads) == [""])
             #expect(try Data(contentsOf: run.storeURL) == contents)
         }
     }
 
-    @Test("저장하지 못해도 판정은 바뀌지 않는다: 메모리의 상태로 거르고, 다음 변화 때 다시 쓴다")
+    @Test("A storage failure does not change the decision. Filters with in-memory state and tries writing again on the next change")
     func saveFailureKeepsEnforcing() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
@@ -285,10 +285,10 @@ struct ControlClientLockTests {
             }
             server.setMapResponse(try world.map())
         }) { run in
-            try await eventually("부트스트랩 요청") { !run.server.requests(to: Server.bootstrapPath).isEmpty }
+            try await eventually("Bootstrap request") { !run.server.requests(to: Server.bootstrapPath).isEmpty }
             try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: run.directory.path)
             run.server.release(Server.bootstrapPath)
-            let netmap = try await run.latest("거른 netmap") { _ in true }
+            let netmap = try await run.latest("Filtered netmap") { _ in true }
             #expect(netmap.tailnetLock.mode == .enforcing)
             #expect(netmap.peers.map(\.id) == [2, 4])
             #expect(!FileManager.default.fileExists(atPath: run.storeURL.path))
@@ -296,19 +296,19 @@ struct ControlClientLockTests {
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: run.directory.path)
             let advanced = try addSigner(LockTesting.Signer(), to: run.server, signedBy: world.signer)
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaInfo(head: advanced.head)))
-            _ = try await run.latest("동기화한 netmap") { $0.tailnetLock.head == advanced.head.text }
+            _ = try await run.latest("Synchronized netmap") { $0.tailnetLock.head == advanced.head.text }
             #expect(try TailnetLockStore(directory: run.directory).load()?.head == advanced.head)
         }
     }
 
-    // MARK: 동기화
+    // MARK: Synchronization
 
-    @Test("서버의 머리만 바뀌어도 동기화하고, 새 상태로 같은 netmap을 다시 걸러 낸다")
+    @Test("Synchronizes even when only the server head changes, then filters the same netmap again with the new state")
     func synchronizeOnHeadChange() async throws {
         let world = try LockWorld()
         let second = LockTesting.Signer()
         let peerKey = LockTesting.newNodeKey()
-        // 아직 신뢰받지 않는 서명 기기가 서명한 피어.
+        // A peer signed by a signing device that is still untrusted.
         let peer = LockTesting.peerJSON(5, key: peerKey, signature: try second.signature(for: peerKey))
         try await withEnforcingClient(world, extraPeers: [peer]) { run, first in
             #expect(first.peers.map(\.id) == [2, 4])
@@ -316,7 +316,7 @@ struct ControlClientLockTests {
 
             let advanced = try addSigner(second, to: run.server, signedBy: world.signer)
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaInfo(head: advanced.head)))
-            let synced = try await run.latest("동기화한 netmap") { $0.tailnetLock.head == advanced.head.text }
+            let synced = try await run.latest("Synchronized netmap") { $0.tailnetLock.head == advanced.head.text }
             #expect(synced.peers.map(\.id) == [2, 4, 5])
             #expect(synced.tailnetLock == TailnetLockStatus(mode: .enforcing, head: advanced.head.text, filteredPeerCount: 1))
             #expect(run.netmaps.count == 2)
@@ -331,11 +331,11 @@ struct ControlClientLockTests {
             ])
             #expect(String(decoding: send.body, as: UTF8.self).contains(#""MissingAUMs":[]"#))
             #expect(try TailnetLockStore(directory: run.directory).load()?.head == advanced.head)
-            try await eventually("새 TKAHead를 올림") { run.uploadedHeads.last == advanced.head.text }
+            try await eventually("Upload the new TKAHead") { run.uploadedHeads.last == advanced.head.text }
         }
     }
 
-    /// 동기화가 실패하는 길들.
+    /// Ways synchronization can fail.
     enum SyncFault: String, CaseIterable, CustomTestStringConvertible {
         case offerServerError, unreadableHead, unreadableAncestor, forgedUpdate, undecodableUpdate, oversizedOffer, sendServerError
 
@@ -343,7 +343,7 @@ struct ControlClientLockTests {
         var path: String { self == .sendServerError ? LockFakeControlServer.syncSendPath : LockFakeControlServer.syncOfferPath }
     }
 
-    @Test("동기화가 실패하면 예전 상태로 계속 거른다(열지 않는다). 다음 netmap에서 다시 시도해 따라잡는다", arguments: SyncFault.allCases)
+    @Test("If synchronization fails, keeps filtering with the old state (does not open up). Retries on the next netmap and catches up", arguments: SyncFault.allCases)
     func synchronizationFailureKeepsOldState(fault: SyncFault) async throws {
         let world = try LockWorld()
         let second = LockTesting.Signer()
@@ -362,7 +362,7 @@ struct ControlClientLockTests {
             case .unreadableHead: reply = .json(offer(head.lowercased(), root, [update(advanced.aum)]))
             case .unreadableAncestor: reply = .json(offer(head, "AAAA", [update(advanced.aum)]))
             case .forgedUpdate:
-                // 신뢰 키가 아닌 키로 서명한 AddKey: 서버가 서명 없는 노드의 키를 믿게 하려는 것과 같은 모양이다.
+                // AddKey signed with an untrusted key, mimicking a server trying to establish trust in an unsigned node's key.
                 let forged = try LockTesting.addKey(second, after: world.head, signedBy: second)
                 reply = .json(offer(forged.hash.text, root, [update(forged)]))
             case .undecodableUpdate: reply = .json(offer(head, root, [update(advanced.aum), "AA=="]))
@@ -373,27 +373,27 @@ struct ControlClientLockTests {
             run.server.updateLock { $0.faults[fault.path] = reply }
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaInfo(head: advanced.head), #""Domain":"first.example""#))
 
-            let stale = try await run.latest("실패 뒤의 netmap") { $0.domain == "first.example" }
+            let stale = try await run.latest("Netmap after failure") { $0.domain == "first.example" }
             if fault == .sendServerError {
-                // AUM은 이미 들였다. 서버에 알리는 것만 실패했다.
+                // The AUM was already accepted. Only notifying the server failed.
                 #expect(stale.tailnetLock.head == advanced.head.text)
             } else {
-                #expect(stale.peers.map(\.id) == [2, 4], "검증하지 못한 상태로 피어를 올렸다")
+                #expect(stale.peers.map(\.id) == [2, 4], "Published peers using unverified state")
                 #expect(stale.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 2))
                 #expect(try TailnetLockStore(directory: run.directory).load()?.head == world.head)
-                #expect(run.server.requests(to: Server.syncSendPath).isEmpty, "들이지 못했는데 send를 보냈다")
+                #expect(run.server.requests(to: Server.syncSendPath).isEmpty, "Issued the send RPC without accepting the AUM")
             }
 
-            // 서버가 고쳐지고 다음 netmap이 오면 따라잡는다.
+            // Once the server is fixed and the next netmap arrives, it catches up.
             run.server.updateLock { $0.faults = [:] }
             run.server.push(#"{"Domain":"second.example"}"#)
-            let synced = try await run.latest("따라잡은 netmap") { $0.domain == "second.example" }
+            let synced = try await run.latest("Netmap after catching up") { $0.domain == "second.example" }
             #expect(synced.peers.map(\.id) == [2, 4, 5])
             #expect(synced.tailnetLock.head == advanced.head.text)
         }
     }
 
-    @Test("sync/offer 응답은 8MiB까지 받는다(다른 RPC의 1MiB 한도가 아니다)")
+    @Test("Accepts sync/offer responses up to 8MiB, beyond the 1MiB limit for other RPCs")
     func syncOfferBodyAtLimit() async throws {
         let world = try LockWorld()
         try await withEnforcingClient(world) { run, _ in
@@ -402,11 +402,11 @@ struct ControlClientLockTests {
             let padded = valid + String(repeating: " ", count: ControlClient.maximumTKASyncOfferResponseSize - valid.utf8.count)
             run.server.updateLock { $0.faults[Server.syncOfferPath] = .json(padded) }
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaInfo(head: advanced.head)))
-            _ = try await run.latest("동기화한 netmap") { $0.tailnetLock.head == advanced.head.text }
+            _ = try await run.latest("Synchronized netmap") { $0.tailnetLock.head == advanced.head.text }
         }
     }
 
-    @Test("서버가 모르는 로컬 AUM은 sync/send로 보낸다. 저장된 상태가 있으면 부트스트랩하지 않고 첫 요청부터 TKAHead를 싣는다")
+    @Test("Sends local AUMs unknown to the server via sync/send. With saved state, skips bootstrap and includes TKAHead from the first request")
     func sendsAUMsUnknownToServer() async throws {
         let world = try LockWorld()
         var ahead = world.authority
@@ -417,7 +417,7 @@ struct ControlClientLockTests {
             server.updateLock { $0.authority = world.authority }
             server.setMapResponse(try world.map())
         }) { run in
-            let netmap = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
+            let netmap = try await run.latest("Filtered netmap") { $0.tailnetLock.mode == .enforcing }
             #expect(netmap.tailnetLock.head == ahead.head.text)
             #expect(run.netmaps.count == 1)
             #expect(run.server.tkaPaths == [Server.syncOfferPath, Server.syncSendPath])
@@ -433,13 +433,13 @@ struct ControlClientLockTests {
             ])
             #expect(run.server.lock.authority?.head == ahead.head)
 
-            // 스트림 요청과 상태 올리기 둘 다 첫 요청부터 머리를 실었다.
+            // Both the stream request and state upload included the head from the first request.
             let heads = run.server.requests(to: "/machine/map").map { $0.object["TKAHead"] as? String }
             #expect(heads.count >= 2 && heads.allSatisfy { $0 == ahead.head.text })
         }
     }
 
-    @Test("다른 tailnet의 상태가 남아 있으면 그 상태로 거른다: 서버와 교차가 없어 따라가지 못하고, 새 tailnet의 서명을 믿지 않는다")
+    @Test("If state from another tailnet remains, filters with it. With no intersection with the server, cannot catch up and does not trust the new tailnet's signatures")
     func foreignStoreStaysClosed() async throws {
         let world = try LockWorld()
         let other = try LockWorld()
@@ -448,14 +448,14 @@ struct ControlClientLockTests {
             server.updateLock { $0.authority = world.authority }
             server.setMapResponse(try world.map())
         }) { run in
-            let netmap = try await run.latest("첫 netmap") { _ in true }
-            // 서명 검사를 받지 않는 피어만 남고, 자기 서명도 검증되지 않는다.
+            let netmap = try await run.latest("First netmap") { _ in true }
+            // Only peers exempt from signature checks remain, and the self signature is also unverified.
             #expect(netmap.peers.map(\.id) == [4])
             #expect(netmap.tailnetLock.mode == .enforcing)
             #expect(netmap.tailnetLock.head == other.head.text)
             #expect(netmap.tailnetLock.filteredPeerCount == 2)
             #expect(netmap.tailnetLock.isLockedOut)
-            // 서명해도 풀리지 않는다는 것을 앱이 안다(5절 TL-11b 항목 4).
+            // The app knows that signing will not unlock the node (§5, TL-11b item 4).
             #expect(netmap.tailnetLock.issue == .storedStateDiverged)
             #expect(run.server.tkaPaths == [Server.syncOfferPath])
             #expect(try TailnetLockStore(directory: run.directory).load()?.head == other.head)
@@ -465,7 +465,7 @@ struct ControlClientLockTests {
 }
 
 extension LockDisablementTests {
-    @Test("끄기: 맞는 비밀이면 상태와 파일을 지우고 거르기를 멈춘다. 부트스트랩 RPC에 로컬 머리를 싣는다")
+    @Test("Disablement with the correct secret removes state and its file and stops filtering. The bootstrap RPC carries the local head")
     func disablementWithValidSecret() async throws {
         let world = try LockWorld()
         try await withEnforcingClient(world) { run, _ in
@@ -474,7 +474,7 @@ extension LockDisablementTests {
                 $0.disablementSecret = LockTesting.disablementSecret
             }
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled))
-            let open = try await run.latest("끈 뒤의 netmap") { $0.tailnetLock.mode == .disabled }
+            let open = try await run.latest("Netmap after disablement") { $0.tailnetLock.mode == .disabled }
             #expect(open.peers.map(\.id) == [2, 3, 4])
             #expect(open.tailnetLock == TailnetLockStatus())
             #expect(!FileManager.default.fileExists(atPath: run.storeURL.path))
@@ -483,13 +483,13 @@ extension LockDisablementTests {
             let requests = run.server.requests(to: Server.bootstrapPath)
             #expect(requests.count == 2)
             #expect(requests.last?.object["Head"] as? String == world.head.text)
-            #expect(run.server.tkaPaths.suffix(1) == [Server.bootstrapPath], "끈 뒤에 동기화를 보냈다")
-            try await eventually("빈 TKAHead를 올림") { run.uploadedHeads.last == "" && run.uploadedHeads.count == 3 }
+            #expect(run.server.tkaPaths.suffix(1) == [Server.bootstrapPath], "Sent a sync after disablement")
+            try await eventually("Upload an empty TKAHead") { run.uploadedHeads.last == "" && run.uploadedHeads.count == 3 }
             #expect(await run.client.disablementDerivationCount == 1)
         }
     }
 
-    @Test("끄기: 켜진 머리를 올리는 응답이 오기 전에 꺼지면, 그 응답 뒤에 빈 TKAHead를 다시 올린다(동작 N4)")
+    @Test("Disablement before the response to the enabled head upload arrives uploads an empty TKAHead again after the response (behavior N4)")
     func disablementWhileHeadUploadInFlight() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
@@ -499,31 +499,31 @@ extension LockDisablementTests {
             }
             server.setMapResponse(try world.map())
         }) { run in
-            // 첫 상태 올리기(빈 머리)는 연결을 맺을 때 끝났다. 그 뒤의 올리기만 붙든다.
-            try await eventually("부트스트랩 요청") { !run.server.requests(to: Server.bootstrapPath).isEmpty }
+            // The first state upload (empty head) finished when connecting. Hold only later uploads.
+            try await eventually("Bootstrap request") { !run.server.requests(to: Server.bootstrapPath).isEmpty }
             run.server.updateLock { $0.faults[Server.mapPath] = .hold }
             run.server.release(Server.bootstrapPath)
-            _ = try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
-            try await eventually("켜진 머리를 올림") { run.uploadedHeads == ["", world.head.text] }
+            _ = try await run.latest("Filtered netmap") { $0.tailnetLock.mode == .enforcing }
+            try await eventually("Upload the enabled head") { run.uploadedHeads == ["", world.head.text] }
 
             run.server.updateLock {
                 $0.authority = nil
                 $0.disablementSecret = LockTesting.disablementSecret
             }
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled))
-            _ = try await run.latest("끈 뒤의 netmap") { $0.tailnetLock.mode == .disabled }
-            #expect(run.uploadedHeads == ["", world.head.text], "붙든 응답이 오기 전에 다음 올리기를 보냈다")
+            _ = try await run.latest("Netmap after disablement") { $0.tailnetLock.mode == .disabled }
+            #expect(run.uploadedHeads == ["", world.head.text], "Sent the next upload before the held response arrived")
 
             run.server.release(Server.mapPath)
-            try await eventually("빈 TKAHead를 다시 올림") { run.uploadedHeads == ["", world.head.text, ""] }
+            try await eventually("Upload an empty TKAHead again") { run.uploadedHeads == ["", world.head.text, ""] }
         }
     }
 
-    @Test("끄기: 틀린 비밀·비밀 없는 Disabled로는 lock을 유지하고 동기화를 이어 간다. 같은 비밀로는 KDF를 다시 돌리지 않는다")
+    @Test("Disablement with a wrong secret or Disabled with no secret keeps lock active and continues syncing. A repeated secret does not rerun the KDF")
     func disablementWithInvalidSecret() async throws {
         let world = try LockWorld()
         try await withEnforcingClient(world) { run, _ in
-            // 서버가 `Disabled`를 알리고 `secret`을 준다. 그 뒤의 netmap을 돌려준다.
+            // The server reports `Disabled` and supplies `secret`. Returns the resulting netmap.
             var round = 0
             func disable(secret: [UInt8]) async throws -> Netmap {
                 round += 1
@@ -533,7 +533,7 @@ extension LockDisablementTests {
                     $0.disablementSecret = secret
                 }
                 run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaDisabled, #""Domain":"\#(domain)""#))
-                return try await run.latest("\(round)번째 netmap") { $0.domain == domain }
+                return try await run.latest("Netmap number \(round)") { $0.domain == domain }
             }
             let enforced = TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1)
             let wrong = [UInt8](repeating: 0x5a, count: 32)
@@ -542,16 +542,16 @@ extension LockDisablementTests {
             #expect(netmap.tailnetLock == enforced)
             #expect(netmap.peers.map(\.id) == [2, 4])
             #expect(await run.client.disablementDerivationCount == 1)
-            // 서버가 알린 머리(없음)와 다르므로 동기화를 이어서 시도한다. 그것이 실패해도 예전 상태로 거른다.
+            // The local head differs from the head reported by the server (none), so synchronization continues to be attempted. On failure, still filters with the old state.
             #expect(run.server.tkaPaths.suffix(2) == [Server.bootstrapPath, Server.syncOfferPath])
 
             netmap = try await disable(secret: wrong)
             #expect(netmap.tailnetLock == enforced)
-            #expect(await run.client.disablementDerivationCount == 1, "같은 비밀로 KDF를 다시 돌렸다")
+            #expect(await run.client.disablementDerivationCount == 1, "Reran the KDF with the same secret")
             #expect(run.server.requests(to: Server.bootstrapPath).count == 3)
 
             netmap = try await disable(secret: [])
-            #expect(netmap.tailnetLock == enforced, "비밀 없는 Disabled로 lock을 지웠다")
+            #expect(netmap.tailnetLock == enforced, "Cleared lock on Disabled without a secret")
             #expect(await run.client.disablementDerivationCount == 2)
 
             netmap = try await disable(secret: Array(LockTesting.disablementSecret.dropLast()))
@@ -559,7 +559,7 @@ extension LockDisablementTests {
             #expect(await run.client.disablementDerivationCount == 3)
             #expect(try TailnetLockStore(directory: run.directory).load()?.head == world.head)
 
-            // 거절을 기억하는 것이 맞는 비밀을 막지 않는다.
+            // Remembering a rejection does not block the correct secret.
             netmap = try await disable(secret: LockTesting.disablementSecret)
             #expect(netmap.tailnetLock == TailnetLockStatus())
             #expect(netmap.peers.map(\.id) == [2, 3, 4])
@@ -567,9 +567,9 @@ extension LockDisablementTests {
         }
     }
 
-    /// 관문 (가) 7에서 드러난 것: 서버가 끄기 비밀만 바꾸고 내용이 같은 맵을 다시 보내면, 바뀐 것이 없는 netmap이라며 절차를
-    /// 다시 돌지 않았다. Go는 맵 응답마다 절차를 돈다.
-    @Test("끄기: 할 일이 남아 있으면 내용이 같은 맵 응답에서도 절차를 다시 돈다(KeepAlive에서는 돌지 않는다)")
+    /// Gate (a) 7 revealed that if the server changes only the disablement secret and resends an identical map, the unchanged netmap
+    /// prevented the procedure from running again. Go runs the procedure on every map response.
+    @Test("Disablement reruns the procedure on identical map responses when work remains, and skips it on KeepAlive")
     func unchangedMapRetriesPendingProcedure() async throws {
         let world = try LockWorld()
         try await withEnforcingClient(world) { run, _ in
@@ -579,50 +579,50 @@ extension LockDisablementTests {
                 $0.disablementSecret = [UInt8](repeating: 0x5a, count: 32)
             }
             run.server.push(disabledMap)
-            let kept = try await run.latest("틀린 비밀 뒤의 netmap") { $0.domain == "same.example" }
+            let kept = try await run.latest("Netmap after the wrong secret") { $0.domain == "same.example" }
             #expect(kept.tailnetLock.mode == .enforcing)
             let attempts = run.server.requests(to: Server.bootstrapPath).count
 
-            // KeepAlive는 계기가 아니다.
+            // KeepAlive is not a trigger.
             run.server.push(#"{"KeepAlive":true}"#)
             try await Task.sleep(for: .milliseconds(300))
             #expect(run.server.requests(to: Server.bootstrapPath).count == attempts)
 
-            // 비밀만 맞는 것으로 바뀌고 맵은 그대로다.
+            // Only the secret changes to a correct one. The map stays the same.
             run.server.updateLock { $0.disablementSecret = LockTesting.disablementSecret }
             run.server.push(disabledMap)
-            let open = try await run.latest("같은 맵에서 다시 시도해 끈 뒤의 netmap") { $0.tailnetLock.mode == .disabled }
+            let open = try await run.latest("Netmap after retrying on the same map and disabling lock") { $0.tailnetLock.mode == .disabled }
             #expect(open.peers.map(\.id) == [2, 3, 4])
             #expect(run.server.requests(to: Server.bootstrapPath).count == attempts + 1)
         }
     }
 
-    @Test("TKAInfo가 도중에 빠진 응답은 변화 없음이고, 다시 이은 스트림의 첫 응답에 없으면 끄기 절차로 간다")
+    @Test("Omitting TKAInfo midstream leaves it unchanged. Omitting it from the first response on a reconnected stream starts disablement")
     func missingTKAInfo() async throws {
         let world = try LockWorld()
         try await withEnforcingClient(world) { run, _ in
             run.server.push(LockTesting.mapJSON(lock: #""TKAInfo":null"#, #""Domain":"first.example""#))
-            let unchanged = try await run.latest("증분") { $0.domain == "first.example" }
+            let unchanged = try await run.latest("Delta") { $0.domain == "first.example" }
             #expect(unchanged.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
             #expect(run.server.tkaPaths == [Server.bootstrapPath, Server.syncOfferPath])
 
-            // 새 맵 세션은 처음부터 TKAInfo가 없다. 서버는 틀린 비밀을 준다: 유지한다.
+            // The new map session has no TKAInfo from the start. The server supplies the wrong secret, so lock stays enabled.
             run.server.updateLock {
                 $0.authority = nil
                 $0.disablementSecret = [1, 2, 3]
             }
             run.server.setMapResponse(try world.map(lock: LockWorld.noTKAInfo, #""Domain":"second.example""#))
             run.server.dropConnections()
-            let kept = try await run.latest("다시 이은 뒤의 netmap") { $0.domain == "second.example" }
+            let kept = try await run.latest("Netmap after reconnecting") { $0.domain == "second.example" }
             #expect(kept.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
             #expect(run.server.requests(to: Server.bootstrapPath).last?.object["Head"] as? String == world.head.text)
             #expect(await run.client.disablementDerivationCount == 1)
 
-            // 맞는 비밀을 주면 꺼진다.
+            // The correct secret disables lock.
             run.server.updateLock { $0.disablementSecret = LockTesting.disablementSecret }
             run.server.setMapResponse(try world.map(lock: LockWorld.noTKAInfo, #""Domain":"third.example""#))
             run.server.dropConnections()
-            let open = try await run.latest("끈 뒤의 netmap") { $0.domain == "third.example" }
+            let open = try await run.latest("Netmap after disablement") { $0.domain == "third.example" }
             #expect(open.tailnetLock == TailnetLockStatus())
             #expect(open.peers.map(\.id) == [2, 3, 4])
             #expect(!FileManager.default.fileExists(atPath: run.storeURL.path))
@@ -632,9 +632,9 @@ extension LockDisablementTests {
 }
 
 extension ControlClientLockTests {
-    // MARK: 다시 시작과 다시 잇기
+    // MARK: Restart and reconnect
 
-    @Test("다시 시작: 저장된 상태로 부트스트랩 없이 같은 머리로 거르고, 그사이 자란 사슬은 동기화로 따라온다")
+    @Test("A restart filters with the same head from stored state without bootstrap and catches up by synchronizing any chain growth")
     func restart() async throws {
         let world = try LockWorld()
         let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-lock-\(UUID().uuidString)")
@@ -648,29 +648,29 @@ extension ControlClientLockTests {
             }
         }
         let first = try await withLockClient(world, directory: directory, prepare: prepare(world.authority)) { run in
-            try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing }
+            try await run.latest("Filtered netmap") { $0.tailnetLock.mode == .enforcing }
         }
         #expect(first.tailnetLock.head == world.head.text)
 
         try await withLockClient(world, directory: directory, prepare: prepare(world.authority)) { run in
-            let netmap = try await run.latest("다시 시작한 뒤의 netmap") { _ in true }
-            #expect(netmap.tailnetLock == first.tailnetLock, "머리와 서명 요청(같은 NL 키)이 같아야 한다")
+            let netmap = try await run.latest("Netmap after restart") { _ in true }
+            #expect(netmap.tailnetLock == first.tailnetLock, "The head and signing request (same NL key) must match")
             #expect(netmap.peers.map(\.id) == [2, 4])
-            #expect(run.server.tkaPaths.isEmpty, "머리가 같은데 RPC를 보냈다")
+            #expect(run.server.tkaPaths.isEmpty, "Sent an RPC despite matching heads")
             #expect(run.server.requests(to: "/machine/map").allSatisfy { $0.object["TKAHead"] as? String == world.head.text })
         }
 
         var advanced = world.authority
         try advanced.inform([try LockTesting.addKey(LockTesting.Signer(), after: world.head, signedBy: world.signer)])
         try await withLockClient(world, directory: directory, prepare: prepare(advanced)) { run in
-            let netmap = try await run.latest("다시 시작한 뒤의 netmap") { _ in true }
+            let netmap = try await run.latest("Netmap after restart") { _ in true }
             #expect(netmap.tailnetLock.head == advanced.head.text)
             #expect(run.server.tkaPaths == [Server.syncOfferPath, Server.syncSendPath])
             #expect(run.netmaps.count == 1)
         }
     }
 
-    @Test("절차 중에 연결이 끊겨도 상태가 어긋나지 않는다: 다시 이은 세션에서 절차를 다시 돌고, 그사이 거르지 않은 netmap이 나가지 않는다")
+    @Test("A disconnect mid-procedure preserves consistent state. The reconnected session reruns the procedure, and no unfiltered netmap is emitted in the meantime")
     func reconnectDuringProcedure() async throws {
         let world = try LockWorld()
         try await withLockClient(world, prepare: { server, _ in
@@ -680,36 +680,36 @@ extension ControlClientLockTests {
             }
             server.setMapResponse(try world.map())
         }) { run in
-            // 부트스트랩의 답을 기다리는 중에 끊긴다.
-            try await eventually("부트스트랩 요청") { run.server.requests(to: Server.bootstrapPath).count == 1 }
+            // Disconnect while waiting for the bootstrap response.
+            try await eventually("Bootstrap request") { run.server.requests(to: Server.bootstrapPath).count == 1 }
             run.server.updateLock { $0.faults = [:] }
             run.server.dropConnections()
-            let netmap = try await run.latest("다시 이은 뒤의 netmap") { _ in true }
+            let netmap = try await run.latest("Netmap after reconnecting") { _ in true }
             #expect(netmap.tailnetLock == TailnetLockStatus(mode: .enforcing, head: world.head.text, filteredPeerCount: 1))
             #expect(run.server.requests(to: Server.bootstrapPath).count == 2)
             #expect(run.netmaps.count == 1)
 
-            // 동기화의 답을 기다리는 중에 끊긴다. 메모리의 상태는 그대로 쥐고, 새 세션이 다시 동기화한다.
+            // Disconnect while waiting for the sync response. Retain the in-memory state, and the new session synchronizes again.
             let advanced = try addSigner(LockTesting.Signer(), to: run.server, signedBy: world.signer)
             run.server.updateLock { $0.faults[Server.syncOfferPath] = .hold }
             let offers = run.server.requests(to: Server.syncOfferPath).count
             run.server.push(LockTesting.mapJSON(lock: LockTesting.tkaInfo(head: advanced.head)))
-            try await eventually("동기화 요청") { run.server.requests(to: Server.syncOfferPath).count == offers + 1 }
+            try await eventually("Sync request") { run.server.requests(to: Server.syncOfferPath).count == offers + 1 }
             #expect(await run.client.lockAuthority?.head == world.head)
             run.server.updateLock { $0.faults = [:] }
             run.server.setMapResponse(try world.map(lock: LockTesting.tkaInfo(head: advanced.head)))
             run.server.dropConnections()
-            let synced = try await run.latest("따라잡은 netmap") { $0.tailnetLock.head == advanced.head.text }
+            let synced = try await run.latest("Netmap after catching up") { $0.tailnetLock.head == advanced.head.text }
             #expect(synced.peers.map(\.id) == [2, 4])
             #expect(run.netmaps.allSatisfy { $0.tailnetLock.mode == .enforcing && $0.peers.map(\.id) == [2, 4] })
-            #expect(run.server.requests(to: Server.bootstrapPath).count == 2, "상태를 쥐고 있는데 다시 부트스트랩했다")
+            #expect(run.server.requests(to: Server.bootstrapPath).count == 2, "Bootstrapped again despite retaining state")
             #expect(try TailnetLockStore(directory: run.directory).load()?.head == advanced.head)
         }
     }
 
-    // MARK: Go와 같은 판정
+    // MARK: Decisions matching Go
 
-    @Test("피어 집합의 판정이 Go와 같다(tka-fixtures.json의 peerSets)", arguments: try GoPeerSetFile.load().peerSets)
+    @Test("Peer set decisions match Go (peerSets in tka-fixtures.json)", arguments: try GoPeerSetFile.load().peerSets)
     func goPeerSets(peerSet: GoPeerSetFile.PeerSet) async throws {
         let world = try LockWorld()
         let authority = try GoPeerSetFile.load().authority(named: peerSet.authority)
@@ -724,7 +724,7 @@ extension ControlClientLockTests {
                 selfNode: LockTesting.selfJSON(key: world.selfKey), peers: peers, lock: LockTesting.tkaInfo(head: authority.head)
             ))
         }) { run in
-            let netmap = try await run.latest("거른 netmap") { _ in true }
+            let netmap = try await run.latest("Filtered netmap") { _ in true }
             #expect(netmap.tailnetLock.mode == .enforcing)
             #expect(netmap.peers.map { $0.key.rawValue.hex } == peerSet.kept)
             #expect(netmap.tailnetLock.filteredPeerCount == peerSet.peers.count - peerSet.kept.count)

@@ -1,9 +1,9 @@
-// NL 키(tailnet lock 키)의 텍스트 표기를 Go 기준값과 견준다. 계약 `docs/contracts/SwiftailTailnetLock.md` 동작 R1, 노트
+// Compares NL key (tailnet lock key) text representations against Go reference values. Contract `docs/contracts/SwiftailTailnetLock.md`, behavior R1, notes
 // `docs/protocol-notes/tailnet-lock.md` 3.8.
 //
-// 기준값은 `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json`(go1.27.3, tailscale.com v1.104.6, `tkafixtures` 도구)의 `text`
-// 배열 가운데 `nlPublic.*`·`nlPrivate.*` 14개를 그대로 옮겨 적었다. 그 파일은 다른 시험 타깃의 리소스라 읽지 않는다.
-// 키는 도구의 공개된 시험 전용 값이다. 결과(`output`)가 nil이면 Go가 거절한 것이다.
+// The reference values come from the `text` array in `Tests/SwiftailTKATests/Fixtures/tka-fixtures.json` (go1.27.3, tailscale.com v1.104.6, `tkafixtures` tool).
+// The 14 `nlPublic.*` and `nlPrivate.*` cases are copied verbatim. That file is a resource in another test target, so it is not read here.
+// The keys are the tool's public, test-only values. Go rejected the input if the result (`output`) is nil.
 
 import CryptoKit
 import SwiftailBase
@@ -11,7 +11,7 @@ import Testing
 
 @testable import SwiftailControl
 
-@Suite("NL 키 텍스트: Go 기준값")
+@Suite("NL key text: Go reference values")
 struct NLKeyTextTests {
     struct GoCase: Sendable, CustomTestStringConvertible {
         var name: String
@@ -38,19 +38,19 @@ struct NLKeyTextTests {
         GoCase(name: "nlpriv-decode-wrong-public-half", kind: "nlPrivate.decode", input: "nlpriv:d132274d5c925219b42ed925e1b1c8aed8b70c35cd1ba669de00a9f56c9dd5ca0000000000000000000000000000000000000000000000000000000000000000", output: "nlpriv:d132274d5c925219b42ed925e1b1c8aed8b70c35cd1ba669de00a9f56c9dd5ca0000000000000000000000000000000000000000000000000000000000000000"),
     ]
 
-    /// Swiftail이 Go와 다르게 판정하는 것과 그 까닭. 둘 다 Go는 받고 Swiftail은 거절한다.
+    /// Cases where Swiftail differs from Go, with the reasons. Go accepts both and Swiftail rejects both.
     static let intendedDifferences: [String: String] = [
-        // 동작 R1: 뒤 32바이트가 시드로 만든 공개 키와 다르면 손상이다.
+        // Behavior R1: The key is corrupt if its last 32 bytes differ from the public key derived from its seed.
         "nlpriv-decode-wrong-public-half": "R1",
-        // Swiftail은 NL 공개 키를 와이어(JSON)에서만 읽고, 와이어의 표기는 `nlpub:`다. `tlpub:`는 쓰기만 한다.
-        "tlpub-decode": "읽는 곳 없음",
+        // Swiftail reads NL public keys only from the wire (JSON), where the representation is `nlpub:`. It only writes `tlpub:`.
+        "tlpub-decode": "No reader",
     ]
 
-    @Test("Go 기준값과 같다(의도된 차이는 거절)", arguments: cases)
+    @Test("Matches Go reference values and rejects the intentional differences", arguments: cases)
     func matchesGo(_ fixture: GoCase) throws {
         let expected = Self.intendedDifferences[fixture.name] == nil ? fixture.output : nil
         let input = [UInt8](hex: fixture.input)
-        if Self.intendedDifferences[fixture.name] != nil { #expect(fixture.output != nil, "의도된 차이는 Go가 받는 입력이다") }
+        if Self.intendedDifferences[fixture.name] != nil { #expect(fixture.output != nil, "The intentional differences are inputs that Go accepts") }
         switch fixture.kind {
         case "nlPublic.encode":
             let key = try #require(input.flatMap { NLPublicKey(rawValue: $0) })
@@ -66,11 +66,11 @@ struct NLKeyTextTests {
         case "nlPrivate.decode":
             #expect(NodeIdentityStore.lockKey(fixture.input).map(NodeIdentityStore.text) == expected)
         default:
-            Issue.record("모르는 종류 \(fixture.kind)")
+            Issue.record("Unknown kind \(fixture.kind)")
         }
     }
 
-    @Test("NL 공개 키는 시드에서 Go와 같은 바이트로 나온다")
+    @Test("Derives the same NL public key bytes from the seed as Go")
     func publicKeyFromSeed() throws {
         let encoded = try #require(Self.cases.first { $0.kind == "nlPrivate.encode" })
         let seed = try #require([UInt8](hex: encoded.input))

@@ -3,14 +3,14 @@ import SwiftailBase
 import SwiftailControl
 import Testing
 
-@Suite("Go 실제 맵 세션·요청과의 독립 비교")
+@Suite("Independent comparison with actual Go map sessions and requests")
 struct GoFixtureTests {
-    @Test("맵 응답 원문을 순서대로 적용한다", arguments: try loadGoFixtures("map-sessions", as: [GoMapScenario].self))
+    @Test("Applies original map responses in order", arguments: try loadGoFixtures("map-sessions", as: [GoMapScenario].self))
     func maps(_ scenario: GoMapScenario) throws {
         try check(scenario, framed: false)
     }
 
-    @Test("조각난 리틀엔디언 프레임도 같은 맵을 만든다", arguments: try loadGoFixtures("map-sessions", as: [GoMapScenario].self))
+    @Test("Fragmented little-endian frames yield the same map", arguments: try loadGoFixtures("map-sessions", as: [GoMapScenario].self))
     func framedMaps(_ scenario: GoMapScenario) throws {
         try check(scenario, framed: true)
     }
@@ -23,7 +23,7 @@ struct GoFixtureTests {
         var random = SeededRandom(seed: 0x6D61_7066_6978_0001)
         let now = try goFixtureDate("2026-01-02T03:04:05.123456789Z")
         for (index, step) in scenario.steps.enumerated() {
-            let context = "\(scenario.name) 단계 \(index + 1) [\(step.name)] \(framed ? "프레임" : "원문")"
+            let context = "\(scenario.name) step \(index + 1) [\(step.name)] \(framed ? "framed" : "original")"
             do {
                 let raw = Data(step.response.utf8)
                 let response: MapResponse
@@ -32,41 +32,41 @@ struct GoFixtureTests {
                     var responses: [MapResponse] = []
                     var offset = 0
                     while offset < bytes.count {
-                        // 접두도 쪼개고, JSON 중간에서도 끊는다. 고정 시드로 재현한다.
+                        // Split the prefix as well and split within JSON. Use a fixed seed for reproducibility.
                         let count = min(Int.random(in: 1...113, using: &random), bytes.count - offset)
                         responses += try framer.receive(Array(bytes[offset..<offset + count]))
                         offset += count
                     }
-                    #expect(responses.count == 1, "\(context): 응답 수 기대=1 실제=\(responses.count)")
-                    response = try #require(responses.first, "\(context): 완성된 응답 없음")
+                    #expect(responses.count == 1, "\(context): response count expected=1 actual=\(responses.count)")
+                    response = try #require(responses.first, "\(context): no complete response")
                     #expect(response == (try JSONDecoder().decode(MapResponse.self, from: raw)),
-                            "\(context): 프레이머와 원문 해독 결과가 다름")
+                            "\(context): the framer and raw decoder produced different results")
                 } else {
-                    // 자료의 response를 재부호화하지 않는다. 생략·null·빈 배열을 보존한다.
+                    // Do not re-encode the fixture response. Preserve omissions, null, and empty arrays.
                     response = try JSONDecoder().decode(MapResponse.self, from: raw)
                 }
                 let update = try session.apply(response, receivedAt: now)
-                // Go의 netmap은 `TKAEnabled`를 담는다. Swift는 그것을 netmap 밖(`serverLock`)에 두므로, Go가 보는
-                // "바뀜"은 netmap이 바뀌었거나 서버가 알린 lock의 켜짐이 바뀐 것이다.
+                // Go's netmap contains `TKAEnabled`. Swift keeps it outside the netmap in `serverLock`, so Go reports
+                // a "change" if the netmap changes or the server-reported lock enabled state changes.
                 let changed = update.netmap != nil || update.serverLock.isEnabled != wasLockEnabled
                 wasLockEnabled = update.serverLock.isEnabled
                 current = update.netmap ?? current
                 if step.netmap == .null {
-                    #expect(!changed, "\(context) $.netmap: 기대=null(변화 없음), 실제=netmap 있음")
+                    #expect(!changed, "\(context) $.netmap: expected=null (no change), actual=netmap present")
                 } else if changed, let map = current {
                     try compareGoJSON(comparableGoNetmap(step.netmap),
                                       projectGoNetmap(map, tkaEnabled: update.serverLock.isEnabled),
                                       context: context, netmap: true)
                 } else {
-                    Issue.record("\(context) $.netmap: 기대=정규화 객체, 실제=null")
+                    Issue.record("\(context) $.netmap: expected=normalized object, actual=null")
                 }
             } catch {
-                Issue.record("\(context) $.response: 기대=해독·적용 성공, 실제=\(error)")
+                Issue.record("\(context) $.response: expected=successful decode and application, actual=\(error)")
             }
         }
     }
 
-    @Test("요청을 채워 Go JSON의 키·값·타입과 비교한다", arguments: try loadGoFixtures("requests", as: [GoRequestCase].self))
+    @Test("Populates requests and compares them with Go JSON for keys, values, and types", arguments: try loadGoFixtures("requests", as: [GoRequestCase].self))
     func requests(_ fixture: GoRequestCase) throws {
         let data = try encodeGoRequest(fixture)
         let decoder = JSONDecoder()
@@ -74,7 +74,7 @@ struct GoFixtureTests {
                           decoder.decode(GoFixtureJSON.self, from: data), context: fixture.name)
     }
 
-    @Test("모든 응답에서 한 바이트 삭제·값 타입 변경을 해도 죽지 않는다",
+    @Test("Deleting one byte and changing a value type in every response do not cause a crash",
           arguments: try loadGoFixtures("map-sessions", as: [GoMapScenario].self))
     func malformedResponses(_ scenario: GoMapScenario) throws {
         var random = SeededRandom(seed: 0x6D61_7066_6978_0002)
@@ -85,14 +85,14 @@ struct GoFixtureTests {
             cut.remove(at: index)
             let value = try JSONDecoder().decode(GoFixtureJSON.self, from: Data(step.response.utf8))
             let changed = changeGoValueType(value, random: &random)
-            #expect(changed != value, "\(scenario.name) [\(step.name)]: 변형이 원문과 같음")
+            #expect(changed != value, "\(scenario.name) [\(step.name)]: mutation matches the original")
             for bytes in [cut, Array(try JSONEncoder().encode(changed))] {
                 do {
                     let response = try JSONDecoder().decode(MapResponse.self, from: Data(bytes))
                     var session = MapSession()
                     _ = try session.apply(response, receivedAt: Date(timeIntervalSince1970: 0))
                 } catch {
-                    // 잘린 JSON·잘못된 타입·첫 self 누락 오류는 허용한다. 프로세스 생존이 검사 대상이다.
+                    // Allow errors for truncated JSON, an invalid type, or a missing initial self node. The test checks that the process survives.
                 }
                 var framer = MapResponseFramer()
                 do { _ = try framer.receive(goFrame(bytes)) } catch { }
@@ -102,7 +102,7 @@ struct GoFixtureTests {
         #expect(completed == scenario.steps.count * 2)
     }
 
-    @Test("비교기는 큰 정수·불·null·빈 배열·키 존재를 구분한다")
+    @Test("The comparator distinguishes large integers, Booleans, null, empty arrays, and key presence")
     func comparisonBoundaries() throws {
         func json(_ text: String) throws -> GoFixtureJSON {
             try JSONDecoder().decode(GoFixtureJSON.self, from: Data(text.utf8))
@@ -127,7 +127,7 @@ private func goFrame(_ bytes: [UInt8]) -> [UInt8] {
     (0..<4).map { UInt8(truncatingIfNeeded: bytes.count >> (8 * $0)) } + bytes
 }
 
-/// 중첩 값을 고정 시드로 골라 정확히 하나의 JSON 타입을 바꾼다. 빈 컨테이너도 변형한다.
+/// Uses a fixed seed to choose a nested value and change exactly one JSON type. Also mutates empty containers.
 private func changeGoValueType(_ value: GoFixtureJSON, random: inout SeededRandom) -> GoFixtureJSON {
     switch value {
     case .object(var fields) where !fields.isEmpty:
@@ -144,7 +144,7 @@ private func changeGoValueType(_ value: GoFixtureJSON, random: inout SeededRando
     }
 }
 
-/// input의 미지정 필드는 Swift 생성자의 기본값이 아닌 Go zero 값으로 명시한다.
+/// Explicitly fills unspecified input fields with Go zero values instead of Swift initializer defaults.
 private func encodeGoRequest(_ fixture: GoRequestCase) throws -> Data {
     let input = fixture.input
     let hostInput = try input.field("Hostinfo", default: GoFixtureJSON.null)

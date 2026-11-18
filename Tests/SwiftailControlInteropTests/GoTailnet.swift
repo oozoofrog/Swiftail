@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// tailnet JSON 줄 규약의 필요한 필드만 해석한다(Tools/interop/README.md).
+/// Decodes only the needed fields of the tailnet JSON-line protocol (Tools/interop/README.md).
 actor GoTailnet {
     struct Event: Decodable, Sendable {
         struct DERP: Decodable, Sendable {
@@ -60,14 +60,14 @@ actor GoTailnet {
     }
 
     func start() async throws -> Event {
-        guard let binary = tailnetBinary else { throw GateFailure("SWIFTAIL_TAILNET가 없음") }
+        guard let binary = tailnetBinary else { throw GateFailure("SWIFTAIL_TAILNET is missing") }
         process.executableURL = URL(fileURLWithPath: binary)
         process.standardInput = input
         process.standardOutput = output
         process.standardError = errors
-        // 종료 중 명령 쓰기가 SIGPIPE로 시험 프로세스까지 죽이지 않게 한다.
+        // Prevents a command write during shutdown from killing the test process with SIGPIPE.
         guard fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
-            throw GateFailure("tailnet 입력 F_SETNOSIGPIPE 실패 (errno \(errno))")
+            throw GateFailure("F_SETNOSIGPIPE failed on tailnet input (errno \(errno))")
         }
         let exitContinuation = exitContinuation
         let continuation = continuation
@@ -109,26 +109,26 @@ actor GoTailnet {
         pending.append(data)
         while let newline = pending.firstIndex(of: 10) {
             do {
-                guard newline <= 4_194_304 else { throw GateFailure("tailnet JSON 줄 상한 초과") }
+                guard newline <= 4_194_304 else { throw GateFailure("Tailnet JSON line exceeds the limit") }
                 continuation.yield(try JSONDecoder().decode(Event.self, from: pending.prefix(upTo: newline)))
             } catch {
-                failure = GateFailure("tailnet JSON 사건 해독 실패")
+                failure = GateFailure("Could not decode tailnet JSON event")
                 continuation.finish()
             }
             pending.removeSubrange(...newline)
         }
         if pending.count > 4_194_304 {
-            failure = GateFailure("tailnet 미완성 JSON 줄 상한 초과")
+            failure = GateFailure("Incomplete tailnet JSON line exceeds the limit")
             continuation.finish()
         }
     }
 
     private func event(_ kind: String, id: Int? = nil, timeout: Duration = .seconds(35)) async throws -> Event {
-        let result = try await nextEvent(events, waitingFor: "tailnet \(kind) (명령 id \(id ?? 0))", timeout: timeout)
+        let result = try await nextEvent(events, waitingFor: "tailnet \(kind) (command ID \(id ?? 0))", timeout: timeout)
         if let failure { throw failure }
-        guard result.event != "error" else { throw GateFailure("tailnet \(kind): \(redacted(result.message ?? "내용 없음"))") }
+        guard result.event != "error" else { throw GateFailure("tailnet \(kind): \(redacted(result.message ?? "no details"))") }
         guard result.event == kind, result.id == id else {
-            throw GateFailure("tailnet 기대 \(kind)/\(id ?? 0), 실제 \(result.event)/\(result.id ?? 0)")
+            throw GateFailure("tailnet expected \(kind)/\(id ?? 0), actual \(result.event)/\(result.id ?? 0)")
         }
         return result
     }
@@ -142,7 +142,7 @@ actor GoTailnet {
     }
 
     private func write(_ command: Command) throws {
-        guard process.isRunning else { throw GateFailure("tailnet \(command.cmd) 전에 프로세스 종료") }
+        guard process.isRunning else { throw GateFailure("Process exited before tailnet \(command.cmd)") }
         var data = try JSONEncoder().encode(command)
         data.append(10)
         try input.fileHandleForWriting.write(contentsOf: data)
@@ -153,7 +153,7 @@ actor GoTailnet {
     }
 
     func diagnostics() -> String {
-        let status = !started ? "시작 안 됨" : (process.isRunning ? "실행 중" : "종료 \(process.terminationStatus)")
+        let status = !started ? "Not started" : (process.isRunning ? "Running" : "Exited \(process.terminationStatus)")
         return "tailnet: \(status)\n\(redacted(String(decoding: log, as: UTF8.self)))"
     }
 
@@ -163,11 +163,11 @@ actor GoTailnet {
         if process.isRunning { try? write(.init(cmd: "quit")) }
         try? input.fileHandleForWriting.close()
         if process.isRunning {
-            // 시험 Task가 취소되어도 프로세스 회수는 독립된 정리 Task에서 끝낸다.
+            // Finishes reaping the process in an independent cleanup Task even if the test Task is canceled.
             let exits = exits
             let pid = process.processIdentifier
             await Task.detached {
-                do { _ = try await nextEvent(exits, waitingFor: "tailnet 정상 종료", timeout: .seconds(3)) }
+                do { _ = try await nextEvent(exits, waitingFor: "Clean tailnet shutdown", timeout: .seconds(3)) }
                 catch { _ = kill(pid, SIGKILL) }
             }.value
             if process.isRunning { process.waitUntilExit() }
@@ -182,7 +182,7 @@ actor GoTailnet {
     }
 }
 
-/// 도구가 재부호화해도 의미가 보존되는 증분만 보낸다. null·빈 배열 구별은 단위 시험의 책임이다.
+/// Sends only deltas whose meaning survives re-encoding by the tool. Unit tests cover the distinction between null and empty arrays.
 struct MapInjection: Encodable, Sendable {
     struct Peer: Encodable, Sendable {
         let ID: Int64

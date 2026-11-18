@@ -1,5 +1,5 @@
-// `ControlClient`의 tailnet lock 시험이 함께 쓰는 틀: 시험용 tailnet 하나(`LockWorld`)와, 가짜 제어 서버에 붙은
-// 클라이언트 한 벌(`LockRun`).
+// Shared harness for `ControlClient` tailnet lock tests: a test tailnet (`LockWorld`) and
+// one client connected to a fake control server (`LockRun`).
 
 import CryptoKit
 import Foundation
@@ -10,15 +10,15 @@ import SwiftailBase
 @testable import SwiftailControl
 @testable import SwiftailTKA
 
-/// 시험용 tailnet: 서명 기기 하나, 그 체크포인트로 시작한 서명 권한 상태, 이 노드의 신원, 피어 셋.
+/// A test tailnet with one signing device, authority state initialized from its checkpoint, this node's identity, and three peers.
 struct LockWorld: Sendable {
     let signer = LockTesting.Signer()
-    /// 이 노드의 저장된 신원. node 키가 이미 있어 등록이 그 키로 끝난다.
+    /// The stored identity of this node. It already has a node key, so registration completes with that key.
     let identity = NodeIdentity(machineKey: .init(), nodeKey: .init())
     let selfKey: NodePublicKey
-    /// 서버의 처음 서명 권한 상태(체크포인트 하나).
+    /// Initial server authority state (one checkpoint).
     let authority: Authority
-    /// 서명된 피어(ID 2), 서명 없는 피어(ID 3), 서명 없는 `UnsignedPeerAPIOnly` 피어(ID 4).
+    /// A signed peer (ID 2), an unsigned peer (ID 3), and an unsigned `UnsignedPeerAPIOnly` peer (ID 4).
     let signedPeer = LockTesting.newNodeKey()
     let unsignedPeer = LockTesting.newNodeKey()
     let apiOnlyPeer = LockTesting.newNodeKey()
@@ -38,7 +38,7 @@ struct LockWorld: Sendable {
         ]
     }
 
-    /// 전체 맵 응답. `lock`이 nil이면 서버의 처음 머리를 알리는 `TKAInfo`를 싣고, 빈 문자열이면 `TKAInfo`를 싣지 않는다.
+    /// A full map response. If `lock` is nil, includes `TKAInfo` reporting the server's initial head. An empty string omits `TKAInfo`.
     func map(
         selfSigned: Bool = true, hasCapability: Bool = true, lock: String? = nil, extraPeers: [String] = [], _ extra: String = ""
     ) throws -> String {
@@ -50,12 +50,12 @@ struct LockWorld: Sendable {
         )
     }
 
-    /// `TKAInfo`를 싣지 않는 맵 응답의 `lock` 인자.
+    /// The `lock` argument for a map response that omits `TKAInfo`.
     static let noTKAInfo = ""
 }
 
 extension ControlClient.Timeouts {
-    /// 시험용 기한: 닫힌 쪽의 재시도를 곧바로 본다.
+    /// Test deadlines that let the closed side's retries be observed immediately.
     static var lockTesting: ControlClient.Timeouts {
         var timeouts = ControlClient.Timeouts()
         timeouts.tkaRequest = .seconds(10)
@@ -64,11 +64,11 @@ extension ControlClient.Timeouts {
     }
 }
 
-/// 가짜 서버에 붙어 도는 클라이언트 한 벌과, 그것이 낸 netmap의 기록.
+/// One client running against a fake server, with a record of its emitted netmaps.
 final class LockRun: Sendable {
     let client: ControlClient
     let server: LockFakeControlServer
-    /// 상태 디렉터리.
+    /// State directory.
     let directory: URL
     private let received = Mutex<[Netmap]>([])
 
@@ -78,13 +78,13 @@ final class LockRun: Sendable {
         self.directory = directory
     }
 
-    /// 클라이언트가 사건으로 낸 netmap 전부. 낸 순서다.
+    /// All netmaps emitted by the client as events, in emission order.
     var netmaps: [Netmap] { received.withLock { $0 } }
     fileprivate func record(_ netmap: Netmap) { received.withLock { $0.append(netmap) } }
 
     var storeURL: URL { directory.appending(path: TailnetLockStore.fileName) }
 
-    /// 가장 새 netmap이 `condition`에 맞을 때까지 기다려 그것을 돌려준다.
+    /// Waits for the newest netmap to satisfy `condition` and returns it.
     func latest(_ what: String, where condition: (Netmap) -> Bool) async throws -> Netmap {
         var matched: Netmap?
         try await eventually(what) {
@@ -94,31 +94,31 @@ final class LockRun: Sendable {
         return try #require(matched)
     }
 
-    /// 상태 올리기(스트림이 아닌 맵 요청)가 실은 `TKAHead`들. 받은 순서이고, 싣지 않았으면 빈 문자열이다.
+    /// The `TKAHead` values sent by state uploads (non-streaming map requests), in receipt order. An omitted value is an empty string.
     var uploadedHeads: [String] {
         server.requests(to: "/machine/map").map(\.object).filter { $0["Stream"] as? Bool != true }.map { $0["TKAHead"] as? String ?? "" }
     }
 }
 
-/// `condition`이 참이 될 때까지 기다린다. 기한을 넘기면 시험 실패로 적고 던진다.
+/// Waits for `condition` to become true. Records a test failure and throws when the deadline expires.
 func eventually(_ what: String, within duration: Duration = .seconds(30), _ condition: () async -> Bool) async throws {
     let deadline = ContinuousClock.now + duration
     while await !condition() {
         guard ContinuousClock.now < deadline else {
-            Issue.record("\(duration) 안에 일어나지 않았다: \(what)")
+            Issue.record("Did not occur within \(duration): \(what)")
             throw CancellationError()
         }
         try await Task.sleep(for: .milliseconds(5))
     }
 }
 
-// 실제 Argon2i 검증을 여러 시험에서 겹쳐 돌리면 서로의 netmap 처리가 밀린다. 끄기 비밀 시험끼리만 차례로 돈다.
-@Suite("제어 클라이언트: tailnet lock 끄기 비밀", .serialized, .timeLimit(.minutes(3)))
+// Concurrent real Argon2i verification across tests delays their netmap processing. Run only the disablement secret tests in sequence.
+@Suite("Control client: Tailnet lock disablement secret", .serialized, .timeLimit(.minutes(3)))
 struct LockDisablementTests {
     typealias Server = LockFakeControlServer
 }
 
-/// lock이 켜진 tailnet에 붙어 `.enforcing`이 된 클라이언트로 `body`를 돌린다.
+/// Runs `body` with a client that joined a tailnet with lock enabled and reached `.enforcing`.
 func withEnforcingClient(
     _ world: LockWorld, extraPeers: [String] = [], _ body: (LockRun, Netmap) async throws -> Void
 ) async throws {
@@ -126,15 +126,15 @@ func withEnforcingClient(
         server.updateLock { $0.authority = world.authority }
         server.setMapResponse(try world.map(extraPeers: extraPeers))
     }) { run in
-        try await body(run, try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing })
+        try await body(run, try await run.latest("Filtered netmap") { $0.tailnetLock.mode == .enforcing })
     }
 }
 
-/// 가짜 서버와 클라이언트를 띄우고 `body`를 돌린다. 끝나면 `run()`을 취소하고 끝날 때까지 기다린다.
+/// Starts a fake server and client and runs `body`. Cancels `run()` afterward and waits for it to finish.
 ///
 /// - Parameters:
-///   - directory: 상태 디렉터리. 주면 지우지 않는다(다시 시작하는 시험이 두 번 쓴다).
-///   - prepare: 서버가 연결을 받기 전에 서버와 상태 디렉터리를 준비한다. 신원은 이미 저장되어 있다.
+///   - directory: State directory. If supplied, it is kept (the restart test uses it twice).
+///   - prepare: Prepares the server and state directory before the server accepts connections. The identity is already stored.
 func withLockClient<T: Sendable>(
     _ world: LockWorld,
     directory: URL? = nil,

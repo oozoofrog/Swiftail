@@ -1,12 +1,12 @@
-// 계약 시험 4: 수명. SETTINGS ACK, PING 응답, GOAWAY 뒤 새 요청 거절, RST_STREAM, 스트림 ID가 홀수로 증가.
+// Contract test 4: Lifecycle. SETTINGS ACK, PING response, rejection of new requests after GOAWAY, RST_STREAM, and increasing odd stream IDs.
 
 import Testing
 
 @testable import SwiftailHTTP2
 
-@Suite("연결 시작과 SETTINGS")
+@Suite("Connection startup and SETTINGS")
 struct HandshakeTests {
-    @Test("프리페이스 24바이트와 SETTINGS(푸시 끔)를 보낸다")
+    @Test("Sends a 24-byte preface and SETTINGS with push disabled")
     func clientPreface() throws {
         var connection = HTTP2ClientConnection()
         let bytes = connection.takeOutboundBytes()
@@ -16,7 +16,7 @@ struct HandshakeTests {
         #expect(connection.takeOutboundBytes().isEmpty)
     }
 
-    @Test("서버 SETTINGS에는 ACK로 답하고 ACK에는 답하지 않는다")
+    @Test("Acknowledges server SETTINGS with ACK and leaves ACK unanswered")
     func settingsAcknowledged() throws {
         var connection = HTTP2ClientConnection()
         _ = connection.takeOutboundBytes()
@@ -26,7 +26,7 @@ struct HandshakeTests {
         #expect(connection.takeOutboundBytes().isEmpty)
     }
 
-    @Test("모르는 SETTINGS와 모르는 프레임 type은 무시한다")
+    @Test("Ignores unknown SETTINGS and unknown frame types")
     func unknownIgnored() throws {
         var connection = HTTP2ClientConnection()
         _ = connection.takeOutboundBytes()
@@ -36,14 +36,14 @@ struct HandshakeTests {
         #expect(connection.takeOutboundBytes().isEmpty)
     }
 
-    @Test("서버의 첫 프레임이 SETTINGS가 아니면 연결 오류")
+    @Test("A server first frame other than SETTINGS is a connection error")
     func firstFrameMustBeSettings() throws {
         var connection = HTTP2ClientConnection()
         _ = connection.takeOutboundBytes()
         #expect(throws: HTTP2Error.connectionFailed(code: 1)) { try connection.receive(windowUpdateBytes(stream: 0, increment: 1)) }
     }
 
-    @Test("규격 밖 SETTINGS 값은 연결 오류")
+    @Test("Out-of-spec SETTINGS values are connection errors")
     func invalidSettings() throws {
         for setting: (UInt16, UInt32) in [(2, 1), (2, 2), (5, 16_383), (5, 16_777_216)] {
             var connection = HTTP2ClientConnection()
@@ -51,7 +51,7 @@ struct HandshakeTests {
         }
     }
 
-    @Test("PUSH_PROMISE는 연결 오류")
+    @Test("PUSH_PROMISE is a connection error")
     func pushPromiseRejected() throws {
         var connection = try HTTP2ClientConnection.established()
         _ = try connection.startRequest(getRequest, body: nil)
@@ -62,9 +62,9 @@ struct HandshakeTests {
     }
 }
 
-@Suite("PING, GOAWAY, 오류 뒤")
+@Suite("PING, GOAWAY, and behavior after errors")
 struct ConnectionLifetimeTests {
-    @Test("PING은 같은 8바이트로 ACK하고 ACK에는 답하지 않는다")
+    @Test("Acknowledges PING with the same 8 bytes and leaves ACK unanswered")
     func ping() throws {
         var connection = try HTTP2ClientConnection.established()
         let data: [UInt8] = [1, 2, 3, 4, 5, 6, 7, 8]
@@ -74,7 +74,7 @@ struct ConnectionLifetimeTests {
         #expect(connection.takeOutboundBytes().isEmpty)
     }
 
-    @Test("GOAWAY 뒤에는 새 요청을 거절하고, 처리된 스트림은 끝까지 받는다")
+    @Test("Rejects new requests after GOAWAY and receives processed streams to completion")
     func goAway() throws {
         var connection = try HTTP2ClientConnection.established()
         let first = try connection.startRequest(getRequest, body: nil)
@@ -84,13 +84,13 @@ struct ConnectionLifetimeTests {
         #expect(events == [.goAway(lastStreamID: first, code: 0)])
         #expect(throws: HTTP2Error.connectionClosed) { try connection.startRequest(getRequest, body: nil) }
 
-        // 처리된 스트림 1은 응답을 마칠 수 있다. 처리되지 않은 3은 버려졌다.
+        // The processed stream 1 can finish its response. Unprocessed stream 3 was discarded.
         let rest = try connection.receive(responseHeadBytes(stream: 1, endStream: true) + responseHeadBytes(stream: 3, endStream: true))
         #expect(rest == [.responseHead(first, status: 200, headers: []), .streamClosed(first, resetCode: nil)])
         _ = second
     }
 
-    @Test("오류 코드가 있는 GOAWAY도 사건으로 알리고 새 요청은 거절한다")
+    @Test("Reports GOAWAY with an error code as an event and rejects new requests")
     func goAwayWithError() throws {
         var connection = try HTTP2ClientConnection.established()
         let events = try connection.receive(goAwayBytes(lastStream: 0, code: 1))
@@ -98,7 +98,7 @@ struct ConnectionLifetimeTests {
         #expect(throws: HTTP2Error.connectionClosed) { try connection.startRequest(getRequest, body: nil) }
     }
 
-    @Test("연결 오류 뒤: GOAWAY가 남고, 이후 입력과 요청은 connectionClosed")
+    @Test("After a connection error, GOAWAY remains and subsequent input and requests get connectionClosed")
     func afterConnectionError() throws {
         var connection = try HTTP2ClientConnection.established()
         #expect(throws: HTTP2Error.connectionFailed(code: 1)) { try connection.receive(dataBytes(stream: 0, [1])) }
@@ -110,27 +110,27 @@ struct ConnectionLifetimeTests {
     }
 }
 
-@Suite("스트림 수명")
+@Suite("Stream lifecycle")
 struct StreamLifetimeTests {
-    @Test("스트림 ID는 1부터 홀수로 증가한다")
+    @Test("Stream IDs increase through odd numbers starting at 1")
     func oddIncreasingIDs() throws {
         var connection = try HTTP2ClientConnection.established()
         let ids = try (0..<4).map { _ in try connection.startRequest(getRequest, body: nil).rawValue }
         #expect(ids == [1, 3, 5, 7])
         let frames = try connection.takeOutboundFrames()
         #expect(frames.count == 4)
-        guard case .headers(let id, _, let endStream, let endHeaders) = frames[0] else { Issue.record("HEADERS가 아니다"); return }
+        guard case .headers(let id, _, let endStream, let endHeaders) = frames[0] else { Issue.record("Expected HEADERS"); return }
         #expect(id == HTTP2StreamID(1) && endStream && endHeaders)
     }
 
-    @Test("요청 HEADERS는 의사 헤더가 앞에 오고 :scheme은 https다")
+    @Test("Request HEADERS place pseudo-headers first and use https for :scheme")
     func requestHeaders() throws {
         var connection = try HTTP2ClientConnection.established()
         let request = HTTP2ClientConnection.Request(
             method: "POST", path: "/machine/map", authority: "tail0001",
             headers: [HeaderField("content-type", "application/json"), HeaderField("ts-lb", "nodekey:abc")])
         _ = try connection.startRequest(request, body: [1, 2])
-        guard case .headers(_, let block, _, _) = try connection.takeOutboundFrames().first else { Issue.record("HEADERS가 아니다"); return }
+        guard case .headers(_, let block, _, _) = try connection.takeOutboundFrames().first else { Issue.record("Expected HEADERS"); return }
         var decoder = HPACKDecoder()
         #expect(try decoder.decode(block) == [
             HeaderField(":method", "POST"), HeaderField(":scheme", "https"), HeaderField(":authority", "tail0001"),
@@ -138,16 +138,16 @@ struct StreamLifetimeTests {
         ])
     }
 
-    @Test("RST_STREAM을 받으면 스트림이 오류 코드와 함께 닫힌다")
+    @Test("Receiving RST_STREAM closes the stream with its error code")
     func receivedReset() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
         #expect(try connection.receive(rstStreamBytes(stream: 1, code: 7)) == [.streamClosed(id, resetCode: 7)])
-        // 이미 끝난 스트림의 RST_STREAM은 무시한다.
+        // Ignore RST_STREAM on an already completed stream.
         #expect(try connection.receive(rstStreamBytes(stream: 1, code: 0)).isEmpty)
     }
 
-    @Test("요청한 적 없는 스트림의 프레임은 연결 오류")
+    @Test("A frame on a stream that was never requested is a connection error")
     func idleStream() throws {
         for frame in [rstStreamBytes(stream: 3, code: 0), dataBytes(stream: 3, [1]), responseHeadBytes(stream: 2), windowUpdateBytes(stream: 5, increment: 1)] {
             var connection = try HTTP2ClientConnection.established()
@@ -156,7 +156,7 @@ struct StreamLifetimeTests {
         }
     }
 
-    @Test("cancel은 RST_STREAM(CANCEL)을 보내고, 끝난 스트림에는 아무 일도 없다")
+    @Test("cancel sends RST_STREAM(CANCEL) and has no effect on a completed stream")
     func cancel() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -166,12 +166,12 @@ struct StreamLifetimeTests {
         connection.cancel(id)
         connection.cancel(HTTP2StreamID(99))
         #expect(connection.takeOutboundBytes().isEmpty)
-        // 취소한 스트림에 늦게 온 응답은 조용히 버리되 헤더 블록은 해제한다.
+        // Silently discard late responses on canceled streams while still decoding their header blocks.
         let late = try connection.receive(responseHeadBytes(stream: 1, headers: [HeaderField("x", "y")]))
         #expect(late.isEmpty)
     }
 
-    @Test("동시 스트림 수는 상대의 MAX_CONCURRENT_STREAMS까지")
+    @Test("Concurrent streams are limited to the peer's MAX_CONCURRENT_STREAMS")
     func tooManyStreams() throws {
         var connection = try HTTP2ClientConnection.established(serverSettings: [(3, 2)])
         let first = try connection.startRequest(getRequest, body: nil)
@@ -183,7 +183,7 @@ struct StreamLifetimeTests {
         _ = first
     }
 
-    @Test("잘못된 요청")
+    @Test("Invalid requests")
     func invalidRequests() throws {
         var connection = try HTTP2ClientConnection.established()
         let bad: [HTTP2ClientConnection.Request] = [
@@ -199,14 +199,14 @@ struct StreamLifetimeTests {
         for request in bad {
             #expect(throws: HTTP2Error.invalidRequest) { try connection.startRequest(request, body: nil) }
         }
-        // 거절한 요청은 스트림 ID를 쓰지 않는다.
+        // Rejected requests do not consume stream IDs.
         #expect(try connection.startRequest(getRequest, body: nil).rawValue == 1)
     }
 }
 
-@Suite("응답 처리")
+@Suite("Response processing")
 struct ResponseTests {
-    @Test("작은 GET: 머리, 본문, 끝")
+    @Test("Small GET with headers, body, and end of stream")
     func smallGet() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -220,7 +220,7 @@ struct ResponseTests {
         ])
     }
 
-    @Test("끝나지 않는 응답은 다른 요청과 함께 진행된다")
+    @Test("An endless response progresses alongside another request")
     func interleavedStreams() throws {
         var connection = try HTTP2ClientConnection.established()
         let long = try connection.startRequest(getRequest, body: nil)
@@ -235,7 +235,7 @@ struct ResponseTests {
         ])
     }
 
-    @Test("1xx 임시 응답은 건너뛰고 최종 응답을 낸다")
+    @Test("Skips informational 1xx responses and emits the final response")
     func informational() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -243,16 +243,16 @@ struct ResponseTests {
         #expect(events == [.responseHead(id, status: 204, headers: []), .streamClosed(id, resetCode: nil)])
     }
 
-    @Test("잘못된 응답은 그 스트림만 RST_STREAM(PROTOCOL_ERROR)으로 끊는다")
+    @Test("An invalid response closes only its stream with RST_STREAM(PROTOCOL_ERROR)")
     func malformedResponse() throws {
         let bad: [[HeaderField]] = [
-            [HeaderField("x", "y")],                                         // :status 없음
-            [HeaderField(":status", "200"), HeaderField(":status", "200")],  // 중복
-            [HeaderField("x", "y"), HeaderField(":status", "200")],          // 의사 헤더가 뒤에
-            [HeaderField(":status", "20")],                                  // 세 자리가 아님
+            [HeaderField("x", "y")],                                         // Missing :status
+            [HeaderField(":status", "200"), HeaderField(":status", "200")],  // Duplicate
+            [HeaderField("x", "y"), HeaderField(":status", "200")],          // Pseudo-header after regular headers
+            [HeaderField(":status", "20")],                                  // Not three digits
             [HeaderField(":status", "2x0")],
-            [HeaderField(":status", "200"), HeaderField(":path", "/")],      // 응답에 없는 의사 헤더
-            [HeaderField(":status", "200"), HeaderField("X-Upper", "1")],    // 대문자 이름
+            [HeaderField(":status", "200"), HeaderField(":path", "/")],      // Pseudo-header not allowed in a response
+            [HeaderField(":status", "200"), HeaderField("X-Upper", "1")],    // Uppercase name
         ]
         for fields in bad {
             var connection = try HTTP2ClientConnection.established()
@@ -263,12 +263,12 @@ struct ResponseTests {
             let events = try connection.receive(frameBytes(1, flags: 0x4, stream: 1, payload: block))
             #expect(events == [.streamClosed(first, resetCode: 1)])
             #expect(try connection.takeOutboundFrames() == [.rstStream(first, code: 1)])
-            // 다른 스트림은 영향이 없다.
+            // Other streams are unaffected.
             #expect(try connection.receive(responseHeadBytes(stream: 3)) == [.responseHead(second, status: 200, headers: [])])
         }
     }
 
-    @Test("응답 머리 전의 DATA는 스트림 오류")
+    @Test("DATA before response headers is a stream error")
     func dataBeforeHead() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -277,7 +277,7 @@ struct ResponseTests {
         #expect(try connection.takeOutboundFrames().contains(.rstStream(id, code: 1)))
     }
 
-    @Test("본문 뒤의 헤더 블록(트레일러)은 END_STREAM일 때만")
+    @Test("A header block after the body (trailers) requires END_STREAM")
     func trailers() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(getRequest, body: nil)
@@ -291,7 +291,7 @@ struct ResponseTests {
         #expect(try invalid.receive(responseHeadBytes(stream: 1) + notEnding).last == .streamClosed(other, resetCode: 1))
     }
 
-    @Test("서버가 요청 본문을 다 받기 전에 응답을 끝내면 남은 본문을 접는다")
+    @Test("Discards the rest of the request body if the server finishes its response before receiving the full body")
     func earlyResponse() throws {
         var connection = try HTTP2ClientConnection.established()
         let id = try connection.startRequest(
@@ -300,7 +300,7 @@ struct ResponseTests {
         let events = try connection.receive(responseHeadBytes(stream: 1, status: "413", endStream: true))
         #expect(events == [.responseHead(id, status: 413, headers: []), .streamClosed(id, resetCode: nil)])
         #expect(try connection.takeOutboundFrames() == [.rstStream(id, code: 8)])
-        // 창이 열려도 더는 보내지 않는다.
+        // Send no more data even after the window opens.
         _ = try connection.receive(windowUpdateBytes(stream: 0, increment: 100_000) + windowUpdateBytes(stream: 1, increment: 100_000))
         #expect(try connection.takeOutboundFrames().isEmpty)
     }
