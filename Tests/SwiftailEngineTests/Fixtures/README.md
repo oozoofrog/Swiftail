@@ -1,29 +1,29 @@
-# Go 패킷 필터 판정 자료
+# Go packet filter verdict fixtures
 
-`filter-verdicts.json`은 `tailscale.com` v1.104.6의 실제 `wgengine/filter`로 생성한다.
-91개 시나리오(IPv4 46개, IPv6 45개), 2,429개 단계(수신 333개, 송신 2,058개,
-규칙 교체 38개)이며 M3의 의도한 차이 표시는 34개다.
+The actual `wgengine/filter` from `tailscale.com` v1.104.6 generates `filter-verdicts.json`.
+It contains 91 scenarios (46 IPv4 and 45 IPv6) and 2,429 steps (333 inbound, 2,058 outbound,
+and 38 rule replacements), with 34 markers for intentional M3 differences.
 
-재생성 환경·명령·키의 뜻·전체 시나리오 목록은
-[interop 도구 설명](../../../Tools/interop/README.md#filterfixtures)을 따른다.
-생성 도구는 모든 시나리오를 새 필터로 두 번 실행하고 바이트 단위로 비교한다.
-시각·난수·소켓·실제 tailnet과 Swift 구현을 사용하지 않는다.
+For the regeneration environment, commands, key meanings, and complete scenario list, see
+the [interop tool documentation](../../../Tools/interop/README.md#filterfixtures).
+The generator runs every scenario twice with a fresh filter and compares the results byte for byte.
+It uses no clock, randomness, sockets, real tailnet, or Swift implementation.
 
-`GoFilterComparisonTests`는 규칙 원문을 `[FilterRule]`로 해독하고 공개 계약의
-`IPPacket`·`PacketFilter`만으로 순서대로 재현한다. Swift 구현이 없는 worktree에서
-작성했으므로 이 시험은 아직 컴파일·실행하지 않았다. 병합 뒤 검증해야 한다.
+`GoFilterComparisonTests` decodes the raw rules into `[FilterRule]` and replays the steps in order using only
+`IPPacket` and `PacketFilter` from the public contract. The test was written in a worktree without the Swift
+implementation, so it has yet to be compiled or run. Verify it after the merge.
 
-계약 누락을 드러내는 표시 없는 사례도 보존했다. Go는 와이어 프로토콜 0·255를
-Unknown으로 버리고, SCTP(132)는 일부 목적 포트 허용과 송신 응답 캐시를 지원한다.
-계약의 일반 프로토콜 규칙(번호 일치·전체 포트만 허용)과 UDP만 기록한다는 문구로는
-같은 판정이 나오지 않는다. 이는 승인된 M3 차이가 아니므로 `swiftailDiffers`로 숨기지 않는다.
+The fixtures also retain unmarked cases that expose gaps in the contract. Go drops wire protocols 0 and 255
+as Unknown, and SCTP (132) supports allowing specific destination ports and caching outbound flows for replies.
+The contract's rule for other protocols (matching the protocol number and allowing only full port ranges) and its statement that only UDP is recorded
+yield different verdicts. These differences lack M3 approval, so the fixtures leave them visible without using `swiftailDiffers`.
 
-TSMP 표시 단계는 `.tsmp` 해석만 확인한다. `TailnetEngine.receive`의 제어 패킷 소비와
-WireGuard 인증·AllowedIPs 검사는 이 필터 대조의 범위 밖이다.
+Steps marked TSMP verify only `.tsmp` parsing. Control packet consumption in `TailnetEngine.receive` and
+WireGuard authentication and AllowedIPs checks are outside the scope of this filter comparison.
 
-# TSMP disco 키 광고 자료
+# TSMP disco key advertisement fixtures
 
-`tsmp-vectors.json`은 `tailscale.com` v1.104.6의 `packet.TSMPDiscoKeyAdvertisement.Marshal`과
-`Parsed.AsTSMPDiscoAdvertisement`로 만든다(v1.104.7과 코드가 같다). 재생성은
-[interop 도구 설명](../../../Tools/interop/README.md#tsmpvectors)을 따른다. `TSMPVectorTests`가 읽는다.
-해석 사례의 `key`는 Go의 판정이다. IPv6 첫 조각 두 사례는 Swiftail이 버리는 알려진 차이로 시험이 따로 확인한다.
+`tsmp-vectors.json` is generated with `packet.TSMPDiscoKeyAdvertisement.Marshal` and
+`Parsed.AsTSMPDiscoAdvertisement` from `tailscale.com` v1.104.6 (the same code as in v1.104.7). To regenerate it, follow
+the [interop tool documentation](../../../Tools/interop/README.md#tsmpvectors). `TSMPVectorTests` reads the file.
+The `key` in each parsing case is Go's verdict. The test separately verifies the two IPv6 first-fragment cases as known differences where Swiftail drops the packet.

@@ -1,16 +1,16 @@
-// DNS 시험 도우미: 질의 바이트 만들기와 응답 바이트 읽기.
-// 응답 읽기는 시험할 코덱을 쓰지 않고 따로 쓴다. 응답기는 이름을 압축하지 않으므로 포인터를 다루지 않는다.
+// DNS test helpers for building query bytes and parsing response bytes.
+// Parse responses independently of the codec under test. The responder uses no name compression, so this parser does not handle pointers.
 
 import Testing
 
 import SwiftailBase
 
-/// 시험용 DNS 질의 바이트.
+/// DNS query bytes for tests.
 enum DNSWire {
-    /// RD만 켠 질의 플래그.
+    /// Query flags with only RD set.
     static let recursionDesired: UInt16 = 0x0100
 
-    /// 점으로 나눈 이름의 압축 없는 선 형식. 빈 문자열과 `.`은 루트다.
+    /// Encodes a dotted name in uncompressed wire format. The empty string and `.` represent the root.
     static func name(_ text: String) -> [UInt8] {
         var bytes: [UInt8] = []
         for label in text.split(separator: ".") {
@@ -20,12 +20,12 @@ enum DNSWire {
         return bytes + [0]
     }
 
-    /// 질문 하나짜리 질의. CLASS IN.
+    /// Builds a single-question query with CLASS IN.
     static func query(_ name: String, type: UInt16, id: UInt16 = 0xBEEF, flags: UInt16 = recursionDesired) -> [UInt8] {
         header(id: id, flags: flags, questions: 1) + question(name, type: type)
     }
 
-    /// 추가 구역에 옵션 없는 EDNS 0 OPT(광고 크기 `udpPayloadSize`)를 붙인 질의.
+    /// Builds a query with an optionless EDNS 0 OPT in the additional section (advertised size `udpPayloadSize`).
     static func query(_ name: String, type: UInt16, udpPayloadSize: UInt16) -> [UInt8] {
         header(id: 0xBEEF, flags: recursionDesired, questions: 1, additionals: 1)
             + question(name, type: type)
@@ -44,7 +44,7 @@ enum DNSWire {
         [UInt8(value >> 8), UInt8(value & 0xFF)]
     }
 
-    /// 표기 길이(끝 점 포함)가 `length`인 이름. 63바이트 레이블을 앞에서부터 채운다.
+    /// Builds a name whose presentation length, including the trailing dot, is `length`. Fills 63-byte labels from the start.
     static func nameText(presentationLength length: Int, letter: Character = "a") -> String {
         var labels: [String] = []
         var remaining = length
@@ -57,7 +57,7 @@ enum DNSWire {
     }
 }
 
-/// 시험이 보는 응답 필드.
+/// Response fields inspected by tests.
 struct DecodedResponse {
     struct Record {
         let name: String
@@ -135,7 +135,7 @@ struct DecodedResponse {
     }
 }
 
-/// 16진 문자열의 바이트. 시험 벡터용.
+/// Decodes a hex string into bytes for test vectors.
 func hexBytes(_ text: String) throws -> [UInt8] {
     try #require([UInt8](hex: text))
 }

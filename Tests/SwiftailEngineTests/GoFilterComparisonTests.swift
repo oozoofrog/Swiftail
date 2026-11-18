@@ -4,41 +4,41 @@ import SwiftailControl
 import SwiftailEngine
 import Testing
 
-@Suite("Go 실제 패킷 필터와의 독립 대조")
+@Suite("Independent comparison with the actual Go packet filter")
 struct GoFilterComparisonTests {
-    @Test("같은 규칙 원문과 패킷 열의 판정을 비교한다", arguments: try loadGoFilterFixtures().scenarios)
-    func 판정을대조한다(_ scenario: GoFilterScenario) throws {
+    @Test("Compare verdicts for the same raw rules and packet sequence", arguments: try loadGoFilterFixtures().scenarios)
+    func compareVerdicts(_ scenario: GoFilterScenario) throws {
         let decoder = JSONDecoder()
         var filter: PacketFilter
         do {
             let rules = try decoder.decode([FilterRule].self, from: Data(scenario.rules.utf8))
             filter = PacketFilter(rules: rules, localAddresses: try addresses(scenario.localAddresses))
         } catch {
-            Issue.record("\(scenario.name) 단계 0 [초기화]: 기대=규칙·자기 주소 해독 성공 실제=\(error)")
+            Issue.record("\(scenario.name) step 0 [initialization], expected successful decoding of rules and local addresses, got \(error)")
             return
         }
 
         for (index, step) in scenario.steps.enumerated() {
-            let context = "\(scenario.name) 단계 \(index + 1) [\(step.name)]"
+            let context = "\(scenario.name) step \(index + 1) [\(step.name)]"
             do {
                 if step.direction == "replace" {
-                    let raw = try #require(step.rules, "\(context): 기대=교체 규칙 원문 실제=없음")
-                    let local = try #require(step.localAddresses, "\(context): 기대=교체 자기 주소 실제=없음")
+                    let raw = try #require(step.rules, "\(context), expected raw replacement rules, got none")
+                    let local = try #require(step.localAddresses, "\(context), expected replacement local addresses, got none")
                     filter.replaceRules(try decoder.decode([FilterRule].self, from: Data(raw.utf8)),
                                         localAddresses: try addresses(local))
                     continue
                 }
-                let raw = try #require(step.packet, "\(context): 기대=IP 패킷 hex 실제=없음")
-                let bytes = try #require([UInt8](hex: raw), "\(context): 기대=올바른 hex 실제=\(raw)")
+                let raw = try #require(step.packet, "\(context), expected IP packet hex, got none")
+                let bytes = try #require([UInt8](hex: raw), "\(context), expected valid hex, got \(raw)")
                 let expected = try expectation(step, context: context)
 
-                // 의도한 해석 차이는 drop으로 뭉개지 않고 정확한 ParseError를 확인한다.
+                // Check the exact ParseError for intentional parsing differences instead of treating all of them as drop verdicts.
                 if let parseError = expected.parseError {
                     do {
                         _ = try IPPacket(parsing: bytes)
-                        Issue.record("\(context): 기대=\(parseError) 실제=해석 성공")
+                        Issue.record("\(context), expected \(parseError), got successful parsing")
                     } catch {
-                        #expect(error == parseError, "\(context): 기대=\(parseError) 실제=\(error)")
+                        #expect(error == parseError, "\(context), expected \(parseError), got \(error)")
                     }
                     continue
                 }
@@ -48,10 +48,10 @@ struct GoFilterComparisonTests {
                     packet = try IPPacket(parsing: bytes)
                 } catch {
                     if step.swiftailDiffers == nil && step.direction == "in" {
-                        // 표시가 없는 입력의 해석 실패는 계약대로 drop 판정으로 비교한다.
-                        #expect(step.verdict == "drop", "\(context): 기대=Go \(step.verdict ?? "없음") 실제=drop(\(error))")
+                        // Compare parsing failures for unmarked inputs as drop verdicts, per the contract.
+                        #expect(step.verdict == "drop", "\(context), expected Go \(step.verdict ?? "none"), got drop(\(error))")
                     } else {
-                        Issue.record("\(context): 기대=해석 성공(\(expected.rawValue)) 실제=\(error)")
+                        Issue.record("\(context), expected successful parsing (\(expected.rawValue)), got \(error)")
                     }
                     continue
                 }
@@ -60,33 +60,33 @@ struct GoFilterComparisonTests {
                     filter.recordOutbound(packet)
                     continue
                 }
-                #expect(step.direction == "in", "\(context): 기대=in 실제=\(step.direction)")
+                #expect(step.direction == "in", "\(context), expected in, got \(step.direction)")
                 if expected == .tsmp {
-                    // TSMP 소비는 TailnetEngine.receive의 책임이다. 필터 판정과 혼동하지 않는다.
+                    // TailnetEngine.receive consumes TSMP. Consumption is separate from the filter verdict.
                     #expect(packet.transportProtocol == .tsmp,
-                            "\(context): 기대=tsmp(엔진 소비 대상) 실제=\(packet.transportProtocol)")
+                            "\(context), expected tsmp (for the engine to consume), got \(packet.transportProtocol)")
                     continue
                 }
                 if expected == .trimmedAccept {
                     let length = bytes[0] >> 4 == 4
                         ? Int(bytes[2]) * 256 + Int(bytes[3])
                         : 40 + Int(bytes[4]) * 256 + Int(bytes[5])
-                    #expect(length < bytes.count, "\(context): 기대=선언 길이 뒤 바이트 있음 실제=\(bytes.count), 선언=\(length)")
+                    #expect(length < bytes.count, "\(context), expected bytes beyond the declared length, got \(bytes.count), declared length \(length)")
                     #expect(packet.bytes == Array(bytes.prefix(length)),
-                            "\(context): 기대=선언 길이 \(length)로 자른 바이트 실제=\(packet.bytes.hex)")
+                            "\(context), expected bytes trimmed to the declared length \(length), got \(packet.bytes.hex)")
                 }
                 let verdict = filter.checkInbound(packet)
                 let actual = verdict == .accept ? "accept" : "drop"
                 let wanted = expected == .trimmedAccept ? "accept" : expected.rawValue
-                #expect(actual == wanted, "\(context): 기대=\(wanted) 실제=\(actual)(\(verdict))")
+                #expect(actual == wanted, "\(context), expected \(wanted), got \(actual)(\(verdict))")
             } catch {
-                Issue.record("\(context): 기대=자료 해독·적용 성공 실제=\(error)")
+                Issue.record("\(context), expected successful decoding and application of fixtures, got \(error)")
             }
         }
     }
 
-    @Test("자료의 기준 버전과 시나리오·단계 수를 확인한다")
-    func 자료범위를확인한다() throws {
+    @Test("Verify the fixture reference version and scenario and step counts")
+    func verifyFixtureCoverage() throws {
         let fixture = try loadGoFilterFixtures()
         #expect(fixture.reference == "tailscale.com v1.104.6")
         #expect(fixture.scenarios.count == 91)
@@ -95,33 +95,33 @@ struct GoFilterComparisonTests {
         #expect(steps.filter { $0.swiftailDiffers != nil }.count == 34)
         #expect(Set(fixture.scenarios.map(\.name)).count == fixture.scenarios.count)
         for scenario in fixture.scenarios {
-            #expect(!scenario.steps.isEmpty, "\(scenario.name): 기대=단계 있음 실제=없음")
+            #expect(!scenario.steps.isEmpty, "\(scenario.name), expected steps, got none")
             for (index, step) in scenario.steps.enumerated() {
-                let context = "\(scenario.name) 단계 \(index + 1)"
-                #expect(["in", "out", "replace"].contains(step.direction), "\(context): 기대=알려진 방향 실제=\(step.direction)")
+                let context = "\(scenario.name) step \(index + 1)"
+                #expect(["in", "out", "replace"].contains(step.direction), "\(context), expected a known direction, got \(step.direction)")
                 #expect((step.swiftailDiffers == nil) == (step.swiftailExpected == nil),
-                        "\(context): 기대=차이 이유와 기대값을 함께 표시 실제=\(step.swiftailDiffers ?? "없음"), \(step.swiftailExpected ?? "없음")")
+                        "\(context), expected both a reason for the difference and an expected value, got \(step.swiftailDiffers ?? "none"), \(step.swiftailExpected ?? "none")")
                 if step.direction == "in" {
-                    #expect(["accept", "drop"].contains(step.verdict ?? ""), "\(context): 기대=Go 판정 실제=\(step.verdict ?? "없음")")
+                    #expect(["accept", "drop"].contains(step.verdict ?? ""), "\(context), expected a Go verdict, got \(step.verdict ?? "none")")
                 }
             }
         }
     }
 
     private func addresses(_ values: [String]) throws -> [IPAddress] {
-        try values.map { try #require(IPAddress($0), "기대=자료의 올바른 자기 주소 실제=\($0)") }
+        try values.map { try #require(IPAddress($0), "Expected a valid local address in the fixture, got \($0)") }
     }
 
     private func expectation(_ step: GoFilterStep, context: String) throws -> GoFilterExpectation {
         if let reason = step.swiftailDiffers {
-            #expect(!reason.isEmpty, "\(context): 기대=차이 이유 실제=빈 문자열")
-            let raw = try #require(step.swiftailExpected, "\(context): 기대=Swiftail 계약 기대값 실제=없음")
-            return try #require(GoFilterExpectation(rawValue: raw), "\(context): 기대=알려진 계약 동작 실제=\(raw)")
+            #expect(!reason.isEmpty, "\(context), expected a reason for the difference, got an empty string")
+            let raw = try #require(step.swiftailExpected, "\(context), expected a Swiftail contract expectation, got none")
+            return try #require(GoFilterExpectation(rawValue: raw), "\(context), expected a known contract behavior, got \(raw)")
         }
-        // 송신은 판정을 비교하지 않고 흐름만 기록한다.
+        // For outbound packets, only record the flow and skip verdict comparison.
         if step.direction == "out" { return .accept }
-        let raw = try #require(step.verdict, "\(context): 기대=Go 판정 실제=없음")
-        return try #require(GoFilterExpectation(rawValue: raw), "\(context): 기대=accept/drop 실제=\(raw)")
+        let raw = try #require(step.verdict, "\(context), expected a Go verdict, got none")
+        return try #require(GoFilterExpectation(rawValue: raw), "\(context), expected accept/drop, got \(raw)")
     }
 }
 
@@ -163,6 +163,6 @@ enum GoFilterExpectation: String {
 
 private func loadGoFilterFixtures() throws -> GoFilterFixture {
     let url = try #require(Bundle.module.url(forResource: "filter-verdicts", withExtension: "json", subdirectory: "Fixtures"),
-                           "기대=filter-verdicts.json 리소스 실제=없음")
+                           "Expected the filter-verdicts.json resource, got none")
     return try JSONDecoder().decode(GoFilterFixture.self, from: Data(contentsOf: url))
 }
