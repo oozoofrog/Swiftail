@@ -7,8 +7,8 @@ import (
 	"tailscale.com/types/key"
 )
 
-// textCase는 텍스트 표기 하나의 Go 판정이다. encode는 16진 입력의 Go 텍스트, decode는 텍스트를 Go가 읽은
-// 결과(16진, 또는 nlpriv는 다시 쓴 텍스트)다.
+// textCase is Go's verdict for one text encoding. encode is Go's text for hexadecimal input. decode is Go's result from reading the text
+// (hexadecimal, or re-encoded text for nlpriv).
 type textCase struct {
 	Name   string `json:"name"`
 	Kind   string `json:"kind"`
@@ -53,8 +53,8 @@ func textCases(hashes [][]byte) []textCase {
 	for _, last := range []string{"A", "B", "P", "Q", "7"} {
 		decode("aum-hash-zero-last-"+last, zero+last)
 	}
-	// TL-5 대조 시험이 더한 것(계약 5절 TL-2): base32.Decode는 \r·\n을 지우고 읽지만 길이 검사(DecodedLen)는 지우기 전의
-	// 글자 수로 한다(tka/aum.go:33-41). 그래서 52자 안에 줄바꿈이 둘이면 50자를 읽어 31바이트만 채운다.
+	// Added by the TL-5 comparison tests (contract §5 TL-2): base32.Decode removes \r and \n, but the length check (DecodedLen) uses
+	// the character count before removal (tka/aum.go:33-41). With two line breaks in 52 characters, it reads 50 characters and fills only 31 bytes.
 	decode("aum-hash-50-chars-crlf", s[:50]+"\r\n")
 	decode("aum-hash-50-chars-lf-lf", s[:50]+"\n\n")
 	decode("aum-hash-50-chars-cr-cr", s[:50]+"\r\r")

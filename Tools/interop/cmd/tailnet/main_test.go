@@ -70,7 +70,7 @@ func TestTailnet(t *testing.T) {
 	}
 	refused, err := n.execute(command{Cmd: "peerSend", Name: "peer-a", To: addr, Port: 42099, Proto: "tcp"})
 	if err != nil || refused["sent"] != false || refused["error"] == "" {
-		t.Fatalf("닫힌 TCP 포트: %v %v", refused, err)
+		t.Fatalf("closed TCP port: %v %v", refused, err)
 	}
 	deadline = time.Now().Add(30 * time.Second)
 	for {
@@ -80,10 +80,10 @@ func TestTailnet(t *testing.T) {
 		}
 		p := status["peers"].([]any)[0].(map[string]any)
 		if active, ok := p["active"].(bool); !ok || !active {
-			t.Fatal("송신한 피어의 active가 true가 아닙니다")
+			t.Fatal("sending peer's active is not true")
 		}
 		if lastWrite, ok := p["lastWrite"].(time.Time); !ok || lastWrite.IsZero() || lastWrite.After(time.Now()) {
-			t.Fatal("송신한 피어의 lastWrite가 유효한 과거 시각이 아닙니다")
+			t.Fatal("sending peer's lastWrite is not a valid time in the past")
 		}
 		selfAddrs := status["selfAddrs"].([]string)
 		nodes, err := n.execute(command{Cmd: "nodes"})
@@ -106,7 +106,7 @@ func TestTailnet(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("selfAddrs와 제어 서버 endpoints에서 같은 loopback 엔드포인트를 찾지 못했습니다")
+			t.Fatal("could not find a common loopback endpoint in selfAddrs and the control server endpoints")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -116,10 +116,10 @@ func TestTailnet(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("임시 디렉터리가 남았습니다: %v", err)
+		t.Fatalf("temporary directory was left behind: %v", err)
 	}
 	if n.peers["peer-a"] != nil {
-		t.Fatal("피어가 남았습니다")
+		t.Fatal("peers were left behind")
 	}
 }
 
@@ -133,11 +133,11 @@ func TestSetNeverDirectUDP(t *testing.T) {
 			t.Fatal(err)
 		}
 		if result["event"] != "neverDirectUDP" || result["enabled"] != enabled || read() != enabled {
-			t.Fatalf("노브 전환: 응답 %v, 캐시 값 %v", result, read())
+			t.Fatalf("knob toggle: response %v, cached value %v", result, read())
 		}
 	}
 	if _, err := n.execute(command{Cmd: "setNeverDirectUDP"}); err == nil || read() {
-		t.Fatal("enabled 누락을 상태 변경 없이 거절해야 합니다")
+		t.Fatal("missing enabled must be rejected without changing state")
 	}
 }
 
@@ -183,17 +183,17 @@ func TestSetNeverDirectUDPJSON(t *testing.T) {
 			t.Fatal(err)
 		}
 		if result.Event != want.event || string(result.ID) != want.id {
-			t.Fatalf("응답 %d: event=%s id=%s", i, result.Event, result.ID)
+			t.Fatalf("response %d: event=%s id=%s", i, result.Event, result.ID)
 		}
 		if want.event == "neverDirectUDP" && (result.Enabled == nil || *result.Enabled != (i == 1)) {
-			t.Fatalf("응답 %d: enabled가 요청과 다릅니다", i)
+			t.Fatalf("response %d: enabled differs from the request", i)
 		}
 		if want.event == "error" && result.Message == "" {
-			t.Fatalf("응답 %d: 오류 설명이 없습니다", i)
+			t.Fatalf("response %d: no error description", i)
 		}
 	}
 	if envknob.RegisterBool("TS_DEBUG_NEVER_DIRECT_UDP")() {
-		t.Fatal("잘못된 요청이 노브를 바꿨습니다")
+		t.Fatal("an invalid request changed the knob")
 	}
 }
 
@@ -239,7 +239,7 @@ func TestNeverDirectUDPLeavesUDPData(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(payload, got[:]) {
-			t.Fatal("UDP 에코가 원문과 다릅니다")
+			t.Fatal("UDP echo differs from the original")
 		}
 	}
 	waitPath := func(direct bool) {
@@ -262,7 +262,7 @@ func TestNeverDirectUDPLeavesUDPData(t *testing.T) {
 				return
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("15초 안에 양쪽 direct=%v가 되지 않았습니다", direct)
+				t.Fatalf("both peers did not reach direct=%v within 15 seconds", direct)
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -273,7 +273,7 @@ func TestNeverDirectUDPLeavesUDPData(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitPath(false)
-	// DERP 서버와 리스너를 닫아 UDP 에코가 중계로 성공할 가능성을 없앤다.
+	// Close the DERP server and listener so the UDP echo cannot succeed through a relay.
 	n.derp.Close()
 	n.derpHTTP.Close()
 	for range 3 {
@@ -297,7 +297,7 @@ func TestPeerSendRejectsInvalidInput(t *testing.T) {
 		c := command{Cmd: "peerSend", Name: "peer-a", To: "100.64.0.2", Port: 7, Proto: "udp", Payload: "00"}
 		change(&c)
 		if _, err := n.execute(c); err == nil {
-			t.Fatal("잘못된 peerSend 입력을 거절하지 않았습니다")
+			t.Fatal("invalid peerSend input was not rejected")
 		}
 	}
 }
@@ -314,18 +314,18 @@ func TestInspectCapturedPacket(t *testing.T) {
 	for _, ip := range [][]byte{ipv4, ipv6} {
 		service, port, err := inspectCapturedPacket(append([]byte{1, 0, 0, 0}, ip...))
 		if err != nil || !service || port != 43010 {
-			t.Fatal("서비스 패킷·UDP 포트 해석 실패")
+			t.Fatal("failed to parse the service packet or UDP port")
 		}
 	}
 	normal := append([]byte(nil), ipv4...)
 	copy(normal[16:20], []byte{100, 64, 0, 2})
 	service, port, err := inspectCapturedPacket(append([]byte{1, 0, 0, 0}, normal...))
 	if err != nil || service || port != 43010 {
-		t.Fatal("일반 UDP 양성 대조 실패")
+		t.Fatal("ordinary UDP positive control failed")
 	}
 	for _, data := range [][]byte{nil, {1, 0, 0}, {1, 0, 16, 0}, {1, 0, 1, 0}, {1, 0, 0, 0, 0x45}} {
 		if _, _, err := inspectCapturedPacket(data); err == nil {
-			t.Fatal("짧거나 잘못된 경계 허용")
+			t.Fatal("accepted a short or invalid boundary")
 		}
 	}
 }
@@ -339,18 +339,18 @@ func TestMagicDNSAndNetworkCounters(t *testing.T) {
 	enabled := true
 	result, err := n.execute(command{Cmd: "setMagicDNS", Enabled: &enabled})
 	if err != nil || result["enabled"] != true || n.control.DNSConfig == nil || !n.control.DNSConfig.Proxied {
-		t.Fatal("MagicDNS 설정 실패")
+		t.Fatal("MagicDNS configuration failed")
 	}
 	if _, err := n.execute(command{Cmd: "setMagicDNS"}); err == nil {
-		t.Fatal("bool 누락 허용")
+		t.Fatal("allowed a missing bool")
 	}
 	n.started = true
 	enabled = false
 	if _, err := n.execute(command{Cmd: "setMagicDNS", Enabled: &enabled}); err == nil || !n.control.DNSConfig.Proxied {
-		t.Fatal("등록 뒤 DNS 변경 허용")
+		t.Fatal("allowed a DNS change after registration")
 	}
 	result, err = n.execute(command{Cmd: "networkStatus"})
 	if err != nil || result["controlConnections"] != 0 || result["derpConnections"] != 0 || result["stunRequests"] != 0 {
-		t.Fatal("초기 연결 카운터 오류")
+		t.Fatal("invalid initial connection count")
 	}
 }

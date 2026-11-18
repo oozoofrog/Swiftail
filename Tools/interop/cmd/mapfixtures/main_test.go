@@ -19,7 +19,7 @@ func TestFixturesMatchGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(actual, want) {
-		t.Fatal("저장 자료와 실제 mapSession 결과가 다릅니다. mapfixtures로 재생성하세요")
+		t.Fatal("Stored fixtures differ from actual mapSession results. Regenerate them with mapfixtures")
 	}
 	requests, err := json.MarshalIndent(requestFixtures(), "", "  ")
 	if err != nil {
@@ -30,7 +30,7 @@ func TestFixturesMatchGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(append(requests, '\n'), want) {
-		t.Fatal("저장 자료와 Go 요청 부호화가 다릅니다")
+		t.Fatal("Stored fixtures differ from Go's request encoding")
 	}
 }
 
@@ -55,7 +55,7 @@ func TestResponsesPreserveJSON(t *testing.T) {
 		}
 	}
 	if !empty || !omitted || !null {
-		t.Fatal("Peers의 빈 배열·생략·null을 보존하지 않았습니다")
+		t.Fatal("Peers did not preserve empty array, omission, and null")
 	}
 }
 
@@ -68,20 +68,20 @@ func TestRequestZeroAndStatusFields(t *testing.T) {
 		switch fixture.Name {
 		case "zero 등록":
 			if string(fields["Expiry"]) != `"0001-01-01T00:00:00Z"` || string(fields["Hostinfo"]) != "null" || string(fields["NodeKeySignature"]) != "null" {
-				t.Fatal("필수 zero 필드 불일치")
+				t.Fatal("required zero field mismatch")
 			}
 			if !strings.Contains(string(fields["NodeKey"]), strings.Repeat("0", 64)) {
-				t.Fatal("zero 공개 키 불일치")
+				t.Fatal("zero public key mismatch")
 			}
 			if _, found := fields["Auth"]; found {
-				t.Fatal("Auth는 생략해야 합니다")
+				t.Fatal("Auth must be omitted")
 			}
 		case "상태 갱신":
 			if _, found := fields["Stream"]; found {
-				t.Fatal("false Stream은 생략해야 합니다")
+				t.Fatal("false Stream must be omitted")
 			}
 			if string(fields["OmitPeers"]) != "true" || len(fields["Endpoints"]) == 0 || len(fields["EndpointTypes"]) == 0 {
-				t.Fatal("상태 갱신 필드 불일치")
+				t.Fatal("status update field mismatch")
 			}
 		}
 	}

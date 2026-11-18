@@ -4,26 +4,26 @@ import Observation
 import Swiftail
 import SwiftailPairing
 
-/// 여는 쪽: 제안을 열고, 들어오는 기기의 승인을 사용자에게 묻고, 짝 목록을 쥐고, 짝에게만 인사를 돌려준다.
+/// Acts as the host. Opens offers, asks the user to approve joining devices, maintains the paired peer list, and returns greetings only to paired peers.
 ///
-/// `start(on:)`이 노드 위에 `PairingHost`를 만들고 `stop()`이 내린다. 그 사이의 일은 `serve`의 TaskGroup 하나에 있다:
+/// `start(on:)` creates a `PairingHost` on the node and `stop()` shuts it down. Between them, one TaskGroup in `serve` handles the work:
 ///
 /// ```
 /// serve
-///  ├ PairingHost.run()   짝 맺기 포트(4747). 끝나면 나머지를 취소한다
-///  ├ greet               짝이 된 뒤의 연결 예(4748)
-///  └ PairingHost.events  짝 목록이 바뀌면 다시 읽는다
+///  ├ PairingHost.run()   Pairing port (4747). Cancels the other tasks when it finishes
+///  ├ greet               Example of a connection after pairing (4748)
+///  └ PairingHost.events  Reloads the paired peer list when it changes
 /// ```
 @MainActor @Observable
 final class HostModel {
-    /// 사용자의 답을 기다리는 승인 하나.
+    /// An approval request awaiting the user's response.
     struct Approval: Identifiable {
         let id: UUID
         let request: PairingRequest
         fileprivate let answer: CheckedContinuation<Bool, Never>
     }
 
-    /// 화면에 낸 제안. 링크와 QR은 비밀이다.
+    /// An offer shown on screen. The link and QR code are secret.
     struct OpenOffer {
         let url: URL
         let qrCode: CGImage?
@@ -33,29 +33,29 @@ final class HostModel {
 
     static let pairingPort: UInt16 = 4747
     static let greetingPort: UInt16 = 4748
-    /// 제안 링크의 앞부분. `Info.plist`의 URL 스킴과 같아야 들어오는 쪽 앱이 열린다.
+    /// The offer link prefix. It must match the URL scheme in `Info.plist` to open the joiner app.
     static let linkBase: URL = {
-        guard let url = URL(string: "swiftail-demo://pair") else { preconditionFailure("고정된 링크 앞부분은 올바른 URL이다") }
+        guard let url = URL(string: "swiftail-demo://pair") else { preconditionFailure("The fixed link prefix is a valid URL") }
         return url
     }()
 
-    /// 여는 쪽이 돌고 있는가.
+    /// Whether the host is running.
     var isRunning: Bool { host != nil }
     private(set) var offer: OpenOffer?
-    /// 이 호스트에서 연 제안의 수와, 사건(`.opened`)으로 알려진 수. 같을 때의 상태 사건만 지금 제안의 것이다.
+    /// The number of offers opened on this host and the number reported by `.opened` events. State events belong to the current offer only when the counts match.
     @ObservationIgnored private var openedOffers = 0
     @ObservationIgnored private var announcedOffers = 0
     private(set) var approvals: [Approval] = []
     private(set) var peers: [PairedPeer] = []
-    /// 저장된 OAuth 클라이언트의 ID. 없으면 nil.
+    /// The saved OAuth client ID, or nil if absent.
     private(set) var oauthClientID = OAuthClientKeychain.load()?.id
-    /// 마지막 실패의 안내.
+    /// Guidance for the most recent failure.
     var message: String?
 
     private let log: EventLog
     private let automation: Automation?
     private var host: PairingHost?
-    /// `host`가 묶인 노드.
+    /// The node to which `host` is bound.
     private var hostedNode: TailnetNode?
     private var serving: Task<Void, Never>?
 
@@ -64,10 +64,10 @@ final class HostModel {
         self.automation = automation
     }
 
-    // MARK: 수명
+    // MARK: Lifecycle
 
-    /// `node` 위에서 여는 쪽을 돌린다. 이미 그 노드 위에서 돌고 있으면 아무 일도 하지 않는다. 다른 노드 위의 것은 먼저 내린다
-    /// (`PairingHost`는 노드 하나에 묶여 있고, 같은 짝 목록 디렉터리를 둘이 쓸 수 없다).
+    /// Runs the host on `node`. Does nothing if already running on that node. Stops any host on another node first
+    /// (a `PairingHost` is bound to one node, and two hosts cannot share a paired peer list directory).
     func start(on node: TailnetNode) async {
         guard hostedNode !== node else { return }
         await stop()
@@ -80,7 +80,7 @@ final class HostModel {
             openedOffers = 0
             announcedOffers = 0
             peers = await host.pairedPeers
-            log.record(.host, "started", "짝 \(peers.count)개")
+            log.record(.host, "started", "Paired peers: \(peers.count)")
             serving = Task { await self.serve(host, on: node) }
         } catch {
             fail("started", error)
@@ -92,7 +92,7 @@ final class HostModel {
         await serving?.value
     }
 
-    /// `PairingHost.run()`이 끝날 때까지 돈다. 취소되거나 노드가 끝나면 돌아온다.
+    /// Runs until `PairingHost.run()` completes. Returns on cancellation or when the node stops.
     private func serve(_ host: PairingHost, on node: TailnetNode) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.greet(host, on: node) }
@@ -117,10 +117,10 @@ final class HostModel {
         offer = nil
     }
 
-    // MARK: 제안
+    // MARK: Offer
 
-    /// 제안의 사건을 화면에 맞춘다. 쓰였거나 만료됐거나 닫힌 제안의 QR과 링크는 더 보이지 않는다(비밀이 든 링크다).
-    /// 사건은 차례대로 오므로, 받은 `.opened`의 수가 연 수와 같을 때의 상태 사건만 지금 화면의 제안의 것이다.
+    /// Reflects offer events in the UI. The QR code and link disappear when the offer is used, expires, or closes (the link contains a secret).
+    /// Events arrive in order, so state events belong to the offer on screen only when the number of received `.opened` events matches the number of opens.
     private func offerChanged(_ state: PairingHost.OfferState) {
         switch state {
         case .opened: announcedOffers += 1
@@ -139,42 +139,42 @@ final class HostModel {
             self.offer = OpenOffer(
                 url: url, qrCode: offer.qrCode(base: Self.linkBase), expires: offer.expires, carriesAuthKey: authKey != nil)
             log.record(
-                .host, "offer-opened", "수명 \(lifetime.components.seconds)초, 인증 키 \(authKey == nil ? "없음" : "있음")")
+                .host, "offer-opened", "Lifetime \(lifetime.components.seconds) seconds, auth key \(authKey == nil ? "absent" : "present")")
             if automation?.writesOfferLink == true {
                 let written = (try? Data(url.absoluteString.utf8).write(to: Storage.offerLink, options: .atomic)) != nil
-                log.record(.host, "offer-link-file", written ? "씀" : "쓰지 못함")
+                log.record(.host, "offer-link-file", written ? "Written" : "Could not write")
             }
         } catch {
             fail("offer-opened", error)
         }
     }
 
-    /// 저장된 OAuth 클라이언트로 1회용 인증 키를 만들어 제안에 싣는다. 키의 수명은 제안과 같다.
+    /// Creates a single-use auth key with the saved OAuth client and includes it in the offer. The key has the same lifetime as the offer.
     func openOfferWithIssuedKey(lifetime: Duration) async {
         guard let client = OAuthClientKeychain.load() else {
-            message = "OAuth 클라이언트를 먼저 저장하세요."
+            message = "Save an OAuth client first."
             return
         }
         message = nil
         do throws(AuthKeyIssueError) {
             let issued = try await AuthKeyIssuer(client: client).issue(lifetime: lifetime)
-            log.record(.host, "auth-key-issued", "성공")
+            log.record(.host, "auth-key-issued", "Succeeded")
             await openOffer(lifetime: lifetime, authKey: issued.key)
         } catch {
             message = error.guidance
-            log.record(.host, "auth-key-issued", "실패: \(error)")
+            log.record(.host, "auth-key-issued", "Failed: \(error)")
         }
     }
 
     func closeOffer() async {
         await host?.closeOffer()
         offer = nil
-        log.record(.host, "offer-closed", "닫음")
+        log.record(.host, "offer-closed", "Closed")
     }
 
-    // MARK: OAuth 클라이언트
+    // MARK: OAuth Client
 
-    /// 모양을 검사하고 키체인에 둔다. 태그는 쉼표로 가른다.
+    /// Validates the format and saves the client in the keychain. Tags are comma-separated.
     func saveOAuthClient(id: String, secret: String, tags: String) {
         let client = TailscaleOAuthClient(
             id: id.trimmingCharacters(in: .whitespaces), secret: secret.trimmingCharacters(in: .whitespaces),
@@ -186,7 +186,7 @@ final class HostModel {
             return
         }
         guard OAuthClientKeychain.save(client) else {
-            message = "키체인에 저장하지 못했습니다."
+            message = "Could not save to the keychain."
             return
         }
         message = nil
@@ -198,17 +198,17 @@ final class HostModel {
         oauthClientID = nil
     }
 
-    // MARK: 승인
+    // MARK: Approval
 
-    /// `PairingHost`의 `decide`. 사용자의 답을 기다린다. 상대가 끊거나 120초가 지나면 이 Task가 취소되고, 그때는 승인
-    /// 화면을 내리고 곧 돌아간다.
+    /// Implements `decide` for `PairingHost`. Waits for the user's response. If the peer disconnects or 120 seconds elapse, this Task is canceled,
+    /// and it dismisses the approval screen and returns immediately.
     private func decide(_ request: PairingRequest) async -> Bool {
-        // 쓰인 제안의 QR은 이보다 먼저 온 `.used`가 내린다. 여기서 지우면 그사이 새로 연 제안을 지운다.
+        // The earlier `.used` event clears the used offer's QR code. Clearing it here would clear any new offer opened in the meantime.
         log.record(
             .host, "approval-requested",
-            automation?.logsConfirmationCode == true ? "확인 숫자 \(request.confirmationCode)" : "사용자의 답을 기다림")
+            automation?.logsConfirmationCode == true ? "SAS \(request.confirmationCode)" : "Waiting for the user's response")
         if automation?.approvesAutomatically == true {
-            log.record(.host, "approval", "자동 승인")
+            log.record(.host, "approval", "Automatically approved")
             return true
         }
         let id = UUID()
@@ -217,12 +217,12 @@ final class HostModel {
                 approvals.append(Approval(id: id, request: request, answer: continuation))
             }
         } onCancel: {
-            Task { @MainActor in self.answer(id, approved: false, by: "취소됨(상대가 끊었거나 시간 초과)") }
+            Task { @MainActor in self.answer(id, approved: false, by: "Canceled (peer disconnected or timed out)") }
         }
     }
 
-    func approve(_ approval: Approval) { answer(approval.id, approved: true, by: "승인") }
-    func deny(_ approval: Approval) { answer(approval.id, approved: false, by: "거절") }
+    func approve(_ approval: Approval) { answer(approval.id, approved: true, by: "Approved") }
+    func deny(_ approval: Approval) { answer(approval.id, approved: false, by: "Denied") }
 
     private func answer(_ id: UUID, approved: Bool, by result: String) {
         guard let index = approvals.firstIndex(where: { $0.id == id }) else { return }
@@ -230,13 +230,13 @@ final class HostModel {
         log.record(.host, "approval", result)
     }
 
-    // MARK: 짝 목록
+    // MARK: Paired Peer List
 
     func remove(_ peer: PairedPeer) async {
         guard let host else { return }
         do throws(PairingError) {
             try await host.removePairedPeer(withStableID: peer.peer.stableID)
-            log.record(.host, "peer-removed", "지움")
+            log.record(.host, "peer-removed", "Removed")
         } catch {
             fail("peer-removed", error)
         }
@@ -245,22 +245,22 @@ final class HostModel {
     private func refreshPeers(from host: PairingHost) async {
         let latest = await host.pairedPeers
         guard latest != peers else { return }
-        // 새로 짝이 됐거나 같은 노드가 다시 짝이 됐다(그때는 항목의 `pairedAt`이 바뀐다).
+        // A peer has paired for the first time or the same node has paired again (in which case the entry's `pairedAt` changes).
         if latest.contains(where: { !peers.contains($0) }) {
-            log.record(.host, "paired", "짝 \(latest.count)개")
+            log.record(.host, "paired", "Paired peers: \(latest.count)")
         }
         peers = latest
     }
 
-    // MARK: 짝이 된 뒤의 연결
+    // MARK: Connection After Pairing
 
-    /// 인사 포트에서 듣는다. 연결의 상대를 `whoIs`로 찾아 짝 목록에 있을 때만 한 줄을 돌려준다.
+    /// Listens on the greeting port. Looks up the remote peer with `whoIs` and returns a line only if the peer is in the paired peer list.
     private func greet(_ host: PairingHost, on node: TailnetNode) async {
         let listener: TailnetListener
         do throws(ConnectionError) {
             listener = try await node.listen(port: Self.greetingPort)
         } catch {
-            log.record(.host, "greeting-listen", "실패: \(error)")
+            log.record(.host, "greeting-listen", "Failed: \(error)")
             return
         }
         await withDiscardingTaskGroup { group in
@@ -276,21 +276,21 @@ final class HostModel {
             let peer = await host.pairedPeer(withStableID: identity.stableID)
         else {
             await connection.abort()
-            log.record(.host, "greeting", "거절: 짝이 아님")
+            log.record(.host, "greeting", "Denied: peer is not paired")
             return
         }
         do throws(ConnectionError) {
-            try await connection.write(Array("안녕하세요, \(peer.deviceName)\n".utf8))
+            try await connection.write(Array("Hello, \(peer.deviceName)\n".utf8))
             await connection.close()
-            log.record(.host, "greeting", "보냄")
+            log.record(.host, "greeting", "Sent")
         } catch {
             await connection.abort()
-            log.record(.host, "greeting", "실패: \(error)")
+            log.record(.host, "greeting", "Failed: \(error)")
         }
     }
 
     private func fail(_ event: String, _ error: PairingError) {
         message = error.guidance
-        log.record(.host, event, "실패: \(error)")
+        log.record(.host, event, "Failed: \(error)")
     }
 }

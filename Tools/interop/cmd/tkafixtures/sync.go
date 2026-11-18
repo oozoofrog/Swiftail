@@ -6,21 +6,21 @@ import (
 	"tailscale.com/tka"
 )
 
-// 동기화 시나리오. 두 Authority(local, remote)를 AUM 모음(pool)의 번호 목록으로 만든다: 첫 번호로
-// 부트스트랩하고 나머지를 그 순서대로 한 묶음으로 Inform한다. 각자 SyncOffer를 내고, 상대 제안에 대한
-// MissingAUMs(상대가 모를 자기 AUM)를 둘 다 먼저 계산한 뒤, 상대의 목록을 Inform한다(목록이 비었거나
-// 계산이 실패하면 하지 않는다).
+// Sync scenarios. Build two Authority instances (local, remote) from lists of indexes into an AUM pool. Use the first index
+// to bootstrap and pass the rest to Inform in order as one group. Each produces a SyncOffer. First both sides compute
+// MissingAUMs for the other's offer (their own AUMs the other side may lack), then call Inform with the other's list (unless the list is empty
+// or the computation failed).
 
 type offerView struct {
 	Head      string   `json:"head"`
 	Ancestors []string `json:"ancestors"`
-	// HeadText·AncestorsText는 tka.FromSyncOffer의 base32 텍스트(RPC에 실리는 형식)다.
+	// HeadText and AncestorsText are the tka.FromSyncOffer base32 text (the format carried in RPC).
 	HeadText      string   `json:"headText"`
 	AncestorsText []string `json:"ancestorsText"`
 }
 
-// missingView는 MissingAUMs의 결과다. 해시가 100개를 넘으면 목록은 싣지 않고 수와 SHA-256(해시 32바이트를
-// 차례로 이은 것)만 싣는다.
+// missingView is the MissingAUMs result. If there are more than 100 hashes, omit the list and include only the count and SHA-256
+// of the 32-byte hashes concatenated in order.
 type missingView struct {
 	OK     bool     `json:"ok"`
 	Error  string   `json:"error,omitempty"`
@@ -152,8 +152,8 @@ func syncGroups() []syncGroup {
 		return out
 	}
 
-	// basic: 0 G(lock/0·lock/1), 1~5 X1~X5(직선, lock/0), 6·7 Y3·Y4(X2에서 갈라짐, lock/1),
-	// 8 C1(G에서 갈라진 체크포인트, lock/0·lock/1이 서명해 2표), 9 C2(C1의 자식), 10 G'(다른 genesis), 11 G'의 자식.
+	// basic: 0 G (lock/0 and lock/1), 1–5 X1–X5 (linear, lock/0), 6 and 7 Y3 and Y4 (fork from X2, lock/1),
+	// 8 C1 (checkpoint forked from G, signed by lock/0 and lock/1 for 2 votes), 9 C2 (child of C1), 10 G' (another genesis), 11 child of G'.
 	keys := []tka.Key{L[0].tkaKey(1), L[1].tkaKey(1)}
 	g := genesisAUM(keys, V[:1], 1, 2, L[0])
 	pool := [][]byte{g}
@@ -176,7 +176,7 @@ func syncGroups() []syncGroup {
 		runSync("no-intersection", pool, indices(0, 5), []int{10, 11}),
 	}})
 
-	// checkpoint-51: 0 G, 1~49 NoOp, 50 체크포인트(51번째 AUM), 51·52 NoOp.
+	// checkpoint-51: 0 G, 1–49 NoOp, 50 checkpoint (51st AUM), 51 and 52 NoOp.
 	pool = [][]byte{genesisAUM(keys, V[:1], 1, 2, L[0])}
 	for i := 1; i <= 52; i++ {
 		parent := aumHash(pool[i-1])
@@ -192,23 +192,23 @@ func syncGroups() []syncGroup {
 		runSync("remote-past-checkpoint", pool, indices(0, 30), indices(0, 52)),
 	}})
 
-	// long: 0 G(lock/0), 1 C(G 다음의 체크포인트), 2~2000 NoOp. 조상 목록의 1,000회 한도와 앞으로 감기의
-	// 2,000회 한도(maxSyncHeadIntersectionIter, maxSyncIter)의 경계.
+	// long: 0 G (lock/0), 1 C (the checkpoint after G), 2–2000 NoOp. Boundary of the 1,000-iteration ancestor list limit
+	// and the 2,000-iteration forward scan limit (maxSyncHeadIntersectionIter, maxSyncIter).
 	pool = longPool()
 	groups = append(groups, syncGroup{"long", hexPool(pool), []syncCase{
 		runSync("checkpoint-depth-999", pool, indices(0, 1000), []int{0}),
 		runSync("checkpoint-depth-1000", pool, indices(0, 1001), []int{0}),
 		runSync("fast-forward-1999", pool, indices(0, 1999), []int{0}),
 		runSync("fast-forward-2000", pool, indices(0, 2000), []int{0}),
-		// TL-5 대조 시험이 더한 것(계약 5절 TL-3): 상대의 머리가 로컬 머리에서 999개 뒤면 머리 교차, 1,000개 뒤면
-		// 머리 교차의 1,000회를 넘어 상대 조상(C)의 꼬리 교차로 넘어간다(tka/sync.go:158-213).
+		// Added by the TL-5 comparison tests (contract §5 TL-3): when the remote head is 999 entries behind the local head, it intersects the head. At 1,000 entries behind,
+		// it exceeds the 1,000 head intersection iterations and falls back to tail intersection with the remote ancestor (C) (tka/sync.go:158-213).
 		runSync("head-intersection-distance-999", pool, indices(0, 1999), indices(0, 1000)),
 		runSync("head-intersection-distance-1000", pool, indices(0, 1999), indices(0, 999)),
 	}})
 	return groups
 }
 
-// longPool은 sync의 long 묶음이자 limits의 앞부분이다: 0 G(lock/0), 1 C(체크포인트), 2~2000 NoOp(각각 앞의 자식).
+// longPool is the sync long group and the prefix for limits: 0 G (lock/0), 1 C (checkpoint), 2–2000 NoOp (each a child of the preceding entry).
 func longPool() [][]byte {
 	L, V := lockKeys, disablementValues
 	one := []tka.Key{L[0].tkaKey(1)}

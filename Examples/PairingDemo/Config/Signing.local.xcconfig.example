@@ -1,9 +1,9 @@
-// 이 파일을 Signing.local.xcconfig로 복사하고 개발 팀 ID를 넣는다.
-// 팀 ID는 developer.apple.com > Account > Membership details의 Team ID(10자)다.
+// Copy this file to Signing.local.xcconfig and fill in the development team ID.
+// Find the 10-character Team ID at developer.apple.com > Account > Membership details.
 DEVELOPMENT_TEAM = XXXXXXXXXX
 
-// 번들 ID 앞부분. 그 팀이 쓸 수 있는 값으로 바꾼다. 예: dev.<팀 ID 소문자>
+// Bundle ID prefix. Replace it with a value the team can use, such as dev.<lowercase team ID>.
 DEMO_BUNDLE_PREFIX = dev.xxxxxxxxxx
 
-// Mac 앱을 개발 인증서로 서명한다(선택). 넣지 않으면 임시 서명이다.
+// Sign the Mac app with a development certificate (optional). If omitted, the app uses ad hoc signing.
 // DEMO_MAC_SIGN_IDENTITY = Apple Development

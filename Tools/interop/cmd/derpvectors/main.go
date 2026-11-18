@@ -1,11 +1,11 @@
-// derpvectors는 SwiftailDERP 단위 시험의 고정 벡터를 Go의 NaCl box로 뽑아 JSON 한 줄로 출력한다.
+// derpvectors generates fixed vectors for SwiftailDERP unit tests with Go's NaCl box and prints one JSON line.
 //
-// 키는 SHA-256("swiftail-fixtures/derp/<번호>")를 X25519 개인 키 입력으로 쓴다(시험용 공개 값, 운영 키가 아니다).
-// 봉하는 방식은 tailscale.com `derp/derp_client.go`의 sendClientKey와 `types/key/node.go`의 SealTo와 같다
-// (`box.Seal(nonce, 평문, &nonce, 상대 공개 키, 내 개인 키)`). 시험은 nonce를 고정해야 하므로 SealTo의 난수
-// 대신 고정 nonce를 넣는다. 출처 tailscale.com v1.104.6, BSD-3-Clause.
+// For keys, use SHA-256("swiftail-fixtures/derp/<number>") as X25519 private key input (public test values, never production keys).
+// Sealing follows sendClientKey in tailscale.com `derp/derp_client.go` and SealTo in `types/key/node.go`
+// (`box.Seal(nonce, plaintext, &nonce, peer public key, own private key)`). Tests require a fixed nonce, so supply one
+// in place of SealTo's randomness. Origin: tailscale.com v1.104.6, BSD-3-Clause.
 //
-// 실행: Tools/interop에서 `go run ./cmd/derpvectors` (환경 변수는 README.md의 것).
+// Run `go run ./cmd/derpvectors` in Tools/interop (use the environment variables in README.md).
 package main
 
 import (
@@ -29,7 +29,7 @@ func public(private [32]byte) [32]byte {
 	return pub
 }
 
-// nonce는 고정 값 0x00 0x01 … 0x17이다.
+// The nonce is fixed at 0x00 0x01 … 0x17.
 func fixedNonce() [24]byte {
 	var n [24]byte
 	for i := range n {
@@ -38,7 +38,7 @@ func fixedNonce() [24]byte {
 	return n
 }
 
-// sealTo는 SealTo와 같은 출력(nonce ‖ box)을 고정 nonce로 만든다.
+// sealTo produces the same output as SealTo (nonce ‖ box) with a fixed nonce.
 func sealTo(private, peer [32]byte, nonce [24]byte, cleartext []byte) []byte {
 	return box.Seal(nonce[:], cleartext, &nonce, &peer, &private)
 }
@@ -51,9 +51,9 @@ func main() {
 	clientInfo := []byte(`{"version":2,"CanAckPings":true}`)
 	serverInfo := []byte(`{"version":2}`)
 
-	// ClientInfo 프레임 본문: 클라이언트 공개 키 ‖ nonce ‖ box.
+	// ClientInfo frame body: client public key ‖ nonce ‖ box.
 	clientBody := append(clientPub[:], sealTo(client, serverPub, nonce, clientInfo)...)
-	// ServerInfo 프레임 본문: nonce ‖ box (서버 개인 키, 클라이언트 공개 키).
+	// ServerInfo frame body: nonce ‖ box (server private key, client public key).
 	serverBody := sealTo(server, clientPub, nonce, serverInfo)
 
 	out := map[string]string{

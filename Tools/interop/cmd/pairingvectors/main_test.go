@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestFixtures는 연속 생성이 같고, 저장된 기준 자료가 지금의 도구 출력과 같은지 본다.
+// TestFixtures checks that consecutive generations match and that the stored reference fixtures match the tool's current output.
 func TestFixtures(t *testing.T) {
 	first, err := generate()
 	if err != nil {
@@ -17,13 +17,13 @@ func TestFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first, second) {
-		t.Fatal("연속 생성 결과가 다릅니다")
+		t.Fatal("consecutive generations differ")
 	}
 	saved, err := os.ReadFile("../../../../Tests/SwiftailPairingTests/Fixtures/pairing-vectors.json")
 	if err != nil {
-		t.Fatal("저장된 기준 자료를 읽지 못했습니다")
+		t.Fatal("could not read the stored reference fixtures")
 	}
 	if !bytes.Equal(first, saved) {
-		t.Fatal("저장 자료와 재생성 결과가 다릅니다")
+		t.Fatal("stored fixtures differ from regenerated fixtures")
 	}
 }

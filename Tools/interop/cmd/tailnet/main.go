@@ -66,7 +66,7 @@ type command struct {
 	RootPEM            string              `json:"rootPEM"`
 	Stop               bool                `json:"stop"`
 	Mode               string              `json:"mode"`
-	// Tailnet Lock 명령(lock.go).
+	// Tailnet Lock commands (lock.go).
 	LockKey     string   `json:"lockKey"`
 	Signers     []string `json:"signers"`
 	AddKeys     []string `json:"addKeys"`
@@ -94,7 +94,7 @@ type network struct {
 	controlConnections int
 	derpConnections    int
 	derpTLSHandshakes  int
-	derpServerNames    map[string]bool // DERP TLS ClientHello의 SNI. 보내지 않으면 ""
+	derpServerNames    map[string]bool // SNI from DERP TLS ClientHello. "" if absent
 	derpCertMode       *derpCertificateMode
 	stunRequests       int
 	transfers          []*transfer
@@ -144,7 +144,7 @@ func newNetwork() (*network, error) {
 	n.derpHTTP.TLS = &tls.Config{GetConfigForClient: n.derpTLSConfig}
 	n.derpHTTP.StartTLS()
 	port := n.derpHTTP.Listener.Addr().(*net.TCPAddr).Port
-	// testcontrol의 기본 등록 로그가 공개 nodeKey를 기록하므로 끈다.
+	// Disable the default testcontrol registration log because it records public nodeKey values.
 	n.control = &testcontrol.Server{Logf: func(string, ...any) {}, MagicDNSDomain: "tail0001.test", AllOnline: true, DERPMap: &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{1: {RegionID: 1, RegionCode: "test", RegionName: "test", Nodes: []*tailcfg.DERPNode{{Name: "1a", RegionID: 1, HostName: "127.0.0.1", IPv4: "127.0.0.1", IPv6: "none", DERPPort: port, STUNPort: n.stun.LocalAddr().(*net.UDPAddr).Port, InsecureForTests: true}}}}}}
 	n.initHostTools()
 	n.http = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +181,7 @@ func (n *network) ready() map[string]any {
 	return map[string]any{"event": "ready", "controlURL": n.control.ExplicitBaseURL, "magicDNSSuffix": n.control.MagicDNSDomain, "derp": map[string]any{"regionID": 1, "host": "127.0.0.1", "port": n.derpHTTP.Listener.Addr().(*net.TCPAddr).Port, "stunPort": n.stun.LocalAddr().(*net.UDPAddr).Port}}
 }
 
-// utcTime은 시각을 UTC RFC 3339로 적는다. 0이면 "".
+// utcTime writes the timestamp in UTC RFC 3339, or "" for the zero time.
 func utcTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -189,7 +189,7 @@ func utcTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// peerKeyExpiry는 피어의 node 키 만료 시각을 UTC RFC 3339로 적는다. 없으면 "".
+// peerKeyExpiry writes the peer's node key expiration in UTC RFC 3339, or "" if absent.
 func peerKeyExpiry(p *ipnstate.PeerStatus) string {
 	if p.KeyExpiry == nil {
 		return ""
@@ -216,17 +216,17 @@ func (n *network) execute(c command) (map[string]any, error) {
 		return n.executeLock(c)
 	case "addPeer":
 		if !validName.MatchString(c.Name) {
-			return nil, errors.New("name이 잘못되었습니다")
+			return nil, errors.New("invalid name")
 		}
 		if n.peers[c.Name] != nil {
-			return nil, errors.New("이미 존재하는 피어입니다")
+			return nil, errors.New("peer already exists")
 		}
 		dir, e := os.MkdirTemp("", "swiftail-peer-")
 		if e != nil {
 			return nil, e
 		}
 		authKey := n.authKey
-		if c.AuthKey != nil { // lockWrapAuthKey로 감싼 인증 키로 등록할 때
+		if c.AuthKey != nil { // When registering with an auth key wrapped by lockWrapAuthKey
 			authKey = *c.AuthKey
 		}
 		s, st, e := startPeer(c.Name, dir, n.control.ExplicitBaseURL, authKey)
@@ -237,14 +237,14 @@ func (n *network) execute(c command) (map[string]any, error) {
 		n.peers[c.Name] = &peer{server: s, dir: dir, transfers: newPeerTransfers()}
 		result = map[string]any{"event": "peer", "name": c.Name, "nodeKey": st.Self.PublicKey.String(), "addresses": st.TailscaleIPs, "fqdn": st.Self.DNSName}
 	case "restartPeer":
-		// 같은 상태 폴더로 tsnet을 다시 띄운다. node 키는 상태 파일에 있어 그대로이고, disco 키는 magicsock이 시작할 때
-		// 새로 만든다(`wgengine/magicsock/magicsock.go` `newConn`). UDP 포트도 바뀐다.
+		// Restart tsnet with the same state directory. The node key is kept in the state file and stays the same, while magicsock creates a new disco key at startup
+		// (`wgengine/magicsock/magicsock.go` `newConn`). The UDP port changes as well.
 		p := n.peers[c.Name]
 		if p == nil {
-			return nil, errors.New("피어가 없습니다")
+			return nil, errors.New("peer not found")
 		}
 		if p.stopped {
-			return nil, errors.New("멈춘 피어입니다")
+			return nil, errors.New("peer is stopped")
 		}
 		if e := p.server.Close(); e != nil {
 			return nil, e
@@ -259,7 +259,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 	case "removePeer":
 		p := n.peers[c.Name]
 		if p == nil {
-			return nil, errors.New("피어가 없습니다")
+			return nil, errors.New("peer not found")
 		}
 		delete(n.peers, c.Name)
 		p.transfers.close()
@@ -298,12 +298,12 @@ func (n *network) execute(c command) (map[string]any, error) {
 		return n.setDERPCertificate(c)
 	case "setMagicDNS":
 		if c.Enabled == nil {
-			return nil, errors.New("enabled에 bool이 필요합니다")
+			return nil, errors.New("enabled requires a bool")
 		}
 		n.mu.Lock()
 		if n.started {
 			n.mu.Unlock()
-			return nil, errors.New("DNS 설정은 첫 제어 요청 전에만 바꿀 수 있습니다")
+			return nil, errors.New("DNS settings can only be changed before the first control request")
 		}
 		n.control.DNSConfig = &tailcfg.DNSConfig{Proxied: *c.Enabled}
 		if n.host.configured {
@@ -315,11 +315,11 @@ func (n *network) execute(c command) (map[string]any, error) {
 	case "startCapture", "captureStatus":
 		p := n.peers[c.Name]
 		if p == nil {
-			return nil, errors.New("피어가 없습니다")
+			return nil, errors.New("peer not found")
 		}
 		if c.Cmd == "startCapture" {
 			if p.capture != nil {
-				return nil, errors.New("이미 관측 중입니다")
+				return nil, errors.New("observation is already active")
 			}
 			var err error
 			p.capture, err = startPeerCapture(p.server)
@@ -329,10 +329,10 @@ func (n *network) execute(c command) (map[string]any, error) {
 			result = map[string]any{"event": "captureStarted"}
 		} else {
 			if p.capture == nil {
-				return nil, errors.New("관측을 시작하지 않았습니다")
+				return nil, errors.New("observation has not started")
 			}
 			if c.Port < 1 || c.Port > 65535 {
-				return nil, errors.New("port는 1…65535여야 합니다")
+				return nil, errors.New("port must be 1…65535")
 			}
 			var err error
 			result, err = p.capture.status(uint16(c.Port))
@@ -343,7 +343,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 	case "peerLogout":
 		p := n.peers[c.Name]
 		if p == nil || p.stopped {
-			return nil, errors.New("실행 중인 피어가 없습니다")
+			return nil, errors.New("no running peer")
 		}
 		lc, e := p.server.LocalClient()
 		if e != nil {
@@ -352,7 +352,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if e := lc.Logout(ctx); e != nil {
-			return nil, fmt.Errorf("로그아웃 실패: %w", e)
+			return nil, fmt.Errorf("logout failed: %w", e)
 		}
 		st, e := lc.StatusWithoutPeers(ctx)
 		if e != nil {
@@ -362,7 +362,7 @@ func (n *network) execute(c command) (map[string]any, error) {
 	case "peerStatus", "peerPing":
 		p := n.peers[c.Name]
 		if p == nil {
-			return nil, errors.New("피어가 없습니다")
+			return nil, errors.New("peer not found")
 		}
 		lc, e := p.server.LocalClient()
 		if e != nil {
@@ -387,11 +387,11 @@ func (n *network) execute(c command) (map[string]any, error) {
 		} else {
 			addr, e := netip.ParseAddr(c.To)
 			if e != nil {
-				return nil, errors.New("to 주소가 잘못되었습니다")
+				return nil, errors.New("invalid to address")
 			}
 			typ := tailcfg.PingType(c.Type)
 			if typ != tailcfg.PingDisco && typ != tailcfg.PingTSMP && typ != tailcfg.PingICMP {
-				return nil, errors.New("ping type이 잘못되었습니다")
+				return nil, errors.New("invalid ping type")
 			}
 			ping, e := lc.Ping(ctx, addr, typ)
 			if e != nil {
@@ -404,27 +404,27 @@ func (n *network) execute(c command) (map[string]any, error) {
 			return n.stopPeer(c)
 		}
 		if p := n.peers[c.Name]; c.Cmd != "transfers" && p != nil && p.stopped {
-			return nil, errors.New("멈춘 피어입니다")
+			return nil, errors.New("peer is stopped")
 		}
 		return n.executeTransfer(c)
 	case "peerSend":
 		p := n.peers[c.Name]
 		if p == nil {
-			return nil, errors.New("피어가 없습니다")
+			return nil, errors.New("peer not found")
 		}
 		addr, e := netip.ParseAddr(c.To)
 		if e != nil || addr.Zone() != "" {
-			return nil, errors.New("to 주소가 잘못되었습니다")
+			return nil, errors.New("invalid to address")
 		}
 		if c.Port < 1 || c.Port > 65535 {
-			return nil, errors.New("port는 1…65535여야 합니다")
+			return nil, errors.New("port must be 1…65535")
 		}
 		if c.Proto != "udp" && c.Proto != "tcp" {
-			return nil, errors.New("proto는 udp 또는 tcp여야 합니다")
+			return nil, errors.New("proto must be udp or tcp")
 		}
 		payload, e := hex.DecodeString(c.Payload)
 		if e != nil || len(payload) > 65507 {
-			return nil, errors.New("payload는 65507바이트 이하의 hex여야 합니다")
+			return nil, errors.New("payload must be hex for at most 65507 bytes")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -446,19 +446,19 @@ func (n *network) execute(c command) (map[string]any, error) {
 		if sendErr != nil {
 			message = sendErr.Error()
 		}
-		// TCP 제한 시간은 SYN 송신의 증거가 아니다. 수신자가 패킷을 직접 확인한다.
+		// A TCP timeout does not prove that a SYN was sent. The receiver checks for the packet directly.
 		result = map[string]any{"event": "peerSend", "name": c.Name, "attempted": true, "sent": sent, "error": message}
 	case "injectMapResponse":
 		var k key.NodePublic
 		if e := k.UnmarshalText([]byte(c.NodeKey)); e != nil {
-			return nil, errors.New("nodeKey가 잘못되었습니다")
+			return nil, errors.New("invalid nodeKey")
 		}
 		var m tailcfg.MapResponse
 		if len(c.Response) == 0 || string(c.Response) == "null" {
-			return nil, errors.New("response가 필요합니다")
+			return nil, errors.New("response is required")
 		}
 		if e := json.Unmarshal(c.Response, &m); e != nil {
-			return nil, errors.New("response가 잘못되었습니다")
+			return nil, errors.New("invalid response")
 		}
 		n.mu.Lock()
 		injected := n.control.AddRawMapResponse(k, &m)
@@ -467,19 +467,19 @@ func (n *network) execute(c command) (map[string]any, error) {
 		}
 		n.mu.Unlock()
 		if !injected {
-			return nil, errors.New("연결된 맵 스트림이 없습니다")
+			return nil, errors.New("no connected map stream")
 		}
 		result = map[string]any{"event": "injected"}
 	case "setAuth":
 		if c.AuthURL != "" {
 			if !n.control.CompleteAuth(c.AuthURL) {
-				return nil, errors.New("인증 URL이 없습니다")
+				return nil, errors.New("no authentication URL")
 			}
 		} else {
 			n.mu.Lock()
 			if n.started {
 				n.mu.Unlock()
-				return nil, errors.New("인증 설정은 첫 제어 요청 전에만 바꿀 수 있습니다")
+				return nil, errors.New("authentication settings can only be changed before the first control request")
 			}
 			if c.RequireAuth != nil {
 				n.control.RequireAuth = *c.RequireAuth
@@ -493,15 +493,15 @@ func (n *network) execute(c command) (map[string]any, error) {
 		result = map[string]any{"event": "auth"}
 	case "setNeverDirectUDP":
 		if c.Enabled == nil {
-			return nil, errors.New("enabled에 bool이 필요합니다")
+			return nil, errors.New("enabled requires a bool")
 		}
-		// 시험 계약의 런타임 전환이며, envknob의 동시 읽기 안전성 한계는 README에 적는다.
+		// This is the runtime toggle from the test contract. The README documents envknob's safety limits for concurrent reads.
 		envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", strconv.FormatBool(*c.Enabled))
 		result = map[string]any{"event": "neverDirectUDP", "enabled": *c.Enabled}
 	case "quit":
 		result = map[string]any{"event": "quit"}
 	default:
-		return nil, errors.New("알 수 없는 명령입니다")
+		return nil, errors.New("unknown command")
 	}
 	return result, nil
 }
@@ -549,9 +549,9 @@ func run(in io.Reader, out io.Writer) (runErr error) {
 		e = json.Unmarshal(scanner.Bytes(), &c)
 		var result map[string]any
 		if e != nil {
-			result = map[string]any{"event": "error", "message": "JSON이 잘못되었습니다"}
+			result = map[string]any{"event": "error", "message": "invalid JSON"}
 		} else if len(c.ID) == 0 || string(c.ID) == "null" {
-			result = map[string]any{"event": "error", "message": "id가 필요합니다"}
+			result = map[string]any{"event": "error", "message": "id is required"}
 		} else if c.Cmd == "peerHTTP" && n.peers[c.Name] != nil && !n.peers[c.Name].stopped {
 			p := n.peers[c.Name]
 			httpWG.Add(1)
@@ -599,7 +599,7 @@ func main() {
 	}
 }
 
-// startPeer는 상태 폴더 dir로 tsnet 피어를 띄우고 TCP·UDP 포트 7의 에코를 연다. 실패하면 연 것을 닫는다.
+// startPeer launches a tsnet peer with state directory dir and opens TCP and UDP echo services on port 7. On failure, it closes anything it opened.
 func startPeer(name, dir, controlURL, authKey string) (*tsnet.Server, *ipnstate.Status, error) {
 	s := &tsnet.Server{Dir: dir, Hostname: name, ControlURL: controlURL, AuthKey: authKey, UserLogf: func(string, ...any) {}}
 	ok := false
@@ -612,7 +612,7 @@ func startPeer(name, dir, controlURL, authKey string) (*tsnet.Server, *ipnstate.
 	defer cancel()
 	st, e := s.Up(ctx)
 	if e != nil {
-		return nil, nil, fmt.Errorf("피어 시작 실패: %w", e)
+		return nil, nil, fmt.Errorf("peer startup failed: %w", e)
 	}
 	tcp, e := s.Listen("tcp", ":7")
 	if e != nil {

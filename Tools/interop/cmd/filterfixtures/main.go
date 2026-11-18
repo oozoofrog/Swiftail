@@ -1,4 +1,4 @@
-// Go 기준 구현을 직접 호출한다. 필터 판정 로직은 이 도구에 복제하지 않는다.
+// Calls the Go reference implementation directly. This tool does not duplicate the filter decision logic.
 package main
 
 import (
@@ -53,7 +53,7 @@ func install(raw string, locals, capabilitySources []string, previous *filter.Fi
 		return nil, "", err
 	}
 	matches, conversionErr := filter.MatchesFromFilterRules(rules)
-	// 주소 오류는 부분 결과를 보존한다. SrcBits·DstPorts.Bits 오류의 nil도 그대로 설치한다.
+	// Preserve partial results on address errors. Install nil from SrcBits and DstPorts.Bits errors as is.
 	var conversion string
 	if conversionErr != nil {
 		conversion = conversionErr.Error()
@@ -101,7 +101,7 @@ func evaluate() (fixture, error) {
 			if st.Direction == "replace" {
 				f, st.ConversionError, err = install(st.Rules, st.LocalAddresses, s.CapabilitySources, f)
 				if err != nil {
-					return fixture{}, fmt.Errorf("%s 단계 %d: %w", s.Name, j+1, err)
+					return fixture{}, fmt.Errorf("%s step %d: %w", s.Name, j+1, err)
 				}
 				continue
 			}
@@ -109,7 +109,7 @@ func evaluate() (fixture, error) {
 			if err != nil {
 				return fixture{}, err
 			}
-			// 매 패킷마다 새 Parsed를 쓴다. 재사용 필드가 다음 판정에 스며들지 않는다.
+			// Use a fresh Parsed for each packet so reused fields do not leak into the next verdict.
 			var q packet.Parsed
 			q.Decode(b)
 			switch st.Direction {
@@ -120,15 +120,15 @@ func evaluate() (fixture, error) {
 				} else if verdict.IsDrop() {
 					st.Verdict = "drop"
 				} else {
-					return fixture{}, fmt.Errorf("%s 단계 %d: 최종 판정이 아님", s.Name, j+1)
+					return fixture{}, fmt.Errorf("%s step %d: verdict is not final", s.Name, j+1)
 				}
 			case "out":
 				verdict, _ := f.RunOut(&q, 0)
 				if verdict != filter.Accept {
-					return fixture{}, fmt.Errorf("%s 단계 %d: 송신 기준 패킷 거절", s.Name, j+1)
+					return fixture{}, fmt.Errorf("%s step %d: outbound reference packet rejected", s.Name, j+1)
 				}
 			default:
-				return fixture{}, fmt.Errorf("잘못된 방향: %s", st.Direction)
+				return fixture{}, fmt.Errorf("invalid direction: %s", st.Direction)
 			}
 		}
 	}
@@ -138,7 +138,7 @@ func evaluate() (fixture, error) {
 func generate(dir string) error {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return fmt.Errorf("Go 모듈 빌드 정보 없음")
+		return fmt.Errorf("Go module build information is missing")
 	}
 	found := false
 	for _, dep := range info.Deps {
@@ -147,7 +147,7 @@ func generate(dir string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("기준 tailscale.com 버전 또는 replace가 다릅니다")
+		return fmt.Errorf("reference tailscale.com version or replace differs")
 	}
 	first, err := evaluate()
 	if err != nil {
@@ -157,7 +157,7 @@ func generate(dir string) error {
 	if err != nil {
 		return err
 	}
-	// 새 필터들로 같은 패킷 열을 다시 실행하여 모든 판정·변환 오류·순서를 확인한다.
+	// Run the same packet sequence again with new filters to check every verdict, conversion error, and their order.
 	second, err := evaluate()
 	if err != nil {
 		return err
@@ -167,7 +167,7 @@ func generate(dir string) error {
 		return err
 	}
 	if !bytes.Equal(data, repeated) {
-		return fmt.Errorf("동일 입력의 Go 판정이 재현되지 않음")
+		return fmt.Errorf("Go verdicts were not reproduced for identical input")
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -177,7 +177,7 @@ func generate(dir string) error {
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "사용법: filterfixtures <Engine Fixtures 폴더>")
+		fmt.Fprintln(os.Stderr, "Usage: filterfixtures <Engine Fixtures directory>")
 		os.Exit(1)
 	}
 	if err := generate(os.Args[1]); err != nil {

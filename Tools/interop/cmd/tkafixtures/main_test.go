@@ -22,14 +22,14 @@ func TestFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first, second) {
-		t.Fatal("연속 생성 결과가 다릅니다")
+		t.Fatal("consecutive generations differ")
 	}
 	saved, err := os.ReadFile(savedPath)
 	if err != nil {
-		t.Fatal("저장된 기준 자료를 읽지 못했습니다")
+		t.Fatal("could not read the stored reference fixtures")
 	}
 	if !bytes.Equal(first, saved) {
-		t.Fatal("저장 자료와 재생성 결과가 다릅니다")
+		t.Fatal("stored fixtures differ from regenerated fixtures")
 	}
 	var f map[string]json.RawMessage
 	if err := json.Unmarshal(first, &f); err != nil {
@@ -37,13 +37,13 @@ func TestFixtures(t *testing.T) {
 	}
 	var caseCount int
 	if err := json.Unmarshal(f["caseCount"], &caseCount); err != nil || caseCount == 0 {
-		t.Fatalf("caseCount가 0이거나 읽히지 않습니다: %v", err)
+		t.Fatalf("caseCount is 0 or unreadable: %v", err)
 	}
 	sum := 0
 	for _, name := range []string{"keys", "authorities", "text", "encodings", "cbor", "chains", "sync", "signatures", "peerSets", "disablement", "authKeys", "resign", "unorderedPeerSets", "limits", "padded", "openedStates", "reviewChains", "reviewSignatures"} {
 		var items []json.RawMessage
 		if err := json.Unmarshal(f[name], &items); err != nil || len(items) == 0 {
-			t.Fatalf("%s 배열이 비었거나 없습니다", name)
+			t.Fatalf("array %s is empty or missing", name)
 		}
 		switch name {
 		case "keys", "authorities":
@@ -68,14 +68,14 @@ func TestFixtures(t *testing.T) {
 		}
 	}
 	if sum != caseCount {
-		t.Fatalf("caseCount %d가 시나리오 수 %d와 다릅니다", caseCount, sum)
+		t.Fatalf("caseCount %d differs from scenario count %d", caseCount, sum)
 	}
 	if len(first) > 2<<20 {
-		t.Fatalf("자료가 2MB를 넘습니다: %d", len(first))
+		t.Fatalf("fixture exceeds 2MB: %d", len(first))
 	}
 }
 
-// TestCopiedGoTestData는 genesis.go에 옮긴 Go 시험 값이 원본 파일에 그대로 있는지 본다.
+// TestCopiedGoTestData checks that the Go test values copied into genesis.go are present verbatim in the original files.
 func TestCopiedGoTestData(t *testing.T) {
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "tailscale.com").Output()
 	if err != nil {
@@ -88,7 +88,7 @@ func TestCopiedGoTestData(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Contains(source, []byte(`"`+value+`"`)) {
-			t.Fatalf("%s에 옮긴 값이 없습니다", file)
+			t.Fatalf("%s is missing the copied value", file)
 		}
 	}
 }
@@ -106,14 +106,14 @@ func TestVerifyCommand(t *testing.T) {
 		}
 		var stdout bytes.Buffer
 		if code := verifyCommand(bytes.NewReader(input), &stdout); code != 0 {
-			t.Fatalf("%s: 종료 코드 %d: %s", c.Name, code, stdout.String())
+			t.Fatalf("%s: exit code %d: %s", c.Name, code, stdout.String())
 		}
 		var got verifyOutput
 		if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
 		if !got.OK || got.Authorized != c.Authorized || got.Error != c.Error {
-			t.Fatalf("%s: 자료와 다른 판정: %s", c.Name, stdout.String())
+			t.Fatalf("%s: verdict differs from fixture: %s", c.Name, stdout.String())
 		}
 	}
 	for _, bad := range []string{
@@ -129,7 +129,7 @@ func TestVerifyCommand(t *testing.T) {
 	} {
 		var stdout bytes.Buffer
 		if code := verifyCommand(strings.NewReader(bad), &stdout); code != 1 || !strings.Contains(stdout.String(), `"ok":false`) {
-			t.Fatalf("잘못된 입력 %q을 받아들였습니다: %s", bad, stdout.String())
+			t.Fatalf("accepted invalid input %q: %s", bad, stdout.String())
 		}
 	}
 }

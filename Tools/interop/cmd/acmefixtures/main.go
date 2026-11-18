@@ -1,7 +1,7 @@
-// acmefixtures는 Swift 구현을 참조하지 않는 ACME 기준 자료와 검증 명령이다.
-// CSR 템플릿의 출처: tailscale.com v1.104.6 feature/acme/certstore.go:305-320,
+// acmefixtures provides ACME reference fixtures and verification commands independent of the Swift implementation.
+// Origin of the CSR template: tailscale.com v1.104.6 feature/acme/certstore.go:305-320,
 // Copyright (c) Tailscale Inc & contributors, BSD-3-Clause.
-// 모든 개인 키는 공개된 고정 씨앗에서 만든 시험 전용 값이며 운영에 쓰면 안 된다.
+// All private keys are test-only values derived from public fixed seeds and must never be used in production.
 package main
 
 import (
@@ -66,8 +66,8 @@ type protectedHeader struct {
 	URL       string          `json:"url"`
 }
 
-// deterministicSigner는 Go의 RFC 6979 구현을 써 자료를 재현한다.
-// acme가 넘기는 rand.Reader는 읽지 않는다. 실제 클라이언트의 서명 난수 정책과는 다르다.
+// deterministicSigner uses Go's RFC 6979 implementation to reproduce the fixtures.
+// It does not read the rand.Reader passed by acme. The actual client's signing randomness policy differs.
 type deterministicSigner struct{ key *ecdsa.PrivateKey }
 
 func (s deterministicSigner) Public() crypto.PublicKey { return &s.key.PublicKey }
@@ -124,7 +124,7 @@ type fixture struct {
 	CSRs       []csrCase       `json:"csrs"`
 }
 
-// captureTransport는 소켓 없이 acme.Client의 실제 요청 본문을 포착한다.
+// captureTransport captures actual acme.Client request bodies without using a socket.
 type captureTransport struct{ requests []jws }
 
 func (t *captureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -148,7 +148,7 @@ func (t *captureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 			body = `{"status":"valid","identifier":{"type":"dns","value":"a.ts.net"},"challenges":[]}`
 		}
 	default:
-		return nil, errors.New("예상하지 않은 메모리 전송 요청")
+		return nil, errors.New("unexpected in-memory transport request")
 	}
 	h := make(http.Header)
 	h.Set("Replay-Nonce", nonce)
@@ -166,7 +166,7 @@ func capture(key *ecdsa.PrivateKey) ([]jws, error) {
 		return nil, err
 	}
 	if len(t.requests) != 2 {
-		return nil, errors.New("포착한 JWS 수가 다릅니다")
+		return nil, errors.New("captured JWS count differs")
 	}
 	return t.requests, nil
 }
@@ -187,7 +187,7 @@ func evaluate() ([]byte, error) {
 	f.Reference.Go = runtime.Version()
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return nil, errors.New("Go 빌드 정보가 없습니다")
+		return nil, errors.New("Go build information is missing")
 	}
 	for _, dep := range info.Deps {
 		if dep.Path == "tailscale.com" && dep.Replace == nil {
@@ -195,7 +195,7 @@ func evaluate() ([]byte, error) {
 		}
 	}
 	if f.Reference.Tailscale != "v1.104.6" {
-		return nil, errors.New("기준 tailscale 버전이 다릅니다")
+		return nil, errors.New("reference tailscale version differs")
 	}
 	var keys []*ecdsa.PrivateKey
 	for i := 0; i < 4096 && len(keys) < 3; i++ {
@@ -267,7 +267,7 @@ func evaluate() ([]byte, error) {
 		keys = append(keys, key)
 	}
 	if len(keys) != 3 {
-		return nil, errors.New("선행 0 좌표 시험 키를 찾지 못했습니다")
+		return nil, errors.New("could not find a test key with a leading zero in a coordinate")
 	}
 	domains := []struct{ name, domain string }{
 		{"short", "a.ts.net"},
@@ -276,7 +276,7 @@ func evaluate() ([]byte, error) {
 		{"name-253", strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 45) + ".tail0001.ts.net"},
 	}
 	for _, d := range domains {
-		// certRequest(key, domain, nil)의 일반 이름 경로와 같은 템플릿이다.
+		// This is the same template used for the common name path in certRequest(key, domain, nil).
 		template := &x509.CertificateRequest{Subject: pkix.Name{CommonName: d.domain}, DNSNames: []string{d.domain}, ExtraExtensions: nil}
 		der, err := x509.CreateCertificateRequest(nil, template, deterministicSigner{keys[0]})
 		if err != nil {
@@ -296,7 +296,7 @@ func evaluate() ([]byte, error) {
 func decodeBase64(s string) ([]byte, error) {
 	data, err := b64.DecodeString(s)
 	if err != nil || b64.EncodeToString(data) != s {
-		return nil, errors.New("채움 없는 base64url 형식이 아닙니다")
+		return nil, errors.New("invalid unpadded base64url format")
 	}
 	return data, nil
 }
@@ -305,11 +305,11 @@ func parseJWK(j jwk) (*ecdsa.PublicKey, error) {
 	x, ex := decodeBase64(j.X)
 	y, ey := decodeBase64(j.Y)
 	if j.Curve != "P-256" || j.Type != "EC" || ex != nil || ey != nil || len(x) != 32 || len(y) != 32 {
-		return nil, errors.New("P-256 공개 JWK 형식이 잘못되었습니다")
+		return nil, errors.New("invalid P-256 public JWK format")
 	}
 	p := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
 	if !p.Curve.IsOnCurve(p.X, p.Y) {
-		return nil, errors.New("JWK 좌표가 P-256 곡선 위에 없습니다")
+		return nil, errors.New("JWK coordinates are not on the P-256 curve")
 	}
 	return p, nil
 }
@@ -336,7 +336,7 @@ func validURL(s string) bool {
 
 func verifyJWS(in jwsInput) (jwsResult, error) {
 	fail := func() (jwsResult, error) {
-		return jwsResult{}, errors.New("JWS 보호 머리 또는 서명이 올바르지 않습니다")
+		return jwsResult{}, errors.New("invalid JWS protected header or signature")
 	}
 	pub, err := parseJWK(in.JWK)
 	if err != nil {
@@ -401,18 +401,18 @@ type csrResult struct {
 
 func parseCSR(der []byte) (csrResult, error) {
 	if len(der) == 0 || len(der) > maxDER {
-		return csrResult{}, errors.New("CSR DER 크기 한도를 벗어났습니다")
+		return csrResult{}, errors.New("CSR DER size is out of bounds")
 	}
 	request, err := x509.ParseCertificateRequest(der)
 	if err != nil {
-		return csrResult{}, errors.New("Go가 CSR DER를 읽지 못했습니다")
+		return csrResult{}, errors.New("Go could not read the CSR DER")
 	}
 	if err := request.CheckSignature(); err != nil {
-		return csrResult{}, errors.New("Go가 CSR 서명을 거절했습니다")
+		return csrResult{}, errors.New("Go rejected the CSR signature")
 	}
 	pub, ok := request.PublicKey.(*ecdsa.PublicKey)
 	if !ok || pub.Curve != elliptic.P256() {
-		return csrResult{}, errors.New("CSR 공개 키가 P-256이 아닙니다")
+		return csrResult{}, errors.New("CSR public key is not P-256")
 	}
 	type rawRDNSET []struct {
 		OID   asn1.ObjectIdentifier
@@ -421,7 +421,7 @@ func parseCSR(der []byte) (csrResult, error) {
 	var subject []rawRDNSET
 	rest, err := asn1.Unmarshal(request.RawSubject, &subject)
 	if err != nil || len(rest) != 0 {
-		return csrResult{}, errors.New("CSR 주체를 읽지 못했습니다")
+		return csrResult{}, errors.New("could not read the CSR subject")
 	}
 	tag := 0
 	for _, set := range subject {
@@ -447,11 +447,11 @@ type keyResult struct {
 func parseKey(text string) (keyResult, error) {
 	data := bytes.TrimSpace([]byte(text))
 	if len(data) > maxDER || !bytes.HasPrefix(data, []byte("-----BEGIN ")) {
-		return keyResult{}, errors.New("PEM 입력 형식 또는 크기가 잘못되었습니다")
+		return keyResult{}, errors.New("invalid PEM input format or size")
 	}
 	block, rest := pem.Decode(data)
 	if block == nil || len(bytes.TrimSpace(rest)) != 0 || len(block.Headers) != 0 || bytes.Count(data, []byte("-----BEGIN ")) != 1 || bytes.Count(data, []byte("-----END ")) != 1 {
-		return keyResult{}, errors.New("PEM 블록 하나가 필요합니다")
+		return keyResult{}, errors.New("exactly one PEM block is required")
 	}
 	var parsed any
 	var err error
@@ -461,11 +461,11 @@ func parseKey(text string) (keyResult, error) {
 	case "PRIVATE KEY":
 		parsed, err = x509.ParsePKCS8PrivateKey(block.Bytes)
 	default:
-		return keyResult{}, errors.New("지원하지 않는 PEM 종류입니다")
+		return keyResult{}, errors.New("unsupported PEM type")
 	}
 	key, ok := parsed.(*ecdsa.PrivateKey)
 	if err != nil || !ok || key.Curve != elliptic.P256() {
-		return keyResult{}, errors.New("Go가 P-256 개인 키를 읽지 못했습니다")
+		return keyResult{}, errors.New("Go could not read the P-256 private key")
 	}
 	return keyResult{true, block.Type, publicJWK(&key.PublicKey)}, nil
 }
@@ -473,17 +473,17 @@ func parseKey(text string) (keyResult, error) {
 func readLimited(r io.Reader) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(r, maxInput+1))
 	if err != nil {
-		return nil, errors.New("입력을 읽지 못했습니다")
+		return nil, errors.New("could not read input")
 	}
 	if len(data) > maxInput {
-		return nil, errors.New("입력은 256KiB 이하여야 합니다")
+		return nil, errors.New("input must be at most 256KiB")
 	}
 	return data, nil
 }
 
-// strictJSON은 중복 멤버·과도한 중첩·알 수 없는 필드·뒤따르는 값을 거절한다.
+// strictJSON rejects duplicate members, excessive nesting, unknown fields, and trailing values.
 func strictJSON(data []byte, out any) error {
-	bad := errors.New("JSON 입력 형식이 잘못되었습니다")
+	bad := errors.New("invalid JSON input format")
 	if !utf8.Valid(data) {
 		return bad
 	}
@@ -499,7 +499,7 @@ func strictJSON(data []byte, out any) error {
 		}
 		switch t {
 		case json.Delim('{'):
-			// encoding/json의 대소문자 무시 매칭을 프로토콜 경계에서 허용하지 않는다.
+			// Reject encoding/json's case-insensitive matching at the protocol boundary.
 			var fields map[string]reflect.Type
 			if schema != nil && schema.Kind() == reflect.Struct {
 				fields = make(map[string]reflect.Type)
@@ -571,15 +571,15 @@ func execute(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 		if err := os.MkdirAll(args[0], 0755); err != nil {
-			return errors.New("자료 폴더를 만들지 못했습니다")
+			return errors.New("could not create the fixture directory")
 		}
 		if err := os.WriteFile(filepath.Join(args[0], "acme-fixtures.json"), data, 0644); err != nil {
-			return errors.New("자료를 쓰지 못했습니다")
+			return errors.New("could not write the fixtures")
 		}
 		return nil
 	}
 	if len(args) != 1 {
-		return errors.New("사용법: acmefixtures [자료 폴더 | verify-jws | verify-csr | parse-key]")
+		return errors.New("usage: acmefixtures [fixture directory | verify-jws | verify-csr | parse-key]")
 	}
 	data, err := readLimited(in)
 	if err != nil {
@@ -602,7 +602,7 @@ func execute(args []string, in io.Reader, out io.Writer) error {
 		}
 		der, decodeErr := hex.DecodeString(input.DERHex)
 		if decodeErr != nil {
-			return errors.New("DER hex 형식이 잘못되었습니다")
+			return errors.New("invalid DER hex format")
 		}
 		result, err = parseCSR(der)
 	case "parse-key":

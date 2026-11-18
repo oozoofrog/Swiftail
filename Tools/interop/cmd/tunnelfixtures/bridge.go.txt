@@ -1,5 +1,5 @@
-// 호출 대상: tailscale.com v1.104.6 ipn/ipnlocal/local.go·node_backend.go (BSD-3-Clause).
-// 실제 LocalBackend.authReconfigLocked가 Engine.Reconfig에 넘긴 설정을 받는다.
+// Calls tailscale.com v1.104.6 ipn/ipnlocal/local.go and node_backend.go (BSD-3-Clause).
+// Captures the configuration that the actual LocalBackend.authReconfigLocked passes to Engine.Reconfig.
 package ipnlocal
 
 import (
@@ -28,14 +28,14 @@ func (e *swiftailCaptureEngine) Reconfig(_ *wgcfg.Config, r *router.Config, d *d
 	return nil
 }
 
-// SwiftailFixtureBackend은 제어 연결 없이 고정 netmap만 받는 시험 노드다.
+// SwiftailFixtureBackend is a test node that accepts only a fixed netmap, with no control connection.
 type SwiftailFixtureBackend struct {
 	b   *LocalBackend
 	e   *swiftailCaptureEngine
 	sys *tsd.System
 }
 
-// NewSwiftailFixtureBackend는 upstream LocalBackend 시험과 같은 메모리 store·fake TUN을 쓴다.
+// NewSwiftailFixtureBackend uses the same in-memory store and fake TUN as the upstream LocalBackend tests.
 func NewSwiftailFixtureBackend() (*SwiftailFixtureBackend, error) {
 	sys := tsd.NewSystem()
 	sys.Set(new(mem.Store))
@@ -58,7 +58,7 @@ func NewSwiftailFixtureBackend() (*SwiftailFixtureBackend, error) {
 	return &SwiftailFixtureBackend{b, e, sys}, nil
 }
 
-// Capture는 DNS 산출·라우터 산출 로직을 복제하지 않고 실제 재설정을 실행한다.
+// Capture runs the actual reconfiguration without duplicating DNS or router configuration logic.
 func (f *SwiftailFixtureBackend) Capture(nm *netmap.NetworkMap, expired bool) (*dns.Config, *router.Config, error) {
 	b := f.b
 	b.mu.Lock()
@@ -78,12 +78,12 @@ func (f *SwiftailFixtureBackend) Capture(nm *netmap.NetworkMap, expired bool) (*
 	f.e.router = nil
 	b.authReconfigLocked()
 	if f.e.dns == nil || f.e.router == nil {
-		return nil, nil, errors.New("엔진에 설정이 전달되지 않았습니다")
+		return nil, nil, errors.New("the configuration was not passed to the engine")
 	}
 	return f.e.dns, f.e.router, nil
 }
 
-// Close는 노드와 시험용 자원을 모두 닫는다.
+// Close shuts down the node and all test resources.
 func (f *SwiftailFixtureBackend) Close() {
 	f.b.Shutdown()
 	f.sys.Bus.Get().Close()

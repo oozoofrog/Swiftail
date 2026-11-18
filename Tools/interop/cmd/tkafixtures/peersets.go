@@ -14,9 +14,9 @@ import (
 	"tailscale.com/tka"
 )
 
-// 피어 거르기의 낡은 키 판정(rotationTracker)은 ipnlocal의 내보내지 않은 타입이다. mapfixtures와 같은 방식으로
-// tailscale.com의 임시 사본에 bridge.go.txt 한 파일을 overlay로 얹고, 그 파일이 실제 tkaFilterNetmapLocked를
-// 부른다(거르기 로직을 옮겨 적지 않는다). 모듈 캐시는 고치지 않고, 임시 사본은 끝나면 지운다.
+// Stale-key detection in peer filtering (rotationTracker) is an unexported ipnlocal type. As in mapfixtures,
+// overlay the single bridge.go.txt file onto a temporary copy of tailscale.com and let it call the actual tkaFilterNetmapLocked
+// without copying the filtering logic. Leave the module cache intact and delete the temporary copy on completion.
 
 //go:embed bridge.go.txt
 var bridge []byte
@@ -35,12 +35,12 @@ type peerSetCase struct {
 	Authority string      `json:"authority"`
 	Peers     []peerInput `json:"peers"`
 	Kept      []string    `json:"kept"`
-	// Runs는 tkaFilterNetmapLocked를 같은 입력으로 돌린 횟수다. 모든 실행의 답이 같아야 이 배열에 든다.
+	// Runs is the number of tkaFilterNetmapLocked runs with the same input. This array includes only cases with identical results on every run.
 	Runs int `json:"runs"`
 }
 
-// unorderedPeerSetCase는 Go의 답이 맵 순회 순서에 따라 갈리는 입력이다(rotationTracker.obsoleteKeys가
-// byWrappingKey 맵을 돈다). Outcomes는 Runs번 돌려 나온 서로 다른 답(남은 node 키 목록)을 정렬한 것이다.
+// unorderedPeerSetCase is an input whose Go result depends on map iteration order (rotationTracker.obsoleteKeys
+// iterates the byWrappingKey map). Outcomes contains the distinct results (lists of remaining node keys) from Runs runs, sorted.
 type unorderedPeerSetCase struct {
 	Name      string      `json:"name"`
 	Authority string      `json:"authority"`
@@ -88,16 +88,16 @@ func peerSetInputs() []peerSetCase {
 		{Name: "credential-chains-not-grouped", Authority: base, Peers: []peerInput{peer(N[6], byCred(N[6])), peer(N[7], byCred(N[7]))}},
 		{Name: "different-wrapping-keys", Authority: base, Peers: []peerInput{peer(N[3], ser(r3)), peer(N[8], ser(rotationNKS(NL[1], N[8], other, nil)))}},
 		{Name: "removed-signing-key", Authority: "nks-removed", Peers: []peerInput{peer(N[0], ser(direct)), peer(N[10], ser(directNKS(L[1], N[10], nil)))}},
-		// TL-5 대조 시험이 더한 것(계약 5절 TL-4, 동작 P1): 낡은 키 검사는 UnsignedPeerAPIOnly 피어도 받는다. 그런 피어의
-		// 서명은 보지 않으므로 그 rotation은 다른 피어를 낡은 키로 만들지 않는다.
+		// Added by the TL-5 comparison tests (contract §5 TL-4, behavior P1): stale-key detection accepts UnsignedPeerAPIOnly peers as well. It skips their
+		// signatures, so their rotations do not make other peers' keys stale.
 		{Name: "api-only-obsoleted-by-rotation", Authority: base, Peers: []peerInput{apiOnly(peer(N[0], nil)), peer(N[1], ser(r1))}},
 		{Name: "api-only-rotation-not-tracked", Authority: base, Peers: []peerInput{peer(N[0], ser(direct)), apiOnly(peer(N[1], ser(r1)))}},
 	}
 }
 
-// unorderedPeerSetInputs는 같은 node 키가 서로 다른 회전 키의 묶음에 함께 드는 입력이다(계약 5절 TL-4).
-// 묶음 nl/0: node/3(이전 키 1개), node/4(2개). 묶음 nl/1: node/3(2개), node/7(1개). nl/0을 먼저 보면 node/3이
-// 낡은 키가 되고 nl/1에는 node/7만 남아 살아남는다. nl/1을 먼저 보면 node/7이 낡은 키가 된다.
+// unorderedPeerSetInputs is input where the same node key belongs to groups with different rotation keys (contract §5 TL-4).
+// Group nl/0: node/3 (1 previous key), node/4 (2). Group nl/1: node/3 (2), node/7 (1). If nl/0 comes first, node/3
+// becomes stale, leaving only node/7 in nl/1, which survives. If nl/1 comes first, node/7 becomes stale.
 func unorderedPeerSetInputs() []unorderedPeerSetCase {
 	L, NL, N := lockKeys, nlKeys, nodeKeys
 	peer := func(n nodeKey, sig tka.NodeKeySignature) peerInput {
@@ -112,7 +112,7 @@ func unorderedPeerSetInputs() []unorderedPeerSetCase {
 	}
 }
 
-// peerSetCases는 두 배열을 한 번의 bridge 실행으로 만든다. 피어 집합마다 Runs번 돌린 서로 다른 답을 받는다.
+// peerSetCases builds both arrays with one bridge run. For each peer set, it collects the distinct results from Runs runs.
 func peerSetCases(all []namedAuthority) ([]peerSetCase, []unorderedPeerSetCase, error) {
 	cases, unordered := peerSetInputs(), unorderedPeerSetInputs()
 	type setInput struct {
@@ -141,11 +141,11 @@ func peerSetCases(all []namedAuthority) ([]peerSetCase, []unorderedPeerSetCase, 
 		return nil, nil, err
 	}
 	if len(outcomes) != len(input) {
-		return nil, nil, errors.New("피어 집합 결과의 수가 다릅니다")
+		return nil, nil, errors.New("peer set result count differs")
 	}
 	for i := range cases {
 		if len(outcomes[i]) != 1 {
-			return nil, nil, fmt.Errorf("피어 집합 %s의 Go 답이 실행마다 다릅니다: %v", cases[i].Name, outcomes[i])
+			return nil, nil, fmt.Errorf("Go results for peer set %s differ across runs: %v", cases[i].Name, outcomes[i])
 		}
 		cases[i].Kept, cases[i].Runs = outcomes[i][0], peerSetRuns
 	}
@@ -155,19 +155,19 @@ func peerSetCases(all []namedAuthority) ([]peerSetCase, []unorderedPeerSetCase, 
 	return cases, unordered, nil
 }
 
-// runBridge는 tailscale.com 사본 + overlay로 worker를 빌드해 실행한다. 현재 폴더가 Tools/interop(그
-// go.mod가 GOMOD)여야 한다. 빌드 임시 파일은 eyebuild dir interop-tools 아래에만 둔다.
+// runBridge builds and runs the worker from a copy of tailscale.com with an overlay. The working directory must be Tools/interop
+// (its go.mod must be GOMOD). Keep temporary build files under eyebuild dir interop-tools only.
 func runBridge(payload []byte) ([]byte, error) {
 	out, err := exec.Command("go", "list", "-m", "-json", "tailscale.com").Output()
 	if err != nil {
-		return nil, fmt.Errorf("기준 모듈 조회(현재 폴더가 Tools/interop인지 확인): %w", err)
+		return nil, fmt.Errorf("look up reference module (check that the working directory is Tools/interop): %w", err)
 	}
 	var module struct{ Dir, Version string }
 	if err := json.Unmarshal(out, &module); err != nil {
 		return nil, err
 	}
 	if module.Version != tailscaleVersion {
-		return nil, errors.New("기준 tailscale.com 버전이 다릅니다")
+		return nil, errors.New("reference tailscale.com version differs")
 	}
 	build, err := exec.Command("eyebuild", "dir", "interop-tools").Output()
 	if err != nil {
@@ -178,7 +178,7 @@ func runBridge(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	// Go는 모듈 캐시 안의 overlay를 금지한다. 원본의 임시 사본에만 얹는다.
+	// Go forbids overlays inside the module cache. Overlay only a temporary copy of the original.
 	reference := filepath.Join(dir, "tailscale")
 	if err := os.CopyFS(reference, os.DirFS(module.Dir)); err != nil {
 		return nil, err
@@ -212,14 +212,14 @@ func runBridge(payload []byte) ([]byte, error) {
 	cmd.Env = append(os.Environ(), "GOTMPDIR="+dir)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("ipnlocal 사본 빌드: %w", err)
+		return nil, fmt.Errorf("build ipnlocal copy: %w", err)
 	}
 	run := exec.Command(binary)
 	run.Stdin = bytes.NewReader(payload)
 	run.Stderr = os.Stderr
 	data, err := run.Output()
 	if err != nil {
-		return nil, fmt.Errorf("tkaFilterNetmapLocked 실행: %w", err)
+		return nil, fmt.Errorf("run tkaFilterNetmapLocked: %w", err)
 	}
 	return data, nil
 }

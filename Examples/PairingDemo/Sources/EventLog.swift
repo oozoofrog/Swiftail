@@ -1,24 +1,24 @@
 import Foundation
 import Observation
 
-/// 앱이 파일을 두는 자리. 모두 Application Support 아래다(샌드박스에서는 앱 컨테이너 안).
+/// The app's file locations. All are under Application Support (inside the app container when sandboxed).
 enum Storage {
     static let root = URL.applicationSupportDirectory
         .appending(path: Bundle.main.bundleIdentifier ?? "PairingDemo", directoryHint: .isDirectory)
-    /// 노드의 신원(`TailnetNode`의 상태 디렉터리).
+    /// The node's identity (the state directory for `TailnetNode`).
     static let nodeState = root.appending(path: "node", directoryHint: .isDirectory)
-    /// 여는 쪽의 짝 목록(`PairingHost`의 `storeDirectory`).
+    /// The host's paired peer list (the `storeDirectory` for `PairingHost`).
     static let pairingStore = root.appending(path: "pairing", directoryHint: .isDirectory)
-    /// 들어오는 쪽이 짝이 된 여는 쪽(`PairedHost`).
+    /// The host paired with the joiner (`PairedHost`).
     static let pairedHost = root.appending(path: "paired-host.json")
     static let events = root.appending(path: "events.jsonl")
-    /// 자동화 모드에서만 쓰는 제안 링크 파일.
+    /// The offer link file used only in automation mode.
     static let offerLink = root.appending(path: "offer-link.txt")
 }
 
-/// 단계마다의 사건 기록. 화면의 목록과 `events.jsonl`(한 줄에 사건 하나)에 함께 남긴다.
+/// Logs events at each step. Records them both in the on-screen list and in `events.jsonl` (one event per line).
 ///
-/// 제안의 링크, 비밀, 인증 키, OAuth 비밀, 로그인 URL은 남기지 않는다. 확인 숫자는 자동화 모드가 켰을 때만 남긴다.
+/// The log omits offer links, secrets, auth keys, OAuth secrets, and sign-in URLs. It records the SAS only when automation mode is enabled.
 @MainActor @Observable
 final class EventLog {
     enum Source: String, Encodable {
@@ -37,7 +37,7 @@ final class EventLog {
         }
     }
 
-    /// 새 것이 앞에 온다.
+    /// Newest entries come first.
     private(set) var entries: [Entry] = []
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -49,7 +49,7 @@ final class EventLog {
     func record(_ role: Source, _ event: String, _ result: String) {
         let entry = Entry(time: Date(), role: role, event: event, result: result)
         entries.insert(entry, at: 0)
-        // 파일에 쓰지 못해도 화면의 목록은 남는다. 기록 때문에 짝 맺기를 멈추지 않는다.
+        // The on-screen list remains available if writing to the file fails. Logging does not interrupt pairing.
         guard var line = try? encoder.encode(entry) else { return }
         line.append(0x0A)
         try? FileManager.default.createDirectory(at: Storage.root, withIntermediateDirectories: true)

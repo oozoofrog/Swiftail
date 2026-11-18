@@ -19,8 +19,8 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>페어링 QR 코드를 읽는 데 카메라를 씁니다.</string>
+	<string>The app uses the camera to read pairing QR codes.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>같은 네트워크에 있는 tailnet 기기와 직접 연결하는 데 로컬 네트워크를 씁니다.</string>
+	<string>The app uses the local network to connect directly to tailnet devices on the same network.</string>
 </dict>
 </plist>

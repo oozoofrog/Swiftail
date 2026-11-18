@@ -1,6 +1,6 @@
-// 기준 API: gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72의
-// pkg/tcpip/header/{tcp,ipv4,ipv6}.go. 구현을 복사하지 않고 공개 API를 호출한다. SACK 옵션의 순서는
-// pkg/tcpip/transport/tcp/connect.go의 makeSynOptions·makeOptions를 따른다.
+// Reference API: gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72,
+// pkg/tcpip/header/{tcp,ipv4,ipv6}.go. Call the public API without copying its implementation. SACK option order follows
+// makeSynOptions and makeOptions in pkg/tcpip/transport/tcp/connect.go.
 package main
 
 import (
@@ -34,7 +34,7 @@ type decoded struct {
 	MSS             *uint16 `json:"mss"`
 	WindowScale     *int    `json:"windowScale"`
 	SACKPermitted   *bool   `json:"sackPermitted"`
-	// SACKBlocks는 SYN이 아닌 세그먼트에서만 채운다. 블록마다 [왼쪽 끝, 오른쪽 끝]이고 없으면 빈 목록이다.
+	// Populate SACKBlocks only for non-SYN segments. Each block is [left edge, right edge], with an empty list when there are no blocks.
 	SACKBlocks [][2]uint32 `json:"sackBlocks"`
 	DataLength int         `json:"dataLength"`
 }
@@ -92,8 +92,8 @@ func packet(ipv6, ipOptions bool, flags header.TCPFlags, options, payload []byte
 	return b
 }
 
-// observe는 길이를 확인한 뒤에만 gVisor의 경계 검사 없는 header 접근자를 부른다.
-// error는 API의 bool을 계약의 오류 이름으로 정규화한 값이다.
+// observe checks lengths before calling gVisor's unchecked header accessors.
+// error is the API's bool normalized to the contract's error name.
 func observe(b []byte) result {
 	r := result{Error: "malformed"}
 	if len(b) == 0 {
@@ -192,7 +192,7 @@ func evaluate() ([]byte, error) {
 		header.EncodeWSOption(shift, b[5:])
 		return b
 	}
-	// makeSynOptions(connect.go)의 순서: MSS, NOP 둘과 SACK-Permitted, NOP와 WS.
+	// Order in makeSynOptions (connect.go): MSS, two NOPs and SACK-Permitted, then NOP and WS.
 	sackSyn := func(mss uint32, shift int) []byte {
 		b := make([]byte, 12)
 		offset := header.EncodeMSSOption(mss, b)
@@ -203,7 +203,7 @@ func evaluate() ([]byte, error) {
 		header.EncodeWSOption(shift, b[offset:])
 		return b
 	}
-	// makeOptions(connect.go)의 순서: NOP 둘과 SACK 블록.
+	// Order in makeOptions (connect.go): two NOPs and SACK blocks.
 	sackBlocks := func(edges ...uint32) []byte {
 		var blocks []header.SACKBlock
 		for i := 0; i+1 < len(edges); i += 2 {
@@ -266,11 +266,11 @@ func evaluate() ([]byte, error) {
 	} {
 		add(opts.name, packet(false, false, syn, opts.bytes, nil), "W2: gVisor TCPValid는 옵션 길이를 검사하지 않고 ParseSynOptions는 중단할 뿐이다. 계약은 malformed로 버린다.", "malformed", -1, -1)
 	}
-	// 길이가 규격과 다르지만 2 이상이고 머리 안인 MSS·Window Scale은 계약도 값을 읽지 않고 길이로 건너뛴다(W의 "구현에서
-	// 정해진 것"). 결과가 gVisor와 같으므로 차이로 표시하지 않는다.
+	// For MSS and Window Scale options with a nonstandard length of at least 2 that fit within the header, the contract also skips by length without reading the value (W's "Decisions made
+	// during implementation"). This matches gVisor's result, so it is not marked as a difference.
 	plain("mss-length-three", packet(false, false, syn, []byte{2, 3, 1, 1}, nil))
 	plain("ws-length-two", packet(false, false, syn, []byte{3, 2, 1, 1}, nil))
-	// SACK-Permitted와 SACK(RFC 2018 2·3). gVisor 인코더로 만든 모양은 Swiftail이 만드는 바이트와도 같다.
+	// SACK-Permitted and SACK (RFC 2018 §§2 and 3). The gVisor encoder also produces the same bytes as Swiftail.
 	plain("ipv4-syn-sack-permitted", packet(false, false, syn, sackSyn(1240, 3), nil))
 	plain("ipv6-syn-sack-permitted", packet(true, false, syn|ack, sackSyn(1220, 3), nil))
 	plain("ipv4-ack-sack-one-block", packet(false, false, ack, sackBlocks(5500, 6000), nil))
@@ -279,8 +279,8 @@ func evaluate() ([]byte, error) {
 	plain("sack-duplicate", packet(false, false, ack, append(sackBlocks(1, 2), sackBlocks(3, 4, 5, 6)...), nil))
 	plain("sack-on-syn", packet(false, false, syn, append([]byte{2, 4, 4, 216}, sackBlocks(1, 2)...), nil))
 	plain("sack-permitted-on-ack", packet(false, false, ack, []byte{1, 1, 4, 2}, nil))
-	// 길이가 규격과 다르지만 2 이상이고 머리 안인 옵션: gVisor는 해석을 멈추고 계약은 길이로 건너뛴다. 뒤에 다른 옵션을 두지 않아
-	// 결과가 같다.
+	// Options with nonstandard lengths of at least 2 that fit within the header: gVisor stops parsing, and the contract skips them by length. With no subsequent option,
+	// the results are the same.
 	plain("sack-permitted-length-three", packet(false, false, syn, []byte{2, 4, 4, 216, 4, 3, 0}, nil))
 	plain("sack-length-two", packet(false, false, ack, []byte{1, 1, 5, 2}, nil))
 	plain("sack-length-not-multiple", packet(false, false, ack, []byte{5, 9, 0, 0, 0, 1, 0, 0, 0}, nil))
@@ -293,7 +293,7 @@ func evaluate() ([]byte, error) {
 	} {
 		add(opts.name, packet(false, false, ack, opts.bytes, nil), "W2: gVisor ParseTCPOptions는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다. 계약은 malformed로 버린다.", "malformed", -1, -1)
 	}
-	// 절단 뒤 IP 길이만 다시 맞춰 TCP 머리 길이 검사까지 도달시킨다.
+	// After truncation, adjust only the IP length so processing reaches the TCP header length check.
 	for _, size := range []int{0, 1, 19} {
 		b := packet(false, false, syn, nil, nil)[:20+size]
 		ip := header.IPv4(b)
@@ -311,7 +311,7 @@ func evaluate() ([]byte, error) {
 		header.TCP(b[20:]).SetDataOffset(uint8(offset * 4))
 		plain(fmt.Sprintf("data-offset-%d", offset), b)
 	}
-	// data offset은 4비트라 16은 표현할 수 없고 0으로 순환한다.
+	// The data offset is 4 bits, so it cannot represent 16 and wraps to 0.
 	b := packet(false, false, syn, nil, nil)
 	header.TCP(b[20:]).SetDataOffset(64)
 	plain("data-offset-16-wraps-zero", b)
@@ -328,7 +328,7 @@ func evaluate() ([]byte, error) {
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "사용법: tcpfixtures <Netstack Fixtures 폴더>")
+		fmt.Fprintln(os.Stderr, "Usage: tcpfixtures <Netstack Fixtures directory>")
 		os.Exit(1)
 	}
 	data, err := evaluate()

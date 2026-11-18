@@ -1,6 +1,6 @@
-// argon2fixtures는 golang.org/x/crypto의 argon2.Key(Argon2i, 버전 0x13) 출력을 여러 인자로 뽑아
-// 표준 출력에 JSON으로 쓴다. Swift 구현은 읽거나 호출하지 않는다.
-// TKA 인자의 값은 tailscale.com/tka.DisablementKDF와도 견주어, 다르면 실패한다.
+// argon2fixtures generates golang.org/x/crypto argon2.Key output (Argon2i, version 0x13) for several parameter sets
+// and writes it as JSON to standard output. It does not read or call the Swift implementation.
+// It also compares the result for the TKA parameters with tailscale.com/tka.DisablementKDF and fails if they differ.
 package main
 
 import (
@@ -32,7 +32,7 @@ type params struct {
 	keyLen         uint32
 }
 
-// pattern은 i번째 바이트가 (i·mul + add) mod 256인 바이트열이다. 시험 전용 고정 입력이다.
+// pattern is a byte sequence whose ith byte is (i·mul + add) mod 256. It is fixed input for tests only.
 func pattern(n, mul, add int) []byte {
 	b := make([]byte, n)
 	for i := range b {
@@ -44,7 +44,7 @@ func pattern(n, mul, add int) []byte {
 func cases() []params {
 	var out []params
 	pw, salt := pattern(16, 7, 1), pattern(16, 3, 2)
-	// 패스 수·메모리·병렬도 격자(m ≥ 8p만).
+	// Grid of pass counts, memory sizes, and degrees of parallelism (m ≥ 8p only).
 	for t := uint32(1); t <= 4; t++ {
 		for _, m := range []uint32{8, 32, 64, 1024} {
 			for _, p := range []uint8{1, 2, 4, 8} {
@@ -54,32 +54,32 @@ func cases() []params {
 			}
 		}
 	}
-	// 출력 길이: 64 이하는 H 한 번, 그보다 길면 H'의 긴 경로(RFC 9106 3.3).
+	// Output length: One H for 64 or fewer, or the long H' path for larger outputs (RFC 9106 §3.3).
 	for _, k := range []uint32{4, 31, 63, 64, 65, 96, 100, 128, 129, 1024} {
 		out = append(out, params{pw, salt, 2, 32, 2, k})
 	}
-	// 비밀·솔트 길이.
+	// Secret and salt lengths.
 	for _, n := range []int{0, 1, 32, 127, 128, 129} {
 		out = append(out, params{pattern(n, 11, 5), salt, 1, 16, 2, 32})
 	}
 	for _, n := range []int{0, 1, 8, 39, 64, 200} {
 		out = append(out, params{pw, pattern(n, 13, 9), 1, 16, 2, 32})
 	}
-	// 메모리가 4p의 배수가 아닐 때(H0에는 m, 블록 수는 m'). 두 조각 이상의 주소 블록이 필요한 크기 하나.
+	// Memory not divisible by 4p (m in H0 and m' blocks). One size that needs at least two address blocks in a slice.
 	out = append(out,
 		params{pw, salt, 2, 33, 4, 32},
 		params{pw, salt, 1, 37, 2, 32},
 		params{pw, salt, 1, 1023, 8, 32},
 		params{pw, salt, 1, 4096, 1, 32},
 	)
-	// TKA 끄기 비밀의 인자 그대로(tailscale.com/tka/state.go DisablementKDF).
+	// Exact TKA disablement secret parameters (tailscale.com/tka/state.go DisablementKDF).
 	out = append(out, params{bytes.Repeat([]byte{0xa5}, 32), []byte("tailscale network-lock disablement salt"), 4, 16 * 1024, 4, 32})
 	return out
 }
 
 func main() {
 	if len(os.Args) != 1 {
-		fmt.Fprintln(os.Stderr, "사용법: argon2fixtures > argon2i-go.json")
+		fmt.Fprintln(os.Stderr, "Usage: argon2fixtures > argon2i-go.json")
 		os.Exit(2)
 	}
 	var vectors []vector
@@ -89,7 +89,7 @@ func main() {
 	}
 	last := vectors[len(vectors)-1]
 	if got := hex.EncodeToString(tka.DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))); got != last.Output {
-		fmt.Fprintf(os.Stderr, "tka.DisablementKDF와 argon2.Key가 다르다: %s != %s\n", got, last.Output)
+		fmt.Fprintf(os.Stderr, "tka.DisablementKDF and argon2.Key differ: %s != %s\n", got, last.Output)
 		os.Exit(1)
 	}
 	enc := json.NewEncoder(os.Stdout)

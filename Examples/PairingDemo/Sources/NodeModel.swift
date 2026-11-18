@@ -2,16 +2,16 @@ import Foundation
 import Observation
 import Swiftail
 
-/// 프로세스 안 tailnet 노드 하나의 수명과 화면에 보일 모습.
+/// Manages the lifecycle and on-screen state of a single in-process tailnet node.
 ///
-/// 노드는 `start(authKey:)`에서 만들고 `stop()`이나 `run()`의 실패에서 버린다. 다시 시작하면 새 `TailnetNode`다
-/// (`run()`은 노드 하나에 한 번만 부를 수 있다).
+/// `start(authKey:)` creates the node. `stop()` or a failure in `run()` discards it. Restarting creates a new `TailnetNode`
+/// (`run()` can be called only once per node).
 @MainActor @Observable
 final class NodeModel {
-    /// 돌고 있는 노드. 시작 전과 끝난 뒤에는 nil.
+    /// The running node, or nil before startup and after shutdown.
     private(set) var node: TailnetNode?
     private(set) var status: NodeStatus?
-    /// `run()`이 던진 실패의 안내. 다시 시작하면 지운다.
+    /// Guidance for the error thrown by `run()`. Cleared on restart.
     private(set) var failure: String?
 
     private let controlURL: URL
@@ -23,9 +23,9 @@ final class NodeModel {
         self.log = log
     }
 
-    /// 이 기기가 전에 등록한 적이 있는가. 있으면 앱이 뜰 때 인증 없이 노드를 시작한다.
+    /// Whether this device has registered before. If so, the app starts the node without authentication at launch.
     ///
-    /// 신원 파일을 읽지 못하면 true다. 노드를 띄워 `run()`의 실패(`.control(.storage)`)로 안내를 보인다.
+    /// Returns true if the identity file cannot be read. The node starts so a failure from `run()` (`.control(.storage)`) can provide guidance.
     var hasSavedIdentity: Bool {
         do throws(NodeError) {
             return try TailnetNode.hasSavedIdentity(in: Storage.nodeState)
@@ -34,10 +34,10 @@ final class NodeModel {
         }
     }
 
-    /// 노드를 만들고 돌린다. 이미 돌고 있으면 아무 일도 하지 않는다.
+    /// Creates and runs the node. Does nothing if the node is already running.
     ///
-    /// - Parameter authKey: 첫 등록에 쓸 인증 키. 저장하지 않고 노드 설정에 한 번 넘긴다. nil이면 저장된 신원으로 잇고,
-    ///   신원이 없으면 노드가 `.needsLogin(url)`로 로그인 URL을 준다.
+    /// - Parameter authKey: The auth key for the first registration. Passed to the node configuration once and never stored. If nil, connects with the saved identity,
+    ///     or the node provides a sign-in URL via `.needsLogin(url)` if no identity exists.
     func start(authKey: String?) {
         guard node == nil else { return }
         failure = nil
@@ -47,7 +47,7 @@ final class NodeModel {
                     stateDirectory: Storage.nodeState, hostname: Self.hostname, controlURL: controlURL, authKey: authKey),
                 device: .inProcess)
             self.node = node
-            log.record(.node, "start", authKey == nil ? "저장된 신원 또는 로그인" : "인증 키")
+            log.record(.node, "start", authKey == nil ? "Saved identity or sign-in" : "Auth key")
             running = Task { await self.run(node) }
         } catch {
             fail(error)
@@ -59,7 +59,7 @@ final class NodeModel {
         await running?.value
     }
 
-    /// 노드가 `.running`이 되고 자기 이름을 알 때까지 기다린다. 노드가 끝나거나 호출한 Task가 취소되면 nil.
+    /// Waits for the node to reach `.running` and know its own name. Returns nil if the node stops or the calling Task is canceled.
     func waitUntilRunning() async -> TailnetNode? {
         while let node, !Task.isCancelled {
             if status?.state == .running, status?.fqdn != nil { return node }
@@ -68,10 +68,10 @@ final class NodeModel {
         return nil
     }
 
-    /// `run()`이 끝날 때까지 돌며 화면의 상태를 맞춘다. 상태 전이와 lock 변화는 기록에 남기고, 화면은 `statusChanged`마다
-    /// `status`를 다시 읽는다.
+    /// Runs until `run()` completes and keeps the on-screen state current. Logs state transitions and lock changes, and reloads
+    /// `status` for the UI on each `statusChanged` event.
     private func run(_ node: TailnetNode) async {
-        // 처음 모습은 사건으로 오지 않는다.
+        // The initial state does not arrive as an event.
         await refresh(from: node)
         if let status {
             log.record(.node, "state", status.state.label)
@@ -91,7 +91,7 @@ final class NodeModel {
         self.node = nil
         status = nil
         running = nil
-        log.record(.node, "stopped", failure == nil ? "중지" : "실패")
+        log.record(.node, "stopped", failure == nil ? "Stopped" : "Failed")
     }
 
     private func handle(_ event: NodeEvent, from node: TailnetNode) async {
@@ -114,7 +114,7 @@ final class NodeModel {
         log.record(.node, "failed", error.logName)
     }
 
-    /// 제어 서버가 노드 이름을 지을 때 쓰는 호스트 이름. 실제 기기 이름을 tailnet에 올리지 않는다.
+    /// The hostname the control server uses to name the node. Keeps the real device name off the tailnet.
     private static var hostname: String {
         #if os(macOS)
         "pairing-demo-mac"
@@ -125,54 +125,54 @@ final class NodeModel {
 }
 
 extension NodeState {
-    /// 화면과 기록에 쓰는 이름. 로그인 URL은 담지 않는다.
+    /// The label for the UI and log. Omits the sign-in URL.
     var label: String {
         switch self {
-        case .starting: "시작하는 중"
-        case .needsLogin: "로그인 필요"
-        case .needsMachineAuth: "관리자 승인 대기"
-        case .running: "연결됨"
+        case .starting: "Starting"
+        case .needsLogin: "Sign-in required"
+        case .needsMachineAuth: "Awaiting admin approval"
+        case .running: "Connected"
         }
     }
 }
 
 extension TailnetLockStatus {
-    /// 화면과 기록에 쓰는 이름.
+    /// The label for the UI and log.
     var label: String {
         switch mode {
-        case .disabled: "꺼짐"
-        case .enforcing: signingRequest == nil ? "켜짐 · 이 노드 서명됨" : "켜짐 · 서명을 기다림"
-        case .unverified: "확인하지 못함 · 피어를 올리지 않음"
+        case .disabled: "Disabled"
+        case .enforcing: signingRequest == nil ? "Enabled · This node is signed" : "Enabled · Awaiting signature"
+        case .unverified: "Unverified · Peers are not brought up"
         }
     }
 }
 
 extension NodeError {
-    /// 사용자가 다음에 할 일.
+    /// Guidance on what the user can do next.
     var guidance: String {
         switch self {
         case .control(.authKeyRejected):
-            "인증 키가 거절됐습니다. 키가 잘못됐거나 만료됐거나 이미 쓰였습니다. 새 키나 새 제안으로 다시 시작하세요."
+            "The auth key was rejected. It is invalid, expired, or already used. Start again with a new key or offer."
         case .control(.registrationRejected):
-            "제어 서버가 등록을 거절했습니다. tailnet 관리자 정책을 확인하세요."
+            "The control server rejected registration. Check the tailnet admin policy."
         case .control(.nodeKeyExpired):
-            "노드 키가 만료됐습니다. 노드를 다시 시작해 로그인하세요."
+            "The node key expired. Restart the node and sign in."
         case .control(.storage):
-            "신원 파일을 읽거나 쓰지 못했습니다. 앱의 저장 공간을 확인하세요."
+            "Could not read or write the identity file. Check the app's storage space."
         case .control:
-            "제어 서버와의 통신이 실패했습니다. 노드를 다시 시작하세요."
+            "Communication with the control server failed. Restart the node."
         case .invalidConfiguration(let message):
-            "노드 설정이 잘못됐습니다: \(message)"
+            "Invalid node configuration: \(message)"
         case .udpUnavailable(let reason):
-            "UDP 소켓을 열지 못했습니다(\(reason)). 네트워크 권한을 확인하세요."
+            "Could not open the UDP socket (\(reason)). Check the network permissions."
         case .stateDirectoryInUse:
-            "다른 노드가 같은 신원으로 돌고 있습니다. 앱을 다시 띄우세요."
+            "Another node is running with the same identity. Relaunch the app."
         case .tunnelDeviceClosed(let reason):
-            "터널 장치가 닫혔습니다(\(reason))."
+            "The tunnel device closed (\(reason))."
         }
     }
 
-    /// 기록에 남길 종류. 서버가 준 진단 문자열은 남기지 않는다.
+    /// The category to log. Omits diagnostic strings from the server.
     var logName: String {
         switch self {
         case .control(.authKeyRejected): "authKeyRejected"

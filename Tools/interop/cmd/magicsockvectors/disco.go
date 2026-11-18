@@ -10,14 +10,14 @@ import (
 	"tailscale.com/types/key"
 )
 
-// discoPart는 disco 절이다.
+// discoPart is the disco section.
 type discoPart struct {
 	Messages []sealedMessage `json:"messages"`
 	Parse    []parseCase     `json:"parse"`
 }
 
-// sealedMessage는 메시지 하나와 그것을 보낸 쪽 → 받는 쪽으로 봉한 겉 형식이다.
-// 평문과 봉한 패킷만 Go가 만든 바이트이고 나머지 필드는 같은 메시지를 사람이 읽는 형태로 적은 것이다.
+// sealedMessage is one message and its outer format sealed from sender to recipient.
+// Go generates only the plaintext and sealed packet bytes. The other fields describe the same message in human-readable form.
 type sealedMessage struct {
 	Name      string `json:"name"`
 	Sender    string `json:"sender"`
@@ -28,7 +28,7 @@ type sealedMessage struct {
 	Packet    string `json:"packet"`
 }
 
-// parseCase는 평문을 `disco.Parse`에 넣은 결과다. 오류면 Error에 Go의 오류 문장이, 아니면 Result가 있다.
+// parseCase is the result of passing plaintext to `disco.Parse`. Error holds Go's error text on failure, and Result holds the result on success.
 type parseCase struct {
 	Name      string  `json:"name"`
 	Plaintext string  `json:"plaintext"`
@@ -36,8 +36,8 @@ type parseCase struct {
 	Error     string  `json:"error,omitempty"`
 }
 
-// result는 해석된 메시지다. Kind에 따라 쓰는 필드가 다르다.
-// relay는 Go가 해석하지만 Swiftail은 해석하지 않는 종류(0x04–0x09)다.
+// result is a parsed message. The fields used depend on Kind.
+// relay covers types (0x04–0x09) that Go parses and Swiftail does not.
 type result struct {
 	Kind      string   `json:"kind"`
 	TxID      string   `json:"txID,omitempty"`
@@ -102,7 +102,7 @@ func buildDisco(a, b testKey) discoPart {
 	return part
 }
 
-// fixedNonce는 메시지 번호에서 정해지는 24바이트다. 같은 키로 봉하는 메시지끼리 nonce가 겹치지 않게 한다.
+// fixedNonce is 24 bytes derived from the message number. It keeps nonces distinct for messages sealed with the same key.
 func fixedNonce(index int) [24]byte {
 	var n [24]byte
 	for i := range n {
@@ -111,7 +111,7 @@ func fixedNonce(index int) [24]byte {
 	return n
 }
 
-// seal은 `magic ‖ 보낸 쪽 공개 키 ‖ nonce ‖ secretbox(평문)`을 고정 nonce로 만든다(노트 3.1·3.2 3).
+// seal produces `magic ‖ sender public key ‖ nonce ‖ secretbox(plaintext)` with a fixed nonce (notes §3.1 and §3.2 item 3).
 func seal(from, to testKey, plaintext []byte, nonce [24]byte) []byte {
 	private := raw32(from.Seed)
 	peer := raw32(to.Public)
@@ -123,17 +123,17 @@ func seal(from, to testKey, plaintext []byte, nonce [24]byte) []byte {
 	return secretbox.Seal(packet, plaintext, &nonce, &shared)
 }
 
-// verifySealed는 Go가 실제로 쓰는 열기 경로(`key.DiscoPrivate.Shared(...).Open`)로 봉한 바이트를 열어 본다.
+// verifySealed opens the sealed bytes through Go's actual opening path (`key.DiscoPrivate.Shared(...).Open`).
 func verifySealed(from, to testKey, plaintext, packet []byte) {
-	require(disco.LooksLikeDiscoWrapper(packet), "disco로 보이지 않는다")
+	require(disco.LooksLikeDiscoWrapper(packet), "packet does not look like disco")
 	source, ok := disco.Source(packet)
-	require(ok && equal(source, mustHex(from.Public)), "보낸 쪽 키를 읽지 못했다")
+	require(ok && equal(source, mustHex(from.Public)), "could not read the sender's key")
 
 	receiver := key.DiscoPrivateFromRaw32(mem.B(mustHex(to.Seed)))
 	sender := key.DiscoPublicFromRaw32(mem.B(source))
 	opened, ok := receiver.Shared(sender).Open(packet[len(disco.Magic)+32:])
-	require(ok, "Go가 봉한 바이트를 열지 못했다")
-	require(equal(opened, plaintext), "열린 평문이 다르다")
+	require(ok, "Go could not open the sealed bytes")
+	require(equal(opened, plaintext), "opened plaintext differs")
 }
 
 func raw32(hexValue string) [32]byte {
@@ -165,7 +165,7 @@ func describe(message disco.Message) result {
 	}
 }
 
-// parseCases는 노트 7.2 1의 경계를 `disco.Parse`에 넣은 결과다.
+// parseCases contains the results of passing the edge cases in notes §7.2 item 1 to `disco.Parse`.
 func parseCases(txID [12]byte, nodeKey [32]byte) []parseCase {
 	body := func(length int, prefix ...byte) []byte {
 		out := make([]byte, length)
@@ -175,7 +175,7 @@ func parseCases(txID [12]byte, nodeKey [32]byte) []parseCase {
 	withHeader := func(kind, version byte, body []byte) []byte {
 		return append([]byte{kind, version}, body...)
 	}
-	// 주소 i를 만드는 18바이트: IPv4-mapped 192.0.2.<i>:<1000+i>.
+	// 18 bytes for address i: IPv4-mapped 192.0.2.<i>:<1000+i>.
 	mapped := func(i byte) []byte {
 		out := make([]byte, 18)
 		out[10], out[11] = 0xff, 0xff
@@ -183,7 +183,7 @@ func parseCases(txID [12]byte, nodeKey [32]byte) []parseCase {
 		out[16], out[17] = 0x03, 0xe8+i
 		return out
 	}
-	// 보통 IPv6 2001:db8::<i>:<2000+i>.
+	// Native IPv6 2001:db8::<i>:<2000+i>.
 	native := func(i byte) []byte {
 		out := make([]byte, 18)
 		copy(out, []byte{0x20, 0x01, 0x0d, 0xb8})

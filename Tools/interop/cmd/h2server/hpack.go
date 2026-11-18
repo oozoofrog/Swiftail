@@ -48,7 +48,7 @@ func hpackFixtures() []connection {
 	encoder.SetMaxDynamicTableSize(4096)
 	add(header{"x-long", strings.Repeat("abcdef0123456789", 256), false})
 	add(header{"x-message", "www.example.test", false})
-	// 한 블록 안에서 최소 크기와 최종 크기를 모두 알리는 경로도 통과한다.
+	// Also cover the path that signals both the minimum and final sizes in one block.
 	encoder.SetMaxDynamicTableSize(0)
 	encoder.SetMaxDynamicTableSize(512)
 	add(header{"x-final", "final", false})

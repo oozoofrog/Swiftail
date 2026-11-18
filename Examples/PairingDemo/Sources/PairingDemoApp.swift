@@ -15,16 +15,16 @@ struct PairingDemoApp: App {
     }
 }
 
-/// 앱의 뿌리 모델. 노드와 두 역할을 잇는다.
+/// The app's root model. Connects the node and the two roles.
 @MainActor @Observable
 final class AppModel {
-    /// 자동화 모드가 아니면 nil.
+    /// Nil outside automation mode.
     let automation = Automation(arguments: ProcessInfo.processInfo.arguments)
     let log = EventLog()
     let node: NodeModel
     let host: HostModel
     let joiner: JoinerModel
-    /// 여는 쪽의 `PairingHost`는 이 역할이 `.host`이고 노드가 있을 때만 돈다.
+    /// The host's `PairingHost` runs only when this role is `.host` and a node exists.
     var role: Role {
         didSet { Task { await syncHost() } }
     }
@@ -36,16 +36,16 @@ final class AppModel {
         role = automation?.role ?? .platformDefault
     }
 
-    /// 앱이 뜰 때 한 번 부른다. 전에 등록한 기기면 인증 없이 노드를 잇는다.
+    /// Called once at app launch. Connects the node without authentication if the device has registered before.
     func launch() async {
         if let automation {
-            log.record(.app, "launch", "자동화 모드")
+            log.record(.app, "launch", "Automation mode")
             if node.hasSavedIdentity || automation.authKey != nil { await startNode(authKey: automation.authKey) }
             if automation.opensOffer, role == .host, await node.waitUntilRunning() != nil {
                 await host.openOffer(lifetime: .seconds(300), authKey: automation.authKey)
             }
         } else {
-            log.record(.app, "launch", "시작")
+            log.record(.app, "launch", "Started")
             if node.hasSavedIdentity { await startNode(authKey: nil) }
         }
     }
@@ -60,7 +60,7 @@ final class AppModel {
         await node.stop()
     }
 
-    /// OS가 배달한 링크. 들어오는 쪽으로 바꾸고 제안을 보여 준다. 짝 맺기는 사용자가 확인한 뒤에 한다.
+    /// Handles a link delivered by the OS. Switches to the joiner role and shows the offer. Pairing waits for the user to confirm.
     func open(_ url: URL) {
         role = .joiner
         joiner.receive(link: url.absoluteString, source: "url")

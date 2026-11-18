@@ -3,11 +3,11 @@ import AVFoundation
 import SwiftUI
 import VisionKit
 
-/// 카메라로 QR 하나를 읽는다. 읽은 문자열은 OS의 링크 배달을 거치지 않고 앱 안에서만 쓰인다(계약 3절).
+/// Reads one QR code with the camera. The decoded string stays in the app and bypasses OS link delivery (contract §3).
 struct QRScanner: UIViewControllerRepresentable {
     let onRead: (String) -> Void
 
-    /// 카메라 접근을 묻고, 이 기기에서 읽을 수 있는지 돌려준다.
+    /// Requests camera access and returns whether this device can scan.
     static func requestAccess() async -> Bool {
         guard DataScannerViewController.isSupported else { return false }
         return await AVCaptureDevice.requestAccess(for: .video)

@@ -9,12 +9,12 @@ struct ContentView: View {
             Form {
                 if model.automation != nil {
                     Section {
-                        Label("자동화 모드", systemImage: "gearshape.2")
+                        Label("Automation Mode", systemImage: "gearshape.2")
                             .foregroundStyle(.orange)
                     }
                 }
                 Section {
-                    Picker("역할", selection: $model.role) {
+                    Picker("Role", selection: $model.role) {
                         ForEach(Role.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
@@ -28,7 +28,7 @@ struct ContentView: View {
             }
             .formStyle(.grouped)
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Swiftail 페어링")
+            .navigationTitle("Swiftail Pairing")
         }
         .sheet(item: Binding(get: { model.host.approvals.first }, set: { _ in })) { approval in
             ApprovalView(host: model.host, approval: approval)
@@ -43,29 +43,29 @@ private struct NodeSection: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        Section("노드") {
+        Section("Node") {
             if let status = model.node.status {
-                LabeledContent("상태", value: status.state.label)
+                LabeledContent("Status", value: status.state.label)
                 if case .needsLogin(let url) = status.state {
-                    Button("브라우저에서 로그인") { openURL(url) }
+                    Button("Sign In in Browser") { openURL(url) }
                 }
-                LabeledContent("이름", value: status.fqdn ?? "—")
-                LabeledContent("피어", value: "\(status.peerCount)")
+                LabeledContent("Name", value: status.fqdn ?? "—")
+                LabeledContent("Peers", value: "\(status.peerCount)")
                 LabeledContent("tailnet lock", value: status.tailnetLock.label)
                 if let request = status.tailnetLock.signingRequest {
                     let command = "tailscale lock sign \(request.nodeKey) \(request.lockKey)"
-                    Text("이 노드는 아직 서명되지 않아 다른 기기와 통신할 수 없습니다. tailnet의 서명 기기에서 아래 명령을 실행하세요.")
+                    Text("This node has not been signed yet and cannot communicate with other devices. Run the command below on a signing device in the tailnet.")
                     Text(command)
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
-                    Button("명령 복사") { Pasteboard.copy(command) }
+                    Button("Copy Command") { Pasteboard.copy(command) }
                 }
-                Button("노드 중지") { Task { await model.stopNode() } }
+                Button("Stop Node") { Task { await model.stopNode() } }
             } else if model.node.node != nil {
-                LabeledContent("상태", value: NodeState.starting.label)
+                LabeledContent("Status", value: NodeState.starting.label)
             } else {
-                SecureField("인증 키(없으면 저장된 신원이나 로그인)", text: $authKey)
-                Button("노드 시작") {
+                SecureField("Auth key (otherwise use a saved identity or sign in)", text: $authKey)
+                Button("Start Node") {
                     let key = authKey.trimmingCharacters(in: .whitespacesAndNewlines)
                     authKey = ""
                     Task { await model.startNode(authKey: key.isEmpty ? nil : key) }
@@ -84,28 +84,28 @@ private struct ApprovalView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("들어오는 기기 화면의 숫자와 같을 때만 승인하세요.")
+            Text("Approve only if the number matches the one on the joining device's screen.")
                 .multilineTextAlignment(.center)
             Text(approval.request.confirmationCode)
                 .font(.system(size: 48, weight: .bold).monospacedDigit())
                 .accessibilityIdentifier("host-confirmation-code")
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                 GridRow {
-                    Text("기기 이름(상대가 밝힌 값)").foregroundStyle(.secondary)
+                    Text("Device name (reported by the peer)").foregroundStyle(.secondary)
                     Text(approval.request.deviceName)
                 }
                 GridRow {
-                    Text("노드").foregroundStyle(.secondary)
+                    Text("Node").foregroundStyle(.secondary)
                     Text(approval.request.peer.computedName)
                 }
                 GridRow {
-                    Text("로그인").foregroundStyle(.secondary)
+                    Text("Login").foregroundStyle(.secondary)
                     Text(approval.request.peer.loginName)
                 }
             }
             HStack {
-                Button("거절", role: .destructive) { host.deny(approval) }
-                Button("승인") { host.approve(approval) }
+                Button("Deny", role: .destructive) { host.deny(approval) }
+                Button("Approve") { host.approve(approval) }
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -117,9 +117,9 @@ private struct EventLogSection: View {
     let log: EventLog
 
     var body: some View {
-        Section("기록") {
+        Section("Log") {
             if log.entries.isEmpty {
-                Text("아직 사건이 없습니다.").foregroundStyle(.secondary)
+                Text("No events yet.").foregroundStyle(.secondary)
             }
             ForEach(log.entries) { entry in
                 VStack(alignment: .leading, spacing: 2) {
@@ -134,7 +134,7 @@ private struct EventLogSection: View {
     }
 }
 
-/// 시스템 클립보드에 글을 넣는다.
+/// Copies text to the system clipboard.
 enum Pasteboard {
     static func copy(_ text: String) {
         #if os(macOS)

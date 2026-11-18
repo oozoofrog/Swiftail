@@ -1,4 +1,4 @@
-// pcap 규약 출처: tailscale.com v1.104.6 feature/capture/capture.go, net/packet/capture.go.
+// Origin of the pcap format: tailscale.com v1.104.6 feature/capture/capture.go, net/packet/capture.go.
 // Copyright (c) Tailscale Inc & contributors; SPDX-License-Identifier: BSD-3-Clause.
 package main
 
@@ -15,7 +15,7 @@ import (
 	"tailscale.com/tsnet"
 )
 
-// 원문 패킷·주소는 보관하거나 출력하지 않고 관문에 필요한 수만 남긴다.
+// Retain and print only the counts needed for the gate. Do not store or print raw packets or addresses.
 type peerCapture struct {
 	stream         io.ReadCloser
 	cancel         context.CancelFunc
@@ -46,7 +46,7 @@ func startPeerCapture(server *tsnet.Server) (*peerCapture, error) {
 		var header [24]byte
 		_, err := io.ReadFull(stream, header[:])
 		if err == nil && (binary.LittleEndian.Uint32(header[:4]) != 0xa1b2c3d4 || binary.LittleEndian.Uint32(header[20:]) != 147) {
-			err = errors.New("지원하지 않는 capture 머리")
+			err = errors.New("unsupported capture header")
 		}
 		ready <- err
 		if err != nil {
@@ -59,7 +59,7 @@ func startPeerCapture(server *tsnet.Server) (*peerCapture, error) {
 			}
 			size := binary.LittleEndian.Uint32(record[8:12])
 			if size > 65535 {
-				err = errors.New("capture 패킷 크기 초과")
+				err = errors.New("capture packet exceeds size limit")
 				break
 			}
 			data := make([]byte, int(size))
@@ -90,10 +90,10 @@ func startPeerCapture(server *tsnet.Server) (*peerCapture, error) {
 			return p, nil
 		}
 		p.close()
-		return nil, errors.New("capture 시작 머리 오류")
+		return nil, errors.New("invalid initial capture header")
 	case <-ctx.Done():
 		p.close()
-		return nil, errors.New("capture 시작 제한 시간 초과")
+		return nil, errors.New("capture start timed out")
 	}
 }
 
@@ -102,14 +102,14 @@ func (p *peerCapture) status(port uint16) (map[string]any, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.failure != nil {
-		return nil, errors.New("capture 흐름이 끝났습니다")
+		return nil, errors.New("capture stream ended")
 	}
 	return map[string]any{"event": "captureStatus", "servicePackets": p.servicePackets, "observedPackets": p.ports[port]}, nil
 }
 
-// FromPeer만 센다. NAT 메타데이터와 IP 경계를 확인한 뒤 목적지와 UDP 출발 포트만 읽는다.
+// Count only FromPeer packets. Check the NAT metadata and IP boundaries before reading only the destination and UDP source port.
 func inspectCapturedPacket(data []byte) (bool, uint16, error) {
-	invalid := errors.New("capture 패킷 경계 오류")
+	invalid := errors.New("invalid capture packet boundaries")
 	if len(data) < 4 {
 		return false, 0, invalid
 	}

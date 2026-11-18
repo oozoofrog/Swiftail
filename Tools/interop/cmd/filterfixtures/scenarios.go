@@ -68,7 +68,7 @@ func scenarios() []scenario {
 		}
 		add("기타 프로토콜은 포트 전체만", rule("*", self, 7, 9, "[47]"),
 			inbound("전체 포트가 아니므로 거절", ipPacket(peer, self, 47, make([]byte, 8))))
-		// 계약의 other(UInt8)에 포함되지만 Go 파서·필터가 특별 취급하는 경계다.
+		// These are edge cases included in the contract's other(UInt8) that the Go parser and filter treat specially.
 		var specialNumbers []step
 		if family.name == "IPv4" {
 			specialNumbers = append(specialNumbers, inbound("와이어 번호 0은 Go Unknown", ipPacket(peer, self, 0, make([]byte, 8))))
@@ -134,7 +134,7 @@ func scenarios() []scenario {
 			inbound("목적 포트만 다름", udp(peer, self, 7, 40001)),
 			inbound("프로토콜만 TCP SYN", transportPacket(peer, self, 6, 7, 40000, 2)),
 			inbound("정확한 역방향 재확인", udp(peer, self, 7, 40000)))
-		// 목적 주소 차이가 notForUs에 가려지지 않도록 두 주소 모두 자기 주소로 둔다.
+		// Make both addresses local so notForUs does not mask the destination address difference.
 		all[len(all)-1].LocalAddresses = []string{self, third}
 		add("수신 허용은 흐름을 만들지 않음", rule("*", self, 7, 7, "[17]"),
 			inbound("규칙으로 수신", udp(peer, self, 40000, 7)),

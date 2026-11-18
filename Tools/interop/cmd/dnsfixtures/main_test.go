@@ -17,6 +17,6 @@ func TestFixturesMatchGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(actual, want) {
-		t.Fatal("저장 자료와 Go 기준 구현 결과가 다릅니다. dnsfixtures로 재생성하세요")
+		t.Fatal("Stored fixtures differ from the Go reference results. Regenerate them with dnsfixtures")
 	}
 }

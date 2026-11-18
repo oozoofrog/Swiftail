@@ -2,9 +2,9 @@ import Foundation
 import Security
 import SwiftailPairing
 
-/// 인증 키를 만드는 데 쓰는 Tailscale OAuth 클라이언트의 보관. 키체인의 일반 암호 항목 하나에 둔다.
+/// Stores the Tailscale OAuth client used to create auth keys in a single generic password item in the keychain.
 ///
-/// 라이브러리는 클라이언트 비밀을 받아 쓰기만 하고 저장하지 않는다(계약 1절). 보관은 앱의 몫이다.
+/// The library receives and uses the client secret without storing it (contract §1). The app is responsible for storage.
 enum OAuthClientKeychain {
     private struct Stored: Codable {
         var id: String
@@ -30,7 +30,7 @@ enum OAuthClientKeychain {
         return TailscaleOAuthClient(id: stored.id, secret: stored.secret, tags: stored.tags)
     }
 
-    /// 있던 항목을 바꾼다. 저장했으면 true.
+    /// Replaces the existing item. Returns true if saved.
     static func save(_ client: TailscaleOAuthClient) -> Bool {
         guard let data = try? JSONEncoder().encode(Stored(id: client.id, secret: client.secret, tags: client.tags))
         else { return false }
