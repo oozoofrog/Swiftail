@@ -6,7 +6,7 @@ import Foundation
 /// AEAD in the handshake uses counter 0 and AAD = the current hash. Transport uses the message's counter and
 /// empty AAD. The ciphertext layout is ciphertext ‖ tag (16).
 ///
-/// Whitepaper §5.4, `docs/protocol-notes/wireguard.md` "Basic operations" and "Transport data: sending" 7
+/// Whitepaper §5.4 and `docs/protocol-notes/wireguard.md`, “Basic operations” and “Sending transport data,” item 7
 /// (origin: wireguard-go `device/noise-protocol.go`, `device/send.go`).
 enum AEAD {
     static let tagSize = 16

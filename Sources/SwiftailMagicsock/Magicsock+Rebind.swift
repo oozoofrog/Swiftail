@@ -37,14 +37,14 @@ extension Magicsock {
         )
     }
 
-    /// Restarts a STUN round when only the link changes and the socket stays the same (Go `ReSTUN`, "same" in behavior N 2). Leaves path state as is.
+    /// Restarts a STUN round when only the link changes and the socket stays the same (Go `ReSTUN`, “Same” in behavior N 2). Leaves path state as is.
     ///
     /// Does nothing if a round is already active or there are no regions. If endpoints changed, emits
     /// `.endpointsChanged` when the round ends.
     ///
     /// shortcut: Go schedules another round after the active one ends if one is already running (`wantEndpointsUpdate`). Here the active
-    /// round (at most 3 seconds) measures the same interfaces and addresses, so its results are used. This will be needed when results from a round
-    /// immediately after a link change are observed on a real device to be stale and yield incorrect endpoints.
+    /// round (at most 3 seconds) measures the same interfaces and addresses, so its results are used. Schedule another round if real-device testing shows
+    /// that the active round returns stale results after a link change and yields incorrect endpoints.
     public mutating func restartSTUN(at now: ContinuousClock.Instant) -> [Output] {
         var random = SystemRandomNumberGenerator()
         return restartSTUN(at: now, using: &random)

@@ -4,7 +4,7 @@
 /// do not revisit byte offsets. All integers are little-endian. The first 4 bytes are read as one LE `uint32` consisting of 1 type byte and
 /// three bytes of 0. As a result, any reserved byte other than 0 produces an unknown type.
 ///
-/// Whitepaper §5.4, `docs/protocol-notes/wireguard.md` "Wire format"
+/// Whitepaper §5.4 and `docs/protocol-notes/wireguard.md`, “Wire formats”
 /// (origin: wireguard-go `device/noise-protocol.go`, `device/receive.go`).
 enum Message {
     case initiation(Initiation, MessageMACs)
@@ -12,7 +12,7 @@ enum Message {
     case cookieReply(CookieReply)
     case transportData(TransportData)
 
-    /// Parses a datagram. Returns `malformed` if it is shorter than 32 bytes, has an unknown type,
+    /// Parses a datagram. Throws `malformed` if it is shorter than 32 bytes, has an unknown type,
     /// or is a handshake message with an incorrect size.
     init(parsing datagram: [UInt8]) throws(WireGuardError) {
         // wireguard-go discards messages shorter than MinMessageSize (32) before checking the type.
@@ -48,7 +48,7 @@ enum Message {
     }
 }
 
-/// The two MACs at the end of a handshake message. mac1 always differs from 0, and mac2 differs from 0 only when a cookie has been received.
+/// The two MACs at the end of a handshake message. Always computes mac1. Computes mac2 only with a received cookie that is still valid.
 struct MessageMACs: Equatable {
     var mac1: [UInt8]
     var mac2: [UInt8]
@@ -69,7 +69,7 @@ struct Initiation: Equatable {
     /// 12-byte TAI64N + 16-byte tag.
     var encryptedTimestamp: [UInt8]
 
-    /// The bytes preceding mac1 and mac2. The MAC is computed over these bytes.
+    /// The bytes preceding mac1 and mac2. mac1 covers these bytes, and mac2 also covers mac1.
     var bytesBeforeMACs: [UInt8] {
         Self.type.littleEndianBytes + sender.littleEndianBytes + ephemeral + encryptedStatic + encryptedTimestamp
     }

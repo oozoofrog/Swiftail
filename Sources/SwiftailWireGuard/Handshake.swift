@@ -7,11 +7,10 @@ import SwiftailCrypto
 /// in one round trip. Each stage is a pure function that takes inputs and returns the message and next state. Device-level decisions such as index assignment, peer lookup,
 /// and replay checks belong to `WireGuardDevice`.
 ///
-/// The hash (transcript) guarantees the peer has not changed between stages. If any AEAD operation fails to open, discard
-/// that message.
+/// The transcript hash binds the peer across stages. Discard a message if any AEAD operation fails to open it.
 ///
-/// Whitepaper §5.4.2–§5.4.5, `docs/protocol-notes/wireguard.md` from "Initiator: creating an initiation"
-/// through "Transport key derivation" (origin: wireguard-go `device/noise-protocol.go`).
+/// Whitepaper §5.4.2–§5.4.5 and `docs/protocol-notes/wireguard.md`, from “Initiator creates an initiation”
+/// through “Transport key derivation (`BeginSymmetricSession`)” (origin: wireguard-go `device/noise-protocol.go`).
 enum Handshake {
     // shortcut: The PSK is fixed at 32 bytes of 0. Tailscale does not configure a PSK. Add it to peer configuration if a use case needs it.
     private static let presharedKey = [UInt8](repeating: 0, count: 32)

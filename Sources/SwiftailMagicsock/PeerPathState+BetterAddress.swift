@@ -7,13 +7,13 @@ import SwiftailBase
 
 /// Whether an address that just returned a Pong is better than the current `bestAddr` (notes 4.7).
 ///
-/// Both addresses start at 0 points. The faster one receives a score equal to the percentage by which it is faster than the slower one. Each address
-/// gets bonus points by type (loopback +50, link-local +30, private +20). If the new address is only 1% faster or less, keep the old one to avoid switching
-/// between similar paths. If a Go peer on the same machine advertises both `127.0.0.1:p` and a LAN address, comparable latency makes
-/// loopback win (notes 4.7 calculation).
+/// Both addresses start at 0 points. For the lower-latency address, compute 100 − (lower latency × 100) / higher latency using integer division.
+/// Then add points by address type (loopback +50, link-local +30, private +20). Keep the current address when it scores 0 and the new address
+/// scores at most 1 point. Otherwise, switch only if the new address scores higher. This avoids switching between similar paths. If a Go peer on
+/// the same machine advertises both `127.0.0.1:p` and a LAN address, loopback wins at comparable latencies (notes §4.7 calculation).
 ///
-/// shortcut: Omits Go's same-address MTU comparison (path MTU measurement), peer relay (Geneve) path comparison, and IPv6 +10 points because MTU is
-/// unmeasured, relay is unused, and only IPv4 candidates exist (contract "Exclusions"). Each becomes necessary when adding path MTU measurement,
+/// shortcut: Omits Go’s same-address MTU comparison (path MTU measurement), peer relay (Geneve) path comparison, and the 10-point bonus for IPv6. Swiftail skips MTU measurements,
+/// does not use peer relay, and accepts only IPv4 candidates (contract “Exclusions”). Each becomes necessary when adding path MTU measurement,
 /// peer relay, or IPv6 candidates, respectively.
 extension PeerPathState {
     /// Returns true if `a` is better than `b`. It is always better if `b` is absent. An identical address is never better.

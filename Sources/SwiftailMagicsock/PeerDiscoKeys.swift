@@ -5,7 +5,7 @@
 
 import SwiftailBase
 
-/// A peer's two disco keys and which one is active (contract "TSMP disco key advertisement" behavior T4, notes 4.10 2).
+/// A peer’s two disco keys and which one is active (contract “TSMP Disco Key Advertisement (2026-11-16),” behavior T4, notes §4.10, item 2).
 ///
 /// Holds the key learned from the netmap and the key learned from a TSMP advertisement separately. Seals outgoing disco messages with the one active key. The rules match Go.
 /// - When a TSMP advertisement arrives, its key becomes active even if the netmap supplied a newer key.
@@ -13,7 +13,7 @@ import SwiftailBase
 ///   a Ping or CallMeMaybe sealed with the inactive key arrives (`noteSeen`).
 ///
 /// A mutating entry point returns true when its Go counterpart does. It can return true even if the active key's value did not change (when the first advertisement
-/// matches the netmap key, or when the netmap key changes while the TSMP key is active). On true, the caller rediscovers the path (Go
+/// matches the netmap key, or when the netmap key changes while the TSMP key is active). On true, the caller triggers path rediscovery (Go
 /// `changedActiveDiscoLocked`, `PeerPathState.resetForNewDiscoKey`).
 ///
 /// Keys of 0 are omitted. The caller passes nil for a netmap key of 0 or one whose shared key cannot be computed (behavior B1). Whether another peer

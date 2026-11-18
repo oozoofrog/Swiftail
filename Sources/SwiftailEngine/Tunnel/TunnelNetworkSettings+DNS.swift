@@ -10,8 +10,8 @@ import SwiftailControl
 
 /// Derives DNS settings to pass to the OS (contract behavior S5, DNS notes 4.1.4).
 ///
-/// Passes only zones the node answers directly (`localZones`) to the OS as match domains. Only queries for these zones reach the service IP.
-/// The default OS DNS resolves all other names (decision D1). The same `localZones` become MagicDNS responder zones (behavior S7).
+/// Passes only zones the node answers directly (`localZones`) to the OS as match domains. Only queries for these zones reach the service IP through OS resolver routing.
+/// The OS's default DNS resolves all other names (decision D1). The same `localZones` become MagicDNS responder zones (behavior S7).
 ///
 /// shortcut: Omits global `Resolvers`, `Routes` with resolvers, and `FallbackResolvers` (decision D2), and does not emit search
 /// `Domains` (decision D3). Also omits 4via6 names and `dns-subdomain-resolve`. This will be needed when custom split
@@ -61,8 +61,8 @@ extension TunnelNetworkSettings {
                 zones.insert(zone)
             }
         }
-        // The `routes` dictionary has no order, but coverage compares against all keys and is independent of order. A zone created by an earlier `ExtraRecords` entry
-        // covers later entries (as in Go).
+        // The `routes` dictionary is unordered, but coverage is independent of order because it checks all keys. A zone created by an earlier `ExtraRecords` entry
+        // can cover later entries (as in Go).
         for record in dns.extraRecords {
             guard ["", "A", "AAAA"].contains(record.type),
                   IPAddress(record.value) != nil,

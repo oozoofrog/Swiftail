@@ -2,8 +2,8 @@ import SwiftailBase
 
 /// An inclusive address range. Represents every filter rule address expression (`*`, CIDR, `a-b`, and single addresses).
 ///
-/// Go expands an `a-b` range into a list of prefixes. Here the range is compared directly, avoiding the explosion in
-/// prefix count when expanding a wide range while giving the same membership result.
+/// Go expands an `a-b` range into a list of prefixes. Comparing directly against the range gives the same membership result
+/// and avoids the large number of prefixes a wide range can produce.
 ///
 /// The address string table in `docs/protocol-notes/netmap-engine.md` 4.4.
 struct AddressRange: Sendable, Equatable {
@@ -51,8 +51,8 @@ struct AddressRange: Sendable, Equatable {
 extension AddressRange {
     /// Parses one filter rule address expression. If it cannot be parsed, returns an empty list, dropping only that item.
     ///
-    /// Uses the same order as Go `parseIPSet`. `*` → `cap:` → CIDR if `/` is present → range if exactly one `-` is present →
-    /// single address. Rejects a CIDR with host bits set instead of silently clearing them.
+    /// Checks for `*` first, then `cap:`, then a CIDR if `/` is present, then a range if exactly one `-` is present, and finally a
+    /// single address. This is the order of Go `parseIPSet`. Rejects a CIDR with host bits set instead of silently clearing them.
     static func ranges(parsing text: String) -> [AddressRange] {
         if text == "*" {
             return [everything(byteCount: 4), everything(byteCount: 16)]

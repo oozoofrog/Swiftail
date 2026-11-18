@@ -1,7 +1,7 @@
 /// Queues outgoing IP packets and sends them as transport messages when a usable session exists. Otherwise
 /// sends an initiation. Also handles keepalive and rekey decisions.
 ///
-/// Whitepaper §5.4.6 and §6.2, `docs/protocol-notes/wireguard.md` "Transport data: sending" and "Handshake sending rules"
+/// Whitepaper §5.4.6 and §6.2 and `docs/protocol-notes/wireguard.md`, “Sending transport data” and “Handshake send rules”
 /// (origin: wireguard-go `device/send.go`).
 extension WireGuardDevice {
     /// Sends one IP packet to a peer. If there is no session, queues the packet and starts a handshake.
@@ -47,7 +47,7 @@ extension WireGuardDevice {
         return outputs
     }
 
-    /// Sends the priority message using the current keypair when a session is first established (`setPriorityMessage(_:for:)`).
+    /// Sends the priority message using the current keypair as soon as a session is established (`setPriorityMessage(_:for:)`).
     ///
     /// Bypasses the queue and skips sending if no session is usable, without starting a handshake (wireguard-go
     /// `SendPriorityMessage`). It counts as a data send because the packet is nonempty (wireguard-go `RoutineSequentialSender`).

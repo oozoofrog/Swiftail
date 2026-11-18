@@ -6,7 +6,7 @@
 ///
 /// Apply this only to AEAD-authenticated packets so forged counters cannot advance the window and block legitimate packets.
 ///
-/// Whitepaper §5.4.6, `docs/protocol-notes/wireguard.md` "Transport data: receiving" 4
+/// Whitepaper §5.4.6 and `docs/protocol-notes/wireguard.md`, “Receiving transport data,” item 4
 /// (origin: wireguard-go `replay/replay.go`, MIT license, Copyright (C) 2017-2023 WireGuard LLC).
 struct ReplayFilter {
     private static let blockBitLog: UInt64 = 6

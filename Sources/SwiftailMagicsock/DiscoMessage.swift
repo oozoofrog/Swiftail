@@ -3,16 +3,16 @@ import SwiftailBase
 /// A disco message before sealing, either Ping, Pong, or CallMeMaybe.
 ///
 /// Handles only plaintext encoding and parsing (`DiscoPacket` handles the envelope and cryptography). Bytes from the peer are checked for
-/// length and type and converted to this type at the single `init(parsing:)` entry point. No byte sequence causes a trap.
+/// length and type and converted to this type at the single `init(parsing:)` entry point. Parsing never traps on any byte sequence.
 ///
 /// Plaintext is `type(1) ‖ version(1) ‖ body` and version is 0 when sending. See notes 3.3 and 3.4 for the body layout.
 /// Parsing is lenient as in Go. Ping and Pong ignore version and permit bytes after the body.
 ///
 /// `docs/protocol-notes/disco-magicsock.md` §§3.3 and 3.4 (origin: tailscale.com `disco/disco.go`, BSD-3-Clause).
 enum DiscoMessage: Sendable, Equatable {
-    /// - nodeKey: The sender's node public key, or nil if absent or 0. Discards padding for path MTU measurement.
+    /// - nodeKey: The sender's node public key, or nil if absent or 0. The parser discards path MTU measurement padding.
     case ping(TransactionID, nodeKey: NodePublicKey?)
-    /// - source: The observed source address of the Ping. IPv4 also arrives as IPv4-mapped IPv6 (16 bytes) on the wire and is stored unmapped.
+    /// - source: The observed source address of the Ping. On the wire, an IPv4 address arrives as a 16-byte IPv4-mapped IPv6 address. The parser converts it back to IPv4.
     case pong(TransactionID, source: IPEndpoint)
     /// The address list advertised by the peer. A version ≠ 0, a 0-byte body, or a body whose length is not a multiple of 18 yields an empty list without error (as in Go).
     case callMeMaybe([IPEndpoint])
@@ -26,12 +26,12 @@ enum DiscoMessage: Sendable, Equatable {
     private static let headerLength = 2
     private static let transactionIDLength = TransactionID.byteCount
     private static let pongBodyLength = transactionIDLength + endpointLength
-    /// One address on the wire consists of 16 IP bytes ‖ 2 port bytes (BE).
+    /// An address on the wire consists of a 16-byte IP address and a 2-byte big-endian port.
     private static let endpointLength = 18
 
     /// Parses decrypted plaintext.
     ///
-    /// - Throws: `malformed` for fewer than 2 bytes or a body shorter than its type minimum. If the type is outside `0x01`–`0x03`, throws
+    /// - Throws: `malformed` for fewer than 2 bytes or a body shorter than the minimum for its type. If the type is outside `0x01`–`0x03`, throws
     ///   `unknownType` (including peer relay types `0x04`–`0x09`, which Go parses and M4 discards).
     init(parsing plaintext: [UInt8]) throws(DiscoError) {
         guard plaintext.count >= Self.headerLength else { throw .malformed }
@@ -42,7 +42,7 @@ enum DiscoMessage: Sendable, Equatable {
         switch kind {
         case .ping:
             guard let txID = TransactionID(body.prefix(Self.transactionIDLength)) else { throw .malformed }
-            // If at least 32 bytes follow the TxID and they are not all 0, they contain a NodeKey. Otherwise the rest is padding.
+            // If at least 32 bytes follow the TxID and those first 32 bytes are not all 0, they contain a NodeKey. Otherwise the rest is padding.
             let extra = body.dropFirst(Self.transactionIDLength)
             let nodeKey = NodePublicKey(rawValue: extra.prefix(NodePublicKey.byteCount)).flatMap { $0.isZero ? nil : $0 }
             self = .ping(txID, nodeKey: nodeKey)

@@ -5,13 +5,13 @@
 
 import SwiftailBase
 
-/// Derives routes to send through the tunnel (contract behaviors S2~S4).
+/// Derives routes for traffic that should go through the tunnel (contract behaviors S2~S4).
 ///
 /// Builds OS routes from AllowedIPs for peers installed in the data plane. OS routes differ from WireGuard AllowedIPs. The aggregated
 /// `/10` and `/48` are passed only to the OS and never used as AllowedIPs (`netmap-engine.md` 4.8).
 ///
 /// shortcut: Creates no subnet, exit node, or VIP service routes. Since M3, `EnginePeer` excludes subnet routes and /0
-/// from AllowedIPs (engine contract M3 behavior 2), so peer routes contain only single-address entries and peers' own addresses. This will be needed
+/// from AllowedIPs (engine contract M3 behavior 2), so peer routes carry only single-address prefixes for the peers' own addresses. This will be needed
 /// when the plan scope expands.
 extension TunnelNetworkSettings {
     /// If the control server supplies `one-cgnat?v=true`, the threshold for aggregating per-peer `/32` routes into one CGNAT `/10` becomes 1.

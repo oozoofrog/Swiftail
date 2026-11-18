@@ -74,8 +74,8 @@ extension Netcheck {
 
     /// Matches a STUN response. Returns nil if it is not a response to a request sent in the active round (`unexpectedSTUN`).
     ///
-    /// The first response sets the region's latency and cancels its remaining requests (Go `cancelSet`). Rejects a second response
-    /// with the same TxID. Ends the round once every region it is waiting for has answered.
+    /// The first response sets the region's latency and cancels its unsent requests (Go `cancelSet`). Other in-flight requests can still lower the recorded latency.
+    /// Rejects a second response with the same TxID. Ends the round once every region it is waiting for has answered.
     mutating func receive(
         _ txID: TransactionID,
         mapped: IPEndpoint,

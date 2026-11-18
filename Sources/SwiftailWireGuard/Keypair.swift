@@ -2,7 +2,7 @@ import CryptoKit
 
 /// A transport session from one handshake, with send and receive keys, a send counter, and a receive replay protection window.
 ///
-/// Whitepaper §5.4.6, `docs/protocol-notes/wireguard.md` "Transport key derivation"
+/// Whitepaper §5.4.6, `docs/protocol-notes/wireguard.md`, “Transport key derivation (`BeginSymmetricSession`)”
 /// (origin: wireguard-go `device/keypair.go`, `device/noise-protocol.go`).
 struct Keypair {
     let sendKey: SymmetricKey

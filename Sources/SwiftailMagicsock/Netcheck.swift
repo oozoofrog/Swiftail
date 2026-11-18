@@ -7,7 +7,7 @@ import SwiftailBase
 /// A state machine that determines the local external addresses (endpoints) and home DERP region. It has no sockets or clock.
 ///
 /// Runs a **round** that sends requests to STUN servers in DERP regions, gathers local external addresses and per-region latencies from responses,
-/// and recomputes the endpoint list and home region at the end. The node sends `Action` values of `.sendSTUN` through the UDP socket,
+/// and recomputes the endpoint list and home region at the end. The node sends the payload of each `.sendSTUN` action through the UDP socket,
 /// passes received STUN responses to `receive`, and calls `advance` when the time reaches `nextDeadline`. Time and randomness (TxID and the next round interval)
 /// are arguments that tests can provide directly.
 ///
@@ -23,7 +23,7 @@ import SwiftailBase
 ///   always measure every region and end when all reply or 3 seconds elapse. This will be needed if round cost becomes a problem for a DERPMap with many regions.
 struct Netcheck: Sendable {
     enum Action: Sendable, Equatable {
-        /// Sends to `to` through the UDP socket. It must share the WireGuard and disco socket for the response address to become an endpoint (DERP notes 4.10 2).
+        /// Sends to `to` through the same UDP socket as WireGuard and disco so the response address can become an endpoint (DERP notes §4.10, item 2).
         case sendSTUN([UInt8], to: IPEndpoint)
         /// The set of endpoints to publish changed (order matters, notes 4.9 1).
         case endpointsChanged([Magicsock.Endpoint])
@@ -49,7 +49,7 @@ struct Netcheck: Sendable {
     static let homeAbsoluteDifference = Duration.milliseconds(10)
     /// A region that sent a DERP packet within this time is considered reachable even without a STUN response (`netcheck.go:1396` `PreferredDERPFrameTime`).
     static let homeFrameRecency = Duration.seconds(8)
-    /// The age of DERP activity that keeps a measured home as the reference after a round with no measurements (Go `PreferredDERPKeepAliveTimeout`, 2 × 60 seconds).
+    /// The maximum age of DERP activity that preserves the home selected by measurement as the comparison baseline after a round with no measurements (Go `PreferredDERPKeepAliveTimeout`, 2 × 60 seconds).
     static let homeKeepAliveTimeout = Duration.seconds(120)
 
     // MARK: Inputs
@@ -78,7 +78,7 @@ struct Netcheck: Sendable {
 
     /// The current home region, or 0 if none yet.
     var homeRegion: Int64 = 0
-    /// The home selected by measurements in the last round (Go's previous report's `PreferredDERP`). 0 for a fallback home or if measurements stopped. The reference for deciding whether to keep home.
+    /// The home selected by measurements in the last round (the previous Go report’s `PreferredDERP`). It is 0 for a fallback home or when measurements stop. This value is the baseline for home retention.
     var measuredHome: Int64 = 0
     /// The last computed list of local endpoints. Empty until the first round completes.
     var endpoints: [Magicsock.Endpoint] = []
@@ -136,7 +136,7 @@ struct Netcheck: Sendable {
         return startRound(at: now, using: &generator)
     }
 
-    /// Reports that a socket was newly bound (notes 4.11 2). Replaces endpoint inputs, discards the active round, and immediately starts a new one.
+    /// Handles a newly bound socket (notes §4.11, item 2). Replaces endpoint inputs, discards the active round, and immediately starts a new one.
     ///
     /// Requests in the previous round went out on the old socket, so their replies no longer match any request (`unexpectedSTUN`). If there are
     /// no regions, starts no round. When regions arrive, `setRegions` starts a round with the new inputs.

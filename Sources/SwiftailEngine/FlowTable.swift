@@ -7,7 +7,7 @@ import SwiftailBase
 ///
 /// `docs/protocol-notes/netmap-engine.md` 4.5 and §5 (constants).
 struct FlowTable: Sendable {
-    /// A flow as seen by the receiver, with protocol, source address and port → destination address and port.
+    /// A flow as seen on receive, keyed by protocol, source address and port, and destination address and port.
     struct Flow: Hashable, Sendable {
         let protocolNumber: UInt8
         let source: IPAddress
@@ -19,7 +19,7 @@ struct FlowTable: Sendable {
     /// The maximum number of records.
     static let capacity = 512
 
-    /// Maps each flow to its last-use sequence number. The smallest value is the least recently used.
+    /// Maps each flow to its last-use sequence number. The flow with the lowest number is the least recently used.
     private var lastUse: [Flow: UInt64] = [:]
     private var clock: UInt64 = 0
 

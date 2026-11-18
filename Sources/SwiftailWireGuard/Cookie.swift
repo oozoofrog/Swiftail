@@ -9,7 +9,7 @@ import SwiftailCrypto
 /// The sender uses `CookieGenerator` and the receiver uses `CookieChecker`. `HandshakeLoad` and `RateLimiter` handle when
 /// the receiver requires mac2 (load detection) and per-source rate limiting.
 ///
-/// Whitepaper §5.4.4 and §5.4.7, `docs/protocol-notes/wireguard.md` "mac1, mac2, and cookies"
+/// Whitepaper §5.4.4 and §5.4.7, `docs/protocol-notes/wireguard.md` "mac1, mac2, and cookie"
 /// (origin: wireguard-go `device/cookie.go`).
 enum MAC {
     static let size = 16
@@ -81,7 +81,7 @@ struct CookieGenerator {
 /// (the mac2 portion of wireguard-go's `CookieChecker`).
 ///
 /// Cookie = MAC(secret, source). Only the receiver knows the secret, which rotates every `cookieRefreshTime` (120 seconds). Only a sender that can
-/// actually receive replies at that source can obtain the cookie, and it can use it only briefly. The secret and cookie are hidden from `dump` and the debugger.
+/// actually receive replies at that source can obtain the cookie and use it for a limited time. The secret and cookie are hidden from `dump` and the debugger.
 struct CookieChecker {
     private struct Secret {
         let value: [UInt8]
@@ -90,7 +90,7 @@ struct CookieChecker {
 
     /// Cookie sealing key = HASH("cookie--" ‖ the device's own public key).
     private let cookieKey: [UInt8]
-    /// Nil until a reply has been created. Until then mac2 is always invalid (like time 0 for `secretSet` in Go).
+    /// Nil until a reply has been created. Until then mac2 is always invalid (as with the zero value of `secretSet` in Go).
     private var secret: Secret?
 
     init(publicKey: PublicKey) {
@@ -98,7 +98,7 @@ struct CookieChecker {
     }
 
     /// Checks in constant time whether the received message's mac2 was made with the cookie issued to this source.
-    /// Returns false if there is no secret or more than 120 seconds have elapsed (the sender has also stopped using any cookie issued with that secret).
+    /// Returns false if there is no secret or the secret is more than 120 seconds old. The sender tracks cookie age separately, from receipt.
     func isValidMAC2(
         _ macs: MessageMACs,
         over bytesBeforeMACs: [UInt8],
@@ -113,7 +113,7 @@ struct CookieChecker {
     /// Creates a cookie reply for a rejected handshake message (sender index `sender`, mac1 `mac1`).
     ///
     /// If there is no secret or it is older than 120 seconds, draws a new one using `generator` first. Seals the cookie with the rejected message's mac1 as AAD.
-    /// Only the sender of that mac1 can open it, so observing or forging the reply cannot make it usable with another message.
+    /// The sender opens the reply using its last sent mac1 as AAD. Opening fails if that MAC differs from the one used to seal the reply.
     /// Sealing cannot fail because the key and nonce lengths are fixed. If it fails, returns nil.
     mutating func makeReply(
         to sender: UInt32,

@@ -2,7 +2,7 @@ import SwiftailBase
 
 /// Input and output values shared by parts of `Magicsock`, including peers, candidate home regions, and local endpoints.
 ///
-/// The node extracts these values from the netmap and DERPMap and passes them in. This target does not know the tailcfg models.
+/// The node extracts these values from the netmap and DERPMap and passes them in. This target is independent of the tailcfg models.
 /// "Public API" in `docs/contracts/SwiftailMagicsock.md`.
 extension Magicsock {
     /// The portion of a netmap peer needed for path discovery. The node creates it from `EnginePeer`.
@@ -31,10 +31,10 @@ extension Magicsock {
         public var id: Int64
         /// The address to query for STUN. If empty, the region is left unmeasured and can only be chosen as a fallback home when there are no measurements.
         public var stunServers: [IPEndpoint]
-        /// DERPMap `HomeParams.RegionScore`. Multiplies latency only when positive. Defaults to 0 if absent.
+        /// DERPMap `HomeParams.RegionScore`. Used as a latency multiplier only when positive. Defaults to 0 if absent.
         public var score: Double
 
-        /// Creates a candidate home region. The default `score` of 0 compares latency as is.
+        /// Creates a candidate home region. The default `score` of 0 compares unweighted latencies.
         public init(id: Int64, stunServers: [IPEndpoint], score: Double = 0) {
             self.id = id
             self.stunServers = stunServers

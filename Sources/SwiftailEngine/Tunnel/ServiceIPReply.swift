@@ -9,8 +9,8 @@ import SwiftailBase
 /// Builds the IP packets the node sends directly in response to packets to the service IP (`100.100.100.100`, `fd7a:115c:a1e0::53`).
 ///
 /// Pure functions with no I/O. The received packet was already parsed as `IPPacket`, and the answer is the IP packet bytes to send back.
-/// Swaps source and destination addresses and ports, and correctly fills in the IPv4 header checksum, UDP, TCP, and ICMPv6 pseudo-header checksums,
-/// and the ICMPv4 checksum (the UDP checksum is mandatory for IPv6, RFC 8200 8.1). Returns `nil` for input it cannot answer.
+/// Swaps source and destination addresses and ports, and fills in the IPv4 header and ICMPv4 checksums, along with the UDP, TCP, and ICMPv6 checksums
+/// that include a pseudo-header (the UDP checksum is mandatory for IPv6, RFC 8200 8.1). Returns `nil` for input it cannot answer.
 ///
 /// The caller chooses which packets to answer (whether to the service IP or UDP 53). This code checks only whether a reply can be built. Contract behavior L2
 /// specifies DNS responses for UDP 53, replies for ICMP echo, RST for TCP, and discarding the rest (no response or ICMP unreachable).

@@ -9,8 +9,8 @@ import SwiftailWireGuard
 /// Has no I/O, socket, clock, or actor. Takes time as an argument and returns "WireGuard datagrams to send to peers" and
 /// "IP packets to deliver up the stack." All entry points are nonthrowing. Discards are reported as `.dropped`.
 ///
-/// The engine is unaware of paths. The caller (`Magicsock`) chooses whether to send a datagram by UDP or which DERP region to use,
-/// and delivers only datagrams classified as WireGuard (the same principle as the WireGuard device being unaware of addresses).
+/// The engine is unaware of paths. The caller (`Magicsock`) chooses UDP or a DERP region for outbound datagrams. On receive, only datagrams classified
+/// as WireGuard by `Magicsock` reach the engine. This follows the same principle as keeping addresses out of the WireGuard device.
 /// Fails closed for unsupported packets and peers.
 ///
 /// This file contains state, netmap application, and timers. Packet sending and receiving are in `TailnetEngine+Packets.swift`.
@@ -22,7 +22,7 @@ public struct TailnetEngine: Sendable {
     public enum Output: Sendable, Equatable {
         /// A WireGuard message to send to a peer. The caller (`Magicsock`) chooses the path.
         case datagram([UInt8], to: NodePublicKey)
-        /// An IP packet allowed by the filter to deliver up the stack.
+        /// An IP packet that passed the filter and is ready for delivery up the stack.
         case ipPacket([UInt8])
         /// A discarded packet, for diagnostics and tests.
         case dropped(Drop)
@@ -74,7 +74,7 @@ public struct TailnetEngine: Sendable {
     private var netmap: Netmap?
     /// The next time a node key expires, whether for a peer or for this node.
     private var keyExpiryDeadline: ContinuousClock.Instant?
-    /// A responder for UDP 53 queries to the service IP. Empty if there is no netmap or the local key expired (SERVFAIL for every name).
+    /// A responder for UDP 53 queries to the service IP. With no netmap or an expired local key, its node index and zones are empty, so unresolved names get SERVFAIL unless a built-in rule handles them.
     var resolver = MagicDNSResolver(netmap: nil, localZones: [])
     /// Local tailnet addresses (single-address prefixes only). Packets to these addresses return to the device.
     var localAddresses: Set<IPAddress> = []
@@ -104,8 +104,8 @@ public struct TailnetEngine: Sendable {
     /// Returns any outbound items.
     ///
     /// Installs all eligible peers in WireGuard up front (without Go's lazy creation). Removes keys that have disappeared or are
-    /// no longer eligible. Changing AllowedIPs for the same key preserves the session. The filter updates only rules and preserves UDP flow
-    /// records. Adding and removing peers creates no messages, so currently this always returns an empty list.
+    /// no longer eligible. Changing AllowedIPs for the same key preserves the session. The filter replaces the rules and local addresses and preserves UDP and SCTP
+    /// flow records. Adding and removing peers creates no messages, so currently this always returns an empty list.
     ///
     /// - Parameter wallClock: The wall-clock time at `now`. Used to check key expiration for peers and the local node.
     public mutating func apply(_ netmap: Netmap, at now: ContinuousClock.Instant, wallClock: Date) -> [Output] {
@@ -121,7 +121,7 @@ public struct TailnetEngine: Sendable {
 
     /// Processes timers due by now (WireGuard timers and key expiration for peers and the local node).
     ///
-    /// Clears the responder when the local key expires, even if no new netmap arrives (SERVFAIL for every name). `nextDeadline` includes that time,
+    /// Clears the responder's node index and zones when the local key expires, even if no new netmap arrives. Unresolved names yield SERVFAIL unless a built-in rule handles them. `nextDeadline` includes that time,
     /// so the caller must call `advance` then.
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
         if recomputesPeers(at: now) {
@@ -165,7 +165,7 @@ public struct TailnetEngine: Sendable {
 
     /// Computes peers from the netmap as of wallNow and synchronizes WireGuard and the send index.
     ///
-    /// Also sets the TSMP disco key advertisement for each peer when a session is established. The source is a local address in the same family as the peer's first address,
+    /// Also configures the TSMP disco key advertisement to send to each peer whenever a session is established. The source is a local address in the same family as the peer's first address,
     /// and the destination is that first address (Go `PriorityMessageForPeer`). Sends nothing if it cannot build the advertisement.
     private mutating func configurePeers(in netmap: Netmap, wallNow: Date) {
         var current: [NodePublicKey: EnginePeer] = [:]

@@ -8,7 +8,7 @@ import SwiftailControl
 
 /// Decides whether to accept an incoming packet. Built from tailcfg filter rules and local addresses.
 ///
-/// Outgoing packets bypass the rules, and only UDP flows are recorded (as in Go). Incoming packets are evaluated in this order.
+/// Outgoing packets bypass the rules. Only UDP and SCTP flow state is recorded (as in Go). Incoming packets are evaluated in this order.
 /// 1. Drop if the destination is multicast or link-local.
 /// 2. Drop if the destination is not a local address, even if an allow rule is broad (prevents peers from targeting other destinations).
 /// 3. Apply protocol-specific rules. TCP checks rules only for new connections (SYN without ACK). UDP and SCTP accept replies to previously sent flows.
@@ -56,7 +56,7 @@ public struct PacketFilter: Sendable {
         self.localAddresses = localAddresses
     }
 
-    /// Evaluates an incoming packet. Accepts a reply to previously sent UDP or SCTP even without a rule.
+    /// Evaluates an incoming packet. Replies to previously sent UDP or SCTP can pass without an allow rule.
     public mutating func checkInbound(_ packet: IPPacket) -> Verdict {
         if Self.isMulticastOrLinkLocal(packet.destination) {
             return .drop(.multicastOrLinkLocal)
@@ -67,13 +67,13 @@ public struct PacketFilter: Sendable {
         return isAllowed(packet) ? .accept : .drop(.noRuleMatched)
     }
 
-    /// Records an outgoing packet so UDP replies can be accepted. Does nothing for protocols other than UDP and SCTP.
+    /// Records outgoing UDP and SCTP packets so their replies can be accepted.
     public mutating func recordOutbound(_ packet: IPPacket) {
         guard packet.transportProtocol == .udp || packet.transportProtocol == .sctp else { return }
         flows.recordReply(to: packet)
     }
 
-    /// Replaces only the rules and retains UDP flow records.
+    /// Replaces the rules and local addresses while retaining UDP and SCTP flow records.
     public mutating func replaceRules(_ rules: [FilterRule], localAddresses: [IPAddress]) {
         matches = FilterMatch.matches(from: rules)
         self.localAddresses = Set(localAddresses)
@@ -84,7 +84,7 @@ public struct PacketFilter: Sendable {
     private mutating func isAllowed(_ packet: IPPacket) -> Bool {
         switch packet.transportProtocol {
         case .tcp:
-            // There is no connection tracking. A new connection cannot start without SYN, so all non-SYN packets are accepted.
+            // The filter does no TCP connection tracking. Only SYN packets with ACK clear are treated as new connections and checked against the rules.
             return !packet.isTCPSYN || matches.contains { $0.matches(packet) }
         case .udp, .sctp:
             return flows.containsFlow(of: packet) || matches.contains { $0.matches(packet) }

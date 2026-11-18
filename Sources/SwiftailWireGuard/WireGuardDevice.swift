@@ -6,7 +6,7 @@ import SwiftailBase
 ///
 /// This state machine has no I/O, sockets, TUN, timers, or clock. The caller supplies received datagrams,
 /// outgoing IP packets, and the current time. The machine updates its state and returns "datagrams to send over the network" and
-/// "IP packets to deliver up the stack." Because this is a value type, its owner can call it serially.
+/// "IP packets to deliver up the stack." This is a value type, so serial calls by its owner suffice.
 ///
 /// The device does not handle addresses. The Tailscale fork of wireguard-go also lacks endpoint roaming.
 /// Magicsock chooses the path to the peer, so the output is "bytes to send to this peer."
@@ -116,7 +116,7 @@ public struct WireGuardDevice: Sendable {
         peers[peer]?.priorityMessage = message
     }
 
-    /// Removes the peer and its key material. Subsequent messages using that peer's indices return `unknownPeer`.
+    /// Removes the peer and its key material. Subsequent messages using that peer's indices cause `unknownPeer` to be thrown.
     ///
     /// Retains only the last accepted initiation timestamp (up to `maxRetiredTimestamps` entries). A peer registered again with the same key
     /// rejects replays of old initiations. When the table fills, it forgets the earliest removal. The timestamp does

@@ -21,7 +21,7 @@ enum DiscoPacket {
     /// The minimum length for opening a packet covers the 62-byte header and 16-byte tag.
     private static let minimumOpenableLength = sealedStart + NaClSecretBox.overhead
 
-    /// Whether the length is ≥ 38 and starts with magic. Does not try to open it.
+    /// Checks for at least 38 bytes and a leading disco magic value without opening the packet.
     static func isDisco(_ bytes: [UInt8]) -> Bool {
         bytes.count >= classificationLength && bytes.starts(with: magic)
     }
@@ -32,7 +32,7 @@ enum DiscoPacket {
         return DiscoPublicKey(rawValue: bytes[senderKeyRange])
     }
 
-    /// Creates `magic ‖ sender ‖ nonce ‖ secretbox(plaintext)`. The nonce must be 24 bytes (otherwise it traps as a programming error).
+    /// Creates `magic ‖ sender ‖ nonce ‖ secretbox(plaintext)`. A nonce length other than 24 bytes is a programming error and triggers a trap.
     static func seal(_ message: DiscoMessage, sender: DiscoPublicKey, sharedKey: DiscoSharedKey, nonce: [UInt8]) -> [UInt8] {
         magic + sender.rawValue + nonce + sharedKey.seal(message.plaintext, nonce: nonce)
     }

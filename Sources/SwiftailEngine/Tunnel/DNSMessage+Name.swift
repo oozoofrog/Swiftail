@@ -59,7 +59,7 @@ extension DNSMessage {
         /// Reads one name from `offset` in the message. Follows the same rules as Go `Name.unpack` (notes 3.1).
         ///
         /// Follows a pointer (top two bits 11) in either direction, at most 10 times. This matches Go and bounds loops by the pointer count.
-        /// Between pointers, the read position always moves forward, so the loop never exceeds 11 times the message length for any input,
+        /// Between pointers, the read position always moves forward, so the number of iterations is at most 11 times the message length for any input,
         /// and the length check bounds the label count.
         ///
         /// - Returns: The name and the offset of the byte after it. If there is a pointer, the offset is immediately after the first pointer.

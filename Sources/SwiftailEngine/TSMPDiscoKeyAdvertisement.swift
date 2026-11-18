@@ -9,7 +9,7 @@ import SwiftailBase
 /// An announcement of the node's own disco public key, sent to the peer through the tunnel whenever a WireGuard session is established (notes `disco-magicsock.md` 3.8).
 ///
 /// The IP header (20 bytes for IPv4 or 40 bytes for IPv6, protocol 99 TSMP, TTL 64, ID 0) is followed by `'a'` and the 32-byte disco key.
-/// The receiver opens disco messages with this key without waiting for the netmap ("TSMP disco key advertisement" in the `SwiftailMagicsock` contract).
+/// The receiver opens disco messages with this key without waiting for the netmap (see “TSMP Disco Key Advertisement (2026-11-16)” in `docs/contracts/SwiftailMagicsock.md`).
 struct TSMPDiscoKeyAdvertisement: Sendable, Equatable {
     /// IP protocol number 99 (Go `ipproto.TSMP`).
     static let protocolNumber: UInt8 = 99
@@ -30,7 +30,7 @@ struct TSMPDiscoKeyAdvertisement: Sendable, Equatable {
     ///
     /// - Parameters:
     ///   - selfAddresses: The local `Addresses` in netmap order.
-    ///   - destination: The peer's first `Addresses` address (Go `endpoint.nodeAddr`).
+    ///   - destination: The first address in the peer's `Addresses` (Go `endpoint.nodeAddr`).
     init?(selfAddresses: [IPPrefix], destination: IPAddress, key: DiscoPublicKey) {
         guard !key.isZero,
               let source = selfAddresses.first(where: {
@@ -42,7 +42,7 @@ struct TSMPDiscoKeyAdvertisement: Sendable, Equatable {
         self.key = key
     }
 
-    /// The contents of an advertisement in a received packet parsed by the engine. Returns nil if it is not TSMP, its type is not `'a'`, or it is shorter than 33 bytes.
+    /// The contents of an advertisement in a received packet parsed by the engine. Returns nil unless the protocol is TSMP and the payload is at least 33 bytes and starts with `'a'`.
     /// The key may be 0 (the receiver discards it).
     init?(parsing packet: IPPacket) {
         guard packet.transportProtocol == .tsmp else { return nil }

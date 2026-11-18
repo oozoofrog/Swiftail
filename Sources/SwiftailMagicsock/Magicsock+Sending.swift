@@ -6,11 +6,11 @@ import SwiftailBase
 
 /// Sending WireGuard datagrams and disco messages (contract behaviors D3, D4, and F, notes 4.5 and 4.8 4).
 ///
-/// The peer's `PeerPathState` selects the path. A trusted direct address gets UDP only. Otherwise sends to both the direct address (if any) and the peer's home DERP
+/// The peer's `PeerPathState` selects the path. If the direct address is trusted, send only over UDP. Otherwise send to both the direct address (if any) and the peer's home DERP
 /// while rediscovering the path. This file converts that plan into output, seals any disco Pings in the plan, and fills CallMeMaybe with
 /// local endpoints. If the endpoints are stale, defers CallMeMaybe and sends it after a STUN round completes.
 extension Magicsock {
-    /// If the local endpoints to put in CallMeMaybe are older than this, rerun the round before sending.
+    /// If the local endpoints to put in CallMeMaybe are at least this old, rerun the round before sending.
     /// `endpointsFreshEnoughDuration` (`magicsock.go:4112`, notes 4.8 4.1).
     static let endpointsFreshness: Duration = .seconds(27)
 
@@ -22,7 +22,7 @@ extension Magicsock {
 
     /// Equivalent to `send(_:to:at:)`, drawing random values from `generator`.
     ///
-    /// Outputs in order are the datagram (UDP, then DERP), associated disco Pings and CallMeMaybe, STUN requests from restarting the paused periodic round, and path events.
+    /// Emits the datagram over UDP and then DERP as applicable, followed by associated disco Pings and CallMeMaybe, STUN requests from restarting periodic rounds, and path events.
     /// If there is no direct address or DERP region, discards the datagram with `noRouteToPeer` and sends the Pings as usual.
     mutating func send(
         _ datagram: [UInt8],
@@ -75,7 +75,7 @@ extension Magicsock {
 
     /// Sends a CallMeMaybe containing all local endpoints to the peer over its home DERP (behavior F1).
     ///
-    /// If 27 seconds have passed since endpoints were set or none were ever set, adds the peer to the deferred list (one slot per peer) and starts a round.
+    /// If local endpoints are at least 27 seconds old or have never been determined, add the peer to the deferred list (one slot per peer) and start a round.
     /// When the round ends, `sendPendingCallMeMaybe` sends it (behavior F2). Endpoint types are omitted (notes 4.8 4.2).
     mutating func callMeMaybe(
         to peer: NodePublicKey,
