@@ -1,12 +1,12 @@
-// 스택 시험의 공용 도우미. 스택 둘을 메모리에서 맞붙이는 `StackPair`, 스택 하나에 손으로 만든 패킷을 넣는 도우미,
-// 표의 불변식 검사를 둔다. 손실·재정렬을 주입하는 하네스는 M6-6의 몫이다.
+// Shared stack test helpers. Provides `StackPair` to connect two stacks in memory, helpers for feeding handcrafted packets to one stack,
+// and table invariant checks. The harness that injects loss and reordering belongs to M6-6.
 
 import SwiftailBase
 import Testing
 
 @testable import SwiftailNetstack
 
-/// 시험의 가짜 주소와 비밀. 실제 tailnet 주소가 아니다.
+/// Fake addresses and secrets for tests. The addresses are not from a real tailnet.
 enum StackHosts {
     static let clientAddresses = [WireHosts.v4a, WireHosts.v6a]
     static let serverAddresses = [WireHosts.v4b, WireHosts.v6b]
@@ -31,13 +31,13 @@ extension Array where Element == TCPStack.Output {
         compactMap { if case .ipPacket(let packet) = $0 { packet } else { nil } }
     }
 
-    /// 낸 패킷을 해석한 세그먼트. 스택이 낸 패킷은 늘 해석된다(아니면 시험이 실패한다).
+    /// Segments parsed from emitted packets. Packets emitted by the stack always parse (otherwise the test fails).
     var segments: [TCPSegment] {
         packets.map { packet in
             do {
                 return try TCPSegment(parsingIPPacket: packet)
             } catch {
-                Issue.record("스택이 해석되지 않는 패킷을 냈다: \(error)")
+                Issue.record("The stack emitted a packet that could not be parsed: \(error)")
                 return TCPSegment(
                     source: IPEndpoint(address: WireHosts.v4a, port: 0),
                     destination: IPEndpoint(address: WireHosts.v4a, port: 0), sequenceNumber: SequenceNumber(0),
@@ -54,7 +54,7 @@ extension Array where Element == TCPStack.Output {
         compactMap { if case .dropped(let drop) = $0 { drop } else { nil } }
     }
 
-    /// 응용이 놓은 연결의 끝(`.releasedConnectionClosed`).
+    /// A connection released by the application ended (`.releasedConnectionClosed`).
     var releasedCloses: [ReleasedClose] {
         compactMap {
             if case .releasedConnectionClosed(let reason, let statistics) = $0 {
@@ -66,15 +66,15 @@ extension Array where Element == TCPStack.Output {
     }
 }
 
-/// `.releasedConnectionClosed`에 실린 값.
+/// The payload of `.releasedConnectionClosed`.
 struct ReleasedClose: Equatable {
     var reason: TCPStack.CloseReason
     var statistics: TCPConnection.Statistics
 }
 
 extension TCPStack.Event {
-    /// `.closed`의 통계를 `TCPConnection.Statistics.unchecked`로 바꾼 사건. 사건의 순서·ID·까닭만 견주는 시험이 쓴다
-    /// (통계는 `ConnectionStatisticsTests`가 본다).
+    /// An event with `.closed` statistics replaced by `TCPConnection.Statistics.unchecked`. Used by tests comparing only event order, ID, and reason
+    /// (`ConnectionStatisticsTests` covers statistics).
     var withoutStatistics: Self {
         guard case .closed(let id, let reason, _) = self else { return self }
         return .closed(id, reason, .unchecked)
@@ -82,19 +82,19 @@ extension TCPStack.Event {
 }
 
 extension TCPConnection.Statistics {
-    /// 견주지 않는 통계의 자리값.
+    /// Placeholder for statistics that are not compared.
     static let unchecked = Self(openedAt: .now)
 }
 
 extension TCPSegment {
-    /// 시험이 스택에 넣을 패킷 바이트.
+    /// Packet bytes the test will feed to the stack.
     var packet: [UInt8] {
-        guard let packet = ipPacket() else { fatalError("시험의 세그먼트를 패킷으로 만들지 못했다: \(self)") }
+        guard let packet = ipPacket() else { fatalError("Could not turn the test segment into a packet: \(self)") }
         return packet
     }
 }
 
-/// 상대가 보내는 세그먼트를 짧게 만든다.
+/// Creates a compact representation of a segment sent by the peer.
 func peerSegment(
     from source: IPEndpoint, to destination: IPEndpoint, sequence: UInt32 = 5_000,
     acknowledgment: SequenceNumber = SequenceNumber(0), flags: TCPSegment.Flags, payload: [UInt8] = [],
@@ -106,9 +106,9 @@ func peerSegment(
         maximumSegmentSize: maximumSegmentSize ?? (flags.contains(.syn) ? 1_240 : nil), payload: payload)
 }
 
-/// 스택 둘(`client`는 IPv4·IPv6 주소 `v4a`·`v6a`, `server`는 `v4b`·`v6b`)을 손실 없는 링크로 잇는다. 시각은 시험이 넘긴다.
+/// Connects two stacks (`client` uses IPv4 and IPv6 addresses `v4a` and `v6a`, and `server` uses `v4b` and `v6b`) over a lossless link. The test provides the time.
 ///
-/// 한 쪽에 쌓인 패킷을 묶음으로 넣은 뒤 같은 시각으로 `advance(to:)`를 불러 미뤄 둔 ACK를 받는다(노드의 묶음 처리와 같다).
+/// After feeding the accumulated packets as a batch to one side, calls `advance(to:)` at the same time to get the delayed ACK (as the node does when batching).
 struct StackPair {
     enum Side { case client, server }
 
@@ -121,7 +121,7 @@ struct StackPair {
     var serverDrops: [TCPStack.Drop] = []
     var clientReleasedCloses: [ReleasedClose] = []
     var serverReleasedCloses: [ReleasedClose] = []
-    /// 각 쪽이 낸 세그먼트 전부.
+    /// All segments emitted by each side.
     var clientSent: [TCPSegment] = []
     var serverSent: [TCPSegment] = []
     var toServer: [[UInt8]] = []
@@ -154,12 +154,12 @@ struct StackPair {
         }
     }
 
-    /// 쌓인 패킷을 모두 건넨다. 받은 쪽은 묶음 하나를 받은 뒤 `advance(to: now)`로 ACK를 낸다.
+    /// Delivers all accumulated packets. The recipient emits an ACK with `advance(to: now)` after receiving a batch.
     mutating func deliver() throws {
         var rounds = 0
         while !toServer.isEmpty || !toClient.isEmpty {
             rounds += 1
-            guard rounds < 100_000 else { throw HarnessError(description: "주고받기가 끝나지 않는다") }
+            guard rounds < 100_000 else { throw HarnessError(description: "The exchange did not finish") }
             let forServer = toServer
             toServer = []
             for packet in forServer {
@@ -175,7 +175,7 @@ struct StackPair {
         }
     }
 
-    /// `limit`까지 타이머를 돌리며 주고받는다. 끝나면 `now`는 `limit`이다.
+    /// Runs timers and exchanges packets up to `limit`. On return, `now` equals `limit`.
     mutating func run(until limit: ContinuousClock.Instant) throws {
         try deliver()
         while let next = [client.nextDeadline, server.nextDeadline].compactMap({ $0 }).min(), next <= limit {
@@ -191,7 +191,7 @@ struct StackPair {
         try run(until: now + duration)
     }
 
-    /// 클라이언트가 서버의 `port`로 걸고, 서버가 대기열에서 꺼낸다. 두 쪽의 ID를 돌려준다.
+    /// The client connects to the server's `port`, and the server dequeues the connection. Returns both sides' IDs.
     mutating func open(
         port: UInt16 = 443, listener: TCPStack.ListenerID, ipv6: Bool = false
     ) throws -> (client: TCPStack.ConnectionID, server: TCPStack.ConnectionID) {
@@ -200,7 +200,7 @@ struct StackPair {
         collect(outputs, from: .client)
         try deliver()
         guard let accepted = server.accept(from: listener, at: now) else {
-            throw HarnessError(description: "서버의 대기열이 비었다: \(serverDrops)")
+            throw HarnessError(description: "The server queue was empty: \(serverDrops)")
         }
         collect(accepted.outputs, from: .server)
         try deliver()
@@ -233,7 +233,7 @@ struct StackPair {
         }
     }
 
-    /// 클라이언트가 먼저 닫고 서버가 뒤따라 닫는다. 클라이언트에 TIME-WAIT가 남는다.
+    /// The client closes first and the server closes next. The client retains TIME-WAIT.
     mutating func closeFromClient(_ ids: (client: TCPStack.ConnectionID, server: TCPStack.ConnectionID)) throws {
         collect(client.close(ids.client, at: now), from: .client)
         try deliver()
@@ -243,26 +243,26 @@ struct StackPair {
 }
 
 extension TCPStack {
-    /// 손으로 만든 상대 `peer`(ISN 1,000, 창 65,535)가 `local`의 리스너와 연결을 맺고, 응용이 대기열에서 꺼낸다.
+    /// A handcrafted remote `peer` (ISN 1,000, window 65,535) establishes a connection to the `local` listener, and the application dequeues it.
     mutating func acceptHandmade(
         from peer: IPEndpoint, to local: IPEndpoint, listener: ListenerID, at now: ContinuousClock.Instant
     ) throws -> ConnectionID {
         let syn = peerSegment(from: peer, to: local, sequence: 1_000, flags: [.syn])
         guard let synAck = receive(syn.packet, at: now).segments.first, synAck.flags == [.syn, .ack] else {
-            throw HarnessError(description: "SYN-ACK가 없다")
+            throw HarnessError(description: "No SYN-ACK")
         }
         let ack = peerSegment(
             from: peer, to: local, sequence: 1_001, acknowledgment: synAck.sequenceNumber.advanced(by: 1), flags: [.ack])
         _ = receive(ack.packet, at: now)
-        guard let accepted = accept(from: listener, at: now) else { throw HarnessError(description: "대기열이 비었다") }
+        guard let accepted = accept(from: listener, at: now) else { throw HarnessError(description: "The queue was empty") }
         return accepted.connection
     }
 
-    /// 응용이 먼저 `close`하고 상대가 이 쪽 FIN을 확인하며 FIN을 보낸다. 같은 시각의 `advance`로 ACK가 나가면 연결은
-    /// TIME-WAIT 기록이 된다(기록이 차 있지 않으면). 그 4-튜플을 돌려준다.
+    /// The application calls `close` first, and the peer acknowledges this side's FIN and sends its own. Once `advance` at the same time emits the ACK, the connection
+    /// becomes a TIME-WAIT record (if the records are not full). Returns the 4-tuple.
     @discardableResult
     mutating func closeIntoTimeWait(_ id: ConnectionID, at now: ContinuousClock.Instant) throws -> FourTuple {
-        guard let connection = connection(id) else { throw HarnessError(description: "연결이 없다") }
+        guard let connection = connection(id) else { throw HarnessError(description: "No connection") }
         _ = close(id, at: now)
         let fin = peerSegment(
             from: connection.remoteEndpoint, to: connection.localEndpoint, sequence: connection.receiveNext.rawValue,
@@ -272,7 +272,7 @@ extension TCPStack {
         return FourTuple(local: connection.localEndpoint, remote: connection.remoteEndpoint)
     }
 
-    /// TIME-WAIT 기록 `tuple`에 상대 FIN의 재전송을 보낸다. 기록이 없으면 아무것도 보내지 않는다. 답을 돌려준다.
+    /// Sends a retransmitted peer FIN to the TIME-WAIT record `tuple`. Sends nothing if the record is absent. Returns the reply.
     mutating func retransmitFin(to tuple: FourTuple, at now: ContinuousClock.Instant) -> [TCPSegment] {
         guard let record = timeWaitRecords[tuple] else { return [] }
         let fin = peerSegment(
@@ -282,7 +282,7 @@ extension TCPStack {
     }
 }
 
-/// 스택의 표가 서로 맞고 상한 안인지 본다(계약 동작 M).
+/// Checks that the stack's tables agree and stay within limits (contract behavior M).
 func expectStackInvariants(_ stack: TCPStack, sourceLocation: SourceLocation = #_sourceLocation) {
     #expect(stack.connections.count <= TCPStack.maximumConnections, sourceLocation: sourceLocation)
     #expect(stack.timeWaitRecords.count <= TCPStack.maximumTimeWaitRecords, sourceLocation: sourceLocation)

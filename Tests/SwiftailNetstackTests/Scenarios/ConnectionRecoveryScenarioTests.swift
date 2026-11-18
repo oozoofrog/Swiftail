@@ -1,10 +1,10 @@
 import SwiftailNetstack
 import Testing
 
-/// 기대 시각은 계약 R1·R3·R4·F5·F7·F8과 RFC 6298 5절에서 계산한다.
-@Suite("독립 연결 회복")
+/// Expected times are computed from contract R1·R3·R4·F5·F7·F8 and RFC 6298 §5.
+@Suite("Independent connection recovery")
 struct ConnectionRecoveryScenarioTests {
-    @Test("SYN·SYN-ACK·셋째 ACK 하나의 손실은 1초 뒤 회복", arguments: [0, 1, 2])
+    @Test("Recovers after 1 second from the loss of one SYN, SYN-ACK, or third ACK", arguments: [0, 1, 2])
     func handshakeLoss(_ lostLeg: Int) throws {
         var client = LinkSimulator.Policy()
         var server = LinkSimulator.Policy()
@@ -18,10 +18,10 @@ struct ConnectionRecoveryScenarioTests {
         if lostLeg == 0 || lostLeg == 1 {
             #expect(try link.connection(.client).retransmissionTimeout >= .seconds(3))
         }
-        print("회복 handshake leg=\(lostLeg), seed=\(link.seed): \(link.elapsed)")
+        print("Recovery handshake leg=\(lostLeg), seed=\(link.seed): \(link.elapsed)")
     }
 
-    @Test("SYN 재전송은 1·3·7·15·31·63·127초, 247초에 종료")
+    @Test("SYN retransmits at 1·3·7·15·31·63·127 seconds and ends at 247 seconds")
     func synchronizeBackoffAndLimit() throws {
         let policy = LinkSimulator.Policy(lossPercent: 100)
         var link = try LinkSimulator(seed: 110, clientPolicy: policy)
@@ -32,7 +32,7 @@ struct ConnectionRecoveryScenarioTests {
         #expect(try link.connection(.client).nextDeadline == nil)
     }
 
-    @Test("첫 데이터·창 끝 손실은 ACK 진행 뒤 RTO 200ms에 재전송", arguments: [1, 10])
+    @Test("Loss of the first data or the window's last segment retransmits at the 200ms RTO after ACK progress", arguments: [1, 10])
     func dataAndTailLoss(_ segmentCount: Int) throws {
         var link = try LinkSimulator(seed: 120 + UInt64(segmentCount))
         try link.open()
@@ -46,15 +46,15 @@ struct ConnectionRecoveryScenarioTests {
         let lost = link.transmissions.filter { $0.side == .client && $0.segment.sequenceNumber == lostSequence && !$0.segment.payload.isEmpty }
         #expect(lost.count == 2)
         let retransmission = try #require(lost.last)
-        // 열 개면 앞 아홉 개의 ACK 가운데 마지막(아홉째, 2×MSS에 못 미침)이 F5의 40ms 지연 ACK라 RTO가 42ms에 다시 걸린다.
+        // With ten segments, the last ACK for the first nine (the ninth, falling short of 2×MSS) is the 40ms delayed ACK in F5, so RTO restarts at 42ms.
         let timerStart = segmentCount == 1 ? start : start + .milliseconds(42)
         #expect(retransmission.time - timerStart == .milliseconds(200))
         #expect(link.elapsed - start == .milliseconds(segmentCount == 1 ? 242 : 284))
         #expect(try link.read(from: .server).elementsEqual(bytes))
-        print("회복 data segments=\(segmentCount), seed=\(link.seed): retransmit=\(retransmission.time - start), ACK=\(link.elapsed - start)")
+        print("Recovery data segments=\(segmentCount), seed=\(link.seed): retransmit=\(retransmission.time - start), ACK=\(link.elapsed - start)")
     }
 
-    @Test("FIN·FIN의 ACK 손실은 200ms 재전송과 즉시 ACK로 회복", arguments: [false, true])
+    @Test("Recovers from loss of FIN or its ACK with a retransmission at 200ms and an immediate ACK", arguments: [false, true])
     func finishLoss(_ losesAcknowledgment: Bool) throws {
         var link = try LinkSimulator(seed: losesAcknowledgment ? 132 : 131)
         try link.open()
@@ -71,10 +71,10 @@ struct ConnectionRecoveryScenarioTests {
         try link.finish(.server)
         try link.run(for: .seconds(62), until: { $0.connections.allSatisfy { $0?.state == .closed } })
         #expect(link.connections.allSatisfy { $0?.nextDeadline == nil })
-        print("회복 FIN ackLoss=\(losesAcknowledgment), seed=\(link.seed): 0.202 seconds")
+        print("Recovery FIN ackLoss=\(losesAcknowledgment), seed=\(link.seed): 0.202 seconds")
     }
 
-    @Test("마지막 FIN ACK 손실은 TIME-WAIT에서 ACK하고 60초를 다시 잰다")
+    @Test("For a lost final FIN ACK, sends an ACK in TIME-WAIT and restarts the 60-second timer")
     func lastFinishAcknowledgmentLoss() throws {
         var link = try LinkSimulator(seed: 133)
         try link.open()
@@ -88,10 +88,10 @@ struct ConnectionRecoveryScenarioTests {
         #expect(finishes.map { $0.time - start } == [.zero, .milliseconds(200)])
         #expect(link.elapsed - start == .milliseconds(60_201))
         #expect(link.events.allSatisfy { $0.contains(.closed(.finished)) })
-        print("회복 lastFINACK seed=133: 재전송=0.2 seconds, CLOSED=\(link.elapsed - start)")
+        print("Recovery lastFINACK seed=133: retransmission=0.2 seconds, CLOSED=\(link.elapsed - start)")
     }
 
-    @Test("TIME-WAIT보다 긴 RTO에서 마지막 ACK 손실은 재전송 한도 뒤 종료한다")
+    @Test("If RTO exceeds TIME-WAIT, loss of the final ACK ends at the retransmission limit")
     func lastAcknowledgmentLossWithLongRetransmissionTimeout() throws {
         var link = try LinkSimulator(seed: 134)
         try link.open()
@@ -105,17 +105,17 @@ struct ConnectionRecoveryScenarioTests {
         link.policies[0].rules = [.init(matches: { $0.flags == .ack && $0.payload.isEmpty })]
         let start = link.elapsed
         try link.finish(.server)
-        // T6은 60초, R1은 최대 120초, R4는 재전송 15회다. 정상 종료를 모든 손실에 강제할 수 없다.
+        // T6 is 60 seconds, R1 is at most 120 seconds, and R4 allows 15 retransmissions. A normal close cannot be forced for every loss.
         try link.run(for: .seconds(2_000), stallLimit: .seconds(2_000),
                      until: { $0.connections.allSatisfy { $0?.state == .closed } })
         #expect(link.elapsed - start == .seconds(1_920))
         #expect(link.events[0].contains(.closed(.finished)))
         #expect(link.events[1].contains(.closed(.timedOut)))
         #expect(link.connections.allSatisfy { $0?.nextDeadline == nil })
-        print("종료 longRTO seed=134: 마지막 ACK 손실 뒤 1920 seconds, client=finished, server=timedOut")
+        print("Close longRTO seed=134: 1920 seconds after final ACK loss, client=finished, server=timedOut")
     }
 
-    @Test("지연 ACK는 40ms, 두 MSS 또는 빈 곳 메우기는 같은 시각")
+    @Test("Delayed ACK at 40ms, immediate ACK at two MSS or when a gap is filled")
     func delayedAndImmediateAcknowledgments() throws {
         var peer = try ScriptedTCPPeer()
         let first = peer.segment(payload: scenarioBytes(1240))
@@ -127,7 +127,7 @@ struct ConnectionRecoveryScenarioTests {
         peer = try ScriptedTCPPeer()
         _ = peer.connection.receive(first, at: peer.now)
         let second = peer.segment(sequence: peer.peerStart.advanced(by: 1240), payload: scenarioBytes(1240))
-        // 곧바로 보낼 ACK는 그 세그먼트의 receive 출력으로 나온다(F5, 2026-11-15).
+        // An immediate ACK appears in the receive output for that segment (F5, 2026-11-15).
         #expect(peer.connection.receive(second, at: peer.now).scenarioSegments.map(\.acknowledgmentNumber)
             == [peer.peerStart.advanced(by: 2480)])
         #expect(peer.connection.advance(to: peer.now).scenarioSegments.isEmpty)
@@ -137,7 +137,7 @@ struct ConnectionRecoveryScenarioTests {
         #expect(peer.receive(first).scenarioSegments.first?.acknowledgmentNumber == peer.peerStart.advanced(by: 2480))
     }
 
-    @Test("작지만 0이 아닌 창은 SWS override 200ms 뒤에 보낸다")
+    @Test("A small but nonzero window sends after the 200ms SWS override")
     func sillyWindowOverride() throws {
         var peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment(window: 1))
@@ -150,10 +150,10 @@ struct ConnectionRecoveryScenarioTests {
         #expect(sent.map { $0.payload.count } == [8])
     }
 
-    @Test("중복 ACK 셋째에서 RTO 전에 fast retransmit, partial ACK에서 다음 손실 재전송")
+    @Test("The third duplicate ACK triggers fast retransmit before RTO, and a partial ACK retransmits the next loss")
     func fastRetransmitAndPartialAcknowledgment() throws {
         var peer = try ScriptedTCPPeer()
-        // SYN의 창은 확장하지 않는다. 데이터 ACK로 확장 창을 먼저 광고한다(RFC 7323 2.2).
+        // The SYN window is unscaled. First advertise a scaled window with a data ACK (RFC 7323 2.2).
         _ = peer.receive(peer.segment())
         let original = peer.connection.write(scenarioBytes(10 * 1240)[...], at: peer.now).outputs.scenarioSegments
         #expect(original.count == 10)
@@ -176,7 +176,7 @@ struct ConnectionRecoveryScenarioTests {
         #expect(peer.connection.unacknowledgedSendByteCount == 0)
     }
 
-    @Test("데이터·창 변경 ACK는 중복 ACK 세 개에 포함하지 않는다", arguments: [false, true])
+    @Test("ACKs that carry data or change the window do not count toward three duplicate ACKs", arguments: [false, true])
     func nonDuplicateAcknowledgmentsDoNotRetransmit(_ carriesData: Bool) throws {
         var peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment())
@@ -191,7 +191,7 @@ struct ConnectionRecoveryScenarioTests {
         #expect(sent.first(where: { !$0.payload.isEmpty })?.sequenceNumber == peer.localStart)
     }
 
-    @Test("창 갱신 ACK 손실은 첫 persist 탐침으로 회복한다")
+    @Test("The first persist probe recovers from a lost window update ACK")
     func lostWindowUpdate() throws {
         var link = try blockedLink(seed: 140)
         let start = link.elapsed
@@ -202,10 +202,10 @@ struct ConnectionRecoveryScenarioTests {
         let probe = try #require(link.transmissions.first { $0.side == .client && $0.time > start && $0.segment.payload.count == 1 })
         #expect(probe.time - start == rto)
         #expect(link.elapsed - start == rto + .milliseconds(3))
-        print("회복 windowUpdate seed=140: probe=\(probe.time - start), data=\(link.elapsed - start)")
+        print("Recovery windowUpdate seed=140: probe=\(probe.time - start), data=\(link.elapsed - start)")
     }
 
-    @Test("0 창 탐침 답 하나를 잃으면 다음 탐침은 2배 간격")
+    @Test("Losing one zero-window probe reply doubles the interval to the next probe")
     func lostZeroWindowProbeReply() throws {
         var link = try blockedLink(seed: 141)
         let start = link.elapsed
@@ -216,7 +216,7 @@ struct ConnectionRecoveryScenarioTests {
         #expect(probes.prefix(2).map { $0.time - start } == [rto, rto * 3])
         #expect(try link.connection(.client).state == .established)
         #expect(link.droppedCounts[1] == 1)
-        print("회복 probeReply seed=141: \(probes.prefix(2).map { $0.time - start })")
+        print("Recovery probeReply seed=141: \(probes.prefix(2).map { $0.time - start })")
     }
 
     private func blockedLink(seed: UInt64) throws -> LinkSimulator {

@@ -4,8 +4,8 @@ import SwiftailBase
 
 @testable import SwiftailNetstack
 
-/// SACK-Permitted와 SACK 옵션의 해석·만들기(RFC 2018 2·3, 계약 동작 W2·W3, X1). 입력 바이트는 `RawPacket`이 구현과 따로 짠다.
-@Suite("TCP 세그먼트 SACK 옵션")
+/// Parsing and serializing SACK-Permitted and SACK options (RFC 2018 2·3, contract behaviors W2·W3, X1). `RawPacket` builds input bytes independently of the implementation.
+@Suite("TCP segment SACK options")
 struct TCPSegmentSACKTests {
     private func parse(_ bytes: [UInt8]) throws(TCPSegment.ParseError) -> TCPSegment {
         try TCPSegment(parsingIPPacket: bytes)
@@ -20,7 +20,7 @@ struct TCPSegmentSACKTests {
         }
     }
 
-    /// SACK 옵션의 바이트: kind 5, 길이, 블록마다 왼쪽·오른쪽 끝.
+    /// SACK option bytes: kind 5, length, and the left and right edges of each block.
     private func sackOption(_ blocks: [(UInt32, UInt32)]) -> [UInt8] {
         [5, UInt8(2 + 8 * blocks.count)] + blocks.flatMap { RawPacket.be32($0.0) + RawPacket.be32($0.1) }
     }
@@ -29,9 +29,9 @@ struct TCPSegmentSACKTests {
         TCPSegment.SACKBlock(leftEdge: SequenceNumber(left), rightEdge: SequenceNumber(right))
     }
 
-    // MARK: - 해석: SACK-Permitted
+    // MARK: - Parsing SACK-Permitted
 
-    @Test("SYN의 SACK-Permitted(kind 4, 길이 2)를 읽는다. 앞뒤의 MSS·Window Scale도 읽힌다")
+    @Test("Reads SACK-Permitted (kind 4, length 2) on SYN and reads the surrounding MSS and Window Scale options")
     func sackPermittedOnSYN() throws {
         let options: [UInt8] = [2, 4, 0x04, 0xD8, 1, 1, 4, 2, 1, 3, 3, 7]
         for packet in [
@@ -48,13 +48,13 @@ struct TCPSegmentSACKTests {
         #expect(!without.sackPermitted)
     }
 
-    @Test("SYN이 아닌 세그먼트의 SACK-Permitted는 버린다(RFC 2018 2: SYN에만 보낸다)")
+    @Test("Discards SACK-Permitted on non-SYN segments (RFC 2018 2: send only on SYN)")
     func sackPermittedOnNonSYNIgnored() throws {
         let parsed = try parse(RawPacket.ipv4(segment: RawPacket.segment(flags: 0x10, options: [1, 1, 4, 2])))
         #expect(!parsed.sackPermitted)
     }
 
-    @Test("길이가 2가 아닌 SACK-Permitted는 값을 읽지 않고 길이로 건너뛴다(뒤의 옵션은 읽는다)")
+    @Test("Skips SACK-Permitted by length without reading its value if length is not 2 (reads subsequent options)")
     func sackPermittedWrongLength() throws {
         let parsed = try parse(RawPacket.ipv4(segment: RawPacket.segment(
             flags: 0x02, options: [4, 3, 0, 2, 4, 0x04, 0xD8, 1])))
@@ -62,9 +62,9 @@ struct TCPSegmentSACKTests {
         #expect(parsed.maximumSegmentSize == 1240)
     }
 
-    // MARK: - 해석: SACK 블록
+    // MARK: - Parsing SACK blocks
 
-    @Test("SACK 블록 1~4개를 옵션의 순서대로 읽는다. 32비트 끝을 순환하는 블록도 그대로다", arguments: 1...4)
+    @Test("Reads 1~4 SACK blocks in option order and preserves a block that wraps at the 32-bit boundary", arguments: 1...4)
     func sackBlocks(count: Int) throws {
         let all: [(UInt32, UInt32)] = [(5_500, 6_000), (0xFFFF_FFF0, 0x10), (8_000, 8_500), (7_000, 7_500)]
         let blocks = Array(all.prefix(count))
@@ -76,7 +76,7 @@ struct TCPSegmentSACKTests {
         #expect(parsed.maximumSegmentSize == nil)
     }
 
-    @Test("데이터가 실린 세그먼트의 SACK 블록도 읽고 데이터는 옵션 뒤에서 시작한다(IPv6)")
+    @Test("Also reads SACK blocks on data-bearing segments, with data starting after the options (IPv6)")
     func sackBlocksWithPayload() throws {
         let payload: [UInt8] = [1, 2, 3, 4, 5]
         let parsed = try parse(RawPacket.ipv6(segment: RawPacket.segment(
@@ -85,7 +85,7 @@ struct TCPSegmentSACKTests {
         #expect(parsed.payload == payload)
     }
 
-    @Test("SYN의 SACK 블록은 버린다(MSS·Window Scale을 SYN에서만 담는 것과 같은 규칙)")
+    @Test("Discards SACK blocks on SYN (just as MSS and Window Scale are kept only on SYN)")
     func sackBlocksOnSYNIgnored() throws {
         let parsed = try parse(RawPacket.ipv4(segment: RawPacket.segment(
             flags: 0x12, options: [2, 4, 0x04, 0xD8, 1, 1] + sackOption([(1, 2)]))))
@@ -93,39 +93,39 @@ struct TCPSegmentSACKTests {
         #expect(parsed.maximumSegmentSize == 1240)
     }
 
-    @Test("길이가 2 + 8n(n ≥ 1)이 아닌 SACK은 값을 읽지 않고 길이로 건너뛴다", arguments: [2, 3, 9, 17, 33])
+    @Test("Skips a SACK by length without reading values when its length is not 2 + 8n (n ≥ 1)", arguments: [2, 3, 9, 17, 33])
     func sackWrongLengthSkipped(length: Int) throws {
         var option: [UInt8] = [5, UInt8(length)] + [UInt8](repeating: 0xAB, count: length - 2)
-        // 뒤에 Window Scale을 두어 길이로 정확히 건너뛰었는지 본다(SYN이 아니라 값은 담지 않으므로 오류가 없음으로 본다).
+        // Put Window Scale after it to check that parsing skips by exactly the length (as this is not a SYN, it does not retain the value, so check that there is no error).
         option += [1, 1, 1, 1]
         let parsed = try parse(RawPacket.ipv4(segment: RawPacket.segment(flags: 0x10, options: option)))
         #expect(parsed.sackBlocks.isEmpty)
     }
 
-    @Test("같은 세그먼트에 SACK이 둘이면 뒤의 것이 남는다")
+    @Test("When a segment has two SACK options, the last one wins")
     func duplicateSACKLastWins() throws {
         let parsed = try parse(RawPacket.ipv4(segment: RawPacket.segment(
             flags: 0x10, options: [1, 1] + sackOption([(1, 2)]) + [1, 1] + sackOption([(3, 4), (5, 6)]))))
         #expect(parsed.sackBlocks == [block(3, 4), block(5, 6)])
     }
 
-    @Test("머리 밖으로 나가는 SACK, 블록이 옵션 공간(40바이트)을 넘는 SACK, 길이 필드가 잘린 SACK은 malformed")
+    @Test("A SACK extending past the header, a SACK with blocks exceeding the option space (40 bytes), and a SACK with a truncated length field are malformed")
     func malformedSACK() {
-        // 블록 하나(길이 10)를 선언했지만 옵션 영역에는 8바이트뿐이다.
+        // Declares one block (length 10), but the option area contains only 8 bytes.
         let outside = RawPacket.ipv4(segment: RawPacket.segment(flags: 0x10, options: [1, 1, 5, 10, 0, 0, 0, 1]))
         #expect(parseError(outside) == .malformed)
-        // 블록 5개는 길이 42다. 옵션 영역 40바이트를 꽉 채워도 들어가지 않는다.
+        // Five blocks give length 42. They do not fit even with all 40 bytes of option space.
         let fiveBlocks = [5, 42] + [UInt8](repeating: 0, count: 38)
         let tooMany = RawPacket.ipv4(segment: RawPacket.segment(flags: 0x10, options: fiveBlocks))
         #expect(parseError(tooMany) == .malformed)
-        // 영역의 마지막 바이트가 kind 5이고 길이 필드가 없다.
+        // The area's last byte is kind 5 with no length field.
         let truncated = RawPacket.ipv4(segment: RawPacket.segment(flags: 0x10, options: [1, 1, 1, 5]))
         #expect(parseError(truncated) == .malformed)
     }
 
-    // MARK: - 만들기
+    // MARK: - Serialization
 
-    @Test("SYN: MSS, NOP 둘과 SACK-Permitted, NOP와 Window Scale 순서의 12바이트(gVisor makeSynOptions와 같다)")
+    @Test("SYN: 12 bytes in the order MSS, two NOPs and SACK-Permitted, then NOP and Window Scale (as in gVisor makeSynOptions)")
     func serializeSYNWithSACKPermitted() throws {
         let segment = TCPSegment(
             source: WireHosts.endpoint(WireHosts.v4a, 40_000), destination: WireHosts.endpoint(WireHosts.v4b, 443),
@@ -144,7 +144,7 @@ struct TCPSegmentSACKTests {
             sequence: 1, flags: 0x02, window: 65_535, options: [2, 4, 0x04, 0xD8, 1, 1, 4, 2])))
     }
 
-    @Test("SYN이 아니면 SACK-Permitted를 싣지 않고, SYN이면 SACK 블록을 싣지 않는다")
+    @Test("Non-SYN segments omit SACK-Permitted, and SYN segments omit SACK blocks")
     func optionsOnlyWhereAllowed() throws {
         let ack = TCPSegment(
             source: WireHosts.endpoint(WireHosts.v4a, 40_000), destination: WireHosts.endpoint(WireHosts.v4b, 443),
@@ -160,7 +160,7 @@ struct TCPSegmentSACKTests {
         #expect(synPacket.count == 40)
     }
 
-    @Test("ACK의 SACK 블록 1~4개: NOP 둘 + kind 5 + 길이 + 블록. 해석하면 같은 값이다(IPv4·IPv6)", arguments: 1...4)
+    @Test("ACK with 1~4 SACK blocks: two NOPs + kind 5 + length + blocks. Parsing yields the same values (IPv4 and IPv6)", arguments: 1...4)
     func serializeSACKBlocks(count: Int) throws {
         let edges: [(UInt32, UInt32)] = [(6_000, 6_500), (0xFFFF_FF00, 0x100), (8_000, 8_500), (9_000, 9_500)]
         let blocks = Array(edges.prefix(count))
@@ -182,7 +182,7 @@ struct TCPSegmentSACKTests {
         #expect(TCPSegment.sackOptionLength(blockCount: count) == 4 + 8 * count)
     }
 
-    @Test("SACK 블록이 5개면 TCP 머리에 들어가지 않아 nil이다")
+    @Test("Five SACK blocks do not fit in the TCP header, so the result is nil")
     func tooManySACKBlocksDoNotSerialize() {
         let segment = TCPSegment(
             source: WireHosts.endpoint(WireHosts.v4a, 40_000), destination: WireHosts.endpoint(WireHosts.v4b, 443),

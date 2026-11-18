@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 임의의 입력에 죽지 않고 상한을 넘지 않는다. 연결 256개·TIME-WAIT 기록 1,024개에서의 비용.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 X1·X7·X8, M과 시험 11.
-@Suite("스택: 임의 입력과 비용")
+/// The stack survives arbitrary inputs and stays within limits. Cost with 256 connections and 1,024 TIME-WAIT records.
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors X1·X7·X8, M, and test 11.
+@Suite("Stack arbitrary input and cost")
 struct StackRobustnessTests {
-    @Test("임의 패킷·SYN 홍수·응용 호출·시각을 섞어 넣어도 죽지 않고 표가 상한 안에서 서로 맞는다", arguments: [1, 2, 3] as [UInt64])
+    @Test("A mix of arbitrary packets, SYN floods, application calls, and times does not crash and leaves the tables consistent and within limits", arguments: [1, 2, 3] as [UInt64])
     func randomTraffic(seed: UInt64) {
         var random = WireFuzzRandom(seed: seed)
         var now = ContinuousClock.now
@@ -91,7 +91,7 @@ struct StackRobustnessTests {
             case 8:
                 outputs = (try? stack.connect(to: remote, at: now).outputs) ?? []
             default:
-                // 주소의 주인이 바뀌는 일은 드물게 섞는다(잦으면 홍수가 상한에 닿기 전에 지워진다).
+                // Mix in address owner changes infrequently (if frequent, they clear the flood before it reaches the limit).
                 if Int.random(in: 0..<20, using: &random) == 0 {
                     outputs = stack.removeConnections(toRemoteAddress: remote.address)
                 }
@@ -102,19 +102,19 @@ struct StackRobustnessTests {
             if step % 200 == 0 { expectStackInvariants(stack) }
         }
         expectStackInvariants(stack)
-        // 상한이 실제로 걸렸는지(홍수가 상한까지 닿았는지)도 본다.
+        // Also check that a limit actually applied (the flood reached the limit).
         let limits: [TCPStack.Limit] = drops.compactMap { if case .limitReached(let limit) = $0 { limit } else { nil } }
-        print("임의 입력(씨앗 \(seed)): 상한에 닿아 버린 SYN \(limits.count)개, 종류 \(Set(limits.map { "\($0)" }).sorted())")
-        // 상대 주소가 셋뿐이라 주소별 상한(맺는 중 16, 연결 64. 연결 64를 먼저 본다)에 닿는다.
+        print("Arbitrary input (seed \(seed)): dropped \(limits.count) SYNs at a limit, types \(Set(limits.map { "\($0)" }).sorted())")
+        // With only three remote addresses, per-address limits apply (16 opening, 64 connections. Check the 64-connection limit first).
         #expect(limits.contains(.halfOpenConnectionsPerAddress) || limits.contains(.connectionsPerAddress))
         #expect(drops.contains(.malformed) || drops.contains(.badChecksum))
     }
 
-    @Test("연결 256개와 TIME-WAIT 기록 1,024개에서 패킷 하나·기한 찾기·advance의 비용")
+    @Test("Cost of one packet, deadline lookup, and advance with 256 connections and 1,024 TIME-WAIT records")
     func costAtLimits() throws {
         let start = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: start)
-        // 상대 주소 하나에 연결 64개·기록 64개까지라 주소를 나눈다(M6 검토 A).
+        // Spread over multiple addresses because each remote address allows up to 64 connections and 64 records (M6 review A).
         for index in 0..<256 {
             let remote = IPEndpoint(address: StackHosts.peer(UInt8(1 + index / 64)), port: UInt16(1_000 + index))
             _ = try stack.connect(to: remote, at: start)
@@ -134,7 +134,7 @@ struct StackRobustnessTests {
 
         let iterations = 2_000
         let clock = ContinuousClock()
-        // SYN-SENT 연결에 온, 답하지 않는 세그먼트(ACK 없는 RST): 찾기와 연결 하나의 처리.
+        // A segment that gets no answer (RST without ACK) on a SYN-SENT connection: lookup and processing for one connection.
         let target = try #require(stack.connections.values.first?.connection)
         let ignored = peerSegment(
             from: target.remoteEndpoint, to: target.localEndpoint, sequence: 1, flags: [.rst]
@@ -151,9 +151,9 @@ struct StackRobustnessTests {
         }
         #expect(deadline == start + .seconds(1))
         print(
-            "스택 비용(연결 256, 기록 1,024, 평균): receive \(receiveTime / iterations), "
-                + "nextDeadline \(deadlineTime / iterations), advance(기한 없음) \(advanceTime / iterations)")
-        // 디버그 빌드에서도 패킷마다 1ms를 넘지 않는다(병적인 경우만 잡는 느슨한 한계).
+            "Stack cost (256 connections, 1,024 records, average): receive \(receiveTime / iterations), "
+                + "nextDeadline \(deadlineTime / iterations), advance (no deadline) \(advanceTime / iterations)")
+        // At most 1ms per packet even in a debug build (a loose limit that catches only pathological cases).
         #expect(receiveTime / iterations < .milliseconds(1))
         #expect(deadlineTime / iterations < .milliseconds(1))
         #expect(advanceTime / iterations < .milliseconds(1))

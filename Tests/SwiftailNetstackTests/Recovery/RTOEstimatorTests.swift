@@ -2,11 +2,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 재전송 타이머의 RTO 추정(RFC 6298). 계약 `docs/contracts/SwiftailNetstack.md` 동작 R1~R3과 시험 7.
-/// 기대값은 RFC 6298 2.2·2.3의 식을 손으로 계산한 것이다(G = 0, K = 4, α = 1/8, β = 1/4).
-@Suite("RTO 추정기")
+/// Retransmission timer RTO estimation (RFC 6298). Contract `docs/contracts/SwiftailNetstack.md` behaviors R1~R3 and test 7.
+/// Expected values are calculated by hand from the RFC 6298 2.2·2.3 formulas (G = 0, K = 4, α = 1/8, β = 1/4).
+@Suite("RTO estimator")
 struct RTOEstimatorTests {
-    @Test("측정 전의 RTO는 1초다(2.1)")
+    @Test("Before measurement, the RTO is 1 second (2.1)")
     func initialTimeout() {
         let estimator = RTOEstimator()
         #expect(estimator.retransmissionTimeout == .seconds(1))
@@ -14,7 +14,7 @@ struct RTOEstimatorTests {
         #expect(estimator.roundTripTimeVariation == .zero)
     }
 
-    @Test("첫 표본 R: SRTT = R, RTTVAR = R/2, RTO = SRTT + 4·RTTVAR(2.2)")
+    @Test("First sample R: SRTT = R, RTTVAR = R/2, RTO = SRTT + 4·RTTVAR (2.2)")
     func firstSample() {
         var estimator = RTOEstimator()
         estimator.recordSample(.milliseconds(100))
@@ -23,7 +23,7 @@ struct RTOEstimatorTests {
         #expect(estimator.retransmissionTimeout == .milliseconds(300))
     }
 
-    @Test("다음 표본 R': RTTVAR를 먼저, 낡은 SRTT로 고치고 SRTT를 고친다(2.3)")
+    @Test("Next sample R': updates RTTVAR first using the old SRTT, then updates SRTT (2.3)")
     func laterSamples() {
         var estimator = RTOEstimator()
         estimator.recordSample(.milliseconds(100))
@@ -32,14 +32,14 @@ struct RTOEstimatorTests {
         #expect(estimator.roundTripTimeVariation == .microseconds(57_500))
         #expect(estimator.smoothedRoundTripTime == .milliseconds(110))
         #expect(estimator.retransmissionTimeout == .milliseconds(340))
-        // 표본이 SRTT와 같으면 RTTVAR만 3/4로 준다: 43.125ms, RTO = 110 + 172.5 = 282.5ms
+        // If the sample equals SRTT, only RTTVAR drops to 3/4: 43.125ms, RTO = 110 + 172.5 = 282.5ms
         estimator.recordSample(.milliseconds(110))
         #expect(estimator.roundTripTimeVariation == .microseconds(43_125))
         #expect(estimator.smoothedRoundTripTime == .milliseconds(110))
         #expect(estimator.retransmissionTimeout == .microseconds(282_500))
     }
 
-    @Test("SRTT보다 작은 표본도 |SRTT − R'|로 RTTVAR를 고친다")
+    @Test("A sample below SRTT also uses |SRTT − R'| to update RTTVAR")
     func sampleBelowSmoothedValue() {
         var estimator = RTOEstimator()
         estimator.recordSample(.seconds(1))
@@ -51,7 +51,7 @@ struct RTOEstimatorTests {
         #expect(estimator.retransmissionTimeout == .milliseconds(3025))
     }
 
-    @Test("하한 200ms: 경계 바로 아래는 올리고 바로 위는 그대로 둔다")
+    @Test("200ms floor: raises a value just below the boundary and leaves a value just above it alone")
     func lowerBound() {
         var tiny = RTOEstimator()
         tiny.recordSample(.milliseconds(10))   // 10 + 4·5 = 30ms
@@ -67,10 +67,10 @@ struct RTOEstimatorTests {
         #expect(above.retransmissionTimeout == .nanoseconds(200_000_001))
     }
 
-    @Test("상한 120초: 경계 바로 위는 내리고 바로 아래는 그대로 둔다")
+    @Test("120-second cap: lowers a value just above the boundary and leaves a value just below it alone")
     func upperBound() {
         var exact = RTOEstimator()
-        exact.recordSample(.seconds(40))   // 3R = 120초
+        exact.recordSample(.seconds(40))   // 3R = 120 seconds
         #expect(exact.retransmissionTimeout == .seconds(120))
 
         var below = RTOEstimator()
@@ -82,7 +82,7 @@ struct RTOEstimatorTests {
         #expect(above.retransmissionTimeout == .seconds(120))
     }
 
-    @Test("0과 음수 표본은 0으로 본다")
+    @Test("Treats zero and negative samples as 0")
     func zeroAndNegativeSamples() {
         var zero = RTOEstimator()
         zero.recordSample(.zero)
@@ -96,7 +96,7 @@ struct RTOEstimatorTests {
         #expect(negative.retransmissionTimeout == .milliseconds(200))
     }
 
-    @Test("터무니없이 큰 표본은 상한으로 묶여 넘침 없이 상한 RTO가 된다")
+    @Test("Caps an extremely large sample so that RTO reaches the cap without overflowing")
     func hugeSamples() {
         var estimator = RTOEstimator()
         estimator.recordSample(.seconds(Int64.max))
@@ -108,7 +108,7 @@ struct RTOEstimatorTests {
         #expect(estimator.retransmissionTimeout >= .milliseconds(200))
     }
 
-    @Test("만료마다 RTO를 두 배로 하고 120초에서 멈춘다(5.5)")
+    @Test("Doubles RTO on every expiration and caps it at 120 seconds (5.5)")
     func backOff() {
         var estimator = RTOEstimator()
         var seen: [Duration] = []
@@ -119,7 +119,7 @@ struct RTOEstimatorTests {
         #expect(seen == [2, 4, 8, 16, 32, 64, 120, 120, 120].map { Duration.seconds($0) })
     }
 
-    @Test("backoff는 SRTT·RTTVAR를 건드리지 않고, 새 표본이 오면 식으로 되돌린다(5.5, 5.7 아래 주석)")
+    @Test("backoff leaves SRTT and RTTVAR alone, and a new sample restores formula-based RTO (5.5, note below 5.7)")
     func backOffReleasedByNewSample() {
         var estimator = RTOEstimator()
         estimator.recordSample(.milliseconds(100))   // RTO 300ms
@@ -129,12 +129,12 @@ struct RTOEstimatorTests {
         #expect(estimator.retransmissionTimeout == .milliseconds(2400))
         #expect(estimator.smoothedRoundTripTime == .milliseconds(100))
         #expect(estimator.roundTripTimeVariation == .milliseconds(50))
-        // 같은 표본이 다시 오면 RTTVAR = 37.5ms, SRTT = 100ms, RTO = 250ms
+        // If the same sample arrives again, RTTVAR = 37.5ms, SRTT = 100ms, RTO = 250ms
         estimator.recordSample(.milliseconds(100))
         #expect(estimator.retransmissionTimeout == .milliseconds(250))
     }
 
-    @Test("표본 없이 backoff한 RTO도 첫 표본이 오면 2.2의 식으로 정해진다")
+    @Test("The first sample uses formula 2.2 even if RTO backed off without samples")
     func firstSampleAfterBackOff() {
         var estimator = RTOEstimator()
         estimator.retransmissionTimerExpired()
@@ -142,31 +142,31 @@ struct RTOEstimatorTests {
         #expect(estimator.retransmissionTimeout == .milliseconds(300))
     }
 
-    @Test("SYN의 타이머가 만료된 적이 있으면 맺어진 뒤 RTO를 3초로 올린다(5.7)")
+    @Test("If the SYN timer has expired, raises RTO to 3 seconds after establishment (5.7)")
     func synRetransmissionRaisesToThreeSeconds() {
         var estimator = RTOEstimator()
-        estimator.retransmissionTimerExpired(forSYN: true)   // 1 → 2초
+        estimator.retransmissionTimerExpired(forSYN: true)   // 1 → 2 seconds
         #expect(estimator.retransmissionTimeout == .seconds(2))
         estimator.handshakeCompleted()
         #expect(estimator.retransmissionTimeout == .seconds(3))
     }
 
-    @Test("5.7은 이미 큰 RTO를 낮추지 않는다")
+    @Test("5.7 does not lower an already larger RTO")
     func synRuleNeverLowers() {
         var estimator = RTOEstimator()
-        for _ in 0..<3 { estimator.retransmissionTimerExpired(forSYN: true) }   // 8초
+        for _ in 0..<3 { estimator.retransmissionTimerExpired(forSYN: true) }   // 8 seconds
         estimator.handshakeCompleted()
         #expect(estimator.retransmissionTimeout == .seconds(8))
     }
 
-    @Test("SYN이 재전송되지 않았으면 맺어져도 RTO는 그대로다")
+    @Test("RTO stays the same after establishment if SYN was not retransmitted")
     func noSynExpiry() {
         var estimator = RTOEstimator()
         estimator.handshakeCompleted()
         #expect(estimator.retransmissionTimeout == .seconds(1))
     }
 
-    @Test("SYN 만료로 올린 3초는 한 번만 적용되고, 이후 표본이 RTO를 식으로 되돌린다")
+    @Test("The 3 seconds raised by SYN expiration apply once, and a later sample restores formula-based RTO")
     func synRuleAppliesOnce() {
         var estimator = RTOEstimator()
         estimator.retransmissionTimerExpired(forSYN: true)
@@ -177,7 +177,7 @@ struct RTOEstimatorTests {
         #expect(estimator.retransmissionTimeout == .milliseconds(300))
     }
 
-    @Test("데이터 타이머의 만료는 5.7을 켜지 않는다")
+    @Test("Data timer expiration does not trigger 5.7")
     func dataExpiryDoesNotArmSynRule() {
         var estimator = RTOEstimator()
         estimator.retransmissionTimerExpired()

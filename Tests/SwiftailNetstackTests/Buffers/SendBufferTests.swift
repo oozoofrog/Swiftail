@@ -2,12 +2,12 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 보내는 버퍼(계약 동작 F6). 번호는 첫 바이트(`startSequence`의 처음 값)에서의 거리로 말한다.
-@Suite("보내는 버퍼")
+/// Send buffer (contract behavior F6). Express sequence numbers as offsets from the first byte (the initial value of `startSequence`).
+@Suite("Send buffer")
 struct SendBufferTests {
     private static let first = SequenceNumber(5000)
 
-    @Test("쓴 바이트는 순서대로 쥐고 구간으로 꺼낼 수 있다")
+    @Test("Retains written bytes in order and allows retrieval by range")
     func appendAndSlice() {
         var buffer = SendBuffer(firstSequence: Self.first, capacity: 64)
         #expect(buffer.append(ArraySlice(patternBytes(0..<10))) == 10)
@@ -22,35 +22,35 @@ struct SendBufferTests {
         #expect(buffer.bytes(from: 20, upTo: 100) == patternBytes(20..<25))
     }
 
-    @Test("범위 밖 구간과 0바이트는 빈 배열이다")
+    @Test("Out-of-range requests and zero-byte requests return empty arrays")
     func degenerateSlices() {
         var buffer = SendBuffer(firstSequence: Self.first, capacity: 64)
         #expect(buffer.append([]) == 0)
         #expect(buffer.bytes(from: 0, upTo: 10).isEmpty)
         _ = buffer.append(ArraySlice(patternBytes(0..<10)))
-        #expect(buffer.bytes(from: 10, upTo: 5).isEmpty)  // 끝 바로 뒤
+        #expect(buffer.bytes(from: 10, upTo: 5).isEmpty)  // Just past the end
         #expect(buffer.bytes(from: 99, upTo: 5).isEmpty)
         #expect(buffer.bytes(from: -1, upTo: 5).isEmpty)
         #expect(buffer.bytes(from: 3, upTo: 0).isEmpty)
         #expect(buffer.bytes(from: 3, upTo: -4).isEmpty)
     }
 
-    @Test("용량까지만 받아들이고 받아들인 수를 돌려준다")
+    @Test("Accepts only up to capacity and returns the count accepted")
     func capacityLimit() {
         var buffer = SendBuffer(firstSequence: Self.first, capacity: 16)
         #expect(buffer.append(ArraySlice(patternBytes(0..<10))) == 10)
-        #expect(buffer.append(ArraySlice(patternBytes(10..<30))) == 6)  // 자리가 6개뿐
+        #expect(buffer.append(ArraySlice(patternBytes(10..<30))) == 6)  // Room for only 6 bytes
         #expect(buffer.freeSpace == 0)
         #expect(buffer.append(ArraySlice(patternBytes(16..<20))) == 0)
         #expect(buffer.count == 16)
         #expect(buffer.bytes(from: 0, upTo: 100) == patternBytes(0..<16))
-        // 용량보다 큰 한 번의 쓰기는 용량까지만.
+        // A single write larger than capacity fills only up to capacity.
         var other = SendBuffer(firstSequence: Self.first, capacity: 16)
         #expect(other.append(ArraySlice(patternBytes(0..<100))) == 16)
         #expect(other.bytes(from: 0, upTo: 100) == patternBytes(0..<16))
     }
 
-    @Test("부분 ACK는 앞에서부터 버리고 SND.UNA를 옮긴다")
+    @Test("A partial ACK discards bytes from the front and advances SND.UNA")
     func partialAcknowledgement() {
         var buffer = SendBuffer(firstSequence: Self.first, capacity: 64)
         _ = buffer.append(ArraySlice(patternBytes(0..<30)))
@@ -60,10 +60,10 @@ struct SendBufferTests {
         #expect(buffer.bytes(from: 0, upTo: 100) == patternBytes(10..<30))
         #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 25)) == 15)
         #expect(buffer.bytes(from: 0, upTo: 100) == patternBytes(25..<30))
-        #expect(buffer.endSequence == Self.first.advanced(by: 30))  // 끝 번호는 ACK로 움직이지 않는다
+        #expect(buffer.endSequence == Self.first.advanced(by: 30))  // The ACK does not move the end sequence number
     }
 
-    @Test("전체 ACK는 버퍼를 비운다. 이어 쓸 수 있다")
+    @Test("A full ACK empties the buffer, allowing subsequent writes")
     func fullAcknowledgement() {
         var buffer = SendBuffer(firstSequence: Self.first, capacity: 16)
         _ = buffer.append(ArraySlice(patternBytes(0..<16)))
@@ -76,16 +76,16 @@ struct SendBufferTests {
         #expect(buffer.bytes(from: 0, upTo: 100) == patternBytes(16..<30))
     }
 
-    @Test("오래된·중복·범위 밖 ACK는 아무것도 바꾸지 않는다")
+    @Test("Old, duplicate, and out-of-range ACKs change nothing")
     func unusableAcknowledgements() {
         var buffer = SendBuffer(firstSequence: Self.first, capacity: 64)
         _ = buffer.append(ArraySlice(patternBytes(0..<20)))
         #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 8)) == 8)
-        // 중복(SND.UNA와 같음)과 오래된 ACK(앞)
+        // Duplicate (equal to SND.UNA) and old ACK (before SND.UNA)
         #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 8)) == 0)
         #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 3)) == 0)
-        #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 0xFFFF_FFF0)) == 0)  // 아주 오래된 번호
-        // 쥔 바이트 너머(보내지 않은 것을 확인한다는 ACK)
+        #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 0xFFFF_FFF0)) == 0)  // Very old sequence number
+        // Beyond retained bytes (an ACK claiming to acknowledge unsent data)
         #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 21)) == 0)
         #expect(buffer.acknowledge(upTo: Self.first.advanced(by: 5000)) == 0)
         #expect(buffer.startSequence == Self.first.advanced(by: 8))
@@ -93,7 +93,7 @@ struct SendBufferTests {
         #expect(buffer.bytes(from: 0, upTo: 100) == patternBytes(8..<20))
     }
 
-    @Test("ACK로 난 자리에 이어 쓰면 저장소를 한 바퀴 돌아도 내용이 맞다")
+    @Test("Writing into the space freed by an ACK preserves contents even across a storage wrap")
     func ringReuse() {
         var buffer = SendBuffer(firstSequence: Self.first, capacity: 16)
         var written = 0
@@ -102,7 +102,7 @@ struct SendBufferTests {
             let length = 3 + round % 9
             let accepted = buffer.append(ArraySlice(patternBytes(written..<written + length)))
             written += accepted
-            // 쥔 구간 전체가 맞다(저장소의 끝을 넘어 되감기는 구간 포함).
+            // The entire retained range is correct (including ranges that wrap past the end of storage).
             #expect(buffer.bytes(from: 0, upTo: 100) == patternBytes(acknowledged..<written))
             let ack = min(5, buffer.count)
             #expect(buffer.acknowledge(upTo: buffer.startSequence.advanced(by: UInt32(ack))) == ack)
@@ -111,25 +111,25 @@ struct SendBufferTests {
         #expect(buffer.count == written - acknowledged)
     }
 
-    @Test("번호가 2³²을 넘어도 맞다")
+    @Test("Works when sequence numbers cross 2³²")
     func sequenceWrap() {
         let first = SequenceNumber(0xFFFF_FFF0)
         var buffer = SendBuffer(firstSequence: first, capacity: 64)
         #expect(buffer.append(ArraySlice(patternBytes(0..<40))) == 40)
         #expect(buffer.endSequence == SequenceNumber(24))
-        // 0을 넘기기 전의 ACK
+        // ACK before crossing 0
         #expect(buffer.acknowledge(upTo: SequenceNumber(0xFFFF_FFF8)) == 8)
-        // 0을 넘긴 ACK
+        // ACK after crossing 0
         #expect(buffer.acknowledge(upTo: SequenceNumber(5)) == 13)
         #expect(buffer.startSequence == SequenceNumber(5))
         #expect(buffer.bytes(from: 0, upTo: 100) == patternBytes(21..<40))
-        // 한 바퀴 돈 뒤의 앞선 번호는 오래된 ACK다.
+        // After wraparound, an earlier sequence number is an old ACK.
         #expect(buffer.acknowledge(upTo: SequenceNumber(0xFFFF_FFF0)) == 0)
         #expect(buffer.acknowledge(upTo: SequenceNumber(24)) == 19)
         #expect(buffer.count == 0)
     }
 
-    @Test("가끔 쓰는 연결은 저장소가 용량까지 자라지 않는다")
+    @Test("Storage for a sporadically used connection does not grow to capacity")
     func lightUseStaysSmall() {
         var buffer = SendBuffer(firstSequence: Self.first)
         #expect(buffer.allocatedByteCount == 0)
@@ -140,14 +140,14 @@ struct SendBufferTests {
         #expect(buffer.allocatedByteCount <= 4096)
     }
 
-    @Test("임의의 쓰기·꺼내기·ACK를 모형과 견주어도 같다")
+    @Test("Arbitrary writes, retrievals, and ACKs match the model")
     func randomOperationsMatchModel() {
         for seed in UInt64(1)...20 {
             var generator = BufferTestGenerator(seed: seed)
             let capacity = [16, 100, 1024, 4096].randomElement(using: &generator) ?? 100
             let first = SequenceNumber(UInt32.random(in: .min ... .max, using: &generator) | (seed.isMultiple(of: 2) ? 0xFFFF_F000 : 0))
             var buffer = SendBuffer(firstSequence: first, capacity: capacity)
-            var model: [UInt8] = []  // 쥐고 있는 바이트
+            var model: [UInt8] = []  // Retained bytes
             var nextStreamIndex = 0
 
             for _ in 0..<2_000 {

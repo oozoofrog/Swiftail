@@ -3,18 +3,18 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 응용이 받아 가기 전(리스너의 대기열)의 연결은 받는 창을 16KiB로 묶는다. 받는 버퍼는 쓴 자리까지 자라므로, 창을 다 열어
-/// 두면 상대가 순서대로 1바이트와 창 끝의 1바이트만으로 연결마다 256KiB를 잡게 한다. 받아 가면 버퍼 전체로 연다.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S5, M.
-@Suite("스택: 받아 가기 전의 받는 창")
+/// Before an application accepts a connection (while in the listener queue), the receive window is capped at 16KiB. The receive buffer grows to the last written position, so with the window fully
+/// open, a peer could allocate 256KiB per connection with only 1 in-order byte and 1 byte at the end of the window. Acceptance opens the window to the entire buffer.
+/// Contract `docs/contracts/SwiftailNetstack.md` behavior S5, M.
+@Suite("Stack receive window before acceptance")
 struct StackUnacceptedWindowTests {
     static let server = IPEndpoint(address: WireHosts.v4b, port: 443)
-    /// 스택의 Window Scale shift.
+    /// The stack's Window Scale shift.
     static let shift = TCPConnection.ownWindowShift
-    /// 계약 동작 M: 받아 가기 전의 받는 창.
+    /// Contract behavior M: receive window before acceptance.
     static let unacceptedWindow = 16 * 1024
 
-    /// 창 확장을 켠 상대 `peer`가 핸드셰이크를 끝낸다. 연결은 대기열에 남는다. 상대가 다음에 쓸 ACK 번호를 돌려준다.
+    /// A remote `peer` with window scaling enabled completes the handshake. The connection stays queued. Returns the peer's next ACK number.
     func handshake(
         _ stack: inout TCPStack, from peer: IPEndpoint, at now: ContinuousClock.Instant
     ) throws -> SequenceNumber {
@@ -29,7 +29,7 @@ struct StackUnacceptedWindowTests {
         return acknowledgment
     }
 
-    /// 상대가 순서대로 1바이트를 보내 ACK가 광고한 창을 읽고, 그 창의 마지막 자리에 1바이트를 더 보낸다. 광고받은 창을 돌려준다.
+    /// The peer sends 1 in-order byte, reads the window advertised in the ACK, and sends 1 more byte at the last position in that window. Returns the advertised window.
     func stretchWindow(
         _ stack: inout TCPStack, from peer: IPEndpoint, acknowledgment: SequenceNumber, at now: ContinuousClock.Instant
     ) throws -> Int {
@@ -50,28 +50,28 @@ struct StackUnacceptedWindowTests {
         stack.connections.values.reduce(0) { $0 + $1.connection.receiveBuffer.allocatedByteCount }
     }
 
-    @Test("대기열의 연결 32개가 창 끝까지 벌려 받아도 받는 버퍼의 합은 32 × 16KiB를 넘지 않는다")
+    @Test("Even if 32 queued connections receive out to their window edges, their receive buffers total at most 32 × 16KiB")
     func queuedConnectionsHoldSmallBuffers() throws {
         let start = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: start)
         let listener = try stack.listen(on: 443)
         for index in 0..<32 {
             let now = start + .milliseconds(index * 50)
-            // 리스너의 대기열에서 피어 하나의 몫은 16개라 주소 둘로 나눈다.
+            // A peer has 16 slots in the listener queue, so use two addresses.
             let peer = IPEndpoint(address: StackHosts.peer(UInt8(1 + index / 16)), port: UInt16(2_000 + index))
             let acknowledgment = try handshake(&stack, from: peer, at: now)
             let window = try stretchWindow(&stack, from: peer, acknowledgment: acknowledgment, at: now)
             #expect(window < Self.unacceptedWindow)
         }
         #expect(stack.listeners[listener]?.queue.count == 32)
-        // 연결마다 순서대로 온 1바이트와 창 끝의 1바이트를 쥐고 있다.
+        // Each connection holds 1 in-order byte and 1 byte at the end of the window.
         #expect(stack.connections.values.allSatisfy {
             $0.connection.readableByteCount == 1 && $0.connection.receiveBuffer.outOfOrderByteCount == 1
         })
         #expect(allocatedByteCount(stack) <= 32 * Self.unacceptedWindow)
     }
 
-    @Test("받아 가면 창 갱신 ACK가 버퍼 전체의 창을 알리고, 그 창 끝의 데이터를 받는다")
+    @Test("On acceptance, a window update ACK advertises the entire buffer and data at the end of that window is accepted")
     func acceptOpensWindow() throws {
         let now = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: now)
@@ -93,11 +93,11 @@ struct StackUnacceptedWindowTests {
             flags: [.ack], payload: [9])
         _ = stack.receive(last.packet, at: now)
         #expect(stack.connections[accepted.connection]?.connection.receiveBuffer.outOfOrderByteCount == 1)
-        // 응용이 쥔 연결의 버퍼는 전처럼 쓴 자리까지 자란다.
+        // The buffer of a connection held by the application grows to the written position as before.
         #expect(allocatedByteCount(stack) == ReceiveBuffer.defaultCapacity)
     }
 
-    @Test("받아 가기 전에는 16KiB까지만 받고, 받아 간 뒤 나머지가 모두 온다")
+    @Test("Accepts up to only 16KiB before acceptance and receives the rest afterward")
     func transferAcrossAccept() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)

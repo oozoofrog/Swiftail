@@ -1,10 +1,10 @@
 import SwiftailNetstack
 import Testing
 
-/// 계약 T2·X2~4와 시험 4·5·10. 기대값은 TCP 노트 4.2·RFC 5961 3.2·4.2·5.2다.
-@Suite("독립 연결 입력 경계")
+/// Contract T2·X2~4 and tests 4·5·10. Expected values follow the TCP notes 4.2 and RFC 5961 3.2·4.2·5.2.
+@Suite("Independent connection input edge cases")
 struct ConnectionInputScenarioTests {
-    @Test("창 밖 RST는 무시, 창 안 다른 RST는 challenge, 정확한 RST는 reset", arguments: [0, 1, 2])
+    @Test("Ignores out-of-window RST, challenges another in-window RST, and resets on an exact RST", arguments: [0, 1, 2])
     func resetValidation(_ position: Int) throws {
         var peer = try ScriptedTCPPeer()
         let sequence = peer.peerStart.advanced(by: position == 0 ? 1_000_000 : position == 1 ? 1 : 0)
@@ -19,7 +19,7 @@ struct ConnectionInputScenarioTests {
         }
     }
 
-    @Test("동기화 상태의 SYN은 번호와 관계없이 challenge ACK", arguments: [UInt32(0), 1, 1_000_000, 0xFFFF_FFFF])
+    @Test("SYN in a synchronized state receives a challenge ACK regardless of sequence number", arguments: [UInt32(0), 1, 1_000_000, 0xFFFF_FFFF])
     func synchronizeInjection(_ offset: UInt32) throws {
         var peer = try ScriptedTCPPeer()
         let output = peer.receive(peer.segment(sequence: peer.peerStart.advanced(by: offset), flags: .syn)).scenarioSegments
@@ -29,7 +29,7 @@ struct ConnectionInputScenarioTests {
         #expect(output.first?.acknowledgmentNumber == peer.peerStart)
     }
 
-    @Test("범위를 벗어난 ACK의 데이터·FIN은 처리하지 않는다", arguments: [false, true])
+    @Test("Does not process the data or FIN of an ACK outside the range", arguments: [false, true])
     func invalidAcknowledgmentPrecedesDataAndFinish(_ tooOld: Bool) throws {
         var peer = try ScriptedTCPPeer()
         let acknowledgment = tooOld ? peer.localStart.advanced(by: UInt32.max - 1_000_000) : peer.localStart.advanced(by: 1)
@@ -41,7 +41,7 @@ struct ConnectionInputScenarioTests {
         #expect(output.scenarioSegments.first?.flags == .ack)
     }
 
-    @Test("challenge ACK는 5초 안에 10개, 다음 구간에서 다시 허용")
+    @Test("Allows 10 challenge ACKs in 5 seconds and allows them again in the next interval")
     func challengeAcknowledgmentRateLimit() throws {
         var peer = try ScriptedTCPPeer()
         let rst = peer.segment(sequence: peer.peerStart.advanced(by: 1), flags: .rst)
@@ -53,7 +53,7 @@ struct ConnectionInputScenarioTests {
         #expect(peer.connection.state == .established)
     }
 
-    @Test("SYN-SENT·SYN-RECEIVED의 틀린 ACK는 그 ACK 번호의 RST")
+    @Test("An invalid ACK in SYN-SENT or SYN-RECEIVED gets an RST with that ACK number")
     func openingRejectsInvalidAcknowledgments() throws {
         let peer = try ScriptedTCPPeer()
         var active = TCPConnection.connect(from: peer.local, to: peer.remote,
@@ -71,7 +71,7 @@ struct ConnectionInputScenarioTests {
         #expect(passive.state == .synReceived)
     }
 
-    @Test("WL1·WL2: 오래된 SEQ·ACK는 창을 갱신하지 않는다")
+    @Test("WL1 and WL2: old SEQ and ACK values do not update the window")
     func windowUpdateOrdering() throws {
         var peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment(sequence: peer.peerStart.advanced(by: 2), window: 100))
@@ -85,7 +85,7 @@ struct ConnectionInputScenarioTests {
         #expect(peer.connection.sendWindow == 3200)
     }
 
-    @Test("줄어든 창 밖으로 새 데이터를 내지 않고 다시 열리면 재개한다")
+    @Test("Sends no new data beyond the shrunken window and resumes when it reopens")
     func shrinkingWindowStopsNewData() throws {
         var peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment())
@@ -103,7 +103,7 @@ struct ConnectionInputScenarioTests {
         #expect(resumed.reduce(0) { $0 + $1.payload.count } == 12_400)
     }
 
-    @Test("Window Scale 미협상은 16비트, SYN의 창은 협상해도 확장하지 않는다", arguments: [false, true])
+    @Test("Without Window Scale negotiation the window is 16 bits, and the SYN window remains unscaled even when negotiated", arguments: [false, true])
     func windowScaleNegotiation(_ negotiated: Bool) throws {
         var peer = try ScriptedTCPPeer(window: 100, scale: negotiated ? 3 : nil)
         #expect(peer.connection.sendWindow == 100)
@@ -111,16 +111,16 @@ struct ConnectionInputScenarioTests {
         #expect(peer.connection.sendWindow == (negotiated ? 800 : 100))
     }
 
-    @Test("MSS 63은 능동·수동 열기 모두 거절한다")
+    @Test("MSS 63 is rejected on both active and passive opens")
     func rejectsTooSmallMaximumSegmentSize() throws {
         let peer = try ScriptedTCPPeer()
         let syn = TCPSegment(source: peer.remote, destination: peer.local, sequenceNumber: SequenceNumber(90_000),
                              flags: .syn, window: 100, maximumSegmentSize: 63)
         do {
             _ = try TCPConnection.accept(syn, initialSequenceNumber: SequenceNumber(10_000), at: peer.now)
-            Issue.record("계약 X9: MSS 63인 SYN은 거절해야 한다")
+            Issue.record("Contract X9: A SYN with MSS 63 must be rejected")
         } catch {
-            // catch 절에 바로 패턴을 걸지 않는다: Swift 6.3의 SILGen이 typed throws의 catch 패턴에서 멈춘다.
+            // Avoid a pattern directly on the catch clause. Swift 6.3 SILGen stalls on catch patterns with typed throws.
             guard case .unacceptableMaximumSegmentSize(let reset) = error else { throw error }
             #expect(reset.flags == [.rst, .ack])
             #expect(reset.acknowledgmentNumber == peer.peerStart)
@@ -136,7 +136,7 @@ struct ConnectionInputScenarioTests {
         #expect(active.state == .closed)
     }
 
-    @Test("수신 창의 왼쪽에 걸친 부분은 잘라 받고 중복을 읽지 않는다")
+    @Test("Trims the portion overlapping the left of the receive window and does not read duplicates")
     func leftOverlapIsClipped() throws {
         var peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment(payload: [0, 1, 2, 3]))
@@ -144,10 +144,10 @@ struct ConnectionInputScenarioTests {
         #expect(peer.connection.read(upTo: 100, at: peer.now).bytes == [0, 1, 2, 3, 4, 5])
     }
 
-    @Test("받는 창의 네 칸과 오른쪽 경계 자르기")
+    @Test("Four receive window cases and right-edge trimming")
     func segmentAcceptabilityAndRightClipping() throws {
         var peer = try ScriptedTCPPeer()
-        // 셋째 ACK에서 shift 3인 창 32768을 광고했으므로 오른쪽 끝은 256KiB다(계약 F1·F2).
+        // The third ACK advertised a window of 32768 with shift 3, so the right edge is 256KiB (contract F1·F2).
         let edge = peer.peerStart.advanced(by: 262_144)
         let outside = peer.receive(peer.segment(sequence: edge, payload: [9]))
         #expect(outside.scenarioSegments.first?.acknowledgmentNumber == peer.peerStart)
@@ -164,7 +164,7 @@ struct ConnectionInputScenarioTests {
         peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment())
         #expect(peer.connection.state == .established)
-        // 256KiB까지 채우되 ACK로 광고된 오른쪽 끝 안에서만 넣는다.
+        // Fill up to 256KiB, inserting only within the right edge advertised in the ACK.
         var offset = 0
         while offset < 262_144 {
             let count = min(1240, 262_144 - offset)
@@ -186,7 +186,7 @@ struct ConnectionInputScenarioTests {
         #expect(peer.connection.nextDeadline == nil)
     }
 
-    @Test("앞·뒤·가운데·전체 겹침은 먼저 받은 바이트를 보존한다", arguments: [0, 1, 2, 3])
+    @Test("Front, back, interior, and full overlaps preserve the first bytes received", arguments: [0, 1, 2, 3])
     func outOfOrderOverlapsKeepFirstBytes(_ overlap: Int) throws {
         var peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment(sequence: peer.peerStart.advanced(by: 4), payload: [4, 5, 6, 7]))
@@ -200,7 +200,7 @@ struct ConnectionInputScenarioTests {
         #expect(peer.connection.read(upTo: 100, at: peer.now).bytes == expected[overlap])
     }
 
-    @Test("33번째 분리 구간은 버리되 빈 곳을 메우는 것은 허용한다")
+    @Test("Drops the 33rd disjoint range but allows a gap to be filled")
     func outOfOrderRangeLimit() throws {
         var peer = try ScriptedTCPPeer()
         for index in 1...33 {
@@ -215,7 +215,7 @@ struct ConnectionInputScenarioTests {
         #expect(peer.connection.receiveNext == peer.peerStart.advanced(by: 67))
     }
 
-    @Test("빈 곳 뒤에 먼저 온 FIN은 빈 곳을 메운 뒤 소비한다")
+    @Test("A FIN that arrives early beyond a gap is consumed once the gap is filled")
     func outOfOrderFinishIsConsumedAfterGap() throws {
         var peer = try ScriptedTCPPeer()
         _ = peer.receive(peer.segment(sequence: peer.peerStart.advanced(by: 3), flags: [.ack, .fin]))
@@ -225,11 +225,11 @@ struct ConnectionInputScenarioTests {
         let consumedFinish = peer.connection.hasReceivedEndOfStream
         let reportedFinish = output.contains(.event(.endOfStream))
         let enteredCloseWait = peer.connection.state == .closeWait
-        // 계약 T2·RFC 9293 3.10.7.4 SHLD-31: 빈 곳을 메우면 FIN의 재전송 없이 EOF가 난다.
+        // Contract T2 and RFC 9293 3.10.7.4 SHLD-31: Filling the gap yields EOF without retransmitting FIN.
         #expect(consumedFinish && reportedFinish && enteredCloseWait)
     }
 
-    @Test("1바이트 구간 1만 개에서도 읽는 바이트는 원본의 앞부분")
+    @Test("Even with 10,000 one-byte ranges, the read bytes are a prefix of the original")
     func tinySegmentFlood() throws {
         var peer = try ScriptedTCPPeer()
         for index in stride(from: 9999, through: 1, by: -2) {
@@ -244,7 +244,7 @@ struct ConnectionInputScenarioTests {
         #expect(received == (0..<10_000).map { UInt8(truncatingIfNeeded: $0) })
     }
 
-    @Test("고정 씨앗의 임의 창 밖·ACK·RST·SYN 주입 뒤 유효 데이터는 온전히 전달", arguments: [UInt64(1), 42, 0x5EED])
+    @Test("Valid data arrives intact after arbitrary out-of-window, ACK, RST, and SYN injections with a fixed seed", arguments: [UInt64(1), 42, 0x5EED])
     func randomizedHostileSegments(_ seed: UInt64) throws {
         var link = try LinkSimulator(seed: seed)
         try link.open()

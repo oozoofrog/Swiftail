@@ -1,7 +1,7 @@
-// 노드의 tailnet lock 표면: `NodeStatus.tailnetLock`과 `NodeEvent.tailnetLockChanged`.
-// 계약 `docs/contracts/SwiftailTailnetLock.md` 2절 `Swiftail`, 결정 L4, 첫 사용처 검토 F2의 넷, 7절 단위 시험 22.
+// The node's tailnet lock surface: `NodeStatus.tailnetLock` and `NodeEvent.tailnetLockChanged`.
+// Contract `docs/contracts/SwiftailTailnetLock.md` §2 `Swiftail`, decision L4, the four cases in first adopter review F2, and §7 unit test 22.
 //
-// netmap은 `ControlClient`가 거르고 lock 모습을 실어 낸 것처럼 `Netmap.tailnetLock`을 채워 `apply`에 넣는다.
+// Fills `Netmap.tailnetLock` as if `ControlClient` had filtered the netmap and included the lock state, then passes it to `apply`.
 
 import Foundation
 import SwiftailBase
@@ -9,18 +9,18 @@ import SwiftailControl
 import Testing
 @testable import Swiftail
 
-@Suite("노드: tailnet lock", .timeLimit(.minutes(1)))
+@Suite("Node tailnet lock", .timeLimit(.minutes(1)))
 struct NodeTailnetLockTests {
     static let head = String(repeating: "A", count: 52)
     static let request = TailnetLockStatus.SigningRequest(
         nodeKey: NodeTestSupport.nodeKey(0x11),
         lockKey: "tlpub:" + [UInt8](repeating: 0x33, count: 32).hex
     )
-    /// 켜짐·서명을 기다림.
+    /// Enabled and awaiting a signature.
     static let locked = TailnetLockStatus(mode: .enforcing, head: head, filteredPeerCount: 1, signingRequest: request)
-    /// 켜짐·이 노드 서명됨.
+    /// Enabled and this node is signed.
     static let signed = TailnetLockStatus(mode: .enforcing, head: head)
-    /// 확인하지 못함: 서버가 알린 피어 하나를 올리지 않았다.
+    /// Unverified: one peer reported by the server was not admitted.
     static let unverified = TailnetLockStatus(mode: .unverified, filteredPeerCount: 1)
 
     static func netmap(_ lock: TailnetLockStatus, peerAddress: String? = nil) throws -> Netmap {
@@ -29,7 +29,7 @@ struct NodeTailnetLockTests {
         return netmap
     }
 
-    /// 사건 하나를 받고, 받은 순간의 `status`를 함께 돌려준다. 사건이 모자라면 기다리지 않도록 흐름을 끝낸 뒤 부른다.
+    /// Receives one event and returns `status` at the time of receipt. Call after ending the stream to avoid waiting if there are too few events.
     static func next(
         _ events: inout AsyncStream<NodeEvent>.Iterator, of node: TailnetNode
     ) async throws -> (NodeEvent, NodeStatus) {
@@ -37,14 +37,14 @@ struct NodeTailnetLockTests {
         return (event, await node.status)
     }
 
-    /// 끝낸 흐름에 남은 사건을 모두 읽는다.
+    /// Reads all remaining events from a finished stream.
     static func remaining(_ events: inout AsyncStream<NodeEvent>.Iterator) async -> [NodeEvent] {
         var rest: [NodeEvent] = []
         while let event = await events.next() { rest.append(event) }
         return rest
     }
 
-    @Test("netmap 전에는 .disabled이고, lock 없는 netmap은 lock 사건을 내지 않는다")
+    @Test("Before the netmap arrives the state is .disabled, and a netmap without a lock emits no lock event")
     func disabledByDefault() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         #expect(await node.status.tailnetLock == TailnetLockStatus())
@@ -58,11 +58,11 @@ struct NodeTailnetLockTests {
         #expect(await node.status.tailnetLock.mode == .disabled)
     }
 
-    @Test("F2 1·3: 잠긴 노드의 lock 사건은 .running보다 먼저이고, 어느 사건을 받을 때든 status에 서명 요청이 있다")
+    @Test("F2 1·3: A locked node's lock event precedes .running, and status contains the signing request when either event is received")
     func lockedBeforeRunning() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         var events = node.events.makeAsyncIterator()
-        // 홈 DERP가 먼저 서 있으면 첫 netmap 하나로 `.running`이 된다: 두 사건이 같은 netmap에서 나온다.
+        // If home DERP is already up, the first netmap alone yields `.running`. Both events come from the same netmap.
         await node.markConnectedForTesting()
         await node.apply(try Self.netmap(Self.locked))
         await node.finishEventsForTesting()
@@ -75,21 +75,21 @@ struct NodeTailnetLockTests {
             #expect(status.tailnetLock.isLockedOut)
         }
         #expect(secondStatus.state == .running)
-        // 서명 기기의 `tailscale lock sign`에 그대로 붙여 넣는 두 값.
+        // The two values to paste verbatim into `tailscale lock sign` on the signing device.
         let request = try #require(secondStatus.tailnetLock.signingRequest)
         #expect(request.nodeKey.hasPrefix("nodekey:") && request.nodeKey.count == 8 + 64)
         #expect(request.lockKey.hasPrefix("tlpub:") && request.lockKey.count == 6 + 64)
         #expect(await Self.remaining(&events) == [.statusChanged])
     }
 
-    @Test("F2 4: 서명 뒤의 netmap에서 다시 시작 없이 풀린다: lock 사건 하나만 오고 signingRequest가 nil이다")
+    @Test("F2 4: The netmap after signing unlocks the node without a restart. One lock event arrives and signingRequest is nil")
     func unlocksAfterSigning() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.markConnectedForTesting()
         await node.apply(try Self.netmap(Self.locked))
         #expect(await node.status.tailnetLock.isLockedOut)
 
-        // 서명 기기가 서명한 뒤의 netmap: 이 노드가 풀리고 걸렀던 피어가 올라온다.
+        // The netmap after the signing device signs: this node is unlocked and the filtered peer is admitted.
         await node.apply(try Self.netmap(Self.signed, peerAddress: "100.64.0.2/32"))
         let status = await node.status
         #expect(status.tailnetLock == Self.signed)
@@ -103,7 +103,7 @@ struct NodeTailnetLockTests {
         ])
     }
 
-    @Test("lock 모습만 바뀐 netmap(피어 그대로)은 lock 사건과 statusChanged만 내고, 같은 lock 모습이 거듭 와도 사건은 한 번이다")
+    @Test("A netmap changing only the lock state (same peers) emits only the lock event and statusChanged. Repeating the same lock state still yields only one lock event")
     func onlyLockChanges() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.markConnectedForTesting()
@@ -124,7 +124,7 @@ struct NodeTailnetLockTests {
         #expect(await node.status.peerCount == 1)
     }
 
-    @Test("status.tailnetLock이 netmap을 따라가고, 바뀔 때만 사건이 나온다(.disabled로 돌아가는 것 포함)")
+    @Test("status.tailnetLock tracks the netmap and emits an event only on a change (including a return to .disabled)")
     func followsNetmap() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.markConnectedForTesting()
@@ -142,14 +142,14 @@ struct NodeTailnetLockTests {
         ])
     }
 
-    @Test("F2 2: status 하나로 네 경우를 가른다", arguments: [
+    @Test("F2 2: A single status distinguishes four cases", arguments: [
         (TailnetLockStatus(), TailnetLockStatus.Mode.disabled, false),
         (signed, .enforcing, false),
         (locked, .enforcing, true),
         (unverified, .unverified, false),
     ])
-    // 모듈 이름을 붙인다. `Swiftail`의 별명과 `SwiftailControl`의 원래 이름이 함께 보이는 파일에서는 `@Test`가 만드는
-    // `(TailnetLockStatus).self`가 모호하다(`ReexportedTypes.swift`).
+    // Qualify the module name. In a file where both the alias from `Swiftail` and the original name from `SwiftailControl` are visible,
+    // `(TailnetLockStatus).self` generated by `@Test` is ambiguous (`ReexportedTypes.swift`).
     func fourCases(
         lock: SwiftailControl.TailnetLockStatus, mode: SwiftailControl.TailnetLockStatus.Mode, waitsForSignature: Bool
     ) async throws {
@@ -163,7 +163,7 @@ struct NodeTailnetLockTests {
         #expect(status.tailnetLock.isLockedOut == waitsForSignature)
     }
 
-    @Test(".unverified(피어 없음)에서도 노드는 .running까지 간다. 피어가 없을 뿐이다")
+    @Test("The node reaches .running even in .unverified (no peers). It simply has no peers")
     func unverifiedRuns() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.markConnectedForTesting()
@@ -180,7 +180,7 @@ struct NodeTailnetLockTests {
         #expect(status.tailnetLock.signingRequest == nil)
     }
 
-    @Test("run()이 끝나도 status.tailnetLock은 다른 필드처럼 마지막 netmap의 것이고, 다시 시작한 노드는 .disabled부터다")
+    @Test("After run() ends, status.tailnetLock still reflects the last netmap like the other fields, and a restarted node begins at .disabled")
     func afterRun() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let configuration = try NodeTestSupport.configuration(stateDirectory: directory)
@@ -200,12 +200,12 @@ struct NodeTailnetLockTests {
 }
 
 private extension TailnetNode {
-    /// 홈 DERP 연결이 선 것처럼 상태 기계에 넣는다(netmap 뒤면 `.running`).
+    /// Updates the state machine as if the home DERP connection came up (`.running` after the netmap).
     func markConnectedForTesting() {
         announce(stateMachine.connected())
     }
 
-    /// 사건 흐름을 끝내, 남은 사건을 끝까지 읽을 수 있게 한다.
+    /// Finishes the event stream so all remaining events can be read.
     func finishEventsForTesting() {
         eventQueue.finish()
     }

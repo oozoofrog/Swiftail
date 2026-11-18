@@ -5,12 +5,12 @@ import Testing
 
 @testable import SwiftailIO
 
-/// 루프백 다리가 쓰는 소켓 보탬(계약 `docs/contracts/SwiftailHost.md` 8절, 동작 B4·B5·B6, 첫 사용처 검토 결과 7).
+/// Tests the socket operations used by the loopback bridge (contract `docs/contracts/SwiftailHost.md` §8, behaviors B4·B5·B6, first adopter review result 7).
 ///
-/// 상대는 시험 안의 평문 `NWListener`다. 상대가 본 끝이 "깨끗한 EOF"(오류 없이 `isComplete`)인지 오류인지를 견준다.
-@Suite("소켓의 루프백 보탬", .timeLimit(.minutes(1)))
+/// The peer is a plaintext `NWListener` in the test. Check whether the peer sees a "clean EOF" (`isComplete` without an error) or an error.
+@Suite("Socket loopback operations", .timeLimit(.minutes(1)))
 struct NetworkSocketLoopbackTests {
-    @Test("준비된 소켓의 localPort는 리스너가 본 출발 포트다")
+    @Test("A ready socket's localPort is the source port seen by the listener")
     func localPortMatchesListenerView() async throws {
         let server = try await PlainLoopbackServer.start()
         defer { server.close() }
@@ -24,7 +24,7 @@ struct NetworkSocketLoopbackTests {
         }
     }
 
-    @Test("finishWriting 뒤 상대는 깨끗한 EOF를 보고, 반대 방향은 계속 간다")
+    @Test("After finishWriting, the peer sees a clean EOF and traffic continues in the opposite direction")
     func finishWritingHalfCloses() async throws {
         let server = try await PlainLoopbackServer.start()
         defer { server.close() }
@@ -36,7 +36,7 @@ struct NetworkSocketLoopbackTests {
         socket.finishWriting()
         #expect(await accepted.readToEnd() == .end(Array("request".utf8)))
 
-        // FIN을 받은 쪽이 응답을 보낸다.
+        // The peer that received FIN sends a response.
         let response = [UInt8](repeating: 0x5A, count: 300_000)
         try await accepted.send(response, final: true)
         var received: [UInt8] = []
@@ -44,9 +44,9 @@ struct NetworkSocketLoopbackTests {
         #expect(received == response)
     }
 
-    /// `NWConnection`은 마지막 바이트와 끝을 한 번에 알리고, 그 뒤의 받기는 `ENODATA` 오류로 끝낸다. 고치기 전에는
-    /// 정상 닫기가 `readFailed`로 보였다.
-    @Test("끝(FIN)이 마지막 바이트와 함께 와도 그 뒤의 receive는 nil이다")
+    /// `NWConnection` reports the last bytes together with EOF and ends the next receive with an `ENODATA` error. Before the fix,
+    /// a normal close appeared as `readFailed`.
+    @Test("receive returns nil on the next call even if EOF (FIN) comes with the last bytes")
     func endArrivingWithLastBytes() async throws {
         let server = try await PlainLoopbackServer.start()
         defer { server.close() }
@@ -54,16 +54,16 @@ struct NetworkSocketLoopbackTests {
         defer { socket.close() }
         let peer = try await server.next()
         try await peer.send([1, 2, 3], final: true)
-        // 바이트와 FIN이 다 도착한 뒤에 받는다.
+        // Receive after both the bytes and FIN have arrived.
         try await Task.sleep(for: .milliseconds(100))
         #expect(try await socket.receive() == [1, 2, 3])
         #expect(try await socket.receive() == nil)
         #expect(try await socket.receive() == nil)
     }
 
-    /// 시험 도우미(`PeerConnection.read`)의 시험. 고치기 전에는 마지막 바이트와 함께 온 끝을 놓쳐 다음 받기가 `ENODATA`로
-    /// 실패했고, 부하에서 다리 시험이 흔들렸다.
-    @Test("시험 서버: 끝(FIN)이 마지막 바이트와 함께 와도 readToEnd는 깨끗한 EOF로 끝난다")
+    /// Tests the test helper (`PeerConnection.read`). Before the fix it missed EOF arriving with the last bytes, so the next receive failed with `ENODATA`
+    /// and the bridge test was flaky under load.
+    @Test("Test server: readToEnd ends with a clean EOF even if EOF (FIN) arrives with the last bytes")
     func peerSeesEndArrivingWithLastBytes() async throws {
         let server = try await PlainLoopbackServer.start()
         defer { server.close() }
@@ -72,12 +72,12 @@ struct NetworkSocketLoopbackTests {
         let peer = try await server.next()
         #expect(await socket.writeAccepted([1, 2, 3]))
         socket.finishWriting()
-        // 바이트와 FIN이 다 도착한 뒤에 받는다.
+        // Receive after both the bytes and FIN have arrived.
         try await Task.sleep(for: .milliseconds(100))
         #expect(await peer.readToEnd() == .end([1, 2, 3]))
     }
 
-    @Test("abort는 상대에게 오류(RST)로 보이고, close는 깨끗한 EOF로 보인다")
+    @Test("The peer sees abort as an error (RST) and close as a clean EOF")
     func abortResetsAndCloseFinishes() async throws {
         let server = try await PlainLoopbackServer.start()
         defer { server.close() }
@@ -85,12 +85,12 @@ struct NetworkSocketLoopbackTests {
         let aborted = try await NetworkSocket.connectLoopback(port: server.port)
         let abortedPeer = try await server.next()
         #expect(await aborted.writeAccepted([1, 2, 3]))
-        // 상대가 앞의 바이트를 받은 뒤에 끊는다(받기 전에 끊으면 바이트가 버려질 수 있다).
+        // Abort after the peer receives the earlier bytes (aborting before receipt can discard them).
         #expect(await abortedPeer.read() == .bytes([1, 2, 3]))
         aborted.abort()
-        // forceCancel이 RST를 낸다: 상대의 읽기가 ECONNRESET으로 끝난다(2026-11 macOS에서 확인).
+        // forceCancel emits RST, so the peer's read ends with ECONNRESET (verified on macOS in 2026-11).
         guard case .failed(_, let error) = await abortedPeer.readToEnd() else {
-            Issue.record("abort 뒤 상대의 읽기가 오류로 끝나지 않았다")
+            Issue.record("The peer's read did not end with an error after abort")
             return
         }
         #expect(error.contains("Connection reset"), "\(error)")
@@ -102,7 +102,7 @@ struct NetworkSocketLoopbackTests {
         #expect(await closedPeer.readToEnd() == .end([4, 5, 6]))
     }
 
-    @Test("기다리던 receive의 Task가 취소되어도 루프백 소켓은 닫히지 않는다")
+    @Test("Canceling the Task that is waiting on receive leaves the loopback socket open")
     func cancelledReceiveKeepsConnection() async throws {
         let server = try await PlainLoopbackServer.start()
         defer { server.close() }
@@ -110,18 +110,18 @@ struct NetworkSocketLoopbackTests {
         defer { socket.abort() }
         let peer = try await server.next()
         let reader = Task { () -> String in
-            do { return try await socket.receive() == nil ? "닫힘" : "받음" } catch { return "실패" }
+            do { return try await socket.receive() == nil ? "closed" : "received" } catch { return "failed" }
         }
         try await Task.sleep(for: .milliseconds(50))
         reader.cancel()
-        #expect(await reader.value == "실패")
-        // 상대에게 끝이 오지 않는다. 쓰기는 여전히 간다.
+        #expect(await reader.value == "failed")
+        // The peer does not see EOF, and writes still go through.
         #expect(await socket.writeAccepted([7]))
         #expect(await peer.read(within: .milliseconds(300)) == .bytes([7]))
         #expect(await peer.read(within: .milliseconds(200)) == nil)
     }
 
-    @Test("포트 0과 듣는 쪽이 없는 포트는 connectFailed다")
+    @Test("Port 0 and a port with no listener yield connectFailed")
     func connectFailures() async throws {
         await #expect(throws: SocketError.connectFailed("포트가 잘못되었다")) {
             _ = try await NetworkSocket.connectLoopback(port: 0)
@@ -130,19 +130,19 @@ struct NetworkSocketLoopbackTests {
         do {
             let socket = try await NetworkSocket.connectLoopback(port: closedPort)
             socket.close()
-            Issue.record("듣는 쪽이 없는 포트에 붙었다")
+            Issue.record("Connected to a port with no listener")
         } catch {
             guard case .connectFailed = error else {
-                Issue.record("connectFailed가 아니다: \(error)")
+                Issue.record("Expected connectFailed, got \(error)")
                 return
             }
         }
     }
 }
 
-// MARK: 시험 서버
+// MARK: Test server
 
-/// 시험 안의 평문 루프백 리스너(`127.0.0.1`, 포트는 시스템이 고른다). 받은 연결을 차례로 내준다.
+/// Provides a plaintext loopback listener within the test (`127.0.0.1`, with a system-assigned port). Yields accepted connections in order.
 final class PlainLoopbackServer: Sendable {
     let port: UInt16
     private let listener: NWListener
@@ -178,7 +178,7 @@ final class PlainLoopbackServer: Sendable {
         return PlainLoopbackServer(listener: listener, port: port, accepted: accepted)
     }
 
-    /// 잠깐 열었다 닫은 포트. 곧바로 다른 것이 차지하지 않는 한 듣는 쪽이 없다.
+    /// A port that was opened briefly and then closed. Nothing is listening unless something else takes it immediately.
     static func unusedPort() async throws -> UInt16 {
         let server = try await start()
         server.close()
@@ -186,7 +186,7 @@ final class PlainLoopbackServer: Sendable {
         return server.port
     }
 
-    /// 다음으로 받은 연결. 준비될 때까지 기다린다.
+    /// Returns the next accepted connection. Waits until it is ready.
     func next() async throws -> PeerConnection {
         for await connection in accepted {
             all.withLock { $0.append(connection) }
@@ -204,29 +204,29 @@ final class PlainLoopbackServer: Sendable {
     }
 }
 
-/// 리스너가 받은 연결 하나.
+/// Represents one connection accepted by the listener.
 struct PeerConnection: Sendable {
-    /// 한 번의 받기 결과.
+    /// The result of one receive.
     enum Received: Equatable, Sendable {
         case bytes([UInt8])
-        /// 오류 없이 끝났다(FIN). 그 전까지 받은 바이트.
+        /// EOF without an error (FIN). Includes bytes received up to that point.
         case end([UInt8])
-        /// 오류로 끝났다(RST 등). 그 전까지 받은 바이트 수.
+        /// EOF with an error (such as RST). Includes the number of bytes received up to that point.
         case failed(received: Int, error: String)
     }
 
-    /// 상대의 끝(FIN)이 마지막 바이트와 함께 왔다. `NWConnection`은 끝을 한 번만 알리고 그 뒤의 받기를 `ENODATA`로
-    /// 끝내므로, 그 바이트를 돌려준 뒤의 `read()`는 이것을 보고 `.end`를 돌려준다.
+    /// The peer's EOF (FIN) arrived with the last bytes. `NWConnection` reports EOF only once and ends the next receive with `ENODATA`,
+    /// so `read()` uses this flag to return `.end` after returning those bytes.
     private final class EndSeen: Sendable {
         let value = Mutex(false)
     }
 
     let connection: NWConnection
-    /// 상대(다리 쪽 소켓)의 출발 포트.
+    /// The peer's source port (the socket on the bridge side).
     let remotePort: UInt16
     private let endSeen = EndSeen()
 
-    /// 연결을 시작하고 준비될 때까지 기다린다. 기다리던 Task가 취소되면 연결을 닫는다(기다림이 오류로 풀린다).
+    /// Starts the connection and waits until it is ready. If the waiting Task is canceled, closes the connection (the wait ends with an error).
     static func start(_ connection: NWConnection) async throws -> PeerConnection {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
@@ -248,7 +248,7 @@ struct PeerConnection: Sendable {
         return PeerConnection(connection: connection, remotePort: port.rawValue)
     }
 
-    /// 한 번 받는다. 끝이면 `.end([])`. 기다리던 Task가 취소되면 연결을 닫는다(받기가 오류로 풀린다).
+    /// Receives once. Returns `.end([])` at EOF. If the waiting Task is canceled, closes the connection (the receive ends with an error).
     func read() async -> Received {
         if endSeen.value.withLock({ $0 }) { return .end([]) }
         let endSeen = endSeen
@@ -273,10 +273,10 @@ struct PeerConnection: Sendable {
         }
     }
 
-    /// `duration` 안에 한 번 받는다. 그 안에 아무것도 오지 않으면 nil. 걸어 둔 받기는 남는다(다음 바이트를 가져간다).
+    /// Receives once within `duration`. Returns nil if nothing arrives in that time. Leaves the pending receive in place (it takes the next bytes).
     func read(within duration: Duration) async -> Received? {
         let (stream, sink) = AsyncStream.makeStream(of: Received?.self)
-        // 받기를 맡은 Task는 취소하지 않는다(취소하면 연결이 닫힌다).
+        // Leave the Task performing the receive running (canceling it closes the connection).
         Task { sink.yield(await read()) }
         let timer = Task {
             try? await Task.sleep(for: duration)
@@ -287,7 +287,7 @@ struct PeerConnection: Sendable {
         return nil
     }
 
-    /// 끝날 때까지 받는다.
+    /// Receives until EOF.
     func readToEnd() async -> Received {
         var received: [UInt8] = []
         while true {
@@ -299,7 +299,7 @@ struct PeerConnection: Sendable {
         }
     }
 
-    /// 보내고 네트워크 스택이 받아 갈 때까지 기다린다. `final`이면 쓰기 방향을 닫는다(FIN).
+    /// Sends data and waits for the network stack to accept it. If `final` is set, closes the write direction (FIN).
     func send(_ bytes: [UInt8], final: Bool) async throws {
         let connection = connection
         try await withTaskCancellationHandler {

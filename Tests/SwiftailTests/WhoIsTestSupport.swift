@@ -1,12 +1,12 @@
-// `whoIs` 시험의 공용 도우미: 노드와 사용자 프로필을 고를 수 있는 netmap.
-// tailcfg 값의 필드는 바깥에서 쓸 수 없으므로 제어 서버가 보내는 것과 같은 JSON을 해독해 만든다.
+// Shared `whoIs` test helpers for netmaps with configurable nodes and user profiles.
+// The fields of tailcfg values are inaccessible externally, so create the values by decoding the same JSON the control server sends.
 
 import Foundation
 import SwiftailControl
 import Testing
 
 enum WhoIsTestSupport {
-    /// netmap에 넣을 노드 하나. 기본값은 사용자 101이 만든 평범한 노드다.
+    /// One node to include in a netmap. Defaults to a regular node created by user 101.
     struct TestNode {
         var id: Int64
         var stableID: String
@@ -14,12 +14,12 @@ enum WhoIsTestSupport {
         var user: Int64 = 101
         var key: UInt8
         var addresses: [String]
-        /// nil이면 제어 서버가 `AllowedIPs`를 생략한 것이고, `addresses`와 같다.
+        /// A nil value means the control server omitted `AllowedIPs`, so it is the same as `addresses`.
         var allowedIPs: [String]?
         var hostname: String = ""
         var tags: [String] = []
         var expired = false
-        /// 키 만료 시각. nil이면 만료가 없다.
+        /// The key expiration time. A nil value means it does not expire.
         var keyExpiry: Date?
         var online = true
     }
@@ -35,7 +35,7 @@ enum WhoIsTestSupport {
 
     static let alice = (id: Int64(101), loginName: "alice@example.com")
 
-    /// `selfNode`와 `peers`의 netmap. `profiles`에 든 사용자만 netmap의 `userProfiles`에 있다.
+    /// A netmap with `selfNode` and `peers`. Only users in `profiles` are in the netmap's `userProfiles`.
     static func netmap(
         selfNode: TestNode = selfNode, peers: [TestNode] = [], profiles: [(id: Int64, loginName: String)] = [alice]
     ) throws -> Netmap {

@@ -1,8 +1,8 @@
-// `.inProcess` 노드 시험의 공용 도우미: 피어를 고를 수 있는 netmap, 제어 서버 없이 돌린 노드, 자기 주소로 맺은 연결 한 쌍.
+// Shared helpers for `.inProcess` node tests: a netmap with selectable peers, a node run without a control server, and a connection pair to the node's own address.
 //
-// 노드는 제어 서버가 없는 루프백 포트로 `run()`을 돌리고(등록은 끝없이 다시 시도한다), 시험이 엔진을 직접 만들고 netmap을
-// 적용한다. 자기 주소로 간 패킷은 엔진이 되돌리므로(터널 계약 동작 L) 노드 하나가 듣는 쪽과 거는 쪽이 된다. 피어 주소로 건
-// 연결의 SYN은 `Magicsock`이 없어 나가지 않는다(맺어지지 않는 연결을 만들 때 쓴다).
+// The node calls `run()` against a loopback port with no control server (registration retries indefinitely), and the test creates the engine directly and applies the
+// netmap. The engine loops back packets sent to the node's own address (tunnel contract behavior L), so one node acts as both listener and caller. The SYN for a connection to a peer address
+// does not go out because there is no `Magicsock` (used to create connections that never establish).
 
 import CryptoKit
 import Foundation
@@ -23,7 +23,7 @@ enum NetstackTestSupport {
     static let phone = Peer(
         id: 2, key: 0x22, name: "rd-phone-1a2b3c4d.tail0001.ts.net.", addresses: ["100.64.0.2/32", "fd7a:115c:a1e0::2/128"])
 
-    /// 자기 노드(ID 1, `rd-mac-1a2b3c4d.tail0001.ts.net.`)와 `peers`의 netmap. 피어는 홈 DERP 1에 있어 데이터면에 오른다.
+    /// A netmap with the local node (ID 1, `rd-mac-1a2b3c4d.tail0001.ts.net.`) and `peers`. Peers have home DERP 1 and enter the data plane.
     static func netmap(
         selfAddresses: [String] = ["100.64.0.1/32", "fd7a:115c:a1e0::1/128"], peers: [Peer] = []
     ) throws -> Netmap {
@@ -40,7 +40,7 @@ enum NetstackTestSupport {
         return try #require(try session.apply(response, receivedAt: Date()).netmap)
     }
 
-    /// `.inProcess` 노드를 돌리고 `netmap`을 적용해 `.running`으로 만든 뒤 `body`에 넘긴다. 끝나면 `run()`을 멈춘다.
+    /// Runs an `.inProcess` node, applies `netmap`, sets the state to `.running`, and passes the node to `body`. Stops `run()` afterward.
     static func withRunningNode(
         _ netmap: Netmap, _ body: (TailnetNode) async throws -> Void
     ) async throws {
@@ -49,7 +49,7 @@ enum NetstackTestSupport {
                 configuration: try NodeTestSupport.configuration(stateDirectory: directory), device: .inProcess)
             let run = Task { try await node.run() }
             do {
-                try await waitUntil("run()이 시작됨") { await node.isRunning }
+                try await waitUntil("run() started") { await node.isRunning }
                 await node.prepareForTesting(netmap)
                 try await body(node)
             } catch {
@@ -62,7 +62,7 @@ enum NetstackTestSupport {
         }
     }
 
-    /// 자기 주소로 건 연결 한 쌍. 리스너를 함께 돌려준다(버리면 닫힌다).
+    /// A connection pair to the node's own address. Also returns the listener (dropping it closes it).
     static func connectedPair(
         _ node: TailnetNode, port: UInt16 = 9_000, host: String = "100.64.0.1"
     ) async throws -> (client: TailnetConnection, server: TailnetConnection, listener: TailnetListener) {
@@ -73,22 +73,22 @@ enum NetstackTestSupport {
         return (client, server, listener)
     }
 
-    /// `condition`이 참이 될 때까지 10ms마다 본다. 5초 안에 참이 되지 않으면 실패한다.
+    /// Checks `condition` every 10ms until it becomes true. Fails if it does not become true within 5 seconds.
     static func waitUntil(_ what: String, _ condition: () async -> Bool) async throws {
         for _ in 0..<500 {
             if await condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }
-        Issue.record("5초 안에 일어나지 않음: \(what)")
+        Issue.record("Did not happen within 5 seconds: \(what)")
         throw CancellationError()
     }
 
-    /// `length`바이트의 정해진 무늬.
+    /// A deterministic pattern of `length` bytes.
     static func pattern(_ length: Int, seed: UInt8 = 0) -> [UInt8] {
         (0..<length).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ Int(seed)) }
     }
 
-    /// `length`바이트를 다 읽는다. 그 전에 끝나면 읽은 만큼이다.
+    /// Reads all `length` bytes. If the stream ends sooner, returns what it read.
     static func read(_ length: Int, from connection: TailnetConnection) async throws -> [UInt8] {
         var received: [UInt8] = []
         while received.count < length, let chunk = try await connection.read() {
@@ -97,7 +97,7 @@ enum NetstackTestSupport {
         return received
     }
 
-    /// `body`가 던진 `ConnectionError`. 던지지 않으면 nil. 다른 오류는 시험 실패다(`Task.value`는 타입 없는 오류를 던진다).
+    /// Returns the `ConnectionError` thrown by `body`, or nil if it does not throw. Other errors fail the test (`Task.value` throws an untyped error).
     static func error<T>(_ body: () async throws -> T) async -> ConnectionError? {
         do {
             _ = try await body()
@@ -105,14 +105,14 @@ enum NetstackTestSupport {
         } catch let error as ConnectionError {
             return error
         } catch {
-            Issue.record("ConnectionError가 아닌 오류: \(error)")
+            Issue.record("Expected ConnectionError, got \(error)")
             return nil
         }
     }
 }
 
 extension TailnetNode {
-    /// 등록을 거치지 않고 엔진을 만들고 netmap을 적용한 뒤 상태를 `.running`으로 만든다.
+    /// Creates the engine without registering, applies the netmap, and sets the state to `.running`.
     func prepareForTesting(_ netmap: Netmap) {
         engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: .now, wallClock: Date())
         apply(netmap)
@@ -131,12 +131,12 @@ extension TailnetNode {
         listenerRecords[listener.token]?.waiter != nil
     }
 
-    /// 응용이 쥐었거나 거는 중인 연결의 수.
+    /// The number of connections the application holds or is establishing.
     var trackedConnectionCount: Int {
         netstack?.connections.count ?? 0
     }
 
-    /// 거는 중인 연결이 맺어지기를 기다리고 있다.
+    /// Whether a connection attempt is waiting to establish.
     var isConnecting: Bool {
         netstack?.connections.values.contains { $0.writeWaiter != nil && !$0.isEstablished } ?? false
     }

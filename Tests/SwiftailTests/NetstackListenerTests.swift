@@ -3,12 +3,12 @@ import SwiftailBase
 import Testing
 @testable import Swiftail
 
-/// 리스너: `run()` 전의 `listen`, 포트 중복, 상한, 닫기, 대기열(계약 `docs/contracts/SwiftailNetstack.md` 동작 A1·S3·S5).
-@Suite("노드의 TCP: 리스너", .timeLimit(.minutes(1)))
+/// Listener coverage: `listen` before `run()`, duplicate ports, limits, closing, and the queue (contract `docs/contracts/SwiftailNetstack.md` behaviors A1·S3·S5).
+@Suite("Node TCP listeners", .timeLimit(.minutes(1)))
 struct NetstackListenerTests {
     private typealias Support = NetstackTestSupport
 
-    @Test("run() 전에 연 리스너가 run()이 시작한 뒤 연결을 받는다. 포트 0과 중복은 거절한다")
+    @Test("A listener opened before run() accepts connections after run() starts. Port 0 and duplicate ports are rejected")
     func listenBeforeRun() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(
@@ -19,7 +19,7 @@ struct NetstackListenerTests {
             #expect(await Support.error { try await node.listen(port: 0) } == .invalidConfiguration("포트는 0이 아니어야 한다"))
 
             let run = Task { try await node.run() }
-            try await Support.waitUntil("run()이 시작됨") { await node.isRunning }
+            try await Support.waitUntil("run() started") { await node.isRunning }
             await node.prepareForTesting(try Support.netmap())
             let client = try await node.connect(to: "100.64.0.1", port: 9_000)
             var connections = listener.makeAsyncIterator()
@@ -33,7 +33,7 @@ struct NetstackListenerTests {
         }
     }
 
-    @Test("리스너는 16개까지이고, 닫으면 같은 포트를 다시 열 수 있다")
+    @Test("Allows up to 16 listeners and reopens the same port after closing")
     func listenerLimitAndReuse() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             var listeners: [TailnetListener] = []
@@ -49,7 +49,7 @@ struct NetstackListenerTests {
         }
     }
 
-    @Test("받아 가기 전에 맺어진 연결은 들어온 차례로 나오고, 그동안 온 데이터와 FIN을 쥐고 있다")
+    @Test("Connections established before acceptance are yielded in arrival order and retain any data and FIN received in the meantime")
     func queuedConnections() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let listener = try await node.listen(port: 9_000)
@@ -69,7 +69,7 @@ struct NetstackListenerTests {
         }
     }
 
-    @Test("리스너를 닫으면 기다리던 흐름이 끝나고 받아 가지 않은 연결은 RST로 끊긴다. 받아 간 연결은 그대로다")
+    @Test("Closing a listener ends the waiting stream and resets unaccepted connections. Accepted connections stay intact")
     func closeEndsIteration() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
@@ -86,9 +86,9 @@ struct NetstackListenerTests {
                 var connections = listener.makeAsyncIterator()
                 return await connections.next()
             }
-            try await Support.waitUntil("흐름이 기다림") { await node.isAccepting(listener) }
+            try await Support.waitUntil("The stream is waiting") { await node.isAccepting(listener) }
             var second = listener.makeAsyncIterator()
-            #expect(await second.next() == nil, "둘째 Task의 흐름은 곧바로 끝난다")
+            #expect(await second.next() == nil, "The second Task's stream ends immediately")
             await listener.close()
             #expect(await accepter.value == nil)
 
@@ -98,7 +98,7 @@ struct NetstackListenerTests {
         }
     }
 
-    @Test("흐름을 기다리던 Task를 취소하면 그 흐름만 끝나고 리스너는 그대로다")
+    @Test("Canceling the Task waiting on the stream ends only that stream and leaves the listener intact")
     func cancelledIteration() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let listener = try await node.listen(port: 9_000)
@@ -106,7 +106,7 @@ struct NetstackListenerTests {
                 var connections = listener.makeAsyncIterator()
                 return await connections.next()
             }
-            try await Support.waitUntil("흐름이 기다림") { await node.isAccepting(listener) }
+            try await Support.waitUntil("The stream is waiting") { await node.isAccepting(listener) }
             accepter.cancel()
             #expect(await accepter.value == nil)
 
@@ -119,19 +119,19 @@ struct NetstackListenerTests {
         }
     }
 
-    @Test("버려진 리스너는 닫혀 포트를 다시 열 수 있다")
+    @Test("Dropping a listener closes it so the port can be reopened")
     func droppedListenerCloses() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             var listener: TailnetListener? = try await node.listen(port: 9_000)
             #expect(listener?.port == 9_000)
             listener = nil
-            try await Support.waitUntil("포트가 풀림") {
+            try await Support.waitUntil("The port was released") {
                 await Support.error { try await node.listen(port: 9_000) } == nil
             }
         }
     }
 
-    @Test("run() 전에 버린 리스너는 포트를 놓는다. 같은 포트를 다시 열고, 그것이 run() 뒤에 연결을 받는다")
+    @Test("Dropping a listener before run() releases the port. Reopening the same port gives a listener that accepts connections after run()")
     func droppedListenerBeforeRunReleasesPort() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(
@@ -142,7 +142,7 @@ struct NetstackListenerTests {
             let listener = try await node.listen(port: 9_000)
 
             let run = Task { try await node.run() }
-            try await Support.waitUntil("run()이 시작됨") { await node.isRunning }
+            try await Support.waitUntil("run() started") { await node.isRunning }
             await node.prepareForTesting(try Support.netmap())
             let client = try await node.connect(to: "100.64.0.1", port: 9_000)
             var connections = listener.makeAsyncIterator()
@@ -154,7 +154,7 @@ struct NetstackListenerTests {
         }
     }
 
-    @Test("run() 전에 버린 리스너는 상한에도 세지 않는다")
+    @Test("A listener dropped before run() does not count against the limit")
     func droppedListenersBeforeRunDoNotCount() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(
@@ -170,7 +170,7 @@ struct NetstackListenerTests {
         }
     }
 
-    @Test("run() 중에도 버린 직후 같은 포트의 listen은 addressInUse가 아니다")
+    @Test("Even during run(), listen on the same port immediately after dropping the listener does not yield addressInUse")
     func droppedListenerReleasesPortImmediately() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             for _ in 0..<20 {

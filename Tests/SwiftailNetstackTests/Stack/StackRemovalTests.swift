@@ -3,13 +3,13 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 연결을 끝내는 스택의 일: 자기 주소 바뀜, 상대 주소의 주인 바뀜, 리스너 닫기, 응용이 놓은 연결, 옛 ID.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S5·S9, X10과 시험 11.
-@Suite("스택: 연결 끝내기")
+/// Stack duties when ending connections: local address changes, remote address owner changes, listener closure, application-released connections, and old IDs.
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors S5·S9, X10, and test 11.
+@Suite("Stack connection termination")
 struct StackRemovalTests {
     static let server = IPEndpoint(address: WireHosts.v4b, port: 443)
 
-    @Test("자기 주소가 아니게 된 주소의 연결은 아무것도 보내지 않고 peerRemoved로 끝난다")
+    @Test("Connections to an address that is no longer local end with peerRemoved without sending anything")
     func localAddressRemoved() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -21,25 +21,25 @@ struct StackRemovalTests {
         #expect(pair.client.connection(v4.client) == nil)
         #expect(pair.client.connection(v6.client) != nil)
         #expect(pair.client.write([1], to: v4.client, at: pair.now) == (0, []))
-        // 그 주소로 오는 패킷은 이제 자기 것이 아니다.
+        // Packets arriving at that address are no longer local.
         _ = pair.write([1, 2], to: v4.server, from: .server)
         try pair.deliver()
         #expect(pair.clientDrops == [.notForUs])
         expectStackInvariants(pair.client)
     }
 
-    /// 고치기 전에는 응용이 `close`로 놓은 닫는 중인 연결을 끊을 호출이 없어, 노드가 멈출 때 RST 없이 버려졌다.
-    @Test("모두 끊기: 응용이 쥔 것, close로 놓았지만 닫는 중인 것, 대기열의 것에 RST를 하나씩 내고 사건 없이 비운다")
+    /// Before the fix, there was no call to abort a closing connection that the application released with `close`, so node shutdown discarded it without RST.
+    @Test("Abort all: emit one RST each for application-held, released with close but still closing, and queued connections, then clear them without events")
     func abortAllResetsEveryConnection() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
         let held = try pair.open(listener: listener)
         let closing = try pair.open(listener: listener)
-        // 서버가 받아 가지 않은 연결 하나(대기열에 남는다).
+        // One connection the server has not accepted (it stays queued).
         let queued = try pair.client.connect(to: Self.server, at: pair.now)
         pair.collect(queued.outputs, from: .client)
         try pair.deliver()
-        // 클라이언트가 close한 연결: FIN이 나갔지만 상대에 닿기 전이라 아직 닫는 중이다.
+        // A connection closed by the client: FIN went out, but the connection is still closing because the peer has yet to receive it.
         let closeOutputs = pair.client.close(closing.client, at: pair.now)
         #expect(closeOutputs.segments.contains { $0.flags.contains(.fin) })
 
@@ -60,7 +60,7 @@ struct StackRemovalTests {
         _ = held
     }
 
-    @Test("상대 주소의 연결을 끝낸다: 응용이 쥔 것은 알리고, 대기열·맺는 중인 것은 알리지 않고 지운다")
+    @Test("Ends connections for the remote address: reports application-held connections and silently removes queued and opening connections")
     func remoteAddressRemoved() throws {
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: .now)
         let listener = try stack.listen(on: 443)
@@ -93,7 +93,7 @@ struct StackRemovalTests {
         expectStackInvariants(stack)
     }
 
-    @Test("리스너를 닫으면 대기열의 연결은 RST로 끊고 맺는 중인 연결은 말없이 버린다. 꺼낸 연결은 그대로다")
+    @Test("Closing a listener resets queued connections and silently drops opening connections. Dequeued connections stay intact")
     func stopListening() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -101,7 +101,7 @@ struct StackRemovalTests {
         let (queuedClient, outputs) = try pair.client.connect(to: Self.server, at: pair.now)
         pair.collect(outputs, from: .client)
         try pair.deliver()
-        // 맺는 중인 연결 하나: 클라이언트의 마지막 ACK를 잃는다.
+        // One opening connection: the client's final ACK is lost.
         let (_, synOutputs) = try pair.client.connect(to: Self.server, at: pair.now)
         let syn = try #require(synOutputs.packets.first)
         _ = pair.server.receive(syn, at: pair.now)
@@ -125,7 +125,7 @@ struct StackRemovalTests {
         expectStackInvariants(pair.server)
     }
 
-    @Test("close로 놓은 연결은 마무리를 스택이 하고 사건을 내지 않는다. 옛 ID의 호출은 아무 일도 하지 않는다")
+    @Test("The stack finishes a connection released with close without emitting events. Calls with an old ID do nothing")
     func releasedConnection() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -135,7 +135,7 @@ struct StackRemovalTests {
         _ = pair.write([1, 2, 3], to: ids.client, from: .client)
         pair.collect(pair.client.close(ids.client, at: pair.now), from: .client)
         try pair.run(for: .seconds(1))
-        // 닫은 뒤에 온 데이터에는 RST(SHLD-3)지만, 놓은 연결이라 서버에는 사건이 없다.
+        // Data arriving after close gets RST (SHLD-3), but the server gets no event because the connection was released.
         #expect(pair.serverEvents == eventsBefore)
         #expect(pair.server.connections.isEmpty)
         #expect(pair.server.read(upTo: 10, from: ids.server, at: pair.now) == ([], []))
@@ -145,7 +145,7 @@ struct StackRemovalTests {
         #expect(pair.server.finishWriting(ids.server, at: pair.now).isEmpty)
     }
 
-    @Test("대기열의 연결은 꺼내기 전에는 ID로 부를 수 없다")
+    @Test("A queued connection cannot be called by ID before dequeue")
     func queuedConnectionIsNotApplications() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)

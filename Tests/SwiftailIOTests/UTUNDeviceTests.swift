@@ -5,15 +5,15 @@ import Testing
 
 @testable import SwiftailIO
 
-/// utun 장치 감싸개(계약 "시험" 9). 실제 utun은 열 때 권한이 필요하므로 시험하지 않는다(실기기 관문). 대신 utun 확인을 건너뛰고
-/// `socketpair`의 한쪽을 utun 자리에 붙인다. 데이터그램 경계가 있는 `AF_UNIX`·`SOCK_DGRAM` 쌍은 utun의 "읽기 한 번이 패킷 하나"와
-/// 같은 모양이다.
-@Suite("utun 장치")
+/// Tests the utun device wrapper (contract "Tests" 9). Opening a real utun requires privileges, so leave that to the real-device gate. Instead, bypass the utun check
+/// and use one end of a `socketpair` in its place. An `AF_UNIX`·`SOCK_DGRAM` pair preserves datagram boundaries and behaves like utun's
+/// "one packet per read."
+@Suite("utun device")
 struct UTUNDeviceTests {
     private static let ipv4Packet: [UInt8] = [0x45, 0, 0, 20] + [UInt8](repeating: 7, count: 16)
     private static let ipv6Packet: [UInt8] = [0x60, 0, 0, 0] + [UInt8](repeating: 9, count: 36)
 
-    /// utun 확인만 건너뛴다. 복제·`O_NONBLOCK`·읽기는 실제 코드가 그대로 돈다.
+    /// Bypasses only the utun check. Duplication, `O_NONBLOCK`, and reads still use the production code.
     private static func device(on descriptor: Int32, mtu: Int = 1280) throws -> UTUNDevice {
         try UTUNDevice(duplicating: descriptor, mtu: mtu, verifying: { _ in })
     }
@@ -25,7 +25,7 @@ struct UTUNDeviceTests {
         case timeout
     }
 
-    /// 흐름에서 하나를 기다린다.
+    /// Waits for one item from the stream.
     private static func next(from device: UTUNDevice, within duration: Duration = .seconds(5)) async -> Outcome {
         let stream = device.packets
         do {
@@ -40,44 +40,44 @@ struct UTUNDeviceTests {
         }
     }
 
-    // MARK: 머리 붙이기·떼기와 버전 판정 (순수 함수)
+    // MARK: Header insertion, removal, and version detection (pure functions)
 
-    @Test("IP 버전 4는 AF_INET(2), 6은 AF_INET6(30) 머리를 붙인다")
+    @Test("IP version 4 gets an AF_INET (2) header and version 6 gets an AF_INET6 (30) header")
     func framesByVersion() {
         #expect(UTUNDevice.frame(Self.ipv4Packet) == [0, 0, 0, 2] + Self.ipv4Packet)
         #expect(UTUNDevice.frame(Self.ipv6Packet) == [0, 0, 0, 30] + Self.ipv6Packet)
     }
 
-    @Test("4도 6도 아닌 버전과 빈 패킷은 머리를 붙이지 않는다", arguments: [0x00, 0x10, 0x30, 0x50, 0x70, 0xf0, 0x04, 0x06] as [UInt8])
+    @Test("Packets with a version other than 4 or 6 and empty packets get no header", arguments: [0x00, 0x10, 0x30, 0x50, 0x70, 0xf0, 0x04, 0x06] as [UInt8])
     func rejectsOtherVersions(_ first: UInt8) {
-        // 윗 니블만 버전이다: 아래 니블이 4나 6이어도 버전은 아니다.
+        // Only the upper nibble encodes the version. A 4 or 6 in the lower nibble does not specify a version.
         #expect(UTUNDevice.frame([first, 1, 2, 3]) == nil)
     }
 
-    @Test("버전은 첫 바이트의 윗 니블이다")
+    @Test("The upper nibble of the first byte encodes the version")
     func versionIsHighNibble() {
         #expect(UTUNDevice.frame([0x4f, 0]) == [0, 0, 0, 2, 0x4f, 0])
         #expect(UTUNDevice.frame([0x6f, 0]) == [0, 0, 0, 30, 0x6f, 0])
         #expect(UTUNDevice.frame([]) == nil)
     }
 
-    @Test("머리를 떼고 머리 값은 보지 않는다")
+    @Test("Removes the header without inspecting its value")
     func stripsHeaderWithoutLookingAtIt() {
         #expect(UTUNDevice.ipPacket(inFrame: [0, 0, 0, 2] + Self.ipv4Packet) == Self.ipv4Packet)
         #expect(UTUNDevice.ipPacket(inFrame: [0xff, 0xff, 0xff, 0xff, 0x45]) == [0x45])
-        // 슬라이스의 시작 위치가 0이 아니어도 된다.
+        // Also works when the slice starts at a nonzero index.
         let frame: [UInt8] = [9, 9, 0, 0, 0, 2, 0x45, 1]
         #expect(UTUNDevice.ipPacket(inFrame: frame[2...]) == [0x45, 1])
     }
 
-    @Test("머리보다 짧거나 머리뿐인 프레임은 버린다", arguments: 0...4)
+    @Test("Discards frames shorter than the header or containing only the header", arguments: 0...4)
     func dropsShortFrames(_ length: Int) {
         #expect(UTUNDevice.ipPacket(inFrame: [UInt8](repeating: 1, count: length)[...]) == nil)
     }
 
-    // MARK: 읽기
+    // MARK: Reading
 
-    @Test("프레임에서 머리를 떼고 IP 패킷만 올린다")
+    @Test("Strips the frame header and yields only the IP packet")
     func readsPacketWithoutHeader() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -88,7 +88,7 @@ struct UTUNDeviceTests {
         #expect(await Self.next(from: device) == .packet(Self.ipv6Packet))
     }
 
-    @Test("한 번에 여러 개가 도착해도 모두 순서대로 읽는다")
+    @Test("Reads all packets in order even when several arrive at once")
     func readsUntilNothingLeft() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -101,7 +101,7 @@ struct UTUNDeviceTests {
         #expect(numbers == (0..<50).map(UInt8.init))
     }
 
-    @Test("머리보다 짧은 읽기와 머리뿐인 읽기는 버리고 계속 읽는다")
+    @Test("Discards shorter-than-header and header-only reads, then keeps reading")
     func dropsShortReadsAndContinues() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -113,7 +113,7 @@ struct UTUNDeviceTests {
         #expect(await Self.next(from: device, within: .milliseconds(200)) == .timeout)
     }
 
-    @Test("MTU와 같은 길이는 올리고 MTU를 넘는 패킷은 버린다", arguments: [1280, 1420])
+    @Test("Yields packets as long as the MTU and drops packets that exceed it", arguments: [1280, 1420])
     func dropsPacketsOverMTU(_ mtu: Int) async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -125,9 +125,9 @@ struct UTUNDeviceTests {
         #expect(await Self.next(from: device) == .packet(atLimit))
     }
 
-    // MARK: 쓰기
+    // MARK: Writing
 
-    @Test("쓸 때 IPv4는 머리 2, IPv6는 머리 30을 붙인다")
+    @Test("Writes IPv4 with header 2 and IPv6 with header 30")
     func writesHeaders() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -138,7 +138,7 @@ struct UTUNDeviceTests {
         #expect(pair.receive() == [0, 0, 0, 30] + Self.ipv6Packet)
     }
 
-    @Test("다른 버전과 빈 패킷은 쓰지 않고 EAFNOSUPPORT로 알린다")
+    @Test("Skips writes for other versions and empty packets and reports EAFNOSUPPORT")
     func writeRejectsOtherVersions() throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -146,36 +146,36 @@ struct UTUNDeviceTests {
         #expect(throws: SocketError.sendFailed("EAFNOSUPPORT")) { try device.write([0x50, 1, 2]) }
         #expect(throws: SocketError.sendFailed("EAFNOSUPPORT")) { try device.write([]) }
         #expect(pair.receive(within: .milliseconds(100)) == nil)
-        // 실패한 뒤에도 다음 패킷을 쓸 수 있다.
+        // The next packet can still be written after a failure.
         try device.write(Self.ipv4Packet)
         #expect(pair.receive() == [0, 0, 0, 2] + Self.ipv4Packet)
     }
 
-    @Test("커널이 받지 못한 패킷은 sendFailed이고 장치는 계속 쓸 수 있다")
+    @Test("A packet the kernel could not accept yields sendFailed, and the device remains usable")
     func writeFailureKeepsDevice() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
         let device = try Self.device(on: pair.caller)
-        // `AF_UNIX` 데이터그램의 최대 크기(기본 2,048바이트)를 넘으면 EMSGSIZE다.
+        // Exceeding the maximum `AF_UNIX` datagram size (2,048 bytes by default) yields EMSGSIZE.
         let oversized = [0x45] + [UInt8](repeating: 0, count: 8_000)
         #expect(throws: SocketError.sendFailed("EMSGSIZE")) { try device.write(oversized) }
         try device.write(Self.ipv4Packet)
         #expect(pair.receive() == [0, 0, 0, 2] + Self.ipv4Packet)
     }
 
-    /// 고치기 전에는 끊긴 스트림 소켓에 쓰면 SIGPIPE로 시험 프로세스가 죽었다(신호 13).
-    @Test("상대가 닫힌 소켓에 써도 신호로 죽지 않고 sendFailed(EPIPE)다")
+    /// Before the fix, writing to a disconnected stream socket killed the test process with SIGPIPE (signal 13).
+    @Test("Writing to a socket whose peer closed yields sendFailed(EPIPE) without a fatal signal")
     func writeToClosedPeerDoesNotRaiseSIGPIPE() throws {
         let pair = try SocketPair(type: SOCK_STREAM)
-        defer { close(pair.caller) }  // 상대는 아래에서 이미 닫았다. 같은 번호를 두 번 닫으면 병렬로 도는 다른 시험의 기술자를 닫는다.
+        defer { close(pair.caller) }  // The peer is already closed below. Closing the same descriptor number twice would close a descriptor from another test running in parallel.
         let device = try Self.device(on: pair.caller)
         pair.closePeer()
         #expect(throws: SocketError.sendFailed("EPIPE")) { try device.write(Self.ipv4Packet) }
     }
 
-    // MARK: 파일 기술자의 소유
+    // MARK: File descriptor ownership
 
-    @Test("복제본은 호출자의 기술자와 다른 번호이고 FD_CLOEXEC·O_NONBLOCK이 있다")
+    @Test("The duplicate has a different descriptor number from the caller's and has FD_CLOEXEC and O_NONBLOCK")
     func duplicateHasCloexecAndNonblocking() throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -186,7 +186,7 @@ struct UTUNDeviceTests {
         #expect(fcntl(copy, F_GETFL) & O_NONBLOCK != 0)
     }
 
-    @Test("장치를 닫아도 호출자의 기술자는 열려 있다")
+    @Test("Closing the device leaves the caller's descriptor open")
     func closeLeavesCallerDescriptorOpen() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -195,12 +195,12 @@ struct UTUNDeviceTests {
         device.close()
         try await Self.waitUntilClosed(copy, duplicateOf: pair.caller)
         #expect(fcntl(pair.caller, F_GETFD) >= 0)
-        // 호출자의 기술자는 여전히 읽고 쓸 수 있다.
+        // The caller's descriptor can still read and write.
         try pair.send([1, 2, 3])
         #expect(pair.receiveOnCaller() == [1, 2, 3])
     }
 
-    @Test("장치를 버리면 복제본만 닫히고 호출자의 기술자는 열려 있다")
+    @Test("Dropping the device closes only the duplicate and leaves the caller's descriptor open")
     func deinitClosesOnlyDuplicate() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -221,21 +221,21 @@ struct UTUNDeviceTests {
         #expect(outcome == .ended)
     }
 
-    // MARK: 닫기
+    // MARK: Closing
 
-    @Test("닫으면 흐름이 오류 없이 끝나고, 닫은 뒤의 쓰기는 EBADF다")
+    @Test("Closing ends the stream without an error, and writing afterward yields EBADF")
     func closeEndsStream() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
         let device = try Self.device(on: pair.caller)
         device.close()
-        device.close()  // 여러 번 불러도 된다
+        device.close()  // Calling it more than once is allowed
         #expect(await Self.next(from: device) == .ended)
         #expect(throws: SocketError.sendFailed("EBADF")) { try device.write(Self.ipv4Packet) }
         #expect(pair.receive(within: .milliseconds(100)) == nil)
     }
 
-    @Test("기다리는 동안 닫아도 흐름이 끝난다")
+    @Test("Closing while waiting also ends the stream")
     func closeWhileWaiting() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -246,9 +246,9 @@ struct UTUNDeviceTests {
         #expect(await waiter.value == .ended)
     }
 
-    @Test("닫은 장치의 복제본 번호를 다른 장치가 받아도 건드리지 않는다")
+    @Test("The closed device leaves another device alone if it gets the same duplicate descriptor number")
     func closedDeviceDoesNotTouchReusedDescriptor() async throws {
-        // 닫은 장치가 놓은 번호는 곧바로 다른 곳이 받는다. 닫은 뒤의 `write`·`close`가 그 기술자에 닿으면 새 장치가 깨진다.
+        // Another owner immediately gets the descriptor number released by the closed device. If `write` or `close` after closure reaches it, the new device breaks.
         for round in 0..<20 {
             let oldPair = try SocketPair()
             let old = try Self.device(on: oldPair.caller)
@@ -268,11 +268,11 @@ struct UTUNDeviceTests {
         }
     }
 
-    @Test("상대가 닫히면 EOF를 알리고 읽기 처리기와 복제본을 닫는다")
+    @Test("When the peer closes, signals EOF and closes the read handler and the duplicate")
     func peerCloseStopsReaderAndClosesDuplicate() async throws {
-        // 데이터그램 소켓 쌍은 상대가 닫혀도 읽기가 끝나지 않으므로 이 시험만 스트림 소켓 쌍을 쓴다.
+        // Reads on a datagram socket pair do not end when the peer closes, so this test alone uses a stream socket pair.
         let pair = try SocketPair(type: SOCK_STREAM)
-        defer { close(pair.caller) }  // 상대는 아래에서 이미 닫았다. 같은 번호를 두 번 닫지 않는다.
+        defer { close(pair.caller) }  // The peer is already closed below. Do not close the same descriptor number twice.
         let readEvents = Mutex(0)
         let device = try UTUNDevice(duplicating: pair.caller, mtu: 1280, onReadEvent: {
             readEvents.withLock { $0 += 1 }
@@ -284,7 +284,7 @@ struct UTUNDeviceTests {
         #expect(device.duplicateDescriptor == nil)
         try await Self.waitUntilClosed(copy, duplicateOf: pair.caller)
         #expect(throws: SocketError.sendFailed("EBADF")) { try device.write(Self.ipv4Packet) }
-        // 첫 처리기에서 EOF를 읽으므로 다시 호출될 이유가 없다.
+        // The first handler invocation reads EOF, so there is no reason to call it again.
         #expect(readEvents.withLock { $0 } == 1)
         try await Task.sleep(for: .milliseconds(50))
         #expect(readEvents.withLock { $0 } == 1)
@@ -292,9 +292,9 @@ struct UTUNDeviceTests {
         #expect(device.readFailure == .readFailed("EOF"))
     }
 
-    // MARK: 취소와 느린 소비자
+    // MARK: Cancellation and slow consumers
 
-    @Test("기다리던 Task를 취소하면 읽기가 끝나고 장치는 열려 있다")
+    @Test("Canceling the waiting Task ends the read and leaves the device open")
     func cancellationEndsWaitingRead() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -312,7 +312,7 @@ struct UTUNDeviceTests {
         #expect(pair.receive() == [0, 0, 0, 2] + Self.ipv4Packet)
     }
 
-    @Test("이미 취소된 Task에서 읽으면 곧바로 끝난다")
+    @Test("Reading from an already canceled Task ends immediately")
     func readInCancelledTask() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -328,17 +328,17 @@ struct UTUNDeviceTests {
         #expect(ended)
     }
 
-    @Test("소비하지 않으면 256개까지만 쌓고 오래된 것부터 버린다")
+    @Test("Without a consumer, queues at most 256 packets and drops the oldest first")
     func slowConsumerKeepsNewest256() async throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
         let device = try Self.device(on: pair.caller)
         let total = 1000
         for number in 0..<total {
-            // 번호를 2바이트로 싣는다. 받는 쪽 큐가 차면 `send`가 잠깐 쉬고 다시 보낸다.
+            // Encodes the number in 2 bytes. If the receive queue fills, `send` waits briefly and retries.
             try pair.send([0, 0, 0, 2, UInt8(number >> 8) | 0x40, UInt8(number & 0xff)])
         }
-        // 마지막 패킷이 흐름에 들어갈 때까지 기다린 뒤에야 소비를 시작한다.
+        // Start consuming only after the last packet enters the stream.
         try await Task.sleep(for: .milliseconds(500))
         let marker: [UInt8] = [0x4f, 0xff]
         try pair.send([0, 0, 0, 2] + marker)
@@ -349,18 +349,18 @@ struct UTUNDeviceTests {
             if packet == marker { break }
             numbers.append(Int(packet[0] & 0x3f) << 8 | Int(packet[1]))
         }
-        // 표지가 들어오며 가장 오래된 하나가 더 밀려났으므로 255개 이하다.
+        // The marker displaced one more oldest packet, leaving at most 255.
         #expect(numbers.count <= 255)
         #expect(!numbers.isEmpty)
-        // 남은 것은 가장 나중에 온 것들이고 순서가 지켜진다.
+        // The remaining packets are the most recent arrivals and stay in order.
         #expect(numbers == numbers.sorted())
         #expect(numbers.last == total - 1)
         #expect(try #require(numbers.first) >= total - 256)
     }
 
-    // MARK: 공개 생성자의 거절
+    // MARK: Public initializer rejection
 
-    /// 거절된 기술자는 호출자의 것으로 남아 있어야 한다.
+    /// The rejected descriptor must remain owned by the caller.
     private static func expectRejected(
         _ descriptor: Int32,
         mtu: Int = 1280,
@@ -369,29 +369,29 @@ struct UTUNDeviceTests {
     ) {
         do {
             _ = try UTUNDevice(duplicating: descriptor, mtu: mtu)
-            Issue.record("거절되지 않았다", sourceLocation: sourceLocation)
+            Issue.record("The descriptor was accepted", sourceLocation: sourceLocation)
         } catch {
             guard case .invalidDevice(let message) = error else {
-                Issue.record("invalidDevice가 아닌 오류: \(error)", sourceLocation: sourceLocation)
+                Issue.record("Expected invalidDevice, got \(error)", sourceLocation: sourceLocation)
                 return
             }
             if let reason { #expect(message == reason, sourceLocation: sourceLocation) }
         }
     }
 
-    @Test("utun이 아닌 기술자(데이터그램·스트림 소켓)를 거절하고 호출자의 기술자는 열려 있다", arguments: [SOCK_DGRAM, SOCK_STREAM])
+    @Test("Rejects non-utun descriptors (datagram and stream sockets) and leaves the caller's descriptor open", arguments: [SOCK_DGRAM, SOCK_STREAM])
     func rejectsUnixSockets(_ type: Int32) throws {
         let pair = try SocketPair(type: type)
         defer { pair.closeAll() }
         Self.expectRejected(pair.caller, "notUTUN")
         #expect(fcntl(pair.caller, F_GETFD) >= 0)
-        // 거절하면서 호출자의 기술자를 비차단으로 바꾸지 않는다.
+        // Rejection does not make the caller's descriptor nonblocking.
         #expect(fcntl(pair.caller, F_GETFL) & O_NONBLOCK == 0)
         try pair.send([1])
         #expect(pair.receiveOnCaller() == [1])
     }
 
-    @Test("utun이 아닌 기술자(UDP 소켓, 파이프)를 거절한다")
+    @Test("Rejects non-utun descriptors (UDP sockets and pipes)")
     func rejectsOtherDescriptors() throws {
         let udp = socket(AF_INET, SOCK_DGRAM, 0)
         try #require(udp >= 0)
@@ -406,18 +406,18 @@ struct UTUNDeviceTests {
         #expect(fcntl(ends[0], F_GETFD) >= 0)
     }
 
-    @Test("닫힌 번호와 음수 기술자를 거절한다")
+    @Test("Rejects closed descriptor numbers and negative descriptors")
     func rejectsClosedAndNegative() throws {
         let pair = try SocketPair()
         let closed = pair.caller
         pair.closeAll()
-        // 다른 시험이 같은 번호를 곧바로 받았을 수도 있으므로 이유까지 고정하지 않는다. 어느 쪽이든 거절이다.
+        // Another test may have immediately acquired the same descriptor number, so do not assert the reason. Both cases are rejections.
         Self.expectRejected(closed)
         Self.expectRejected(-1, "fileDescriptor")
         Self.expectRejected(Int32.min, "fileDescriptor")
     }
 
-    @Test("MTU가 1280…1420 밖이면 거절한다", arguments: [1, 1000, 1279, 1421, 1500, 9000, 0, -1280])
+    @Test("Rejects an MTU outside 1280…1420", arguments: [1, 1000, 1279, 1421, 1500, 9000, 0, -1280])
     func rejectsOutOfRangeMTU(_ mtu: Int) throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
@@ -427,23 +427,23 @@ struct UTUNDeviceTests {
         }
     }
 
-    @Test("MTU 경계 1280과 1420은 받아들이고 그 값을 그대로 보관한다", arguments: [1280, 1420])
+    @Test("Accepts the MTU limits 1280 and 1420 and retains each value unchanged", arguments: [1280, 1420])
     func acceptsMTUBoundaries(_ mtu: Int) throws {
         let pair = try SocketPair()
         defer { pair.closeAll() }
         #expect(try Self.device(on: pair.caller, mtu: mtu).mtu == mtu)
     }
 
-    // MARK: 도우미
+    // MARK: Helpers
 
-    /// 복제본이 닫혔는지 기다린다. `close(2)`는 읽기 원천의 취소 처리기가 하므로 곧바로는 아니다.
+    /// Waits for the duplicate to close. Closure is asynchronous because the read source's cancellation handler calls `close(2)`.
     ///
-    /// 번호가 `EBADF`인지만 보면 안 된다. 병렬로 도는 다른 시험이 닫힌 번호를 곧바로 받아 가면 `EBADF`가 영영 나오지
-    /// 않는다. 그래서 그 번호가 아직 `original`과 같은 소켓인지(`fstat`의 inode)를 본다. 닫혔거나 다른 것이 됐으면 닫힌 것이다.
+    /// Checking only for `EBADF` is insufficient. Another test running in parallel can immediately take the closed descriptor number, so `EBADF` might never occur.
+    /// Instead, check if the number still identifies the same socket as `original` (the inode from `fstat`). If closed or reassigned, the duplicate has closed.
     private static func waitUntilClosed(_ descriptor: Int32, duplicateOf original: Int32) async throws {
         var identity = stat()
         guard fstat(original, &identity) == 0 else {
-            Issue.record("원래 기술자의 fstat 실패")
+            Issue.record("fstat failed on the original descriptor")
             return
         }
         for _ in 0..<200 {
@@ -451,13 +451,13 @@ struct UTUNDeviceTests {
             if fstat(descriptor, &current) != 0 || current.st_ino != identity.st_ino { return }
             try await Task.sleep(for: .milliseconds(10))
         }
-        Issue.record("복제본이 닫히지 않았다")
+        Issue.record("The duplicate did not close")
     }
 }
 
-/// 시험용 `socketpair`. 시험 코드의 POSIX 포인터는 이 타입에만 둔다.
+/// A test `socketpair`. Keep the test code's POSIX pointers in this type only.
 ///
-/// `caller`가 utun 자리(앱이 노드에 넘기는 기술자)이고 `peer`가 커널 자리다. 상대는 비차단으로 써서, 큐가 차면 잠깐 쉬고 다시 보낸다.
+/// `caller` stands in for utun (the descriptor the app passes to the node), and `peer` stands in for the kernel. The peer writes in nonblocking mode and retries after a brief wait if the queue fills.
 private struct SocketPair {
     struct Failure: Error { var step: String }
 
@@ -474,13 +474,13 @@ private struct SocketPair {
 
     func closePeer() { close(peer) }
 
-    /// 두 기술자를 닫는다. 이미 닫았으면 `EBADF`를 무시한다.
+    /// Closes both descriptors. Ignores `EBADF` if already closed.
     func closeAll() {
         close(caller)
         close(peer)
     }
 
-    /// 상대 쪽에서 `caller`로 한 번 보낸다.
+    /// Sends once from the peer to `caller`.
     func send(_ bytes: [UInt8]) throws {
         while true {
             let sent = bytes.withUnsafeBytes { write(peer, $0.baseAddress, $0.count) }
@@ -490,12 +490,12 @@ private struct SocketPair {
         }
     }
 
-    /// `peer`가 받은 데이터그램 하나(장치가 쓴 것). 기한 안에 없으면 nil.
+    /// Returns one datagram received by `peer` (written by the device), or nil if none arrives by the deadline.
     func receive(within duration: Duration = .seconds(5)) -> [UInt8]? {
         read(from: peer, within: duration)
     }
 
-    /// 호출자의 기술자로 직접 읽는다(장치가 이 기술자를 건드리지 않았는지 볼 때).
+    /// Reads directly from the caller's descriptor (to check that the device left it alone).
     func receiveOnCaller() -> [UInt8]? {
         read(from: caller, within: .seconds(5))
     }

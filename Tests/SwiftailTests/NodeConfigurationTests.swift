@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import Swiftail
 
-/// 설정과 노드 값이 인증 키를 드러내지 않는지. 계약 노드 API 동작 7.
-@Suite("노드 설정의 비밀 가리기")
+/// Verifies that configuration and node values do not expose the auth key. Node API contract behavior 7.
+@Suite("Redacting secrets in node configuration")
 struct NodeConfigurationTests {
-    /// 가짜 인증 키. 실제 키 형식을 흉내 낼 뿐이다.
+    /// A fake auth key. It only mimics the real key format.
     private static let authKey = "tskey-auth-fake0000-swiftail0000"
 
     private static func configuration(stateDirectory: String = "file:///var/empty/swiftail-test/") throws -> NodeConfiguration {
@@ -17,14 +17,14 @@ struct NodeConfigurationTests {
         )
     }
 
-    @Test("description에 인증 키가 나오지 않는다")
+    @Test("description omits the auth key")
     func description() throws {
         let text = String(describing: try Self.configuration())
         #expect(!text.contains(Self.authKey))
         #expect(text.contains("<가림>"))
     }
 
-    @Test("dump에 인증 키가 나오지 않는다")
+    @Test("dump omits the auth key")
     func dumpOutput() throws {
         var text = ""
         dump(try Self.configuration(), to: &text)
@@ -32,24 +32,24 @@ struct NodeConfigurationTests {
         #expect(text.contains("rd-mac-1a2b3c4d"))
     }
 
-    @Test("노드의 dump에 설정의 비밀이 나오지 않는다")
+    @Test("Dumping the node omits secrets from its configuration")
     func nodeDump() throws {
         var text = ""
         dump(try TailnetNode(configuration: try Self.configuration()), to: &text)
         #expect(!text.contains(Self.authKey))
     }
 
-    @Test("run()을 두 번 부르면 invalidConfiguration")
+    @Test("Calling run() twice yields invalidConfiguration")
     func runTwice() async throws {
         let node = try TailnetNode(configuration: try Self.configuration())
-        // 첫 호출은 만들 수 없는 상태 디렉터리라 신원 파일을 쓰지 못해 곧바로 끝난다. 그래도 한 번 부른 것이다.
+        // The first call ends immediately because the state directory cannot be created and the identity file cannot be written. It still counts as a call.
         await #expect(throws: NodeError.self) { try await node.run() }
         do {
             try await node.run()
-            Issue.record("두 번째 run()이 던지지 않았다")
+            Issue.record("The second run() did not throw")
         } catch {
             guard case .invalidConfiguration = error else {
-                Issue.record("기대 invalidConfiguration, 실제 \(error)")
+                Issue.record("Expected invalidConfiguration, got \(error)")
                 return
             }
         }

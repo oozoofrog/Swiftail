@@ -7,11 +7,11 @@ import Testing
 import SwiftailControl
 @testable import Swiftail
 
-/// `TailnetNode.logOut()`의 독립 검토가 보탠 시험. 계약 `docs/contracts/SwiftailHost.md` "로그아웃" 동작 O1·O6.
-/// 잘못된 때에 불렸을 때(겹친 `logOut()`, 도는 `run()`, 취소)와 상태 디렉터리의 차지가 모든 길에서 풀리는지를 본다.
-@Suite("노드: 로그아웃(검토)", .timeLimit(.minutes(1)))
+/// Tests added by the independent review of `TailnetNode.logOut()`. Contract `docs/contracts/SwiftailHost.md`, "Logout," behaviors O1·O6.
+/// Tests calls at the wrong time (overlapping `logOut()`, active `run()`, cancellation) and checks that every path releases the state directory claim.
+@Suite("Node logout review", .timeLimit(.minutes(1)))
 struct NodeLogoutReviewTests {
-    /// 등록한 적이 있는 신원을 `directory`에 저장하고 파일의 바이트를 돌려준다.
+    /// Saves a previously registered identity in `directory` and returns the file's bytes.
     private static func saveRegisteredIdentity(in directory: URL) throws -> Data {
         var identity = NodeIdentity()
         identity.nodeKey = Curve25519.KeyAgreement.PrivateKey()
@@ -19,10 +19,10 @@ struct NodeLogoutReviewTests {
         return try identityFile(in: directory)
     }
 
-    /// 상태 디렉터리의 하나뿐인 파일(신원 파일)의 바이트.
+    /// The bytes of the state directory's only file (the identity file).
     private static func identityFile(in directory: URL) throws -> Data {
         let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
-        try #require(names.count == 1, "신원 파일 말고 다른 파일이 생겼다: \(names.count)개")
+        try #require(names.count == 1, "Found \(names.count) files instead of just the identity file")
         return try Data(contentsOf: directory.appending(path: names[0]))
     }
 
@@ -35,7 +35,7 @@ struct NodeLogoutReviewTests {
         }
     }
 
-    /// 연결은 받되 아무것도 답하지 않는 루프백 리스너를 띄우고 그 주소와 받은 연결 수를 넘긴다.
+    /// Starts a loopback listener that accepts connections but sends no response, and passes its address and the number of connections accepted.
     private static func withSilentServer<T>(_ body: (URL, @Sendable () -> Int) async throws -> T) async throws -> T {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
@@ -66,23 +66,23 @@ struct NodeLogoutReviewTests {
         return try await body(try #require(URL(string: "http://127.0.0.1:\(port)")), { connections.withLock { $0.count } })
     }
 
-    @Test("서버에 닿지 못해 던져도 차지를 남기지 않고 신원 파일은 그대로다")
+    @Test("A throw when the server is unreachable leaves no claim and preserves the identity file")
     func throwingReleasesClaim() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let before = try Self.saveRegisteredIdentity(in: directory)
-            // 127.0.0.1:9에는 제어 서버가 없다.
+            // There is no control server at 127.0.0.1:9.
             let node = try TailnetNode(configuration: try NodeTestSupport.configuration(stateDirectory: directory))
             guard case .control(.connection)? = await Self.logOutError(node) else {
-                Issue.record("control(.connection)이 아니다")
+                Issue.record("Expected control(.connection)")
                 return
             }
-            let claim = try #require(StateDirectoryClaims.shared.claim(directory), "던진 logOut()은 차지를 남기지 않는다")
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory), "A logOut() that throws leaves no claim")
             StateDirectoryClaims.shared.release(claim)
             #expect(try Self.identityFile(in: directory) == before)
         }
     }
 
-    @Test("겹친 logOut()은 stateDirectoryInUse이고(같은 노드든 다른 노드든), 취소한 logOut()은 차지를 풀며, 그동안 시작한 run()도 거절된다")
+    @Test("Overlapping logOut() yields stateDirectoryInUse (on the same node or a different one), a canceled logOut() releases the claim, and a run() started in the meantime is rejected")
     func overlapAndCancellation() async throws {
         try await Self.withSilentServer { url, connectionCount in
             try await NodeTestSupport.withTemporaryDirectory { directory in
@@ -92,47 +92,47 @@ struct NodeLogoutReviewTests {
                 let other = try TailnetNode(configuration: configuration)
 
                 let first = Task { await Self.logOutError(node) }
-                // 첫 logOut()이 서버에 닿았으면 디렉터리를 쥐고 `/key`의 답을 기다리는 중이다.
+                // Once the first logOut() reaches the server, it holds the directory and waits for the response to `/key`.
                 let deadline = ContinuousClock.now + .seconds(5)
                 while connectionCount() == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
                 try #require(connectionCount() == 1)
 
                 for overlapping in [node, other] {
                     guard case .stateDirectoryInUse? = await Self.logOutError(overlapping) else {
-                        Issue.record("겹친 logOut()이 stateDirectoryInUse가 아니다")
+                        Issue.record("Overlapping logOut() did not yield stateDirectoryInUse")
                         return
                     }
                 }
-                // logOut()이 도는 동안 시작한 run()도 같은 오류로 끝난다(파일·소켓을 열기 전).
+                // A run() started while logOut() is active also ends with the same error (before opening files or sockets).
                 do throws(NodeError) {
                     try await other.run()
-                    Issue.record("run()이 던지지 않았다")
+                    Issue.record("run() did not throw")
                 } catch {
                     guard case .stateDirectoryInUse = error else {
-                        Issue.record("run()이 stateDirectoryInUse가 아니다: \(error)")
+                        Issue.record("run() did not yield stateDirectoryInUse: \(error)")
                         return
                     }
                 }
-                #expect(connectionCount() == 1, "거절된 호출은 서버에 닿지 않는다")
+                #expect(connectionCount() == 1, "A rejected call does not reach the server")
 
                 let start = ContinuousClock.now
                 first.cancel()
                 guard case .control(.connection)? = await first.value else {
-                    Issue.record("취소한 logOut()이 control(.connection)이 아니다")
+                    Issue.record("Canceled logOut() did not yield control(.connection)")
                     return
                 }
-                #expect(ContinuousClock.now - start < .seconds(3), "취소는 기한(10초)을 기다리지 않는다")
-                let claim = try #require(StateDirectoryClaims.shared.claim(directory), "취소한 logOut()은 차지를 남기지 않는다")
+                #expect(ContinuousClock.now - start < .seconds(3), "Cancellation does not wait for the deadline (10 seconds)")
+                let claim = try #require(StateDirectoryClaims.shared.claim(directory), "A canceled logOut() leaves no claim")
                 StateDirectoryClaims.shared.release(claim)
                 #expect(try Self.identityFile(in: directory) == before)
             }
         }
     }
 
-    @Test("같은 노드의 run()이 도는 중이거나 방금 취소돼 아직 끝나지 않았으면 stateDirectoryInUse이고, 끝난 뒤에는 된다")
+    @Test("While the same node's run() is active or has just been canceled and is still ending, logOut() yields stateDirectoryInUse. It succeeds once run() has ended")
     func whileRunning() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
-            // 127.0.0.1:9: run()은 연결에 실패하며 물러났다가 다시 시도한다(등록하지 못하므로 node 키는 생기지 않는다).
+            // At 127.0.0.1:9, run() fails to connect, backs off, and retries (it cannot register, so no node key is created).
             let node = try TailnetNode(configuration: try NodeTestSupport.configuration(stateDirectory: directory))
             let run = Task { () -> NodeError? in
                 do throws(NodeError) {
@@ -142,25 +142,25 @@ struct NodeLogoutReviewTests {
                     return error
                 }
             }
-            // 차지 표를 직접 찔러 보지 않는다(그 순간의 run()이 거절당한다). 노드가 돈다고 할 때까지 기다린다.
+            // Do not probe the claim table directly (run() would be rejected at that moment). Wait until the node reports it is running.
             let deadline = ContinuousClock.now + .seconds(5)
             while !(await node.isRunning) {
-                try #require(ContinuousClock.now < deadline, "run()이 돌지 않는다")
+                try #require(ContinuousClock.now < deadline, "run() is not running")
                 try await Task.sleep(for: .milliseconds(10))
             }
             guard case .stateDirectoryInUse? = await Self.logOutError(node) else {
-                Issue.record("도는 중의 logOut()이 stateDirectoryInUse가 아니다")
+                Issue.record("logOut() during run() did not yield stateDirectoryInUse")
                 return
             }
 
             run.cancel()
-            // 취소 직후의 logOut()은 run()이 아직 끝나지 않았으면 거절되고, 끝났으면 된다. 어느 쪽이든 그 밖의 오류는 없다.
+            // Immediately after cancellation, logOut() is rejected if run() has yet to end and succeeds if it has ended. Neither case yields any other error.
             switch await Self.logOutError(node) {
             case nil, .stateDirectoryInUse?: break
-            case let error?: Issue.record("취소 직후의 logOut(): \(error)")
+            case let error?: Issue.record("logOut() immediately after cancellation: \(error)")
             }
             #expect(await run.value == nil)
-            // run()이 끝난 뒤: 등록한 적이 없어 아무것도 보내지 않고 돌아온다.
+            // After run() ends, logOut() returns without sending anything because the node has never registered.
             #expect(await Self.logOutError(node) == nil)
             let claim = try #require(StateDirectoryClaims.shared.claim(directory))
             StateDirectoryClaims.shared.release(claim)

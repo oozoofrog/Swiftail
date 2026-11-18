@@ -5,8 +5,8 @@ import SwiftailEngine
 import Testing
 @testable import Swiftail
 
-/// `whoIs`: 주소 → 노드 신원(계약 `docs/contracts/SwiftailHost.md` 동작 W1~W6, 단위 시험 1).
-@Suite("whoIs: 주소로 노드 신원 찾기", .timeLimit(.minutes(1)))
+/// `whoIs`: address → node identity (contract `docs/contracts/SwiftailHost.md` behaviors W1~W6, unit test 1).
+@Suite("whoIs: looking up node identity by address", .timeLimit(.minutes(1)))
 struct WhoIsTests {
     private typealias Support = WhoIsTestSupport
 
@@ -18,16 +18,16 @@ struct WhoIsTests {
         try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
     }
 
-    /// `netmap`을 적용한 노드에게 `text` 주소의 신원을 묻는다.
+    /// Looks up the identity of address `text` on a node that has applied `netmap`.
     private static func whoIs(_ text: String, in netmap: Netmap) async throws -> PeerIdentity? {
         let node = try node()
         await node.apply(netmap)
         return await node.whoIs(try address(text))
     }
 
-    // MARK: 찾기
+    // MARK: Lookup
 
-    @Test("자기 주소(IPv4·IPv6)는 자기 노드의 신원이다")
+    @Test("The local addresses (IPv4 and IPv6) identify the local node")
     func selfAddress() async throws {
         let netmap = try Support.netmap(peers: [Support.phone])
         for text in ["100.64.0.1", "fd7a:115c:a1e0::1"] {
@@ -38,7 +38,7 @@ struct WhoIsTests {
         }
     }
 
-    @Test("피어의 IPv4·IPv6 주소는 그 피어의 신원이다")
+    @Test("A peer's IPv4 and IPv6 addresses identify that peer")
     func peerAddresses() async throws {
         let netmap = try Support.netmap(peers: [Support.phone])
         for text in ["100.64.0.2", "fd7a:115c:a1e0::2"] {
@@ -49,16 +49,16 @@ struct WhoIsTests {
         }
     }
 
-    @Test("IPv4-mapped IPv6 주소는 IPv4로 바꿔 찾는다")
+    @Test("Converts IPv4-mapped IPv6 addresses to IPv4 before lookup")
     func mappedAddress() async throws {
         let netmap = try Support.netmap(peers: [Support.phone])
         #expect(try await Self.whoIs("::ffff:100.64.0.2", in: netmap)?.stableID == "nStablePhone")
         #expect(try await Self.whoIs("::ffff:100.64.0.1", in: netmap)?.stableID == "nStableSelf")
-        // IPv4-mapped가 아닌 ::ffff:0:a.b.c.d나 다른 접두는 바꾸지 않는다.
+        // Leaves non-IPv4-mapped ::ffff:0:a.b.c.d and other prefixes unchanged.
         #expect(try await Self.whoIs("::100.64.0.2", in: netmap) == nil)
     }
 
-    @Test("모르는 주소는 nil이다")
+    @Test("An unknown address yields nil")
     func unknownAddress() async throws {
         let netmap = try Support.netmap(peers: [Support.phone])
         for text in ["100.64.0.3", "fd7a:115c:a1e0::3", "8.8.8.8", "0.0.0.0"] {
@@ -66,13 +66,13 @@ struct WhoIsTests {
         }
     }
 
-    @Test("netmap을 받기 전에는 nil이다")
+    @Test("Returns nil before receiving a netmap")
     func beforeNetmap() async throws {
         let node = try Self.node()
         #expect(await node.whoIs(try Self.address("100.64.0.1")) == nil)
     }
 
-    @Test("서브넷 경로(AllowedIPs)의 주소와 한 주소짜리가 아닌 접두는 찾지 않는다")
+    @Test("Skips subnet route (AllowedIPs) addresses and prefixes that cover more than one address")
     func subnetRoutes() async throws {
         var router = Support.phone
         router.allowedIPs = ["100.64.0.2/32", "fd7a:115c:a1e0::2/128", "192.168.1.0/24", "10.0.0.0/8"]
@@ -84,7 +84,7 @@ struct WhoIsTests {
         }
     }
 
-    @Test("오프라인인 피어는 찾고, 키가 만료되어 데이터면에 오르지 않은 피어의 주소는 nil이다")
+    @Test("Finds offline peers and yields nil for a peer's address if its key expired and it did not enter the data plane")
     func expiredAndOfflinePeers() async throws {
         var offline = Support.phone
         offline.online = false
@@ -97,9 +97,9 @@ struct WhoIsTests {
         #expect(try await Self.whoIs("100.64.0.2", in: netmap) == nil)
     }
 
-    @Test("같은 주소를 가진 노드가 여럿이면 데이터면이 그 주소를 준 피어(node ID가 작은 쪽)의 신원이다")
+    @Test("When several nodes have the same address, returns the identity of the peer to which the data plane assigned the address (the lower node ID)")
     func duplicateAddressFollowsDataPlane() async throws {
-        // netmap에 적힌 차례와 node ID의 차례를 다르게 둔다.
+        // Order the entries in the netmap differently from node ID order.
         var high = Support.phone
         high.id = 5
         high.stableID = "nStableHigh"
@@ -116,19 +116,19 @@ struct WhoIsTests {
         for text in ["100.64.0.2", "fd7a:115c:a1e0::2"] {
             let address = try Self.address(text)
             let prefix = try #require(IPPrefix(address: address, length: address.bytes.count * 8))
-            // 그 주소를 AllowedIPs로 가진(그 주소에서 패킷을 보낼 수 있는) 피어는 하나다.
+            // Only one peer has the address as an AllowedIPs entry (can send packets from it).
             let owners = EnginePeer.peers(in: netmap, at: Date()).filter { $0.allowedIPs.contains(prefix) }
             #expect(owners.map(\.key.description) == [NodeTestSupport.nodeKey(low.key)])
             #expect(try await Self.whoIs(text, in: netmap)?.stableID == "nStableLow")
         }
 
-        // 주소를 준 피어가 만료되어 내려가면 다음 노드가 그 주소를 갖는다.
+        // When the peer assigned the address expires and is removed, the next node gets it.
         low.expired = true
         let afterExpiry = try Support.netmap(peers: [high, low, last])
         #expect(try await Self.whoIs("100.64.0.2", in: afterExpiry)?.stableID == "nStableHigh")
     }
 
-    @Test("자기 주소를 데이터면 피어도 가졌으면 누구의 연결인지 가릴 수 없으므로 nil이다")
+    @Test("If a data-plane peer also has the local address, returns nil because the connection's owner is ambiguous")
     func peerClaimingSelfAddress() async throws {
         var impostor = Support.phone
         impostor.id = 3
@@ -137,18 +137,18 @@ struct WhoIsTests {
         impostor.addresses = ["100.64.0.1/32"]
         let netmap = try Support.netmap(peers: [impostor])
         let claimed = try #require(IPPrefix("100.64.0.1/32"))
-        // 이 피어가 그 주소에서 패킷을 보낼 수 있는 동안에만 가릴 수 없다.
+        // The ambiguity lasts only while this peer can send packets from that address.
         if EnginePeer.peers(in: netmap, at: Date()).contains(where: { $0.allowedIPs.contains(claimed) }) {
             #expect(try await Self.whoIs("100.64.0.1", in: netmap) == nil)
         } else {
             #expect(try await Self.whoIs("100.64.0.1", in: netmap)?.stableID == "nStableSelf")
         }
         #expect(try await Self.whoIs("100.64.0.1", in: netmap)?.stableID != "nStableImpostor")
-        // 겹치지 않는 자기 주소는 그대로 자기 노드다.
+        // Non-overlapping local addresses still identify the local node.
         #expect(try await Self.whoIs("fd7a:115c:a1e0::1", in: netmap)?.stableID == "nStableSelf")
     }
 
-    @Test("Addresses에 없어도 데이터면이 받아들이는 한 주소짜리 AllowedIPs는 그 피어의 신원이다")
+    @Test("A single-address AllowedIPs entry admitted by the data plane identifies that peer even if the address is absent from Addresses")
     func allowedSingleAddress() async throws {
         var peer = Support.phone
         peer.allowedIPs = ["100.64.0.2/32", "fd7a:115c:a1e0::2/128", "100.64.0.77/32"]
@@ -158,29 +158,29 @@ struct WhoIsTests {
         #expect(try await Self.whoIs("100.64.0.77", in: netmap)?.stableID == "nStablePhone")
     }
 
-    // MARK: 거절
+    // MARK: Rejection
 
-    @Test("사용자 프로필이 netmap에 없는 노드는 nil이다(다른 노드로 넘어가지 않는다)")
+    @Test("A node whose user profile is absent from the netmap yields nil (without falling through to another node)")
     func missingProfile() async throws {
         var stranger = Support.phone
         stranger.user = 999
         let netmap = try Support.netmap(peers: [stranger])
         #expect(try await Self.whoIs("100.64.0.2", in: netmap) == nil)
         #expect(try await Self.whoIs("100.64.0.1", in: netmap)?.stableID == "nStableSelf")
-        // 프로필이 하나도 없으면 자기 노드도 nil이다.
+        // With no profiles, even the local node yields nil.
         #expect(try await Self.whoIs("100.64.0.1", in: try Support.netmap(profiles: [])) == nil)
     }
 
-    @Test("StableID가 빈 노드는 nil이다")
+    @Test("A node with an empty StableID yields nil")
     func emptyStableID() async throws {
         var anonymous = Support.phone
         anonymous.stableID = ""
         #expect(try await Self.whoIs("100.64.0.2", in: try Support.netmap(peers: [anonymous])) == nil)
     }
 
-    // MARK: 이름과 사용자
+    // MARK: Names and users
 
-    @Test("이름이 빈 노드는 name이 빈 문자열이고 computedName은 호스트 이름이다")
+    @Test("A node with an empty name has an empty name string and the hostname as computedName")
     func emptyName() async throws {
         var unnamed = Support.phone
         unnamed.name = ""
@@ -190,7 +190,7 @@ struct WhoIsTests {
         #expect(identity.computedName == "alices-iphone")
     }
 
-    @Test("이름도 호스트 이름도 빈 노드의 computedName은 node 공개 키의 텍스트다")
+    @Test("A node with an empty name and hostname has the node public key text as computedName")
     func emptyNameAndHostname() async throws {
         var unnamed = Support.phone
         unnamed.name = ""
@@ -198,7 +198,7 @@ struct WhoIsTests {
         #expect(identity.computedName == NodeTestSupport.nodeKey(0x22))
     }
 
-    @Test("다른 tailnet에서 공유받은 노드는 끝 점 없는 FQDN을 computedName으로 갖고 소유자의 로그인 이름을 쓴다")
+    @Test("A node shared from another tailnet gets an FQDN without the trailing dot as computedName and uses the owner's login name")
     func sharedFromOtherTailnet() async throws {
         var shared = Support.phone
         shared.name = "rd-shared-9f9f9f9f.tail0002.ts.net."
@@ -210,7 +210,7 @@ struct WhoIsTests {
         #expect(identity.loginName == "bob@example.com")
     }
 
-    @Test("태그 노드는 노드를 만든 사용자의 프로필을 그대로 쓴다")
+    @Test("A tagged node uses the profile of the user who created it as is")
     func taggedNode() async throws {
         var tagged = Support.phone
         tagged.tags = ["tag:phone"]
@@ -219,27 +219,27 @@ struct WhoIsTests {
         #expect(try await Self.whoIs("100.64.0.2", in: netmap)?.loginName == "tagged-devices")
     }
 
-    @Test("자기 이름에 점이 없으면 접미사는 그 이름 그대로여서 점 없는 피어 이름은 그대로 남는다")
+    @Test("If the local name has no dot, the suffix is the name itself, so peer names without dots stay unchanged")
     func suffixlessSelfName() async throws {
         var bare = Support.selfNode
         bare.name = "mac"
         var peer = Support.phone
         peer.name = "mac"
         let netmap = try Support.netmap(selfNode: bare, peers: [peer])
-        // 이름이 접미사와 같으면 레이블 경계가 없어 떼지 않는다.
+        // A name equal to the suffix has no label boundary, so the suffix stays.
         #expect(try await Self.whoIs("100.64.0.2", in: netmap)?.computedName == "mac")
     }
 
-    // MARK: netmap이 바뀔 때(동작 W6)
+    // MARK: Netmap changes (behavior W6)
 
-    @Test("netmap이 바뀌면 주소의 주인이 바뀐 대로 답한다")
+    @Test("When the netmap changes, answers reflect changes to the address owner")
     func ownerChanges() async throws {
         let node = try Self.node()
         let phoneAddress = try Self.address("100.64.0.2")
         await node.apply(try Support.netmap(peers: [Support.phone]))
         #expect(await node.whoIs(phoneAddress)?.stableID == "nStablePhone")
 
-        // 같은 주소를 다른 노드가 이어받았다.
+        // Another node took over the same address.
         var heir = Support.phone
         heir.id = 9
         heir.stableID = "nStableHeir"
@@ -250,13 +250,13 @@ struct WhoIsTests {
         #expect(identity.stableID == "nStableHeir")
         #expect(identity.computedName == "rd-heir")
 
-        // 주인이 같은 채 이름만 바뀌면 새 이름을 본다.
+        // When only the name changes and the owner stays the same, the lookup sees the new name.
         heir.name = "rd-renamed.tail0001.ts.net."
         await node.apply(try Support.netmap(peers: [heir]))
         #expect(await node.whoIs(phoneAddress)?.computedName == "rd-renamed")
     }
 
-    @Test("피어가 netmap에서 사라지면 그 주소는 nil이 된다")
+    @Test("An address yields nil after the peer disappears from the netmap")
     func peerDisappears() async throws {
         let node = try Self.node()
         await node.apply(try Support.netmap(peers: [Support.phone]))
@@ -266,7 +266,7 @@ struct WhoIsTests {
         #expect(await node.whoIs(try Self.address("100.64.0.1"))?.stableID == "nStableSelf")
     }
 
-    @Test("주인은 netmap을 적용할 때 정해진다. 묻는 시각이 앞 주인의 키 만료를 넘어도 답은 데이터면이 바뀔 때까지 그대로다")
+    @Test("The owner is determined when the netmap is applied. Even if the previous owner's key expires before lookup, the answer stays the same until the data plane changes")
     func answerDoesNotDependOnQueryTime() async throws {
         var low = Support.phone
         low.stableID = "nStableLow"
@@ -275,7 +275,7 @@ struct WhoIsTests {
         high.id = 5
         high.stableID = "nStableHigh"
         high.key = 0x55
-        // 돌지 않는 노드라 키 만료를 처리할 타이머가 없다. 데이터면의 주인은 적용한 때 그대로다.
+        // Since the node is not running, there is no timer to handle key expiration. The data-plane owner is still the one selected when the netmap was applied.
         let node = try Self.node()
         await node.apply(try Support.netmap(peers: [low, high]))
         let address = try Self.address("100.64.0.2")
@@ -284,14 +284,14 @@ struct WhoIsTests {
         #expect(await node.whoIs(address)?.stableID == "nStableLow")
     }
 
-    @Test("주소의 주인이 바뀌어 연결이 peerRemoved로 끝나는 시점에 whoIs는 이미 새 주인을 가리킨다")
+    @Test("By the time a change of address owner ends a connection with peerRemoved, whoIs already points to the new owner")
     func tableChangesWithConnectionTeardown() async throws {
         try await NetstackTestSupport.withRunningNode(try Support.netmap(peers: [Support.phone])) { node in
             let phoneAddress = try Self.address("100.64.0.2")
             let connector = Task { () async throws -> TailnetConnection in
                 try await node.connect(to: "100.64.0.2", port: 80)
             }
-            try await NetstackTestSupport.waitUntil("connect가 기다림") { await node.isConnecting }
+            try await NetstackTestSupport.waitUntil("connect is waiting") { await node.isConnecting }
             #expect(await node.whoIs(phoneAddress)?.stableID == "nStablePhone")
 
             var heir = Support.phone

@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 응용이 `close`·`abort`로 놓은 연결의 끝: TCP의 일이 끝날 때(CLOSED, TIME-WAIT) `.releasedConnectionClosed`가 한 번
-/// 나오고, 응용에 가는 사건은 그대로다. 계약 `docs/contracts/SwiftailNetstack.md` "연결 종료 통계 로그"의 "응용이 놓은 연결".
-@Suite("스택: 놓은 연결의 끝")
+/// For a connection the application releases with `close` or `abort`, `.releasedConnectionClosed` is emitted once when TCP finishes (CLOSED, TIME-WAIT),
+/// and the events sent to the application stay the same. Contract `docs/contracts/SwiftailNetstack.md`, "Connections Released by the Application" in "Connection Close Statistics Log."
+@Suite("Stack completion of released connections")
 struct StackReleasedCloseTests {
-    @Test("상대가 먼저 FIN을 보낸 뒤 close로 놓은 연결은 마지막 ACK에서 한 번 알린다")
+    @Test("A connection released with close after the peer sends FIN is reported once on the final ACK")
     func lastAcknowledgmentAfterPeerFinish() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -19,7 +19,7 @@ struct StackReleasedCloseTests {
         #expect(pair.serverEvents.last == .endOfStream(ids.server))
         let eventsBefore = pair.serverEvents
 
-        // 서버가 LAST-ACK에 들고, 클라이언트의 ACK로 CLOSED가 된다.
+        // The server enters LAST-ACK and the client's ACK puts it in CLOSED.
         pair.collect(pair.server.close(ids.server, at: pair.now), from: .server)
         #expect(pair.serverReleasedCloses.isEmpty)
         try pair.deliver()
@@ -34,7 +34,7 @@ struct StackReleasedCloseTests {
         expectStackInvariants(pair.server)
     }
 
-    @Test("응용이 먼저 close로 놓은 연결은 FIN을 주고받아 TIME-WAIT에 들 때 한 번 알린다")
+    @Test("A connection the application releases first with close is reported once when it enters TIME-WAIT after exchanging FINs")
     func timeWaitAfterRelease() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -51,7 +51,7 @@ struct StackReleasedCloseTests {
         #expect(pair.serverReleasedCloses.map(\.reason) == [.finished])
         #expect(pair.clientEvents == clientEventsBefore)
 
-        // TIME-WAIT 기록이 기한에 사라져도 다시 알리지 않는다.
+        // Expiration of the TIME-WAIT record does not send another notification.
         try pair.run(for: .seconds(300))
         #expect(pair.client.timeWaitRecords.isEmpty)
         #expect(pair.clientReleasedCloses.count == 1)
@@ -59,13 +59,13 @@ struct StackReleasedCloseTests {
         expectStackInvariants(pair.client)
     }
 
-    @Test("쥔 채 .closed를 받은 연결은 놓아도 다시 알리지 않는다")
+    @Test("Releasing a connection that received .closed while held does not notify again")
     func heldCloseIsNotRepeated() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
         let ids = try pair.open(listener: listener)
-        // 서버는 받은 데이터를 읽지 않은 채 쓰기를 끝낸다. LAST-ACK에서 끝나 `.closed(.finished)`를 받고, 읽지 않은 데이터
-        // 때문에 항목이 남는다.
+        // The server finishes writing without reading the data received. It ends in LAST-ACK and receives `.closed(.finished)`, but the unread data
+        // keeps the entry around.
         _ = pair.write([1, 2, 3], to: ids.client, from: .client)
         pair.collect(pair.client.finishWriting(ids.client, at: pair.now), from: .client)
         try pair.deliver()
@@ -84,14 +84,14 @@ struct StackReleasedCloseTests {
         #expect(pair.client.connections.isEmpty)
     }
 
-    @Test("놓은 뒤의 재전송도 통계에 든다")
+    @Test("Statistics include retransmissions after release")
     func retransmissionAfterRelease() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
         let ids = try pair.open(listener: listener)
         _ = pair.write(Array(repeating: 2, count: 1_000), to: ids.client, from: .client)
         pair.collect(pair.client.close(ids.client, at: pair.now), from: .client)
-        // 데이터와 FIN을 잃는다. RTO 뒤 클라이언트가 다시 보낸다.
+        // Data and FIN are lost. The client retransmits after RTO.
         pair.toServer = []
         try pair.run(for: .seconds(3))
         #expect(pair.read(ids.server, from: .server).count == 1_000)
@@ -105,7 +105,7 @@ struct StackReleasedCloseTests {
         #expect(statistics.retransmissionTimeouts >= 1)
     }
 
-    @Test("놓은 뒤 상대의 RST로 끝나면 reset으로 알린다")
+    @Test("If the peer ends the connection with RST after release, reports reset")
     func resetAfterRelease() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -118,12 +118,12 @@ struct StackReleasedCloseTests {
         #expect(pair.clientReleasedCloses.map(\.reason) == [.reset])
         #expect(pair.clientEvents == clientEventsBefore)
         #expect(pair.client.connections.isEmpty)
-        // 쥔 채 끊은 서버는 사건 하나이고 놓은 연결의 끝은 없다.
+        // Aborting the server connection while held yields one event and no released-connection completion.
         #expect(pair.serverEvents.map(\.withoutStatistics).last == .closed(ids.server, .aborted, .unchecked))
         #expect(pair.serverReleasedCloses.isEmpty)
     }
 
-    @Test("놓은 연결도 주소가 바뀌어 끝나면 peerRemoved로 알린다")
+    @Test("Reports peerRemoved even for a released connection if an address change ends it")
     func peerRemovedAfterRelease() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -134,7 +134,7 @@ struct StackReleasedCloseTests {
         #expect(outputs.releasedCloses.map(\.reason) == [.peerRemoved])
     }
 
-    @Test("abort와 곧바로 끝나는 close는 .closed 하나만 내고, 노드가 멈추며 버리는 연결은 알리지 않는다")
+    @Test("abort and a close that ends immediately emit only one .closed, and connections discarded on node shutdown are not reported")
     func immediateEndsAreReportedOnce() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -146,7 +146,7 @@ struct StackReleasedCloseTests {
         #expect(abortOutputs.events.map(\.withoutStatistics) == [.closed(aborted.client, .aborted, .unchecked)])
         #expect(abortOutputs.releasedCloses.isEmpty)
 
-        // 읽지 않은 데이터가 있는 close는 RST로 곧바로 끝난다.
+        // A close with unread data ends immediately with RST.
         _ = pair.write([1, 2, 3], to: unread.server, from: .server)
         try pair.deliver()
         let closeOutputs = pair.client.close(unread.client, at: pair.now)

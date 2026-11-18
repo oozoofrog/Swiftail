@@ -1,4 +1,4 @@
-// `TailnetNode.hasSavedIdentity(in:)`: 앱이 노드를 띄우기 전에 저장된 신원이 있는지 묻는다.
+// `TailnetNode.hasSavedIdentity(in:)` lets an app check whether an identity is saved before starting a node.
 
 import CryptoKit
 import Foundation
@@ -6,7 +6,7 @@ import SwiftailControl
 import Testing
 @testable import Swiftail
 
-@Suite("저장된 신원 묻기")
+@Suite("Checking for a saved identity")
 struct SavedIdentityTests {
     private static func save(nodeKey: Bool, in directory: URL) throws {
         var identity = NodeIdentity()
@@ -14,7 +14,7 @@ struct SavedIdentityTests {
         try NodeIdentityStore(directory: directory).save(identity)
     }
 
-    /// `body`가 던진 `NodeError`. 던지지 않으면 nil.
+    /// Returns the `NodeError` thrown by `body`, or nil if it does not throw.
     private static func nodeError(_ body: () throws(NodeError) -> Bool) -> NodeError? {
         do throws(NodeError) {
             _ = try body()
@@ -24,7 +24,7 @@ struct SavedIdentityTests {
         }
     }
 
-    @Test("신원 파일이 없으면 false다. 디렉터리가 없어도 만들지 않고 false다")
+    @Test("A missing identity file returns false. A missing directory also returns false without creating it")
     func noIdentity() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory throws in
             #expect(try TailnetNode.hasSavedIdentity(in: directory) == false)
@@ -34,7 +34,7 @@ struct SavedIdentityTests {
         }
     }
 
-    @Test("등록을 마친 신원(node 키 있음)이면 true, machine 키만 있으면 false다")
+    @Test("A registered identity (with a node key) returns true. An identity with only a machine key returns false")
     func registeredIdentity() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory throws in
             try Self.save(nodeKey: false, in: directory)
@@ -44,7 +44,7 @@ struct SavedIdentityTests {
         }
     }
 
-    @Test("깨진 신원 파일은 run()과 같은 control(.storage)로 던진다", arguments: [
+    @Test("A corrupt identity file throws control(.storage), as run() does", arguments: [
         Data("not json".utf8),
         Data(#"{"MachineKey":"privkey:00"}"#.utf8),
         Data(repeating: 0x20, count: 64 * 1_024 + 1),
@@ -54,13 +54,13 @@ struct SavedIdentityTests {
             try contents.write(to: directory.appending(path: "identity.json"))
             let error = Self.nodeError { () throws(NodeError) in try TailnetNode.hasSavedIdentity(in: directory) }
             guard case .control(.storage) = error else {
-                Issue.record("control(.storage)가 아니다: \(String(describing: error))")
+                Issue.record("Expected control(.storage), got \(String(describing: error))")
                 return
             }
         }
     }
 
-    @Test("심볼릭 링크인 신원 파일은 따라가지 않고 control(.storage)로 던진다")
+    @Test("Throws control(.storage) for an identity file that is a symbolic link without following it")
     func symbolicLink() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let elsewhere = directory.appending(path: "elsewhere")
@@ -73,18 +73,18 @@ struct SavedIdentityTests {
             #expect(try TailnetNode.hasSavedIdentity(in: elsewhere) == true)
             let error = Self.nodeError { () throws(NodeError) in try TailnetNode.hasSavedIdentity(in: state) }
             guard case .control(.storage) = error else {
-                Issue.record("control(.storage)가 아니다: \(String(describing: error))")
+                Issue.record("Expected control(.storage), got \(String(describing: error))")
                 return
             }
         }
     }
 
-    @Test("파일 URL이 아니면 invalidConfiguration이다")
+    @Test("A non-file URL yields invalidConfiguration")
     func notFileURL() throws {
         let url = try #require(URL(string: "https://example.com/state"))
         let error = Self.nodeError { () throws(NodeError) in try TailnetNode.hasSavedIdentity(in: url) }
         guard case .invalidConfiguration = error else {
-            Issue.record("invalidConfiguration이 아니다: \(String(describing: error))")
+            Issue.record("Expected invalidConfiguration, got \(String(describing: error))")
             return
         }
     }

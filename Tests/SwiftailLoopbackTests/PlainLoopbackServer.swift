@@ -1,14 +1,14 @@
-// 시험 안의 루프백 리스너. `Tests/SwiftailIOTests/NetworkSocketLoopbackTests.swift`의 것에 다리의 프로토콜과 TLS를 넣을 수
-// 있게 한 것이다(시험 타깃끼리는 코드를 나눌 수 없다). 다리의 루프백 쪽 상대로 쓴다.
+// A loopback listener for tests. Extends the one in `Tests/SwiftailIOTests/NetworkSocketLoopbackTests.swift` to support the bridge's protocol and TLS
+// (test targets cannot share code). Acts as the bridge's loopback peer.
 
 import Foundation
 import Network
 import Synchronization
 @testable import SwiftailLoopback
 
-/// 시험 안의 루프백 리스너(`127.0.0.1`, 포트는 시스템이 고른다). 받은 연결을 차례로 내준다.
+/// A loopback listener inside the test (`127.0.0.1`, with a system-assigned port). Yields accepted connections in order.
 ///
-/// `bridge`를 주면 그 다리의 프로토콜을 스택의 끝(TLS 아래)에 넣는다. 첫 사용처의 서버가 하는 그대로다.
+/// If given a `bridge`, installs its protocol at the bottom of the stack (below TLS). The first adopter's server does the same.
 final class PlainLoopbackServer: Sendable {
     let port: UInt16
     private let listener: NWListener
@@ -16,7 +16,7 @@ final class PlainLoopbackServer: Sendable {
     private let all = Mutex<[NWConnection]>([])
     private let acceptCount: AcceptCount
 
-    /// 리스너가 받은 연결 수. `next()`로 꺼내지 않은 것도 센다.
+    /// The number of connections accepted by the listener, including those not yet dequeued with `next()`.
     var acceptedCount: Int { acceptCount.value.withLock { $0 } }
 
     private final class AcceptCount: Sendable {
@@ -60,7 +60,7 @@ final class PlainLoopbackServer: Sendable {
         return PlainLoopbackServer(listener: listener, port: port, accepted: accepted, acceptCount: acceptCount)
     }
 
-    /// 잠깐 열었다 닫은 포트. 곧바로 다른 것이 차지하지 않는 한 듣는 쪽이 없다.
+    /// A port that was opened briefly and then closed. Nothing is listening unless something else takes it immediately.
     static func unusedPort() async throws -> UInt16 {
         let server = try await start()
         server.close()
@@ -68,7 +68,7 @@ final class PlainLoopbackServer: Sendable {
         return server.port
     }
 
-    /// 다음으로 받은 연결. 준비될 때까지 기다린다. 준비되지 않고 끝나면 던진다.
+    /// Returns the next accepted connection. Waits until it is ready. Throws if it ends without becoming ready.
     func next() async throws -> PeerConnection {
         switch await nextOutcome() {
         case .ready(let peer): return peer
@@ -76,13 +76,13 @@ final class PlainLoopbackServer: Sendable {
         }
     }
 
-    /// 다음으로 받은 연결이 준비되었는가, 준비되지 않고 끝났는가.
+    /// Reports whether the next accepted connection became ready or ended without becoming ready.
     func nextOutcome() async -> PeerConnection.Outcome {
-        guard let connection = await nextConnection() else { return .failed("리스너가 닫혔다") }
+        guard let connection = await nextConnection() else { return .failed("The listener closed") }
         return await PeerConnection.start(connection)
     }
 
-    /// 다음으로 받은 연결을 시작하지 않고 내준다(서버가 `newConnectionHandler`에서 받은 그대로).
+    /// Returns the next accepted connection without starting it (as the server received it in `newConnectionHandler`).
     func nextConnection() async -> NWConnection? {
         for await connection in accepted {
             all.withLock { $0.append(connection) }
@@ -91,7 +91,7 @@ final class PlainLoopbackServer: Sendable {
         return nil
     }
 
-    /// 받은 연결을 닫고 놓는다. 준비되지 않고 끝난 연결의 소켓은 `cancel()`만으로는 닫히지 않고 `NWConnection`이 풀릴 때 닫힌다.
+    /// Closes and releases an accepted connection. For connections that end before readiness, `cancel()` alone leaves the socket open until `NWConnection` is released.
     func discard(_ connection: NWConnection) {
         connection.cancel()
         all.withLock { $0.removeAll { $0 === connection } }
@@ -106,21 +106,21 @@ final class PlainLoopbackServer: Sendable {
     }
 }
 
-/// 리스너가 받은 연결 하나.
+/// Represents one connection accepted by the listener.
 struct PeerConnection: Sendable {
-    /// 한 번의 받기 결과.
+    /// The result of one receive.
     enum Received: Equatable, Sendable {
         case bytes([UInt8])
-        /// 오류 없이 끝났다(FIN). 그 전까지 받은 바이트.
+        /// EOF without an error (FIN). Includes bytes received up to that point.
         case end([UInt8])
-        /// 오류로 끝났다(RST 등). 그 전까지 받은 바이트 수.
+        /// EOF with an error (such as RST). Includes the number of bytes received up to that point.
         case failed(received: Int, error: String)
     }
 
-    /// 받은 연결을 시작한 결과.
+    /// The result of starting an accepted connection.
     enum Outcome: Sendable {
         case ready(PeerConnection)
-        /// 준비되지 않고 끝났다. 그 까닭.
+        /// Ended before becoming ready. Includes the reason.
         case failed(String)
     }
 
@@ -128,43 +128,43 @@ struct PeerConnection: Sendable {
         var description: String
     }
 
-    /// 상대의 끝(FIN)이 마지막 바이트와 함께 왔다. `NWConnection`은 끝을 한 번만 알리고 그 뒤의 받기를 `ENODATA`로
-    /// 끝내므로, 그 바이트를 돌려준 뒤의 `read()`는 이것을 보고 `.end`를 돌려준다.
+    /// The peer's EOF (FIN) arrived with the last bytes. `NWConnection` reports EOF only once and ends the next receive with `ENODATA`,
+    /// so `read()` uses this flag to return `.end` after returning those bytes.
     private final class EndSeen: Sendable {
         let value = Mutex(false)
     }
 
     let connection: NWConnection
-    /// 상대(다리 쪽 소켓)의 출발 포트.
+    /// The peer's source port (the socket on the bridge side).
     let remotePort: UInt16
     private let endSeen = EndSeen()
 
-    /// 연결을 시작하고 준비되거나 끝날 때까지 기다린다. 기다리던 Task가 취소되면 연결을 닫는다.
+    /// Starts the connection and waits until it is ready or has ended. If the waiting Task is canceled, closes the connection.
     static func start(_ connection: NWConnection) async -> Outcome {
         let (states, sink) = AsyncStream.makeStream(of: Outcome?.self)
         connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
                 guard case .hostPort(_, let port) = connection.endpoint else {
-                    sink.yield(.failed("끝점이 없다"))
+                    sink.yield(.failed("No endpoint"))
                     return
                 }
                 sink.yield(.ready(PeerConnection(connection: connection, remotePort: port.rawValue)))
             case .failed(let error): sink.yield(.failed("\(error)"))
-            case .cancelled: sink.yield(.failed("취소됨"))
+            case .cancelled: sink.yield(.failed("Canceled"))
             default: break
             }
         }
         connection.start(queue: DispatchQueue(label: "test.peer"))
         return await withTaskCancellationHandler {
             for await outcome in states { if let outcome { return outcome } }
-            return .failed("취소됨")
+            return .failed("Canceled")
         } onCancel: {
             connection.cancel()
         }
     }
 
-    /// 한 번 받는다. 끝이면 `.end([])`. 기다리던 Task가 취소되면 연결을 닫는다(받기가 오류로 풀린다).
+    /// Receives once. Returns `.end([])` at EOF. If the waiting Task is canceled, closes the connection (the receive ends with an error).
     func read() async -> Received {
         if endSeen.value.withLock({ $0 }) { return .end([]) }
         let endSeen = endSeen
@@ -189,10 +189,10 @@ struct PeerConnection: Sendable {
         }
     }
 
-    /// `duration` 안에 한 번 받는다. 그 안에 아무것도 오지 않으면 nil. 걸어 둔 받기는 남는다(다음 바이트를 가져간다).
+    /// Receives once within `duration`. Returns nil if nothing arrives in that time. Leaves the pending receive in place (it takes the next bytes).
     func read(within duration: Duration) async -> Received? {
         let (stream, sink) = AsyncStream.makeStream(of: Received?.self)
-        // 받기를 맡은 Task는 취소하지 않는다(취소하면 연결이 닫힌다).
+        // Leave the Task performing the receive running (canceling it closes the connection).
         Task { sink.yield(await read()) }
         let timer = Task {
             try? await Task.sleep(for: duration)
@@ -203,7 +203,7 @@ struct PeerConnection: Sendable {
         return nil
     }
 
-    /// 끝날 때까지 받는다.
+    /// Receives until EOF.
     func readToEnd() async -> Received {
         var received: [UInt8] = []
         while true {
@@ -215,7 +215,7 @@ struct PeerConnection: Sendable {
         }
     }
 
-    /// 보내고 네트워크 스택이 받아 갈 때까지 기다린다. `final`이면 쓰기 방향을 닫는다(FIN).
+    /// Sends data and waits for the network stack to accept it. If `final` is set, closes the write direction (FIN).
     func send(_ bytes: [UInt8], final: Bool) async throws {
         let connection = connection
         try await withTaskCancellationHandler {

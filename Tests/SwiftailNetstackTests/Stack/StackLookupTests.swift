@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 찾기, 맞붙인 스택 둘의 열기·전송·닫기, 묶음 ACK, 출력의 순서.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S1·S3·S5·S6·S10과 시험 11.
-@Suite("스택: 찾기와 전송")
+/// Lookup, opening, transfer, and closing between two connected stacks, batched ACKs, and output ordering.
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors S1·S3·S5·S6·S10 and test 11.
+@Suite("Stack lookup and transfer")
 struct StackLookupTests {
-    @Test("스택 둘이 IPv4·IPv6로 열고, 양방향으로 보내고, 닫는다", arguments: [false, true])
+    @Test("Two stacks open over IPv4 and IPv6, send in both directions, and close", arguments: [false, true])
     func openTransferClose(ipv6: Bool) throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -40,7 +40,7 @@ struct StackLookupTests {
         #expect(receivedUp == upload)
         #expect(receivedDown == download)
 
-        // 클라이언트가 쓰기를 먼저 끝내고, 서버가 닫는다. 클라이언트는 TIME-WAIT에 들어 기록을 남긴다.
+        // The client finishes writing first, then the server closes. The client enters TIME-WAIT and leaves a record.
         pair.collect(pair.client.finishWriting(ids.client, at: pair.now), from: .client)
         try pair.deliver()
         #expect(pair.serverEvents.last == .endOfStream(ids.server))
@@ -62,7 +62,7 @@ struct StackLookupTests {
         expectStackInvariants(pair.server)
     }
 
-    @Test("같은 상대의 두 연결은 4-튜플로 갈린다")
+    @Test("A 4-tuple distinguishes two connections to the same peer")
     func twoConnectionsFromOnePeer() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -82,7 +82,7 @@ struct StackLookupTests {
         #expect(pair.read(second.server, from: .server) == [2, 2])
     }
 
-    @Test("목적지가 자기 주소가 아니면 notForUs로 버리고 답하지 않는다")
+    @Test("Drops a destination other than a local address as notForUs and sends no response")
     func notForUs() {
         var stack = StackHosts.makeStack(addresses: [WireHosts.v4b], now: .now)
         _ = try? stack.listen(on: 443)
@@ -90,7 +90,7 @@ struct StackLookupTests {
             from: IPEndpoint(address: WireHosts.v4a, port: 40_000),
             to: IPEndpoint(address: StackHosts.peer(9), port: 443), flags: [.syn])
         #expect(stack.receive(syn.packet, at: .now) == [.dropped(.notForUs)])
-        // IPv6 주소를 갖지 않은 스택에 온 IPv6 패킷도 같다.
+        // The same holds for an IPv6 packet arriving at a stack with no IPv6 address.
         let syn6 = peerSegment(
             from: IPEndpoint(address: WireHosts.v6a, port: 40_000), to: IPEndpoint(address: WireHosts.v6b, port: 443),
             flags: [.syn])
@@ -98,7 +98,7 @@ struct StackLookupTests {
         #expect(stack.connections.isEmpty)
     }
 
-    @Test("TCP가 아니거나 해석되지 않는 패킷은 그 까닭으로 버린다")
+    @Test("Drops non-TCP or unparseable packets with the corresponding reason")
     func unparsable() {
         var stack = StackHosts.makeStack(addresses: [WireHosts.v4b], now: .now)
         var udp = peerSegment(
@@ -117,7 +117,7 @@ struct StackLookupTests {
         #expect(stack.receive(corrupted, at: .now) == [.dropped(.badChecksum)])
     }
 
-    @Test("묶음으로 받은 데이터 세그먼트 둘(2×MSS)에는 둘째의 receive가 ACK 하나를 내고, 같은 시각의 advance는 내지 않는다")
+    @Test("For two data segments (2×MSS) received in a batch, the second receive emits one ACK and advance at the same time emits none")
     func batchAcknowledgment() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -139,7 +139,7 @@ struct StackLookupTests {
         #expect(acknowledgments.first?.flags == [.ack])
     }
 
-    @Test("출력의 순서: 한 연결의 패킷은 시퀀스 순서, 데이터의 readable이 FIN의 endOfStream보다 앞")
+    @Test("Output order: packets for one connection follow sequence order, and readable for data precedes endOfStream for FIN")
     func outputOrder() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -158,7 +158,7 @@ struct StackLookupTests {
         if let readable, let end { #expect(readable < end) }
     }
 
-    @Test("맺는 중인 연결이 RST로 끝나면 알리지 않고 지운다")
+    @Test("Removes an opening connection without notification if it ends with RST")
     func halfOpenReset() throws {
         var stack = StackHosts.makeStack(addresses: [WireHosts.v4b], now: .now)
         let listener = try stack.listen(on: 443)
@@ -177,7 +177,7 @@ struct StackLookupTests {
         expectStackInvariants(stack)
     }
 
-    @Test("대기열에 있는 동안 받은 데이터와 FIN은 사건 없이 남고, 꺼낸 뒤 읽힌다")
+    @Test("Data and FIN received while queued are retained without events and can be read after dequeue")
     func queuedConnectionKeepsData() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)

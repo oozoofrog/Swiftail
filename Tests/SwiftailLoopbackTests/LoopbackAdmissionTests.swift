@@ -6,21 +6,21 @@ import Testing
 @testable import Swiftail
 @testable import SwiftailLoopback
 
-/// 다리가 연 루프백 연결만 신원을 얻는다(계약 `docs/contracts/SwiftailHost.md` 동작 B6, M7-9b).
+/// Only loopback connections opened by the bridge obtain an identity (contract `docs/contracts/SwiftailHost.md` behavior B6, M7-9b).
 ///
-/// 같은 기기의 다른 프로세스가 할 수 있는 수를 POSIX 소켓(`RawLoopbackSocket`)으로 둔다: 원하는 출발 포트에 묶기
-/// (`SO_REUSEADDR`), 루프백 리스너에 걸기, 아무 바이트나 보내기. 서버는 계약대로 `.ready`에서 묻는다.
-@Suite("루프백 다리: 다리가 연 연결만 신원을 얻는다", .timeLimit(.minutes(1)))
+/// Use a POSIX socket (`RawLoopbackSocket`) for operations another process on the same device could perform: bind to the desired source port
+/// (`SO_REUSEADDR`), connect to a loopback listener, and send arbitrary bytes. The server looks up identity at `.ready`, as the contract specifies.
+@Suite("Loopback bridge: only connections opened by the bridge obtain an identity", .timeLimit(.minutes(1)))
 struct LoopbackAdmissionTests {
     private typealias Support = BridgeTestSupport
 
-    /// TLS 레코드처럼 시작하는 바이트(토큰 자리에 다른 것이 오는 경우).
+    /// Bytes that start like a TLS record (something other than a token arrives in its place).
     private static let stray = [UInt8](repeating: 0x16, count: 64)
 
-    // MARK: 검토에서 재현된 것
+    // MARK: Review reproductions
 
-    /// 검토 1: 표의 열쇠가 출발 포트뿐이면 둘째 리스너가 첫째 리스너로 잇는 연결의 신원을 얻었다.
-    @Test("다리가 첫 리스너에 잇는 동안 같은 출발 포트로 둘째 리스너에 붙은 연결은 준비되지 않는다")
+    /// Review 1: with only the source port as the table key, a second listener obtained the identity of a connection to the first listener.
+    @Test("A connection from the same source port to the second listener does not become ready while the bridge connects to the first")
     func sameSourcePortOnSecondListener() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let bridge = LoopbackBridge(node: node)
@@ -41,9 +41,9 @@ struct LoopbackAdmissionTests {
         }
     }
 
-    /// 검토 2: 서버가 응답하고 닫은 뒤 tailnet 쪽이 더 보내면 서버 커널이 RST를 내고, 다리가 알아채기 전에 출발 포트가 풀린다.
-    /// 서버가 묻지 않은 허가가 그 4-튜플로 남아 있어도(그 연결이 실제로 나른 바이트의 상대다) 새 연결은 준비되지 않는다.
-    @Test("서버가 닫은 뒤의 RST로 풀린 출발 포트로 같은 리스너에 붙은 연결은 남은 허가가 있어도 신원을 얻지 못한다")
+    /// Review 2: if the tailnet side sends more after the server responds and closes, the server kernel emits RST and frees the source port before the bridge notices.
+    /// The new connection does not become ready even if an admission the server never looked up remains for that 4-tuple (it identifies the peer whose bytes the connection actually carried).
+    @Test("A connection to the same listener from a source port freed by RST after the server closed cannot obtain an identity, even if admission remains")
     func portFreedByResetOnSameListener() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let bridge = LoopbackBridge(node: node)
@@ -58,31 +58,31 @@ struct LoopbackAdmissionTests {
             link.peer.connection.cancel()
             #expect(try await Support.readToEnd(link.client) == Array("response".utf8))
 
-            // 닫힌 서버 소켓으로 더 보내면 RST가 오고 다리의 루프백 소켓이 CLOSED가 된다. 그때 같은 4-튜플로 걸 수 있다.
+            // Sending more to a closed server socket elicits RST and puts the bridge's loopback socket in CLOSED. The same 4-tuple can then be used to connect.
             var stranger: RawLoopbackSocket?
             for _ in 0..<500 where stranger == nil {
                 _ = try? await link.client.write([0xEE])
                 stranger = Self.connectedStranger(from: key.sourcePort, to: server.port)
                 if stranger == nil { try await Task.sleep(for: .milliseconds(10)) }
             }
-            let socket = try #require(stranger, "출발 포트가 풀리지 않았다")
+            let socket = try #require(stranger, "The source port was not released")
             #expect(bridge.admission.snapshot.admitted.contains(key))
 
             let accepted = try #require(await server.nextConnection())
-            // 계약을 어기고 준비되기 전에 묻는 서버에게도 답하지 않는다.
+            // Do not answer even a server that violates the contract by looking up the identity before it is ready.
             #expect(bridge.origin(of: accepted) == nil)
             try socket.send(Self.stray)
             await Self.expectRejected(PeerConnection.start(accepted), bridge)
             #expect(bridge.origin(of: accepted) == nil)
-            // 다리는 루프백에서 더 받지 않으므로 다음에 쓸 때 RST를 안다. tailnet 쪽이 쓰지 않으면 그때까지 남는다.
+            // The bridge receives nothing more on loopback, so it learns of the RST on its next write. If the tailnet side does not write, the entry remains until then.
             await link.client.abort()
             #expect(await link.finished() == nil)
         }
     }
 
-    /// 검토 2의 둘째 경우: 다리가 받는 중에 서버가 RST로 끊으면, 포트가 풀린 때부터 다리가 알아채기까지 틈이 있었다.
-    /// 다른 스레드가 그 포트로 걸기를 되풀이하다 풀리는 즉시 붙는다.
-    @Test("받는 중에 서버가 RST로 끊은 직후 같은 출발 포트로 곧바로 붙은 연결은 준비되지 않는다", arguments: 0..<10)
+    /// Second case in review 2: if the server resets while the bridge is receiving, there was a gap between the port being released and the bridge noticing.
+    /// Another thread repeatedly tries to connect from that port and gets through as soon as it is released.
+    @Test("A connection made immediately from the same source port after the server resets during a receive does not become ready", arguments: 0..<10)
     func probeRightAfterServerReset(round: Int) async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let bridge = LoopbackBridge(node: node)
@@ -110,24 +110,24 @@ struct LoopbackAdmissionTests {
             try await Task.sleep(for: .milliseconds(20))
             link.peer.connection.forceCancel()
             let stranger = await probe.value
-            #expect(stranger != nil, "\(round)번째: 출발 포트가 풀리지 않았다")
+            #expect(stranger != nil, "Round \(round): the source port was not released")
             if stranger != nil { await Self.expectRejected(server.nextOutcome(), bridge) }
             #expect(await Support.error { try await Support.readToEnd(link.client) } == .reset)
             #expect(await link.finished() == nil)
         }
     }
 
-    // MARK: 토큰
+    // MARK: Tokens
 
-    @Test("토큰이 없거나 틀리거나, 토큰을 다 보내기 전에 끝낸 연결은 준비되지 않는다")
+    @Test("A connection with a missing or incorrect token, or one that ends before sending the whole token, does not become ready")
     func invalidTokensAreRejected() async throws {
         let bridge = try Self.idleBridge()
         let server = try await PlainLoopbackServer.start(admittingFor: bridge)
         defer { server.close() }
         let cases: [(String, [UInt8], Bool)] = [
-            ("토큰 없이 HTTP", Array("GET / HTTP/1.1\r\nHost: rd-mac-1a2b3c4d\r\n\r\n".utf8), false),
-            ("적지 않은 토큰", LoopbackAdmissionTable.makeToken() + [1], false),
-            ("10바이트 뒤 FIN", [UInt8](repeating: 1, count: 10), true),
+            ("HTTP without a token", Array("GET / HTTP/1.1\r\nHost: rd-mac-1a2b3c4d\r\n\r\n".utf8), false),
+            ("Unrecorded token", LoopbackAdmissionTable.makeToken() + [1], false),
+            ("FIN after 10 bytes", [UInt8](repeating: 1, count: 10), true),
         ]
         for (what, bytes, finish) in cases {
             let stranger = try RawLoopbackSocket(boundTo: 0, reuseAddress: false)
@@ -138,7 +138,7 @@ struct LoopbackAdmissionTests {
         }
     }
 
-    @Test("토큰을 다 보내지 않고 멈춘 연결은 5초 뒤 준비되지 않고 끝난다")
+    @Test("A connection that stops before sending the whole token ends after 5 seconds without becoming ready")
     func partialTokenTimesOut() async throws {
         let bridge = try Self.idleBridge()
         let server = try await PlainLoopbackServer.start(admittingFor: bridge)
@@ -152,7 +152,7 @@ struct LoopbackAdmissionTests {
         #expect(elapsed >= .seconds(4) && elapsed < .seconds(10), "\(elapsed)")
     }
 
-    @Test("토큰은 적힌 출발 포트와 리스너 포트의 연결에서 한 번만 통한다")
+    @Test("A token works once on the connection with the recorded source port and listener port")
     func tokenIsBoundAndSingleUse() async throws {
         let bridge = try Self.idleBridge()
         let server = try await PlainLoopbackServer.start(admittingFor: bridge)
@@ -162,48 +162,48 @@ struct LoopbackAdmissionTests {
         let origin = LoopbackBridge.Origin(
             remoteEndpoint: IPEndpoint(address: try #require(IPAddress("100.64.0.2")), port: 41_641), peer: Support.selfIdentity)
 
-        // 맞는 연결.
+        // The matching connection.
         let rightful = try RawLoopbackSocket(boundTo: 0, reuseAddress: false)
         let token = LoopbackAdmissionTable.makeToken()
         #expect(bridge.admission.expect(token, for: .init(sourcePort: rightful.localPort, listenerPort: server.port), origin: origin))
         try rightful.connect(to: server.port)
-        // 토큰, 바이트, 끝(FIN)이 한꺼번에 온다. framer가 받아 둔 바이트와 끝이 위로 간다.
+        // The token, bytes, and EOF (FIN) arrive together. The bytes and EOF buffered by the framer reach the next layer.
         try rightful.send(token + [7])
         rightful.finishWriting()
         let peer = try await server.next()
         #expect(bridge.origin(of: peer.connection) == origin)
         #expect(await peer.readToEnd() == .end([7]))
 
-        // 같은 토큰을 다시 쓴다.
+        // Reuse the same token.
         let replay = try RawLoopbackSocket(boundTo: 0, reuseAddress: false)
         try replay.connect(to: server.port)
         try replay.send(token)
-        await Self.expectRejected(server.nextOutcome(), bridge, "다시 쓴 토큰")
+        await Self.expectRejected(server.nextOutcome(), bridge, "Reused token")
 
-        // 다른 리스너에서 쓴다. 그 토큰은 소비되어 제 리스너에서도 더 통하지 않는다.
+        // Use the token on a different listener. The token is consumed, so it no longer works on its own listener either.
         let misdirected = try RawLoopbackSocket(boundTo: 0, reuseAddress: false)
         let stolen = LoopbackAdmissionTable.makeToken()
         let stolenKey = LoopbackAdmissionTable.Key(sourcePort: misdirected.localPort, listenerPort: server.port)
         #expect(bridge.admission.expect(stolen, for: stolenKey, origin: origin))
         try misdirected.connect(to: other.port)
         try misdirected.send(stolen)
-        await Self.expectRejected(other.nextOutcome(), bridge, "다른 리스너의 토큰")
+        await Self.expectRejected(other.nextOutcome(), bridge, "Token for a different listener")
         let late = try RawLoopbackSocket(boundTo: stolenKey.sourcePort, reuseAddress: true)
         try late.connect(to: server.port)
         try late.send(stolen)
-        await Self.expectRejected(server.nextOutcome(), bridge, "소비된 토큰")
+        await Self.expectRejected(server.nextOutcome(), bridge, "Consumed token")
 
-        // 다른 출발 포트에서 쓴다.
+        // Use the token from a different source port.
         let elsewhere = try RawLoopbackSocket(boundTo: 0, reuseAddress: false)
         let reserved = LoopbackAdmissionTable.makeToken()
         #expect(bridge.admission.expect(reserved, for: .init(sourcePort: 1, listenerPort: server.port), origin: origin))
         try elsewhere.connect(to: server.port)
         try elsewhere.send(reserved)
-        await Self.expectRejected(server.nextOutcome(), bridge, "다른 출발 포트의 토큰")
+        await Self.expectRejected(server.nextOutcome(), bridge, "Token for a different source port")
         #expect(bridge.admission.snapshot.expected.isEmpty)
     }
 
-    @Test("기다리는 토큰과 가져가지 않은 허가는 256개까지다")
+    @Test("Pending tokens and unclaimed admissions are capped at 256")
     func tableLimits() throws {
         let table = LoopbackAdmissionTable()
         let origin = LoopbackBridge.Origin(
@@ -218,7 +218,7 @@ struct LoopbackAdmissionTests {
         for (index, token) in tokens.enumerated() {
             #expect(table.admit(token, for: .init(sourcePort: UInt16(index + 1), listenerPort: 9)))
         }
-        // 257번째 허가는 가장 오래된 것을 밀어낸다.
+        // The 257th admission evicts the oldest.
         let extra = LoopbackAdmissionTable.makeToken()
         #expect(table.expect(extra, for: .init(sourcePort: 999, listenerPort: 9), origin: origin))
         #expect(table.admit(extra, for: .init(sourcePort: 999, listenerPort: 9)))
@@ -228,10 +228,10 @@ struct LoopbackAdmissionTests {
         #expect(table.snapshot.admitted.count == 254)
     }
 
-    // MARK: TLS 리스너
+    // MARK: TLS listener
 
-    /// TLS 클라이언트 → 시험의 입구 리스너 → tailnet 연결 → 다리 → 프로토콜을 넣은 TLS 리스너. 핸드셰이크가 다리를 지난다.
-    @Test("TLS 리스너에서도 다리가 이은 연결은 핸드셰이크 뒤 신원을 얻고 바이트가 끝에서 끝으로 간다")
+    /// TLS client → test entry listener → tailnet connection → bridge → TLS listener with the protocol installed. The handshake crosses the bridge.
+    @Test("With a TLS listener, a bridged connection obtains an identity after the handshake and bytes travel end to end")
     func tlsEndToEnd() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let bridge = LoopbackBridge(node: node)
@@ -264,7 +264,7 @@ struct LoopbackAdmissionTests {
             let tlsPeer = try await server.next()
             #expect(bridge.origin(of: tlsPeer.connection)?.peer == Support.selfIdentity)
             guard case .ready(let tlsClient) = await clientReady.value else {
-                Issue.record("TLS 클라이언트가 준비되지 않았다")
+                Issue.record("The TLS client did not become ready")
                 return
             }
             try await tlsClient.send(Array("ping".utf8), final: false)
@@ -277,7 +277,7 @@ struct LoopbackAdmissionTests {
         }
     }
 
-    @Test("TLS 리스너: 토큰 없이 건 TLS 클라이언트와 다리의 출발 포트를 다시 쓴 연결은 준비되지 않는다")
+    @Test("TLS listener: a TLS client that connects without a token and a connection that reuses the bridge's source port do not become ready")
     func tlsRejections() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let bridge = LoopbackBridge(node: node)
@@ -292,21 +292,21 @@ struct LoopbackAdmissionTests {
                 using: NWParameters(tls: SelfSignedIdentity.clientOptions(), tcp: NWProtocolTCP.Options()))
             defer { direct.cancel() }
             direct.start(queue: DispatchQueue(label: "test.direct"))
-            await Self.expectRejected(server.nextOutcome(), bridge, "토큰 없는 TLS 클라이언트")
+            await Self.expectRejected(server.nextOutcome(), bridge, "TLS client without a token")
 
             let link = try await Support.bridge(node, bridge, to: plain)
             let stranger = try RawLoopbackSocket(boundTo: link.peer.remotePort, reuseAddress: true)
             try stranger.connect(to: server.port)
             try stranger.send(Self.stray)
-            await Self.expectRejected(server.nextOutcome(), bridge, "다리의 출발 포트")
+            await Self.expectRejected(server.nextOutcome(), bridge, "The bridge's source port")
             await link.client.abort()
             _ = await link.finished()
         }
     }
 
-    /// 관문에서 본 것: 서버가 거절된 연결을 `cancel()`만 하고 붙잡고 있으면 소켓이 닫히지 않아, 토큰 없이 건 TLS 클라이언트가
-    /// 준비 중에 머문다(framer가 없는 TLS 리스너도 준비 전에 끝난 연결은 같다). 서버는 끝난 연결을 놓아야 한다.
-    @Test("거절된 연결은 서버가 닫고 놓으면 상대가 끝을 본다", arguments: [false, true])
+    /// The gate showed that if the server only calls `cancel()` on a rejected connection and retains it, the socket stays open and a TLS client that connects without a token
+    /// remains in the process of becoming ready (a TLS listener without a framer behaves the same for a connection that ends before readiness). The server must release ended connections.
+    @Test("The peer sees EOF on a rejected connection once the server closes and releases it", arguments: [false, true])
     func rejectedConnectionEndsOnceReleased(tls: Bool) async throws {
         let bridge = try Self.idleBridge()
         let server = try await PlainLoopbackServer.start(
@@ -323,9 +323,9 @@ struct LoopbackAdmissionTests {
         #expect(stranger.seesEnd(within: 5))
     }
 
-    // MARK: 도우미
+    // MARK: Helpers
 
-    /// 노드를 돌리지 않는 다리. 표와 framer만 시험한다.
+    /// A bridge without a running node. Tests only the table and framer.
     private static func idleBridge() throws -> LoopbackBridge {
         let configuration = NodeConfiguration(
             stateDirectory: try #require(URL(string: "file:///var/empty/swiftail-test/")), hostname: "rd-mac-1a2b3c4d",
@@ -333,7 +333,7 @@ struct LoopbackAdmissionTests {
         return LoopbackBridge(node: try TailnetNode(configuration: configuration))
     }
 
-    /// `127.0.0.1:<sourcePort>`에 묶어(`SO_REUSEADDR`) `127.0.0.1:<port>`에 건 소켓. 그 4-튜플이 쓰이는 중이면 nil이다.
+    /// A socket bound to `127.0.0.1:<sourcePort>` (`SO_REUSEADDR`) and connected to `127.0.0.1:<port>`. Returns nil if the 4-tuple is in use.
     private static func connectedStranger(from sourcePort: UInt16, to port: UInt16) -> RawLoopbackSocket? {
         guard let socket = try? RawLoopbackSocket(boundTo: sourcePort, reuseAddress: true) else { return nil }
         do {
@@ -344,14 +344,14 @@ struct LoopbackAdmissionTests {
         }
     }
 
-    /// 연결이 준비되지 않고 끝났는지 본다. 준비되었다면 신원도 얻지 못해야 한다(둘 다 실패로 적는다).
+    /// Checks that the connection ended without becoming ready. If it did become ready, it must still have obtained no identity (record both as failures).
     private static func expectRejected(
         _ outcome: PeerConnection.Outcome, _ bridge: LoopbackBridge, _ what: String = "",
         sourceLocation: SourceLocation = #_sourceLocation
     ) async {
         guard case .ready(let peer) = outcome else { return }
         let origin = bridge.origin(of: peer.connection)
-        Issue.record("\(what): 준비되었다(신원 \(origin == nil ? "없음" : "있음"))", sourceLocation: sourceLocation)
+        Issue.record("\(what): became ready (identity \(origin == nil ? "absent" : "present"))", sourceLocation: sourceLocation)
         peer.connection.cancel()
     }
 }

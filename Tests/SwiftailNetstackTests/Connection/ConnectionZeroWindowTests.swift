@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 창 0의 경계(M6 검토 A): 응용이 `close`로 놓은 연결의 0 창 탐침 한도, 데이터가 날아가는 중에 줄어든 창의 재전송 한도,
-/// 받는 창이 0일 때의 데이터 없는 FIN. 계약 동작 F8과 그 아래, T6.
-@Suite("창 0의 경계")
+/// Zero-window edge cases (M6 review A): the zero-window probe limit for a connection released by the application with `close`, the retransmission limit when the window shrinks with data in flight,
+/// and a data-free FIN when the receive window is zero. Contract behavior F8 and the material below it, T6.
+@Suite("Zero-window edge cases")
 struct ConnectionZeroWindowTests {
-    /// 타이머를 차례로 돌리며 `answer`로 상대의 답을 넣는다. 사건이 나오거나 `limit`에 닿으면 멈추고 그 출력을 돌려준다.
+    /// Runs timers in order and uses `answer` to feed the peer's replies. Stops and returns the output when an event occurs or `limit` is reached.
     private func runTimers(
         _ peer: inout ManualPeer, until limit: Duration,
         answer: (inout ManualPeer, [TCPConnection.Output]) -> Void
@@ -22,9 +22,9 @@ struct ConnectionZeroWindowTests {
         return []
     }
 
-    // MARK: 놓은 연결의 0 창 탐침 (동작 F8)
+    // MARK: Zero-window probes on released connections (behavior F8)
 
-    @Test("close로 놓은 연결은 상대가 탐침에 창 0으로 답해도 15번 뒤 RST를 보내고 .timedOut으로 끝난다. 보내는 버퍼를 놓는다")
+    @Test("A connection released with close sends RST and ends with .timedOut after 15 probes even if the peer replies with a zero window. It releases the send buffer")
     func releasedConnectionProbeLimit() throws {
         var peer = try ManualPeer.established(ackWindow: 0)
         let (accepted, _) = peer.connection.write(patternBytes(count: 200_000)[...], at: peer.now)
@@ -34,7 +34,7 @@ struct ConnectionZeroWindowTests {
         let final = runTimers(&peer, until: .seconds(30_000)) { peer, outputs in
             guard outputs.segments.contains(where: { $0.payload == [0] }) else { return }
             probes += 1
-            // 15번째 탐침까지는 연결이 남는다.
+            // The connection stays through the 15th probe.
             #expect(peer.connection.state == .established)
             _ = peer.receive(peer.segment(flags: [.ack], window: 0))
         }
@@ -45,7 +45,7 @@ struct ConnectionZeroWindowTests {
         #expect(peer.connection.unacknowledgedSendByteCount == 0)
     }
 
-    @Test("응용이 쥐고 있는 연결은 상대가 탐침에 답하는 한 15번을 넘어도 끊지 않는다(MUST-37)")
+    @Test("An application-held connection stays open beyond 15 probes as long as the peer replies (MUST-37)")
     func heldConnectionKeepsProbing() throws {
         var peer = try ManualPeer.established(ackWindow: 0)
         _ = peer.connection.write(patternBytes(count: 200_000)[...], at: peer.now)
@@ -60,7 +60,7 @@ struct ConnectionZeroWindowTests {
         #expect(peer.connection.state == .established)
     }
 
-    @Test("놓은 연결의 탐침 수는 상대가 창을 열어 데이터를 확인받으면 다시 센다")
+    @Test("A released connection resets its probe count after the peer opens the window and acknowledges data")
     func releasedConnectionProbeCountResetsOnProgress() throws {
         var peer = try ManualPeer.established(ackWindow: 0)
         _ = peer.connection.write(patternBytes(count: 200_000)[...], at: peer.now)
@@ -74,7 +74,7 @@ struct ConnectionZeroWindowTests {
                 _ = peer.receive(peer.segment(flags: [.ack], window: 0))
                 return
             }
-            // 10번째 탐침에 창을 열어 데이터를 받고, 받은 것을 확인하며 다시 창을 0으로 닫는다.
+            // Open the window on the 10th probe, receive data, then acknowledge it while closing the window back to 0.
             opened = true
             let sent = peer.receive(peer.segment(flags: [.ack], window: 4_960))
             #expect(sent.segments.map(\.payload.count).reduce(0, +) == 4_960)
@@ -84,9 +84,9 @@ struct ConnectionZeroWindowTests {
         #expect(final.events == [.closed(.timedOut)])
     }
 
-    // MARK: 줄어든 창의 재전송 (동작 F8 아래, RFC 9293 3.8.6 SHLD-17·MUST-35)
+    // MARK: Retransmission in a shrunk window (below behavior F8, RFC 9293 3.8.6 SHLD-17·MUST-35)
 
-    /// 3,000바이트를 보낸 뒤 상대가 `ACK=SND.UNA`, 창 0으로 답한 연결.
+    /// A connection whose peer responded to 3,000 bytes sent with `ACK=SND.UNA` and a zero window.
     private func shrunkWindowPeer() throws -> ManualPeer {
         var peer = try ManualPeer.established()
         let (_, sent) = peer.connection.write(patternBytes(count: 3_000)[...], at: peer.now)
@@ -96,7 +96,7 @@ struct ConnectionZeroWindowTests {
         return peer
     }
 
-    @Test("데이터가 날아가는 중에 창이 0으로 줄고 상대가 재전송마다 ACK하면 재전송 한도로 끊지 않는다")
+    @Test("If the window shrinks to 0 with data in flight and the peer ACKs each retransmission, the retransmission limit does not abort the connection")
     func shrunkWindowAnswered() throws {
         var peer = try shrunkWindowPeer()
         var retransmissions = 0
@@ -111,7 +111,7 @@ struct ConnectionZeroWindowTests {
         #expect(peer.connection.state == .established)
     }
 
-    @Test("줄어든 창에서 상대가 답하지 않으면 한도로 끝난다: 창 0의 ACK 뒤 첫 만료만 세지 않아 16번 다시 보낸 뒤 .timedOut")
+    @Test("If the peer does not respond after the window shrinks, the limit ends the connection. Only the first expiration after the zero-window ACK is skipped, so .timedOut follows 16 retransmissions")
     func shrunkWindowSilentPeer() throws {
         var peer = try shrunkWindowPeer()
         var retransmissions = 0
@@ -123,7 +123,7 @@ struct ConnectionZeroWindowTests {
         #expect(final.events == [.closed(.timedOut)])
     }
 
-    @Test("close로 놓은 연결은 줄어든 창에서 상대가 답해도 재전송 15번 뒤 RST를 보내고 .timedOut으로 끝난다")
+    @Test("A connection released with close sends RST and ends with .timedOut after 15 retransmissions even if the peer responds in the shrunk window")
     func shrunkWindowReleased() throws {
         var peer = try shrunkWindowPeer()
         _ = peer.connection.close(at: peer.now)
@@ -139,9 +139,9 @@ struct ConnectionZeroWindowTests {
         #expect(final.events == [.closed(.timedOut)])
     }
 
-    // MARK: 창 0의 FIN (동작 T6)
+    // MARK: FIN with a zero window (behavior T6)
 
-    /// 상대 SYN에 Window Scale이 있어 256KiB를 광고한 연결에 256KiB를 채워 받는 창을 0으로 만든다. 보낸 바이트를 돌려준다.
+    /// Fill a connection that advertised 256KiB because of Window Scale in the peer's SYN with 256KiB to close its receive window. Returns the bytes sent.
     private func fillReceiveWindow(_ peer: inout ManualPeer) -> [UInt8] {
         var sent: [UInt8] = []
         for index in 0..<(256 * 1024 / 1_024) {
@@ -153,7 +153,7 @@ struct ConnectionZeroWindowTests {
         return sent
     }
 
-    @Test("받는 창이 0이어도 RCV.NXT의 데이터 없는 FIN은 소비한다. 응용은 남은 데이터를 다 읽은 뒤 EOF를 본다")
+    @Test("Consumes a data-free FIN at RCV.NXT even with a zero receive window. The application sees EOF after reading all remaining data")
     func bareFinOnZeroWindow() throws {
         var peer = try ManualPeer.established(windowScale: 7)
         let sent = fillReceiveWindow(&peer)
@@ -175,7 +175,7 @@ struct ConnectionZeroWindowTests {
         #expect(peer.connection.hasReceivedEndOfStream)
     }
 
-    @Test("받는 창이 0일 때 데이터가 든 FIN은 지금 규칙 그대로 소비하지 않는다(데이터가 창에 다 들어와야 한다)")
+    @Test("A FIN carrying data is still not consumed with a zero receive window under the current rule (all the data must fit in the window)")
     func finWithDataOnZeroWindow() throws {
         var peer = try ManualPeer.established(windowScale: 7)
         _ = fillReceiveWindow(&peer)
@@ -185,7 +185,7 @@ struct ConnectionZeroWindowTests {
         #expect(outputs.segments.first?.window == 0)
         #expect(peer.connection.state == .established)
         #expect(!peer.connection.hasReceivedEndOfStream)
-        // RCV.NXT가 아닌 곳의 FIN도 받지 않는다.
+        // A FIN at a position other than RCV.NXT is also rejected.
         let ahead = peer.receive(peer.segment(sequence: peer.peerNext.advanced(by: 1), flags: [.fin, .ack]))
         #expect(ahead.events.isEmpty)
         #expect(!peer.connection.hasReceivedEndOfStream)

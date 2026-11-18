@@ -1,22 +1,22 @@
-// Go(gVisor) 기준 자료와 TCP 세그먼트 코덱의 독립 대조 시험.
+// Independently compares the TCP segment codec with Go (gVisor) reference fixtures.
 //
-// 자료(`Fixtures/tcp-segments.json`)는 `Tools/interop/cmd/tcpfixtures`가 gVisor의 `header` 패키지로 만든 IP 패킷 62개와
-// 각 사례의 해석 결과다. 사례마다 `go`(gVisor가 실제로 돌려준 값)와 `swiftail`(계약이 정한 기대값)이 있고, 둘이 다르면
-// `swiftailDiffers`에 까닭이 있다. 이 시험은 코덱을 쓴 세션과 다른 세션이 썼고, 코덱의 소스를 읽어 기대값을 맞추지 않았다.
+// The fixtures (`Fixtures/tcp-segments.json`) include 62 IP packets built by `Tools/interop/cmd/tcpfixtures` with gVisor's `header` package and
+// the decoded result for each case. Each case has `go` (the actual gVisor return value) and `swiftail` (the expectation defined by the contract). When they differ,
+// `swiftailDiffers` explains why. A different session from the one that wrote the codec wrote this test without reading the codec source to fit the expectations.
 //
-// 대조 규칙(README "tcpfixtures"를 확인했다):
-// - `error`는 빈 문자열(성공)과 `malformed`·`badChecksum`·`notTCP`이며 `TCPSegment.ParseError`와 이름이 같다.
-// - 오류 사례의 `decoded`는 Go가 읽은 진단 값이라 견주지 않는다. 성공 사례만 주소·포트·번호·플래그·창·MSS·Window Scale·
-//   데이터 길이를 견준다. `flags`는 Go의 8비트 원값이고 코덱은 상태 기계가 쓰는 하위 5비트만 담으므로 `& 0x1F`로 견준다.
-// - `mss`는 SYN의 **유효 MSS**(옵션이 없으면 기본값 포함)이고 `windowScale`은 옵션이 없으면 -1이다. SYN이 아니면 둘 다 null.
-//   코덱은 광고하지 않은 값을 `nil`로 둔다(`TCPSegment.maximumSegmentSize` 문서). 그래서 MSS 옵션이 없는 SYN은 자료의
-//   기본값과 `nil`이 어긋난다. 그런 사례(`withoutMSSOption`)는 코덱이 `nil`을 내는지 보고, 계약 T5의 읽는 규칙(옵션이
-//   없으면 IPv4 536·IPv6 1220으로 본다)을 적용한 값이 자료와 같은지 확인한다.
-// - 표시된 차이(`swiftailDiffers`)는 `go`와 `swiftail`이 다른 필드를 계산해, 표에 적은 필드와 같은지 보고, 코덱의 결과가
-//   그 필드에서 `swiftail`과 같고 `go`와는 다름을 확인한다.
-// - `sackPermitted`는 SYN에서만 bool이고 아니면 null, `sackBlocks`는 SYN이 아닐 때만 `[왼쪽 끝, 오른쪽 끝]`의 목록이고
-//   SYN이면 null이다. 코덱은 SYN이면 `sackBlocks`를, SYN이 아니면 `sackPermitted`를 비워 둔다(M6-10a에서 더했다. 이 부분은
-//   코덱을 쓴 세션이 함께 고쳤다).
+// Comparison rules (checked against README "tcpfixtures"):
+// - `error` is an empty string (success) or one of `malformed`·`badChecksum`·`notTCP`, matching the names in `TCPSegment.ParseError`.
+// - For error cases, `decoded` is a diagnostic value read by Go and is excluded from comparison. For successful cases only, compare addresses, ports, sequence numbers, flags, window, MSS, Window Scale, and
+//   payload length. `flags` is Go's raw 8-bit value, and the codec keeps only the 5 low bits used by the state machine, so compare with `& 0x1F`.
+// - `mss` is the SYN's **effective MSS** (including the default if the option is missing), and `windowScale` is -1 if the option is absent. Both are null for non-SYN segments.
+//   The codec leaves unadvertised values as `nil` (see `TCPSegment.maximumSegmentSize` docs). For a SYN without the MSS option, the fixture's
+//   default therefore differs from `nil`. For such cases (`withoutMSSOption`), check that the codec returns `nil` and that applying contract T5's interpretation rule
+//   (use 536 for IPv4 and 1220 for IPv6 when the option is absent) matches the fixture.
+// - For marked differences (`swiftailDiffers`), compute the fields where `go` and `swiftail` differ, check that they match the listed fields, and confirm that the codec result
+//   matches `swiftail` and differs from `go` in those fields.
+// - `sackPermitted` is a bool only on SYN and otherwise null. `sackBlocks` is a list of `[left edge, right edge]` only on non-SYN segments and is
+//   null on SYN. The codec leaves `sackBlocks` empty on SYN and `sackPermitted` empty on non-SYN segments (added in M6-10a. This part
+//   was also updated by the session that wrote the codec).
 
 import Foundation
 import Testing
@@ -25,9 +25,9 @@ import SwiftailBase
 
 @testable import SwiftailNetstack
 
-// MARK: - 자료
+// MARK: - Fixtures
 
-/// 자료 파일의 해석 결과 하나(`go` 또는 `swiftail`).
+/// One decoded result from the fixture file (`go` or `swiftail`).
 private struct FixtureResult: Decodable, Equatable {
     struct Decoded: Decodable, Equatable {
         var ipVersion: Int
@@ -71,11 +71,11 @@ private struct FixtureDocument: Decodable {
     var cases: [FixtureCase]
 }
 
-/// 자료 파일을 읽는다. 파일이 없거나 형식이 다르면 던진다(시험이 조용히 통과하지 않는다).
+/// Reads the fixture file. Throws if the file is missing or has a different format (so the test does not pass silently).
 private func loadTCPSegmentFixture() throws -> FixtureDocument {
     let url = try #require(
         Bundle.module.url(forResource: "tcp-segments", withExtension: "json", subdirectory: "Fixtures"),
-        "기대=tcp-segments.json 리소스 실제=없음")
+        "expected=tcp-segments.json resource actual=missing")
     return try JSONDecoder().decode(FixtureDocument.self, from: Data(contentsOf: url))
 }
 
@@ -101,9 +101,9 @@ private func bytes(fromHex text: String) -> [UInt8]? {
     return result
 }
 
-// MARK: - 해석 결과와 기대값의 비교
+// MARK: - Comparing decoded and expected results
 
-/// 코덱의 결과를 오류 이름과 세그먼트로 모은 값.
+/// The codec result represented by an error name and segment.
 private enum ParseOutcome {
     case segment(TCPSegment)
     case failure(String)
@@ -128,19 +128,19 @@ private enum ParseOutcome {
     }
 }
 
-/// MSS를 어떻게 견주는가.
+/// How to compare MSS.
 private enum MSSReading {
-    /// 코덱이 낸 값을 그대로 자료와 견준다(광고하지 않았으면 nil, 자료는 기본값).
+    /// Compares codec output directly with the fixture (nil if not advertised, default value in the fixture).
     case literal
-    /// 계약 T5의 규칙을 적용한다: SYN에 MSS 옵션이 없으면 IPv4 536·IPv6 1220으로 본다.
+    /// Applies the contract T5 rule: if SYN has no MSS option, use 536 for IPv4 and 1220 for IPv6.
     case effective
 }
 
-/// 성공으로 읽은 세그먼트와 기대 `decoded`의 차이. 비어 있으면 같다. 항목은 `필드: 기대=… 실제=…`.
+/// Differences between the successfully parsed segment and expected `decoded`. An empty list means they match. Entries use `field: expected=… actual=…`.
 private func differences(of segment: TCPSegment, from expected: FixtureResult.Decoded, mss: MSSReading) -> [String] {
     var found: [String] = []
     func check<T: Equatable>(_ field: String, expected: T, actual: T) {
-        if expected != actual { found.append("\(field): 기대=\(expected) 실제=\(actual)") }
+        if expected != actual { found.append("\(field): expected=\(expected) actual=\(actual)") }
     }
     let isIPv4 = segment.source.address.isIPv4
     check("ipVersion", expected: expected.ipVersion, actual: isIPv4 ? 4 : 6)
@@ -162,11 +162,11 @@ private func differences(of segment: TCPSegment, from expected: FixtureResult.De
     check("sackPermitted", expected: expected.sackPermitted, actual: isSynchronize ? segment.sackPermitted : nil)
     check("sackBlocks", expected: expected.sackBlocks,
           actual: isSynchronize ? nil : segment.sackBlocks.map { [$0.leftEdge.rawValue, $0.rightEdge.rawValue] })
-    if isSynchronize { check("SYN의 sackBlocks", expected: 0, actual: segment.sackBlocks.count) }
+    if isSynchronize { check("SYN sackBlocks", expected: 0, actual: segment.sackBlocks.count) }
     return found
 }
 
-/// `go`와 `swiftail`에서 값이 다른 필드의 이름.
+/// Names of fields with different values in `go` and `swiftail`.
 private func differingFields(_ go: FixtureResult, _ swiftail: FixtureResult) -> Set<String> {
     var fields: Set<String> = []
     if go.error != swiftail.error { fields.insert("error") }
@@ -181,38 +181,38 @@ private func differingFields(_ go: FixtureResult, _ swiftail: FixtureResult) -> 
         var rest = left
         rest.mss = right.mss
         rest.windowScale = right.windowScale
-        if rest != right { fields.insert("decoded(mss·windowScale 밖)") }
+        if rest != right { fields.insert("decoded (excluding mss and windowScale)") }
     default:
-        fields.insert("decoded 유무")
+        fields.insert("decoded presence")
     }
     return fields
 }
 
-// MARK: - 시험
+// MARK: - Tests
 
-@Suite("Go(gVisor) 기준 자료와 TCP 세그먼트 코덱의 대조")
+@Suite("Comparing the TCP segment codec with Go (gVisor) reference fixtures")
 struct GoSegmentComparisonTests {
-    /// `swiftailDiffers`가 있는 11개와 차이가 나는 필드. 자료 도구(`tcpfixtures`)가 적은 이유와 README의 설명에서 옮겼다.
+    /// The 11 cases with `swiftailDiffers` and the differing fields. Taken from the reasons recorded by the fixture tool (`tcpfixtures`) and the README explanation.
     private static let markedDifferences: [String: Set<String>] = [
-        "ipv4-mss-zero": ["windowScale"],  // Go는 MSS 0에서 옵션 해석을 멈춰 뒤의 WS를 읽지 않는다
-        "ipv6-mss-zero": ["mss", "windowScale"],  // 위와 같고, 기본 MSS도 536과 1220으로 다르다
-        "ipv6-no-options": ["mss"],  // 기본 MSS(Go 536, 계약 1220)
-        "small-mss": ["mss"],  // Go는 48으로 올리고 코덱은 1을 그대로 둔다
+        "ipv4-mss-zero": ["windowScale"],  // Go stops parsing options at MSS 0 and skips the subsequent WS
+        "ipv6-mss-zero": ["mss", "windowScale"],  // Same as above, and the default MSS also differs (536 versus 1220)
+        "ipv6-no-options": ["mss"],  // Default MSS (Go 536, contract 1220)
+        "small-mss": ["mss"],  // Go raises it to 48 and the codec keeps 1
         "unknown-length-zero": ["error"],
         "unknown-length-one": ["error"],
         "unknown-length-outside": ["error"],
         "missing-option-length": ["error"],
         "mss-outside": ["error"],
-        "sack-outside": ["error"],  // Go는 머리 밖으로 나가는 SACK에서 해석을 멈출 뿐이다
+        "sack-outside": ["error"],  // Go only stops parsing at a SACK that extends past the header
         "sack-five-blocks": ["error"],
     ]
 
-    /// MSS 옵션이 없는 SYN. 자료의 `mss`는 유효 MSS(기본값 포함)이고 코덱의 필드는 "광고하지 않으면 nil"이다.
-    /// 기본값으로 읽는 것은 상태 기계다(계약 T5). 이 사례들은 코덱이 nil을 내는지와, 기본값으로 읽으면 자료와 같은지를 본다.
+    /// SYNs without the MSS option. The fixture's `mss` is effective MSS (including the default) and the codec field is "nil when not advertised."
+    /// The state machine interprets this as the default (contract T5). These cases check that the codec yields nil and interpretation using the default matches the fixture.
     private static let withoutMSSOption: Set<String> = ["ipv4-no-options", "ipv6-no-options", "mss-length-three", "ws-length-two"]
 
-    /// 원본이 Swiftail이 만드는 모양(`ipPacket()`)과 같은 사례. 만든 바이트가 원본과 같아야 한다.
-    /// IPv4는 IHL 5·DF·식별자 0·TTL 64, 옵션은 MSS + NOP + Window Scale 순서이고 SYN에만 있다.
+    /// Cases where the original has the same form as Swiftail's `ipPacket()` output. The resulting bytes must match the original.
+    /// IPv4 uses IHL 5, DF, identifier 0, and TTL 64. Options appear only on SYN, in the order MSS + NOP + Window Scale.
     private static let swiftailShapedOriginals: Set<String> = [
         "ipv4-syn-mss-ws", "ipv4-synack", "ipv4-odd-payload", "ipv4-checksum-carries", "ipv4-fin-ack", "ipv4-rst",
         "ipv6-syn-mss-ws", "ipv6-synack", "ipv6-odd-payload", "ipv6-checksum-carries", "ipv6-fin-ack", "ipv6-rst",
@@ -221,106 +221,106 @@ struct GoSegmentComparisonTests {
         "ipv4-ack-sack-payload",
     ]
 
-    @Test("자료의 머리와 사례 수, 표시 수가 도구의 시험(main_test.go)과 같다")
+    @Test("The fixture header, case count, and marked count match the tool's test (main_test.go)")
     func fixtureCoverage() throws {
         let fixture = try loadTCPSegmentFixture()
-        #expect(fixture.reference.hasPrefix("gvisor.dev/gvisor "), "기대=gVisor 기준 실제=\(fixture.reference)")
-        #expect(fixture.caseCount == 62, "기대=caseCount 62 실제=\(fixture.caseCount)")
-        #expect(fixture.cases.count == 62, "기대=사례 62개 실제=\(fixture.cases.count)")
-        #expect(Set(fixture.cases.map(\.name)).count == fixture.cases.count, "기대=사례 이름이 서로 다름 실제=중복 있음")
+        #expect(fixture.reference.hasPrefix("gvisor.dev/gvisor "), "expected=gVisor reference actual=\(fixture.reference)")
+        #expect(fixture.caseCount == 62, "expected=caseCount 62 actual=\(fixture.caseCount)")
+        #expect(fixture.cases.count == 62, "expected=62 cases actual=\(fixture.cases.count)")
+        #expect(Set(fixture.cases.map(\.name)).count == fixture.cases.count, "expected=distinct case names actual=duplicates")
         let marked = fixture.cases.filter { $0.swiftailDiffers != nil }
-        #expect(marked.count == 11, "기대=표시된 차이 11개 실제=\(marked.count)")
+        #expect(marked.count == 11, "expected=11 marked differences actual=\(marked.count)")
         #expect(Set(marked.map(\.name)) == Set(Self.markedDifferences.keys),
-                "기대=표시된 사례 \(Self.markedDifferences.keys.sorted()) 실제=\(marked.map(\.name))")
+                "expected=marked cases \(Self.markedDifferences.keys.sorted()) actual=\(marked.map(\.name))")
         for item in fixture.cases {
-            #expect(bytes(fromHex: item.packet) != nil, "\(item.name): 기대=소문자 hex 실제=\(item.packet.prefix(40))")
-            if let reason = item.swiftailDiffers { #expect(!reason.isEmpty, "\(item.name): 기대=차이 이유 실제=빈 문자열") }
+            #expect(bytes(fromHex: item.packet) != nil, "\(item.name): expected=lowercase hex actual=\(item.packet.prefix(40))")
+            if let reason = item.swiftailDiffers { #expect(!reason.isEmpty, "\(item.name): expected=reason for difference actual=empty string") }
         }
     }
 
-    @Test("표시 없는 사례는 go와 swiftail이 같고, 표시된 사례는 표에 적힌 필드만 다르다(자료의 일관성)", arguments: try loadTCPSegmentFixture().cases)
+    @Test("Unmarked cases have matching go and swiftail values, and marked cases differ only in the listed fields (fixture consistency)", arguments: try loadTCPSegmentFixture().cases)
     fileprivate func fixtureIsConsistent(_ item: FixtureCase) throws {
         if item.swiftailDiffers == nil {
-            #expect(item.go == item.swiftail, "\(item.name): 기대=표시 없으면 go와 swiftail이 같음 실제=\(differingFields(item.go, item.swiftail).sorted())")
+            #expect(item.go == item.swiftail, "\(item.name): expected=matching go and swiftail for unmarked case actual=\(differingFields(item.go, item.swiftail).sorted())")
         } else {
-            let expected = try #require(Self.markedDifferences[item.name], "\(item.name): 기대=차이 표에 있는 사례 실제=없음")
+            let expected = try #require(Self.markedDifferences[item.name], "\(item.name): expected=case in the difference table actual=missing")
             #expect(differingFields(item.go, item.swiftail) == expected,
-                    "\(item.name): 기대=다른 필드 \(expected.sorted()) 실제=\(differingFields(item.go, item.swiftail).sorted())")
+                    "\(item.name): expected=differing fields \(expected.sorted()) actual=\(differingFields(item.go, item.swiftail).sorted())")
         }
-        // 오류 이름은 코덱의 세 오류와 성공뿐이다.
-        #expect(["", "malformed", "badChecksum", "notTCP"].contains(item.swiftail.error), "\(item.name): 기대=알려진 오류 이름 실제=\(item.swiftail.error)")
-        if item.swiftail.error.isEmpty { #expect(item.swiftail.decoded != nil, "\(item.name): 기대=성공이면 decoded 있음 실제=nil") }
+        // Error names are limited to the codec's three errors and success.
+        #expect(["", "malformed", "badChecksum", "notTCP"].contains(item.swiftail.error), "\(item.name): expected=known error name actual=\(item.swiftail.error)")
+        if item.swiftail.error.isEmpty { #expect(item.swiftail.decoded != nil, "\(item.name): expected=decoded present on success actual=nil") }
     }
 
-    @Test("코덱의 해석이 swiftail 기대값과 같고, 표시된 차이는 그 기대값 쪽에 선다", arguments: try loadTCPSegmentFixture().cases)
+    @Test("The codec parse matches swiftail expectations, including on marked differences", arguments: try loadTCPSegmentFixture().cases)
     fileprivate func codecMatchesFixture(_ item: FixtureCase) throws {
-        let packet = try #require(bytes(fromHex: item.packet), "\(item.name): 기대=hex 실제=\(item.packet.prefix(40))")
+        let packet = try #require(bytes(fromHex: item.packet), "\(item.name): expected=hex actual=\(item.packet.prefix(40))")
         let outcome = ParseOutcome(packet: packet)
         let expected = item.swiftail
 
-        #expect(outcome.errorName == expected.error, "\(item.name): 기대=오류 '\(expected.error)' 실제='\(outcome.errorName)'")
+        #expect(outcome.errorName == expected.error, "\(item.name): expected=error '\(expected.error)' actual='\(outcome.errorName)'")
         guard case .segment(let segment) = outcome, let decoded = expected.decoded, expected.error.isEmpty else { return }
 
         if Self.withoutMSSOption.contains(item.name) {
-            #expect(segment.maximumSegmentSize == nil, "\(item.name): 기대=MSS 옵션이 없으면 nil 실제=\(String(describing: segment.maximumSegmentSize))")
+            #expect(segment.maximumSegmentSize == nil, "\(item.name): expected=nil without the MSS option actual=\(String(describing: segment.maximumSegmentSize))")
             let effective = differences(of: segment, from: decoded, mss: .effective)
-            #expect(effective.isEmpty, "\(item.name): T5 규칙을 적용해도 다름: \(effective.joined(separator: "; "))")
+            #expect(effective.isEmpty, "\(item.name): still differs after applying the T5 rule: \(effective.joined(separator: "; "))")
         } else {
             let literal = differences(of: segment, from: decoded, mss: .literal)
             #expect(literal.isEmpty, "\(item.name): \(literal.joined(separator: "; "))")
         }
 
-        // 표시된 차이: 다른 필드에서 코덱은 go가 아니라 swiftail 쪽이다.
+        // Marked difference: the codec matches swiftail and differs from go in the differing fields.
         if item.swiftailDiffers != nil, let goDecoded = item.go.decoded {
             if goDecoded.mss != decoded.mss, !Self.withoutMSSOption.contains(item.name) {
                 #expect(segment.maximumSegmentSize == decoded.mss && segment.maximumSegmentSize != goDecoded.mss,
-                        "\(item.name): MSS 기대=\(String(describing: decoded.mss))(Go \(String(describing: goDecoded.mss))와 다름) 실제=\(String(describing: segment.maximumSegmentSize))")
+                        "\(item.name): MSS expected=\(String(describing: decoded.mss)) (differs from Go \(String(describing: goDecoded.mss))) actual=\(String(describing: segment.maximumSegmentSize))")
             }
             if goDecoded.windowScale != decoded.windowScale {
                 let actual = segment.windowScale.map(Int.init) ?? -1
                 #expect(actual == decoded.windowScale && actual != goDecoded.windowScale,
-                        "\(item.name): Window Scale 기대=\(String(describing: decoded.windowScale))(Go \(String(describing: goDecoded.windowScale))와 다름) 실제=\(actual)")
+                        "\(item.name): Window Scale expected=\(String(describing: decoded.windowScale)) (differs from Go \(String(describing: goDecoded.windowScale))) actual=\(actual)")
             }
         }
     }
 
-    @Test("표시된 차이는 11개이고, 코덱이 go와 다른 사례는 바로 그 11개다")
+    @Test("There are 11 marked differences, and those are exactly the 11 cases where the codec differs from go")
     func markedDifferenceCount() throws {
         let fixture = try loadTCPSegmentFixture()
         var marked = 0
         var codecDiffersFromGo: [String] = []
         for item in fixture.cases {
             if item.swiftailDiffers != nil { marked += 1 }
-            let packet = try #require(bytes(fromHex: item.packet), "\(item.name): 기대=hex")
+            let packet = try #require(bytes(fromHex: item.packet), "\(item.name): expected=hex")
             let outcome = ParseOutcome(packet: packet)
             var differs = outcome.errorName != item.go.error
             if case .segment(let segment) = outcome, let goDecoded = item.go.decoded, item.go.error.isEmpty {
-                // 효과적 MSS로 견준다: 광고하지 않은 MSS를 기본값으로 읽는 것은 Go와 같은 의미이므로 차이로 세지 않는다.
+                // Compare effective MSS. Using the default for an unadvertised MSS means the same as in Go, so do not count that as a difference.
                 differs = differs || !differences(of: segment, from: goDecoded, mss: .effective).isEmpty
             }
             if differs { codecDiffersFromGo.append(item.name) }
         }
-        #expect(marked == 11, "기대=표시된 차이 11개 실제=\(marked)")
+        #expect(marked == 11, "expected=11 marked differences actual=\(marked)")
         let expected = Set(Self.markedDifferences.keys)
-        #expect(Set(codecDiffersFromGo) == expected, "기대=코덱이 go와 다른 사례 \(expected.sorted()) 실제=\(codecDiffersFromGo.sorted())")
+        #expect(Set(codecDiffersFromGo) == expected, "expected=cases where the codec differs from go \(expected.sorted()) actual=\(codecDiffersFromGo.sorted())")
     }
 
-    @Test("해석한 세그먼트를 ipPacket()으로 다시 만들어 해석하면 같은 세그먼트다", arguments: try loadTCPSegmentFixture().cases)
+    @Test("Rebuilding a parsed segment with ipPacket() and parsing it again yields the same segment", arguments: try loadTCPSegmentFixture().cases)
     fileprivate func serializedSegmentParsesBack(_ item: FixtureCase) throws {
         guard item.swiftail.error.isEmpty else { return }
-        let packet = try #require(bytes(fromHex: item.packet), "\(item.name): 기대=hex")
+        let packet = try #require(bytes(fromHex: item.packet), "\(item.name): expected=hex")
         guard case .segment(let segment) = ParseOutcome(packet: packet) else {
-            Issue.record("\(item.name): 기대=해석 성공 실제=\(ParseOutcome(packet: packet).errorName)")
+            Issue.record("\(item.name): expected=successful parse actual=\(ParseOutcome(packet: packet).errorName)")
             return
         }
-        let rebuilt = try #require(segment.ipPacket(), "\(item.name): 기대=패킷 실제=nil")
+        let rebuilt = try #require(segment.ipPacket(), "\(item.name): expected=packet actual=nil")
         guard case .segment(let again) = ParseOutcome(packet: rebuilt) else {
-            Issue.record("\(item.name): 기대=만든 바이트를 해석 성공 실제=\(ParseOutcome(packet: rebuilt).errorName)")
+            Issue.record("\(item.name): expected=successful parse of rebuilt bytes actual=\(ParseOutcome(packet: rebuilt).errorName)")
             return
         }
-        #expect(again == segment, "\(item.name): 기대=\(segment) 실제=\(again)")
+        #expect(again == segment, "\(item.name): expected=\(segment) actual=\(again)")
         if Self.swiftailShapedOriginals.contains(item.name) {
-            #expect(rebuilt == packet, "\(item.name): 기대=원본과 같은 바이트 실제=다름(원본 \(packet.count)바이트, 만든 것 \(rebuilt.count)바이트)")
+            #expect(rebuilt == packet, "\(item.name): expected=original bytes actual=different (original \(packet.count) bytes, rebuilt \(rebuilt.count) bytes)")
         }
     }
 }

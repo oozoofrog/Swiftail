@@ -2,15 +2,15 @@ import SwiftailBase
 import SwiftailNetstack
 import Testing
 
-/// 소켓·실제 대기 없이 연결 둘을 움직인다. 다음 단위도 `open`, `write`, `read`, `run`을 쓸 수 있다.
-/// ACK는 같은 시각에 도착한 묶음을 모두 넣은 뒤 `advance`로 꺼낸다(계약 T·F5·N4).
+/// Drives two connections without sockets or real waits. The next unit can also use `open`, `write`, `read`, and `run`.
+/// Collects ACKs with `advance` after feeding the entire batch that arrived at the same time (contract T·F5·N4).
 struct LinkSimulator {
     enum Side: Int, CaseIterable, Sendable {
         case client, server
         var peer: Side { self == .client ? .server : .client }
     }
 
-    /// 방향별 송신 순번은 SYN부터 1이다. `rules`의 순번은 조건에 맞은 세그먼트만 센다.
+    /// Send ordinals for each direction start at 1 with SYN. Ordinals in `rules` count only matching segments.
     struct Policy: Sendable {
         var delay: Duration = .milliseconds(1)
         var lossPercent = 0
@@ -25,7 +25,7 @@ struct LinkSimulator {
         var matches: @Sendable (TCPSegment) -> Bool
         fileprivate var count = 0
 
-        // Swift 6.3 이하의 멤버별 초기화는 fileprivate 속성 때문에 fileprivate이 되므로 직접 쓴다.
+        // In Swift 6.3 or earlier, the memberwise initializer is fileprivate because of fileprivate properties, so define it explicitly.
         init(occurrences: Set<Int> = [1], matches: @escaping @Sendable (TCPSegment) -> Bool) {
             self.occurrences = occurrences
             self.matches = matches
@@ -49,11 +49,11 @@ struct LinkSimulator {
 
         var description: String {
             switch self {
-            case let .stalled(seed, elapsed): "진행 없음: seed=\(seed), elapsed=\(elapsed)"
-            case let .busyLoop(seed): "같은 시각의 바쁜 고리: seed=\(seed)"
-            case let .timeLimit(seed, elapsed): "가상 시간 상한: seed=\(seed), elapsed=\(elapsed)"
-            case let .noDeadline(seed): "기한도 도착할 세그먼트도 없음: seed=\(seed)"
-            case let .invariant(seed, detail): "속성 위반: seed=\(seed), \(detail)"
+            case let .stalled(seed, elapsed): "No progress: seed=\(seed), elapsed=\(elapsed)"
+            case let .busyLoop(seed): "Busy loop at the same time: seed=\(seed)"
+            case let .timeLimit(seed, elapsed): "Virtual time limit: seed=\(seed), elapsed=\(elapsed)"
+            case let .noDeadline(seed): "No deadline or incoming segment: seed=\(seed)"
+            case let .invariant(seed, detail): "Invariant violation: seed=\(seed), \(detail)"
             }
         }
     }
@@ -65,7 +65,7 @@ struct LinkSimulator {
         var segment: TCPSegment
     }
 
-    /// RFC 9293의 WL1·WL2를 독립적으로 적용한, 송신자가 실제로 전달받은 광고 창이다.
+    /// The advertised window actually delivered to the sender, applying RFC 9293 WL1 and WL2 independently.
     private struct Window {
         var sequence: SequenceNumber
         var acknowledgment: SequenceNumber
@@ -96,7 +96,7 @@ struct LinkSimulator {
 
     var diagnostic: String {
         connections.enumerated().map { index, connection in
-            guard let connection else { return "side=\(index): 없음" }
+            guard let connection else { return "side=\(index): none" }
             return "side=\(index): state=\(connection.state), UNA=\(connection.sendUnacknowledged.rawValue), NXT=\(connection.sendNext.rawValue), window=\(connection.sendWindow), buffered=\(connection.unacknowledgedSendByteCount), readable=\(connection.readableByteCount), RTO=\(connection.retransmissionTimeout)"
         }.joined(separator: "; ") + "; arrivals=\(arrivals.count), elapsed=\(elapsed)"
     }
@@ -155,12 +155,12 @@ struct LinkSimulator {
         try emit(connections[side.rawValue]?.abort() ?? [], from: side)
     }
 
-    /// 시험이 임의 세그먼트를 링크에 직접 넣을 때도 같은 도착·ACK 묶음 규칙을 쓴다.
+    /// Uses the same arrival and ACK batching rules when a test injects arbitrary segments directly into the link.
     mutating func inject(_ segment: TCPSegment, from side: Side) {
         schedule(segment, from: side, delay: .zero)
     }
 
-    /// 매 단계 응용 호출을 실행한다. 완료 조건은 ACK까지 확인해야 유휴 타이머로 건너뛰지 않는다.
+    /// Runs application calls at each step. The completion condition must include acknowledgment to avoid jumping to an idle timer.
     mutating func run(for limit: Duration, stallLimit: Duration = .seconds(480),
                       application: (inout LinkSimulator) throws -> Void = { _ in },
                       until done: (LinkSimulator) -> Bool) throws {
@@ -174,7 +174,7 @@ struct LinkSimulator {
             if done(self) { return }
             let deadlines = connections.compactMap { $0?.nextDeadline } + arrivals.map(\.at)
             guard let next = deadlines.min() else { throw Failure.noDeadline(seed: seed) }
-            guard next >= now else { throw Failure.invariant(seed: seed, detail: "nextDeadline이 과거") }
+            guard next >= now else { throw Failure.invariant(seed: seed, detail: "nextDeadline is in the past") }
             guard next <= end else { throw Failure.timeLimit(seed: seed, elapsed: elapsed) }
             sameTimeSteps = next == now ? sameTimeSteps + 1 : 0
             guard sameTimeSteps < 10_000 else { throw Failure.busyLoop(seed: seed) }
@@ -189,12 +189,12 @@ struct LinkSimulator {
         }
     }
 
-    /// 특정 시각까지 타이머를 빠짐없이 돌린다. 응용의 가상 대기에 쓴다.
+    /// Runs all timers up to a specified time. Used for virtual application waits.
     mutating func advance(by duration: Duration) throws {
         let end = now.advanced(by: duration)
         var steps = 0
         while let next = (connections.compactMap { $0?.nextDeadline } + arrivals.map(\.at)).min(), next <= end {
-            guard next >= now else { throw Failure.invariant(seed: seed, detail: "nextDeadline이 과거") }
+            guard next >= now else { throw Failure.invariant(seed: seed, detail: "nextDeadline is in the past") }
             guard steps < 100_000 else { throw Failure.busyLoop(seed: seed) }
             now = next
             try settle()
@@ -266,7 +266,7 @@ struct LinkSimulator {
                 let dataEnd = segment.sequenceNumber.advanced(by: UInt32(segment.payload.count))
                 if !segment.payload.isEmpty, highestDataEnd[index].precedes(dataEnd) {
                     if let window = windows[index], window.end.precedes(dataEnd) {
-                        throw Failure.invariant(seed: seed, detail: "광고 창 초과: side=\(side), seq=\(segment.sequenceNumber.rawValue)")
+                        throw Failure.invariant(seed: seed, detail: "Exceeded the advertised window: side=\(side), seq=\(segment.sequenceNumber.rawValue)")
                     }
                     highestDataEnd[index] = dataEnd
                 }
@@ -304,7 +304,7 @@ struct LinkSimulator {
     }
 
     private mutating func random() -> UInt64 {
-        // SplitMix64: 씨앗 0도 유효하며 플랫폼에 관계없이 같은 정수열을 낸다.
+        // SplitMix64: seed 0 is valid, and the same integer sequence is produced on every platform.
         randomState &+= 0x9E37_79B9_7F4A_7C15
         var value = randomState
         value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
@@ -317,13 +317,13 @@ struct LinkSimulator {
             guard (0...262_144).contains(connection.readableByteCount),
                   (0...262_144).contains(connection.unacknowledgedSendByteCount),
                   connection.writableByteCount + connection.unacknowledgedSendByteCount == 262_144 else {
-                throw Failure.invariant(seed: seed, detail: "256KiB 버퍼 상한")
+                throw Failure.invariant(seed: seed, detail: "256KiB buffer limit")
             }
             if connection.state == .closed, connection.nextDeadline != nil {
-                throw Failure.invariant(seed: seed, detail: "CLOSED에 남은 타이머")
+                throw Failure.invariant(seed: seed, detail: "Timer retained in CLOSED")
             }
             if let deadline = connection.nextDeadline, deadline < now {
-                throw Failure.invariant(seed: seed, detail: "nextDeadline이 과거")
+                throw Failure.invariant(seed: seed, detail: "nextDeadline is in the past")
             }
         }
     }

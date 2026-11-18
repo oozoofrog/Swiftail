@@ -3,30 +3,30 @@ import SwiftailBase
 import Testing
 @testable import Swiftail
 
-/// 연결의 읽기·쓰기, 기다림과 취소, 노드의 끝, 장치(계약 `docs/contracts/SwiftailNetstack.md` 동작 N·A, 단위 시험 14·16).
+/// Tests connection reads and writes, waiting and cancellation, node shutdown, and devices (contract `docs/contracts/SwiftailNetstack.md` behaviors N·A, unit tests 14·16).
 ///
-/// 모두 노드 하나가 자기 주소로 건 연결이다. 듣는 쪽과 거는 쪽이 같은 스택에 있고, 패킷은 엔진의 되돌리기를 거친다.
-@Suite("노드의 TCP: 연결", .timeLimit(.minutes(1)))
+/// All connections are from one node to its own address. The listener and caller share a stack, and the engine loops back the packets.
+@Suite("Node TCP connections", .timeLimit(.minutes(1)))
 struct NetstackConnectionTests {
     private typealias Support = NetstackTestSupport
 
-    // MARK: 장치 (시험 16)
+    // MARK: Devices (test 16)
 
-    @Test("메모리 장치에서 listen·connect는 invalidConfiguration이다")
+    @Test("listen and connect on the memory device yield invalidConfiguration")
     func otherDevicesReject() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration(), device: .memory())
         guard case .invalidConfiguration = await Support.error({ try await node.listen(port: 443) }) else {
-            Issue.record("listen이 invalidConfiguration이 아니다")
+            Issue.record("listen did not yield invalidConfiguration")
             return
         }
         guard case .invalidConfiguration = await Support.error({ try await node.connect(to: "100.64.0.1", port: 443) }) else {
-            Issue.record("connect가 invalidConfiguration이 아니다")
+            Issue.record("connect did not yield invalidConfiguration")
             return
         }
         #expect(await node.netstack == nil)
     }
 
-    @Test(".inProcess는 MTU 1280이고 inboundPackets로 아무것도 내지 않는다. 자기 주소로 1MiB가 양방향으로 오간다")
+    @Test(".inProcess has an MTU of 1280 and yields nothing on inboundPackets. 1MiB travels in each direction to the node's own address")
     func inProcessTransfersBothWays() async throws {
         let length = 1 << 20
         try await NodeTestSupport.withTemporaryDirectory { directory in
@@ -34,7 +34,7 @@ struct NetstackConnectionTests {
                 configuration: try NodeTestSupport.configuration(stateDirectory: directory), device: .inProcess)
             #expect(TunnelDevice.inProcess.mtu == 1280)
             let run = Task { try await node.run() }
-            try await Support.waitUntil("run()이 시작됨") { await node.isRunning }
+            try await Support.waitUntil("run() started") { await node.isRunning }
             await node.prepareForTesting(try Support.netmap())
 
             let pair = try await Support.connectedPair(node)
@@ -45,7 +45,7 @@ struct NetstackConnectionTests {
             async let clientReceived = Support.read(length + 1, from: pair.client)
             try await clientSends
             try await serverSends
-            #expect(try await serverReceived == upload, "읽기가 끝(nil)까지 이어져야 한다")
+            #expect(try await serverReceived == upload, "Reading must continue until EOF (nil)")
             #expect(try await clientReceived == download)
             await pair.client.close()
             await pair.server.close()
@@ -56,36 +56,36 @@ struct NetstackConnectionTests {
         }
     }
 
-    // MARK: 기다림 (시험 14)
+    // MARK: Waiting (test 14)
 
-    @Test("데이터 없는 read는 기다리다 데이터가 오면 깨어난다. 상대의 FIN 뒤 버퍼가 비면 nil")
+    @Test("A read with no data waits until data arrives. It yields nil once the buffer empties after the peer's FIN")
     func readWaitsForData() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
             async let received = pair.server.read()
-            try await Support.waitUntil("read가 기다림") { await node.isReading(pair.server) }
+            try await Support.waitUntil("read is waiting") { await node.isReading(pair.server) }
             try await pair.client.write(Array("hello".utf8))
             #expect(try await received == Array("hello".utf8))
 
             async let end = pair.server.read()
-            try await Support.waitUntil("read가 기다림") { await node.isReading(pair.server) }
+            try await Support.waitUntil("read is waiting") { await node.isReading(pair.server) }
             try await pair.client.finishWriting()
             #expect(try await end == nil)
-            #expect(try await pair.server.read() == nil, "끝난 뒤에도 nil")
-            #expect(await Support.error { try await pair.client.write([1]) } == .closed, "finishWriting 뒤의 write")
+            #expect(try await pair.server.read() == nil, "Still nil after EOF")
+            #expect(await Support.error { try await pair.client.write([1]) } == .closed, "write after finishWriting")
             try await pair.server.write(Array("back".utf8))
-            #expect(try await pair.client.read() == Array("back".utf8), "반닫힘 뒤 반대 방향은 그대로")
+            #expect(try await pair.client.read() == Array("back".utf8), "Half-close leaves the opposite direction intact")
             await pair.client.close()
             await pair.server.close()
         }
     }
 
-    @Test("취소된 read는 cancelled를 던지고 연결과 그 뒤의 데이터는 그대로다")
+    @Test("A canceled read throws cancelled and leaves the connection and subsequent data intact")
     func cancelledReadKeepsConnection() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
             let reader = Task { () async throws -> [UInt8]? in try await pair.server.read() }
-            try await Support.waitUntil("read가 기다림") { await node.isReading(pair.server) }
+            try await Support.waitUntil("read is waiting") { await node.isReading(pair.server) }
             reader.cancel()
             #expect(await Support.error { try await reader.value } == .cancelled)
             #expect(await !node.isReading(pair.server))
@@ -97,48 +97,48 @@ struct NetstackConnectionTests {
         }
     }
 
-    @Test("취소된 write는 cancelled를 던지고 연결을 RST로 끊는다")
+    @Test("A canceled write throws cancelled and resets the connection")
     func cancelledWriteResetsConnection() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
-            // 받는 버퍼와 보내는 버퍼(256KiB씩)를 넘겨, 읽지 않는 상대 앞에서 write가 멈추게 한다.
+            // Exceed the receive and send buffers (256KiB each) so write blocks against a peer that does not read.
             let writer = Task { () async throws in try await pair.client.write(Support.pattern(1 << 20)) }
-            try await Support.waitUntil("write가 기다림") { await node.isWriting(pair.client) }
+            try await Support.waitUntil("write is waiting") { await node.isWriting(pair.client) }
             writer.cancel()
             #expect(await Support.error { try await writer.value } == .cancelled)
-            #expect(await Support.error { try await pair.client.read() } == .closed, "이 쪽은 끊은 연결이다")
+            #expect(await Support.error { try await pair.client.read() } == .closed, "This side's connection was aborted")
 
             var serverError: ConnectionError?
             while serverError == nil {
                 serverError = await Support.error { try await pair.server.read() }
             }
-            #expect(serverError == .reset, "상대는 RST를 받는다")
+            #expect(serverError == .reset, "The peer receives RST")
             await pair.server.close()
             await pair.client.close()
         }
     }
 
-    @Test("같은 방향의 둘째 호출은 concurrentUse이고 먼저 기다리던 호출은 그대로다")
+    @Test("A second call in the same direction yields concurrentUse and leaves the first call waiting")
     func concurrentUse() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
             async let first = pair.server.read()
-            try await Support.waitUntil("read가 기다림") { await node.isReading(pair.server) }
+            try await Support.waitUntil("read is waiting") { await node.isReading(pair.server) }
             #expect(await Support.error { try await pair.server.read() } == .concurrentUse)
 
             let writer = Task { () async throws in try await pair.server.write(Support.pattern(1 << 20)) }
-            try await Support.waitUntil("write가 기다림") { await node.isWriting(pair.server) }
+            try await Support.waitUntil("write is waiting") { await node.isWriting(pair.server) }
             #expect(await Support.error { try await pair.server.write([1]) } == .concurrentUse)
 
             try await pair.client.write([7])
             #expect(try await first == [7])
             await pair.server.abort()
-            #expect(await Support.error { try await writer.value } == .closed, "abort가 기다리던 write를 깨운다")
+            #expect(await Support.error { try await writer.value } == .closed, "abort wakes the waiting write")
             await pair.client.close()
         }
     }
 
-    @Test("닫지 않고 버려진 연결은 RST로 끊긴다")
+    @Test("Dropping a connection without closing it resets the connection")
     func droppedConnectionResets() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             var pair: (client: TailnetConnection, server: TailnetConnection, listener: TailnetListener)? =
@@ -154,17 +154,17 @@ struct NetstackConnectionTests {
         }
     }
 
-    @Test("run()이 끝나면 기다리던 read·write·connect·리스너가 깨어나고(notRunning, nil) 그 뒤의 listen·connect도 notRunning")
+    @Test("When run() ends, it wakes waiting read, write, connect, and listener calls (notRunning, nil). Subsequent listen and connect calls also yield notRunning")
     func runEndWakesWaiters() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(
                 configuration: try NodeTestSupport.configuration(stateDirectory: directory), device: .inProcess)
             let run = Task { try await node.run() }
-            try await Support.waitUntil("run()이 시작됨") { await node.isRunning }
+            try await Support.waitUntil("run() started") { await node.isRunning }
             await node.prepareForTesting(try Support.netmap(peers: [Support.phone]))
 
             let pair = try await Support.connectedPair(node)
-            // 쓰는 쪽(client → server)의 반대 방향에는 데이터가 없으므로 client의 read는 끝까지 기다린다.
+            // The direction opposite the writer (client → server) has no data, so the client's read waits until the end.
             let reader = Task { () async throws -> [UInt8]? in try await pair.client.read() }
             let writer = Task { () async throws in try await pair.client.write(Support.pattern(1 << 20)) }
             let other = try await node.listen(port: 9_001)
@@ -172,11 +172,11 @@ struct NetstackConnectionTests {
                 var connections = other.makeAsyncIterator()
                 return await connections.next()
             }
-            // 피어로 건 연결의 SYN은 나가지 않으므로 맺어지지 않는다.
+            // The SYN for a connection to the peer does not go out, so the connection does not establish.
             let connector = Task { () async throws -> TailnetConnection in
                 try await node.connect(to: "rd-phone-1a2b3c4d", port: 80)
             }
-            try await Support.waitUntil("모두 기다림") {
+            try await Support.waitUntil("All calls are waiting") {
                 let reading = await node.isReading(pair.client), writing = await node.isWriting(pair.client)
                 let accepting = await node.isAccepting(other), connecting = await node.isConnecting
                 return reading && writing && accepting && connecting
@@ -195,14 +195,14 @@ struct NetstackConnectionTests {
         }
     }
 
-    @Test("상태가 .running이 아니면 connect는 notRunning이다")
+    @Test("connect yields notRunning when the state is outside .running")
     func connectNeedsRunningState() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(
                 configuration: try NodeTestSupport.configuration(stateDirectory: directory), device: .inProcess)
             #expect(await Support.error { try await node.connect(to: "100.64.0.1", port: 9_000) } == .notRunning)
             let run = Task { try await node.run() }
-            try await Support.waitUntil("run()이 시작됨") { await node.isRunning }
+            try await Support.waitUntil("run() started") { await node.isRunning }
             await node.apply(try Support.netmap())
             #expect(await node.status.state == .starting)
             #expect(await Support.error { try await node.connect(to: "100.64.0.1", port: 9_000) } == .notRunning)
@@ -211,13 +211,13 @@ struct NetstackConnectionTests {
         }
     }
 
-    @Test("취소된 connect는 cancelled를 던지고 시도를 버린다")
+    @Test("A canceled connect throws cancelled and abandons the attempt")
     func cancelledConnect() async throws {
         try await Support.withRunningNode(try Support.netmap(peers: [Support.phone])) { node in
             let connector = Task { () async throws -> TailnetConnection in
                 try await node.connect(to: "rd-phone-1a2b3c4d.tail0001.ts.net", port: 80)
             }
-            try await Support.waitUntil("connect가 기다림") { await node.isConnecting }
+            try await Support.waitUntil("connect is waiting") { await node.isConnecting }
             connector.cancel()
             #expect(await Support.error { try await connector.value } == .cancelled)
             #expect(await node.trackedConnectionCount == 0)

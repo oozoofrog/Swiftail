@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 데이터 주고받기: 양방향 전송, 지연 ACK, 재전송(RTO·fast retransmit·Karn·한도), 시퀀스 순환.
-/// 계약 동작 F5, R2~R7과 시험 3·4·9.
-@Suite("데이터")
+/// Data exchange: bidirectional transfer, delayed ACKs, retransmission (RTO, fast retransmit, Karn, limit), and sequence wraparound.
+/// Contract behaviors F5, R2~R7, and tests 3·4·9.
+@Suite("Data")
 struct ConnectionDataTests {
-    @Test("양방향으로 200KiB씩 동시에 보내고 받은 바이트가 같다")
+    @Test("Simultaneously sends 200KiB in each direction and receives matching bytes")
     func bidirectionalTransfer() throws {
         var pair = try ConnectionPair.established()
         let fromClient = patternBytes(count: 200 * 1024, seed: 1)
@@ -15,11 +15,11 @@ struct ConnectionDataTests {
         let received = try pair.exchange(clientSends: fromClient, serverSends: fromServer)
         #expect(received.serverReceived == fromClient)
         #expect(received.clientReceived == fromServer)
-        // 보내는 세그먼트의 데이터는 MSS 이하다.
+        // The data in a sent segment is at most MSS.
         #expect(pair.clientSent.allSatisfy { $0.segment.payload.count <= 1_240 })
     }
 
-    @Test("ISS가 2³² 근처여도 1MiB가 양방향으로 오간다(시퀀스 순환)")
+    @Test("Transfers 1MiB in each direction even with ISS near 2³² (sequence wraparound)")
     func sequenceWraparound() throws {
         var pair = try ConnectionPair.established(clientISS: 0xFFFF_F000, serverISS: 0xFFFF_FF00)
         let fromClient = patternBytes(count: 1 << 20, seed: 3)
@@ -30,7 +30,7 @@ struct ConnectionDataTests {
         #expect(pair.client.sendNext == SequenceNumber(0xFFFF_F001 &+ (1 << 20)))
     }
 
-    @Test("지연 ACK: 하나뿐인 세그먼트는 40ms 뒤에, 2×MSS가 쌓이면 곧바로")
+    @Test("Delayed ACK: after 40ms for a lone segment, immediately once 2×MSS accumulates")
     func delayedAcknowledgment() throws {
         var peer = try ManualPeer.established()
         #expect(peer.send(flags: [.ack], payload: patternBytes(count: 100)).segments.isEmpty)
@@ -46,7 +46,7 @@ struct ConnectionDataTests {
         #expect(peer.connection.nextDeadline.map { $0 > peer.now + .seconds(60) } == true)
     }
 
-    @Test("순서가 어긋난 세그먼트·빈 곳을 메우는 세그먼트에는 곧바로 ACK한다")
+    @Test("Immediately acknowledges out-of-order segments and segments that fill a gap")
     func immediateAcknowledgmentOutOfOrder() throws {
         var peer = try ManualPeer.established()
         let base = peer.peerNext
@@ -60,7 +60,7 @@ struct ConnectionDataTests {
         #expect(filledACK.first?.acknowledgmentNumber == base.advanced(by: 150))
     }
 
-    @Test("묶음 안의 어긋난 세그먼트마다 receive가 ACK를 하나씩 낸다(RFC 5681 4.2)")
+    @Test("receive emits one ACK for each out-of-order segment in a batch (RFC 5681 4.2)")
     func outOfOrderAcknowledgmentsPerSegment() throws {
         var peer = try ManualPeer.established()
         let base = peer.peerNext
@@ -71,7 +71,7 @@ struct ConnectionDataTests {
             #expect(acknowledgments.count == 1)
             #expect(acknowledgments.first?.acknowledgmentNumber == base)
         }
-        // 상대는 중복 ACK 셋을 받아 fast retransmit을 한다. 묶음 끝의 advance에는 남은 ACK가 없다.
+        // The peer receives three duplicate ACKs and performs fast retransmit. advance at the end of the batch has no ACK left.
         #expect(peer.connection.advance(to: peer.now).segments.isEmpty)
         let fill = peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 200))
         let filled = peer.connection.receive(fill, at: peer.now).segments
@@ -79,7 +79,7 @@ struct ConnectionDataTests {
         #expect(filled.first?.acknowledgmentNumber == base.advanced(by: 250))
     }
 
-    @Test("묶음 안의 순서대로 온 데이터는 2×MSS마다 ACK 하나로 합쳐지고 나머지는 40ms 뒤에(MUST-58·59)")
+    @Test("In-order data in a batch is acknowledged once per 2×MSS, with the remainder acknowledged after 40ms (MUST-58·59)")
     func inOrderAcknowledgmentsCoalescePerTwoSegments() throws {
         var peer = try ManualPeer.established()
         let base = peer.peerNext
@@ -95,7 +95,7 @@ struct ConnectionDataTests {
         #expect(delayed.map(\.acknowledgmentNumber) == [base.advanced(by: 5 * 1_240)])
     }
 
-    @Test("나가는 데이터가 있으면 ACK는 거기에 실린다")
+    @Test("Piggybacks the ACK when there is outgoing data")
     func piggybackedAcknowledgment() throws {
         var peer = try ManualPeer.established()
         _ = peer.connection.receive(
@@ -108,7 +108,7 @@ struct ConnectionDataTests {
         #expect(peer.connection.advance(to: peer.now + .milliseconds(40)).segments.isEmpty)
     }
 
-    @Test("RTO가 만료되면 SND.UNA부터 다시 보낸다(200ms, 이어서 두 배)")
+    @Test("Retransmits from SND.UNA when RTO expires (200ms, then doubles)")
     func retransmissionTimeout() throws {
         var pair = try ConnectionPair.established()
         var dropped = false
@@ -118,7 +118,7 @@ struct ConnectionDataTests {
             return true
         }
         let sentAt = pair.now
-        // 뒤따르는 세그먼트는 둘이라 중복 ACK가 둘뿐이다(셋이면 fast retransmit이 RTO보다 먼저 다시 보낸다).
+        // Only two segments follow, so there are only two duplicate ACKs (three would trigger fast retransmit before RTO).
         let data = patternBytes(count: 3 * 1_240)
         _ = pair.write(data, from: .client)
         try pair.deliver()
@@ -129,7 +129,7 @@ struct ConnectionDataTests {
         #expect(copies.map { $0.at - sentAt } == [.zero, .milliseconds(200)])
     }
 
-    @Test("중복 ACK 셋에 fast retransmit한다. RTO를 기다리지 않는다")
+    @Test("Three duplicate ACKs trigger fast retransmit without waiting for RTO")
     func fastRetransmit() throws {
         var pair = try ConnectionPair.established()
         pair.batched = false
@@ -146,11 +146,11 @@ struct ConnectionDataTests {
         let copies = pair.clientSent.filter { $0.segment.sequenceNumber == SequenceNumber(1_001) && !$0.segment.payload.isEmpty }
         #expect(copies.count == 2)
         #expect(copies.allSatisfy { $0.at == copies[0].at })
-        // full ACK 뒤 cwnd = min(ssthresh, max(FlightSize, SMSS) + SMSS) = min(4960, 2480)
+        // After a full ACK, cwnd = min(ssthresh, max(FlightSize, SMSS) + SMSS) = min(4960, 2480)
         #expect(pair.client.congestionWindow == 2 * 1_240)
     }
 
-    @Test("창이 바뀐 ACK는 중복 ACK가 아니다(RFC 5681 2). 같은 창이면 셋째에 fast retransmit")
+    @Test("An ACK with a changed window is not a duplicate ACK (RFC 5681 2). With the same window, the third triggers fast retransmit")
     func duplicateAcknowledgmentRequiresSameWindow() throws {
         var peer = try ManualPeer.established()
         _ = peer.connection.write(patternBytes(count: 5 * 1_240)[...], at: peer.now)
@@ -170,7 +170,7 @@ struct ConnectionDataTests {
         #expect(retransmissions == 1)
     }
 
-    @Test("Karn: 재전송한 세그먼트의 ACK로 RTT를 재지 않아 물러난 RTO가 남는다")
+    @Test("Karn: ACKs for retransmitted segments do not provide RTT samples, so the backed-off RTO remains")
     func karn() throws {
         var pair = try ConnectionPair.established()
         var dropped = false
@@ -187,7 +187,7 @@ struct ConnectionDataTests {
         #expect(pair.client.roundTripSample == nil)
     }
 
-    @Test("확인 없이 15번 다시 보내면 .timedOut. RTO 상한 120초로 924.6초에 끝난다")
+    @Test("After 15 retransmissions without acknowledgment, yields .timedOut. With the 120-second RTO cap, it ends at 924.6 seconds")
     func dataRetransmissionLimit() throws {
         var pair = try ConnectionPair.established()
         pair.drop = { side, _ in side == .client }
@@ -202,7 +202,7 @@ struct ConnectionDataTests {
         #expect(pair.client.state == .closed)
     }
 
-    @Test("유휴가 RTO보다 길었으면 cwnd를 초기 창으로 줄인다(RFC 5681 4.1)")
+    @Test("If idle longer than RTO, reduces cwnd to the initial window (RFC 5681 4.1)")
     func restartAfterIdle() throws {
         var pair = try ConnectionPair.established()
         _ = try pair.exchange(clientSends: patternBytes(count: 100_000), serverSends: [])
@@ -212,7 +212,7 @@ struct ConnectionDataTests {
         #expect(pair.client.congestionWindow == 12_400)
     }
 
-    @Test(".readable은 읽을 것이 없다가 생길 때, .writable은 버퍼가 찼다가 자리가 날 때 나온다")
+    @Test("Emits .readable when data first becomes available to read and .writable when space opens in a previously full buffer")
     func readableAndWritableEvents() throws {
         var pair = try ConnectionPair.established()
         _ = pair.write(patternBytes(count: 100), from: .client)

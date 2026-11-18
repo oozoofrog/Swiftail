@@ -1,5 +1,5 @@
-// 시험 안에서 만드는 자체 서명 인증서와 TLS 신원. 키체인을 쓰지 않는다(계약 6절의 조각과 같은 길:
-// `SecKeyCreateWithData` → `SecCertificateCreateWithData` → `SecIdentityCreate`). 키는 시험마다 새로 만들고 버린다.
+// A self-signed certificate and TLS identity created within the test. Uses no keychain (the same path as the snippet in contract §6:
+// `SecKeyCreateWithData` → `SecCertificateCreateWithData` → `SecIdentityCreate`). Each test generates and discards a fresh key.
 
 import CryptoKit
 import Foundation
@@ -9,7 +9,7 @@ import Security
 enum SelfSignedIdentity {
     struct Failure: Error {}
 
-    /// `CN=localhost`인 P-256 자체 서명 인증서의 TLS 신원.
+    /// The TLS identity for a P-256 self-signed certificate with `CN=localhost`.
     static func make() throws -> SecIdentity {
         let key = P256.Signing.PrivateKey()
         let certificate = try certificateDER(for: key)
@@ -23,7 +23,7 @@ enum SelfSignedIdentity {
         return identity
     }
 
-    /// 리스너의 TLS 옵션.
+    /// TLS options for the listener.
     static func serverOptions(_ identity: SecIdentity) throws -> NWProtocolTLS.Options {
         let tls = NWProtocolTLS.Options()
         guard let secIdentity = sec_identity_create(identity) else { throw Failure() }
@@ -31,7 +31,7 @@ enum SelfSignedIdentity {
         return tls
     }
 
-    /// 시험의 TLS 클라이언트. 인증서를 검사하지 않는다(시험 안에서 만든 인증서다).
+    /// The test's TLS client. Skips certificate verification (the certificate is created within the test).
     static func clientOptions() -> NWProtocolTLS.Options {
         let tls = NWProtocolTLS.Options()
         sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, _, complete in complete(true) }, .global())

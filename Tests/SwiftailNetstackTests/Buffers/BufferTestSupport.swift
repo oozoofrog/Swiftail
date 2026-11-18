@@ -1,6 +1,6 @@
-/// 버퍼 시험이 함께 쓰는 고정 씨앗 난수와 바이트 열. 시험 타깃 안에서만 쓴다.
+/// Fixed-seed random numbers and byte sequences shared by the buffer tests. Used only inside the test target.
 
-/// 씨앗에서 같은 열을 만드는 SplitMix64. 실패하면 씨앗으로 같은 경우를 다시 만들 수 있다.
+/// SplitMix64 generates the same sequence from the same seed. If a test fails, the seed reproduces the case.
 struct BufferTestGenerator: RandomNumberGenerator {
     private var state: UInt64
 
@@ -17,7 +17,7 @@ struct BufferTestGenerator: RandomNumberGenerator {
     }
 }
 
-/// 위치마다 값이 다른 결정적 바이트. 0부터 `count`개.
+/// Deterministic bytes whose values vary by position. Returns `count` bytes starting at 0.
 func patternBytes(_ range: Range<Int>) -> [UInt8] {
     range.map { patternByte(at: $0) }
 }

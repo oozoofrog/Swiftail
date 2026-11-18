@@ -2,30 +2,30 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// NewReno 혼잡 제어(RFC 5681, 6582, 6928). 계약 `docs/contracts/SwiftailNetstack.md` 동작 R5~R8과 시험 8.
-/// 기대값은 RFC의 식을 손으로 계산한 것이다. 시퀀스 번호는 `SND.UNA` = 1001에서 시작하는 한 흐름이다.
-@Suite("NewReno 혼잡 제어")
+/// NewReno congestion control (RFC 5681, 6582, 6928). Contract `docs/contracts/SwiftailNetstack.md` behaviors R5~R8 and test 8.
+/// Expected values are calculated by hand from the RFC formulas. Sequence numbers belong to a single stream starting at `SND.UNA` = 1001.
+@Suite("NewReno congestion control")
 struct NewRenoCongestionControlTests {
     private typealias Control = NewRenoCongestionControl
 
     private let iss = SequenceNumber(1000)
     private let mss = 1220
-    /// SYN이 확인된 뒤의 `SND.UNA`.
+    /// `SND.UNA` after SYN is acknowledged.
     private var una: SequenceNumber { iss.advanced(by: 1) }
 
     private func control(mss: Int? = nil, iss: SequenceNumber? = nil) -> Control {
         Control(maximumSegmentSize: mss ?? self.mss, initialSequenceNumber: iss ?? self.iss)
     }
 
-    /// 첫 창 20 세그먼트를 보낸 뒤의 `SND.NXT`.
+    /// `SND.NXT` after sending the first window of 20 segments.
     private var windowEnd: SequenceNumber { sendNext(from: una, segments: 20) }
 
-    /// 확인되지 않은 세그먼트 `segments`개(`SND.UNA`부터 한 세그먼트씩)가 날아가는 중인 상태의 `SND.NXT`.
+    /// `SND.NXT` with `segments` unacknowledged segments in flight (one segment at a time from `SND.UNA`).
     private func sendNext(from una: SequenceNumber, segments: Int, mss: Int = 1220) -> SequenceNumber {
         una.advanced(by: UInt32(segments * mss))
     }
 
-    /// 첫 창 20개를 보내고 세 번째 중복 ACK로 fast recovery에 들어간 상태. `recover`는 `una + 20·mss`다.
+    /// State after sending the first window of 20 and entering fast recovery on the third duplicate ACK. `recover` is `una + 20·mss`.
     private func enteringFastRecovery() -> Control {
         var control = control()
         let sendNext = windowEnd
@@ -36,16 +36,16 @@ struct NewRenoCongestionControlTests {
         return control
     }
 
-    // MARK: 초기 창(RFC 6928 2, 식 1)
+    // MARK: Initial window (RFC 6928 2, equation 1)
 
-    @Test("초기 창은 min(10·MSS, max(2·MSS, 14600))이다", arguments: [
-        (1220, 12_200),     // IPv6 터널의 MSS: 10 세그먼트
-        (1240, 12_400),     // IPv4 터널의 MSS: 10 세그먼트
-        (536, 5_360),       // MSS 옵션이 없을 때의 IPv4 기본값
-        (1460, 14_600),     // 10·MSS가 14600과 같다
-        (1500, 14_600),     // 14600이 상한이다
+    @Test("The initial window is min(10·MSS, max(2·MSS, 14600))", arguments: [
+        (1220, 12_200),     // IPv6 tunnel MSS: 10 segments
+        (1240, 12_400),     // IPv4 tunnel MSS: 10 segments
+        (536, 5_360),       // IPv4 default when the MSS option is absent
+        (1460, 14_600),     // 10·MSS equals 14600
+        (1500, 14_600),     // 14600 is the cap
         (7_300, 14_600),    // 2·MSS = 14600
-        (10_000, 20_000),   // 2·MSS가 14600보다 크면 2 세그먼트
+        (10_000, 20_000),   // 2 segments when 2·MSS exceeds 14600
     ])
     func initialWindow(maximumSegmentSize: Int, expected: Int) {
         let control = control(mss: maximumSegmentSize)
@@ -53,18 +53,18 @@ struct NewRenoCongestionControlTests {
         #expect(Control.initialWindow(maximumSegmentSize: maximumSegmentSize) == expected)
         #expect(!control.isInFastRecovery)
         #expect(control.duplicateACKCount == 0)
-        #expect(control.slowStartThreshold >= 1 << 30)   // 처음엔 사실상 무한이다
+        #expect(control.slowStartThreshold >= 1 << 30)   // Effectively unlimited at first
     }
 
-    // MARK: 보낼 수 있는 양(동작 R5)
+    // MARK: Sendable bytes (behavior R5)
 
-    @Test("보낼 수 있는 양은 min(cwnd, SND.WND) − 날아가는 양이고 0 아래로 내려가지 않는다")
+    @Test("Sendable bytes are min(cwnd, SND.WND) − bytes in flight, floored at 0")
     func sendableBytes() {
         let control = control()   // cwnd 12200
         #expect(control.sendableBytes(peerWindow: 100_000, flightSize: 3_000) == 9_200)
         #expect(control.sendableBytes(peerWindow: 5_000, flightSize: 3_000) == 2_000)
         #expect(control.sendableBytes(peerWindow: 100_000, flightSize: 12_200) == 0)
-        #expect(control.sendableBytes(peerWindow: 100_000, flightSize: 50_000) == 0)   // 창이 줄었거나 cwnd가 줄었다
+        #expect(control.sendableBytes(peerWindow: 100_000, flightSize: 50_000) == 0)   // The window or cwnd shrank
         #expect(control.sendableBytes(peerWindow: 0, flightSize: 0) == 0)
         #expect(control.sendableBytes(peerWindow: -1, flightSize: 0) == 0)
         #expect(control.sendableBytes(peerWindow: 100, flightSize: -5) == 100)
@@ -73,9 +73,9 @@ struct NewRenoCongestionControlTests {
         #expect(control.sendableBytes(peerWindow: Int.min, flightSize: Int.min) == 0)
     }
 
-    // MARK: slow start와 congestion avoidance(식 2·3)
+    // MARK: Slow start and congestion avoidance (equations 2·3)
 
-    @Test("slow start: 새로 확인된 바이트 N마다 cwnd += min(N, SMSS)(식 2)")
+    @Test("Slow start: cwnd += min(N, SMSS) for N newly acknowledged bytes (equation 2)")
     func slowStart() {
         var control = control()
         let sendNext = sendNext(from: una, segments: 20)
@@ -83,12 +83,12 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 13_420)
         _ = control.acknowledgeNewData(bytes: 100, ackNumber: una.advanced(by: 1_320), sendNext: sendNext)
         #expect(control.congestionWindow == 13_520)
-        // 한 ACK가 여러 세그먼트를 확인해도 SMSS를 넘겨 올리지 않는다(ACK Division 대비)
+        // An ACK covering multiple segments still increases cwnd by at most SMSS (guards against ACK Division)
         _ = control.acknowledgeNewData(bytes: 5_000, ackNumber: una.advanced(by: 6_320), sendNext: sendNext)
         #expect(control.congestionWindow == 14_740)
     }
 
-    /// cwnd = 1220, ssthresh = 50000인 상태. 한 번 만료로 만든다(FlightSize 100000 → 식 4).
+    /// State with cwnd = 1220 and ssthresh = 50000. Create it with one expiration (FlightSize 100000 → equation 4).
     private func afterFirstTimeout() -> Control {
         var control = control()
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 100_000))
@@ -97,12 +97,12 @@ struct NewRenoCongestionControlTests {
         return control
     }
 
-    @Test("cwnd가 ssthresh를 넘으면 congestion avoidance로 바뀌고 cwnd += SMSS²/cwnd(식 3)")
+    @Test("When cwnd exceeds ssthresh, switches to congestion avoidance and applies cwnd += SMSS²/cwnd (equation 3)")
     func congestionAvoidance() {
         var control = afterFirstTimeout()
         var ack = una
         let sendNext = una.advanced(by: 1_000_000)
-        // 1220 → 2440 → … 40번 확인하면 1220·41 = 50020 > 50000
+        // 1220 → 2440 → … 40 acknowledgments give 1220·41 = 50020 > 50000
         for _ in 0..<40 {
             ack = ack.advanced(by: 1_220)
             _ = control.acknowledgeNewData(bytes: 1_220, ackNumber: ack, sendNext: sendNext)
@@ -114,7 +114,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 50_049)
     }
 
-    @Test("cwnd == ssthresh에서는 congestion avoidance를 쓴다")
+    @Test("Uses congestion avoidance when cwnd == ssthresh")
     func equalWindowUsesCongestionAvoidance() {
         var control = control(mss: 10)   // cwnd 100
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 40))   // ssthresh = max(20, 20), cwnd = 10
@@ -125,7 +125,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 25)
     }
 
-    @Test("식 3의 정수 나눗셈이 0이면 1바이트를 올린다")
+    @Test("Adds 1 byte if the integer division in equation 3 yields 0")
     func congestionAvoidanceGrowsByOneByte() {
         var control = control(mss: 10)
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 40))   // ssthresh 20, cwnd 10
@@ -142,7 +142,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == before + 1)   // 100/101 = 0 → 1
     }
 
-    @Test("새로 확인된 바이트가 0 이하면 아무것도 바꾸지 않는다")
+    @Test("Zero or fewer newly acknowledged bytes change nothing")
     func nonPositiveAcknowledgement() {
         var control = control()
         let original = control
@@ -151,9 +151,9 @@ struct NewRenoCongestionControlTests {
         #expect(control == original)
     }
 
-    // MARK: RTO 만료(RFC 5681 3.1 식 4, 6582 3.2 4)
+    // MARK: RTO expiration (RFC 5681 3.1 equation 4, 6582 3.2 4)
 
-    @Test("처음 만료: ssthresh = max(FlightSize/2, 2·SMSS), cwnd = 1 세그먼트")
+    @Test("First expiration: ssthresh = max(FlightSize/2, 2·SMSS), cwnd = 1 segment")
     func firstTimeout() {
         var control = control()
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 100_000))
@@ -161,7 +161,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 1_220)
     }
 
-    @Test("FlightSize/2가 2·SMSS보다 작으면 2·SMSS가 ssthresh다")
+    @Test("If FlightSize/2 is less than 2·SMSS, ssthresh is 2·SMSS")
     func timeoutWithSmallFlight() {
         var control = control()
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 1_000))
@@ -169,19 +169,19 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 1_220)
     }
 
-    @Test("같은 세그먼트에서 되풀이되는 만료는 ssthresh를 다시 줄이지 않는다")
+    @Test("Repeated expiration for the same segment does not reduce ssthresh again")
     func repeatedTimeoutHoldsSlowStartThreshold() {
         var control = control()
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 100_000))
         #expect(control.slowStartThreshold == 50_000)
-        // 날아가는 양이 줄었어도(식 4면 2440) 반복 만료는 값을 지킨다
+        // Even if fewer bytes are in flight (2440 by equation 4), repeated expiration preserves the value
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 1_000))
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 1_000))
         #expect(control.slowStartThreshold == 50_000)
         #expect(control.congestionWindow == 1_220)
     }
 
-    @Test("새 데이터가 확인된 뒤의 만료는 다른 세그먼트의 처음 만료라 식 4를 다시 쓴다")
+    @Test("Expiration after new data is acknowledged is the first expiration for a different segment, so applies equation 4 again")
     func timeoutAfterProgress() {
         var control = control()
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: una.advanced(by: 100_000))
@@ -192,7 +192,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 1_220)
     }
 
-    @Test("fast recovery 중의 만료는 회복에서 나오고 처음 만료로 센다")
+    @Test("Expiration during fast recovery exits recovery and counts as a first expiration")
     func timeoutInsideFastRecovery() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -201,17 +201,17 @@ struct NewRenoCongestionControlTests {
         #expect(!control.isInFastRecovery)
         #expect(control.duplicateACKCount == 0)
         #expect(control.congestionWindow == 1_220)
-        #expect(control.slowStartThreshold == 12_200)   // 식 4: 24400/2
+        #expect(control.slowStartThreshold == 12_200)   // Equation 4: 24400/2
         #expect(control.recover == sendNext)
     }
 
-    @Test("만료 뒤의 중복 ACK 셋은 recover를 넘지 않아 fast retransmit에 들어가지 않는다(RFC 6582 4)")
+    @Test("Three duplicate ACKs after expiration do not pass recover, so they do not enter fast retransmit (RFC 6582 4)")
     func duplicateACKsAfterTimeoutDoNotEnterFastRetransmit() {
         var control = control()
         let sendNext = sendNext(from: una, segments: 20)
         control.retransmissionTimerExpired(sendUnacknowledged: una, sendNext: sendNext)
         let ssthresh = control.slowStartThreshold
-        // 불필요한 재전송 때문에 상대가 같은 번호를 거듭 확인한다. 확인 번호가 recover(= 만료 때의 SND.NXT)보다 작다.
+        // Unnecessary retransmission makes the peer repeatedly acknowledge the same number. The acknowledgment is below recover (= SND.NXT at expiration).
         let ack = una.advanced(by: 5 * 1_220)
         for _ in 0..<6 {
             #expect(control.receiveDuplicateACK(ackNumber: ack, sendNext: sendNext) == .none)
@@ -221,9 +221,9 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 1_220)
     }
 
-    // MARK: 중복 ACK 셋(RFC 5681 3.2, 6582 3.2 2)
+    // MARK: Three duplicate ACKs (RFC 5681 3.2, 6582 3.2 2)
 
-    @Test("첫째·둘째 중복 ACK는 세고 아무것도 바꾸지 않는다")
+    @Test("Counts the first and second duplicate ACKs and makes no other changes")
     func firstTwoDuplicateACKs() {
         var control = control()
         let sendNext = sendNext(from: una, segments: 20)
@@ -236,7 +236,7 @@ struct NewRenoCongestionControlTests {
         #expect(!control.isInFastRecovery)
     }
 
-    @Test("셋째 중복 ACK: ssthresh는 식 4, 한 세그먼트를 다시 보내고 cwnd = ssthresh + 3·SMSS, recover = SND.NXT")
+    @Test("Third duplicate ACK: ssthresh follows equation 4, one segment is retransmitted, cwnd = ssthresh + 3·SMSS, recover = SND.NXT")
     func thirdDuplicateACK() {
         let control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -247,7 +247,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.duplicateACKCount == 3)
     }
 
-    @Test("fast recovery 중의 중복 ACK마다 cwnd += SMSS(단계 4)이고 다시 보내라고 하지 않는다")
+    @Test("Each duplicate ACK during fast recovery applies cwnd += SMSS (step 4) and does not request retransmission")
     func additionalDuplicateACKs() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -260,7 +260,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.recover == sendNext)
     }
 
-    @Test("회복 중 보낸 새 데이터가 있어도 recover는 회복을 시작할 때의 SND.NXT에 머문다")
+    @Test("Even if new data is sent during recovery, recover stays at SND.NXT from the start of recovery")
     func recoverStaysDuringRecovery() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -268,11 +268,11 @@ struct NewRenoCongestionControlTests {
         #expect(control.recover == sendNext)
     }
 
-    @Test("셋째 중복 ACK의 확인 번호가 recover 이하면 들어가지 않고 ssthresh를 바꾸지 않는다")
+    @Test("If the acknowledgment on the third duplicate ACK is at or below recover, skips entry and leaves ssthresh unchanged")
     func thirdDuplicateACKNotCoveringRecover() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
-        // 회복을 full ACK로 끝낸다(ACK = recover). 같은 번호의 중복 ACK 셋은 recover를 넘지 못한다.
+        // Finish recovery with a full ACK (ACK = recover). Three duplicate ACKs for the same number cannot pass recover.
         _ = control.acknowledgeNewData(bytes: 24_400, ackNumber: sendNext, sendNext: sendNext.advanced(by: 2_440))
         #expect(!control.isInFastRecovery)
         let ssthresh = control.slowStartThreshold
@@ -286,13 +286,13 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == window)
     }
 
-    @Test("recover를 한 발 넘는 확인이 오면 다음 손실의 중복 ACK 셋이 다시 fast retransmit에 들어간다")
+    @Test("Once an acknowledgment advances one step past recover, three duplicate ACKs for the next loss reenter fast retransmit")
     func reentryAfterAdvancing() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
         let newNext = sendNext.advanced(by: 20 * 1_220)
         _ = control.acknowledgeNewData(bytes: 24_400, ackNumber: sendNext, sendNext: newNext)
-        // 다음 세그먼트 하나가 확인되어 recover를 넘는다
+        // One more segment is acknowledged, passing recover
         let ack = sendNext.advanced(by: 1_220)
         _ = control.acknowledgeNewData(bytes: 1_220, ackNumber: ack, sendNext: newNext)
         _ = control.receiveDuplicateACK(ackNumber: ack, sendNext: newNext)
@@ -302,7 +302,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.recover == newNext)
     }
 
-    @Test("첫 창의 첫 세그먼트가 손실돼도 중복 ACK 셋이 fast retransmit에 들어간다(recover의 초기값 = ISS)")
+    @Test("Three duplicate ACKs enter fast retransmit even if the first segment of the initial window is lost (initial recover = ISS)")
     func firstWindowLoss() {
         var control = control()
         let sendNext = sendNext(from: una, segments: 10)
@@ -312,7 +312,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.slowStartThreshold == 6_100)   // max(12200/2, 2440)
     }
 
-    @Test("날아가는 양이 작으면 ssthresh는 2·SMSS다")
+    @Test("With few bytes in flight, ssthresh is 2·SMSS")
     func fastRetransmitWithSmallFlight() {
         var control = control()
         let sendNext = sendNext(from: una, segments: 2)
@@ -321,7 +321,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 2_440 + 3_660)
     }
 
-    @Test("새 ACK가 오면 중복 ACK 수가 0으로 돌아가 셋을 다시 센다")
+    @Test("A new ACK resets the duplicate ACK count to 0, so it counts three again")
     func newACKResetsDuplicateCount() {
         var control = control()
         let sendNext = sendNext(from: una, segments: 20)
@@ -335,14 +335,14 @@ struct NewRenoCongestionControlTests {
         #expect(!control.isInFastRecovery)
     }
 
-    // MARK: full ACK와 partial ACK(RFC 6582 3.2 3)
+    // MARK: Full ACK and partial ACK (RFC 6582 3.2 3)
 
-    @Test("full ACK: cwnd = min(ssthresh, max(FlightSize, SMSS) + SMSS)로 줄이고 회복에서 나온다")
+    @Test("Full ACK: deflates to cwnd = min(ssthresh, max(FlightSize, SMSS) + SMSS) and exits recovery")
     func fullACK() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
-        _ = control.receiveDuplicateACK(ackNumber: una, sendNext: sendNext)   // 더 부풀린다
-        let newNext = sendNext.advanced(by: 2_440)                             // 회복 중 새 데이터 2 세그먼트
+        _ = control.receiveDuplicateACK(ackNumber: una, sendNext: sendNext)   // Inflate further
+        let newNext = sendNext.advanced(by: 2_440)                             // 2 segments of new data during recovery
         let instruction = control.acknowledgeNewData(bytes: 24_400, ackNumber: sendNext, sendNext: newNext)
         #expect(instruction == .none)
         #expect(!control.isInFastRecovery)
@@ -352,7 +352,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.slowStartThreshold == 12_200)
     }
 
-    @Test("full ACK에서 날아가는 양이 많으면 ssthresh가 상한이다")
+    @Test("On a full ACK with many bytes in flight, ssthresh is the cap")
     func fullACKCappedBySlowStartThreshold() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -361,7 +361,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 12_200)
     }
 
-    @Test("full ACK에서 날아가는 양이 0이면 max(FlightSize, SMSS) + SMSS = 2·SMSS")
+    @Test("On a full ACK with 0 bytes in flight, max(FlightSize, SMSS) + SMSS = 2·SMSS")
     func fullACKWithEmptyFlight() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -369,7 +369,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == 2_440)
     }
 
-    @Test("recover를 넘어선 확인도 full ACK다")
+    @Test("An acknowledgment beyond recover is also a full ACK")
     func ackBeyondRecover() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -378,7 +378,7 @@ struct NewRenoCongestionControlTests {
         #expect(!control.isInFastRecovery)
     }
 
-    @Test("partial ACK: 첫 미확인 세그먼트를 다시 보내고, 확인된 만큼 줄이고, 1 SMSS 이상이면 SMSS를 더한다")
+    @Test("Partial ACK: retransmits the first unacknowledged segment, deflates by the amount acknowledged, and adds SMSS if the amount is at least 1 SMSS")
     func partialACK() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -393,7 +393,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.recover == sendNext)
     }
 
-    @Test("1 SMSS보다 적게 확인한 partial ACK는 줄이기만 하고 SMSS를 더하지 않는다")
+    @Test("A partial ACK acknowledging less than 1 SMSS only deflates cwnd and does not add SMSS")
     func partialACKBelowOneSegment() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -403,7 +403,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == before - 500)
     }
 
-    @Test("partial ACK 뒤에도 회복은 계속되고 중복 ACK는 단계 4로 cwnd를 부풀린다")
+    @Test("Recovery continues after a partial ACK, and duplicate ACKs inflate cwnd using step 4")
     func duplicateACKAfterPartialACK() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -414,10 +414,10 @@ struct NewRenoCongestionControlTests {
         #expect(control.receiveDuplicateACK(ackNumber: ack, sendNext: sendNext) == .none)
         #expect(control.congestionWindow == before + 1_220)
         #expect(control.isInFastRecovery)
-        #expect(control.slowStartThreshold == 12_200)   // 다시 줄이지 않는다
+        #expect(control.slowStartThreshold == 12_200)   // Does not reduce it again
     }
 
-    @Test("partial ACK가 연달아 와도 마지막에 full ACK로 나온다")
+    @Test("Even after consecutive partial ACKs, recovery ends on the final full ACK")
     func successivePartialACKs() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -433,7 +433,7 @@ struct NewRenoCongestionControlTests {
         #expect(!control.isInFastRecovery)
     }
 
-    @Test("partial ACK로 확인된 양이 cwnd보다 커도 cwnd는 1 세그먼트 아래로 내려가지 않는다")
+    @Test("cwnd stays at or above 1 segment even if the amount acknowledged by a partial ACK exceeds cwnd")
     func partialACKDoesNotUnderflow() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd
@@ -441,19 +441,19 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow >= 1_220)
     }
 
-    // MARK: 시퀀스 번호가 한 바퀴 돌 때
+    // MARK: Sequence number wraparound
 
-    @Test("ISS가 2³² 근처여도 번호가 넘어가는 곳의 fast recovery가 같다")
+    @Test("Fast recovery behaves the same across sequence wraparound even if ISS is near 2³²")
     func recoveryAcrossSequenceWrap() {
         let wrappingISS = SequenceNumber(0xFFFF_F000)
         var control = control(iss: wrappingISS)
         let una = wrappingISS.advanced(by: 1)
-        let sendNext = una.advanced(by: 20 * 1_220)   // 0xFFFF_F001 + 24400은 한 바퀴 넘어 0x…5xxx
+        let sendNext = una.advanced(by: 20 * 1_220)   // 0xFFFF_F001 + 24400 wraps to 0x…5xxx
         #expect(sendNext.rawValue < una.rawValue)
         for _ in 0..<2 { _ = control.receiveDuplicateACK(ackNumber: una, sendNext: sendNext) }
         #expect(control.receiveDuplicateACK(ackNumber: una, sendNext: sendNext) == .retransmitFirstUnacknowledgedSegment)
         #expect(control.recover == sendNext)
-        // 번호가 0을 넘은 뒤의 partial ACK와 full ACK
+        // Partial and full ACKs after sequence numbers cross 0
         let partial = una.advanced(by: 10 * 1_220)
         #expect(control.acknowledgeNewData(bytes: 10 * 1_220, ackNumber: partial, sendNext: sendNext) == .retransmitFirstUnacknowledgedSegment)
         #expect(control.isInFastRecovery)
@@ -461,23 +461,23 @@ struct NewRenoCongestionControlTests {
         #expect(!control.isInFastRecovery)
     }
 
-    @Test("손실 없이 3GiB를 보낸 뒤에도 낡은 recover 때문에 fast retransmit이 막히지 않는다")
+    @Test("Even after sending 3GiB without loss, a stale recover does not block fast retransmit")
     func staleRecoverAfterLongTransfer() {
         var control = control(iss: SequenceNumber(0))
-        // 한 ACK에 1GiB씩 세 번: 확인 번호가 ISS에서 2³¹ 넘게 떨어진다. recover를 ISS에 둔 채면 비교가 뒤집힌다.
+        // Three ACKs of 1GiB each: the acknowledgment moves more than 2³¹ away from ISS. If recover stays at ISS, the comparison reverses.
         var ack = SequenceNumber(1)
         let step: UInt32 = 1 << 30
         for _ in 0..<3 {
             ack = ack.advanced(by: step)
             _ = control.acknowledgeNewData(bytes: Int(step), ackNumber: ack, sendNext: ack.advanced(by: 10_000))
         }
-        #expect(ack.distance(from: SequenceNumber(0)) < 0)   // 0xC000_0001: 부호 있는 차이로는 ISS보다 "앞"이다
+        #expect(ack.distance(from: SequenceNumber(0)) < 0)   // 0xC000_0001: by signed difference, it is "before" ISS
         let sendNext = ack.advanced(by: 12_200)
         for _ in 0..<2 { _ = control.receiveDuplicateACK(ackNumber: ack, sendNext: sendNext) }
         #expect(control.receiveDuplicateACK(ackNumber: ack, sendNext: sendNext) == .retransmitFirstUnacknowledgedSegment)
     }
 
-    @Test("만료 때 기록한 recover도 번호가 한 바퀴 돈 뒤에는 막지 않는다")
+    @Test("recover recorded at expiration also does not block after sequence numbers wrap")
     func staleRecoverAfterTimeout() {
         var control = control(iss: SequenceNumber(0))
         let una = SequenceNumber(1)
@@ -493,9 +493,9 @@ struct NewRenoCongestionControlTests {
         #expect(control.receiveDuplicateACK(ackNumber: ack, sendNext: sendNext) == .retransmitFirstUnacknowledgedSegment)
     }
 
-    // MARK: 유휴 뒤(RFC 5681 4.1)
+    // MARK: After idle (RFC 5681 4.1)
 
-    @Test("유휴가 RTO보다 길면 cwnd를 min(IW, cwnd)로 줄인다")
+    @Test("Reduces cwnd to min(IW, cwnd) if idle longer than RTO")
     func restartAfterIdle() {
         var control = afterFirstTimeout()
         var ack = una
@@ -507,10 +507,10 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow > 12_200)
         control.restartAfterIdle(idleDuration: .milliseconds(301), retransmissionTimeout: .milliseconds(300))
         #expect(control.congestionWindow == 12_200)
-        #expect(control.slowStartThreshold == 50_000)   // ssthresh는 건드리지 않는다
+        #expect(control.slowStartThreshold == 50_000)   // Does not change ssthresh
     }
 
-    @Test("유휴가 RTO 이하이면 그대로 둔다")
+    @Test("Leaves cwnd unchanged if idle for at most RTO")
     func notIdleLongEnough() {
         var control = control()
         let sendNext = sendNext(from: una, segments: 20)
@@ -523,16 +523,16 @@ struct NewRenoCongestionControlTests {
         #expect(control.congestionWindow == before)
     }
 
-    @Test("cwnd가 이미 초기 창보다 작으면 유휴 뒤에도 키우지 않는다")
+    @Test("If cwnd is already below the initial window, does not increase it after idle")
     func idleNeverGrowsWindow() {
         var control = afterFirstTimeout()   // cwnd 1220
         control.restartAfterIdle(idleDuration: .seconds(60), retransmissionTimeout: .seconds(1))
         #expect(control.congestionWindow == 1_220)
     }
 
-    // MARK: 죽지 않음
+    // MARK: Crash resistance
 
-    @Test("MSS가 범위 밖이어도 죽지 않고 1…65535로 묶는다")
+    @Test("Handles out-of-range MSS without crashing and clamps it to 1…65535")
     func maximumSegmentSizeIsClamped() {
         #expect(control(mss: 0).maximumSegmentSize == 1)
         #expect(control(mss: -7).maximumSegmentSize == 1)
@@ -542,11 +542,11 @@ struct NewRenoCongestionControlTests {
         #expect(control(mss: 1).congestionWindow == 10)
     }
 
-    @Test("큰 바이트 수와 어긋난 번호에도 cwnd는 상한 안이고 음수가 되지 않는다")
+    @Test("Even with large byte counts and misordered sequence numbers, cwnd stays within the limit and never goes negative")
     func extremeInputs() {
         var control = control()
         let far = SequenceNumber(0x8000_0000)
-        _ = control.acknowledgeNewData(bytes: Int.max, ackNumber: far, sendNext: una)       // SND.NXT가 ACK보다 앞
+        _ = control.acknowledgeNewData(bytes: Int.max, ackNumber: far, sendNext: una)       // SND.NXT precedes the ACK
         _ = control.receiveDuplicateACK(ackNumber: far, sendNext: una)
         control.retransmissionTimerExpired(sendUnacknowledged: far, sendNext: una)
         control.restartAfterIdle(idleDuration: .seconds(Int64.max), retransmissionTimeout: .seconds(Int64.min))
@@ -554,7 +554,7 @@ struct NewRenoCongestionControlTests {
         #expect(control.slowStartThreshold >= 2 * control.maximumSegmentSize)
     }
 
-    @Test("부풀리기를 오래 해도 cwnd는 2³⁰을 넘지 않는다")
+    @Test("cwnd stays within 2³⁰ even after prolonged inflation")
     func congestionWindowIsCapped() {
         var control = enteringFastRecovery()
         let sendNext = windowEnd

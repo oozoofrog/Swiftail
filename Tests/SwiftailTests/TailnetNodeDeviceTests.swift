@@ -6,12 +6,12 @@ import SwiftailEngine
 import Testing
 @testable import Swiftail
 
-/// 노드의 장치·시작 검사·끝내기. 계약 `docs/contracts/SwiftailTunnel.md` 동작 U·C 4·E 5, 공개 API.
-@Suite("노드의 터널 장치")
+/// Node device, startup validation, and shutdown. Contract `docs/contracts/SwiftailTunnel.md` behaviors U·C 4·E 5, public API.
+@Suite("Node tunnel device")
 struct TailnetNodeDeviceTests {
-    // MARK: init의 검사 (동작 U1, C 4)
+    // MARK: Initializer validation (behaviors U1, C 4)
 
-    @Test("utun이 아닌 기술자(-1, 파이프)는 init이 invalidConfiguration으로 거절하고 호출자의 기술자는 열려 있다")
+    @Test("The initializer rejects non-utun descriptors (-1, pipe) with invalidConfiguration and leaves the caller's descriptor open")
     func rejectsNonUTUN() throws {
         var pipeDescriptors: [Int32] = [-1, -1]
         #expect(pipe(&pipeDescriptors) == 0)
@@ -25,22 +25,22 @@ struct TailnetNodeDeviceTests {
         #expect(fcntl(pipeDescriptors[1], F_GETFD) >= 0)
     }
 
-    @Test("범위 밖 MTU는 init이 invalidConfiguration으로 거절하고, 경계 값과 기본값은 받는다", arguments: [1, 1000, 1279, 1421, 1500, 9000, -1280])
+    @Test("The initializer rejects an out-of-range MTU with invalidConfiguration and accepts the boundary values and the default", arguments: [1, 1000, 1279, 1421, 1500, 9000, -1280])
     func rejectsMTU(mtu: Int) throws {
         let configuration = try NodeTestSupport.unusedConfiguration()
         Self.expectInvalidConfiguration(containing: "MTU", configuration, device: .memory(mtu: mtu))
-        // 기술자 검사보다 MTU 검사가 먼저다(utun이 아니어도 MTU 메시지).
+        // MTU validation precedes descriptor validation (the message is about MTU even for a non-utun descriptor).
         Self.expectInvalidConfiguration(containing: "MTU", configuration, device: .utun(fileDescriptor: -1, mtu: mtu))
     }
 
-    @Test("MTU 1280·1420·기본값은 받는다")
+    @Test("Accepts MTU 1280, 1420, and the default")
     func acceptsMTU() throws {
         for device in [TunnelDevice.memory(mtu: 1280), .memory(mtu: 1420), .memory()] {
             _ = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration(), device: device)
         }
     }
 
-    @Test("설정 오류(파일 URL이 아닌 상태 디렉터리, http(s)가 아닌 제어 서버, 빈 호스트 이름)는 init이 거절한다")
+    @Test("The initializer rejects configuration errors (a non-file state directory URL, a control server outside http(s), and an empty hostname)")
     func rejectsConfiguration() throws {
         var notFile = try NodeTestSupport.unusedConfiguration()
         notFile.stateDirectory = try #require(URL(string: "https://example.com/state"))
@@ -57,9 +57,9 @@ struct TailnetNodeDeviceTests {
             == URL(string: "https://controlplane.tailscale.com"))
     }
 
-    // MARK: 메모리 장치 (동작 U7, L)
+    // MARK: Memory device (behaviors U7, L)
 
-    @Test("메모리 장치에서 서비스 IP로 보낸 MagicDNS 질의의 응답이 inboundPackets로 나온다")
+    @Test("The response to a MagicDNS query sent to the service IP on the memory device appears on inboundPackets")
     func magicDNSOverMemoryDevice() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.installEngineForTesting()
@@ -72,17 +72,17 @@ struct TailnetNodeDeviceTests {
         let packets = await NodeTestSupport.drain(node.inboundPackets)
         let reply = try #require(packets.first)
         #expect(packets.count == 1)
-        #expect(Array(reply[12..<16]) == service && Array(reply[16..<20]) == selfAddress, "주소가 맞바뀌어야 한다")
-        #expect(Array(reply[20..<24]) == [0, 53, 0x9C, 0x41], "포트가 맞바뀌어야 한다(53 → 40001)")
+        #expect(Array(reply[12..<16]) == service && Array(reply[16..<20]) == selfAddress, "Addresses must be swapped")
+        #expect(Array(reply[20..<24]) == [0, 53, 0x9C, 0x41], "Ports must be swapped (53 → 40001)")
         let dns = Array(reply[28...])
         #expect(Array(dns[0..<2]) == [0x5A, 0x5A])
-        #expect(dns[2] & 0x80 != 0, "응답(QR)")
+        #expect(dns[2] & 0x80 != 0, "Response (QR)")
         #expect(dns[3] & 0x0F == 0, "NOERROR")
-        #expect(Array(dns[6..<8]) == [0, 1], "답 하나")
-        #expect(Array(dns.suffix(4)) == selfAddress, "A 레코드가 자기 주소")
+        #expect(Array(dns[6..<8]) == [0, 1], "One answer")
+        #expect(Array(dns.suffix(4)) == selfAddress, "The A record is the local address")
     }
 
-    @Test("failMemoryDevice()가 run()을 tunnelDeviceClosed(\"test\")로 끝내고 세 흐름이 끝난다")
+    @Test("failMemoryDevice() ends run() with tunnelDeviceClosed(\"test\") and ends all three streams")
     func failMemoryDeviceEndsRun() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(configuration: try NodeTestSupport.configuration(stateDirectory: directory))
@@ -90,18 +90,18 @@ struct TailnetNodeDeviceTests {
             await node.failMemoryDevice()
             let result = await run.result
             guard case let .failure(error) = result, case .tunnelDeviceClosed("test")? = error as? NodeError else {
-                Issue.record("기대 tunnelDeviceClosed(\"test\"), 실제 \(result)")
+                Issue.record("Expected tunnelDeviceClosed(\"test\"), got \(result)")
                 return
             }
             _ = await NodeTestSupport.drain(node.events)
             _ = await NodeTestSupport.drain(node.networkSettings)
             _ = await NodeTestSupport.drain(node.inboundPackets)
-            let claim = try #require(StateDirectoryClaims.shared.claim(directory), "끝난 노드는 상태 디렉터리를 놓는다")
+            let claim = try #require(StateDirectoryClaims.shared.claim(directory), "A stopped node releases the state directory")
             StateDirectoryClaims.shared.release(claim)
         }
     }
 
-    @Test("run()을 취소하면 돌아오고 세 흐름이 끝나며, 다시 부르면 invalidConfiguration이다")
+    @Test("Canceling run() makes it return and ends all three streams. Calling it again yields invalidConfiguration")
     func cancelEndsStreams() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(configuration: try NodeTestSupport.configuration(stateDirectory: directory))
@@ -110,7 +110,7 @@ struct TailnetNodeDeviceTests {
             run.cancel()
             let result = await run.result
             guard case .success = result else {
-                Issue.record("취소는 실패가 아니다: \(result)")
+                Issue.record("Cancellation is not a failure: \(result)")
                 return
             }
             _ = await NodeTestSupport.drain(node.events)
@@ -121,19 +121,19 @@ struct TailnetNodeDeviceTests {
             #expect(await node.path(toPeerWithStableID: "") == nil)
             do throws(NodeError) {
                 try await node.run()
-                Issue.record("두 번째 run()이 던지지 않았다")
+                Issue.record("The second run() did not throw")
             } catch {
                 guard case .invalidConfiguration = error else {
-                    Issue.record("기대 invalidConfiguration, 실제 \(error)")
+                    Issue.record("Expected invalidConfiguration, got \(error)")
                     return
                 }
             }
         }
     }
 
-    // MARK: 상태 (NodeStatus)
+    // MARK: Status (NodeStatus)
 
-    @Test("status는 마지막 netmap의 자기 주소·이름·StableID·피어 수와 상태를 담는다")
+    @Test("status contains the state and the latest netmap's local addresses, name, StableID, and peer count")
     func status() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         let before = await node.status
@@ -151,9 +151,9 @@ struct TailnetNodeDeviceTests {
         #expect(after.networkSettings?.mtu == 1280)
     }
 
-    // MARK: DERP 송신 큐 (동작 M)
+    // MARK: DERP send queue (behavior M)
 
-    @Test("DERP 송신 큐는 256개와 1MiB를 넘으면 오래된 것부터 버리고, 닫으면 끝난다")
+    @Test("The DERP send queue drops the oldest entries first above the limits of 256 entries and 1MiB, and ends on close")
     func derpOutboxBounds() async throws {
         let outbox = TailnetNode.DERPOutbox()
         let peer = try #require(NodePublicKey(rawValue: [UInt8](repeating: 0x22, count: 32)))
@@ -161,7 +161,7 @@ struct TailnetNodeDeviceTests {
             outbox.push(TailnetNode.DERPDatagram(bytes: [UInt8(index & 0xFF)], peer: peer))
         }
         #expect(outbox.backlog.count == 256)
-        #expect(await outbox.next()?.bytes == [UInt8(44)], "가장 오래된 44개가 버려졌다")
+        #expect(await outbox.next()?.bytes == [UInt8(44)], "The oldest 44 entries were dropped")
 
         let large = TailnetNode.DERPOutbox()
         for byte in UInt8(1)...3 {
@@ -172,16 +172,16 @@ struct TailnetNodeDeviceTests {
         large.close()
         #expect(await large.next() == nil)
         large.push(TailnetNode.DERPDatagram(bytes: [1], peer: peer))
-        #expect(large.backlog.count == 0, "닫은 뒤에는 버린다")
+        #expect(large.backlog.count == 0, "Discards entries after closing")
     }
 
     private static func expectInvalidConfiguration(containing text: String, _ configuration: NodeConfiguration, device: TunnelDevice) {
         do throws(NodeError) {
             _ = try TailnetNode(configuration: configuration, device: device)
-            Issue.record("invalidConfiguration을 던지지 않았다")
+            Issue.record("Did not throw invalidConfiguration")
         } catch {
             guard case let .invalidConfiguration(message) = error, text.isEmpty || message.contains(text) else {
-                Issue.record("기대 invalidConfiguration(\(text)), 실제 \(error)")
+                Issue.record("Expected invalidConfiguration(\(text)), got \(error)")
                 return
             }
         }
@@ -189,7 +189,7 @@ struct TailnetNodeDeviceTests {
 }
 
 private extension TailnetNode {
-    /// 등록을 거치지 않고 엔진만 만든다. 서비스 IP 응답은 엔진만 있으면 나온다.
+    /// Create only the engine, without registering. The engine alone is enough to produce the service IP response.
     func installEngineForTesting() {
         engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: .now, wallClock: Date())
     }

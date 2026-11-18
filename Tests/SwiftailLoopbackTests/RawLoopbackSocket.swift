@@ -1,9 +1,9 @@
-// 같은 기기의 다른 프로세스가 하는 것을 흉내 내는 POSIX TCP 소켓. 원하는 출발 포트에 묶어(`SO_REUSEADDR`) 루프백
-// 리스너에 건다. `sockaddr_in`을 `sockaddr`로 다시 보는 포인터는 `withSocketAddress` 안에서만 산다(커널 API가 그것만 받는다).
+// A POSIX TCP socket that simulates another process on the same device. Binds to a chosen source port (`SO_REUSEADDR`) and connects to a loopback
+// listener. The pointer that views `sockaddr_in` as `sockaddr` lives only inside `withSocketAddress` (the kernel API only accepts that form).
 
 import Darwin
 
-/// 시험이 쓰는 POSIX TCP 소켓 하나. 버리면 닫힌다.
+/// One POSIX TCP socket used by the test. Dropping it closes it.
 final class RawLoopbackSocket: Sendable {
     struct Failure: Error, CustomStringConvertible {
         var call: String
@@ -13,7 +13,7 @@ final class RawLoopbackSocket: Sendable {
 
     private let descriptor: Int32
 
-    /// `127.0.0.1:<sourcePort>`에 묶은 소켓. `sourcePort`가 0이면 시스템이 고른다. 걸지는 않는다.
+    /// A socket bound to `127.0.0.1:<sourcePort>`. If `sourcePort` is 0, the system chooses it. Does not connect.
     init(boundTo sourcePort: UInt16, reuseAddress: Bool) throws(Failure) {
         let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw Failure(call: "socket", code: errno) }
@@ -35,7 +35,7 @@ final class RawLoopbackSocket: Sendable {
         Darwin.close(descriptor)
     }
 
-    /// 묶인 출발 포트.
+    /// The bound source port.
     var localPort: UInt16 {
         var address = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -45,13 +45,13 @@ final class RawLoopbackSocket: Sendable {
         return named == 0 ? UInt16(bigEndian: address.sin_port) : 0
     }
 
-    /// `127.0.0.1:<port>`에 건다(막는 호출).
+    /// Connects to `127.0.0.1:<port>` (blocking).
     func connect(to port: UInt16) throws(Failure) {
         let connected = Self.withSocketAddress(port: port) { Darwin.connect(descriptor, $0, $1) }
         guard connected == 0 else { throw Failure(call: "connect", code: errno) }
     }
 
-    /// 모두 보낸다(막는 호출). 상대가 이미 끊었으면 던진다.
+    /// Sends all bytes (blocking). Throws if the peer already disconnected.
     func send(_ bytes: [UInt8]) throws(Failure) {
         var offset = 0
         while offset < bytes.count {
@@ -61,7 +61,7 @@ final class RawLoopbackSocket: Sendable {
         }
     }
 
-    /// 상대가 연결을 끝내기를 `seconds`초까지 기다린다(막는 호출). 끝(FIN)이나 RST를 보면 true, 그때까지 열려 있으면 false다.
+    /// Waits up to `seconds` seconds for the peer to end the connection (blocking). Returns true on EOF (FIN) or RST, and false if the connection stays open until then.
     func seesEnd(within seconds: Int) -> Bool {
         var limit = timeval(tv_sec: seconds, tv_usec: 0)
         guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size)) == 0 else { return false }
@@ -73,12 +73,12 @@ final class RawLoopbackSocket: Sendable {
         }
     }
 
-    /// 쓰기 방향을 닫는다(FIN).
+    /// Closes the write direction (FIN).
     func finishWriting() {
         _ = shutdown(descriptor, SHUT_WR)
     }
 
-    /// `127.0.0.1:<port>`의 `sockaddr_in`을 `sockaddr *`로 넘긴다.
+    /// Passes the `sockaddr_in` for `127.0.0.1:<port>` as `sockaddr *`.
     private static func withSocketAddress(port: UInt16, _ body: (UnsafePointer<sockaddr>, socklen_t) -> Int32) -> Int32 {
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)

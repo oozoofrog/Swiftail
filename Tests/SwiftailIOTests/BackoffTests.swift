@@ -2,9 +2,9 @@ import Testing
 
 @testable import SwiftailIO
 
-@Suite("물러나기")
+@Suite("Backoff")
 struct BackoffTests {
-    @Test("n² × 10ms를 상한에서 자르고 [0.5, 1.5)를 곱한다", arguments: [
+    @Test("Caps n² × 10ms at the limit and multiplies by [0.5, 1.5)", arguments: [
         (1, Duration.milliseconds(10)),
         (2, .milliseconds(40)),
         (10, .seconds(1)),
@@ -19,14 +19,14 @@ struct BackoffTests {
         #expect(Backoff.delay(failures: failures, maximum: maximum, jitter: 0.999) < base * 1.5)
     }
 
-    @Test("상한이 작으면 거기서 자른다")
+    @Test("Caps the delay at a smaller limit")
     func smallMaximum() {
         let maximum = Duration.seconds(5)
         #expect(Backoff.delay(failures: 10, maximum: maximum, jitter: 0.5) == .seconds(1))
         #expect(Backoff.delay(failures: 1_000, maximum: maximum, jitter: 0.5) == maximum)
     }
 
-    @Test("실패가 없으면 기다리지 않는다")
+    @Test("Does not wait when there are no failures")
     func noFailures() {
         #expect(Backoff.delay(failures: 0, maximum: .seconds(30), jitter: 0.7) == .zero)
         #expect(Backoff.delay(failures: -3, maximum: .seconds(30), jitter: 0.7) == .zero)

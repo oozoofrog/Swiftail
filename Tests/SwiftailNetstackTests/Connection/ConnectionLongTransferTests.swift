@@ -3,15 +3,15 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 시퀀스 번호가 한 바퀴를 넘게 도는 전송(계약 시험 6, F4의 4GiB). 맺은 뒤에는 ISS·IRS와 견주는 코드가 없어야 하고,
-/// 오래 남는 번호(SND.WL1·WL2, `recover`, 광고한 창 끝)가 2³¹ 넘게 멀어져 앞뒤가 뒤집히지 않아야 한다.
-/// 상대는 손으로 만든 ACK·데이터만 보내고 IP 패킷을 만들지 않아 빠르게 돈다.
-@Suite("긴 전송")
+/// Transfers spanning more than a full sequence number cycle (contract test 6, 4GiB in F4). After establishment, no code should compare against ISS or IRS,
+/// and long-lived sequence numbers (SND.WL1·WL2, `recover`, advertised window edge) must not drift more than 2³¹ away and reverse their ordering.
+/// The peer sends only handcrafted ACKs and data without building IP packets, so the test runs quickly.
+@Suite("Long transfers")
 struct ConnectionLongTransferTests {
-    /// 2³²보다 조금 더(4GiB + 1MiB).
+    /// Slightly more than 2³² (4GiB + 1MiB).
     static let transferLength = (1 << 32) + (1 << 20)
 
-    @Test("보내는 쪽: 4GiB를 넘게 보내도 번호와 바이트가 맞고 cwnd가 줄지 않는다")
+    @Test("Sender: after sending more than 4GiB, sequence numbers and bytes are correct and cwnd has not decreased")
     func sendBeyondSequenceSpace() throws {
         var peer = try ManualPeer.established(iss: 0xFFFF_0000, windowScale: 7, ackWindow: 2_048)
         let chunk = patternBytes(count: 1 << 16)
@@ -30,7 +30,7 @@ struct ConnectionLongTransferTests {
                     segment.payload.first == chunk[sentCount % chunk.count],
                     segment.payload.last == chunk[(sentCount + segment.payload.count - 1) % chunk.count]
                 else {
-                    Issue.record("\(sentCount)바이트 뒤의 세그먼트가 틀렸다: \(segment.sequenceNumber) ≠ \(expected)")
+                    Issue.record("Incorrect segment after \(sentCount) bytes: \(segment.sequenceNumber) ≠ \(expected)")
                     return
                 }
                 expected = expected.advanced(by: UInt32(segment.payload.count))
@@ -43,18 +43,18 @@ struct ConnectionLongTransferTests {
         #expect(peer.connection.state == .established)
         #expect(peer.connection.sendNext == SequenceNumber(0xFFFF_0001).advanced(by: UInt32(truncatingIfNeeded: sentCount)))
         #expect(peer.connection.congestionWindow > 256 * 1024)
-        // 마지막까지 확인받았다.
+        // Acknowledged through the end.
         #expect(peer.connection.sendUnacknowledged == peer.connection.sendNext)
     }
 
-    @Test("받는 쪽: 4GiB를 넘게 받아도 순서대로 읽히고, 상대는 광고한 창만큼만 보내도 멈추지 않는다")
+    @Test("Receiver: more than 4GiB can be read in order, and the peer keeps making progress while sending only within the advertised window")
     func receiveBeyondSequenceSpace() throws {
         var peer = try ManualPeer.established(peerISS: 0xFFFF_8000, windowScale: 7)
         let segmentLength = 1_240
         let pattern = patternBytes(count: segmentLength * 211)
         var sentCount = 0
         var readCount = 0
-        // 상대가 본 창의 오른쪽 끝: 마지막으로 받은 ACK + (창 << 3). 처음은 SYN-ACK의 65,535(확장하지 않음).
+        // The right edge seen by the peer: last ACK received + (window << 3). Initially 65,535 from the SYN-ACK (unscaled).
         var windowEnd = peer.peerNext.advanced(by: 65_535)
         func note(_ outputs: [TCPConnection.Output]) {
             for segment in outputs.segments {
@@ -77,14 +77,14 @@ struct ConnectionLongTransferTests {
                 guard bytes.first == pattern[readCount % pattern.count],
                     bytes.last == pattern[(readCount + bytes.count - 1) % pattern.count]
                 else {
-                    Issue.record("\(readCount)바이트에서 읽은 바이트가 틀렸다")
+                    Issue.record("Incorrect bytes read at \(readCount) bytes")
                     return
                 }
                 readCount += bytes.count
                 progressed = true
             }
             guard progressed else {
-                Issue.record("\(readCount)바이트에서 멈췄다")
+                Issue.record("Stalled at \(readCount) bytes")
                 return
             }
             peer.now = peer.now + .milliseconds(1)
