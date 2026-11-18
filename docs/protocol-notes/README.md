@@ -1,43 +1,43 @@
-# 프로토콜 노트
+# Protocol notes
 
-Swiftail 구현에 필요한 수준으로 각 프로토콜을 정리한 문서다. 기억이 아니라 소스에서 확인한 내용만 적는다.
+These notes document each protocol to the level needed to implement Swiftail. They record only details verified against the source.
 
-## 기준 소스
+## Reference sources
 
-| 모듈 | 버전 | 라이선스 |
+| Module | Version | License |
 | --- | --- | --- |
 | `tailscale.com` | v1.104.6 (CapabilityVersion 148) | BSD-3-Clause |
 | `github.com/tailscale/wireguard-go` | v0.0.0-20261106233718-9e0ab45c16ca | MIT |
-| `gvisor.dev/gvisor`(`tailscale.com/go.mod`이 고정한 버전) | v0.0.0-20260915211658-a6f909f08a72 | Apache-2.0 |
+| `gvisor.dev/gvisor` (version pinned by `tailscale.com/go.mod`) | v0.0.0-20260915211658-a6f909f08a72 | Apache-2.0 |
 
-`Scripts/fetch-reference-sources.sh`가 소스를 내려받고 루트 경로를 출력한다. gVisor는 이 스크립트가 받지 않는다. `sh Scripts/build-interop-tools.sh`로 시험 도구를 빌드하면 같은 모듈 캐시(`gvisor.dev/gvisor@<버전>`)에 들어온다. 노트의 출처는 모듈 루트 기준 상대 경로와 줄 번호로 적는다(예: `tailscale.com/control/controlbase/handshake.go:120`, `wireguard-go/device/noise-protocol.go:60`).
+`Scripts/fetch-reference-sources.sh` downloads the sources and prints their root paths. The script skips gVisor. Building the test tools with `sh Scripts/build-interop-tools.sh` adds gVisor to the same module cache (`gvisor.dev/gvisor@<version>`). The notes cite paths relative to the module root and line numbers (e.g., `tailscale.com/control/controlbase/handshake.go:120`, `wireguard-go/device/noise-protocol.go:60`).
 
-## 노트 목록과 검증 상태
+## Notes and verification status
 
-검증은 작성한 세션과 다른 세션이 Go 소스와 대조하는 것을 말한다. 해당 마일스톤을 시작하기 전에 검증을 끝낸다.
+Verification means checking the notes against the Go sources in a session other than the one that wrote them. Complete verification before starting the corresponding milestone.
 
-| 노트 | 쓰는 마일스톤 | 작성 | 검증 |
+| Note | Milestones that use it | Author | Verification |
 | --- | --- | --- | --- |
-| [wireguard.md](wireguard.md) | M1 | Claude Opus 5.5 | GPT-6.1 Sol, 2026-11-14, 수정 31건 |
-| [control-transport.md](control-transport.md) | M2 | Claude Opus 5.5 | GPT-6.1 Sol, 2026-11-14, 수정 28건 |
-| [control-map.md](control-map.md) | M2 | GPT-6.1 Sol | Claude Opus 5.5, 2026-11-14, 수정 16건 |
-| [derp-stun.md](derp-stun.md) | M3 | GPT-6.1 Terra | Claude Opus 5.5, 2026-11-14, 수정 13건 + 빠진 절차 보충 |
-| [disco-magicsock.md](disco-magicsock.md) | M4 | GPT-6.1 Sol | Claude Opus 5.5, 2026-11-15, 수정 7건 + M4 절차 보충 |
-| [netmap-engine.md](netmap-engine.md) | M3·M5 | Claude Sonnet 5.5 | GPT-6.1 Sol, 2026-11-14, 수정 10건 + M3 절차 보충 |
-| [dns-state-node.md](dns-state-node.md) | M5~M7 | Claude Sonnet 5.5 | Claude Opus 5.5, 2026-11-15, 수정 16건 + M5 절차 보충 |
-| [tcp-netstack.md](tcp-netstack.md) | M6 | Claude Fable 5.2 | GPT-6.1 Sol, 2026-11-15, RFC 12개·Tailscale v1.104.6·gVisor a6f909f08a72 대조, 사실 정정·미확인 경로 보충 |
-| [whois-certs-state.md](whois-certs-state.md) | M7 | Claude Fable 5.2 | 검증됨(2026-11-15, GPT-6.1 Sol): Tailscale v1.104.6·RFC Editor 원문 20개·Let's Encrypt 공식 문서·PSL·Go 1.27.3·Apple SDK 대조, 주장 248개 판정(맞음 208·틀림 18·확인 불가 22) |
-| [tailnet-lock.md](tailnet-lock.md) | M8 | Claude Opus 5.5 | 검증됨(2026-11-15, Claude Opus 5.5 다른 세션): Tailscale v1.104.7(실행 v1.104.6)·fxamacker/cbor v2.9.3·ed25519consensus v0.2.0·x/crypto v0.58.0·Go 1.27.3 대조, 판정 맞음 256·틀림 11·확인 불가 4, 수정 11건 + 빠진 경로 보충 12건 |
+| [wireguard.md](wireguard.md) | M1 | Claude Opus 5.5 | GPT-6.1 Sol, 2026-11-14, 31 corrections |
+| [control-transport.md](control-transport.md) | M2 | Claude Opus 5.5 | GPT-6.1 Sol, 2026-11-14, 28 corrections |
+| [control-map.md](control-map.md) | M2 | GPT-6.1 Sol | Claude Opus 5.5, 2026-11-14, 16 corrections |
+| [derp-stun.md](derp-stun.md) | M3 | GPT-6.1 Terra | Claude Opus 5.5, 2026-11-14, 13 corrections + missing procedures added |
+| [disco-magicsock.md](disco-magicsock.md) | M4 | GPT-6.1 Sol | Claude Opus 5.5, 2026-11-15, 7 corrections + M4 procedures expanded |
+| [netmap-engine.md](netmap-engine.md) | M3 and M5 | Claude Sonnet 5.5 | GPT-6.1 Sol, 2026-11-14, 10 corrections + M3 procedures expanded |
+| [dns-state-node.md](dns-state-node.md) | M5–M7 | Claude Sonnet 5.5 | Claude Opus 5.5, 2026-11-15, 16 corrections + M5 procedures expanded |
+| [tcp-netstack.md](tcp-netstack.md) | M6 | Claude Fable 5.2 | GPT-6.1 Sol, 2026-11-15, checked against 12 RFCs, Tailscale v1.104.6, and gVisor a6f909f08a72, corrected factual errors and added details on unverified paths |
+| [whois-certs-state.md](whois-certs-state.md) | M7 | Claude Fable 5.2 | Verified (2026-11-15, GPT-6.1 Sol) against Tailscale v1.104.6, 20 original RFCs from the RFC Editor, official Let's Encrypt documentation, the PSL, Go 1.27.3, and the Apple SDK. Assessed 248 claims (208 correct, 18 incorrect, 22 unverifiable) |
+| [tailnet-lock.md](tailnet-lock.md) | M8 | Claude Opus 5.5 | Verified (2026-11-15, a different Claude Opus 5.5 session) against Tailscale v1.104.7 (ran v1.104.6), fxamacker/cbor v2.9.3, ed25519consensus v0.2.0, x/crypto v0.58.0, and Go 1.27.3. Assessed 256 claims as correct, 11 as incorrect, and 4 as unverifiable, made 11 corrections, and added details on 12 missing paths |
 
-## 노트 형식
+## Note format
 
-1. 머리말: 기준 버전, 작성 모델, 검증 상태.
-2. 범위: 다루는 것과 다루지 않는 것.
-3. 와이어 형식: 메시지마다 바이트 단위 표(오프셋, 길이, 필드, 인코딩·엔디언).
-4. 절차와 상태 기계: 번호 매긴 단계. 암호 연산은 입력·출력을 정확히 적는다.
-5. 상수와 타이머: 값과 출처 표.
-6. Swiftail에 필요한 최소 부분과 생략할 수 있는 부분(생략의 근거 포함).
-7. 상호 운용 시험에서 확인할 것.
-8. 확인하지 못한 것.
+1. Introduction with the reference version, authoring model, and verification status.
+2. Scope, including what the note covers and excludes.
+3. Wire format with a byte-level table per message (offset, length, field, encoding and endianness).
+4. Procedures and state machines in numbered steps. Specify the exact inputs and outputs of cryptographic operations.
+5. Constants and timers, with a table of values and origins.
+6. The minimum Swiftail needs and what it can omit, including the rationale for omissions.
+7. What to verify in interop tests.
+8. Unverified details.
 
-모든 사실 문장에 출처(`경로:줄`)를 붙인다. Go 코드를 옮겨 적지 않는다. 상수 값과 짧은 식만 인용한다.
+Cite the origin of every factual sentence (`path:line`). Avoid transcribing Go code. Quote only constant values and short expressions.
