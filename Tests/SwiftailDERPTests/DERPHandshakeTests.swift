@@ -5,9 +5,9 @@ import Testing
 
 @testable import SwiftailDERP
 
-@Suite("DERP 핸드셰이크")
+@Suite("DERP handshake")
 struct DERPHandshakeTests {
-    @Test("만들자마자 업그레이드 요청이 나온다: GET /derp, Host, Connection, Upgrade뿐이다")
+    @Test("Creating the handshake immediately emits an upgrade request with only GET /derp, Host, Connection, and Upgrade")
     func upgradeRequest() throws {
         var connection = try DERPFixtures.connection(host: "derp1.example.test")
         #expect(
@@ -17,21 +17,21 @@ struct DERPHandshakeTests {
         #expect(connection.takeOutboundBytes().isEmpty)
     }
 
-    @Test("ServerKey를 받으면 ClientInfo가 Go box.Seal의 출력과 같은 바이트로 나가고, 홈이면 NotePreferred가 이어진다")
+    @Test("Receiving ServerKey emits ClientInfo with the same bytes as Go box.Seal, followed by NotePreferred for the home server")
     func clientInfoMatchesGoVector() throws {
         var connection = try DERPFixtures.connection(isPreferred: true)
         _ = connection.takeOutboundBytes()
         let events = try connection.receive(DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.serverKeyFrame())
         #expect(events == [.ready])
 
-        // 본문 104바이트 = 키 32 + nonce 24 + 태그 16 + JSON 32 (노트 3.4절).
+        // The 104-byte body is the 32-byte key + 24-byte nonce + 16-byte tag + 32-byte JSON (notes §3.4).
         let clientInfo = try DERPFixtures.Server.frame(0x02, DERPFixtures.bytes(DERPFixtures.clientInfoBody))
         #expect(clientInfo.count == 109)
         let notePreferred: [UInt8] = [0x07, 0, 0, 0, 1, 0x01]
         #expect(connection.takeOutboundBytes() == clientInfo + notePreferred)
     }
 
-    @Test("홈이 아니면 NotePreferred를 보내지 않는다")
+    @Test("Does not send NotePreferred if this is not the home server")
     func notPreferred() throws {
         var connection = try DERPFixtures.connection(isPreferred: false)
         _ = connection.takeOutboundBytes()
@@ -40,26 +40,26 @@ struct DERPHandshakeTests {
         #expect(connection.takeOutboundBytes() == clientInfo)
     }
 
-    @Test("Go가 봉한 ServerInfo를 연다")
+    @Test("Opens ServerInfo sealed by Go")
     func opensGoServerInfo() throws {
         var connection = try DERPFixtures.readyConnection()
         let frame = try DERPFixtures.Server.frame(0x03, DERPFixtures.bytes(DERPFixtures.serverInfoBody))
         #expect(try connection.receive(frame).isEmpty)
         #expect(connection.hasReceivedFrameAfterHandshake)
-        // Swift로 봉한 것도 같은 키로 열린다(열린 뒤에도 연결은 살아 있다).
+        // The same key opens the Swift-sealed version too (the connection remains open afterward).
         #expect(try connection.receive(DERPFixtures.Server.serverInfoFrame()).isEmpty)
         #expect(try connection.receive(DERPFixtures.Server.recvPacket(from: DERPFixtures.nodeKey(7), [1])).count == 1)
     }
 
-    @Test("ServerKey만 받은 연결은 핸드셰이크 뒤 프레임을 받은 것으로 치지 않는다")
+    @Test("Receiving only ServerKey does not count as receiving a post-handshake frame")
     func serverKeyAloneIsNotProgress() throws {
         var connection = try DERPFixtures.connection()
         _ = try connection.receive(DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.serverKeyFrame())
         #expect(!connection.hasReceivedFrameAfterHandshake)
     }
 
-    /// 고치기 전에는 프레임을 처리하기 전에 표시를 켜, 열리지 않는 ServerInfo만 주고 끊는 서버에 물러나기 없이 다시 붙었다.
-    @Test("열리지 않거나 JSON이 아닌 ServerInfo는 핸드셰이크 뒤 프레임을 받은 것으로 치지 않는다")
+    /// Before the fix, the flag was set before processing the frame, so the client reconnected without backoff to servers that sent only a ServerInfo that could not be opened and then disconnected.
+    @Test("ServerInfo that cannot be opened or is not JSON does not count as a received post-handshake frame")
     func failedFrameIsNotProgress() throws {
         var tampered = try DERPFixtures.readyConnection()
         var frame = try DERPFixtures.Server.serverInfoFrame()
@@ -72,7 +72,7 @@ struct DERPHandshakeTests {
         #expect(!notJSON.hasReceivedFrameAfterHandshake)
     }
 
-    @Test("101 머리와 ServerKey가 한 조각에 와도, 머리만 먼저 와도 같다")
+    @Test("The result is the same whether the 101 header and ServerKey arrive in one chunk or the header arrives by itself first")
     func headAndServerKeyInOneChunkOrTwo() throws {
         var together = try DERPFixtures.connection()
         let all = try DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.serverKeyFrame()
@@ -84,7 +84,7 @@ struct DERPHandshakeTests {
         #expect(together.takeOutboundBytes() == apart.takeOutboundBytes())
     }
 
-    @Test("한 바이트씩 넣어도 같은 사건과 같은 출력이 나온다")
+    @Test("Feeding bytes one at a time produces the same events and output")
     func byteAtATime() throws {
         let peer = try DERPFixtures.nodeKey(3)
         let input = try DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.serverKeyFrame()
@@ -103,20 +103,20 @@ struct DERPHandshakeTests {
         #expect(pieces.takeOutboundBytes() == whole.takeOutboundBytes())
     }
 
-    @Test("ServerKey의 40바이트 뒤(향후 확장)는 버린다")
+    @Test("Discards bytes after the first 40 bytes of ServerKey (future extensions)")
     func serverKeyTrailingBytes() throws {
         var connection = try DERPFixtures.connection()
         let input = try DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.serverKeyFrame(trailing: [UInt8](repeating: 9, count: 984))
         #expect(try connection.receive(input) == [.ready])
     }
 
-    @Test("준비 뒤의 ServerKey는 모르는 프레임처럼 건너뛴다")
+    @Test("Skips ServerKey after readiness as an unknown frame")
     func lateServerKeyIsSkipped() throws {
         var connection = try DERPFixtures.readyConnection()
         #expect(try connection.receive(DERPFixtures.Server.serverKeyFrame()).isEmpty)
     }
 
-    @Test("생성 인자를 검증한다: nonce 길이, Host에 공백·CR·LF·빈 값")
+    @Test("Validates initializer arguments, including the nonce length and Host values with spaces, CR, LF, or an empty value")
     func constructorValidation() throws {
         let key = try DERPFixtures.privateKey(seed: DERPFixtures.clientSeed)
         let nonce = try DERPFixtures.bytes(DERPFixtures.nonce)

@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
 
-/// POSIX의 주소 재해석과 버퍼 포인터는 이 파일에만 둔다. 커널 API가 포인터를 요구하며,
-/// 모든 포인터는 동기 호출의 수명 안에서만 쓰고 파일 기술자는 소유 actor에서 직렬 접근한다.
+/// Confines POSIX address reinterpretation and buffer pointers to this file. The kernel API requires pointers.
+/// All pointers live only within synchronous calls, and the owning actor serializes access to file descriptors.
 final class LoopbackSocket {
     private var descriptor: Int32
     let port: UInt16
@@ -67,7 +67,7 @@ final class LoopbackSocket {
             throw posixFailure("recvfrom")
         }
         guard address.sin_addr.s_addr == in_addr_t(INADDR_LOOPBACK).bigEndian else {
-            throw InteropFailure("루프백 밖의 데이터그램")
+            throw InteropFailure("Datagram from outside loopback")
         }
         return (Array(bytes.prefix(count)), UInt16(bigEndian: address.sin_port))
     }
@@ -89,7 +89,7 @@ func makeNonblocking(_ fd: Int32) throws {
     }
 }
 
-/// Pipe도 비차단으로 읽어 로그가 차서 Go 프로세스가 멈추는 일을 막는다.
+/// Also reads Pipe without blocking so the Go process does not stall when its log fills the pipe.
 func readAvailable(_ handle: FileHandle) throws -> Data {
     var bytes = [UInt8](repeating: 0, count: 65_536)
     let count = bytes.withUnsafeMutableBytes { Darwin.read(handle.fileDescriptor, $0.baseAddress, $0.count) }
@@ -108,7 +108,7 @@ private func posixFailure(_ operation: String) -> InteropFailure {
     InteropFailure("\(operation): errno=\(errno)")
 }
 
-/// 종료와 쓰기의 경쟁이 시험 프로세스에 SIGPIPE를 보내지 않게 한다.
+/// Prevents a race between exit and a write from sending SIGPIPE to the test process.
 func suppressBrokenPipe(_ fd: Int32) throws {
     guard fcntl(fd, F_SETNOSIGPIPE, 1) == 0 else { throw posixFailure("F_SETNOSIGPIPE") }
 }

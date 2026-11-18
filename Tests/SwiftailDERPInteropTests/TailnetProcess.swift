@@ -5,7 +5,7 @@ import SwiftailBase
 import SwiftailDERP
 import SwiftailIO
 
-/// 환경 변수 `SWIFTAIL_TAILNET`: `sh Scripts/build-interop-tools.sh tailnet`이 만든 도구의 경로. 없으면 시험을 건너뛴다.
+/// The `SWIFTAIL_TAILNET` environment variable points to the tool built by `sh Scripts/build-interop-tools.sh tailnet`. Tests are skipped if it is absent.
 let tailnetBinary = ProcessInfo.processInfo.environment["SWIFTAIL_TAILNET"].flatMap { $0.isEmpty ? nil : $0 }
 
 struct ToolFailure: Error, CustomStringConvertible {
@@ -13,7 +13,7 @@ struct ToolFailure: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
-/// 도구의 표준 출력에서 `ready` 한 줄을 찾고, 표준 오류는 진단용으로 끝부분만 쥔다.
+/// Looks for a `ready` line on the tool's standard output and retains only the tail of standard error for diagnostics.
 private final class TailnetOutput: Sendable {
     struct Ready: Decodable, Sendable {
         struct DERP: Decodable, Sendable {
@@ -57,20 +57,20 @@ private final class TailnetOutput: Sendable {
         }
     }
 
-    /// 키·사용자 경로가 도구의 로그에 섞여 있어도 보고에 남기지 않는다.
+    /// Keeps keys and user paths out of the report even if they appear in the tool's logs.
     var logText: String {
         var text = log.withLock { String(decoding: $0, as: UTF8.self) }
         for pattern in [#"(?:privkey|nodekey|discokey|mkey):[0-9a-fA-F]+"#, #"/Users/[^\s\"']+"#] {
-            text = text.replacingOccurrences(of: pattern, with: "<가림>", options: .regularExpression)
+            text = text.replacingOccurrences(of: pattern, with: "<redacted>", options: .regularExpression)
         }
         return text
     }
 }
 
-/// `tailnet` 도구 프로세스 하나. 도구는 루프백에 자체 서명 TLS의 Go DERP 서버를 띄운다.
+/// A single `tailnet` tool process. The tool starts a Go DERP server on loopback with self-signed TLS.
 ///
-/// `run`은 본문이 끝나든 던지든 도구를 반드시 끝낸다: 표준 입력에 `quit`을 쓰고 닫아 정상 종료를 기다리고, 3초 안에
-/// 끝나지 않으면 SIGKILL을 보낸다.
+/// Whether the body returns or throws, `run` always stops the tool. It writes `quit` to standard input and closes it, waits for a normal exit, and
+/// sends SIGKILL if the process does not exit within 3 seconds.
 actor TailnetProcess {
     private let process = Process()
     private let input = Pipe()
@@ -86,7 +86,7 @@ actor TailnetProcess {
         (exits, exitContinuation) = AsyncStream.makeStream(of: Void.self)
     }
 
-    /// 도구를 띄우고 DERP 서버가 준비되면 `body`에 그 접속 정보를 준다.
+    /// Starts the tool and passes its connection information to `body` once the DERP server is ready.
     static func run<Result: Sendable>(
         binary: String, _ body: @Sendable (DERPServer) async throws -> Result
     ) async throws -> Result {
@@ -99,7 +99,7 @@ actor TailnetProcess {
         } catch {
             let log = tool.output.logText
             await tool.stop()
-            if !log.isEmpty { print("tailnet 로그(끝부분):\n\(log)") }
+            if !log.isEmpty { print("tailnet log (tail):\n\(log)") }
             throw error
         }
     }
@@ -109,9 +109,9 @@ actor TailnetProcess {
         process.standardInput = input
         process.standardOutput = standardOutput
         process.standardError = standardError
-        // 종료한 도구에 쓰는 명령이 SIGPIPE로 시험 프로세스까지 죽이지 않게 한다.
+        // Keep a write to an exited tool from killing the test process with SIGPIPE.
         guard fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
-            throw ToolFailure("표준 입력에 F_SETNOSIGPIPE를 걸지 못했다 (errno \(errno))")
+            throw ToolFailure("Could not set F_SETNOSIGPIPE on standard input (errno \(errno))")
         }
         let exitContinuation = exitContinuation
         process.terminationHandler = { _ in
@@ -133,9 +133,9 @@ actor TailnetProcess {
         let readyStream = output.ready
         let ready = try await withTimeout(.seconds(15)) {
             for await ready in readyStream { return ready }
-            throw ToolFailure("ready를 보내기 전에 표준 출력이 닫혔다")
+            throw ToolFailure("Standard output closed before ready was sent")
         }
-        guard let derp = ready.derp, let port = UInt16(exactly: derp.port) else { throw ToolFailure("ready에 DERP 정보가 없다") }
+        guard let derp = ready.derp, let port = UInt16(exactly: derp.port) else { throw ToolFailure("ready contains no DERP information") }
         return DERPServer(hostName: derp.host, targets: IPAddress(derp.host).map { [.address($0)] } ?? [.hostName], port: port, verification: .noneForTests)
     }
 

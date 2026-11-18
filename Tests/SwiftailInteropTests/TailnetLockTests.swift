@@ -1,19 +1,19 @@
-// M8 Tailnet Lock 관문 (가)(docs/contracts/SwiftailTailnetLock.md 7절 "관문 (가): 계정 없이"의 항목 1~11).
-// 계정 없이 testcontrol 사본과 Go tsnet 피어를 상대로, lock이 켜진 tailnet에서 Swift 노드(`TailnetNode`)가 Go 노드와 같은
-// 판정을 내는지 끝에서 끝으로 본다. Go 피어끼리의 같은 흐름은 `Tools/interop/cmd/tailnet/lock_test.go`가 본다.
+// M8 Tailnet Lock gate (a) (items 1–11 under "Gate (a): Without an Account" in docs/contracts/SwiftailTailnetLock.md §7).
+// Uses the testcontrol copy and Go tsnet peers without an account to check end-to-end whether a Swift node (`TailnetNode`) reaches the same
+// decisions as Go nodes on a tailnet with lock enabled. `Tools/interop/cmd/tailnet/lock_test.go` covers the same flow between Go peers.
 //
-// 이 서버로 확인할 수 없어 시험하지 않는 것(보고에도 적는다):
-// - 항목 7: "다시 이은 스트림"은 노드를 같은 상태 디렉터리로 다시 띄워 만든다. 도구에 맵 스트림만 끊는 명령이 없고, 주입으로
-//   자동 맵이 멈춘 노드는 다시 이어도 자동 맵을 받지 않는다(README `injectMapResponse`). Go 피어는 이 도구로 다시 띄울 수
-//   없어, 다시 이은 뒤의 판정은 Go와 견주지 않는다.
-// - 항목 9: 이 서버는 재서명한 키 교체가 받아들여지면 옛 키 항목을 지운다. "옛 키가 Go 피어에서 낡은 키로 빠진다"는
-//   "새 키가 보이고 옛 키가 보이지 않는다"로만 본다. 낡은 키 판정 자체는 `tkafixtures`의 `peerSets`가 본다.
-// - 항목 10: 깨진 bootstrap을 되돌릴 때 서버가 새 맵을 보내므로, 풀린 것이 재시도 타이머(첫 5초) 때문인지 새 netmap 때문인지
-//   밖에서 가르지 못한다. 걸린 시간만 남긴다.
-// - Go 노드는 깨진 bootstrap에서 lock을 켜지 않고 거르지 않는다(Swiftail은 `.unverified`로 닫는다. 결정 U1·L4의 의도된 차이).
+// Cases this server cannot verify and the tests omit (also listed in the report):
+// - Item 7: Recreate a "reconnected stream" by restarting the node with the same state directory. The tool has no command to close just the map stream, and a node whose
+//   automatic maps stopped after injection does not receive them after reconnecting (README `injectMapResponse`). The tool cannot restart Go peers,
+//   so decisions after reconnecting are not compared with Go.
+// - Item 9: This server deletes the old key entry when it accepts the re-signed key rotation. "The Go peer drops the old key as obsolete" is checked
+//   only as "the new key is visible and the old key is not." `peerSets` in `tkafixtures` covers the obsolete-key decision itself.
+// - Item 10: The server sends a new map when restoring a broken bootstrap, so an outside observer cannot tell whether recovery came from the retry timer (initially 5 seconds)
+//   or the new netmap. Only elapsed time is recorded.
+// - Go nodes leave lock off and do not filter after a broken bootstrap (Swiftail fails closed with `.unverified`, an intentional difference in decisions U1 and L4).
 //
-// 항목 7은 서버가 맞는 끄기 비밀로 바꾸고 내용이 같은 맵을 다시 보낼 때, Swift와 Go 모두 bootstrap을 다시 불러 lock을
-// 끄는지 확인한다. Swift는 할 일이 남아 있으면 KeepAlive가 아닌 맵 응답에서 내용이 같아도 절차를 다시 시도한다(5cde854).
+// Item 7 checks whether both Swift and Go rerun bootstrap and disable lock when the server switches to the correct disablement secret
+// and resends a map with identical content. If work remains, Swift retries the procedure on non-KeepAlive map responses even with identical content (5cde854).
 
 import Foundation
 import SwiftailBase
@@ -22,223 +22,223 @@ import Testing
 
 @testable import Swiftail
 
-@Suite("M8 관문 (가): Tailnet Lock", .enabled(if: tailnetBinary != nil,
-    "SWIFTAIL_TAILNET가 없어 M8 Tailnet Lock 관문을 건너뜁니다"), .serialized, .timeLimit(.minutes(10)))
+@Suite("M8 gate (a): Tailnet Lock", .enabled(if: tailnetBinary != nil,
+    "Skipping the M8 Tailnet Lock gate because SWIFTAIL_TAILNET is missing"), .serialized, .timeLimit(.minutes(10)))
 struct TailnetLockTests {
-    @Test("항목 1·2·3·5·6: 부트스트랩, 서명 전 잠김, 서명 뒤 통신, 서명 없는 Go 피어, 사슬이 자란 뒤")
+    @Test("Items 1, 2, 3, 5, and 6: bootstrap, lockout before signing, communication after signing, unsigned Go peers, and chain growth")
     func signingFlow() async throws {
         try await withLockGate { gate in
             let peers = try await enableLock(gate, alsoSigned: ["go-peer-b"])
             let a = try #require(peers["go-peer-a"]), b = try #require(peers["go-peer-b"])
             let swift = try gate.startNode("swift-s")
 
-            // 항목 1: 부트스트랩. 머리가 서명 기기의 머리(= 서버의 머리)와 같고, 등록 요청의 NLKey가 0이 아니다.
-            let locked = try await gate.wait(swift, "항목 1·2: enforcing으로 잠김") {
+            // Item 1: bootstrap. The head matches the signing device's head (the server's head), and the registration request's NLKey is nonzero.
+            let locked = try await gate.wait(swift, "Items 1 and 2: locked in enforcing mode") {
                 $0.state == .running && $0.tailnetLock.mode == .enforcing && $0.tailnetLock.signingRequest != nil
             }
             let signer = try await gate.lockStatus("go-peer-a")
-            #expect(locked.tailnetLock.head != nil && locked.tailnetLock.head == signer.head, "항목 1: 머리가 Go 서명 기기와 같다")
-            #expect(signer.head == signer.controlHead, "항목 1: 서명 기기가 서버 머리에 있다")
+            #expect(locked.tailnetLock.head != nil && locked.tailnetLock.head == signer.head, "Item 1: the head matches the Go signing device")
+            #expect(signer.head == signer.controlHead, "Item 1: the signing device is at the server head")
             #expect(locked.tailnetLock.issue == nil)
             let selfKey = try #require(await swift.selfKey)
             gate.name(selfKey, "swift-s")
             let registration = try #require(try await gate.registrations().last { $0.nodeKey == selfKey })
-            #expect(!registration.nlKey.isEmpty, "항목 1: 등록 요청의 NLKey가 0이 아니다")
-            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) >= 1, "항목 1: bootstrap RPC를 보냈다")
+            #expect(!registration.nlKey.isEmpty, "Item 1: the registration request has a nonzero NLKey")
+            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) >= 1, "Item 1: a bootstrap RPC was sent")
 
-            // 항목 2: 서명 전의 잠김.
+            // Item 2: lockout before signing.
             let request = try #require(locked.tailnetLock.signingRequest)
-            #expect(request.nodeKey == selfKey, "항목 2: signingRequest.nodeKey가 등록한 node 키다")
-            #expect(request.lockKey == registration.nlKey, "항목 2: signingRequest.lockKey가 등록한 NL 키다")
-            try expectLockBeforeRunning(swift, "항목 2")
+            #expect(request.nodeKey == selfKey, "Item 2: signingRequest.nodeKey is the registered node key")
+            #expect(request.lockKey == registration.nlKey, "Item 2: signingRequest.lockKey is the registered NL key")
+            try expectLockBeforeRunning(swift, "Item 2")
             for name in ["go-peer-a", "go-peer-b"] {
                 let go = try await gate.lockStatus(name)
-                #expect(go.filteredPeers?.contains(selfKey) == true, "항목 2: \(name)가 Swift 노드를 거른다")
+                #expect(go.filteredPeers?.contains(selfKey) == true, "Item 2: \(name) filters the Swift node")
                 #expect(go.visiblePeers?.contains(selfKey) == false)
             }
-            #expect(await swift.peerKeys == [a.key, b.key], "항목 2: Swift netmap에 서명된 Go 피어 둘이 남는다")
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 2")
-            try await gate.expectSilent("항목 2: 잠긴 Swift → go-peer-a UDP 에코") {
+            #expect(await swift.peerKeys == [a.key, b.key], "Item 2: the two signed Go peers remain in the Swift netmap")
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 2")
+            try await gate.expectSilent("Item 2: locked Swift → go-peer-a UDP echo") {
                 try await gate.udpEcho(from: swift, to: a, within: LockGate.silence)
             }
-            try await gate.expectSilent("항목 2: go-peer-a → 잠긴 Swift UDP") {
+            try await gate.expectSilent("Item 2: go-peer-a → locked Swift UDP") {
                 try await gate.goSend("go-peer-a", to: swift, proto: "udp", within: LockGate.silence)
             }
 
-            // 항목 3: 두 값을 문자열 그대로 lockSign에 넣으면 다시 시작 없이 풀린다(F2 요구 3·4).
+            // Item 3: passing both values verbatim as strings to lockSign unlocks the node without a restart (F2 requirements 3 and 4).
             let signedAt = swift.recorder.events.count
             _ = try await gate.command(.init(cmd: "lockSign", name: "go-peer-a", nodeKey: request.nodeKey, lockKey: request.lockKey),
                                        expecting: "lockSign")
-            try await gate.wait(swift, "항목 3: signingRequest가 nil") {
+            try await gate.wait(swift, "Item 3: signingRequest is nil") {
                 $0.tailnetLock.mode == .enforcing && $0.tailnetLock.signingRequest == nil
             }
             let unlocked = swift.recorder.events.dropFirst(signedAt).contains {
                 if case let .tailnetLockChanged(lock) = $0.event { lock.signingRequest == nil } else { false }
             }
-            #expect(unlocked, "항목 3: 같은 run 안에서 signingRequest가 nil인 tailnetLockChanged가 나왔다")
-            try await netstackWait("항목 3: Go 피어 둘의 netmap에 Swift 노드", seconds: 30) {
+            #expect(unlocked, "Item 3: tailnetLockChanged with nil signingRequest appeared in the same run")
+            try await netstackWait("Item 3: Swift node in the netmaps of both Go peers", seconds: 30) {
                 for name in ["go-peer-a", "go-peer-b"] {
                     guard try await gate.lockStatus(name).visiblePeers?.contains(selfKey) == true else { return false }
                 }
                 return true
             }
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 3")
-            try await gate.expectReachable("항목 3: Swift → go-peer-a UDP 에코") { try await gate.udpEcho(from: swift, to: a, within: LockGate.reachable) }
-            try await gate.expectReachable("항목 3: Swift → go-peer-b UDP 에코") { try await gate.udpEcho(from: swift, to: b, within: LockGate.reachable) }
-            try await gate.expectReachable("항목 3: Swift SYN → go-peer-a SYN-ACK") { try await gate.tcpHandshake(from: swift, to: a, within: LockGate.reachable) }
-            try await gate.expectReachable("항목 3: go-peer-a → Swift UDP") { try await gate.goSend("go-peer-a", to: swift, proto: "udp", within: LockGate.reachable) }
-            try await gate.expectReachable("항목 3: go-peer-a → Swift TCP SYN") { try await gate.goSend("go-peer-a", to: swift, proto: "tcp", within: LockGate.reachable) }
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 3")
+            try await gate.expectReachable("Item 3: Swift → go-peer-a UDP echo") { try await gate.udpEcho(from: swift, to: a, within: LockGate.reachable) }
+            try await gate.expectReachable("Item 3: Swift → go-peer-b UDP echo") { try await gate.udpEcho(from: swift, to: b, within: LockGate.reachable) }
+            try await gate.expectReachable("Item 3: Swift SYN → go-peer-a SYN-ACK") { try await gate.tcpHandshake(from: swift, to: a, within: LockGate.reachable) }
+            try await gate.expectReachable("Item 3: go-peer-a → Swift UDP") { try await gate.goSend("go-peer-a", to: swift, proto: "udp", within: LockGate.reachable) }
+            try await gate.expectReachable("Item 3: go-peer-a → Swift TCP SYN") { try await gate.goSend("go-peer-a", to: swift, proto: "tcp", within: LockGate.reachable) }
 
-            // 항목 5: 서명 없는 Go 피어.
+            // Item 5: unsigned Go peer.
             let filteredBefore = await swift.status.tailnetLock.filteredPeerCount
             let c = try await gate.addPeer("go-peer-c")
-            try await gate.wait(swift, "항목 5: go-peer-c를 거른다") { $0.tailnetLock.filteredPeerCount == filteredBefore + 1 }
-            #expect(await !swift.peerKeys.contains(c.key), "항목 5: Swift peers에 서명 없는 피어가 없다")
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 5")
-            try await gate.expectReachable("항목 5: (대조) go-peer-a → Swift UDP") { try await gate.goSend("go-peer-a", to: swift, proto: "udp", within: LockGate.reachable) }
-            try await gate.expectSilent("항목 5: go-peer-c → Swift UDP") { try await gate.goSend("go-peer-c", to: swift, proto: "udp", within: LockGate.silence) }
-            try await gate.expectSilent("항목 5: go-peer-c → Swift TCP SYN") { try await gate.goSend("go-peer-c", to: swift, proto: "tcp", within: LockGate.silence) }
-            try await gate.expectSilent("항목 5: Swift → go-peer-c UDP 에코") { try await gate.udpEcho(from: swift, to: c, within: LockGate.silence) }
+            try await gate.wait(swift, "Item 5: filters go-peer-c") { $0.tailnetLock.filteredPeerCount == filteredBefore + 1 }
+            #expect(await !swift.peerKeys.contains(c.key), "Item 5: the unsigned peer is absent from Swift peers")
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 5")
+            try await gate.expectReachable("Item 5 (control): go-peer-a → Swift UDP") { try await gate.goSend("go-peer-a", to: swift, proto: "udp", within: LockGate.reachable) }
+            try await gate.expectSilent("Item 5: go-peer-c → Swift UDP") { try await gate.goSend("go-peer-c", to: swift, proto: "udp", within: LockGate.silence) }
+            try await gate.expectSilent("Item 5: go-peer-c → Swift TCP SYN") { try await gate.goSend("go-peer-c", to: swift, proto: "tcp", within: LockGate.silence) }
+            try await gate.expectSilent("Item 5: Swift → go-peer-c UDP echo") { try await gate.udpEcho(from: swift, to: c, within: LockGate.silence) }
 
-            // 항목 6: 사슬이 자란다. b의 키를 더하고, b가 e에 서명하고, b의 키를 빼면 e가 함께 빠진다.
+            // Item 6: the chain grows. Add b's key, have b sign e, then remove b's key and see e removed with it.
             let bLock = try #require(try await gate.lockStatus("go-peer-b").lockKey)
             let added = try await gate.command(.init(cmd: "lockModify", name: "go-peer-a", addKeys: [bLock]), expecting: "lockModify")
-            try await gate.wait(swift, "항목 6: 키를 더한 머리를 따라온다") { $0.tailnetLock.head == added.head }
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 6: 키를 더한 뒤")
-            try await netstackWait("항목 6: go-peer-b가 자기 키를 신뢰하는 머리에 닿는다", seconds: 30) {
+            try await gate.wait(swift, "Item 6: catches up to the head that added the key") { $0.tailnetLock.head == added.head }
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 6: after adding the key")
+            try await netstackWait("Item 6: go-peer-b reaches a head that trusts its own key", seconds: 30) {
                 let status = try await gate.lockStatus("go-peer-b")
                 return status.head == status.controlHead && status.trustedKeys?.contains(bLock) == true
             }
             let e = try await gate.addPeer("go-peer-e")
-            try await gate.wait(swift, "항목 6: 서명 전의 go-peer-e를 거른다") { $0.tailnetLock.filteredPeerCount == filteredBefore + 2 }
+            try await gate.wait(swift, "Item 6: filters go-peer-e before signing") { $0.tailnetLock.filteredPeerCount == filteredBefore + 2 }
             _ = try await gate.command(.init(cmd: "lockSign", name: "go-peer-b", nodeKey: e.key), expecting: "lockSign")
-            try await netstackWait("항목 6: b의 서명으로 go-peer-e가 보인다", seconds: 30) { await swift.peerKeys.contains(e.key) }
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 6: b가 서명한 뒤")
-            try await gate.expectReachable("항목 6: Swift → go-peer-e UDP 에코") { try await gate.udpEcho(from: swift, to: e, within: LockGate.reachable) }
+            try await netstackWait("Item 6: go-peer-e is visible after b signs it", seconds: 30) { await swift.peerKeys.contains(e.key) }
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 6: after b signs")
+            try await gate.expectReachable("Item 6: Swift → go-peer-e UDP echo") { try await gate.udpEcho(from: swift, to: e, within: LockGate.reachable) }
             let removed = try await gate.command(.init(cmd: "lockModify", name: "go-peer-a", removeKeys: [bLock]), expecting: "lockModify")
-            try await gate.wait(swift, "항목 6: 키를 뺀 머리를 따라온다") { $0.tailnetLock.head == removed.head }
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 6: 키를 뺀 뒤")
-            #expect(await !swift.peerKeys.contains(e.key), "항목 6: 뺀 키로만 서명된 피어가 Swift에서 빠진다")
-            #expect(try await gate.lockStatus("go-peer-a").filteredPeers?.contains(e.key) == true, "항목 6: Go에서도 빠진다")
-            try await gate.expectSilent("항목 6: 키를 뺀 뒤 Swift → go-peer-e UDP 에코") {
+            try await gate.wait(swift, "Item 6: catches up to the head that removed the key") { $0.tailnetLock.head == removed.head }
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 6: after removing the key")
+            #expect(await !swift.peerKeys.contains(e.key), "Item 6: Swift drops the peer signed only by the removed key")
+            #expect(try await gate.lockStatus("go-peer-a").filteredPeers?.contains(e.key) == true, "Item 6: Go also drops the peer")
+            try await gate.expectSilent("Item 6: Swift → go-peer-e UDP echo after removing the key") {
                 try await gate.udpEcho(from: swift, to: e, within: LockGate.silence)
             }
         }
     }
 
-    @Test("항목 4: 서명된 인증 키로 등록하면 처음부터 잠기지 않는다")
+    @Test("Item 4: registering with a signed auth key avoids lockout from the start")
     func wrappedAuthKey() async throws {
         try await withLockGate { gate in
             let peers = try await enableLock(gate)
             let a = try #require(peers["go-peer-a"])
-            // 시험 전용 인증 키(testcontrol은 인증 키를 요구하지 않는다). 감싼 결과는 개인 키를 담으므로 어디에도 찍지 않는다.
+            // Test-only auth key (testcontrol does not require one). The wrapped result contains a private key, so never print it.
             let wrapped = try #require(try await gate.command(
                 .init(cmd: "lockWrapAuthKey", name: "go-peer-a", authKey: "tskey-auth-tl10gate0001"), expecting: "lockWrapAuthKey").authKey)
             let swift = try gate.startNode("swift-w", authKey: wrapped)
-            let joined = try await gate.wait(swift, "항목 4: enforcing·서버 머리") {
+            let joined = try await gate.wait(swift, "Item 4: enforcing and at the server head") {
                 $0.state == .running && $0.tailnetLock.mode == .enforcing && $0.tailnetLock.head != nil
             }
             let signer = try await gate.lockStatus("go-peer-a")
-            #expect(joined.tailnetLock.head == signer.controlHead, "항목 4: 사슬이 자란 서버 머리까지 따라왔다")
+            #expect(joined.tailnetLock.head == signer.controlHead, "Item 4: caught up to the server head after the chain grew")
             #expect(joined.tailnetLock.signingRequest == nil)
-            #expect(swift.recorder.lockChanges.allSatisfy { $0.signingRequest == nil }, "항목 4: 한 번도 잠기지 않았다")
-            try expectLockBeforeRunning(swift, "항목 4")
+            #expect(swift.recorder.lockChanges.allSatisfy { $0.signingRequest == nil }, "Item 4: the node was never locked out")
+            try expectLockBeforeRunning(swift, "Item 4")
             let selfKey = try #require(await swift.selfKey)
             gate.name(selfKey, "swift-w")
             let mine = try await gate.registrations().filter { $0.nodeKey == selfKey }
             #expect(!mine.isEmpty)
-            #expect(mine.first?.signature == "accepted", "항목 4: 요청의 서명을 Go가 통과시켰다")
-            #expect(mine.allSatisfy { !$0.wrappedKeyTrace }, "항목 4: 요청 본문에 감싼 개인 키의 흔적이 없다")
+            #expect(mine.first?.signature == "accepted", "Item 4: Go accepted the request signature")
+            #expect(mine.allSatisfy { !$0.wrappedKeyTrace }, "Item 4: the request body has no trace of the wrapped private key")
             #expect(mine.allSatisfy { !$0.nlKey.isEmpty })
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 4")
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 4")
             #expect(signer.filteredPeers?.contains(selfKey) != true)
-            try await gate.expectReachable("항목 4: Swift → go-peer-a UDP 에코") { try await gate.udpEcho(from: swift, to: a, within: LockGate.reachable) }
-            try await gate.expectReachable("항목 4: go-peer-a → Swift UDP") { try await gate.goSend("go-peer-a", to: swift, proto: "udp", within: LockGate.reachable) }
+            try await gate.expectReachable("Item 4: Swift → go-peer-a UDP echo") { try await gate.udpEcho(from: swift, to: a, within: LockGate.reachable) }
+            try await gate.expectReachable("Item 4: go-peer-a → Swift UDP") { try await gate.goSend("go-peer-a", to: swift, proto: "udp", within: LockGate.reachable) }
         }
     }
 
-    @Test("항목 7: lockDisable — 틀린 비밀이면 enforcing에 머물고, 맞는 비밀이면 꺼지고 파일이 없다")
+    @Test("Item 7: lockDisable stays enforcing with the wrong secret, and disables lock and removes the file with the correct secret")
     func disableWithSecret() async throws {
         try await withLockGate { gate in
             _ = try await enableLock(gate, alsoSigned: ["go-peer-b"])
             let swift = try await joinAndSign(gate, "swift-s")
             let selfKey = try #require(await swift.selfKey)
             let c = try await gate.addPeer("go-peer-c")
-            try await netstackWait("항목 7: go-peer-c를 거른다", seconds: 30) {
+            try await netstackWait("Item 7: filters go-peer-c", seconds: 30) {
                 try await gate.lockStatus("go-peer-b").filteredPeers?.contains(c.key) == true
             }
-            try await gate.expectAgreement(swift, with: "go-peer-b", "항목 7: 끄기 전")
-            #expect(FileManager.default.fileExists(atPath: swift.lockFile.path), "항목 7: 끄기 전에 tailnet-lock.cbor가 있다")
+            try await gate.expectAgreement(swift, with: "go-peer-b", "Item 7: before disabling")
+            #expect(FileManager.default.fileExists(atPath: swift.lockFile.path), "Item 7: tailnet-lock.cbor exists before disabling")
 
-            // 틀린 비밀: 서버는 껐지만 노드는 lock을 유지한다.
+            // Wrong secret: the server disables lock, but the node still enforces it.
             let bootstraps = try await gate.tkaRequestCount("bootstrap", from: selfKey)
             let wrong = try await gate.command(.init(cmd: "lockDisable", name: "go-peer-a", wrongSecret: true), expecting: "lockDisable")
             #expect(wrong.alreadyDisabled == false)
-            try await netstackWait("항목 7: Swift 노드가 끈 뒤의 bootstrap으로 비밀을 받으러 간다", seconds: 30) {
+            try await netstackWait("Item 7: Swift node requests bootstrap after lock is disabled to fetch the secret", seconds: 30) {
                 try await gate.tkaRequestCount("bootstrap", from: selfKey) > bootstraps
             }
-            try await netstackWait("항목 7: go-peer-b도 틀린 비밀을 받는다", seconds: 30) {
+            try await netstackWait("Item 7: go-peer-b also receives the wrong secret", seconds: 30) {
                 let status = try await gate.lockStatus("go-peer-b")
                 return status.controlDisabled == true && status.enabled == true
             }
-            // 받은 비밀의 검증(Argon2i, 디버그에서 약 2초)이 끝날 시간을 두고, 그동안과 그 뒤에 바뀌지 않는지 본다.
-            try await gate.holds(swift, "항목 7: 틀린 비밀 뒤 enforcing에 머문다", seconds: 6) {
+            // Allow secret verification to finish (Argon2i, about 2 seconds in debug), and check that state stays the same during and afterward.
+            try await gate.holds(swift, "Item 7: remains enforcing after the wrong secret", seconds: 6) {
                 $0.tailnetLock.mode == .enforcing && $0.tailnetLock.filteredPeerCount == 1
             }
-            #expect(FileManager.default.fileExists(atPath: swift.lockFile.path), "항목 7: 틀린 비밀 뒤 파일이 남는다")
+            #expect(FileManager.default.fileExists(atPath: swift.lockFile.path), "Item 7: the file remains after the wrong secret")
             #expect(await !swift.peerKeys.contains(c.key))
-            #expect(try await gate.lockStatus("go-peer-b").filteredPeers?.contains(c.key) == true, "항목 7: Go도 c를 계속 거른다")
-            try await gate.expectAgreement(swift, with: "go-peer-b", "항목 7: 틀린 비밀 뒤")
-            try await gate.expectSilent("항목 7: 틀린 비밀 뒤 go-peer-c → Swift UDP") {
+            #expect(try await gate.lockStatus("go-peer-b").filteredPeers?.contains(c.key) == true, "Item 7: Go still filters c")
+            try await gate.expectAgreement(swift, with: "go-peer-b", "Item 7: after the wrong secret")
+            try await gate.expectSilent("Item 7: go-peer-c → Swift UDP after the wrong secret") {
                 try await gate.goSend("go-peer-c", to: swift, proto: "udp", within: LockGate.silence)
             }
 
-            // 맞는 비밀: 꺼지고, 서명 없는 피어가 다시 보이고, 파일이 없다. 서버는 이미 꺼져 있으므로 도구는 bootstrap이 줄
-            // 비밀만 바꾸고 새 맵을 보낸다(README `lockDisable`의 `alreadyDisabled`). 그 맵은 앞의 맵과 내용이 같다.
+            // Correct secret: lock is disabled, the unsigned peer is visible again, and the file is gone. The server already has lock disabled, so the tool changes only
+            // the secret bootstrap will return and sends a new map (README `alreadyDisabled` for `lockDisable`). That map has the same content as the previous one.
             let goKey = try #require(try await gate.lockStatus("go-peer-b").nodeKey)
             let goFrom = try await gate.tkaRequestCount("bootstrap", from: goKey)
             let swiftFrom = try await gate.tkaRequestCount("bootstrap", from: selfKey)
             let right = try await gate.command(.init(cmd: "lockDisable", name: "go-peer-a"), expecting: "lockDisable")
             #expect(right.alreadyDisabled == true)
-            // Go의 판정을 먼저 본다: 같은 내용의 맵을 받고 bootstrap을 다시 불러 맞는 비밀로 끈다
-            // (ipnlocal `tkaSyncIfNeeded`는 맵 응답마다 돈다: controlclient/map.go:240, ipnlocal/local.go:2034).
-            try await netstackWait("항목 7: go-peer-b가 같은 맵에서 bootstrap을 다시 부른다", seconds: 30) {
+            // Check Go's decision first. It receives the identical map, calls bootstrap again, and disables lock using the correct secret
+            // (ipnlocal `tkaSyncIfNeeded` runs on each map response: controlclient/map.go:240, ipnlocal/local.go:2034).
+            try await netstackWait("Item 7: go-peer-b calls bootstrap again after the identical map", seconds: 30) {
                 try await gate.tkaRequestCount("bootstrap", from: goKey) > goFrom
             }
-            try await netstackWait("항목 7: go-peer-b가 lock을 끄고 c를 본다", seconds: 30) {
+            try await netstackWait("Item 7: go-peer-b disables lock and sees c", seconds: 30) {
                 guard try await gate.lockStatus("go-peer-b").enabled == false else { return false }
                 let seen = try await gate.command(.init(cmd: "peerStatus", name: "go-peer-b"), expecting: "peerStatus").peers ?? []
                 return seen.contains { $0.nodeKey == c.key }
             }
-            // 같은 맵은 Swift 노드에도 같은 때 갔다. 다시 시도했다면 그 요청은 Go의 것과 거의 같은 때 온다. 2초를 더 준다.
+            // The Swift node received the same map at the same time. If it retried, its request would arrive around the same time as Go's. Allow 2 more seconds.
             try await Task.sleep(for: .seconds(2))
             let swiftRetries = try await gate.tkaRequestCount("bootstrap", from: selfKey) - swiftFrom
             let stuck = gate.describe(await swift.status)
             #expect(swiftRetries > 0, """
-                항목 7: Go는 맞는 비밀을 알린 같은 내용의 맵에서 끄기 절차(bootstrap)를 다시 돌아 끄는데, Swift 노드는 다시 \
-                시도하지 않는다(bootstrap \(swiftRetries)번, \(stuck))
+                Item 7: On the identical map announcing the correct secret, Go reruns the disablement procedure (bootstrap) and disables lock, while the Swift node \
+                does not retry (\(swiftRetries) bootstrap calls, \(stuck))
                 """)
             if swiftRetries == 0 {
-                // 원인을 가른다: 내용이 다른 맵(새 피어)이 오면 다시 시도해 끄는가. 끈 뒤의 확인을 이어 가려고도 한다.
+                // Isolate the cause by checking whether a map with different content (a new peer) triggers a retry and disables lock. This also lets the post-disablement checks continue.
                 _ = try await gate.addPeer("go-peer-y")
-                try await gate.wait(swift, "항목 7(가르기): 내용이 다른 맵 뒤 .disabled") { $0.tailnetLock.mode == .disabled }
-                await gate.tool.checkpoint("항목 7(가르기): 같은 내용의 맵에서는 다시 시도하지 않고, 내용이 다른 맵에서는 끈다")
+                try await gate.wait(swift, "Item 7 (isolating the cause): .disabled after a map with different content") { $0.tailnetLock.mode == .disabled }
+                await gate.tool.checkpoint("Item 7 (isolating the cause): an identical map does not trigger a retry, and a map with different content disables lock")
             } else {
-                try await gate.wait(swift, "항목 7: 맞는 비밀 뒤 .disabled") { $0.tailnetLock.mode == .disabled }
+                try await gate.wait(swift, "Item 7: .disabled after the correct secret") { $0.tailnetLock.mode == .disabled }
             }
-            try await netstackWait("항목 7: Swift 노드가 c를 본다", seconds: 30) { await swift.peerKeys.contains(c.key) }
-            #expect(!FileManager.default.fileExists(atPath: swift.lockFile.path), "항목 7: 끈 뒤 tailnet-lock.cbor가 없다")
-            #expect(swift.recorder.lockChanges.last?.mode == .disabled, "항목 7: .disabled로 바뀐 tailnetLockChanged가 나왔다")
-            try await gate.expectReachable("항목 7: 끈 뒤 go-peer-c → Swift UDP") {
+            try await netstackWait("Item 7: Swift node sees c", seconds: 30) { await swift.peerKeys.contains(c.key) }
+            #expect(!FileManager.default.fileExists(atPath: swift.lockFile.path), "Item 7: tailnet-lock.cbor is absent after disabling lock")
+            #expect(swift.recorder.lockChanges.last?.mode == .disabled, "Item 7: tailnetLockChanged reported the change to .disabled")
+            try await gate.expectReachable("Item 7: go-peer-c → Swift UDP after disabling lock") {
                 try await gate.goSend("go-peer-c", to: swift, proto: "udp", within: LockGate.reachable)
             }
-            try await gate.expectReachable("항목 7: 끈 뒤 Swift → go-peer-c UDP 에코") {
+            try await gate.expectReachable("Item 7: Swift → go-peer-c UDP echo after disabling lock") {
                 try await gate.udpEcho(from: swift, to: c, within: LockGate.reachable)
             }
         }
     }
 
-    @Test("항목 7: TKAInfo 없는 응답 — 도중에는 바뀌지 않고, 다시 이은 스트림의 첫 응답이면 끄기 절차로 간다")
+    @Test("Item 7: a response without TKAInfo leaves state unchanged mid-stream and starts disablement if it is the first response on a reconnected stream")
     func disableWithoutTKAInfo() async throws {
         try await withLockGate { gate in
             _ = try await enableLock(gate, alsoSigned: ["go-peer-b"])
@@ -247,55 +247,55 @@ struct TailnetLockTests {
             let selfKey = try #require(await swift.selfKey)
             let c = try await gate.addPeer("go-peer-c")
             for node in [swift, other] {
-                try await gate.wait(node, "항목 7: go-peer-c를 거른다") { $0.tailnetLock.filteredPeerCount == 1 }
+                try await gate.wait(node, "Item 7: filters go-peer-c") { $0.tailnetLock.filteredPeerCount == 1 }
             }
 
-            // 도중 주입(서버의 lock은 켜져 있다): TKAInfo 없는 응답으로는 바뀌지 않는다. 주입한 노드는 그 뒤 자동 맵을
-            // 받지 않으므로(README `injectMapResponse`) 다른 Swift 노드에 한다. 자기 Node를 주입하면 KeySignature가 빠져
-            // 스스로 잠기므로(주입 도우미의 Node에는 그 필드가 없다) 패킷 필터만 바꾸는 응답을 넣는다.
+            // Mid-stream injection (server lock is enabled): a response without TKAInfo leaves state unchanged. Because the injected node stops receiving automatic maps
+            // afterward (README `injectMapResponse`), inject into another Swift node. Injecting the node's own Node omits KeySignature and
+            // locks it out (the injection helper's Node lacks the field), so inject a response that changes only the packet filter.
             let before = await other.status.tailnetLock
             let otherKey = try #require(await other.selfKey)
             let filterBefore = await other.node.lastNetmap?.packetFilter
             try await gate.tool.inject(.init(PacketFilter: [.init(SrcIPs: ["100.64.254.10/32"], IPProto: [17],
                                                                   DstPorts: [.init(IP: "*", Ports: .init(First: 9, Last: 9))])]),
                                        into: otherKey)
-            try await netstackWait("항목 7: 주입한 응답이 적용된다", seconds: 25) {
+            try await netstackWait("Item 7: injected response is applied", seconds: 25) {
                 let filter = await other.node.lastNetmap?.packetFilter
                 return filter != nil && filter != filterBefore
             }
-            #expect(await other.status.tailnetLock == before, "항목 7: 도중에 주입한 TKAInfo 없는 응답으로 lock 모습이 바뀌지 않는다")
+            #expect(await other.status.tailnetLock == before, "Item 7: a mid-stream injected response without TKAInfo leaves lock state unchanged")
 
-            // 서버가 lock을 끄고 TKAInfo를 싣지 않는다. 이어진 스트림의 Swift 노드와 Go 피어는 그대로 거른다.
+            // The server disables lock and omits TKAInfo. The Swift node and Go peers on the existing streams keep filtering.
             _ = try await gate.command(.init(cmd: "lockDisable", name: "go-peer-a", omitTKAInfo: true), expecting: "lockDisable")
             #expect(try await gate.lockStatus("go-peer-b").controlDisabled == true)
             let x = try await gate.addPeer("go-peer-x")
-            try await gate.wait(swift, "항목 7: 서버가 끈 뒤의 맵에서도 새 피어를 거른다") { $0.tailnetLock.filteredPeerCount == 2 }
-            #expect(await swift.status.tailnetLock.mode == .enforcing, "항목 7: 도중의 TKAInfo 없는 응답으로 끄지 않는다")
+            try await gate.wait(swift, "Item 7: still filters the new peer on a map sent after the server disabled lock") { $0.tailnetLock.filteredPeerCount == 2 }
+            #expect(await swift.status.tailnetLock.mode == .enforcing, "Item 7: a mid-stream response without TKAInfo does not disable lock")
             #expect(FileManager.default.fileExists(atPath: swift.lockFile.path))
-            try await netstackWait("항목 7: go-peer-b도 lock을 유지하고 x를 거른다", seconds: 30) {
+            try await netstackWait("Item 7: go-peer-b also keeps lock enabled and filters x", seconds: 30) {
                 let status = try await gate.lockStatus("go-peer-b")
                 return status.enabled == true && status.filteredPeers?.contains(x.key) == true
             }
-            try await gate.expectAgreement(swift, with: "go-peer-b", "항목 7: 서버가 TKAInfo 없이 끈 뒤")
+            try await gate.expectAgreement(swift, with: "go-peer-b", "Item 7: after the server disabled lock without TKAInfo")
 
-            // 다시 이은 스트림(같은 상태 디렉터리로 다시 띄운다)의 첫 응답에 TKAInfo가 없으면 끄기 절차로 간다.
+            // If the first response on a reconnected stream (restart with the same state directory) lacks TKAInfo, it starts the disablement procedure.
             let bootstraps = try await gate.tkaRequestCount("bootstrap", from: selfKey)
             await swift.stop()
             let restarted = try gate.startNode("swift-s")
-            try await gate.wait(restarted, "항목 7: 다시 이은 뒤 .disabled") { $0.state == .running && $0.tailnetLock.mode == .disabled }
-            try await netstackWait("항목 7: 서명 없는 c와 x가 보인다", seconds: 30) {
+            try await gate.wait(restarted, "Item 7: .disabled after reconnecting") { $0.state == .running && $0.tailnetLock.mode == .disabled }
+            try await netstackWait("Item 7: unsigned c and x are visible", seconds: 30) {
                 let keys = await restarted.peerKeys
                 return keys.contains(c.key) && keys.contains(x.key)
             }
-            #expect(!FileManager.default.fileExists(atPath: restarted.lockFile.path), "항목 7: 끈 뒤 tailnet-lock.cbor가 없다")
-            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) > bootstraps, "항목 7: 끄기 비밀을 bootstrap으로 받았다")
-            try await gate.expectReachable("항목 7: 끈 뒤 go-peer-c → Swift UDP") {
+            #expect(!FileManager.default.fileExists(atPath: restarted.lockFile.path), "Item 7: tailnet-lock.cbor is absent after disabling lock")
+            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) > bootstraps, "Item 7: received the disablement secret via bootstrap")
+            try await gate.expectReachable("Item 7: go-peer-c → Swift UDP after disabling lock") {
                 try await gate.goSend("go-peer-c", to: restarted, proto: "udp", within: LockGate.reachable)
             }
         }
     }
 
-    @Test("항목 8·9: 다시 시작(bootstrap 없이 저장된 상태로, 그사이 자란 사슬은 동기화로), node 키 교체와 재서명")
+    @Test("Items 8 and 9: restart from saved state without bootstrap (sync any chain growth in the meantime), node key rotation, and re-signing")
     func restartAndRotation() async throws {
         try await withLockGate { gate in
             let peers = try await enableLock(gate, alsoSigned: ["go-peer-b"])
@@ -303,211 +303,211 @@ struct TailnetLockTests {
             let first = try await joinAndSign(gate, "swift-s")
             let selfKey = try #require(await first.selfKey)
             let c = try await gate.addPeer("go-peer-c")
-            try await gate.wait(first, "항목 8: go-peer-c를 거른다") { $0.tailnetLock.filteredPeerCount == 1 }
+            try await gate.wait(first, "Item 8: filters go-peer-c") { $0.tailnetLock.filteredPeerCount == 1 }
             let head = try #require(await first.status.tailnetLock.head)
             let nlKey = try #require(try await gate.registrations().last { $0.nodeKey == selfKey }?.nlKey)
             let bootstraps = try await gate.tkaRequestCount("bootstrap", from: selfKey)
             let registered = try await gate.registrations().count { $0.nodeKey == selfKey }
 
-            // 항목 8 ①: 사슬이 그대로면 같은 머리로 곧바로 거른다.
+            // Item 8 ①: if the chain is unchanged, filter immediately with the same head.
             await first.stop()
             let second = try gate.startNode("swift-s")
-            try await gate.wait(second, "항목 8: 다시 띄운 뒤 같은 머리로 거른다") {
+            try await gate.wait(second, "Item 8: filters with the same head after restart") {
                 $0.state == .running && $0.tailnetLock.mode == .enforcing && $0.tailnetLock.head == head && $0.tailnetLock.signingRequest == nil
             }
-            try expectStoredStateFromStart(second, signedPeers: [a.key, b.key], stage: "항목 8 ①")
-            #expect(second.recorder.lockChanges.first?.head == head, "항목 8: 첫 lock 모습이 저장된 머리다")
+            try expectStoredStateFromStart(second, signedPeers: [a.key, b.key], stage: "Item 8 ①")
+            #expect(second.recorder.lockChanges.first?.head == head, "Item 8: initial lock state has the saved head")
             #expect(await !second.peerKeys.contains(c.key))
-            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) == bootstraps, "항목 8: 다시 띄운 뒤 bootstrap RPC가 없다")
+            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) == bootstraps, "Item 8: no bootstrap RPC after restart")
             let afterSecond = try await gate.registrations().filter { $0.nodeKey == selfKey }
-            #expect(afterSecond.count > registered, "항목 8: 다시 띄운 노드가 등록을 보냈다")
-            #expect(afterSecond.allSatisfy { $0.nlKey == nlKey }, "항목 8: 같은 NL 키다")
-            try await gate.expectAgreement(second, with: "go-peer-a", "항목 8 ①")
+            #expect(afterSecond.count > registered, "Item 8: the restarted node sent a registration")
+            #expect(afterSecond.allSatisfy { $0.nlKey == nlKey }, "Item 8: same NL key")
+            try await gate.expectAgreement(second, with: "go-peer-a", "Item 8 ①")
 
-            // 항목 8 ②: 멈춘 사이에 사슬이 자라면 저장된 상태에서 동기화로 따라온다.
+            // Item 8 ②: if the chain grows while stopped, sync catches up from the saved state.
             await second.stop()
             let bLock = try #require(try await gate.lockStatus("go-peer-b").lockKey)
             let grown = try await gate.command(.init(cmd: "lockModify", name: "go-peer-a", addKeys: [bLock]), expecting: "lockModify")
             #expect(grown.head != head)
             let offers = try await gate.tkaRequestCount("sync/offer", from: selfKey)
             let third = try gate.startNode("swift-s")
-            try await gate.wait(third, "항목 8 ②: 자란 머리로 따라온다") {
+            try await gate.wait(third, "Item 8 ②: catches up to the newer head") {
                 $0.state == .running && $0.tailnetLock.mode == .enforcing && $0.tailnetLock.head == grown.head
             }
-            try expectStoredStateFromStart(third, signedPeers: [a.key, b.key], stage: "항목 8 ②")
-            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) == bootstraps, "항목 8 ②: bootstrap RPC가 없다")
-            #expect(try await gate.tkaRequestCount("sync/offer", from: selfKey) > offers, "항목 8 ②: sync/offer로 따라왔다")
+            try expectStoredStateFromStart(third, signedPeers: [a.key, b.key], stage: "Item 8 ②")
+            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) == bootstraps, "Item 8 ②: no bootstrap RPC")
+            #expect(try await gate.tkaRequestCount("sync/offer", from: selfKey) > offers, "Item 8 ②: caught up via sync/offer")
             #expect(try await gate.registrations().filter { $0.nodeKey == selfKey }.allSatisfy { $0.nlKey == nlKey })
-            try await gate.expectAgreement(third, with: "go-peer-a", "항목 8 ②")
+            try await gate.expectAgreement(third, with: "go-peer-a", "Item 8 ②")
 
-            // 항목 9: 서버가 재서명을 요청하면 새 node 키로 바꾸고, 재서명한 요청의 서명을 Go가 통과시킨다.
+            // Item 9: when the server requests re-signing, rotate to a new node key and have Go validate the re-signed request's signature.
             _ = try await gate.command(.init(cmd: "lockRequestResign", nodeKey: selfKey), expecting: "lockRequestResign")
             await third.stop()
             let fourth = try gate.startNode("swift-s")
             var rotated: GoTailnet.LockRegistration?
-            try await netstackWait("항목 9: 옛 키를 OldNodeKey로 단 등록", seconds: 30) {
+            try await netstackWait("Item 9: registration carrying the old key as OldNodeKey", seconds: 30) {
                 rotated = try await gate.registrations().last { $0.oldNodeKey == selfKey }
                 return rotated != nil
             }
             let rotation = try #require(rotated)
-            #expect(rotation.signature == "accepted", "항목 9: 재서명한 요청의 서명을 Go가 통과시켰다 (\(rotation.signatureError))")
-            #expect(rotation.nlKey == nlKey, "항목 9: 같은 NL 키다")
-            #expect(try await gate.registrations().contains { $0.nodeKey == selfKey && $0.resignRequested }, "항목 9: 서버가 재서명을 요청했다")
+            #expect(rotation.signature == "accepted", "Item 9: Go accepted the re-signed request's signature (\(rotation.signatureError))")
+            #expect(rotation.nlKey == nlKey, "Item 9: same NL key")
+            #expect(try await gate.registrations().contains { $0.nodeKey == selfKey && $0.resignRequested }, "Item 9: the server requested re-signing")
             let newKey = rotation.nodeKey
-            gate.name(newKey, "swift-s(새 키)")
+            gate.name(newKey, "swift-s(new key)")
             #expect(newKey != selfKey)
-            try await gate.wait(fourth, "항목 9: 새 키로 잠기지 않고 거른다") {
+            try await gate.wait(fourth, "Item 9: filters with the new key without being locked out") {
                 $0.state == .running && $0.tailnetLock.mode == .enforcing && $0.tailnetLock.signingRequest == nil
             }
             #expect(await fourth.selfKey == newKey)
-            try await netstackWait("항목 9: go-peer-a가 새 키를 보고 옛 키를 보지 않는다", seconds: 30) {
+            try await netstackWait("Item 9: go-peer-a sees the new key and no longer sees the old key", seconds: 30) {
                 let status = try await gate.lockStatus("go-peer-a")
                 let all = Set(status.visiblePeers ?? []).union(status.filteredPeers ?? [])
                 return status.visiblePeers?.contains(newKey) == true && !all.contains(selfKey)
             }
-            try await gate.expectAgreement(fourth, with: "go-peer-a", "항목 9")
-            try await gate.expectReachable("항목 9: 새 키의 Swift → go-peer-a UDP 에코") {
+            try await gate.expectAgreement(fourth, with: "go-peer-a", "Item 9")
+            try await gate.expectReachable("Item 9: Swift with the new key → go-peer-a UDP echo") {
                 try await gate.udpEcho(from: fourth, to: a, within: LockGate.reachable)
             }
-            try await gate.expectReachable("항목 9: go-peer-a → 새 키의 Swift UDP") {
+            try await gate.expectReachable("Item 9: go-peer-a → Swift with the new key UDP") {
                 try await gate.goSend("go-peer-a", to: fourth, proto: "udp", within: LockGate.reachable)
             }
         }
     }
 
-    @Test("항목 10: 닫힌 쪽 — 깨진 bootstrap은 .unverified·acquiringState, 깨진 저장 파일은 unreadableStoredState, 지우면 다시 부트스트랩")
+    @Test("Item 10: fails closed with .unverified and acquiringState for broken bootstrap, unreadableStoredState for a corrupt state file, and bootstraps again after the file is deleted")
     func closedSide() async throws {
         try await withLockGate { gate in
             let peers = try await enableLock(gate, alsoSigned: ["go-peer-b"])
             let a = try #require(peers["go-peer-a"])
 
-            // 깨진 bootstrap. 같은 서버에서 Go 노드는 lock을 켜지 못하고 거르지 않는다(의도된 차이. 비교 기록만 남긴다).
-            // Swift 노드보다 먼저 더한다: 뒤에 더하면 그 맵이 Swift 노드의 재시도를 한 번 더 일으켜 물러나는 간격이 길어진다.
+            // Broken bootstrap. On the same server, the Go node cannot enable lock and does not filter (intentional difference, recorded only for comparison).
+            // Add it before the Swift node. Adding it afterward would send a map that triggers one more Swift retry and lengthens the backoff interval.
             try await gate.setBootstrapFault(true)
             let f = try await gate.addPeer("go-peer-f")
-            try await netstackWait("항목 10: go-peer-f가 bootstrap을 시도한다", seconds: 30) {
+            try await netstackWait("Item 10: go-peer-f attempts bootstrap", seconds: 30) {
                 try await gate.tkaRequestCount("bootstrap", from: f.key) > 0
             }
             let goUnderFault = try await gate.lockStatus("go-peer-f")
-            #expect(goUnderFault.enabled == false, "항목 10: (대조) Go는 깨진 bootstrap에서 lock을 켜지 않는다")
+            #expect(goUnderFault.enabled == false, "Item 10 (control): Go does not enable lock with broken bootstrap")
 
-            // Swift 노드는 피어를 하나도 올리지 않는다.
+            // The Swift node adds no peers.
             let swift = try gate.startNode("swift-s")
-            let closed = try await gate.wait(swift, "항목 10: 깨진 bootstrap에서 .unverified") {
+            let closed = try await gate.wait(swift, "Item 10: .unverified with broken bootstrap") {
                 $0.state == .running && $0.tailnetLock.mode == .unverified
             }
             let selfKey = try #require(await swift.selfKey)
             gate.name(selfKey, "swift-s")
-            #expect(closed.tailnetLock.issue == .acquiringState, "항목 10: issue가 .acquiringState")
+            #expect(closed.tailnetLock.issue == .acquiringState, "Item 10: issue is .acquiringState")
             let closedPeers = await swift.peerKeys
-            #expect(closed.peerCount == 0 && closedPeers.isEmpty, "항목 10: peers가 비어 있다")
+            #expect(closed.peerCount == 0 && closedPeers.isEmpty, "Item 10: peers is empty")
             let others = try await gate.registeredKeys().subtracting([selfKey])
-            #expect(closed.tailnetLock.filteredPeerCount == others.count, "항목 10: filteredPeerCount가 서버가 알린 피어 수")
+            #expect(closed.tailnetLock.filteredPeerCount == others.count, "Item 10: filteredPeerCount matches the number of peers advertised by the server")
             #expect(closed.tailnetLock.head == nil && closed.tailnetLock.signingRequest == nil)
-            try await gate.expectSilent("항목 10: .unverified의 Swift → go-peer-a UDP 에코") {
+            try await gate.expectSilent("Item 10: .unverified Swift → go-peer-a UDP echo") {
                 try await gate.udpEcho(from: swift, to: a, within: LockGate.silence)
             }
-            await gate.tool.checkpoint("항목 10: 깨진 bootstrap — Swift .unverified·피어 0, Go enabled=\(goUnderFault.enabled ?? false)")
+            await gate.tool.checkpoint("Item 10: broken bootstrap — Swift .unverified and 0 peers, Go enabled=\(goUnderFault.enabled ?? false)")
 
-            // 되돌리면 다음 재시도에 .enforcing이 된다. 재시도 간격은 실패마다 5초에서 두 배씩 는다(TL-7, 상한 300초).
-            // 되돌릴 때 서버가 보내는 맵은 내용이 같아(Go는 그 맵에서 곧바로 다시 시도한다) Swift 노드는 타이머를 기다린다.
+            // Restoring bootstrap leads to .enforcing on the next retry. The retry interval starts at 5 seconds and doubles on each failure (TL-7, capped at 300 seconds).
+            // The server sends an identical map on restoration (Go retries immediately on that map), so the Swift node waits for its timer.
             let failures = try await gate.tkaRequestCount("bootstrap", from: selfKey)
             #expect(failures >= 1)
             let backoff = min(5 * (1 << min(max(failures - 1, 0), 6)), 300)
             let restored = ContinuousClock.now
             try await gate.setBootstrapFault(false)
-            let recovered = try await gate.wait(swift, "항목 10: 되돌린 뒤 다음 재시도(실패 \(failures)번, 간격 \(backoff)초 이하)에 .enforcing",
+            let recovered = try await gate.wait(swift, "Item 10: .enforcing on the next retry after restoration (\(failures) failures, interval at most \(backoff) seconds)",
                                                 seconds: backoff + 10) {
                 $0.tailnetLock.mode == .enforcing && $0.tailnetLock.issue == nil
             }
             await gate.tool.checkpoint("""
-                항목 10: 되돌린 뒤 .enforcing까지 \(restored.duration(to: .now).formatted(.units(allowed: [.milliseconds]))) \
-                (그전 bootstrap 실패 \(failures)번, 다음 간격 \(backoff)초 이하)
+                Item 10: \(restored.duration(to: .now).formatted(.units(allowed: [.milliseconds]))) to .enforcing after restoration \
+                (\(failures) prior bootstrap failures, next interval at most \(backoff) seconds)
                 """)
-            let request = try #require(recovered.tailnetLock.signingRequest, "항목 10: 서명 전이라 잠겨 있다")
+            let request = try #require(recovered.tailnetLock.signingRequest, "Item 10: still locked before signing")
             let controlHead = try await gate.lockStatus("go-peer-a").controlHead
-            #expect(recovered.tailnetLock.head == controlHead, "항목 10: 되돌린 뒤 서버 머리")
-            try await gate.expectAgreement(swift, with: "go-peer-a", "항목 10: 되돌린 뒤")
+            #expect(recovered.tailnetLock.head == controlHead, "Item 10: server head after restoration")
+            try await gate.expectAgreement(swift, with: "go-peer-a", "Item 10: after restoration")
             _ = try await gate.command(.init(cmd: "lockSign", name: "go-peer-a", nodeKey: request.nodeKey, lockKey: request.lockKey),
                                        expecting: "lockSign")
-            try await gate.wait(swift, "항목 10: 서명 뒤 풀린다") { $0.tailnetLock.signingRequest == nil && $0.tailnetLock.mode == .enforcing }
-            try await gate.expectReachable("항목 10: 서명 뒤 Swift → go-peer-a UDP 에코") {
+            try await gate.wait(swift, "Item 10: unlocks after signing") { $0.tailnetLock.signingRequest == nil && $0.tailnetLock.mode == .enforcing }
+            try await gate.expectReachable("Item 10: Swift → go-peer-a UDP echo after signing") {
                 try await gate.udpEcho(from: swift, to: a, within: LockGate.reachable)
             }
             let nlKey = try #require(try await gate.registrations().last { $0.nodeKey == selfKey }?.nlKey)
 
-            // 저장 파일을 깨뜨리고 다시 띄우면 .unverified·unreadableStoredState다.
+            // Corrupt the saved file and restart to get .unverified and unreadableStoredState.
             await swift.stop()
             var stored = try Data(contentsOf: swift.lockFile)
             stored[stored.count / 2] ^= 0xff
             try stored.write(to: swift.lockFile)
             let broken = try gate.startNode("swift-s")
-            let unreadable = try await gate.wait(broken, "항목 10: 깨진 저장 파일에서 .unverified") {
+            let unreadable = try await gate.wait(broken, "Item 10: .unverified with a corrupt state file") {
                 $0.state == .running && $0.tailnetLock.mode == .unverified
             }
-            #expect(unreadable.tailnetLock.issue == .unreadableStoredState, "항목 10: issue가 .unreadableStoredState")
+            #expect(unreadable.tailnetLock.issue == .unreadableStoredState, "Item 10: issue is .unreadableStoredState")
             let brokenPeers = await broken.peerKeys
-            #expect(unreadable.peerCount == 0 && brokenPeers.isEmpty, "항목 10: peers가 비어 있다")
-            try await gate.holds(broken, "항목 10: 깨진 저장 파일은 스스로 풀리지 않는다", seconds: 7) {
+            #expect(unreadable.peerCount == 0 && brokenPeers.isEmpty, "Item 10: peers is empty")
+            try await gate.holds(broken, "Item 10: a corrupt state file does not recover on its own", seconds: 7) {
                 $0.tailnetLock.mode == .unverified && $0.tailnetLock.issue == .unreadableStoredState
             }
-            try await gate.expectSilent("항목 10: 깨진 저장 파일의 Swift → go-peer-a UDP 에코") {
+            try await gate.expectSilent("Item 10: Swift with a corrupt state file → go-peer-a UDP echo") {
                 try await gate.udpEcho(from: broken, to: a, within: LockGate.silence)
             }
 
-            // lock 상태 파일만 지우면 새 노드가 부트스트랩부터 해서 풀린다(같은 NL 키, 서명은 그대로 유효).
+            // Deleting only the lock state file lets a new node bootstrap from scratch and unlock (same NL key, signature still valid).
             await broken.stop()
             try ControlClient.removeTailnetLockState(inDirectory: broken.directory)
             #expect(!FileManager.default.fileExists(atPath: broken.lockFile.path))
             let bootstraps = try await gate.tkaRequestCount("bootstrap", from: selfKey)
             let fresh = try gate.startNode("swift-s")
-            try await gate.wait(fresh, "항목 10: 지운 뒤 부트스트랩해서 .enforcing·서명됨") {
+            try await gate.wait(fresh, "Item 10: bootstraps after deletion, reaches .enforcing, and is signed") {
                 $0.state == .running && $0.tailnetLock.mode == .enforcing && $0.tailnetLock.signingRequest == nil && $0.tailnetLock.issue == nil
             }
-            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) > bootstraps, "항목 10: 부트스트랩부터 했다")
+            #expect(try await gate.tkaRequestCount("bootstrap", from: selfKey) > bootstraps, "Item 10: started with bootstrap")
             #expect(await fresh.selfKey == selfKey)
-            #expect(try await gate.registrations().last { $0.nodeKey == selfKey }?.nlKey == nlKey, "항목 10: 같은 NL 키다")
-            try await gate.expectAgreement(fresh, with: "go-peer-a", "항목 10: 지운 뒤")
-            try await gate.expectReachable("항목 10: 지운 뒤 Swift → go-peer-a UDP 에코") {
+            #expect(try await gate.registrations().last { $0.nodeKey == selfKey }?.nlKey == nlKey, "Item 10: same NL key")
+            try await gate.expectAgreement(fresh, with: "go-peer-a", "Item 10: after deletion")
+            try await gate.expectReachable("Item 10: Swift → go-peer-a UDP echo after deletion") {
                 try await gate.udpEcho(from: fresh, to: a, within: LockGate.reachable)
             }
         }
     }
 
-    @Test("항목 11: lock 없는 tailnet — .disabled이고 TKA RPC가 나가지 않는다")
+    @Test("Item 11: a tailnet without lock stays .disabled and sends no TKA RPCs")
     func noLock() async throws {
         try await withLockGate(capability: false) { gate in
             let a = try await gate.addPeer("go-peer-a")
             let swift = try gate.startNode("swift-s")
-            try await gate.wait(swift, "항목 11: running·피어 하나") { $0.state == .running && $0.peerCount == 1 }
-            try await gate.expectReachable("항목 11: Swift → go-peer-a UDP 에코") {
+            try await gate.wait(swift, "Item 11: running with one peer") { $0.state == .running && $0.peerCount == 1 }
+            try await gate.expectReachable("Item 11: Swift → go-peer-a UDP echo") {
                 try await gate.udpEcho(from: swift, to: a, within: LockGate.reachable)
             }
-            #expect(await swift.status.tailnetLock == TailnetLockStatus(), "항목 11: mode가 .disabled이고 나머지는 기본값")
-            #expect(swift.recorder.lockChanges.isEmpty, "항목 11: tailnetLockChanged가 나오지 않는다")
-            #expect(try await gate.tkaRequests().isEmpty, "항목 11: TKA RPC가 없다")
+            #expect(await swift.status.tailnetLock == TailnetLockStatus(), "Item 11: mode is .disabled and other fields are at their defaults")
+            #expect(swift.recorder.lockChanges.isEmpty, "Item 11: no tailnetLockChanged event")
+            #expect(try await gate.tkaRequests().isEmpty, "Item 11: no TKA RPCs")
 
-            // capability만 있고 lock을 켜지 않은 tailnet(TKAInfo 없음)도 같다.
+            // The same holds for a tailnet with only the capability and lock disabled (no TKAInfo).
             _ = try await gate.command(.init(cmd: "setLockCapability", enabled: true), expecting: "lockCapability")
             _ = try await gate.addPeer("go-peer-b")
-            try await gate.wait(swift, "항목 11: capability를 실은 뒤의 맵(피어 둘)") { $0.peerCount == 2 }
-            try await gate.holds(swift, "항목 11: capability만으로는 .disabled", seconds: 3) { $0.tailnetLock.mode == .disabled }
+            try await gate.wait(swift, "Item 11: map after adding the capability (two peers)") { $0.peerCount == 2 }
+            try await gate.holds(swift, "Item 11: .disabled with only the capability", seconds: 3) { $0.tailnetLock.mode == .disabled }
             #expect(swift.recorder.lockChanges.isEmpty)
-            #expect(try await gate.tkaRequests().isEmpty, "항목 11: capability만 있을 때도 TKA RPC가 없다")
+            #expect(try await gate.tkaRequests().isEmpty, "Item 11: no TKA RPCs with only the capability")
             #expect(try await gate.lockStatus("go-peer-a").enabled == false)
         }
     }
 }
 
-/// lock을 켠다: 서명 기기 `go-peer-a`와 켤 때 함께 서명되는 `alsoSigned` 피어를 더하고 `lockInit`. 피어들이 서버 머리에 닿고
-/// 자기가 서명된 것을 본 뒤 돌아온다.
+/// Enables lock by adding the signing device `go-peer-a` and any `alsoSigned` peers signed during enablement, then calling `lockInit`. Returns
+/// after peers reach the server head and see that they are signed.
 private func enableLock(_ gate: LockGate, alsoSigned: [String] = []) async throws -> [String: GatePeer] {
     var peers: [String: GatePeer] = [:]
     for name in ["go-peer-a"] + alsoSigned { peers[name] = try await gate.addPeer(name) }
     let started = try await gate.command(.init(cmd: "lockInit", name: "go-peer-a"), expecting: "lockInit")
     #expect(started.enabled == true && started.head == started.controlHead && started.nodeKeySigned == true)
     for name in alsoSigned {
-        try await netstackWait("lock 켜기: \(name)가 부트스트랩하고 서명된 자기를 본다", seconds: 45) {
+        try await netstackWait("Enable lock: \(name) bootstraps and sees itself as signed", seconds: 45) {
             let status = try await gate.lockStatus(name)
             return status.enabled == true && status.head == status.controlHead && status.nodeKeySigned == true
         }
@@ -515,35 +515,35 @@ private func enableLock(_ gate: LockGate, alsoSigned: [String] = []) async throw
     return peers
 }
 
-/// 새 Swift 노드를 띄워 잠긴 것을 보고, 서명 요청의 두 값을 그대로 `lockSign`에 넣어 풀리게 한다.
+/// Starts a new Swift node, verifies it is locked, then unlocks it by passing both signing request values verbatim to `lockSign`.
 private func joinAndSign(_ gate: LockGate, _ label: String, hostname: String = "rd-mac-1a2b3c4d") async throws -> LockNode {
     let node = try gate.startNode(label, hostname: hostname)
-    let locked = try await gate.wait(node, "\(label): 잠김") {
+    let locked = try await gate.wait(node, "\(label): locked") {
         $0.state == .running && $0.tailnetLock.mode == .enforcing && $0.tailnetLock.signingRequest != nil
     }
     let request = try #require(locked.tailnetLock.signingRequest)
     gate.name(request.nodeKey, label)
     _ = try await gate.command(.init(cmd: "lockSign", name: "go-peer-a", nodeKey: request.nodeKey, lockKey: request.lockKey),
                                expecting: "lockSign")
-    try await gate.wait(node, "\(label): 서명 뒤 풀림") { $0.tailnetLock.signingRequest == nil && $0.tailnetLock.mode == .enforcing }
+    try await gate.wait(node, "\(label): unlocked after signing") { $0.tailnetLock.signingRequest == nil && $0.tailnetLock.mode == .enforcing }
     return node
 }
 
-/// F2 요구 1: 첫 `.running`과 lock 정보 사이에 틈이 없다. 같은 netmap의 `tailnetLockChanged`가 `stateChanged(.running)`보다
-/// 먼저이고, `.running`을 받은 뒤 읽은 `status`에 lock 모습이 이미 있다.
+/// F2 requirement 1: No gap between the first `.running` and lock information. For the same netmap, `tailnetLockChanged` precedes
+/// `stateChanged(.running)`, and `status` read after receiving `.running` already has lock state.
 private func expectLockBeforeRunning(_ node: LockNode, _ stage: String) throws {
     let entries = node.recorder.events
     let lockIndex = entries.firstIndex { if case .tailnetLockChanged = $0.event { true } else { false } }
-    let runningIndex = try #require(entries.firstIndex { $0.event == .stateChanged(.running) }, "\(stage): .running 사건")
-    #expect(lockIndex.map { $0 < runningIndex } == true, "\(stage): tailnetLockChanged가 첫 .running보다 먼저다")
-    #expect(entries[runningIndex].status.tailnetLock.mode != .disabled, "\(stage): .running 뒤의 status에 lock 모습이 있다")
+    let runningIndex = try #require(entries.firstIndex { $0.event == .stateChanged(.running) }, "\(stage): .running event")
+    #expect(lockIndex.map { $0 < runningIndex } == true, "\(stage): tailnetLockChanged comes before the first .running")
+    #expect(entries[runningIndex].status.tailnetLock.mode != .disabled, "\(stage): status after .running contains lock state")
 }
 
-/// 다시 띄운 노드가 처음부터 저장된 상태로 걸렀다: 한 번도 `.unverified`·`.disabled`로 lock 모습을 내지 않았고, 어느 사건 뒤의
-/// `status`에도 서명된 피어보다 많은 피어가 없었다.
+/// The restarted node filtered with the saved state from the start. It never emitted lock state with `.unverified` or `.disabled`, and
+/// `status` after each event included no more peers than the signed peers.
 private func expectStoredStateFromStart(_ node: LockNode, signedPeers: Set<String>, stage: String) throws {
     let changes = node.recorder.lockChanges
-    #expect(!changes.isEmpty && changes.allSatisfy { $0.mode == .enforcing }, "\(stage): 처음부터 .enforcing이다")
-    #expect(node.recorder.events.allSatisfy { $0.status.peerCount <= signedPeers.count }, "\(stage): 서명 없는 피어가 한 번도 올라오지 않았다")
+    #expect(!changes.isEmpty && changes.allSatisfy { $0.mode == .enforcing }, "\(stage): .enforcing from the start")
+    #expect(node.recorder.events.allSatisfy { $0.status.peerCount <= signedPeers.count }, "\(stage): no unsigned peer was ever added")
     try expectLockBeforeRunning(node, stage)
 }

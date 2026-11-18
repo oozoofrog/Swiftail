@@ -4,20 +4,20 @@ import SwiftailBase
 import SwiftailMagicsock
 import Testing
 
-/// 실기기 관측("내려받는 쪽에서 direct가 선 뒤 약 100초에 `relayed`")을 실제 Go 피어와 실제 소켓으로 다시 본다.
-/// `docs/contracts/SwiftailMagicsock.md` "direct가 선 뒤 약 100초에 `relayed`"의 "조사 결과".
+/// Rechecks a real-device observation ("the downloading side becomes `relayed` about 100 seconds after a direct path is established") with a real Go peer and real sockets.
+/// See "Investigation Results" under "`relayed` About 100 Seconds After a Direct Path Is Established" in `docs/contracts/SwiftailMagicsock.md`.
 ///
-/// 루프백이라 왕복 지연이 5 ms 아래여서 1분마다의 전체 Ping 길은 거의 타지 않는다. 그 길과 Wi-Fi 손실은 상태 기계
-/// 시험(`MagicsockLongSessionTests`)이 덮는다.
-@Suite("조사: 긴 내려받기 중 경로", .enabled(if: tailnetBinary != nil,
-    "SWIFTAIL_TAILNET가 없어 긴 내려받기 조사를 건너뜁니다"), .serialized, .timeLimit(.minutes(10)))
+/// Loopback round-trip latency is below 5 ms, so the full Ping path run every minute is rarely exercised. State machine tests
+/// (`MagicsockLongSessionTests`) cover that path and Wi-Fi loss.
+@Suite("Investigation into the path during a long download", .enabled(if: tailnetBinary != nil,
+    "Skipping the long-download investigation because SWIFTAIL_TAILNET is missing"), .serialized, .timeLimit(.minutes(10)))
 struct LongDownloadPathTests {
     private static let chunk: UInt64 = 20 * 1_048_576
 
-    @Test("Go 피어에게서 26초 내려받기와 42초 유휴를 되풀이하는 162초 동안 Swift 노드의 경로가 direct에서 내려가지 않는다")
+    @Test("The Swift node's path stays direct for 162 seconds of repeated 26-second downloads from the Go peer and 42-second idle periods")
     func repeatedDownloads() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
-            // 준비가 양쪽 direct를 확인한다. 그 뒤로는 경로가 바뀔 때만 사건이 온다.
+            // Setup verifies that both sides are direct. After that, events arrive only when the path changes.
             let fqdn = try await netstackPrepare(gate)
             let initial = await gate.node.path(toPeerNamed: fqdn)
             let recorder = PathRecorder()
@@ -36,11 +36,11 @@ struct LongDownloadPathTests {
                     for round in 0..<3 {
                         let downloadEnd = started + .seconds(68 * round + 26)
                         while ContinuousClock.now < downloadEnd {
-                            let connection = try await netstackDeadline("긴 내려받기 connect") {
+                            let connection = try await netstackDeadline("Long download connect") {
                                 try await gate.node.connect(to: gate.peer.address().description, port: 9_100)
                             }
                             try await connection.write(NetstackStream.header(count: Self.chunk, seed: 1))
-                            _ = try await netstackExchange(gate, connection: connection, stage: "긴 내려받기 \(round + 1)",
+                            _ = try await netstackExchange(gate, connection: connection, stage: "Long download \(round + 1)",
                                 sendCount: 0, receiveCount: Self.chunk)
                             total += Self.chunk
                         }
@@ -53,16 +53,16 @@ struct LongDownloadPathTests {
                 received = try #require(try await group.next())
             }
             let events = await recorder.events.map { (started.duration(to: $0.time), $0.path) }
-            await gate.tool.checkpoint("긴 내려받기: \(started.duration(to: .now)) 동안 \(received / 1_048_576)MiB, 경로 사건 \(events)")
+            await gate.tool.checkpoint("Long download: over \(started.duration(to: .now)), \(received / 1_048_576)MiB, path events \(events)")
             #expect(started.duration(to: .now) >= .seconds(150))
             let isDirect: (PeerPath?) -> Bool = { if case .direct = $0 { true } else { false } }
             #expect(isDirect(initial))
-            #expect(events.allSatisfy { isDirect($0.1) }, "direct 뒤 경로 사건: \(events)")
+            #expect(events.allSatisfy { isDirect($0.1) }, "Path events after direct: \(events)")
         }
     }
 }
 
-/// 받은 경로 사건과 그 시각.
+/// Received path events and their timestamps.
 private actor PathRecorder {
     private(set) var events: [(time: ContinuousClock.Instant, path: PeerPath?)] = []
 

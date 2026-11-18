@@ -4,15 +4,15 @@ import Testing
 import SwiftailBase
 import SwiftailWireGuard
 
-/// 길이 필드와 IPv4 체크섬이 맞는 IP 패킷. 짧은 크기는 IP 머리 뒤에 부분 payload를 둔다.
-/// 완전한 UDP 머리가 들어가면 길이와 의사 머리 체크섬도 채워 IPv6에서도 유효하게 만든다.
+/// An IP packet with correct length fields and IPv4 checksum. Short sizes put a partial payload after the IP header.
+/// When a complete UDP header fits, also fills in its length and pseudo-header checksum to make it valid for IPv6.
 func ipPacket(fromSwift: Bool, size: Int = 36, ipv6: Bool = false, marker: UInt8 = 1) throws -> [UInt8] {
     let header = ipv6 ? 40 : 20
-    guard size >= header, size <= 65_535 else { throw InteropFailure("시험 IP 크기 오류") }
+    guard size >= header, size <= 65_535 else { throw InteropFailure("Invalid test IP size") }
     let source = ipv6 ? (fromSwift ? "fd00:99::1" : "fd00:99::2") : (fromSwift ? "10.99.0.1" : "10.99.0.2")
     let destination = ipv6 ? (fromSwift ? "fd00:99::2" : "fd00:99::1") : (fromSwift ? "10.99.0.2" : "10.99.0.1")
     guard let src = IPAddress(source), let dst = IPAddress(destination) else {
-        throw InteropFailure("시험 IP 주소 해석 실패")
+        throw InteropFailure("Could not parse test IP address")
     }
     let payloadSize = size - header
     var packet: [UInt8]
@@ -59,7 +59,7 @@ struct InteropPair: Sendable {
         try await swift.send(sent)
         let received = try await go.packet(timeout: timeout)
         guard received == sent else {
-            throw InteropFailure("Swift→Go 바이트 불일치: 송신 \(sent.count), 수신 \(received.count)")
+            throw InteropFailure("Swift→Go byte mismatch: sent \(sent.count), received \(received.count)")
         }
     }
 
@@ -68,7 +68,7 @@ struct InteropPair: Sendable {
         try await go.send(sent)
         let received = try await swift.packet()
         guard received == sent else {
-            throw InteropFailure("Go→Swift 바이트 불일치: 송신 \(sent.count), 수신 \(received.count)")
+            throw InteropFailure("Go→Swift byte mismatch: sent \(sent.count), received \(received.count)")
         }
     }
 
@@ -83,12 +83,12 @@ struct InteropPair: Sendable {
     }
 }
 
-/// 설정·본문 어느 단계가 실패해도 두 입출력 자원을 닫은 뒤 진단을 함께 던진다.
+/// If setup or the body fails, closes both I/O resources before throwing with diagnostics.
 func withInteropPair(_ body: @Sendable (InteropPair) async throws -> Void) async throws {
     let swiftKey = Curve25519.KeyAgreement.PrivateKey()
     let goKey = Curve25519.KeyAgreement.PrivateKey()
     guard let peer = PublicKey(rawValue: goKey.publicKey.rawRepresentation) else {
-        throw InteropFailure("시험 공개 키 길이 오류")
+        throw InteropFailure("Invalid test public key length")
     }
     let swift = try UDPDriver(privateKey: swiftKey, peer: peer)
     let go = GoPeer()
@@ -102,7 +102,7 @@ func withInteropPair(_ body: @Sendable (InteropPair) async throws -> Void) async
         let ready = try await go.event("ready")
         guard let port = ready.listenPort, port > 0,
               ready.publicKey == Array(goKey.publicKey.rawRepresentation).hex else {
-            throw InteropFailure("wgpeer ready 값 오류")
+            throw InteropFailure("Invalid wgpeer ready value")
         }
         await swift.start(remotePort: port)
         try await body(InteropPair(swift: swift, go: go))
@@ -113,6 +113,6 @@ func withInteropPair(_ body: @Sendable (InteropPair) async throws -> Void) async
         await go.stop()
         let trace = await swift.diagnostics()
         let log = await go.diagnostics()
-        throw InteropFailure("\(error)\n\(trace)\nGo verbose 로그:\n\(log)")
+        throw InteropFailure("\(error)\n\(trace)\nGo verbose log:\n\(log)")
     }
 }

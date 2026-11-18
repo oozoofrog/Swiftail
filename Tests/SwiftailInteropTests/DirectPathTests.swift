@@ -4,17 +4,17 @@ import SwiftailBase
 import SwiftailMagicsock
 import Testing
 
-@Suite("M4 직접 경로 관문", .enabled(if: tailnetBinary != nil,
-    "SWIFTAIL_TAILNET가 없어 M4 관문 시험을 건너뜁니다"), .serialized, .timeLimit(.minutes(6)))
+@Suite("M4 direct path gate", .enabled(if: tailnetBinary != nil,
+    "Skipping M4 gate tests because SWIFTAIL_TAILNET is missing"), .serialized, .timeLimit(.minutes(6)))
 struct DirectPathTests {
-    @Test("항목 1~4·8: 엔드포인트, Swift 선행, 양쪽 차단과 복귀, TSMP 소비")
+    @Test("Items 1–4 and 8: endpoints, Swift sends first, blocking and recovery on both sides, and TSMP consumption")
     func pathSwitching() async throws {
         try await withGate(direct: false) { gate in
             let context = try await DirectContext.load(gate)
-            note("항목 1: STUN 엔드포인트·Go selfAddrs", since: gate.runningAt)
+            note("Item 1: STUN endpoints and Go selfAddrs", since: gate.runningAt)
             let initial = ContinuousClock.now
             try await observe(gate) { observations in
-                try await wait("항목 2: 양쪽 직접 경로·direct 사건", from: initial, for: .seconds(15)) {
+                try await wait("Item 2: direct paths on both sides and a direct event", from: initial, for: .seconds(15)) {
                     let direct = try await context.isDirect(gate, requiringLoopback: true)
                     let event = await observations.hasDirectPath(context.fqdn, since: initial)
                     return direct && event
@@ -22,22 +22,22 @@ struct DirectPathTests {
                 try await observations.requireEchoes(since: initial)
 
                 let (probe, blocked) = try await observations.blockAndSend(gate, context: context)
-                await gate.tool.checkpoint("항목 3: Swift 원격 UDP 포트 차단 및 직접 경로에서 에코 한 번 송신")
-                try await wait("항목 3: 양쪽 중계", from: blocked, for: .milliseconds(9500)) {
+                await gate.tool.checkpoint("Item 3: block the Swift remote UDP port and send one echo over the direct path")
+                try await wait("Item 3: both sides relayed", from: blocked, for: .milliseconds(9500)) {
                     try await context.isRelayed(gate)
                 }
-                // 신뢰 기간의 유실만 허용하고, +9.5초 이후에는 단 한 번 보낸 에코를 모두 확인한다.
+                // Allow loss only during the trust period and verify every echo sent exactly once after +9.5 seconds.
                 let reliable = blocked + .milliseconds(9500)
                 try await until(reliable + .seconds(4))
                 try await observations.requireEchoes(since: reliable)
                 let lost = await observations.missing(since: blocked, before: reliable)
-                #expect(lost.contains(probe), "항목 3: 신뢰 중인 직접 경로를 차단하면서 보낸 에코는 유실되어야 한다")
-                note("항목 3: 신뢰 기간 유실 \(lost.count)개, +9.5초 이후 에코 수신", since: blocked)
+                #expect(lost.contains(probe), "Item 3: the echo sent while blocking a still-trusted direct path must be lost")
+                note("Item 3: \(lost.count) lost during the trust period, echoes received after +9.5 seconds", since: blocked)
 
                 let unblocked = ContinuousClock.now
                 await gate.node.setBlockedUDPPorts([])
                 do {
-                    try await wait("항목 3: Swift 차단 해제 뒤 양쪽 직접", from: unblocked, for: .seconds(10)) {
+                    try await wait("Item 3: both sides direct after lifting the Swift block", from: unblocked, for: .seconds(10)) {
                         try await context.isDirect(gate)
                     }
                 } catch {
@@ -48,7 +48,7 @@ struct DirectPathTests {
                 let disabled = ContinuousClock.now
                 let on = try await gate.tool.command(.init(cmd: "setNeverDirectUDP", enabled: true), expecting: "neverDirectUDP")
                 #expect(on.enabled == true)
-                try await wait("항목 4: Go 노브 뒤 양쪽 중계", from: disabled, for: .milliseconds(9500)) {
+                try await wait("Item 4: both sides relayed after setting the Go knob", from: disabled, for: .milliseconds(9500)) {
                     try await context.isRelayed(gate)
                 }
                 try await observations.requireEchoes(since: disabled)
@@ -56,34 +56,34 @@ struct DirectPathTests {
                 let off = try await gate.tool.command(.init(cmd: "setNeverDirectUDP", enabled: false), expecting: "neverDirectUDP")
                 #expect(off.enabled == false)
                 do {
-                    try await wait("항목 4: Go 노브 해제 뒤 양쪽 직접", from: enabled, for: .seconds(10)) {
+                    try await wait("Item 4: both sides direct after clearing the Go knob", from: enabled, for: .seconds(10)) {
                         try await context.isDirect(gate)
                     }
                 } catch {
                     throw GateFailure("\(error)\n\(try await context.pathSummary(gate))")
                 }
                 try await observations.requireEchoes(since: reliable)
-                note("항목 8: 세션·전환 동안 inbound TSMP 0개", since: initial)
+                note("Item 8: 0 inbound TSMP packets during the session and transition", since: initial)
             }
         }
     }
 
-    @Test("항목 6~8: 유휴·재개, 130초 직접 경로 유지·에코 무손실, TSMP 소비")
+    @Test("Items 6–8: idle and resume, direct path for 130 seconds with no echo loss, and TSMP consumption")
     func idleAndLongHold() async throws {
         try await withGate(direct: false) { gate in
             let context = try await DirectContext.load(gate)
             try await observe(gate) { observations in
-                try await wait("항목 6 준비: 양쪽 직접", from: .now, for: .seconds(15)) {
+                try await wait("Item 6 setup: both sides direct", from: .now, for: .seconds(15)) {
                     try await context.isDirect(gate)
                 }
                 try await observations.requireEchoes(since: gate.runningAt)
                 let idle = await observations.pause()
-                await gate.tool.checkpoint("항목 6: 에코 송신 중지")
-                // 유휴 경계를 기다리는 동안에도 Swift 조회와 사건을 계속 관측한다.
+                await gate.tool.checkpoint("Item 6: stop sending echoes")
+                // Continue observing Swift queries and events while waiting for the idle boundary.
                 var inactiveAt: ContinuousClock.Instant?
                 var nilAt: ContinuousClock.Instant?
                 var nilEventAt: ContinuousClock.Instant?
-                try await wait("항목 6: 50초 이후 Go inactive·75초 이내 Swift nil 사건과 조회",
+                try await wait("Item 6: Go inactive after 50 seconds and Swift nil event and query result within 75 seconds",
                                from: idle, for: .seconds(75)) {
                     if await gate.node.path(toPeerNamed: context.fqdn) == nil, nilAt == nil { nilAt = .now }
                     if await observations.hasNil(context.fqdn, since: idle), nilEventAt == nil { nilEventAt = .now }
@@ -91,16 +91,16 @@ struct DirectPathTests {
                     if status.active == false, inactiveAt == nil { inactiveAt = .now }
                     guard ContinuousClock.now >= idle + .seconds(50) else { return false }
                     guard let inactiveAt, inactiveAt <= idle + .seconds(50) else {
-                        throw GateFailure("항목 6: 송신 중지 50초까지 Go inactive를 관측하지 못함")
+                        throw GateFailure("Item 6: Go inactive not observed by 50 seconds after stopping sends")
                     }
                     return status.active == false && nilAt != nil && nilEventAt != nil
                 }
-                note("항목 6: Go inactive", since: idle, at: try #require(inactiveAt))
-                note("항목 6: Swift nil 조회", since: idle, at: try #require(nilAt))
-                note("항목 6: Swift nil 사건", since: idle, at: try #require(nilEventAt))
+                note("Item 6: Go inactive", since: idle, at: try #require(inactiveAt))
+                note("Item 6: Swift nil query result", since: idle, at: try #require(nilAt))
+                note("Item 6: Swift nil event", since: idle, at: try #require(nilEventAt))
                 let resumed = ContinuousClock.now
                 await observations.resume()
-                try await wait("항목 6: 재개 뒤 양쪽 직접·direct 사건", from: resumed, for: .seconds(15)) {
+                try await wait("Item 6: both sides direct and a direct event after resuming", from: resumed, for: .seconds(15)) {
                     let direct = try await context.isDirect(gate)
                     let event = await observations.hasDirectPath(context.fqdn, since: resumed)
                     return direct && event
@@ -108,24 +108,24 @@ struct DirectPathTests {
                 try await observations.requireEchoes(since: resumed)
 
                 let maintained = ContinuousClock.now
-                await gate.tool.checkpoint("항목 7: 130초 유지 시작")
+                await gate.tool.checkpoint("Item 7: start the 130-second hold")
                 for tick in 1...13 {
                     try await until(maintained + .seconds(tick * 10))
                     let direct = try await context.isDirect(gate)
-                    #expect(direct, "항목 7: \(tick * 10)초의 양쪽 경로가 직접이어야 한다")
+                    #expect(direct, "Item 7: both paths must be direct at \(tick * 10) seconds")
                     try await observations.requireEchoes(since: maintained)
-                    note("항목 7: \(tick * 10)초 양쪽 직접·에코 무손실", since: maintained)
+                    note("Item 7: both sides direct and no echoes lost at \(tick * 10) seconds", since: maintained)
                 }
                 #expect(maintained.duration(to: .now) >= .seconds(130))
-                note("항목 8: 세션·유휴·rekey 동안 inbound TSMP 0개", since: maintained)
+                note("Item 8: 0 inbound TSMP packets during the session, idle time, and rekey", since: maintained)
             }
         }
     }
-    @Test("항목 5: running 뒤 더한 Go 피어가 먼저 보내 직접 경로를 만든다")
+    @Test("Item 5: a Go peer added after running sends first to establish a direct path")
     func goPeerInitiates() async throws {
         try await withGate(direct: false) { gate in
             let original = try await DirectContext.load(gate)
-            await gate.tool.checkpoint("항목 5: running 뒤 새 Go 피어 추가 직전")
+            await gate.tool.checkpoint("Item 5: immediately before adding a new Go peer after running")
             let event = try await gate.tool.command(.init(cmd: "addPeer", name: "go-peer-b"), expecting: "peer")
             let peer = try GatePeer(event)
             let fqdn: String = try #require(event.fqdn)
@@ -133,11 +133,11 @@ struct DirectPathTests {
                                                        deadline: .now + .seconds(10))
             #expect(context.goEndpoint.port != original.goEndpoint.port)
             let started = ContinuousClock.now
-            // 도구는 명령을 순서대로 처리하므로 송신과 status 조회도 한 Task에서 직렬화한다.
+            // The tool processes commands in order, so serialize sending and status queries in one Task as well.
             var nextSend = started
-            try await wait("항목 5: Go 선행 뒤 양쪽 직접", from: started, for: .seconds(15)) {
+            try await wait("Item 5: both sides direct after Go sends first", from: started, for: .seconds(15)) {
                 if ContinuousClock.now >= nextSend {
-                    await gate.tool.checkpoint("항목 5: Go peerSend 직전")
+                    await gate.tool.checkpoint("Item 5: immediately before Go peerSend")
                     let sent = try await gate.tool.command(.init(cmd: "peerSend", name: "go-peer-b",
                         to: try gate.local.address().description, port: 42155, proto: "udp", payload: "4d34"), expecting: "peerSend")
                     #expect(sent.attempted == true && sent.sent == true && sent.error == "")
@@ -145,7 +145,7 @@ struct DirectPathTests {
                 }
                 return try await context.isDirect(gate, requiringLoopback: true)
             }
-            let received = try await gate.packet("항목 5: 새 Go 피어의 UDP 수신") {
+            let received = try await gate.packet("Item 5: UDP reception by the new Go peer") {
                 $0.source == (try? peer.address()) && $0.proto == 17 && $0.destinationPort == 42155 && $0.payload == [0x4d, 0x34]
             }
             #expect(received.destination == (try gate.local.address()))
@@ -153,7 +153,7 @@ struct DirectPathTests {
     }
 }
 
-/// Go가 LAN 주소를 골라도 Swift가 실제 올린 엔드포인트인지 검사한다.
+/// Checks that the endpoint is one Swift actually advertised, even if Go chose a LAN address.
 private struct DirectContext: Sendable {
     let name: String
     let fqdn: String
@@ -164,7 +164,7 @@ private struct DirectContext: Sendable {
                      deadline: ContinuousClock.Instant? = nil) async throws -> Self {
         let deadline = deadline ?? gate.runningAt + .seconds(10)
         var result: Self?
-        try await wait("항목 1: nodes STUN 엔드포인트·Go selfAddrs", deadline: deadline) {
+        try await wait("Item 1: nodes STUN endpoints and Go selfAddrs", deadline: deadline) {
             let nodes = try #require(await gate.tool.command(.init(cmd: "nodes"), expecting: "nodes").nodes)
             let local = try #require(nodes.first { $0.nodeKey == gate.local.key })
             let endpoints = Set((local.endpoints ?? []).compactMap(IPEndpoint.init))
@@ -189,7 +189,7 @@ private struct DirectContext: Sendable {
         let status = try await status(gate)
         guard let text = status.curAddr, let endpoint = IPEndpoint(text), swiftEndpoints.contains(endpoint) else { return false }
         guard case .direct(let address) = await gate.node.path(toPeerNamed: fqdn) else { return false }
-        // loopback 주소는 계약의 항목 2·5만 명시한다. 복귀·유지는 직접 경로 여부를 본다.
+        // Only items 2 and 5 of the contract specify a loopback address. Recovery and persistence check whether the path is direct.
         return !requiringLoopback || address == goEndpoint
     }
 
@@ -198,22 +198,22 @@ private struct DirectContext: Sendable {
         return await gate.node.path(toPeerNamed: fqdn) == .relayed(derpRegion: 1) && status.curAddr == ""
     }
 
-    /// 실제 인터페이스 주소를 노출하지 않고 계약의 어느 쪽 조건이 어긋났는지 남긴다.
+    /// Records which side of the contract's condition failed without exposing actual interface addresses.
     func pathSummary(_ gate: Gate) async throws -> String {
         let status = try await status(gate)
         let swift: String
         switch await gate.node.path(toPeerNamed: fqdn) {
         case .direct(let endpoint):
-            swift = "direct(Go loopback 일치: \(endpoint == goEndpoint), Go 포트 일치: \(endpoint.port == goEndpoint.port))"
+            swift = "direct(Go loopback matches: \(endpoint == goEndpoint), Go port matches: \(endpoint.port == goEndpoint.port))"
         case .relayed(let region): swift = "relayed(\(region))"
         case nil: swift = "nil"
         }
         let advertised = status.curAddr.flatMap(IPEndpoint.init).map { swiftEndpoints.contains($0) } ?? false
-        return "Swift \(swift), Go curAddr 비어 있음: \(status.curAddr == ""), Swift 광고 주소 일치: \(advertised)"
+        return "Swift \(swift), Go curAddr empty: \(status.curAddr == ""), matches a Swift-advertised address: \(advertised)"
     }
 }
 
-/// 한 구독으로 패킷·경로 사건을 모아 취소한 AsyncStream을 다시 구독하지 않는다.
+/// Collects packets and path events with one subscription to avoid resubscribing to a canceled AsyncStream.
 private actor DirectObservations {
     private var paths: [(ContinuousClock.Instant, String, PeerPath?)] = []
     private var sent: [Int: ContinuousClock.Instant] = [:]
@@ -227,9 +227,9 @@ private actor DirectObservations {
     }
 
     func record(_ bytes: [UInt8], gate: Gate) throws {
-        // TSMP는 전송 머리가 없다. UDP·TCP 전용 ReceivedPacket 파서보다 먼저 본다.
+        // TSMP has no transport header. Check it before the UDP- and TCP-only ReceivedPacket parser.
         if bytes.count >= 20 && (bytes[0] >> 4 == 4 ? bytes[9] : bytes[6]) == 99 {
-            throw GateFailure("항목 8: TSMP가 inboundPackets에 나타남")
+            throw GateFailure("Item 8: TSMP appeared in inboundPackets")
         }
         let packet = try ReceivedPacket(bytes)
         guard packet.proto == 17 && packet.destinationPort == 43040 else { return }
@@ -237,10 +237,10 @@ private actor DirectObservations {
         #expect(packet.source == source && packet.destination == destination)
         #expect(packet.sourcePort == 7)
         guard packet.payload.count == 6, packet.payload.prefix(2) == [0x4d, 0x34] else {
-            throw GateFailure("M4 에코 payload 불일치")
+            throw GateFailure("M4 echo payload mismatch")
         }
         let sequence = packet.payload.dropFirst(2).reduce(0) { $0 * 256 + Int($1) }
-        #expect(sent[sequence] != nil, "보낸 적 없는 에코가 수신됨")
+        #expect(sent[sequence] != nil, "Received an echo that was never sent")
         received.insert(sequence)
     }
 
@@ -252,12 +252,12 @@ private actor DirectObservations {
         await gate.node.send(bytes)
     }
 
-    /// 주기 송신 작업이 제때 깨어나지 않아도 신뢰 중인 경로에 에코를 한 번 보낸다.
+    /// Sends one echo over the still-trusted path even if the periodic send task does not wake on time.
     func blockAndSend(_ gate: Gate, context: DirectContext) async throws -> (sequence: Int, at: ContinuousClock.Instant) {
         let (sequence, packet) = try makeEcho(gate)
         sent[sequence] = .now
         var blockedAt: ContinuousClock.Instant?
-        try await wait("항목 3: 차단할 직접 경로", deadline: .now + .seconds(10)) {
+        try await wait("Item 3: direct path to block", deadline: .now + .seconds(10)) {
             blockedAt = await Self.blockAndSend(gate.node, context: context, packet: packet)
             return blockedAt != nil
         }
@@ -270,7 +270,7 @@ private actor DirectObservations {
                                      packet: [UInt8]) -> ContinuousClock.Instant? {
         guard case .direct(let endpoint) = node.path(toPeerNamed: context.fqdn),
               endpoint.port == context.goEndpoint.port else { return nil }
-        // 경로 관측·차단·송신 사이에 노드의 타이머나 다른 송신이 끼어들지 않도록 한다.
+        // Keep node timers or other sends from intervening between observing the path, blocking it, and sending.
         node.setBlockedUDPPorts([endpoint.port])
         let blocked = ContinuousClock.now
         node.send(packet)
@@ -305,10 +305,10 @@ private actor DirectObservations {
 
     func requireEchoes(since: ContinuousClock.Instant) async throws {
         let through = ContinuousClock.now
-        try await wait("단발 UDP 에코의 모든 회신", from: through, for: .seconds(3)) {
+        try await wait("All replies to one-shot UDP echoes", from: through, for: .seconds(3)) {
             self.missing(since: since, before: through).isEmpty
         }
-        #expect(sent.values.contains { $0 >= since && $0 < through }, "검사 구간에 실제 송신한 에코가 있어야 한다")
+        #expect(sent.values.contains { $0 >= since && $0 < through }, "At least one echo must have been sent during the observation window")
     }
 
     private func normalized(_ name: String) -> String {
@@ -323,12 +323,12 @@ private func observe(_ gate: Gate, _ body: @escaping @Sendable (DirectObservatio
         group.addTask {
             for await bytes in gate.node.inboundPackets { try await observations.record(bytes, gate: gate) }
             try Task.checkCancellation()
-            throw GateFailure("M4 관측 중 inboundPackets가 종료됨")
+            throw GateFailure("inboundPackets ended during M4 observation")
         }
         group.addTask {
             for await event in gate.node.events { await observations.record(event) }
             try Task.checkCancellation()
-            throw GateFailure("M4 관측 중 events가 종료됨")
+            throw GateFailure("events ended during M4 observation")
         }
         group.addTask {
             let started = ContinuousClock.now
@@ -341,7 +341,7 @@ private func observe(_ gate: Gate, _ body: @escaping @Sendable (DirectObservatio
             }
         }
         group.addTask { try await body(observations) }
-        // 관측 Task의 실패도 즉시 전파해 TSMP 누출을 놓치지 않는다.
+        // Propagate observation Task failures immediately so TSMP leakage is caught.
         _ = try await group.next()
     }
 }
@@ -360,7 +360,7 @@ private func wait(_ stage: String, deadline: ContinuousClock.Instant,
         if try await condition(), ContinuousClock.now <= deadline { return }
         try await Task.sleep(for: .milliseconds(100))
     }
-    throw GateFailure("\(stage): 조건 대기 제한 초과")
+    throw GateFailure("\(stage): timed out waiting for the condition")
 }
 
 private func until(_ instant: ContinuousClock.Instant) async throws {

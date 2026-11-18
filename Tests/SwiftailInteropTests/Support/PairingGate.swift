@@ -1,6 +1,6 @@
-// 페어링 관문 (가)의 하네스(docs/contracts/SwiftailPairing.md 7절 9~11): `tailnet` 도구(testcontrol + DERP + STUN)와
-// `.inProcess` Swift 노드들, 그리고 루프백 리스너에 물린 여는 쪽 상태 기계. 기존 관문처럼 도구와 노드를 시험마다 새로 띄우고
-// 성공·실패·취소에서 모두 회수한다(상태 디렉터리는 TMPDIR 아래). Go 피어는 띄우지 않는다.
+// Harness for pairing gate (a) (docs/contracts/SwiftailPairing.md §7, 9–11) with the `tailnet` tool (testcontrol + DERP + STUN),
+// `.inProcess` Swift nodes, and the host state machine attached to a loopback listener. Like the existing gates, it starts a fresh tool and nodes for each test and
+// cleans them up on success, failure, or cancellation (the state directory is under TMPDIR). It starts no Go peers.
 
 import Foundation
 import Network
@@ -11,7 +11,7 @@ import Testing
 
 @testable import SwiftailPairing
 
-/// 관문의 Swift 노드 하나.
+/// One Swift node in the gate.
 final class PairingNode: Sendable {
     let node: TailnetNode
     private let run: Task<Void, any Error>
@@ -24,7 +24,7 @@ final class PairingNode: Sendable {
         self.node = node
     }
 
-    /// `run()`을 끝내고 회수한다. 끝난 까닭이 취소가 아니면 그 설명을 돌려준다.
+    /// Stops and joins `run()`. Returns a description if it ended for a reason other than cancellation.
     @discardableResult
     func stop() async -> String? {
         run.cancel()
@@ -35,9 +35,9 @@ final class PairingNode: Sendable {
     }
 }
 
-/// 시험 하나의 페어링 관문.
+/// The pairing gate for one test.
 struct PairingGate: Sendable {
-    /// 띄운 노드들. 관문이 끝날 때 모두 멈춘다.
+    /// The started nodes. Stops them all when the gate ends.
     final class Registry: Sendable {
         let nodes = Mutex<[PairingNode]>([])
     }
@@ -54,9 +54,9 @@ struct PairingGate: Sendable {
         return node
     }
 
-    /// 두 노드가 `.running`이고 서로를 netmap에서 볼 때까지 기다린다.
+    /// Waits until both nodes are `.running` and see each other in their netmaps.
     func waitUntilPeers(_ first: PairingNode, _ second: PairingNode) async throws {
-        try await netstackWait("Swift 노드 둘의 상호 netmap 반영") {
+        try await netstackWait("Both Swift nodes appear in each other's netmaps") {
             for (node, other) in [(first, second), (second, first)] {
                 let status = await node.node.status
                 guard status.state == .running, let address = await other.node.status.addresses.first,
@@ -67,7 +67,7 @@ struct PairingGate: Sendable {
         }
     }
 
-    /// 여는 쪽을 만들고 `run()`을 돌린 채 `body`를 부른다. 끝나면 `run()`을 취소하고 회수한다.
+    /// Creates the host and calls `body` while `run()` runs. Cancels and joins `run()` afterward.
     func withHost(
         _ node: PairingNode, port: UInt16 = 4_747, approver: Approver,
         _ body: (PairingHost) async throws -> Void
@@ -92,11 +92,11 @@ struct PairingGate: Sendable {
         }
         serving.cancel()
         let ending = await serving.value
-        #expect(ending == nil, "취소된 run()은 던지지 않고 돌아온다")
+        #expect(ending == nil, "Canceled run() returns without throwing")
     }
 }
 
-/// 페어링 관문 하나를 띄우고 회수한다. `authKey`를 주면 시험 제어 서버가 그 키로만 등록을 받는다.
+/// Starts and cleans up one pairing gate. If given `authKey`, the test control server accepts registration only with that key.
 func withPairingGate(authKey: String? = nil, _ body: (PairingGate) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-m9-\(UUID().uuidString)")
     let tool = GoTailnet(temporaryDirectory: directory)
@@ -104,7 +104,7 @@ func withPairingGate(authKey: String? = nil, _ body: (PairingGate) async throws 
     defer {
         if FileManager.default.fileExists(atPath: directory.path) {
             do { try FileManager.default.removeItem(at: directory) }
-            catch { Issue.record("페어링 관문 상태 디렉터리 정리 실패: \(redacted(String(describing: error)))") }
+            catch { Issue.record("Could not clean up the pairing gate state directory: \(redacted(String(describing: error)))") }
         }
     }
     func stopNodes() async -> [String] {
@@ -133,11 +133,11 @@ func withPairingGate(authKey: String? = nil, _ body: (PairingGate) async throws 
     }
 }
 
-/// 여는 쪽 앱의 승인 화면 노릇. 받은 요청을 적고 정해 둔 대로 답한다.
+/// Acts as the host app's approval screen. Records requests and responds as configured.
 final class Approver: Sendable {
     enum Answer: Sendable {
         case approve, deny
-        /// 답하지 않는다. 취소될 때까지 기다린다(상대가 끊으면 가장자리가 이 Task를 취소한다).
+        /// Does not respond. Waits for cancellation (the edge cancels this Task when the other side disconnects).
         case wait
     }
 
@@ -150,7 +150,7 @@ final class Approver: Sendable {
     private let state = Mutex(State())
 
     var requests: [PairingRequest] { state.withLock { $0.requests } }
-    /// 답을 기다리다 취소된 결정의 수.
+    /// The number of decisions canceled while waiting for a response.
     var cancelledCount: Int { state.withLock { $0.cancelledCount } }
 
     func set(_ answer: Answer) {
@@ -173,7 +173,7 @@ final class Approver: Sendable {
     }
 }
 
-/// 들어오는 쪽이 `awaitingApproval`로 받은 확인 숫자를 모은다.
+/// Collects the SAS that the joiner receives via `awaitingApproval`.
 final class ConfirmationCodes: Sendable {
     private let codes = Mutex<[String]>([])
     private let arrivals: AsyncStream<Void>
@@ -190,13 +190,13 @@ final class ConfirmationCodes: Sendable {
         continuation.yield()
     }
 
-    /// 다음 확인 숫자가 올 때까지 기다린다.
+    /// Waits for the next SAS.
     func next() async {
         for await _ in arrivals { return }
     }
 }
 
-/// `body`가 던진 `PairingError`. 던지지 않으면 nil. 다른 오류는 시험 실패다.
+/// The `PairingError` thrown by `body`, or nil if it does not throw. Any other error fails the test.
 func pairingFailure<T>(_ body: () async throws -> T) async -> PairingError? {
     do {
         _ = try await body()
@@ -204,22 +204,22 @@ func pairingFailure<T>(_ body: () async throws -> T) async -> PairingError? {
     } catch let error as PairingError {
         return error
     } catch {
-        Issue.record("PairingError가 아닌 오류: \(redacted(String(describing: error)))")
+        Issue.record("Unexpected error type in place of PairingError: \(redacted(String(describing: error)))")
         return nil
     }
 }
 
-/// 루프백(`127.0.0.1`) 리스너에 여는 쪽 상태 기계를 물린 것(관문 11). tailnet도 노드도 없다.
+/// A host state machine attached to a loopback (`127.0.0.1`) listener (gate 11). There is no tailnet or node.
 ///
-/// 들어오는 쪽의 OS 소켓 길(`NWConnection`)이 실제 TCP 위에서 절차를 끝까지 도는지 본다. 두 끝이 루프백 주소이므로
-/// 들어오는 쪽의 대역 검사와 인터페이스 금지는 시험만 쓰는 스위치로 끈다. 이름 풀이와 터널은 거치지 않는다.
+/// Verifies that the joiner's OS socket path (`NWConnection`) completes the procedure over real TCP. Because both endpoints have loopback addresses,
+/// a test-only switch disables the joiner's address range check and interface restriction. This path bypasses name resolution and the tunnel.
 actor LoopbackPairingHost {
-    /// 연결 하나를 돌린 결과.
+    /// The result of running one connection.
     struct Served: Sendable {
         var confirmationCode: String?
         var saved: PairedPeer?
         var ending: PairingHostMachine.Ending?
-        /// 들어오는 쪽에게서 받은 바이트 수.
+        /// The number of bytes received from the joiner.
         var receivedByteCount = 0
     }
 
@@ -264,7 +264,7 @@ actor LoopbackPairingHost {
         }
         guard let port else {
             listener.cancel()
-            throw GateFailure("루프백 리스너를 열지 못했다")
+            throw GateFailure("Could not open the loopback listener")
         }
         return LoopbackPairingHost(listener: listener, port: port, accepted: accepted)
     }
@@ -273,7 +273,7 @@ actor LoopbackPairingHost {
         listener.cancel()
     }
 
-    /// 새 제안을 연다. 호스트 이름 자리에는 루프백 주소를 넣는다(양쪽이 같은 문자열을 T에 넣기만 하면 된다).
+    /// Opens a new offer. Uses the loopback address in place of the hostname (both sides just need to put the same string into T).
     func openOffer() -> PairingOffer {
         let offer = PairingOffer(
             host: "127.0.0.1", port: port, expires: Date().addingTimeInterval(300), authKey: nil,
@@ -284,17 +284,17 @@ actor LoopbackPairingHost {
 
     var hasOpenOffer: Bool { machine.hasOpenOffer }
 
-    /// 다음 연결 하나를 받아 절차를 끝까지 돌린다.
+    /// Accepts one more connection and runs the procedure to completion.
     func serveNext(approving: Bool) async throws -> Served {
         var connection: NWConnection?
         for await next in accepted {
             connection = next
             break
         }
-        guard let connection else { throw GateFailure("루프백 리스너가 닫혔다") }
+        guard let connection else { throw GateFailure("The loopback listener closed") }
         let transport = SocketPairingTransport(connection)
         guard await transport.open(), let ends = transport.endpoints else {
-            throw GateFailure("받은 루프백 연결이 준비되지 않았다")
+            throw GateFailure("The accepted loopback connection did not become ready")
         }
         let id = nextID
         nextID += 1

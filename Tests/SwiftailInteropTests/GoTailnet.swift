@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// tailnet JSON 줄 규약의 필요한 필드만 해석한다(Tools/interop/README.md).
+/// Decodes only the fields needed from the tailnet line-delimited JSON protocol (Tools/interop/README.md).
 actor GoTailnet {
     struct Transfer: Decodable, Sendable {
         let transferID: Int
@@ -26,9 +26,9 @@ actor GoTailnet {
             let endpoints: [String]?
             let active: Bool?
             let lastWrite: String?
-            /// `nodes`(서버 쪽)와 `peerStatus`(Go 피어가 본 것)의 node 키 만료 시각. UTC RFC 3339, 없으면 "".
+            /// Node key expiration from `nodes` (server side) and `peerStatus` (as seen by the Go peer). UTC RFC 3339, or "" if absent.
             let keyExpiry: String?
-            /// `peerStatus`: Go가 그 피어를 만료로 표시했는지(전체 netmap에서만 계산된다).
+            /// In `peerStatus`, whether Go marked the peer expired (computed only from a full netmap).
             let expired: Bool?
         }
         let event: String
@@ -49,7 +49,7 @@ actor GoTailnet {
         let observedPackets: Int?
         let controlConnections: Int?
         let derpConnections: Int?
-        // M8 ③ DERP 인증서 명령(README "DERP 인증서 고정").
+        // M8 ③ DERP certificate commands (README "DERP Certificate Pinning").
         let derpTLSHandshakes: Int?
         let derpServerNames: [String]?
         let certName: String?
@@ -57,7 +57,7 @@ actor GoTailnet {
         let stunRequests: Int?
         let transferID: Int?
         let transfers: [Transfer]?
-        // M7 호스트 관문 명령(README "M7 호스트 관문 명령").
+        // M7 host gate commands (README "M7 Host Gate Commands").
         let name: String?
         let directoryURL: String?
         let rootPEM: String?
@@ -72,7 +72,7 @@ actor GoTailnet {
         let bodySHA256: String?
         let elapsedMs: Int64?
         let stopped: Bool?
-        // Tailnet Lock 관문 명령(README "Tailnet Lock 관문 명령"). `lockStatus`의 `nodeKey`·`name`·`enabled`는 위의 필드다.
+        // Tailnet Lock gate commands (README "Tailnet Lock Gate Commands"). `lockStatus` uses the `nodeKey`, `name`, and `enabled` fields above.
         let head: String?
         let lockKey: String?
         let nodeKeySigned: Bool?
@@ -84,12 +84,12 @@ actor GoTailnet {
         let authKey: String?
         let alreadyDisabled: Bool?
         let registrations: [LockRegistration]?
-        // 로그아웃 관문(README "로그아웃").
+        // Logout gate (README "Logout").
         let backendState: String?
     }
 
-    /// `setDNSLog`와 `lockRequests`가 같은 `requests` 필드를 쓴다. 앞의 것은 `name`·`type`·`value`,
-    /// 뒤의 것은 `path`·`nodeKey`·`head`를 싣는다.
+    /// `setDNSLog` and `lockRequests` share the `requests` field. The former carries `name`, `type`, and `value`.
+    /// The latter carries `path`, `nodeKey`, and `head`.
     struct SetDNSRequest: Decodable, Sendable {
         let name: String?
         let type: String?
@@ -99,7 +99,7 @@ actor GoTailnet {
         let head: String?
     }
 
-    /// `lockRegistrations`의 한 줄. `nlKey`·`oldNodeKey`는 0이면 빈 문자열이다.
+    /// One `lockRegistrations` line. `nlKey` and `oldNodeKey` are empty strings if zero.
     struct LockRegistration: Decodable, Sendable {
         let nodeKey: String
         let oldNodeKey: String
@@ -108,11 +108,11 @@ actor GoTailnet {
         let signatureError: String
         let resignRequested: Bool
         let wrappedKeyTrace: Bool
-        /// 요청에 `Auth`가 실렸는지.
+        /// Whether the request carried `Auth`.
         let auth: Bool
-        /// 요청의 `Expiry` 문자열(선 위의 표기 그대로).
+        /// The request's `Expiry` string, exactly as it appeared on the wire.
         let expiry: String
-        /// `Expiry`의 Unix 초. 0 시각이면 0.
+        /// `Expiry` in Unix seconds, or 0 for a zero time.
         let expiryUnix: Int64
     }
 
@@ -144,7 +144,7 @@ actor GoTailnet {
         var rootPEM: String? = nil
         var stop: Bool? = nil
         var mode: String? = nil
-        // Tailnet Lock 관문 명령.
+        // Tailnet Lock gate commands.
         var authKey: String? = nil
         var lockKey: String? = nil
         var addKeys: [String]? = nil
@@ -169,14 +169,14 @@ actor GoTailnet {
     private var started = false
     private var stopped = false
     private var commandTail: Task<Void, Never>?
-    /// 응답을 기다리지 않고 보낸 명령(`peerHTTP`)의 id. 그 응답은 다른 명령의 응답보다 늦게 올 수 있다.
+    /// ID of a command sent without waiting for the response (`peerHTTP`). Its response may arrive after responses to other commands.
     private var background: Set<Int> = []
-    /// 다른 명령을 기다리다 먼저 받은 `background` 명령의 응답.
+    /// Responses to `background` commands received first while waiting for another command.
     private var early: [Int: Event] = [:]
 
     init(temporaryDirectory: URL) {
         var environment = ProcessInfo.processInfo.environment
-        // 강제 종료 때도 바깥 정리가 Go 피어의 상태 디렉터리를 함께 회수한다.
+        // Even after a forced exit, outer cleanup also removes the Go peers' state directories.
         environment["TMPDIR"] = temporaryDirectory.path
         process.environment = environment
         (events, continuation) = AsyncStream.makeStream(of: Event.self)
@@ -184,14 +184,14 @@ actor GoTailnet {
     }
 
     func start() async throws -> Event {
-        guard let binary = tailnetBinary else { throw GateFailure("SWIFTAIL_TAILNET가 없음") }
+        guard let binary = tailnetBinary else { throw GateFailure("SWIFTAIL_TAILNET is missing") }
         process.executableURL = URL(fileURLWithPath: binary)
         process.standardInput = input
         process.standardOutput = output
         process.standardError = errors
-        // 종료 중 명령 쓰기가 SIGPIPE로 시험 프로세스까지 죽이지 않게 한다.
+        // Keep a command write during shutdown from killing the test process with SIGPIPE.
         guard fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
-            throw GateFailure("tailnet 입력 F_SETNOSIGPIPE 실패 (errno \(errno))")
+            throw GateFailure("Setting F_SETNOSIGPIPE on tailnet input failed (errno \(errno))")
         }
         let exitContinuation = exitContinuation
         let continuation = continuation
@@ -233,22 +233,22 @@ actor GoTailnet {
         pending.append(data)
         while let newline = pending.firstIndex(of: 10) {
             do {
-                guard newline <= 4_194_304 else { throw GateFailure("tailnet JSON 줄 상한 초과") }
+                guard newline <= 4_194_304 else { throw GateFailure("tailnet JSON line exceeds the limit") }
                 continuation.yield(try JSONDecoder().decode(Event.self, from: pending.prefix(upTo: newline)))
             } catch {
-                failure = GateFailure("tailnet JSON 사건 해독 실패")
+                failure = GateFailure("Could not decode tailnet JSON event")
                 continuation.finish()
             }
             pending.removeSubrange(...newline)
         }
         if pending.count > 4_194_304 {
-            failure = GateFailure("tailnet 미완성 JSON 줄 상한 초과")
+            failure = GateFailure("Incomplete tailnet JSON line exceeds the limit")
             continuation.finish()
         }
     }
 
     private func event(_ kind: String, id: Int? = nil, timeout: Duration = .seconds(35)) async throws -> Event {
-        let waiting = "tailnet \(kind) (명령 id \(id ?? 0))"
+        let waiting = "tailnet \(kind) (command id \(id ?? 0))"
         var result: Event
         if let id, let buffered = early.removeValue(forKey: id) {
             result = buffered
@@ -261,9 +261,9 @@ actor GoTailnet {
         }
         if let id { background.remove(id) }
         if let failure { throw failure }
-        guard result.event != "error" else { throw GateFailure("tailnet \(kind): \(redacted(result.message ?? "내용 없음"))") }
+        guard result.event != "error" else { throw GateFailure("tailnet \(kind): \(redacted(result.message ?? "no details"))") }
         guard result.event == kind, result.id == id else {
-            throw GateFailure("tailnet 기대 \(kind)/\(id ?? 0), 실제 \(result.event)/\(result.id ?? 0)")
+            throw GateFailure("tailnet expected \(kind)/\(id ?? 0), got \(result.event)/\(result.id ?? 0)")
         }
         return result
     }
@@ -278,7 +278,7 @@ actor GoTailnet {
         return try await operation.value
     }
 
-    /// actor 재진입 중에도 명령 하나의 응답을 끝까지 받은 뒤 다음 명령을 보낸다.
+    /// Receives each command's full response before sending the next command, even during actor reentrancy.
     private func performCommand(_ value: Command, expecting kind: String) async throws -> Event {
         var value = value
         nextID += 1
@@ -287,8 +287,8 @@ actor GoTailnet {
         return try await event(kind, id: value.id)
     }
 
-    /// 응답을 기다리지 않고 보낸다. 도구가 뒤에서 처리하는 `peerHTTP`에만 쓴다(README: 다른 명령 응답이 먼저 올 수 있다).
-    /// 응답은 `response(to:expecting:timeout:)`로 받는다. 그사이 다른 명령을 보내도 된다.
+    /// Sends without waiting for a response. Used only for `peerHTTP`, which the tool handles in the background (README: other commands may receive responses first).
+    /// Receives the response via `response(to:expecting:timeout:)`. Other commands can be sent in the meantime.
     func send(_ value: Command) throws -> Int {
         var value = value
         nextID += 1
@@ -298,7 +298,7 @@ actor GoTailnet {
         return value.id
     }
 
-    /// `send(_:)`로 보낸 명령의 응답. 다른 명령과 같은 차례를 지켜 사건 흐름을 한 곳에서만 읽는다.
+    /// The response to a command sent via `send(_:)`. Takes its turn with other commands so only one place reads the event stream.
     func response(to id: Int, expecting kind: String, timeout: Duration) async throws -> Event {
         let previous = commandTail
         let operation = Task {
@@ -309,13 +309,13 @@ actor GoTailnet {
         return try await operation.value
     }
 
-    /// 관문의 단계 경계를 표준 출력에 남긴다. 시험이 도중에 끝나도 어느 단계였는지 로그에 남는다.
+    /// Writes gate stage boundaries to standard output so the log shows the stage even if the test ends early.
     func checkpoint(_ stage: String) {
-        try? FileHandle.standardOutput.write(contentsOf: Data("[관문 \(Date().ISO8601Format())] \(stage)\n".utf8))
+        try? FileHandle.standardOutput.write(contentsOf: Data("[gate \(Date().ISO8601Format())] \(stage)\n".utf8))
     }
 
     private func write(_ command: Command) throws {
-        guard process.isRunning else { throw GateFailure("tailnet \(command.cmd) 전에 프로세스 종료") }
+        guard process.isRunning else { throw GateFailure("tailnet exited before \(command.cmd)") }
         var data = try JSONEncoder().encode(command)
         data.append(10)
         try input.fileHandleForWriting.write(contentsOf: data)
@@ -326,7 +326,7 @@ actor GoTailnet {
     }
 
     func diagnostics() -> String {
-        let status = !started ? "시작 안 됨" : (process.isRunning ? "실행 중" : "종료 \(process.terminationStatus)")
+        let status = !started ? "not started" : (process.isRunning ? "running" : "exited \(process.terminationStatus)")
         return "tailnet: \(status)\n\(redacted(String(decoding: log, as: UTF8.self)))"
     }
 
@@ -336,11 +336,11 @@ actor GoTailnet {
         if process.isRunning { try? write(.init(cmd: "quit")) }
         try? input.fileHandleForWriting.close()
         if process.isRunning {
-            // 시험 Task가 취소되어도 프로세스 회수는 독립된 정리 Task에서 끝낸다.
+            // Finish reaping the process in a separate cleanup Task even if the test Task is canceled.
             let exits = exits
             let pid = process.processIdentifier
             await Task.detached {
-                do { _ = try await nextEvent(exits, waitingFor: "tailnet 정상 종료", timeout: .seconds(3)) }
+                do { _ = try await nextEvent(exits, waitingFor: "normal tailnet shutdown", timeout: .seconds(3)) }
                 catch { _ = kill(pid, SIGKILL) }
             }.value
             if process.isRunning { process.waitUntilExit() }
