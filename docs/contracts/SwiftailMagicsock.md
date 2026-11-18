@@ -1,106 +1,106 @@
-# SwiftailMagicsock 계약 (M4)
+# SwiftailMagicsock Contract (M4)
 
-M4의 목표는 **직접 연결**이다. Go 피어와 루프백·LAN에서 직접 UDP 경로가 잡히고, 직접 경로를 막으면 DERP로 내려가고 풀면 다시 올라온다(`docs/plan.md` 7절 M4). M3까지는 UDP 소켓이 없고 모든 패킷이 홈 DERP 지역을 거친다.
+M4 targets **direct connections**. Establish a direct UDP path to a Go peer over loopback or LAN, fall back to DERP when the direct path is blocked, and return to the direct path when it is unblocked (`docs/plan.md` §7 M4). Through M3 there is no UDP socket, and all packets go through the home DERP region.
 
-`SwiftailMagicsock`은 **입출력 없는 값 타입**만 담는다. disco 메시지의 봉하기·열기, 피어별 경로 상태 기계(후보 주소, Ping·Pong, `bestAddr`와 신뢰 기간, heartbeat), STUN 해석과 자기 엔드포인트·홈 지역 결정, 그리고 이들을 묶어 "WireGuard 데이터그램을 어디로 보낼지"와 "받은 데이터그램이 무엇인지"를 정하는 `Magicsock` 상태 기계다. UDP 소켓(POSIX)·인터페이스 주소 읽기는 `SwiftailIO`에, 타이머·DERP 연결·소켓 읽기 루프는 `TailnetNode`(가장자리 actor)에 둔다. 엔진은 지금처럼 "이 피어에게 보낼 WireGuard 데이터그램"만 내고 경로는 `Magicsock`이 고른다(`docs/contracts/SwiftailWireGuard.md` "왜 이 구조인가").
+`SwiftailMagicsock` contains only **I/O-free value types**. They seal and open disco messages, track per-peer path state (candidate addresses, Ping and Pong, `bestAddr` and trust period, heartbeat), parse STUN, determine local endpoints and the home region, and come together in the `Magicsock` state machine to decide where WireGuard datagrams go and what incoming datagrams contain. UDP sockets (POSIX) and interface address lookups live in `SwiftailIO`. Timers, DERP connections, and socket read loops live in `TailnetNode` (the edge actor). As before, the engine only emits "a WireGuard datagram for this peer," and `Magicsock` chooses the path (`docs/contracts/SwiftailWireGuard.md`, "Why This Structure").
 
-프로토콜 세부는 [protocol-notes/disco-magicsock.md](../protocol-notes/disco-magicsock.md)(검증됨, 아래에서 "노트")와 [derp-stun.md](../protocol-notes/derp-stun.md) 3.8·3.9·4.8~4.10(아래에서 "DERP 노트")을 따른다. 이 문서는 모듈 경계, M4 범위, 시험과 관문만 정한다. 엔진·노드 쪽 변경은 [SwiftailEngine.md](SwiftailEngine.md)의 "M4에서 바뀌는 것"에 있다.
+Protocol details follow the verified [protocol-notes/disco-magicsock.md](../protocol-notes/disco-magicsock.md) (the "notes" below) and [derp-stun.md](../protocol-notes/derp-stun.md) §3.8, §3.9, and §4.8~§4.10 (the "DERP notes" below). This document defines only module boundaries, the M4 scope, tests, and gates. See "Changes in M4" in [SwiftailEngine.md](SwiftailEngine.md) for engine and node changes.
 
-## 타깃
+## Targets
 
-| 타깃 | 의존 | 내용 |
+| Target | Dependencies | Contents |
 | --- | --- | --- |
-| `SwiftailBase` | Foundation, Network | 기존 내용 + **`IPEndpoint`**(`SwiftailControl/Tailcfg/IPEndpoint.swift`에서 옮긴다. 공개 이름 그대로. `Codable` 확장은 `IPAddress+Codable.swift`처럼 `SwiftailControl`에 남긴다) |
-| `SwiftailIO` | `SwiftailBase`(새로 더함), Foundation, Network, Synchronization | 기존 내용 + `DatagramSocket`, `LocalInterfaceAddresses`(둘 다 `package`) |
-| `SwiftailMagicsock` (새 타깃, 제품으로 내보낸다) | `SwiftailBase`, `SwiftailCrypto`, CryptoKit | 아래 API. 소켓·시계·actor 없음 |
-| `Swiftail` | 기존 + `SwiftailMagicsock` | 노드 통합(엔진 계약의 "M4에서 바뀌는 것") |
+| `SwiftailBase` | Foundation, Network | Existing contents + **`IPEndpoint`** (moved from `SwiftailControl/Tailcfg/IPEndpoint.swift`, keeping the public name. The `Codable` extension stays in `SwiftailControl`, as with `IPAddress+Codable.swift`) |
+| `SwiftailIO` | `SwiftailBase` (new), Foundation, Network, Synchronization | Existing contents + `DatagramSocket` and `LocalInterfaceAddresses` (both `package`) |
+| `SwiftailMagicsock` (new target, exported as a product) | `SwiftailBase`, `SwiftailCrypto`, CryptoKit | API below. No socket, clock, or actor |
+| `Swiftail` | Existing dependencies + `SwiftailMagicsock` | Node integration ("Changes in M4" in the engine contract) |
 
-`SwiftailMagicsock`은 `SwiftailControl`·`SwiftailDERP`·`SwiftailWireGuard`·`SwiftailEngine`에 의존하지 않는다. netmap·DERPMap(tailcfg)에서 필요한 값(피어의 disco 키·엔드포인트·홈 지역, 지역별 STUN 주소)은 노드가 뽑아 넘긴다. `SwiftailDERP`가 `DERPServer`를 받는 것과 같은 방식이다.
+`SwiftailMagicsock` has no dependency on `SwiftailControl`, `SwiftailDERP`, `SwiftailWireGuard`, or `SwiftailEngine`. The node extracts and passes in the required values from netmap and DERPMap (tailcfg), including peers' disco keys, endpoints, and home regions, and each region's STUN addresses. This works the same way as `SwiftailDERP` receiving a `DERPServer`.
 
-`docs/plan.md` 5절의 의존 그림은 `SwiftailEngine`이 `SwiftailMagicsock`에 기대는 모양이지만, 이 계약은 노드가 둘을 잇는다(아래 총괄 확정 Q1). 모듈 표의 "UDP 소켓과 재결속"은 소켓 감싸개가 `SwiftailIO`로, 재결속이 M5로 간다.
+The dependency diagram in `docs/plan.md` §5 shows `SwiftailEngine` depending on `SwiftailMagicsock`, while this contract has the node connect the two (lead session confirmation Q1 below). For "UDP sockets and rebinding" in the module table, the socket wrapper goes to `SwiftailIO` and rebinding goes to M5.
 
-## 구조
+## Structure
 
 ```
-                 TailnetNode (actor, 가장자리: 시계·소켓·DERP 연결·타이머)
-   IP 패킷 ─► TailnetEngine ─ .datagram(to: 피어) ─► Magicsock ─ .udp / .derp ─► DatagramSocket / DERPClient(지역별)
-   IP 패킷 ◄─ TailnetEngine ◄─ receive ─────────── Magicsock ◄─ receiveUDP / receiveDERP ◄─ 소켓 / DERPClient
+                 TailnetNode (actor, edge: clock, socket, DERP connections, timers)
+   IP packet ─► TailnetEngine ─ .datagram(to: peer) ─► Magicsock ─ .udp / .derp ─► DatagramSocket / DERPClient (per region)
+   IP packet ◄─ TailnetEngine ◄─ receive ─────────── Magicsock ◄─ receiveUDP / receiveDERP ◄─ socket / DERPClient
                                                     │
                                                     ├ .endpointsChanged, .homeRegionChanged ─► ControlClient.setLocalStatus
                                                     └ .pathChanged ─► NodeEvent
 ```
 
-`Magicsock` 안의 값 타입과 책임:
+Value types in `Magicsock` and their responsibilities follow.
 
-| 타입 | 접근 | 책임 | 단위 |
+| Type | Access | Responsibility | Unit |
 | --- | --- | --- | --- |
-| `TransactionID` | internal | disco·STUN이 함께 쓰는 12바이트 ID | 0 |
-| `DiscoMessage` | internal | 평문 Ping·Pong·CallMeMaybe의 부호화·해석(노트 3.3·3.4) | 1 |
-| `DiscoPacket`, `DiscoSharedKey` | internal | 겉 형식 판정, 보낸 쪽 disco 키 읽기, 봉하기·열기(노트 3.1·3.2) | 1 |
-| `PeerPathState` | internal | 피어 하나의 후보 주소·보낸 Ping·`bestAddr`·신뢰·heartbeat·경로 선택(노트 4.4~4.8) | 2 |
-| `STUNMessage` | internal | 바인딩 요청 만들기, 응답 해석(DERP 노트 3.8·3.9·4.10 3) | 3 |
-| `Netcheck` | internal | STUN 회차, 지역별 지연, 자기 엔드포인트 목록, 홈 지역 선택(노트 4.9, DERP 노트 4.8·4.10) | 3 |
-| `Magicsock` | public | 위를 묶는다: 받은 것의 분류, disco 키 표와 공유 키, 피어 묶음, CallMeMaybe, 경로 사건 | 4 |
-| `PeerPath` | public | 피어 경로의 공개 표현(Go `curAddr`와 같은 뜻) | 0 |
+| `TransactionID` | internal | 12-byte ID shared by disco and STUN | 0 |
+| `DiscoMessage` | internal | Encode and parse plaintext Ping, Pong, and CallMeMaybe (notes §3.3 and §3.4) | 1 |
+| `DiscoPacket`, `DiscoSharedKey` | internal | Identify the outer format, read the sender's disco key, seal and open (notes §3.1 and §3.2) | 1 |
+| `PeerPathState` | internal | Candidate addresses, sent Pings, `bestAddr`, trust, heartbeat, and path selection for one peer (notes §4.4~§4.8) | 2 |
+| `STUNMessage` | internal | Create binding requests and parse responses (DERP notes §3.8, §3.9, and §4.10 item 3) | 3 |
+| `Netcheck` | internal | STUN rounds, per-region latencies, local endpoint list, and home region selection (notes §4.9, DERP notes §4.8 and §4.10) | 3 |
+| `Magicsock` | public | Integrates the above, classifies inbound traffic, and handles the disco key table and shared keys, peer groups, CallMeMaybe, and path events | 4 |
+| `PeerPath` | public | Public representation of a peer path (same meaning as Go `curAddr`) | 0 |
 
-내부 타입은 `@testable import`로 시험한다(`SwiftailWireGuard`와 같다). 공개 범위는 노드가 쓰는 `Magicsock`과 그 입출력 타입, `PeerPath`뿐이다.
+Test internal types with `@testable import` (as in `SwiftailWireGuard`). The public scope covers only `Magicsock` and its input and output types, which the node uses, and `PeerPath`.
 
-## 공개 API (`SwiftailMagicsock`)
+## Public API (`SwiftailMagicsock`)
 
 ```swift
-/// 피어에게 가는 길. Go `ipnstate.PeerStatus`의 `CurAddr`와 같은 뜻이다(노트 6.3 마지막 줄, 7.1).
+/// A path to a peer. Equivalent to `CurAddr` in Go's `ipnstate.PeerStatus` (notes §6.3, last line, and §7.1).
 public enum PeerPath: Sendable, Equatable {
-    /// 신뢰 기간 안의 직접 UDP 주소로만 보낸다.
+    /// Sends only to a trusted direct UDP address within its trust period.
     case direct(IPEndpoint)
-    /// DERP를 거친다. 직접 주소로 함께 보내는 중(신뢰가 지난 `bestAddr`)이어도 여기에 든다.
-    /// - Parameter derpRegion: 피어의 홈 DERP 지역. 0이면 모른다.
+    /// Relays through DERP, including when also sending to a direct address (an expired `bestAddr`).
+    /// - Parameter derpRegion: The peer's home DERP region. 0 means unknown.
     case relayed(derpRegion: Int64)
 }
 
-/// 피어 사이의 직접 경로를 찾고 유지하는 상태 기계. 소켓·시계·actor를 갖지 않는다.
+/// A state machine that discovers and maintains direct paths between peers. It has no socket, clock, or actor.
 ///
-/// 노드는 받은 UDP 데이터그램, DERP로 받은 패킷, 엔진이 낸 WireGuard 데이터그램, netmap에서 뽑은 피어 정보,
-/// 그리고 지금 시각을 넣는다. `Magicsock`은 상태를 바꾸고 "UDP·DERP로 보낼 것", "WireGuard 장치에 넣을 것",
-/// "제어 서버에 올릴 것", "경로가 바뀐 피어"를 돌려준다. 모든 진입점은 던지지 않는다. 버린 것은 `.dropped`로 알린다.
+/// The node supplies received UDP datagrams, packets received through DERP, WireGuard datagrams emitted by the engine, peer information from the netmap,
+/// and the current time. `Magicsock` updates state and returns what to send over UDP or DERP, what to feed into the WireGuard device,
+/// what to publish to the control server, and which peers changed paths. No entry point throws. Drops are reported as `.dropped`.
 ///
-/// 난수(disco nonce, TxID, ReSTUN 간격)는 이 타입이 시스템 난수로 뽑는다(`WireGuardDevice`와 같다). 그 아래의
-/// 단계(`PeerPathState`, `Netcheck`, `DiscoPacket.seal`)는 난수를 인자로 받는다.
+/// This type uses system randomness for the disco nonce, TxID, and ReSTUN interval (as in `WireGuardDevice`). The layers below it
+/// (`PeerPathState`, `Netcheck`, and `DiscoPacket.seal`) take randomness as arguments.
 public struct Magicsock: Sendable {
-    /// netmap의 피어 하나 가운데 경로 찾기에 필요한 부분. 노드가 `EnginePeer`에서 만든다.
+    /// The information needed to discover paths for a single netmap peer. The node builds this from `EnginePeer`.
     public struct Peer: Sendable, Equatable {
         public var key: NodePublicKey
-        /// 0이면 이 피어와 disco를 하지 않는다(DERP만).
+        /// 0 disables disco with this peer, leaving only DERP.
         public var discoKey: DiscoPublicKey
-        /// 0이면 모른다.
+        /// 0 means unknown.
         public var homeDERP: Int64
-        /// netmap의 `Endpoints`. IPv4만 후보로 쓴다(동작 D1).
+        /// The netmap's `Endpoints`. Only IPv4 addresses are candidates (behavior D1).
         public var endpoints: [IPEndpoint]
         public init(key: NodePublicKey, discoKey: DiscoPublicKey, homeDERP: Int64, endpoints: [IPEndpoint])
     }
 
-    /// 홈으로 고를 수 있는 DERP 지역. 노드가 DERPMap에서 뽑는다(엔진 계약 M4 동작 N3).
+    /// A DERP region eligible to be home. The node extracts it from DERPMap (engine contract M4 behavior N3).
     public struct Region: Sendable, Equatable {
         public var id: Int64
-        /// STUN을 물을 주소. 비면 이 지역은 재지 않는다(측정이 없을 때의 대체 홈으로만 고른다).
+        /// STUN query addresses. An empty list leaves this region unmeasured and eligible as fallback home only when there are no measurements.
         public var stunServers: [IPEndpoint]
-        /// DERPMap `HomeParams.RegionScore`. 양수일 때만 지연에 곱한다. 없으면 0.
+        /// DERPMap `HomeParams.RegionScore`. Multiply the latency by this value only if positive. Defaults to 0.
         public var score: Double
         public init(id: Int64, stunServers: [IPEndpoint], score: Double = 0)
     }
 
-    /// 받은 것이 온 길. disco의 경로 규칙과, WireGuard 데이터그램에 답할 곳을 정한다.
+    /// The inbound path. Determines the disco path rules and where to reply to a WireGuard datagram.
     public enum Source: Sendable, Hashable {
         case udp(IPEndpoint)
-        /// 보낸 쪽 node 키와 받은 지역.
+        /// The sender's node key and the region where the packet arrived.
         case derp(NodePublicKey, region: Int64)
     }
 
-    /// 제어 서버에 올릴 자기 엔드포인트 하나.
+    /// A local endpoint to publish to the control server.
     public struct Endpoint: Sendable, Equatable {
         public enum Source: Sendable, Equatable {
-            /// 인터페이스 주소 + 소켓 포트. tailcfg `EndpointLocal`(1).
+            /// The interface address + socket port. tailcfg `EndpointLocal` (1).
             case local
-            /// STUN 응답의 바깥 주소. tailcfg `EndpointSTUN`(2).
+            /// The external address from a STUN response. tailcfg `EndpointSTUN` (2).
             case stun
         }
         public var address: IPEndpoint
@@ -108,48 +108,48 @@ public struct Magicsock: Sendable {
     }
 
     public enum Output: Sendable, Equatable {
-        /// UDP 소켓으로 보낸다(WireGuard, disco, STUN 모두 같은 소켓이다).
+        /// Sends over the UDP socket (WireGuard, disco, and STUN share it).
         case udp([UInt8], to: IPEndpoint)
-        /// DERP 지역 `region`의 연결로 피어에게 보낸다. 그 지역에 연결이 없으면 노드가 연다.
+        /// Sends to the peer over the connection for DERP region `region`. The node opens one if needed.
         case derp([UInt8], to: NodePublicKey, region: Int64)
-        /// WireGuard 장치(엔진의 `receive`)에 넣을 데이터그램과 그것이 온 길. 장치가 이 데이터그램에 답하는 cookie
-        /// reply는 피어 경로 선택 없이 이 길로 되돌린다(엔진 계약 "cookie reply", 2026-11-15).
+        /// The datagram to feed to the WireGuard device (the engine's `receive`) and the path it came from. The device sends a cookie
+        /// reply to this datagram back over that path without peer path selection (engine contract "cookie reply", 2026-11-15).
         case wireGuard([UInt8], from: Source)
-        /// 제어 서버에 올릴 자기 엔드포인트가 바뀌었다(순서가 의미 있다. 노트 4.9 1).
+        /// The local endpoints to publish to the control server changed (their order matters. Notes §4.9 item 1).
         case endpointsChanged([Endpoint])
-        /// 홈 DERP 지역이 바뀌었다. `NetInfo.preferredDERP`로 올리고 그 지역에 연결한다.
+        /// The home DERP region changed. Publish it in `NetInfo.preferredDERP` and connect to that region.
         case homeRegionChanged(Int64)
-        /// 피어의 경로가 바뀌었다. nil은 그 피어가 빠졌거나 유휴라는 뜻이다(동작 G3).
+        /// The peer's path changed. Nil means the peer was removed or is idle (behavior G3).
         case pathChanged(NodePublicKey, PeerPath?)
-        /// 버린 것. 진단과 시험용이다.
+        /// A drop, reported for diagnostics and testing.
         case dropped(Drop)
     }
 
     public enum Drop: Sendable, Equatable {
-        /// 보낸 쪽 disco 키가 아는 피어의 것이 아니다.
+        /// The sender's disco key belongs to no known peer.
         case unknownDiscoKey
-        /// 열리지 않거나 해석할 수 없는 disco 메시지.
+        /// A disco message that cannot be opened or parsed.
         case malformedDisco
-        /// 처리하지 않는 disco 종류(peer relay 0x04–0x09), Geneve로 감싼 데이터그램.
+        /// An unsupported disco type (peer relay 0x04–0x09) or a Geneve-encapsulated datagram.
         case unsupportedDisco
-        /// 경로 규칙을 어긴 disco(UDP로 온 CallMeMaybe, 키가 맞지 않는 CallMeMaybe, 모르는 DERP 보낸 쪽).
+        /// A disco message that violates path rules (CallMeMaybe over UDP, CallMeMaybe with mismatched keys, or an unknown DERP sender).
         case misroutedDisco
-        /// 진행 중인 회차의 것이 아니거나 해석할 수 없는 STUN 응답.
+        /// A STUN response that belongs to no active round or cannot be parsed.
         case unexpectedSTUN
-        /// DERP 보낸 쪽 키가 아는 피어가 아니다.
+        /// The DERP sender key belongs to no known peer.
         case unknownDERPSender
-        /// 직접 주소도 DERP 지역도 없어 보낼 곳이 없다.
+        /// No destination because there is neither a direct address nor a DERP region.
         case noRouteToPeer
-        /// 받을 수 없는 출처(IPv6, 포트 0).
+        /// An unacceptable origin (IPv6 or port 0).
         case unsupportedSource
     }
 
     /// - Parameters:
-    ///   - discoKey: 이 노드의 disco 개인 키. 노드가 시작할 때 만들고 저장하지 않는다.
-    ///   - nodeKey: 이 노드의 node 공개 키. 보내는 Ping에 넣는다(노트 4.6 1).
-    ///   - localPort: UDP 소켓이 묶인 포트.
-    ///   - localAddresses: 인터페이스의 IPv4 주소(loopback 제외). `LocalInterfaceAddresses`가 고른다.
-    ///   - loopbackAddresses: loopback IPv4 주소. 다른 엔드포인트가 하나도 없을 때만 쓴다(노트 4.9 1.7).
+    ///   - discoKey: This node's private disco key. The node generates it at startup without persisting it.
+    ///   - nodeKey: This node's public node key. Included in outbound Pings (notes §4.6 item 1).
+    ///   - localPort: The port the UDP socket is bound to.
+    ///   - localAddresses: IPv4 interface addresses, excluding loopback. `LocalInterfaceAddresses` selects them.
+    ///   - loopbackAddresses: Loopback IPv4 addresses. Used only when no other endpoints exist (notes §4.9 item 1.7).
     public init(
         discoKey: Curve25519.KeyAgreement.PrivateKey,
         nodeKey: NodePublicKey,
@@ -161,142 +161,142 @@ public struct Magicsock: Sendable {
 
     public var discoPublicKey: DiscoPublicKey { get }
 
-    /// netmap의 피어를 맞춘다. 순서가 주인을 정한다(같은 disco 키는 앞의 피어만 갖는다). 노드는 node ID 순으로 넘긴다.
+    /// Reconciles the netmap peers. Order determines the owner (only the first peer with a given disco key keeps it). The node supplies peers in node ID order.
     public mutating func setPeers(_ peers: [Peer], at now: ContinuousClock.Instant) -> [Output]
-    /// 홈 후보 지역을 맞춘다. 바뀌면 곧바로 STUN 회차를 시작한다. 홈이 없으면 대체 홈을 곧바로 고른다.
+    /// Reconciles candidate home regions. Immediately starts a STUN round on change and chooses a fallback home immediately if there is no home.
     public mutating func setRegions(_ regions: [Region], at now: ContinuousClock.Instant) -> [Output]
 
-    /// 엔진이 낸 WireGuard 데이터그램 하나를 피어에게 보낸다. 경로를 고른다.
+    /// Sends one WireGuard datagram emitted by the engine to a peer, choosing the path.
     public mutating func send(_ datagram: [UInt8], to peer: NodePublicKey, at now: ContinuousClock.Instant) -> [Output]
-    /// UDP 소켓에서 받은 데이터그램 하나.
+    /// Receives one datagram from the UDP socket.
     public mutating func receiveUDP(_ datagram: [UInt8], from source: IPEndpoint, at now: ContinuousClock.Instant) -> [Output]
-    /// DERP 지역 `region`의 연결에서 받은 패킷 하나. `peer`는 DERP 프레임의 보낸 쪽 키다.
+    /// Receives one packet on the connection for DERP region `region`. The `peer` is the sender's key in the DERP frame.
     public mutating func receiveDERP(_ packet: [UInt8], from peer: NodePublicKey, region: Int64, at now: ContinuousClock.Instant) -> [Output]
 
-    /// now까지 기한이 지난 타이머를 처리한다(Ping 기한, heartbeat, 신뢰 만료, STUN 회차).
+    /// Processes timers due through now (Ping deadlines, heartbeat, trust expiry, and STUN rounds).
     public mutating func advance(to now: ContinuousClock.Instant) -> [Output]
-    /// 다음에 `advance`를 불러야 하는 시각.
+    /// The next time to call `advance`.
     public var nextDeadline: ContinuousClock.Instant? { get }
 
-    /// 피어의 지금 경로. 데이터면에 없는 피어면 nil.
+    /// The peer's current path. Nil if the peer is absent from the data plane.
     public func path(to peer: NodePublicKey, at now: ContinuousClock.Instant) -> PeerPath?
 
-    /// (M5) UDP 소켓이 새로 묶였다. 모든 피어의 직접 경로를 버리고 STUN 회차를 곧바로 시작한다.
-    /// 규칙은 `SwiftailTunnel` 계약 동작 N 3.3.
+    /// (M5) Handles a newly bound UDP socket. Discards all peers' direct paths and starts a STUN round immediately.
+    /// See `SwiftailTunnel` contract behavior N 3.3 for the rules.
     public mutating func rebind(localPort: UInt16, localAddresses: [IPAddress], loopbackAddresses: [IPAddress], at now: ContinuousClock.Instant) -> [Output]
-    /// (M5) 소켓은 그대로이고 링크만 바뀌었다. STUN 회차만 다시 시작한다(Go `ReSTUN`).
+    /// (M5) Handles a link change with the same socket. Restarts only the STUN round (Go `ReSTUN`).
     public mutating func restartSTUN(at now: ContinuousClock.Instant) -> [Output]
 }
 ```
 
-입력은 기존 상태 기계(`WireGuardDevice`, `DERPConnection`, `TailnetEngine`)와 같이 메서드로 받는다.
+As with the existing state machines (`WireGuardDevice`, `DERPConnection`, and `TailnetEngine`), methods receive inputs.
 
-| 입력 | 메서드 |
+| Input | Method |
 | --- | --- |
-| 받은 UDP 데이터그램과 출처 주소 | `receiveUDP(_:from:at:)` |
-| DERP로 받은 패킷(보낸 쪽 키, 받은 지역) | `receiveDERP(_:from:region:at:)` |
-| 엔진이 보낼 WireGuard 데이터그램 | `send(_:to:at:)` |
-| netmap에서 뽑은 피어 정보 | `setPeers(_:at:)` |
-| DERPMap에서 뽑은 홈 후보 지역 | `setRegions(_:at:)` |
-| 시각 | 모든 메서드의 `at`, `advance(to:)` |
-| 난수 | 안에서 시스템 난수로 뽑는다(위 문서 주석) |
+| Received UDP datagram and source address | `receiveUDP(_:from:at:)` |
+| Packet received via DERP (sender key, receiving region) | `receiveDERP(_:from:region:at:)` |
+| WireGuard datagram for the engine to send | `send(_:to:at:)` |
+| Peer information from the netmap | `setPeers(_:at:)` |
+| Candidate home regions from DERPMap | `setRegions(_:at:)` |
+| Time | `at` in all methods, `advance(to:)` |
+| Randomness | Drawn internally from system randomness (see doc comments above) |
 
-### 내부 API (단위 간 약속)
+### Internal API (Contract Between Units)
 
-병렬 구현을 위해 시그니처를 정한다. 이름은 바꾸지 않는다. 내부 구현 세부(저장 방식, 보조 함수)는 각 단위가 정한다.
+Set the signatures for parallel implementation. Keep the names. Each unit decides internal implementation details (storage and helper functions).
 
 ```swift
-// 단위 0 — Sources/SwiftailMagicsock/TransactionID.swift
+// Unit 0 — Sources/SwiftailMagicsock/TransactionID.swift
 struct TransactionID: Hashable, Sendable {
     static let byteCount = 12
     let bytes: [UInt8]
-    init?(_ bytes: some Collection<UInt8>)                       // 12바이트가 아니면 nil
+    init?(_ bytes: some Collection<UInt8>)                       // Nil unless the input contains 12 bytes
     static func random(using generator: inout some RandomNumberGenerator) -> TransactionID
 }
 
-// 단위 1 — DiscoMessage.swift, DiscoPacket.swift
+// Unit 1 — DiscoMessage.swift, DiscoPacket.swift
 enum DiscoError: Error, Sendable, Equatable {
-    case malformed               // 길이·형식이 노트 3.3·3.4 표와 다름
-    case unknownType(UInt8)      // 0x01–0x03이 아닌 type(0x04–0x09 포함)
-    case authenticationFailed    // secretbox가 열리지 않음
-    case invalidKey              // 저차수 공개 키(공유 키가 0)
+    case malformed               // Length or format differs from the tables in notes §3.3 and §3.4
+    case unknownType(UInt8)      // A type other than 0x01–0x03 (including 0x04–0x09)
+    case authenticationFailed    // The secretbox cannot be opened
+    case invalidKey              // Low-order public key (shared key is 0)
 }
 
 enum DiscoMessage: Sendable, Equatable {
-    /// - nodeKey: 보낸 쪽 node 공개 키. 없거나 0이면 nil. 패딩은 버린다.
+    /// - nodeKey: The sender's public node key. Nil if absent or 0. Discard padding.
     case ping(TransactionID, nodeKey: NodePublicKey?)
-    /// - source: Ping의 관측 출발 주소. IPv4-mapped는 풀어서 담는다.
+    /// - source: Observed source address of the Ping. Unwrap IPv4-mapped addresses.
     case pong(TransactionID, source: IPEndpoint)
-    /// 주소 목록. version ≠ 0, 0바이트, 18의 배수가 아닌 본문은 빈 목록이다(오류가 아니다).
+    /// An address list. A version ≠ 0, a 0-byte body, or a body whose size is not a multiple of 18 yields an empty list (no error).
     case callMeMaybe([IPEndpoint])
 
     init(parsing plaintext: [UInt8]) throws(DiscoError)
-    /// 평문(type ‖ version 0 ‖ 본문). Ping은 패딩 없이, nodeKey가 nil이면 12바이트 본문.
+    /// Plaintext (type ‖ version 0 ‖ body). Ping has no padding and has a 12-byte body when nodeKey is nil.
     var plaintext: [UInt8] { get }
 }
 
-/// 자기 disco 개인 키와 상대 disco 공개 키의 NaCl box 공유 키(노트 3.2 2). 비밀이다. `customMirror`가 감춘다.
+/// The NaCl box shared key from the local private disco key and the remote public disco key (notes §3.2 item 2). It is secret, and `customMirror` hides it.
 struct DiscoSharedKey: Sendable {
     init(privateKey: Curve25519.KeyAgreement.PrivateKey, peerPublicKey: DiscoPublicKey) throws(DiscoError)
 }
 
 enum DiscoPacket {
     static let magic: [UInt8]            // 54 53 f0 9f 92 ac
-    static let classificationLength = 38 // 노트 4.1 3
-    /// 길이 ≥ 38이고 magic으로 시작한다. 열어 보지 않는다.
+    static let classificationLength = 38 // Notes §4.1 item 3
+    /// Checks for length ≥ 38 and the opening magic, without opening the packet.
     static func isDisco(_ bytes: [UInt8]) -> Bool
-    /// 보낸 쪽 disco 공개 키(오프셋 6..<38). `isDisco`가 참일 때만 값이 있다.
+    /// The sender's public disco key (offset 6..<38). Present only when `isDisco` is true.
     static func senderKey(of bytes: [UInt8]) -> DiscoPublicKey?
-    /// magic ‖ sender ‖ nonce ‖ secretbox(plaintext). nonce는 24바이트.
+    /// magic ‖ sender ‖ nonce ‖ secretbox(plaintext). The nonce is 24 bytes.
     static func seal(_ message: DiscoMessage, sender: DiscoPublicKey, sharedKey: DiscoSharedKey, nonce: [UInt8]) -> [UInt8]
     static func open(_ bytes: [UInt8], sharedKey: DiscoSharedKey) throws(DiscoError) -> DiscoMessage
 }
 
-// 단위 2 — PeerPathState.swift (+ 필요하면 PeerPathState+Ping.swift)
+// Unit 2 — PeerPathState.swift (+ PeerPathState+Ping.swift if needed)
 struct PeerPathState: Sendable {
     enum Action: Sendable, Equatable {
-        /// 후보에 disco Ping을 보낸다.
+        /// Sends a disco Ping to the candidate.
         case ping(TransactionID, to: IPEndpoint)
-        /// 피어의 홈 DERP로 CallMeMaybe를 보낸다. 자기 엔드포인트는 `Magicsock`이 채운다.
+        /// Sends CallMeMaybe to the peer's home DERP. `Magicsock` supplies the local endpoints.
         case callMeMaybe
     }
-    /// WireGuard 데이터그램 하나를 보낼 곳(노트 4.5).
+    /// The destination for one WireGuard datagram (notes §4.5).
     struct SendPlan: Sendable, Equatable {
         var udp: IPEndpoint?
-        /// DERP로도 보낸다면 피어의 홈 지역. 0이면 DERP로 보내지 않는다.
+        /// The peer's home region if also sending over DERP. 0 means do not send over DERP.
         var derpRegion: Int64
         var actions: [Action]
     }
 
     init(homeDERP: Int64, endpoints: [IPEndpoint])
-    /// netmap 갱신(노트 4.4 1·2).
+    /// Updates the netmap (notes §4.4 items 1 and 2).
     mutating func update(homeDERP: Int64, endpoints: [IPEndpoint], at now: ContinuousClock.Instant)
-    /// 피어의 disco 키가 바뀌었다(노트 4.4 3).
+    /// Handles a change to the peer's disco key (notes §4.4 item 3).
     mutating func resetForNewDiscoKey()
-    /// 노트 4.5 1–5, 4.8 2.
+    /// Notes §4.5 items 1–5 and §4.8 item 2.
     mutating func planSend(at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> SendPlan
-    /// UDP로 온 Ping(노트 4.2 4.2). Pong을 보내야 하면 true(같은 후보의 같은 TxID면 false).
+    /// Handles a Ping received over UDP (notes §4.2 item 4.2). Returns true if a Pong is due (false for the same TxID from the same candidate).
     mutating func receivePing(_ txID: TransactionID, from source: IPEndpoint, at now: ContinuousClock.Instant) -> Bool
-    /// 이 피어가 보낸 Ping의 Pong이면 true(노트 4.6 4). `source`가 nil이면 DERP로 왔다.
+    /// Returns true if the Pong matches a Ping sent by this peer state (notes §4.6 item 4). A nil `source` means it arrived over DERP.
     mutating func receivePong(_ txID: TransactionID, from source: IPEndpoint?, at now: ContinuousClock.Instant) -> Bool
-    /// DERP로 온 CallMeMaybe(노트 4.8 5).
+    /// Handles a CallMeMaybe received over DERP (notes §4.8 item 5).
     mutating func receiveCallMeMaybe(_ endpoints: [IPEndpoint], at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action]
-    /// Pong 기한, heartbeat(노트 4.6 3, 4.8 3).
+    /// Handles Pong deadlines and heartbeats (notes §4.6 item 3 and §4.8 item 3).
     mutating func advance(to now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action]
-    /// Ping 기한, heartbeat, 신뢰 만료 가운데 가장 이른 것.
+    /// The earliest Ping deadline, heartbeat, or trust expiry.
     var nextDeadline: ContinuousClock.Instant? { get }
-    /// 마지막 외부 송신 시각. 없으면 nil. `Magicsock`이 유휴(ReSTUN 멈춤)를 판단한다.
+    /// The last outbound send time, or nil if none. `Magicsock` uses it to detect idleness and stop ReSTUN.
     var lastSend: ContinuousClock.Instant? { get }
     func path(at now: ContinuousClock.Instant) -> PeerPath
 }
 
-// 단위 3 — STUNMessage.swift, Netcheck.swift
+// Unit 3 — STUNMessage.swift, Netcheck.swift
 enum STUNMessage {
-    /// DERP 노트 3.8의 40바이트 요청.
+    /// The 40-byte request from the DERP notes, §3.8.
     static func bindingRequest(_ txID: TransactionID) -> [UInt8]
-    /// 노트 4.1 1의 STUN 판정(길이 ≥ 20, 상위 2비트 0, cookie, 바이트 1이 0x01).
+    /// Identifies STUN per notes §4.1 item 1 (length ≥ 20, top 2 bits are 0, cookie, and byte 1 is 0x01).
     static func looksLikeSTUN(_ bytes: [UInt8]) -> Bool
-    /// DERP 노트 4.10 3의 응답 해석. 실패하면 nil.
+    /// Parses a response per DERP notes §4.10 item 3. Returns nil on failure.
     static func parseBindingResponse(_ bytes: [UInt8]) -> (TransactionID, IPEndpoint)?
 }
 
@@ -305,471 +305,471 @@ struct Netcheck: Sendable {
         case sendSTUN([UInt8], to: IPEndpoint)
         case endpointsChanged([Magicsock.Endpoint])
         case homeRegionChanged(Int64)
-        /// 회차가 끝나 자기 엔드포인트를 다시 정했다(목록이 같아도). 미뤄 둔 CallMeMaybe를 보낼 때다.
+        /// The round finished and refreshed local endpoints, even if the list is unchanged. Send any deferred CallMeMaybe now.
         case endpointsRefreshed
     }
     init(localPort: UInt16, localAddresses: [IPAddress], loopbackAddresses: [IPAddress])
     mutating func setRegions(_ regions: [Magicsock.Region], at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action]
-    /// 회차가 진행 중이 아니면 새로 시작한다(노트 4.8 4.1의 ReSTUN).
+    /// Starts a new round if none is running (ReSTUN in notes §4.8 item 4.1).
     mutating func reSTUN(at now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Action]
-    mutating func receive(_ txID: TransactionID, mapped: IPEndpoint, at now: ContinuousClock.Instant) -> [Action]?   // nil: 이번 회차의 것이 아님
-    /// DERP 지역에서 패킷을 받았다(홈 유지 판단, DERP 노트 4.10 5).
+    mutating func receive(_ txID: TransactionID, mapped: IPEndpoint, at now: ContinuousClock.Instant) -> [Action]?   // Nil means it is not from this round
+    /// Records a packet received from a DERP region (for deciding whether to keep the home region, DERP notes §4.10 item 5).
     mutating func noteDERPActivity(region: Int64, at now: ContinuousClock.Instant)
-    /// - isActive: 피어가 있고 45초 안에 송신이 있었다. 거짓이면 주기 ReSTUN을 멈춘다.
+    /// - isActive: There are peers and a send occurred within 45 seconds. False stops periodic ReSTUN.
     mutating func advance(to now: ContinuousClock.Instant, isActive: Bool, using generator: inout some RandomNumberGenerator) -> [Action]
     var nextDeadline: ContinuousClock.Instant? { get }
     var endpoints: [Magicsock.Endpoint] { get }
-    /// 마지막으로 회차를 끝낸 시각. CallMeMaybe의 27초 신선도(노트 4.8 4.1).
+    /// The last round completion time. CallMeMaybe uses a 27-second freshness window (notes §4.8 item 4.1).
     var endpointsRefreshedAt: ContinuousClock.Instant? { get }
     var homeRegion: Int64 { get }
 }
 
-// 단위 3 — Sources/SwiftailIO (package)
-// `SocketError`에 `bindFailed(String)`, `sendFailed(String)`을 더한다. 메시지에는 errno 이름만 담는다.
-// POSIX 호출과 주소 재해석은 이 파일에만 가두고 이유를 주석으로 남긴다(선례: Tests/SwiftailWireGuardInteropTests/POSIXIO.swift).
-// 읽기는 DispatchSource 읽기 사건으로 깨어나 EAGAIN까지 읽는다(폴링하지 않는다). 파일 기술자는 Mutex로 지킨다.
+// Unit 3 — Sources/SwiftailIO (package)
+// Add `bindFailed(String)` and `sendFailed(String)` to `SocketError`. Messages contain only the errno name.
+// Confine POSIX calls and address reinterpretation to this file and document why in comments (precedent: Tests/SwiftailWireGuardInteropTests/POSIXIO.swift).
+// Reads wake on DispatchSource read events and drain until EAGAIN, without polling. A Mutex protects the file descriptor.
 package final class DatagramSocket: Sendable {
-    /// IPv4 와일드카드(0.0.0.0)에 묶는다. port 0이면 OS가 고른다. 비차단.
+    /// Binds to the IPv4 wildcard (0.0.0.0). If port is 0, the OS chooses it. Nonblocking.
     package init(port: UInt16 = 0) throws(SocketError)
     package var localPort: UInt16 { get }
-    /// 받은 데이터그램의 흐름. 구독자는 하나다. 소비가 느리면 오래된 것부터 버린다(256개).
+    /// A stream of received datagrams with one subscriber. Slow consumption drops the oldest datagrams first (256 entries).
     package var datagrams: AsyncStream<(bytes: [UInt8], source: IPEndpoint)> { get }
-    /// 보낸다. 기다리지 않는다. IPv6 목적지와 실패는 `SocketError`로 알린다(부르는 쪽이 버린다).
+    /// Sends without waiting. Reports IPv6 destinations and failures as `SocketError` (the caller drops the datagram).
     package func send(_ bytes: [UInt8], to destination: IPEndpoint) throws(SocketError)
     package func close()
 }
 
 package enum LocalInterfaceAddresses {
-    /// 지금 인터페이스의 IPv4 주소를 Go `netmon.LocalAddresses` 규칙으로 고른다(동작 E1).
+    /// Selects IPv4 addresses on current interfaces according to Go's `netmon.LocalAddresses` rules (behavior E1).
     package static func current() throws(SocketError) -> (regular: [IPAddress], loopback: [IPAddress])
 }
 ```
 
-## 동작
+## Behavior
 
-번호는 시험과 검토에서 가리키는 이름이다. 프로토콜 세부는 괄호 안의 노트 절을 따른다.
+The numbered items are reference labels for tests and reviews. Protocol details follow the cited sections of the notes.
 
-### A. 받은 것의 분류 (`receiveUDP`, `receiveDERP`)
+### A. Classifying Incoming Traffic (`receiveUDP`, `receiveDERP`)
 
-1. **UDP 분류 순서**(노트 4.1): 출처가 IPv6이거나 포트가 0이면 `unsupportedSource`. → STUN(`looksLikeSTUN`)이면 E2의 회차 표와 맞춘다. → Go가 Geneve로 보는 것(노트 4.1 2: 머리 조건이 맞고 protocol이 `0x7A12`, 또는 `0x7A11`이고 8바이트 뒤가 disco)이면 `unsupportedDisco`. `0x7A11`인데 뒤가 disco가 아니거나 다른 protocol이면 Go처럼 다음 단계로 내려간다. → disco(`isDisco`, 38바이트 기준)면 C. → 나머지는 `.wireGuard`.
-2. **DERP 분류**(노트 4.3): disco(38바이트 기준)면 C(출처는 "DERP 지역 `region`, 보낸 쪽 `peer`"). 아니면 `peer`가 `setPeers`로 받은 피어일 때만 `.wireGuard`, 아니면 `unknownDERPSender`. 받은 모든 패킷은 `Netcheck.noteDERPActivity(region:)`에 알린다.
-3. `.wireGuard`는 내용을 보지 않는다. 피어를 정하는 일은 WireGuard 장치가 receiver index로 한다(노트 4.1 "출발 주소와 피어의 연결"). 주소→피어 표를 두지 않는다. 온 길(`.udp(출처)`, `.derp(보낸 쪽, region:)`)은 함께 싣는다. 피어를 정하는 데는 쓰지 않고, 노드가 WireGuard의 부하 방어(cookie, 출처별 속도 제한)에 넘기고 cookie reply를 그 길로 되돌리는 데 쓴다(2026-11-15). disco가 온 길을 나타내던 내부 타입을 이 공개 타입으로 바꿨다.
+1. **UDP classification order** (notes §4.1). An IPv6 source or port 0 yields `unsupportedSource`. → If STUN (`looksLikeSTUN`), match it against the E2 round table. → If Go considers it Geneve (notes §4.1 item 2, the head conditions hold and the protocol is `0x7A12`, or it is `0x7A11` with disco after 8 bytes), yield `unsupportedDisco`. With `0x7A11` followed by something other than disco, or with another protocol, continue to the next step as Go does. → If disco (`isDisco`, 38-byte threshold), see C. → Otherwise emit `.wireGuard`.
+2. **DERP classification** (notes §4.3). If disco (38-byte threshold), see C (origin is "DERP region `region`, sender `peer`"). Otherwise emit `.wireGuard` only if `peer` came from `setPeers`, or yield `unknownDERPSender`. Report all incoming packets to `Netcheck.noteDERPActivity(region:)`.
+3. `.wireGuard` does not inspect the contents. The WireGuard device identifies the peer by receiver index (notes §4.1, "Associating a Source Address with a Peer"). There is no address-to-peer table. Include the inbound path (`.udp(source)`, `.derp(sender, region:)`). Peer identification does not use it. The node passes it to WireGuard's load defenses (cookie and per-source rate limiting) and uses it to return cookie replies along that path (2026-11-15). This public type replaced the internal type that represented a disco inbound path.
 
-### B. disco 키와 공유 키
+### B. Disco Keys and Shared Keys
 
-1. **disco 키 표**: disco 키 하나를 여러 피어가 쥘 수 있다(Go `peermap.go` `nodesOfDisco`. Go 주석은 노드 공유와 계정 전환을 그 경우로 든다). 피어는 netmap 키와 TSMP 키를 하나씩 쥘 수 있고 그 가운데 하나가 활성이다("TSMP disco 키 광고" T4). 0인 disco 키의 피어는 disco를 하지 않는다(DERP만). 받은 disco가 누구의 상태를 바꾸는지는 C와 T5의 판정표가 정한다. 피어가 광고나 disco로 바꿀 수 있는 것은 자기 자신의 키 상태뿐이다. (2026-11-16 독립 검토 뒤 바꿨다. 처음에는 `setPeers` 순서대로 키 하나에 피어 하나만 두고 뒤의 피어는 DERP만 쓰게 했다.)
-2. **공유 키 캐시**(노트 3.2 5): `setPeers`에서 새 disco 키마다 한 번 계산하고, 빠진 키는 지운다. **받은 패킷마다 X25519를 하지 않는다**(모르는 키로 CPU를 쓰게 하지 못한다). 계산이 `invalidKey`면 그 피어는 disco 없이 DERP만 쓴다.
-3. **피어의 disco 키가 바뀌면** `PeerPathState.resetForNewDiscoKey()`(노트 4.4 3).
-4. `setPeers`에서 빠진 피어는 상태를 지우고 `.pathChanged(key, nil)`을 낸다(이미 nil을 알린 피어면 다시 내지 않는다). 새 피어는 아직 보낸 것이 없어 유휴이므로(G3) 사건을 내지 않는다. disco 키가 바뀐 피어의 경로는 nil이 된다(Go `invalidateDiscoPathLocked`가 마지막 송신 시각을 지우는 것과 같다). `.pathChanged`의 nil은 "빠졌거나 유휴"다.
+1. **Disco key table.** Multiple peers can hold the same disco key (Go `peermap.go` `nodesOfDisco`. The Go comment lists node sharing and account switching as examples). A peer can hold one netmap key and one TSMP key, one of which is active ("TSMP Disco Key Advertisement" T4). Peers with a disco key of 0 do no disco and use only DERP. C and the T5 decision table determine whose state an incoming disco message changes. A peer can change only its own key state through advertisements or disco. (Changed after the 2026-11-16 independent review. Originally, each key was assigned only to the first peer in `setPeers` order, and later peers used only DERP.)
+2. **Shared key cache** (notes §3.2 item 5). Compute once per new disco key in `setPeers` and delete removed keys. **Do not run X25519 for each incoming packet**, so unknown keys cannot consume CPU this way. If calculation yields `invalidKey`, the peer uses only DERP, without disco.
+3. **When the peer's disco key changes**, call `PeerPathState.resetForNewDiscoKey()` (notes §4.4 item 3).
+4. For peers removed by `setPeers`, delete state and emit `.pathChanged(key, nil)` (skip it if nil was already reported). A new peer is idle (G3) because no traffic has been sent to it yet, so it gets no event. A peer whose disco key changed has a nil path (as when Go's `invalidateDiscoPathLocked` clears the last send time). Nil in `.pathChanged` means "removed or idle."
 
-### C. disco 받기 (노트 4.2)
+### C. Receiving Disco (Notes §4.2)
 
-1. 보낸 쪽 disco 키가 B1의 표에 없으면(어느 피어도 netmap 키나 TSMP 키로 쥐지 않았으면) `unknownDiscoKey`. 열기·해석 실패는 `malformedDisco`, `unknownType`은 `unsupportedDisco`. 어느 경우든 상태는 바뀌지 않는다.
+1. A sender disco key absent from the B1 table (no peer holds it as a netmap or TSMP key) yields `unknownDiscoKey`. Opening or parsing failure yields `malformedDisco`, and `unknownType` yields `unsupportedDisco`. None of these changes state.
 2. **Ping**:
-   - UDP로 왔으면 그 키를 쥔 **모든** 피어의 `receivePing(txID, from: 출처)`. 모두 true면(어느 피어에게도 재전송이 아니면) `Pong{txID, src: 출처}`를 그 출처로 UDP로 한 번 보낸다.
-   - DERP로 왔으면 DERP 보낸 쪽 `peer`가 아는 피어여야 한다(아니면 `misroutedDisco`). 후보를 넣지 않고 `Pong{txID, src: 127.3.3.40:<region>}`을 같은 지역으로 그 `peer`에게 보낸다(노트 4.2 4.3·4.4).
-   - UDP로 온 Ping의 `nodeKey`가 그 키를 쥔 피어면 그 피어의 활성 키를 이 키로 바꾼다(Go `unambiguousNodeKeyOfPingLocked` → `checkAndUpdateDiscoKey`). 그 키를 쥐지 않은 피어의 `nodeKey`는 무시한다. 주소→node 표는 두지 않는다(A3).
-3. **Pong**: 그 키를 쥔 피어들에게 차례로 `receivePong(txID, from: UDP 출처 또는 nil)`을 묻고 true인 첫 피어에서 멈춘다(Go `forEachEndpointWithDiscoKey`). TxID는 Ping을 보낸 피어의 표에만 있으므로 그 피어만 바뀐다. 아무도 아니면 무시한다. Pong은 활성 키를 바꾸지 않는다.
-4. **CallMeMaybe**: DERP로 왔고, DERP 보낸 쪽 `peer`의 피어가 있고, 메시지의 보낸 쪽 키가 그 피어의 netmap 키나 TSMP 키일 때만 그 피어의 `receiveCallMeMaybe`. 비활성 키였으면 그 피어의 활성 키를 이 키로 바꾼다(Go `checkAndUpdateDiscoKey`). 같은 키를 쥔 다른 피어는 바뀌지 않는다. 아니면 `misroutedDisco`(노트 4.2 3).
-5. 그 키를 쥔 피어 가운데 경로가 바뀐 피어마다 `.pathChanged`(표의 순서대로).
+   - For UDP, call `receivePing(txID, from: source)` for **all** peers holding that key. If all return true (it is a retransmission for none of them), send one `Pong{txID, src: source}` to that source over UDP.
+   - For DERP, the DERP sender `peer` must be known (otherwise `misroutedDisco`). Add no candidate and send `Pong{txID, src: 127.3.3.40:<region>}` to that `peer` over the same region (notes §4.2 items 4.3 and 4.4).
+   - If the UDP Ping's `nodeKey` identifies a peer that holds that key, switch that peer's active key to this key (Go `unambiguousNodeKeyOfPingLocked` → `checkAndUpdateDiscoKey`). Ignore the `nodeKey` of a peer that does not hold the key. There is no address-to-node table (A3).
+3. **Pong.** Call `receivePong(txID, from: UDP source or nil)` for peers holding that key in order, stopping at the first that returns true (Go `forEachEndpointWithDiscoKey`). The TxID appears only in the table of the peer state that sent the Ping, so only that peer changes. Ignore if none matches. A Pong does not change the active key.
+4. **CallMeMaybe.** Call the peer's `receiveCallMeMaybe` only if it arrived over DERP, the DERP sender `peer` is known, and the message's sender key is that peer's netmap or TSMP key. If the key was inactive, make it active for that peer (Go `checkAndUpdateDiscoKey`). Other peers holding the same key are unaffected. Otherwise yield `misroutedDisco` (notes §4.2 item 3).
+5. Emit `.pathChanged` for every peer holding that key whose path changed (in table order).
 
-### D. 경로 상태 기계 (`PeerPathState`, 노트 4.4~4.8)
+### D. Path State Machine (`PeerPathState`, Notes §4.4~§4.8)
 
-1. **후보**(노트 4.4 1): netmap `Endpoints`, UDP Ping의 출처, DERP CallMeMaybe의 주소. **IPv4만** 받는다(소켓이 IPv4 하나다. 결정 표 "UDP 소켓"). IPv4-mapped는 푼다. IPv4 link-local(169.254/16)은 받는다(Go는 IPv6 link-local만 거른다). 자기 STUN 결과와 Pong의 Src는 후보가 아니다.
-2. **지우기**(노트 4.4 2)와 **disco 키 변경**(노트 4.4 3)은 노트대로다.
-3. **경로 선택**(노트 4.5 1–4): 신뢰 기간 안의 `bestAddr` → UDP만. 아니면 `bestAddr`(있으면) UDP + 피어 홈 DERP. 홈 DERP가 0이고 `bestAddr`도 없으면 `noRouteToPeer`로 버린다. (`shortcut:` 역방향 DERP 지역(노트 4.5 4, DERP 노트 4.9 3)은 쓰지 않는다. 홈 DERP가 0인 피어는 Go에서도 드물다. 필요해지는 시점: 그런 피어가 실제 tailnet 관문에서 보일 때.)
-4. **보낼 때마다**(노트 4.5 3·5, 4.8 2): 신뢰된 직접 경로가 아니면 전체 Ping(CallMeMaybe 포함). 외부 송신 시각을 적고 heartbeat가 없으면 3초 뒤로 건다.
-5. **Ping·Pong·기한**(노트 4.6), **`betterAddr`**(노트 4.7), **전체 Ping·heartbeat·CallMeMaybe 받기**(노트 4.8 1·3·5)는 노트대로다. 받은 Ping에는 Pong만 보낸다(노트 4.8 6).
-6. **타이머 값은 Go와 같다**(노트 5절): Ping 기한 5초, 후보별 Ping 간격 5초, heartbeat 3초, 신뢰 6.5초, 유휴 45초, 좋은 지연 5 ms, 개선 Ping 1분, Ping으로 배운 후보 45초. 바꿀 수 있게 하지 않는다. 시험은 시각을 넘겨 확인한다.
-7. **신뢰 만료도 기한이다**: `nextDeadline`에 `trustBestAddrUntil`을 넣어, 만료 시각의 `advance`에서 `Magicsock`이 `.pathChanged(.relayed)`를 낼 수 있게 한다.
-8. `path(at:)`: `bestAddr`가 있고 `now ≤ trustBestAddrUntil`이면 `.direct(bestAddr)`, 아니면 `.relayed(derpRegion: homeDERP)`(노트 7.1의 `curAddr`).
+1. **Candidates** (notes §4.4 item 1). Use netmap `Endpoints`, UDP Ping sources, and addresses from DERP CallMeMaybe. Accept **IPv4 only** (one IPv4 socket, see "UDP socket" in the decision table). Unwrap IPv4-mapped addresses. Accept IPv4 link-local addresses (169.254/16). Go filters only IPv6 link-local addresses. Local STUN results and Pong Src are excluded from candidates.
+2. **Removal** (notes §4.4 item 2) and **disco key change** (notes §4.4 item 3) follow the notes.
+3. **Path selection** (notes §4.5 items 1–4). A `bestAddr` within its trust period uses UDP only. Otherwise use UDP to `bestAddr` (if present) + the peer's home DERP. With home DERP 0 and no `bestAddr`, drop with `noRouteToPeer`. (`shortcut:` Reverse DERP regions are unused, see notes §4.5 item 4 and DERP notes §4.9 item 3. Peers with home DERP 0 are rare in Go too. This becomes necessary if such a peer appears at the real tailnet gate.)
+4. **On every send** (notes §4.5 items 3 and 5, §4.8 item 2). Without a trusted direct path, send a full Ping round (including CallMeMaybe). Record the outbound send time and schedule a heartbeat for 3 seconds later if none is scheduled.
+5. **Ping, Pong, and deadlines** (notes §4.6), **`betterAddr`** (notes §4.7), and **full Ping round, heartbeat, and receiving CallMeMaybe** (notes §4.8 items 1, 3, and 5) follow the notes. Reply to a received Ping only with a Pong (notes §4.8 item 6).
+6. **Timer values match Go** (notes §5). Ping deadline 5 seconds, per-candidate Ping interval 5 seconds, heartbeat 3 seconds, trust 6.5 seconds, idle 45 seconds, good latency 5 ms, upgrade Ping 1 minute, and Ping-learned candidate 45 seconds. These values are fixed. Tests verify them by passing time explicitly.
+7. **Trust expiry is also a deadline.** Include `trustBestAddrUntil` in `nextDeadline` so `Magicsock` can emit `.pathChanged(.relayed)` on `advance` at expiry.
+8. `path(at:)` returns `.direct(bestAddr)` if `bestAddr` exists and `now ≤ trustBestAddrUntil`, otherwise `.relayed(derpRegion: homeDERP)` (`curAddr` in notes §7.1).
 
-### E. 자기 엔드포인트, STUN, 홈 지역 (`Netcheck`)
+### E. Local Endpoints, STUN, and Home Region (`Netcheck`)
 
-1. **인터페이스 주소**(`LocalInterfaceAddresses`, Go `net/netmon/state.go:38-143`): 올라와 있고 이름이 `zt`로 시작하지 않으며 `wt0`이 아닌 인터페이스의 IPv4 주소 가운데, Tailscale 주소(`100.64.0.0/10`, 단 `100.115.92.0/23` 제외)를 빼고, loopback 인터페이스나 loopback 주소는 `loopback`으로, link-local(169.254/16)은 따로 모아 일반 주소가 없을 때만 `regular`로 쓴다. 각 목록은 주소 오름차순. `getifaddrs` 호출은 이 파일에만 가두고 이유를 주석으로 남긴다.
-   - 노드가 **시작할 때 한 번** 읽어 `Magicsock.init`에 넘긴다. `shortcut:` 주소 변경 감지는 M5(링크 변경과 함께, 노트 4.11).
-2. **STUN 회차**(DERP 노트 4.10 1, Go `net/netcheck/netcheck.go:559-587`): `stunServers`가 있는 지역마다 0, 100, 200 ms에 `stunServers[try % count]`로 요청을 하나씩 보낸다(지역당 3개). 보낸 TxID를 이번 회차 표에 둔다. 지역의 첫 응답이 그 지역의 지연(보낸 시각부터)과 바깥 주소다. 모든 지역이 답했거나 시작 뒤 3초가 지나면 회차를 끝낸다. 회차의 것이 아닌 응답은 `unexpectedSTUN`.
-3. **STUN 주소**(Go `netcheck.go:1665-1700`): 노드가 DERPMap에서 뽑는다. `stunTestIP`가 있으면 그 주소, 아니면 `ipv4`가 IPv4 리터럴일 때 그 주소. `stunPort` 0은 3478, 음수는 그 노드를 쓰지 않는다. `shortcut:` `ipv4`가 빈 노드의 DNS 조회는 하지 않는다(값 타입은 DNS를 할 수 없다. 운영 DERPMap은 IPv4 리터럴을 준다. 필요해지는 시점: 리터럴 없는 DERPMap을 만날 때 노드가 조회해 넘긴다).
-4. **엔드포인트 목록**(노트 4.9 1의 2·7): 회차가 끝나면 `[STUN 전역 주소들(.stun)] + [localAddresses의 각 주소:localPort(.local)]`, 둘 다 비었으면 loopback 주소들:localPort(.local). 중복은 처음 것만. STUN 전역 주소는 회차의 첫 응답 주소와, 두 번 이상 관측된 주소다(노트 4.9 1.2). 회차가 끝날 때마다 `endpointsRefreshedAt`을 갱신하고 `.endpointsRefreshed`를 낸다. 목록이 **집합으로** 바뀌었을 때만 `.endpointsChanged`(Go `magicsock.go:1448-1473`은 순서가 달라도 같은 집합이면 같다고 본다). 지역이 하나도 없고 STUN 결과도 없는 목록은 내지 않는다(노트 4.9 5).
-5. **주기**(노트 4.9 5, Go `magicsock.go:887-923`, `:3683-3712`): 회차가 끝나면 `isActive`일 때 20–26초 무작위 뒤에 다음 회차를 건다. `isActive`는 "피어가 하나 이상 있고, 어느 피어든 마지막 송신(`lastSend`) 뒤 45초가 지나지 않음"이다. 아니면 주기를 멈추고, 다음 `send`가 다시 건다. `setRegions`의 변경과 CallMeMaybe를 보내려는데 엔드포인트가 낡은 경우(F2)는 곧바로 회차를 시작한다.
-   - Go의 유휴 판단은 TUN 송수신 시각이다(`net/tstun/wrap.go:842-853`, `wgengine/userspace.go:435`). 이 계약은 WireGuard 송신 시각으로 대신한다. 차이는 트래픽이 멈춘 뒤 WireGuard keepalive만큼(최대 둘, 약 20초. wireguard-go의 `needAnotherKeepalive`를 옮긴 동작이다) STUN이 더 돌고 유휴 판정(G3의 nil)이 늦는 것이다. Go 피어와 맞춰 본 값(2026-11-15): 마지막 트래픽 뒤 약 55~64초에 nil.
-6. **홈 지역 선택**(DERP 노트 4.10 5, Go `netcheck.go:1426-1531`): 회차가 끝날 때 최근 5분 5초의 회차 기록에서 지역별 최소 지연에 `score`(양수일 때)를 곱해 가장 작은 지역을 고르고, 기존 홈이 아직 닿으면(이번 회차에 지연이 있거나 회차 시작 뒤 또는 8초 안에 그 지역에서 DERP 패킷을 받음) 차이가 10 ms 미만이거나 새 후보가 기존의 2/3보다 크면 유지한다. 측정이 하나도 없으면 120초 안에 DERP 패킷을 받은 기존 홈을 유지하고, 그래도 0이면 기존 홈을 유지한다(DERP 노트 4.8 1).
-   - **대체 홈**: 홈이 0인 채로 `setRegions`가 오면 곧바로 지역 ID가 가장 작은 것을 홈으로 낸다(M3 규칙). 첫 회차(3초)를 기다리지 않고 DERP에 붙기 위해서다. 회차가 끝나면 6의 규칙으로 다시 고른다. 대체 홈은 6의 "기존 홈"이 아니다: 유지 조건의 기준은 **앞 회차가 측정해서 고른 홈**이고(Go는 앞 보고서의 `PreferredDERP`, `netcheck.go:1431`. magicsock의 대체 홈은 거기에 되들어가지 않는다), 처음 측정한 회차는 유지 조건 없이 가장 빠른 지역을 고른다. 측정이 없는 회차 뒤에는 120초 안에 DERP 패킷을 받은 경우에만 그 기준이 이어진다(M4 검토 A, 2026-11-15).
-   - 홈이 바뀌면 `.homeRegionChanged`. `shortcut:` Go는 제어 서버와 맵 스트림이 끊긴 동안 홈을 바꾸지 않는다(DERP 노트 4.8 2). 이 계약은 바꾸되, 노드가 옛 홈 연결을 닫지 않으므로(엔진 계약 M4 동작 N3) 아직 옛 홈으로 보내는 피어의 패킷도 받는다. 바뀐 홈은 제어가 다시 이어진 뒤 올라간다.
-   - `shortcut:` UDP가 막혀 STUN 응답이 없을 때의 HTTPS 지연 측정(DERP 노트 4.10 4)은 하지 않는다. 그때는 위 규칙대로 기존 홈을 유지한다.
-   - DERP 활동은 `receiveDERP`로 받은 패킷만 센다. `DERPClient`는 KeepAlive를 올리지 않는다. 기존 홈이 STUN에는 답하지 않고 KeepAlive만 오는 드문 경우에 홈을 더 일찍 옮길 수 있다.
+1. **Interface addresses** (`LocalInterfaceAddresses`, Go `net/netmon/state.go:38-143`). From IPv4 addresses on interfaces that are up, whose names do not start with `zt`, and that are not `wt0`, exclude Tailscale addresses (`100.64.0.0/10`, except `100.115.92.0/23`). Put loopback interfaces' addresses and loopback addresses in `loopback`. Collect link-local addresses (169.254/16) separately and use them as `regular` only when there are no ordinary addresses. Sort each list in ascending address order. Confine the `getifaddrs` call to this file and document why in a comment.
+   - The node reads addresses **once at startup** and passes them to `Magicsock.init`. `shortcut:` Address change detection comes in M5 (along with link changes, notes §4.11).
+2. **STUN round** (DERP notes §4.10 item 1, Go `net/netcheck/netcheck.go:559-587`). For each region with `stunServers`, send one request to `stunServers[try % count]` at 0, 100, and 200 ms (3 per region). Keep each sent TxID in the current round table. The first reply in a region supplies its latency (from send time) and external address. End the round when all regions have replied or 3 seconds have passed from the start. Responses from outside the round yield `unexpectedSTUN`.
+3. **STUN address** (Go `netcheck.go:1665-1700`). The node extracts it from DERPMap. Use `stunTestIP` if present, otherwise use `ipv4` if it is an IPv4 literal. A `stunPort` of 0 means 3478, and a negative value excludes the node. `shortcut:` Skip DNS lookup for nodes with empty `ipv4` (value types cannot resolve DNS, and the production DERPMap provides IPv4 literals). When a DERPMap without literals is encountered, the node will resolve them and pass the results in.
+4. **Endpoint list** (notes §4.9 item 1 subitems 2 and 7). At the end of a round, use [STUN global addresses (.stun)] + [each address in localAddresses:localPort (.local)]. If both are empty, use loopback addresses:localPort (.local). Keep only the first occurrence of duplicates. STUN global addresses are the round's first response address and addresses observed at least twice (notes §4.9 item 1.2). Update `endpointsRefreshedAt` and emit `.endpointsRefreshed` after every round. Emit `.endpointsChanged` only when the list changes **as a set** (Go `magicsock.go:1448-1473` treats the same set as equal even in a different order). Emit no list if there are no regions and no STUN results (notes §4.9 item 5).
+5. **Periodicity** (notes §4.9 item 5, Go `magicsock.go:887-923`, `:3683-3712`). When a round ends and `isActive` is true, schedule the next round after a random 20–26 seconds. `isActive` means "at least one peer exists, and 45 seconds have not elapsed since at least one peer's last send (`lastSend`)." Otherwise stop periodic rounds and let the next `send` restart them. Changes in `setRegions` and attempts to send CallMeMaybe with stale endpoints (F2) start a round immediately.
+   - Go determines idleness by TUN send and receive times (`net/tstun/wrap.go:842-853`, `wgengine/userspace.go:435`). This contract uses WireGuard send time instead. The difference is that after traffic stops, STUN keeps running through the WireGuard keepalives (at most two, about 20 seconds, behavior ported from wireguard-go's `needAnotherKeepalive`), and idle detection (nil in G3) is delayed. Values checked against a Go peer (2026-11-15) reached nil about 55~64 seconds after the last traffic.
+6. **Home region selection** (DERP notes §4.10 item 5, Go `netcheck.go:1426-1531`). At the end of a round, take each region's minimum latency over rounds in the last 5 minutes 5 seconds, multiply it by `score` if positive, and choose the smallest result. If the existing home is still reachable (it has a latency this round, or a DERP packet arrived from it since the round started or within 8 seconds), keep it when the difference is less than 10 ms or the new candidate is greater than 2/3 of the existing one. With no measurements, keep the existing home if a DERP packet arrived from it within 120 seconds. If the result is still 0, keep the existing home (DERP notes §4.8 item 1).
+   - **Fallback home.** If `setRegions` arrives while home is 0, immediately emit the region with the smallest ID as home (M3 rule). This connects to DERP without waiting for the first round (3 seconds). Choose again under rule 6 when the round ends. The fallback home does not qualify as the "existing home" in rule 6. The baseline for retention is **the home selected from measurements in the previous round** (Go uses `PreferredDERP` from the previous report, `netcheck.go:1431`. Magicsock's fallback home is not fed back into it). The first round with measurements picks the fastest region without a retention condition. After a round without measurements, the baseline survives only if a DERP packet arrived within 120 seconds (M4 review A, 2026-11-15).
+   - Emit `.homeRegionChanged` when home changes. `shortcut:` Go does not change home while the map stream to the control server is disconnected (DERP notes §4.8 item 2). This contract changes it, and because the node does not close the old home connection (engine contract M4 behavior N3), packets still sent to the old home also arrive. Publish the new home after reconnecting to control.
+   - `shortcut:` Skip HTTPS latency measurement when UDP is blocked and no STUN replies arrive (DERP notes §4.10 item 4). Keep the existing home according to the above rules.
+   - Count only packets received through `receiveDERP` as DERP activity. `DERPClient` does not forward KeepAlive. In the rare case where the existing home sends only KeepAlive and does not answer STUN, home may move sooner.
 
-### F. CallMeMaybe 보내기 (노트 4.8 4)
+### F. Sending CallMeMaybe (Notes §4.8 Item 4)
 
-1. `PeerPathState`의 `.callMeMaybe`를 받으면, `endpointsRefreshedAt`이 27초 안이면 지금 엔드포인트 **전체**를 주소만(`EndpointType` 없이) 담아 피어의 disco 키로 봉하고 `.derp(_, to: 피어, region: 피어 홈 DERP)`로 낸다. 홈 DERP가 0이면 보내지 않는다.
-2. 낡았으면 그 피어를 "엔드포인트 갱신 뒤 보낼 목록"에 넣고 `reSTUN`을 부른다. `.endpointsRefreshed`가 오면 목록의 피어에게 1을 한다(목록은 피어당 한 칸).
-3. UDP Ping과 CallMeMaybe의 순서는 보장하지 않는다(노트 4.8 4.3. Go도 같다).
+1. On `.callMeMaybe` from `PeerPathState`, if `endpointsRefreshedAt` is within 27 seconds, include **all** current endpoint addresses without `EndpointType`, seal using the peer's disco key, and emit `.derp(_, to: peer, region: peer's home DERP)`. Skip sending if home DERP is 0.
+2. If stale, add the peer to the list of peers to send to after endpoint refresh and call `reSTUN`. On `.endpointsRefreshed`, perform step 1 for the listed peers (one slot per peer).
+3. Order between UDP Ping and CallMeMaybe is unspecified (notes §4.8 item 4.3, as in Go).
 
-### G. 경로 사건
+### G. Path Events
 
-1. `Magicsock`은 상태를 바꾼 모든 호출 끝에서, 영향을 받은 피어의 `path(at:)`가 마지막으로 알린 값과 다르면 `.pathChanged`를 낸다. `advance`에서는 신뢰가 만료된 피어도 본다(D7).
-2. 같은 값은 다시 내지 않는다. `.direct(a)` → `.direct(b)`는 바뀐 것이다.
-3. 유휴 피어의 경로는 nil이다(2026-11-15 첫 사용처 검토 뒤 더함): 그 피어로 마지막 WireGuard 데이터그램을 보낸 지 45초(유휴 판단, D의 타이머 값)가 넘었으면 `path(to:at:)`는 nil이고, 넘는 시각의 `advance`가 `.pathChanged(key, nil)`을 낸다. 다시 보내면 그때의 경로로 `.pathChanged`가 나온다.
-4. 나빠진 까닭(2026-11-16 더함, 진단용): 경로가 `direct`에서 `relayed`로, 또는 알린 경로에서 nil로 가면 그 까닭을 기억하고 노드가 패키지 안의 `downgrade(of:)`로 묻는다(공개 API가 아니다). 까닭은 `PathDowngrade`의 여섯이다: 신뢰 만료(`bestAddr`가 남았거나 Ping 기한이 지웠음), 후보 지움(`bestAddr`였던 후보를 지움), 재결속, disco 키 바뀜(송신 기록이 지워져 nil), 유휴, 피어 빠짐. 동작에는 쓰이지 않는다.
+1. At the end of every state-changing call, `Magicsock` emits `.pathChanged` if an affected peer's `path(at:)` differs from the last reported value. `advance` also checks peers whose trust expired (D7).
+2. Do not reemit the same value. `.direct(a)` → `.direct(b)` is a change.
+3. An idle peer has a nil path (added after first adopter review on 2026-11-15). If more than 45 seconds (idle detection, timer values in D) have passed since the last WireGuard datagram sent to that peer, `path(to:at:)` is nil, and `advance` at that point emits `.pathChanged(key, nil)`. Sending again emits `.pathChanged` with the path at that time.
+4. The reason for degradation (added 2026-11-16 for diagnostics) is retained when a path goes from `direct` to `relayed` or from a reported path to nil. The node queries it with package-scoped `downgrade(of:)` (outside the public API). `PathDowngrade` has six reasons, trust expiry (`bestAddr` remained or a Ping deadline cleared it), candidate removal (removed the candidate that was `bestAddr`), rebinding, disco key change (nil because the send record was cleared), idleness, and peer removal. This does not affect behavior.
 
-### H. 한도 (신뢰할 수 없는 입력)
+### H. Limits (Untrusted Input)
 
-| 대상 | 한도 | 넘으면 |
+| Item | Limit | When exceeded |
 | --- | --- | --- |
-| 받은 UDP 데이터그램 | 65,535바이트(소켓 읽기 버퍼) | 소켓이 자른 것은 WireGuard·disco가 형식 오류로 버린다 |
-| 피어당 후보 | 128개(Go의 정리 문턱 100 위의 상한) | 노트 4.4 2의 정리를 먼저 하고, 그래도 가득이면 Ping으로만 배운 후보 가운데 Ping을 받은 지 가장 오래된 것을 밀어내고 넣는다. netmap·CallMeMaybe로 배운 후보와 `bestAddr`는 밀어내지 않고, 밀어낼 것이 없으면 새 후보를 넣지 않는다. CallMeMaybe 목록은 앞에서부터 넣는다 |
-| 피어당 보낸 Ping 표 | 128개 | 새 Ping을 보내지 않는다(기한 5초로 비워진다) |
-| STUN 회차 표 | 지역 수 × 3 | 회차가 끝나면 비운다 |
-| CallMeMaybe를 미룬 피어 | 피어 수(피어당 한 칸) | 해당 없음 |
-| 받은 CallMeMaybe 주소 | 데이터그램 길이로 묶인다 | 후보 한도가 막는다 |
+| Received UDP datagram | 65,535 bytes (socket read buffer) | WireGuard or disco drops socket-truncated datagrams as malformed |
+| Candidates per peer | 128 (cap above Go's pruning threshold of 100) | First prune per notes §4.4 item 2. If still full, evict the Ping-only candidate whose last received Ping is oldest and insert the new one. Never evict candidates learned from netmap or CallMeMaybe, or `bestAddr`. If none can be evicted, skip the new candidate. Insert CallMeMaybe entries in list order |
+| Sent Ping table per peer | 128 | Skip new Pings (the 5-second deadline drains it) |
+| STUN round table | Region count × 3 | Clear at the end of the round |
+| Peers with deferred CallMeMaybe | Peer count (one slot per peer) | N/A |
+| Received CallMeMaybe addresses | Bounded by datagram length | The candidate limit applies |
 
-- 실패는 닫힌 쪽이다. 해석·열기·경로 규칙을 어긴 disco는 상태를 바꾸지 않고 버린다. 응답(Pong)도 보내지 않는다. 열리지 않은 패킷을 WireGuard로 넘기지 않는다(노트 3.2 6).
-- 어떤 바이트열을 `receiveUDP`·`receiveDERP`에 넣어도 죽지 않는다. 범위를 넘는 인덱스, 정수 넘침(지연 점수 계산은 나노초 `Int64`, 노트 4.7 4)이 없어야 한다.
-- disco 메시지에는 재전송 방지가 없다(Go도 TxID 중복만 본다, 노트 4.2 4.2). 캡처한 Ping을 다른 주소에서 다시 보내면 그 주소가 후보가 된다. Ping은 그 주소로 가고, Pong이 와야만 `bestAddr`가 되므로 경로를 빼앗지는 못한다.
-- 그런 Ping으로 후보 표를 묶어 두지 못한다(2026-11-17. Go와 다른 점 둘):
-  - **최근에 본 TxID로 온 Ping(재전송)은 후보의 마지막 Ping 시각을 새로 적지 않고, 새 후보도 만들지 않는다.** 피어마다 최근 UDP로 받은 Ping의 TxID 32개를 받은 차례대로 쥐고(넘으면 가장 먼저 본 것을 잊는다), 거기 있는 TxID는 어느 출처에서 오든 재전송으로 본다(2026-11-17 보안 검증 2차. 전에는 그 후보의 직전 TxID와만 견줘, 캡처한 Ping 둘을 번갈아 보내면 모두 새 Ping으로 보았다). 피어의 disco 키가 바뀌면 비운다. Go `addCandidateEndpoint`는 후보마다 직전 TxID 하나만 보고 재전송에도 `lastGotPing`을 새로 적어, 캡처한 Ping 하나를 되풀이해 보내는 것만으로 후보가 45초 수명을 넘겨 남는다. Pong의 규칙은 Go와 같다: 같은 후보에서 직전과 같은 TxID가 왔을 때만 보내지 않는다(후보로 넣지 않은 재전송에도 Pong은 나간다).
-  - **표가 가득 차면 Ping으로만 배운 후보 가운데 가장 오래된 것을 밀어낸다**(위 표). Go에는 상한이 없어 밀어내기도 없다. 전에는 가득 찬 표가 새 후보를 받지 않아, Ping 하나를 주소 128개에서 되풀이해 넣으면 그 피어의 새 주소(netmap의 엔드포인트, 진짜 Ping의 출처)가 후보가 되지 못했다.
-  - 정상 흐름은 달라지지 않는다: Go는 Ping마다 새 TxID를 쓰므로(`startDiscoPingLocked`) 재전송으로 보이는 것은 망이 겹쳐 전한 같은 데이터그램뿐이고, 후보가 128개에 닿는 일은 정상 피어에게 없다(Go의 정리 문턱이 100이다).
-  - 남는 것(한계): 쥐는 TxID가 32개뿐이라, 캡처한 Ping이 그보다 많으면(33개 이상을 돌려 가며 보내면) 여전히 후보의 수명을 늘리거나 새 주소를 후보로 넣을 수 있다. 정상 피어의 Ping도 이 고리를 밀어내므로, 피어가 Ping을 활발히 보내는 동안에는 더 적은 수로도 된다. 그렇게 넣은 후보는 아직 `bestAddr`가 되지 못한 Ping 출처의 후보를 밀어낼 수 있다. 그 후보는 다음 Ping(heartbeat 3초)에 다시 들어온다. netmap·CallMeMaybe로 배운 후보와 그 주소로 선 경로(`bestAddr`)는 영향받지 않는다. 예외: 경로 위에서 새 Ping을 붙잡아 다른 주소에서 먼저 닿게 하면 진짜 출처가 재전송으로 처리되어, Ping으로만 배운 주소(그 주소가 `bestAddr`인 경우 포함)는 수명이 늘지 않고 45초 뒤 지워져 중계로 내려간다. 그런 위치의 상대는 패킷을 버리기만 해도 같은 결과를 내므로 새 능력은 아니다(2026-11-17 재확인).
+- Fail closed. Discard disco messages that fail parsing, opening, or path checks without changing state or sending a response (Pong). Do not pass unopened packets to WireGuard (notes §3.2 item 6).
+- No byte sequence passed to `receiveUDP` or `receiveDERP` may cause a crash. Avoid out-of-range indexing and integer overflow (latency score calculation uses nanoseconds in `Int64`, notes §4.7 item 4).
+- Disco messages have no replay protection (Go also only checks for duplicate TxIDs, notes §4.2 item 4.2). Replaying a captured Ping from another address makes that address a candidate. A Ping goes to that address, and it becomes `bestAddr` only if a Pong arrives, so the path cannot be taken over this way.
+- Such Pings cannot tie up the candidate table (2026-11-17, two differences from Go).
+  - **A Ping with a recently seen TxID (a replay) neither refreshes the candidate's last Ping time nor creates a new candidate.** For each peer, retain the 32 most recent Ping TxIDs received over UDP in receipt order (forget the oldest when full). A TxID in that list is a replay regardless of its source (2026-11-17 security verification, round 2. Previously the check used only the last TxID for that candidate, so alternating two captured Pings made both look new). Clear the list when the peer's disco key changes. Go's `addCandidateEndpoint` checks only one previous TxID per candidate and updates `lastGotPing` even on a replay, so repeating a single captured Ping keeps a candidate past its 45-second lifetime. The Pong rule matches Go. Skip the Pong only when the same candidate sends the same TxID as before (even a replay that was not added as a candidate gets a Pong).
+  - **When the table is full, evict the oldest candidate learned only from Ping** (see the table above). Go has no cap and therefore no eviction. Previously, a full table rejected new candidates, so replaying one Ping from 128 addresses prevented the peer's new addresses (netmap endpoints or genuine Ping sources) from becoming candidates.
+  - Normal traffic is unaffected. Go uses a new TxID for every Ping (`startDiscoPingLocked`), so only a duplicate of the same datagram delivered by the network looks like a replay. Normal peers do not reach 128 candidates (Go's pruning threshold is 100).
+  - Remaining limitation. With only 32 retained TxIDs, more captured Pings (cycling through 33 or more) can still extend a candidate's life or add new addresses. Genuine peer Pings also displace entries in the ring, so fewer captured Pings suffice while the peer sends Pings actively. A candidate added that way can evict a Ping-source candidate that has not yet become `bestAddr`. That candidate returns on the next Ping (3-second heartbeat). Candidates learned from netmap or CallMeMaybe and paths established to those addresses (`bestAddr`) are unaffected. An exception occurs when someone on the path captures a new Ping and gets it delivered from a different address first. The genuine source is then treated as a replay, so an address learned only through Ping (including one that is `bestAddr`) is not refreshed and is removed after 45 seconds, falling back to relay. Someone in that position could achieve the same result by dropping packets, so this adds no capability (reconfirmed 2026-11-17).
 
-### I. 비밀
+### I. Secrets
 
-1. disco 개인 키와 공유 키는 `Magicsock`·`DiscoSharedKey`의 `customMirror`로 감춘다. `Magicsock`의 mirror는 `discoPublicKey`, 피어 수, 홈 지역만 보인다.
-2. 출력(`Output`, `Drop`)에 키 재료가 없다. 봉한 바이트만 나간다.
-3. disco 키는 저장하지 않는다(시작마다 새로, 노트 4.10 4).
+1. Hide the private disco key and shared keys with the `customMirror` of `Magicsock` and `DiscoSharedKey`. The `Magicsock` mirror shows only `discoPublicKey`, peer count, and home region.
+2. Outputs (`Output`, `Drop`) contain no key material. Only sealed bytes go out.
+3. Do not persist the disco key (generate a new one each startup, notes §4.10 item 4).
 
-## 결정 (노트 6.3 "총괄이 계약에서 정할 것")
+## Decisions (Notes §6.3, "What the Lead Session Should Decide in the Contract")
 
-| 결정 | 정한 것 | 근거 |
+| Decision | Choice | Rationale |
 | --- | --- | --- |
-| UDP 소켓 | IPv4 와일드카드 하나, OS가 고른 포트 | 관문이 IPv4로 된다. 이중 스택이면 받은 주소를 unmap해야 하고 Go와 표가 달라진다 |
-| 타이머 값 | Go와 같게. 시각을 인자로 받아 시험이 넘긴다 | Go 피어의 하강·복귀 시점이 이 값으로 정해지고 관문이 그것을 본다 |
-| 홈 지역 | STUN으로 재고 DERP 노트 4.10 5 규칙으로 고른다(E6). HTTPS 측정은 뺀다 | STUN은 엔드포인트에 어차피 필요하다. 시험 지역이 하나라 관문 결과는 같고 규칙은 단위 시험이 덮는다 |
-| 올릴 엔드포인트 | local + STUN | 관문에서 Go의 loopback 엔드포인트가 STUN에서 나오므로 충분하다(노트 7.1) |
-| CapabilityVersion | 148 유지 | 낮추면 다른 서버 동작이 바뀔 수 있다(노트 4.12, plan 위험 13) |
-| relay·Geneve 메시지 | 버림 | 끊으면 Go 피어가 정상적으로 보낸 메시지로 경로가 깨진다(노트 4.12) |
-| TSMP 광고 | 세션 키마다 보내고, 받은 키를 Go와 같은 규칙으로 쓴다("TSMP disco 키 광고" 절, 2026-11-16) | Go가 CapabilityVersion 144부터 그렇게 하고 Swiftail은 148을 선언한다(노트 4.10 3) |
-| 직접 경로 차단 시험 수단 | 둘 다: Swift 쪽 소켓 경계의 거르개 + 도구의 Go 노브 | 아래 "M4 관문" 3·4 |
-| 경로 조회 API | Go `curAddr`과 같은 뜻(`PeerPath`) | Go 쪽 `peerStatus`와 같은 기준으로 관문을 판정할 수 있다 |
+| UDP socket | One IPv4 wildcard socket, OS-selected port | IPv4 suffices for the gate. Dual stack would require unmapping received addresses, and the table would differ from Go's |
+| Timer values | Match Go. Take time as an argument so tests can supply it | These values determine when Go peers fall back and recover, which the gate checks |
+| Home region | Measure with STUN and choose per DERP notes §4.10 item 5 (E6). Omit HTTPS measurements | STUN is needed for endpoints anyway. There is one test region, so gate results are the same, and unit tests cover the rules |
+| Published endpoints | local + STUN | This suffices because Go's loopback endpoint comes from STUN at the gate (notes §7.1) |
+| CapabilityVersion | Keep 148 | Lowering it can change other server behavior (notes §4.12, plan risk 13) |
+| Relay and Geneve messages | Drop | Closing the connection would break the path when a Go peer sends these messages normally (notes §4.12) |
+| TSMP advertisement | Send for every session key and use received keys under the same rules as Go ("TSMP Disco Key Advertisement," 2026-11-16) | Go does this from CapabilityVersion 144, and Swiftail declares 148 (notes §4.10 item 3) |
+| Test mechanisms for blocking direct paths | Both a filter at the Swift socket boundary and a Go knob in the tool | "M4 Gate" items 3 and 4 below |
+| Path query API | Same meaning as Go `curAddr` (`PeerPath`) | The gate can use the same criterion as Go `peerStatus` |
 
-### 총괄 확정 (2026-11-15)
+### Lead Session Confirmations (2026-11-15)
 
-세 결정 모두 권고대로 정했다: Q1 (가), Q2 (가), Q3 (나). 아래 표는 선택지와 근거의 기록이다.
+All three decisions followed the recommendations (Q1 (a), Q2 (a), Q3 (b)). The table records the options and rationale.
 
-| # | 결정 | 선택지 | 권고 |
+| # | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| Q1 | 엔진과 `Magicsock`을 어디서 잇는가 | (가) 노드가 두 값 타입을 저장 프로퍼티로 쥐고 출력을 서로에게 넘긴다 / (나) `TailnetEngine`이 `Magicsock`을 품고 UDP·DERP 출력을 낸다(plan 5절 의존 그림) | (가). 엔진 출력이 "피어에게 보낼 데이터그램"으로 남아 `SwiftailWireGuard` 계약의 원칙과 맞고, 엔진이 UDP·STUN·DERP 지역을 몰라도 된다. 대가는 잇는 코드(출력 네 갈래)가 actor에 있어 그 부분은 단위 시험 대신 노드 시험·관문이 덮는다 |
-| Q2 | 경로 사건의 모양(RemoteDebug: "페어링한 Mac 하나의 경로 상태") | (가) `NodeEvent.peerPathChanged(fqdn:path:)`를 모든 피어에 대해 낸다 + `path(toPeerNamed:)` 조회 / (나) 피어별 `AsyncStream<PeerPath?>` / (다) 조회만 | (가). 사건 흐름이 하나라 앱이 따로 구독할 것이 없고, 경로 변화는 신뢰 기간(6.5초)보다 잦지 않다. 사건 버퍼(64개)가 다른 사건을 밀어낼 만큼 쌓이지 않는다 |
-| Q3 | WireGuard cookie reply 보내기·부하 판정(M1 계약이 "신뢰할 수 없는 네트워크에 UDP 포트를 여는 M4"로 미룬 것) | (가) 이번 M4 단위에 넣는다 / (나) M4 마무리 관문(실제 네트워크) 전에 `SwiftailWireGuard` 계약 변경으로 따로 넣는다 / (다) M5 | (나). 관문(루프백·LAN)에는 필요 없고 `SwiftailMagicsock` 범위 밖이다. 다만 UDP 포트를 인터넷에 여는 마무리 관문 전에는 있어야 한다(node 공개 키는 비밀이 아니므로 initiation 홍수로 X25519를 강요할 수 있다) |
+| Q1 | Where to connect the engine and `Magicsock` | (a) The node holds the two value types as stored properties and passes their outputs to each other / (b) `TailnetEngine` contains `Magicsock` and emits UDP or DERP output (plan §5 dependency diagram) | (a). Engine output remains "a datagram for a peer," consistent with the `SwiftailWireGuard` contract, and the engine does not need to know about UDP, STUN, or DERP regions. The trade-off is that the connecting code (four output branches) lives in the actor, so node tests and the gate cover it instead of unit tests |
+| Q2 | Shape of path events (RemoteDebug, "path state for one paired Mac") | (a) Emit `NodeEvent.peerPathChanged(fqdn:path:)` for all peers + `path(toPeerNamed:)` query / (b) Per-peer `AsyncStream<PeerPath?>` / (c) Query only | (a). With one event stream, the app needs no separate subscription, and path changes are no more frequent than the trust period (6.5 seconds). They do not fill the event buffer (64 entries) enough to displace other events |
+| Q3 | Sending WireGuard cookie replies and assessing load (deferred by the M1 contract to "M4, when a UDP port opens on an untrusted network") | (a) Add to this M4 unit / (b) Add separately as a `SwiftailWireGuard` contract change before the M4 closing gate (real network) / (c) M5 | (b). The gate (loopback and LAN) does not need it, and it is outside the `SwiftailMagicsock` scope. It must be present before the closing gate opens a UDP port to the internet (the public node key is no secret, so an initiation flood can force X25519) |
 
-## 제외 (`shortcut:` 주석으로 남긴다)
+## Exclusions (Record in `shortcut:` Comments)
 
-| 제외 | 근거 | 필요해지는 시점 |
+| Exclusion | Rationale | When needed |
 | --- | --- | --- |
-| peer relay(0x04–0x09, Geneve) 송신·처리 | 노트 4.12. 받으면 버린다 | 측정에서 NAT 통과율이 문제일 때(plan 위험 4) |
-| 경로 MTU 측정(패딩 Ping 보내기) | 노트 4.12. Go 기본 꺼짐, iOS에 없음. 받은 패딩 Ping에는 보통 Pong으로 답한다 | 해당 없음 |
-| 포트 매핑(UPnP·NAT-PMP·PCP) | plan 3절 제외. 노트 6.2 | plan 위험 4의 측정 뒤 |
-| IPv6 소켓·IPv6 엔드포인트·IPv6 후보 | 관문은 IPv4로 된다(노트 6.2) | IPv6만 되는 망(셀룰러 일부)을 M5 실기기에서 만날 때. 넣을 때는 두 소켓을 같은 포트에 묶는다 |
-| Rebind, 링크 변경 감지, 주소 변경 뒤 ReSTUN, 송신 오류(`EHOSTUNREACH`·`EPERM`·broken pipe) 처리 | 노트 4.11, 4.5 6. 관문 상황에서 소켓·주소가 바뀌지 않는다. 송신 오류는 무시한다(DERP가 함께 나간다) | M5(`setDefaultInterface`, Wi-Fi ↔ 셀룰러) |
-| `EndpointSTUN4LocalPort`, 클라우드 메타데이터, 5분 10초 광고 캐시, 고정 엔드포인트 | 노트 6.2 | 단단한 NAT에서 마무리 관문이 실패할 때 |
-| 주소→피어 표 | 노트 4.1. WireGuard가 피어를 알려 준다 | 해당 없음 |
-| 역방향 DERP 지역(홈이 0인 피어) | 동작 D3. 노트 6.2 | 실제 tailnet에서 그런 피어가 보일 때 |
-| Pong 기록 64개, UDP 수명 측정 | 비교에는 최신 지연만 쓴다(노트 6.2) | 해당 없음 |
-| HTTPS 지연 측정, 맵 스트림이 끊긴 동안 홈 고정, DNS가 필요한 STUN 노드 | E3, E6 | E3, E6에 적음 |
-| 홈이 아닌 DERP 연결의 정리(60초 미사용) | 열린 연결 수는 DERPMap 지역 수로 묶인다 | M5 메모리 측정에서 문제일 때(엔진 계약 M4 동작 N3) |
-| CLI Ping(DERP로 보내는 disco Ping) | 관문은 Go 쪽 `peerPing`만 쓴다 | 해당 없음 |
+| Sending and processing peer relay (0x04–0x09, Geneve) | Notes §4.12. Drop on receipt | When measurements show a problem with the NAT traversal rate (plan risk 4) |
+| Path MTU measurement (sending padded Pings) | Notes §4.12. Disabled by default in Go and unavailable on iOS. Reply to received padded Pings with ordinary Pongs | N/A |
+| Port mapping (UPnP, NAT-PMP, PCP) | Excluded by plan §3. Notes §6.2 | After the measurement for plan risk 4 |
+| IPv6 sockets, IPv6 endpoints, and IPv6 candidates | IPv4 suffices for the gate (notes §6.2) | When M5 real-device work encounters an IPv6-only network (some cellular networks). Bind both sockets to the same port when added |
+| Rebind, link change detection, ReSTUN after an address change, and handling send errors (`EHOSTUNREACH`, `EPERM`, broken pipe) | Notes §4.11 and §4.5 item 6. Sockets and addresses are stable in the gate scenario. Ignore send errors (DERP is used in parallel) | M5 (`setDefaultInterface`, Wi-Fi ↔ cellular) |
+| `EndpointSTUN4LocalPort`, cloud metadata, 5-minute 10-second advertisement cache, and static endpoints | Notes §6.2 | When the closing gate fails behind hard NAT |
+| Address-to-peer table | Notes §4.1. WireGuard identifies the peer | N/A |
+| Reverse DERP region (peer with home 0) | Behavior D3. Notes §6.2 | When such a peer appears in a real tailnet |
+| 64-entry Pong history and UDP lifetime measurement | Comparison uses only the latest latency (notes §6.2) | N/A |
+| HTTPS latency measurement, retaining home while the map stream is disconnected, and STUN nodes requiring DNS | E3, E6 | See E3 and E6 |
+| Cleaning up non-home DERP connections (unused for 60 seconds) | The number of DERPMap regions bounds the number of open connections | If M5 memory measurements show a problem (engine contract M4 behavior N3) |
+| CLI Ping (disco Ping over DERP) | The gate uses only Go's `peerPing` | N/A |
 
-## 시험
+## Tests
 
-### 단위 시험 (`Tests/SwiftailMagicsockTests`, 소켓·시계 없음, 시각을 넘겨 결정적으로)
+### Unit Tests (`Tests/SwiftailMagicsockTests`, No Sockets or Clock, Deterministic with Supplied Time)
 
-1. **`DiscoMessage`**: Go 기준값과 같은 평문 바이트(NodeKey 있는·없는 Ping, IPv4·IPv6 Pong, 주소 0·1·3개 CallMeMaybe). 노트 7.2 1의 경계: CallMeMaybe 17·19바이트와 version 1 → 빈 목록, Pong 29바이트 → `malformed`, Ping 12·44·45바이트(패딩), 32바이트 0 NodeKey → nil, 평문 0·1바이트, type 0x04–0x0A → `unknownType`, IPv4-mapped를 풀기.
-2. **`DiscoPacket`**: 고정 키·고정 nonce로 봉한 바이트가 Go 기준값과 같다. Go가 봉한 바이트를 연다. nonce·tag·암호문·보낸 쪽 키 한 바이트 변조 → `authenticationFailed`. 37·38·61바이트의 판정. 저차수 공개 키 → `invalidKey`. `dump`에 공유 키가 나오지 않는다.
-3. **`PeerPathState`**: 노트 4.7의 `betterAddr` 표(같은 주소 MTU, 없음, loopback +50 대 LAN +20, 지연 비율 점수, 1점 규칙)와 노트 4.7 계산(loopback이 LAN을 이긴다). 경로 선택 세 갈래와 `noRouteToPeer`. 신뢰 6.5초 경계(`==`). 후보별 Ping 5초 제한과 CallMeMaybe가 푸는 것. Pong 기한 5초: 신뢰가 남았을 때는 `bestAddr`를 지키고, 지났을 때만 지운다. heartbeat 3초, 45초 유휴 뒤 멈춤과 다음 송신에서 다시 걸림, 전체 Ping 조건(5 ms 이하면 생략, 1분 개선). 후보 지우기(netmap에서 빠짐, Ping으로 배운 것 45초, CallMeMaybe 교체)와 `bestAddr` 함께 지우기. 같은 후보·같은 TxID의 Ping에 Pong하지 않고 수명도 늘리지 않음. 가득 찬 표에서 Ping으로만 배운 가장 오래된 후보를 밀어냄(netmap·CallMeMaybe 후보와 `bestAddr`는 남음). disco 키 변경. IPv6·IPv6 link-local 후보를 넣지 않음. 후보 128개·보낸 Ping 128개 한도.
-4. **`STUNMessage`**: 고정 TxID의 요청이 Go `stun.Request`와 같다. Go `stun.Response`로 만든 IPv4·IPv6 응답, `0x8020`, MAPPED-ADDRESS만 있는 응답을 해석한다. 거절: 19바이트, cookie 틀림, 타입 `01 01` 아님, 선언 길이 초과, 속성 길이가 남은 바이트 초과, family 3, 주소 속성 없음. 무작위 입력으로 죽지 않음.
-5. **`Netcheck`**: 회차의 요청 시각(0·100·200 ms)과 대상(`try % count`), 응답 대응과 회차 밖 응답, 3초 마감과 전 지역 응답 시 조기 마감, 엔드포인트 목록의 순서·중복·loopback 대체 규칙, STUN 전역 주소 규칙, 집합 비교(순서만 바뀌면 `.endpointsChanged` 없음), 주기 20–26초와 유휴·피어 없음에서 멈춤, 홈 선택(DERP 노트 4.10 5의 각 조건: 5분 5초 기록, `score`, 10 ms, 2/3, 8초 DERP 활동, 측정 없음 120초, 대체 홈 즉시 선택).
-6. **`Magicsock`**: 둘을 메모리 "망"으로 맞물린다(각자 주소를 갖고 `.udp`는 상대의 `receiveUDP`로, `.derp`는 상대의 `receiveDERP`로. 망은 데이터그램을 버리거나 지연시킬 수 있다). 확인할 것:
-   - 엔드포인트를 서로 netmap으로 알 때와 모를 때(Ping 출처로 배움, 노트 4.8 계산) 직접 경로가 선다. `.pathChanged(.direct)`가 나온다.
-   - UDP를 막으면: 마지막 Pong + 6.5초에 `.relayed`, 그 사이 데이터는 UDP + DERP로 나간다, heartbeat Ping 기한(5초) 뒤 UDP 송신이 멈춘다. 풀면 다음 heartbeat(3초) 안의 전체 Ping으로 `.direct`. (관문 3의 계산된 시점을 시각으로 확인한다.)
-   - DERP로 온 Ping에 같은 지역 DERP로 Pong(Src `127.3.3.40:<지역>`). UDP로 온 CallMeMaybe, 키가 맞지 않는 CallMeMaybe, 모르는 DERP 보낸 쪽의 Ping은 버리고 응답하지 않는다.
-   - 모르는 disco 키의 패킷은 공유 키를 새로 계산하지 않고 버린다(공유 키 캐시 크기가 피어 수를 넘지 않음으로 확인).
-   - peer relay 종류(0x04–0x09)와 Geneve 머리 데이터그램은 상태를 바꾸지 않는다(노트 7.2 7).
-   - 회차 밖 STUN 응답은 WireGuard로 가지 않는다. 일반 데이터그램은 `.wireGuard`로 그대로 간다.
-   - CallMeMaybe: 엔드포인트가 27초보다 낡았으면 미루고 회차를 시작하며, 회차가 끝나면 보낸다(노트 7.2 4의 Swift 쪽). 받으면 모든 후보에 즉시 Ping.
-   - `setPeers`로 피어가 빠지면 `.pathChanged(_, nil)`. disco 키가 바뀌면 신뢰를 지운다.
-   - 임의 바이트열(길이 0~200, disco magic으로 시작하는 것 포함)로 죽지 않는다. `dump`에 disco 개인 키·공유 키가 나오지 않는다.
-7. **`SwiftailIO`**: `DatagramSocket` 둘이 루프백으로 주고받는다(포트, 출처 주소, 65,535바이트, `close` 뒤 흐름 끝남). `LocalInterfaceAddresses`의 고르기 규칙은 `getifaddrs` 결과를 흉내 낸 입력으로 시험한다(내부 함수를 `@testable`로).
+1. **`DiscoMessage`.** Plaintext bytes match Go reference values (Ping with and without NodeKey, IPv4 and IPv6 Pong, and CallMeMaybe with 0, 1, and 3 addresses). Boundaries from notes §7.2 item 1 include 17- and 19-byte CallMeMaybe and version 1 → empty list, 29-byte Pong → `malformed`, 12-, 44-, and 45-byte Ping (padding), 32-byte all-zero NodeKey → nil, 0- and 1-byte plaintext, type 0x04–0x0A → `unknownType`, and unwrapping IPv4-mapped addresses.
+2. **`DiscoPacket`.** Bytes sealed with a fixed key and nonce match Go reference values. Open bytes sealed by Go. Tampering with one byte of nonce, tag, ciphertext, or sender key → `authenticationFailed`. Classification at 37, 38, and 61 bytes. Low-order public key → `invalidKey`. `dump` exposes no shared key.
+3. **`PeerPathState`.** The `betterAddr` table in notes §4.7 (same address MTU, none, loopback +50 versus LAN +20, latency ratio score, and the 1-point rule) and the calculation in notes §4.7 (loopback beats LAN). Three path selection branches and `noRouteToPeer`. The 6.5-second trust boundary (`==`). The 5-second per-candidate Ping limit and its release by CallMeMaybe. The 5-second Pong deadline keeps `bestAddr` while trusted and clears it only after expiry. A 3-second heartbeat stops after 45 seconds of idleness and restarts on the next send. Full Ping conditions (skip at 5 ms or less, upgrade after 1 minute). Candidate removal (absent from netmap, 45 seconds for Ping-learned candidates, and CallMeMaybe replacement) and clearing `bestAddr` with it. A Ping from the same candidate with the same TxID gets no Pong and does not extend lifetime. In a full table, evict the oldest Ping-only candidate (keep netmap and CallMeMaybe candidates and `bestAddr`). Disco key change. IPv6 and IPv6 link-local candidates are excluded. Limits of 128 candidates and 128 sent Pings.
+4. **`STUNMessage`.** A request with fixed TxID matches Go `stun.Request`. Parse IPv4 and IPv6 replies made with Go `stun.Response`, `0x8020`, and a response with only MAPPED-ADDRESS. Reject 19 bytes, bad cookie, a type other than `01 01`, a declared length exceeding input, an attribute length exceeding remaining bytes, family 3, or no address attribute. Random input does not cause a crash.
+5. **`Netcheck`.** Round request times (0, 100, and 200 ms) and targets (`try % count`), matching replies and replies outside the round, the 3-second deadline and early completion when every region replies, endpoint order, duplicate and loopback fallback rules, STUN global address rules, set comparison (order-only changes yield no `.endpointsChanged`), 20–26-second periodicity and stopping when idle or when there are no peers, and home selection (every condition in DERP notes §4.10 item 5, including 5 minutes 5 seconds of history, `score`, 10 ms, 2/3, 8 seconds of DERP activity, 120 seconds with no measurements, and immediate fallback home selection).
+6. **`Magicsock`.** Connect two instances through an in-memory "network" (each has an address, `.udp` goes to the other's `receiveUDP`, and `.derp` goes to the other's `receiveDERP`. The network can drop or delay datagrams). Check the following.
+   - A direct path forms both when the peers know each other's endpoints from netmap and when they do not (learn from Ping sources, notes §4.8 calculation). Emits `.pathChanged(.direct)`.
+   - Blocking UDP produces `.relayed` at last Pong + 6.5 seconds. Meanwhile, data goes over UDP + DERP, and UDP sends stop after the heartbeat Ping deadline (5 seconds). Unblocking produces `.direct` through a full Ping round within the next heartbeat (3 seconds). Verify the calculated times in gate item 3 using the supplied times.
+   - Answer a DERP Ping with a Pong through the same DERP region (Src `127.3.3.40:<region>`). Drop CallMeMaybe over UDP, CallMeMaybe with mismatched keys, and Pings from unknown DERP senders without replying.
+   - Drop packets with unknown disco keys without calculating a new shared key (verify that the shared key cache size does not exceed the peer count).
+   - Peer relay types (0x04–0x09) and Geneve-headed datagrams leave state unchanged (notes §7.2 item 7).
+   - STUN responses from outside the round never go to WireGuard. Ordinary datagrams pass through unchanged as `.wireGuard`.
+   - CallMeMaybe. If endpoints are older than 27 seconds, defer it and start a round, then send it when the round completes (Swift side of notes §7.2 item 4). On receipt, immediately Ping every candidate.
+   - A peer removed by `setPeers` yields `.pathChanged(_, nil)`. A disco key change clears trust.
+   - Arbitrary byte sequences (length 0~200, including ones beginning with disco magic) do not cause a crash. `dump` exposes no private disco key or shared keys.
+7. **`SwiftailIO`.** Two `DatagramSocket` instances exchange data over loopback (port, source address, 65,535 bytes, and stream ending after `close`). Test the selection rules in `LocalInterfaceAddresses` using simulated `getifaddrs` results (the internal function via `@testable`).
 
-### Go 기준값 대조
+### Comparison with Go Reference Values
 
-- **`Tools/interop/cmd/magicsockvectors`**(새 Go 도구, 단위 1이 쓴다): 시험용 공개 시드(`SHA-256("swiftail-vectors/disco/<번호>")`을 X25519 개인 입력으로)로 만든 disco 키 둘과 고정 nonce·TxID로 다음을 JSON(`Tests/SwiftailMagicsockTests/Fixtures/magicsock-vectors.json`)에 쓴다.
-  - `disco.Ping/Pong/CallMeMaybe`의 `AppendMarshal` 평문(위 단위 시험 1의 사례).
-  - 같은 평문을 `golang.org/x/crypto/nacl/box.Precompute` + `secretbox.Seal`(고정 nonce)로 봉한 겉 형식 전체. 도구는 그 바이트를 `key.DiscoPrivate.Shared(...).Open`으로 다시 열어 Go의 실제 열기 경로와 같은지 확인한 뒤 쓴다(Go의 `Seal`은 nonce를 안에서 뽑으므로 고정 nonce 봉인은 같은 계산을 직접 부른다. 노트 3.2 3).
-  - 경계 사례(노트 7.2 1)를 `disco.Parse`에 넣은 결과(메시지 또는 오류).
-  - `stun.Request(txID)`, `stun.Response(txID, addrPort)`(IPv4·IPv6), 그리고 그 응답을 `stun.ParseResponse`로 해석한 결과.
-- 대조 시험은 구현자와 다른 세션이 쓴다(M3 필터 대조와 같다). 자료에는 현재 시각·운영 키가 없다.
-- `betterAddr`와 타이머 동작은 Go 함수가 공개되어 있지 않으므로 노트 4.7·5절 표를 시험으로 옮긴다(파일 머리에 출처와 BSD-3-Clause).
+- **`Tools/interop/cmd/magicsockvectors`** (new Go tool, used by Unit 1). With two disco keys made from public test seeds (`SHA-256("swiftail-vectors/disco/<number>")` as X25519 private input), fixed nonces, and fixed TxIDs, write the following as JSON (`Tests/SwiftailMagicsockTests/Fixtures/magicsock-vectors.json`).
+  - `AppendMarshal` plaintext for `disco.Ping/Pong/CallMeMaybe` (cases in unit test 1 above).
+  - The full outer format for the same plaintext sealed with `golang.org/x/crypto/nacl/box.Precompute` + `secretbox.Seal` (fixed nonce). Before writing, the tool opens those bytes with `key.DiscoPrivate.Shared(...).Open` to check against Go's actual opening path. Go's `Seal` generates the nonce internally, so fixed-nonce sealing calls the same calculation directly (notes §3.2 item 3).
+  - Results of passing boundary cases (notes §7.2 item 1) to `disco.Parse` (message or error).
+  - `stun.Request(txID)`, `stun.Response(txID, addrPort)` (IPv4 and IPv6), and the result of parsing that response with `stun.ParseResponse`.
+- A session other than the implementer's writes the comparison tests (as in the M3 filter comparison). The data contains no current time or production keys.
+- The Go functions for `betterAddr` and timer behavior are unexported, so turn the tables in notes §4.7 and §5 into tests (origin and BSD-3-Clause at the top of the file).
 
-## M4 관문
+## M4 Gate
 
-`Tools/interop`의 `tailnet`(testcontrol + DERP 지역 1개 + `127.0.0.1`의 STUN + Go tsnet 피어. 피어는 TCP·UDP 포트 7에서 에코한다)을 상대로 한다. Swift 노드는 실제 UDP 소켓을 연다. 시험은 `Tests/SwiftailInteropTests/DirectPathTests.swift`에 두고 `SWIFTAIL_TAILNET`이 없으면 건너뛴다.
+Test against `tailnet` in `Tools/interop` (testcontrol + 1 DERP region + STUN on `127.0.0.1` + a Go tsnet peer, which echoes on TCP and UDP port 7). The Swift node opens a real UDP socket. Put the tests in `Tests/SwiftailInteropTests/DirectPathTests.swift` and skip if `SWIFTAIL_TAILNET` is absent.
 
-### 도구에 더할 것 (`Tools/interop/cmd/tailnet`, README 갱신 포함)
+### Tool Additions (`Tools/interop/cmd/tailnet`, Including README Update)
 
-1. `{"cmd":"setNeverDirectUDP","enabled":true|false}` → `envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "true"/"false")`. 도구 프로세스의 모든 Go 피어에 걸린다(노트 7.2 3).
-2. `peerStatus` 확장: 응답에 그 Go 노드 자신의 엔드포인트 `selfAddrs`(`Status.Self.Addrs`)와, 피어마다 `active`·`lastWrite`(노트 7.2 끝, Go `endpoint.go:2232-2253`).
-3. `nodes` 확장: testcontrol에 등록된 노드마다 `endpoints`(testcontrol이 맵 요청에서 받아 둔 값, 노트 4.9 4). Swift 노드가 올린 엔드포인트를 Go 쪽에서 확인한다.
+1. `{"cmd":"setNeverDirectUDP","enabled":true|false}` → `envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "true"/"false")`. Applies to all Go peers in the tool process (notes §7.2 item 3).
+2. Extend the `peerStatus` response with the Go node's own endpoints `selfAddrs` (`Status.Self.Addrs`) and `active` and `lastWrite` per peer (end of notes §7.2, Go `endpoint.go:2232-2253`).
+3. Extend `nodes` with `endpoints` for each node registered with testcontrol (the value stored by testcontrol from a map request, notes §4.9 item 4). Verify the Swift node's published endpoints from the Go side.
 
-### Swift 쪽 시험용 UDP 거르개
+### Test UDP Filter on the Swift Side
 
-`TailnetNode`의 UDP 가장자리에 둔다(엔진 계약 M4 동작 N8). `package func setBlockedUDPPorts(_ ports: Set<UInt16>)`: 그 원격 포트로 보낼 UDP와 그 포트에서 온 UDP를 소켓 경계에서 버린다. `Magicsock`은 모른다(시험 대상 내부가 아니라 소켓 경계, 노트 6.3). 공개 API가 아니다.
+Put it at the UDP edge in `TailnetNode` (engine contract M4 behavior N8). `package func setBlockedUDPPorts(_ ports: Set<UInt16>)` drops UDP to those remote ports and UDP from those ports at the socket boundary. `Magicsock` has no knowledge of it (it lives at the socket boundary, outside the subject under test, notes §6.3). It is outside the public API.
 
-### 확인 항목
+### Checks
 
-관문에서 찾은 결함(2026-11-15): Darwin에서는 UDP `sendto`도 `EPIPE`로 실패할 수 있고 그때 SIGPIPE가 온다(항목 5에서 Go 피어의 LAN 엔드포인트로 보낼 때 3번 가운데 2번 시험 프로세스가 신호 13으로 죽었다. 단위 4b가 본 두 번도 같은 원인이다). Go 런타임은 이 신호를 무시하고 `EPIPE`만 다룬다(`net/neterror/neterror_unix.go`). `DatagramSocket`에 `SO_NOSIGPIPE`를 걸어 고쳤고, 고친 뒤 항목 5는 6번 연속 통과했다. 이 회귀는 항목 5가 지킨다(단위 시험으로는 UDP의 `EPIPE`를 일부러 만들 수 없다).
+Defect found at the gate (2026-11-15). On Darwin, UDP `sendto` can also fail with `EPIPE`, delivering SIGPIPE. In item 5, when sending to the Go peer's LAN endpoint, the test process died with signal 13 in 2 of 3 runs. The two cases observed by Unit 4b had the same cause. The Go runtime ignores this signal and handles only `EPIPE` (`net/neterror/neterror_unix.go`). Setting `SO_NOSIGPIPE` on `DatagramSocket` fixed it, and item 5 then passed 6 consecutive runs. Item 5 protects against this regression (unit tests cannot deliberately produce UDP `EPIPE`).
 
-Go 피어와 Swift 노드 사이의 관찰(2026-11-15, 단위 4b, 5번 실행): 엔드포인트는 `running` 뒤 0.1초 안에 올라갔고, 첫 에코 뒤 약 0.9~1.0초에 양쪽 직접, Swift 쪽 차단 뒤 6.38~6.51초에 `.relayed`(한 번은 3.44초. 차단이 heartbeat Pong 직전에 걸리면 신뢰가 마지막 Pong부터 세어져 이르다), 풀면 0.11~0.20초(한 번 2.0초)에 직접, Go 노브를 켜면 5.0~6.2초에 중계, 끄면 0.07~0.9초에 직접, 130초 유지에서 에코 유실 0. 관문의 "6.5초(+3초) 안에"는 상한이지 하한이 아니다.
+Observations between a Go peer and a Swift node (2026-11-15, Unit 4b, 5 runs). Endpoints were published within 0.1 seconds of `running`. Both sides went direct about 0.9~1.0 seconds after the first echo. After blocking on the Swift side, it went `.relayed` in 6.38~6.51 seconds (3.44 seconds once. Blocking just before a heartbeat Pong makes it earlier because trust is measured from the last Pong). Unblocking restored direct in 0.11~0.20 seconds (2.0 seconds once). Turning on the Go knob restored relay in 5.0~6.2 seconds, and turning it off restored direct in 0.07~0.9 seconds. Echo loss was 0 over the 130-second run. The gate's "within 6.5 seconds (+3 seconds)" is an upper bound, not a lower bound.
 
-기준 관찰(2026-11-14, Go 피어 둘 사이, 도구의 `setNeverDirectUDP`): 켠 뒤 양쪽 `curAddr`가 6.45초·6.60초에 비었고(신뢰 기간 6.5초와 맞다), 끈 뒤 UDP를 보내자 약 0.04초에 직접 경로로 돌아왔다. 이 노브가 켜져 있어도 UDP 데이터는 계속 흐른다(탐색 Ping만 막는다). 노브를 켠 직후의 `peerPing`(disco)은 30초 뒤 시간 초과로 실패한다. 아래 시각 기대값은 이 관찰과 노트의 계산에 여유를 더한 것이다.
+Baseline observations (2026-11-14, between two Go peers, tool `setNeverDirectUDP`). After enabling it, both `curAddr` values cleared at 6.45 and 6.60 seconds (consistent with the 6.5-second trust period). After disabling it and sending UDP, the direct path returned in about 0.04 seconds. UDP data keeps flowing while the knob is enabled (it blocks only discovery Pings). A `peerPing` (disco) immediately after enabling the knob fails with a timeout after 30 seconds. The timing expectations below add margin to these observations and the calculations in the notes.
 
-Go 피어 하나(`addPeer`)와 Swift 노드 하나로 시작한다. 시각 기대값은 노트 7.2 3의 계산이다. 시험은 기대 시각 + 여유(아래 괄호)까지 조건을 기다린다.
+Start with one Go peer (`addPeer`) and one Swift node. Expected times come from the calculations in notes §7.2 item 3. Tests wait for the condition until the expected time plus margin (in parentheses below).
 
-1. **엔드포인트**: Swift 노드가 `running` 뒤 10초 안에 `nodes`의 Swift 항목 `endpoints`에 `127.0.0.1:<Swift 포트>`가 있다(STUN 결과). Go `peerStatus`의 `selfAddrs`에서 Go 포트를 얻는다.
-2. **직접 경로 성립(Swift가 먼저)**: Swift가 Go 피어의 IPv4 주소 포트 7로 UDP 에코를 1초 간격으로 보낸다. 15초 안에 (가) Go `peerStatus`의 Swift 항목 `curAddr`가 Swift가 올린 엔드포인트 가운데 하나이고(계산은 `127.0.0.1:<Swift 포트>`지만 Go가 LAN 주소를 고르는 것이 약 10번의 전환 가운데 2번 관찰됐다. 어느 것이든 받는다), (나) Swift `path(toPeerNamed:)`가 `.direct(127.0.0.1:<Go 포트>)`이며, (다) `peerPathChanged` 사건이 `.direct`로 나왔다. 에코는 계속 돌아온다.
-3. **Swift 쪽 차단과 복귀**: `setBlockedUDPPorts([Go 포트])`. 에코를 계속 보내며
-   - 6.5초(+3초) 안에 Swift 경로가 `.relayed(derpRegion: 1)`이고 Go `curAddr`가 빈 문자열이다.
-   - 차단 직후 신뢰 기간에는 양쪽이 UDP로만 보내므로 에코가 빠진다. 신뢰가 지난 뒤(차단 + 9.5초)부터는 에코가 하나도 빠지지 않는다(UDP와 DERP로 함께, 이어서 DERP로만 나간다).
-   - 차단을 푼다. 10초 안에 둘 다 직접 경로로 돌아오고 에코가 이어진다.
-4. **Go 쪽 노브**: `setNeverDirectUDP true`. 6.5초(+3초) 안에 Swift 경로 `.relayed`, Go `curAddr` 빈 문자열. 에코는 계속된다. `false`로 되돌리면 10초 안에 둘 다 직접. (Go는 기한 처리할 Ping이 없어 UDP도 함께 보낸다. 노트 7.2 3.)
-5. **Go가 먼저**: Swift 노드가 `running`이 된 뒤 새 Go 피어를 더하고, Swift가 그 피어에게 아무것도 보내지 않은 상태에서 Go 피어가 `peerPing`(disco)이나 `peerSend`로 Swift 주소를 1초 간격으로 부른다(ICMP `peerPing`은 쓰지 않는다. 메모리 장치의 Swift 노드에는 ICMP 응답기가 없어 늘 시간 초과다). 15초 안에 2의 (가)·(나)가 성립한다(Go가 netmap의 Swift 엔드포인트로 Ping하고, Swift가 Pong하며 Go의 출처를 후보로 배운다). Swift가 엔드포인트를 올리기 전에 Go가 먼저 보내는 경우(노트 4.8 계산)는 단위 시험 6이 덮는다.
-6. **유휴와 재개**: 에코를 멈추고 50초 기다린다. Go `peerStatus`의 Swift 항목 `active`가 거짓이다(Go도 45초 유휴). 멈춘 뒤 75초 안에 Swift `path(toPeerNamed:)`가 nil이고 `peerPathChanged`가 nil로 나왔다(45초 + keepalive 최대 둘). 다시 보내면 15초 안에 직접 경로.
-7. **2분 넘는 유지**: 직접 경로에서 에코를 1초 간격으로 130초 보낸다. 10초마다 본 Swift 경로와 Go `curAddr`가 모두 직접이고, 에코가 모두 돌아온다(WireGuard rekey 120초, heartbeat, 주기 STUN을 넘긴다).
-8. **TSMP 광고**: 세션이 선 뒤 Go가 보낸 TSMP disco 광고가 `inboundPackets`에 나오지 않는다(M3과 같다).
-9. **M3 관문 회귀**: M3 관문 2~7(UDP·TCP 에코, ACL, 피어 제거)을 직접 경로가 선 상태에서 다시 통과한다.
+1. **Endpoints.** Within 10 seconds after the Swift node is `running`, the Swift entry's `endpoints` in `nodes` contains `127.0.0.1:<Swift port>` (STUN result). Get the Go port from `selfAddrs` in Go `peerStatus`.
+2. **Direct path establishment (Swift first).** Swift sends a UDP echo to port 7 at the Go peer's IPv4 address every 1 second. Within 15 seconds, (a) `curAddr` for Swift in Go `peerStatus` is one of Swift's published endpoints (the calculation predicts `127.0.0.1:<Swift port>`, but Go was observed choosing a LAN address in 2 out of about 10 transitions. Accept either), (b) Swift `path(toPeerNamed:)` is `.direct(127.0.0.1:<Go port>)`, and (c) a `peerPathChanged` event reported `.direct`. Echoes keep coming back.
+3. **Blocking and recovery on the Swift side.** Call `setBlockedUDPPorts([Go port])` and keep sending echoes.
+   - Within 6.5 seconds (+3 seconds), Swift reports `.relayed(derpRegion: 1)` and Go's `curAddr` is empty.
+   - During the trust period immediately after blocking, echoes are lost because both sides use UDP only. After trust expires (block + 9.5 seconds), no echoes are lost (both UDP and DERP are used, then only DERP).
+   - Unblock. Within 10 seconds, both return to direct and echoes continue.
+4. **Go knob.** Set `setNeverDirectUDP true`. Within 6.5 seconds (+3 seconds), the Swift path is `.relayed` and Go's `curAddr` is empty. Echoes continue. Set it back to `false` and both go direct within 10 seconds. (Go also sends UDP because it has no Pings whose deadlines it needs to process. Notes §7.2 item 3.)
+5. **Go first.** Once the Swift node is `running`, add a new Go peer. With Swift having sent it nothing, call the Swift address from Go with `peerPing` (disco) or `peerSend` every 1 second. Do not use ICMP `peerPing`. The Swift node's in-memory device has no ICMP responder, so it always times out. Within 15 seconds, 2(a) and 2(b) hold (Go Pings Swift's netmap endpoints, and Swift replies with Pong and learns the Go source as a candidate). Unit test 6 covers Go sending before Swift publishes endpoints (notes §4.8 calculation).
+6. **Idleness and resumption.** Stop echoing and wait 50 seconds. The Swift entry's `active` in Go `peerStatus` is false (Go also uses a 45-second idle period). Within 75 seconds after stopping, Swift `path(toPeerNamed:)` is nil and `peerPathChanged` emitted nil (45 seconds + up to two keepalives). Sending again restores the direct path within 15 seconds.
+7. **Sustaining the path for more than 2 minutes.** Send echoes every 1 second for 130 seconds over the direct path. The Swift path and Go `curAddr` checked every 10 seconds both indicate direct, and all echoes come back (through WireGuard's 120-second rekey, heartbeats, and periodic STUN).
+8. **TSMP advertisement.** Once the session is established, the TSMP disco advertisement sent by Go does not appear in `inboundPackets` (as in M3).
+9. **M3 gate regression.** Pass M3 gate items 2~7 (UDP and TCP echo, ACL, and peer removal) again with a direct path established.
 
-마무리 관문(실제 tailnet)은 이 관문과 Q3을 마친 뒤 총괄이 사용자에게 먼저 알리고 비밀 입력으로 인증 키를 받아 한다. 확인할 것: NAT 뒤 기기(사용자가 고른 실제 기기)와의 Swift `path(toPeerNamed:)`가 `.direct`가 되는지, 홈 지역이 STUN 측정으로 정해지는지, relay 서버가 있는 tailnet에서 Go 피어의 `CallMeMaybeVia`가 와도 직접·DERP 경로가 유지되는지(plan 위험 13).
+For the closing gate (real tailnet), after completing this gate and Q3, the lead session notifies the owner first and obtains an auth key through secret input. Check whether Swift `path(toPeerNamed:)` reaches `.direct` to a device behind NAT (a real device selected by the owner), whether STUN measurements determine the home region, and whether direct and DERP paths survive a Go peer's `CallMeMaybeVia` in a tailnet with a relay server (plan risk 13).
 
-## 구현 단위
+## Implementation Units
 
-소유 파일이 겹치지 않게 나눈다. 단위 0은 총괄이 먼저 한다(M3 단위 0과 같은 방식).
+Divide the work so owned files do not overlap. The lead session handles Unit 0 first (as with M3 Unit 0).
 
-| 단위 | 내용 | 소유 파일 | 의존 |
+| Unit | Scope | Owned files | Dependencies |
 | --- | --- | --- | --- |
-| 0 | 자리 만들기: `IPEndpoint`를 `SwiftailBase`로 옮김(시험도), `SwiftailIO`에 `SwiftailBase` 의존, `SwiftailMagicsock`·`SwiftailMagicsockTests` 타깃, `Swiftail`·`SwiftailTests`·`SwiftailInteropTests`의 새 의존, `TransactionID.swift`, `PeerPath.swift`. 동작은 바꾸지 않는다(기존 시험 통과) | `Package.swift`, `Sources/SwiftailBase/IPEndpoint.swift`, `Sources/SwiftailControl/Tailcfg/IPEndpoint.swift`(Codable만 남김), `Sources/SwiftailMagicsock/{TransactionID,PeerPath}.swift` | 없음 |
-| 1 | disco 코덱·암호와 Go 벡터 도구 | `Sources/SwiftailMagicsock/{DiscoMessage,DiscoPacket}.swift`, `Tests/SwiftailMagicsockTests/{DiscoMessageTests,DiscoPacketTests}.swift`, `Tools/interop/cmd/magicsockvectors/`, `Tests/SwiftailMagicsockTests/Fixtures/magicsock-vectors.json` | 0 |
-| 2 | 경로 상태 기계 | `Sources/SwiftailMagicsock/PeerPathState*.swift`, `Tests/SwiftailMagicsockTests/PeerPathStateTests.swift` | 0 |
-| 3 | STUN·Netcheck, UDP 소켓과 인터페이스 주소 | `Sources/SwiftailMagicsock/{STUNMessage,Netcheck}*.swift`, `Sources/SwiftailIO/{DatagramSocket,LocalInterfaceAddresses}.swift`, `Tests/SwiftailMagicsockTests/{STUNMessageTests,NetcheckTests}.swift`, `Tests/SwiftailIOTests/{DatagramSocketTests,LocalInterfaceAddressesTests}.swift` | 0. STUN 기준값 대조는 단위 1의 자료가 나온 뒤 |
-| 4 | `Magicsock` 묶음 + 엔진·노드 통합(엔진 계약 "M4에서 바뀌는 것") | `Sources/SwiftailMagicsock/Magicsock*.swift`, `Tests/SwiftailMagicsockTests/MagicsockTests.swift`, `Sources/SwiftailEngine/*`, `Tests/SwiftailEngineTests/*`, `Sources/Swiftail/*`, `Tests/SwiftailTests/*` | 1, 2, 3 |
-| 5 | 관문: 도구 명령과 Swift 관문 시험 | `Tools/interop/cmd/tailnet/*`, `Tools/interop/README.md`의 tailnet 절, `Tests/SwiftailInteropTests/DirectPathTests.swift` | 도구 부분은 0과 함께 시작. Swift 시험은 4 뒤 |
+| 0 | Set up placeholders. Move `IPEndpoint` (and its tests) to `SwiftailBase`, add the `SwiftailBase` dependency to `SwiftailIO`, add `SwiftailMagicsock` and `SwiftailMagicsockTests` targets and new dependencies for `Swiftail`, `SwiftailTests`, and `SwiftailInteropTests`, and add `TransactionID.swift` and `PeerPath.swift`. Preserve behavior (existing tests pass) | `Package.swift`, `Sources/SwiftailBase/IPEndpoint.swift`, `Sources/SwiftailControl/Tailcfg/IPEndpoint.swift` (keep only Codable), `Sources/SwiftailMagicsock/{TransactionID,PeerPath}.swift` | None |
+| 1 | Disco codec and cryptography, and Go vector tool | `Sources/SwiftailMagicsock/{DiscoMessage,DiscoPacket}.swift`, `Tests/SwiftailMagicsockTests/{DiscoMessageTests,DiscoPacketTests}.swift`, `Tools/interop/cmd/magicsockvectors/`, `Tests/SwiftailMagicsockTests/Fixtures/magicsock-vectors.json` | 0 |
+| 2 | Path state machine | `Sources/SwiftailMagicsock/PeerPathState*.swift`, `Tests/SwiftailMagicsockTests/PeerPathStateTests.swift` | 0 |
+| 3 | STUN and Netcheck, UDP socket, and interface addresses | `Sources/SwiftailMagicsock/{STUNMessage,Netcheck}*.swift`, `Sources/SwiftailIO/{DatagramSocket,LocalInterfaceAddresses}.swift`, `Tests/SwiftailMagicsockTests/{STUNMessageTests,NetcheckTests}.swift`, `Tests/SwiftailIOTests/{DatagramSocketTests,LocalInterfaceAddressesTests}.swift` | 0. Compare against STUN reference values after Unit 1 provides the data |
+| 4 | `Magicsock` integration + engine and node integration (engine contract "Changes in M4") | `Sources/SwiftailMagicsock/Magicsock*.swift`, `Tests/SwiftailMagicsockTests/MagicsockTests.swift`, `Sources/SwiftailEngine/*`, `Tests/SwiftailEngineTests/*`, `Sources/Swiftail/*`, `Tests/SwiftailTests/*` | 1, 2, 3 |
+| 5 | Gate tool commands and Swift gate tests | `Tools/interop/cmd/tailnet/*`, tailnet section of `Tools/interop/README.md`, `Tests/SwiftailInteropTests/DirectPathTests.swift` | Tool work starts alongside 0. Swift tests follow 4 |
 
-순서: 0 → (1, 2, 3, 5의 도구) 병렬 → 4 → 5의 Swift 시험 → 다른 세션의 검토 → 총괄이 관문을 다시 돌림. 단위 4가 가장 크다(상태 기계 묶음과 actor 통합). 둘로 나눈다면 4a(`Magicsock`)와 4b(엔진·노드, 4a의 공개 시그니처만 보고 시작)로 나누고 4b는 4a 병합 뒤 빌드한다. 대조 시험(벡터 자료를 읽는 시험)은 구현자와 다른 세션이 쓴다.
+Order is 0 → (1, 2, 3, and 5's tool work) in parallel → 4 → 5's Swift tests → review by another session → lead session reruns the gate. Unit 4 is the largest (state machine integration and actor integration). If split in two, use 4a (`Magicsock`) and 4b (engine and node, starting from 4a's public signatures alone), and build 4b after merging 4a. A session other than the implementer's writes comparison tests (the tests that read the vector data).
 
-## 직접 경로 지연의 조사 (2026-11-16)
+## Direct Path Delay Investigation (2026-11-16)
 
-### 관측
+### Observations
 
-첫 사용처의 실기기(2026-11-15). 같은 Wi-Fi에 Mac의 호스트(`.inProcess`, 오래 떠 있음)와 iPhone의 터널(`.utun`, 방금 켬)이 있고, iPhone이 Mac의 tailnet 443으로 TCP를 건다.
+The first adopter's real devices (2026-11-15). A Mac host (`.inProcess`, running for a long time) and an iPhone tunnel (`.utun`, just enabled) are on the same Wi-Fi. The iPhone dials TCP to port 443 on the Mac's tailnet address.
 
-- 첫 접촉 뒤 `relayed(7)` → `direct`까지 44초, 25초. 두 번 다 터널을 켠 지 10~30초 안의 첫 접촉이었고, 그동안 통신은 DERP로 됐다. Go 터널 + Go 호스트는 몇 초였다고 한다(값 없음).
-- 유휴 약 26초 뒤 `피어 경로: none`, 다음 요청 순간 1초 안에 `direct → relayed(7) → direct`.
+- From first contact, `relayed(7)` → `direct` took 44 seconds and 25 seconds. Both first contacts were within 10~30 seconds of enabling the tunnel. Communication used DERP in the meantime. The Go tunnel + Go host reportedly took a few seconds (no values).
+- After about 26 seconds of idleness, `Peer path: none`. On the next request, `direct → relayed(7) → direct` within 1 second.
 
-### 측정
+### Measurements
 
-계약 관문 환경(`tailnet` 도구, 루프백 한 기계, testcontrol). 첫 데이터(1초마다 UDP, Go 쪽은 `peerSend`)부터 양쪽이 직접이 될 때까지. 조회 간격이 50 ms라 값에 그만큼의 오차가 있다. 두 번 잰 값이다.
+Contract gate environment (`tailnet` tool, loopback on one machine, testcontrol). Measure from first data (UDP every 1 second, `peerSend` on the Go side) until both sides are direct. The 50 ms polling interval introduces that much measurement error. Values are from two measurements.
 
-| 경우 | Swift(또는 A) | Go(또는 B) |
+| Case | Swift (or A) | Go (or B) |
 | --- | --- | --- |
-| (가) Swift ↔ Go, 둘 다 70초 유휴 뒤 | 72 ms, 72 ms | 14 ms, 18 ms |
-| (나) 방금 띄운 Swift ↔ 떠 있던 Go | 81 ms, 69 ms | 22 ms, 15 ms |
-| (다) 방금 띄운 Swift ↔ Swift(`.memory` 둘, 서로 보냄) | 58 ms, 55 ms | 58 ms, 55 ms |
-| (라) 대조: Go ↔ Go | 99 ms, 90 ms | 26 ms, 26 ms |
+| (a) Swift ↔ Go after both idle for 70 seconds | 72 ms, 72 ms | 14 ms, 18 ms |
+| (b) Newly started Swift ↔ running Go | 81 ms, 69 ms | 22 ms, 15 ms |
+| (c) Newly started Swift ↔ Swift (two `.memory` nodes sending to each other) | 58 ms, 55 ms | 58 ms, 55 ms |
+| (d) Control case, Go ↔ Go | 99 ms, 90 ms | 26 ms, 26 ms |
 
-실기기의 수십 초는 재현되지 않는다. 상태 기계를 실기기 순서로 돌린 단위 시험(`MagicsockStartupTests`)에서도 120초 유휴인 호스트와 30초 전에 켠 터널이 첫 데이터 뒤 12 ms 안에 양쪽 직접이 된다. 터널 쪽 CallMeMaybe는 엔드포인트가 27초보다 낡아 미뤄지지만 곧바로 시작한 회차가 끝나는 15 ms에 나가고, 호스트 쪽도 25 ms에 나간다.
+The delays of tens of seconds on real devices did not reproduce. A unit test (`MagicsockStartupTests`) that ran the state machines in the real-device sequence also brought both sides direct within 12 ms of the first data, with a host idle for 120 seconds and a tunnel enabled 30 seconds earlier. The tunnel's CallMeMaybe is deferred because its endpoints are older than 27 seconds, then sent when the round started immediately completes at 15 ms. The host sends its CallMeMaybe at 25 ms.
 
-### Go와의 대조 (v1.104.7)
+### Comparison with Go (v1.104.7)
 
-| 사건 | Go | Swiftail | 차이 |
+| Event | Go | Swiftail | Difference |
 | --- | --- | --- | --- |
-| 첫 데이터 | 신뢰된 직접이 없으면 모든 후보에 Ping하고 Ping을 하나라도 보냈으면 CallMeMaybe(`endpoint.go:1107-1130`, `:1423-1462`) | `planSend` → `pingAllCandidates(sendCallMeMaybe: true)` | 없음 |
-| 엔드포인트가 낡음 | 회차가 끝나면 보내도록 걸고 `ReSTUN`. 진행 중인 갱신이 있으면 끝난 뒤 한 번 더 돈다(`magicsock.go:2693-2723`, `:3720-3750`, `:887-900`, `:979`) | 미뤄 둔 목록에 넣고 회차가 없으면 시작, 진행 중이면 그 회차 끝에 보낸다(`callMeMaybe(to:)`, `.endpointsRefreshed`) | Swiftail이 진행 중인 회차의 결과를 써서 같거나 이르다. 주기 회차를 기다리는 길은 없다(단위 시험) |
-| CallMeMaybe 받음 | 후보를 바꾸고 Ping 간격을 풀어 곧바로 모두에 Ping, CallMeMaybe는 되보내지 않음(`endpoint.go:2150-2215`) | `receiveCallMeMaybe` | 없음 |
-| Pong 받음 | 더 낫거나 신뢰가 지났으면 `bestAddr`, 그 주소면 신뢰 6.5초(`endpoint.go:1929-2017`) | `receivePong` | 없음 |
-| netmap 엔드포인트 바뀜 | Ping 받은 적 없는 후보는 netmap에서 빠지면 지움(`endpoint.go:1762-1800`, `:510-521`) | `replaceNetmapCandidates` | 없음 |
-| 모르는 출발지의 Ping | 아는 disco 키면 출발지를 후보로 넣고 Pong(`magicsock.go:2581-2690`) | `receivePing` | 없음 |
-| 모르는 disco 키 | 버림(`magicsock.go:2245-2252`). 단 "아는 키"에 TSMP로 배운 키가 들어간다 | 버림. netmap 키만 안다 | **있음**(아래) |
-| 피어의 disco 키 바뀜 | 신뢰·송신 기록·Ping 기록을 지움(`endpoint.go:1694-1697`, `:2286-2310`) | `resetForNewDiscoKey` | 없음 |
+| First data | Without a trusted direct path, Ping every candidate and send CallMeMaybe if at least one Ping was sent (`endpoint.go:1107-1130`, `:1423-1462`) | `planSend` → `pingAllCandidates(sendCallMeMaybe: true)` | None |
+| Endpoints are stale | Schedule the send for the end of the round and call `ReSTUN`. If a refresh is running, run another after it finishes (`magicsock.go:2693-2723`, `:3720-3750`, `:887-900`, `:979`) | Add to the deferred list and start a round if none is active. If one is active, send when that round ends (`callMeMaybe(to:)`, `.endpointsRefreshed`) | Swiftail uses the active round's result, so it sends at the same time or earlier. No path waits for a periodic round (unit test) |
+| Receive CallMeMaybe | Replace candidates, remove the Ping interval restriction, immediately Ping all candidates, and send no CallMeMaybe in return (`endpoint.go:2150-2215`) | `receiveCallMeMaybe` | None |
+| Receive Pong | Set `bestAddr` if better or if trust expired. Give that address 6.5 seconds of trust (`endpoint.go:1929-2017`) | `receivePong` | None |
+| Netmap endpoints change | Remove candidates that never sent a Ping when they disappear from netmap (`endpoint.go:1762-1800`, `:510-521`) | `replaceNetmapCandidates` | None |
+| Ping from an unknown source | If the disco key is known, add the source as a candidate and reply with Pong (`magicsock.go:2581-2690`) | `receivePing` | None |
+| Unknown disco key | Drop (`magicsock.go:2245-2252`). "Known keys" include keys learned through TSMP | Drop. Only netmap keys are known | **Yes** (below) |
+| Peer disco key changes | Clear trust, send history, and Ping history (`endpoint.go:1694-1697`, `:2286-2310`) | `resetForNewDiscoKey` | None |
 
-가설 넷의 판정: CallMeMaybe가 다음 주기 회차에야 나간다 — 아니다(위 표, 단위 시험 1). 첫 데이터에서 전체 Ping이 시작되지 않는다 — 아니다. 상대가 CallMeMaybe를 받고 곧바로 Ping하지 않는다 — 아니다(`callMeMaybeExchange`). 모르는 출발지의 Ping 처리가 다르다 — 다르지 않다.
+Verdicts on the four hypotheses. CallMeMaybe waits for the next periodic round. False (table above, unit test 1). The first data does not start a full Ping round. False. The peer does not Ping immediately on receiving CallMeMaybe. False (`callMeMaybeExchange`). Ping handling for an unknown source differs. No difference.
 
-### 까닭 (실기기에서 확인하지 못함)
+### Cause (Unverified on Real Devices)
 
-남은 차이는 **TSMP disco 키 광고**다(노트 3.8, 4.10). Go는 WireGuard 세션 키가 생길 때마다 자기 disco 키를 터널 안의 TSMP로 보내고(`magicsock.go:4631-4676`, CapabilityVersion 144, `tailcfg.go:195`), 받은 쪽은 그 키를 곧바로 활성 키로 쓴다(`net/tstun/wrap.go:1133-1146`, `wgengine/userspace.go:608-623`, `magicsock.go:4579-4622`). 그래서 방금 켠 Go 노드의 새 disco 키를 상대는 첫 핸드셰이크에서 안다. Swiftail은 보내지도 쓰지도 않는다(결정 표 "TSMP 광고"). 한쪽이라도 Swiftail이면 오래 떠 있던 쪽은 방금 켠 쪽의 새 disco 키를 netmap으로만 배우고, 그때까지 양쪽 disco가 모두 버려진다: 떠 있던 쪽은 모르는 키로, 켠 쪽은 옛 키로 봉한 것을 열지 못해서다. 데이터는 DERP로 흐르고, 새 키가 netmap으로 오면 1초 안에 양쪽 직접이 된다(단위 시험 2). 중계 시간은 곧 제어 서버가 새 키를 퍼뜨리는 시간이다. testcontrol은 곧바로 퍼뜨리므로 위 측정이 빠르다(Swiftail은 스트림 요청이 아니라 그 앞의 상태 올리기로 키를 올린다. testcontrol은 Version ≥ 68의 스트림 요청에 실린 DiscoKey를 무시한다, `testcontrol.go:1452-1458`).
+The remaining difference is **TSMP disco key advertisement** (notes §3.8 and §4.10). Each time a WireGuard session key is established, Go advertises its disco key via TSMP inside the tunnel (`magicsock.go:4631-4676`, CapabilityVersion 144, `tailcfg.go:195`). The receiver uses it immediately as its active key (`net/tstun/wrap.go:1133-1146`, `wgengine/userspace.go:608-623`, `magicsock.go:4579-4622`). This lets a peer learn the new disco key of a just-started Go node at the first handshake. Swiftail neither sends nor uses it (decision table, "TSMP advertisement"). With Swiftail on either side, the long-running side learns the newly started side's new disco key only through netmap. Until then, both sides drop disco. The long-running side sees an unknown key, and the newly started side cannot open messages sealed to its old key. Data flows over DERP, and both sides go direct within 1 second of receiving the new key in netmap (unit test 2). Relay duration therefore equals the time the control server takes to distribute the new key. Testcontrol distributes it immediately, so the above measurements are fast (Swiftail publishes the key in the status update before the stream request. Testcontrol ignores DiscoKey in stream requests with Version ≥ 68, `testcontrol.go:1452-1458`).
 
-관측과 맞는 점: 두 번 다 방금 켠 터널과의 첫 접촉이었고, Go끼리는 몇 초였다. 맞는지 모르는 점: 터널을 켠 뒤 첫 접촉까지 10~30초가 이미 지났으므로, 이 가설이 맞으려면 실제 제어 서버가 새 disco 키를 35~74초 동안 퍼뜨리지 않아야 한다. Swiftail이 CapabilityVersion 148(≥ 144)을 선언하므로 서버가 TSMP 광고를 믿고 disco 키 변경을 서두르지 않을 수 있으나, 서버 코드가 공개되어 있지 않아 확인하지 못했다.
+Consistent with the observations, both were first contacts with a just-enabled tunnel, and Go-to-Go took a few seconds. One point remains unverified. Because 10~30 seconds had already elapsed from enabling the tunnel to first contact, the hypothesis requires the production control server to take 35~74 seconds to distribute the new disco key. Swiftail declares CapabilityVersion 148 (≥ 144), so the server may trust the TSMP advertisement and delay the disco key change. The server code is not public, so this was unverified.
 
-### 유휴 뒤의 `none`과 흔들림
+### `none` and Path Flapping After Idleness
 
-`none`은 세 경우에만 나온다: 마지막 WireGuard 송신(keepalive 포함) 뒤 45초(동작 G3), netmap이 피어의 disco 키를 바꿈(`resetForNewDiscoKey`), 피어가 빠지거나 node 키가 바뀜. 둘째·셋째 뒤의 다음 송신은 신뢰가 없어 `relayed → direct`로 나온다. 관측된 `direct → relayed → direct`는 첫째와 맞는다: heartbeat가 45초까지 `bestAddr`에 Ping해 신뢰가 남은 채 유휴가 되고, 다음 송신은 그 신뢰로 `direct`, 신뢰(마지막 Pong + 6.5초)가 지나면 `relayed`, 그 송신이 전체 Ping을 하고 Pong이 오면 `direct`다. Go도 안에서는 똑같이 움직인다(`endpoint.go:635-656`, `:1117-1124`). Go는 경로 사건을 내지 않아 보이지 않을 뿐이다. 그래서 설계대로이며, 관측의 "26초"는 기준 시각이 마지막 WireGuard 송신이 아니었던 것으로 본다. 아래 로그의 "앞 사건 뒤"가 이를 가른다.
+`none` occurs in only three cases. It has been 45 seconds since the last WireGuard send (including keepalive, behavior G3), netmap changed the peer's disco key (`resetForNewDiscoKey`), or the peer was removed or its node key changed. The next send after the second or third case has no trust and yields `relayed → direct`. The observed `direct → relayed → direct` fits the first case. Heartbeats Ping `bestAddr` until 45 seconds, so the peer goes idle while trust remains. The next send uses that trust and reports `direct`. When trust expires (last Pong + 6.5 seconds), it reports `relayed`, and when that send starts a full Ping round and a Pong arrives, it reports `direct`. Go behaves identically internally (`endpoint.go:635-656`, `:1117-1124`). It emits no path events, so the changes are invisible. This is as designed, and the observed "26 seconds" appears to have been measured from a time other than the last WireGuard send. "Since previous event" in the logs below distinguishes this.
 
-### 고친 것
+### Fixes
 
-동작은 바꾸지 않았다. 범위 안(`SwiftailMagicsock`, 노드의 데이터면)에서 Go와 다른 계기나 기다림을 찾지 못했다.
+Behavior was unchanged. Within scope (`SwiftailMagicsock` and the node's data plane), no trigger or wait was found to differ from Go.
 
-- 회귀 시험 `MagicsockStartupTests`: (1) 유휴 호스트와 늦게 켠 터널에서 양쪽 CallMeMaybe가 첫 데이터 뒤 3초(회차 마감) 안에 나가고 양쪽이 1초 안에 직접이 된다. (2) 호스트가 터널의 옛 disco 키를 쥔 동안은 양쪽 disco가 버려지고(`unknownDiscoKey`, `malformedDisco`), netmap이 새 키를 준 순간 호스트 경로가 nil이 되며 1초 안에 양쪽 직접이 된다.
-- 진단 로그: `피어 N 경로:` 줄 끝에 나빠졌으면 그 까닭(동작 G4), 같은 피어의 앞 경로 사건 뒤 시간, 앞 경로 사건(어느 피어든) 뒤 버린 disco를 종류별로 붙인다(`피어 1 경로: relayed(7) (신뢰 만료, 앞 사건 뒤 96.5초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)`). N은 첫 경로 사건에 1부터 차례로 붙인다. 피어가 netmap에서 빠지면 마지막 사건을 기록한 뒤 그 피어의 기록을 지우고, 돌아오면 다음 첫 사건에 새 번호를 붙인다. 같은 실행에서 번호를 다시 쓰지 않는다. 첫 사건에는 시간 대신 `첫 사건`이 붙는다. 키·주소·이름·안정 ID는 찍지 않는다(`PathEventTally`). 2026-11-16에 피어 번호, 까닭, 같은 피어 기준의 시간을 더했다(한 단말이 여러 피어와 통신하면 줄이 섞여 가릴 수 없었다).
+- Regression tests in `MagicsockStartupTests`. (1) With an idle host and a tunnel enabled later, both CallMeMaybe messages go out within 3 seconds of the first data (round deadline), and both sides go direct within 1 second. (2) While the host holds the tunnel's old disco key, both sides drop disco (`unknownDiscoKey`, `malformedDisco`). The instant netmap supplies the new key, the host path becomes nil, and both sides go direct within 1 second.
+- Diagnostic log. Append the downgrade reason if any (behavior G4), time since the same peer's previous path event, and counts of disco messages dropped by category since the previous path event for any peer to the `Peer N path:` line (`Peer 1 path: relayed(7) (trust expired, 96.5 seconds since previous event, dropped disco: unknown key 0, could not open 0, path rule 0)`). Assign N in order starting at 1 on the first path event. When a peer leaves netmap, log its final event, then delete its record. If it returns, assign a new number on its next first event. Numbers are not reused in the same run. The first event shows `first event` in place of elapsed time. Logs contain no keys, addresses, names, or stable IDs (`PathEventTally`). Peer number, reason, and same-peer elapsed time were added on 2026-11-16 (when one device communicated with several peers, interleaved lines could not be distinguished).
 
-### 실기기에서 가려내는 법
+### Distinguishing the Cases on Real Devices
 
-양쪽 기기의 `Swiftail`/`node` 로그에서 첫 접촉 전후의 `피어 경로:` 줄을 모은다.
+Collect `Peer path:` lines around first contact from both devices' `Swiftail`/`node` logs.
 
-- **disco 키 가설이 맞으면**: 호스트에 `relayed(7)` 다음 25~44초 뒤 같은 피어의 `none (disco 키 바뀜, 앞 사건 뒤 …초, 버린 disco: 모르는 키 N …)`(N > 0)이 찍히고 곧바로 `relayed(7)`, `direct`가 이어진다. 터널의 `direct` 줄에는 `열리지 않음` > 0이 붙는다.
-- **둘 다 0인데 오래 걸리면**: disco는 오갔으나 UDP가 닿지 않은 것이다(같은 Wi-Fi의 단말 격리, iOS 로컬 네트워크 권한, NAT 헤어핀). 그때는 포트 매핑(노트 6.2 `shortcut:`)과 LAN 엔드포인트가 올라갔는지를 본다.
-- **유휴 `none`**: `none (유휴, …)`이면 설계대로다.
+- **If the disco key hypothesis holds**, 25~44 seconds after `relayed(7)` the host logs `none (disco key changed, … seconds since previous event, dropped disco: unknown key N …)` (N > 0) for the same peer, immediately followed by `relayed(7)` and `direct`. The tunnel's `direct` line has `could not open` > 0.
+- **If both counts are 0 and the delay persists**, disco was exchanged but UDP was unreachable (client isolation on the same Wi-Fi, iOS local network permission, or NAT hairpinning). Check port mapping (notes §6.2 `shortcut:`) and whether LAN endpoints were published.
+- **Idle `none`.** `none (idle, …)` is as designed.
 
-### 남은 것 (이 범위 밖)
+### Remaining Work (Outside This Scope)
 
-- 가설이 맞으면 고칠 곳: TSMP disco 키 광고를 보내고 쓰기. `SwiftailWireGuard`(세션 키가 생길 때 터널 안으로 한 번: 시작한 쪽은 응답을 받을 때, 응답한 쪽은 새 키의 첫 transport를 받을 때, 노트 4.10 1), `SwiftailEngine`(TSMP `'a'` 33바이트를 만들고, 받은 것을 소비하면서 키를 위로 알림), `SwiftailMagicsock`(netmap 키와 TSMP 키 가운데 하나를 활성으로 두는 Go의 두 키 모형, `endpoint.go:382-436`, `:1552-1688`), 노트 4.10 3의 결론과 결정 표 "TSMP 광고" 줄. 다른 길은 선언하는 CapabilityVersion을 144 아래로 내리는 것(`SwiftailControl`)인데 다른 서버 동작이 함께 바뀌므로 따로 검토해야 한다.
-- 실제 제어 서버가 새 disco 키를 퍼뜨리는 데 걸리는 시간은 실기기 로그로만 확인된다.
+- If the hypothesis holds, send and use TSMP disco key advertisements. The areas affected are `SwiftailWireGuard` (once inside the tunnel when a session key is established, for the initiator on receiving the response and for the responder on receiving the first transport under the new key, notes §4.10 item 1), `SwiftailEngine` (construct the 33-byte TSMP `'a'` and consume received messages while reporting the key upward), `SwiftailMagicsock` (Go's two-key model with one active key from the netmap key and TSMP key, `endpoint.go:382-436`, `:1552-1688`), the conclusion in notes §4.10 item 3, and the decision table's "TSMP advertisement" row. Another option is lowering the declared CapabilityVersion below 144 (`SwiftailControl`), which requires separate review because it also changes other server behavior.
+- The time the production control server takes to distribute the new disco key can be verified only through real-device logs.
 
-## TSMP disco 키 광고 (2026-11-16)
+## TSMP Disco Key Advertisement (2026-11-16)
 
-Go는 WireGuard 세션 키가 생길 때마다 자기 disco 공개 키를 터널 안의 TSMP 메시지로 알리고, 받은 쪽은 그 키를 netmap을 기다리지 않고 쓴다(노트 `disco-magicsock.md` 3.8·4.10, capability 버전 144 "Client sends `TSMPDiscoKeyAdvertisement` around WireGuard handshakes"). Swiftail은 148을 선언하면서 이것을 보내지도 쓰지도 않았다(노트 4.10 3의 "보내지 않아도 된다"는 결론. 틀렸다). 그 결과로 보이는 것: 방금 켠 노드의 새 disco 키를 오래 떠 있던 상대가 netmap으로만 배우고, 그때까지 disco가 서로 열리지 않아 직접 경로가 서지 않는다(위 "직접 경로 지연의 조사": 실기기에서 25~44초. 이 까닭이 맞는지는 실기기 로그로 아직 가리지 못했다). 까닭이 맞든 아니든 선언한 버전의 동작이므로 넣는다.
+Each time a WireGuard session key is established, Go advertises its public disco key in a TSMP message inside the tunnel. The receiver uses it without waiting for netmap (notes `disco-magicsock.md` §3.8 and §4.10, capability version 144 "Client sends `TSMPDiscoKeyAdvertisement` around WireGuard handshakes"). Swiftail declared 148 but neither sent nor used these advertisements (the conclusion in notes §4.10 item 3 that "sending is unnecessary" was wrong). The apparent result is that a long-running peer learns a recently started node's new disco key only from netmap. Until then the peers cannot open each other's disco messages and no direct path forms (see "Direct Path Delay Investigation" above, 25~44 seconds on real devices. Real-device logs have yet to establish whether this is the cause). Add it regardless of the cause because it is part of the declared version's behavior.
 
-근거 소스: `wgengine/magicsock/magicsock.go`의 `PriorityMessageForPeer`·`HandleDiscoKeyAdvertisement`·`selfIPMatchingFamily`, `endpoint.go`의 `updateTSMPDiscoKey`·`changedActiveDiscoLocked`와 disco 키를 쥐는 자료(`keyFromTSMP`, netmap 키와의 관계), `net/packet/tsmp.go`의 `TSMPDiscoKeyAdvertisement`, `net/tstun/wrap.go`와 `wgengine/userspace.go`의 받는 길, Tailscale 포크 wireguard-go의 priority message(`device/send.go`, `device/receive.go`, `MaxPriorityMessageContentSize`). 세부는 구현이 소스로 확인해 "구현하며 정해진 것"에 적는다.
+Reference sources are `PriorityMessageForPeer`, `HandleDiscoKeyAdvertisement`, and `selfIPMatchingFamily` in `wgengine/magicsock/magicsock.go`, `updateTSMPDiscoKey`, `changedActiveDiscoLocked`, and the disco key storage (`keyFromTSMP` and its relation to the netmap key) in `endpoint.go`, `TSMPDiscoKeyAdvertisement` in `net/packet/tsmp.go`, the receive path in `net/tstun/wrap.go` and `wgengine/userspace.go`, and priority messages in the Tailscale fork of wireguard-go (`device/send.go`, `device/receive.go`, `MaxPriorityMessageContentSize`). Verify details in the source during implementation and record them in "Implementation Decisions."
 
-### 동작 T
+### Behavior T
 
-1. **보내기**: 피어와의 WireGuard 세션 키가 새로 생길 때마다 그 피어에게 터널 안으로 광고 하나를 보낸다. 때는 Go와 같다: 핸드셰이크를 시작한 쪽은 응답을 받아 세션이 섰을 때, 응답한 쪽은 새 키로 된 첫 transport를 받았을 때. 대기 중인 데이터보다 먼저 나가는지도 Go와 같게 한다.
-2. **내용**: 노트 3.8의 형식. 출발지는 피어 주소와 같은 계열의 자기 tailnet 주소(Go `selfIPMatchingFamily`), 목적지는 그 피어의 주소, 키는 자기 disco 공개 키. 맞는 계열의 자기 주소가 없거나 disco 키가 없으면 보내지 않는다.
-3. **받기**: 엔진이 광고를 소비하고(앱·netstack으로 올리지 않는다. 지금도 그렇다) 그 피어의 node 키와 광고된 disco 키를 `Magicsock`에 알린다. 광고는 WireGuard가 인증하고 출발지 검사를 통과한 패킷에서만 받는다. 키가 0이면 버린다.
-4. **활성 키**: 피어마다 netmap으로 배운 키와 TSMP로 배운 키를 Go와 같은 규칙으로 쥐고 그 가운데 하나를 활성 키로 쓴다(netmap이 나중에 다른 키를 줄 때, 같은 키를 줄 때, TSMP가 netmap보다 낡은 키를 줄 때의 판정을 소스로 확인한다). 활성 키가 바뀌면 그 피어의 직접 경로 신뢰와 진행 중인 Ping을 지우고(노트 4.4 3) 곧 다시 찾는다.
-5. **한 피어는 자기 키만 바꾼다**: 광고는 그것을 보낸 피어(WireGuard 세션의 node 키)의 disco 키만 바꾼다. 다른 피어가 쓰는 disco 키를 광고했을 때의 처리(같은 disco 키를 두 피어가 쓰는 경우)는 Go와 같게 하고 시험으로 고정한다.
-6. **비밀과 로그**: disco 키는 공개 키지만 로그에는 종류와 개수만 남긴다.
+1. **Sending.** Send one advertisement to the peer inside the tunnel each time a new WireGuard session key is established with that peer. Match Go's timing. The handshake initiator sends when it receives the response and establishes the session. The responder sends when it receives the first transport under the new key. Also match Go's ordering relative to queued data.
+2. **Contents.** Use the format in notes §3.8. The source is a local tailnet address of the same family as the peer's address (Go `selfIPMatchingFamily`), the destination is the peer's address, and the key is the local public disco key. Skip sending if there is no local address of that family or no disco key.
+3. **Receiving.** The engine consumes the advertisement (as it already does, without forwarding it to the app or netstack) and reports the peer's node key and advertised disco key to `Magicsock`. Accept advertisements only from packets authenticated by WireGuard that pass source validation. Drop a key of 0.
+4. **Active key.** For each peer, keep the key learned from netmap and the key learned from TSMP under the same rules as Go and make one active (verify from source what happens if netmap later provides a different key, the same key, or TSMP provides a key older than netmap). When the active key changes, clear that peer's direct path trust and in-flight Pings (notes §4.4 item 3) and rediscover the path promptly.
+5. **Peers change only their own keys.** An advertisement changes only the disco key of the peer that sent it (the WireGuard session's node key). Match Go when one peer advertises a disco key used by another peer (two peers using the same disco key) and capture the behavior in tests.
+6. **Secrets and logs.** Disco keys are public, and logs retain only event types and counts.
 
-### 시험과 관문
+### Tests and Gate
 
-- 단위: 광고의 바이트가 Go `TSMPDiscoKeyAdvertisement.Marshal`의 출력과 같다(Go 기준값 도구로 벡터를 뽑는다). 보내는 때(시작한 쪽·응답한 쪽), 받았을 때의 활성 키 판정표, 0 키, 계열이 맞는 주소 없음, 인증되지 않은 길로 온 광고는 쓰지 않음, 같은 disco 키를 두 피어가 쓰는 경우.
-- 상태 기계: 위 조사의 회귀 시험 "호스트가 터널의 옛 disco 키를 쥔 동안"에서 **netmap을 바꾸지 않고도** WireGuard 핸드셰이크 뒤 1초 안에 양쪽이 direct가 된다.
-- 상호 운용(`tailnet` 도구, 실제 Go 피어): ① Swift 노드를 다시 띄워 disco 키를 바꾸고, Go 피어에게 가는 netmap 갱신을 막은 채로(도구의 맵 억제) 직접 경로가 선다(Go가 Swiftail의 광고를 받아 쓴다). ② 반대로 Go 피어의 disco 키가 바뀌고 Swift 노드에게 가는 netmap 갱신을 막은 채로 직접 경로가 선다(Swiftail이 Go의 광고를 받아 쓴다). 도구로 만들 수 없는 쪽은 까닭을 적는다.
-- Swift ↔ Swift: 같은 프로세스의 두 노드로 한쪽을 다시 띄웠을 때 netmap 갱신 없이 직접 경로가 서는 시간을 잰다.
+- Unit tests. Advertisement bytes match Go `TSMPDiscoKeyAdvertisement.Marshal` output (generate vectors with the Go reference value tool). Cover initiator and responder send timing, the active key decision table on receipt, a key of 0, no address of the right family, ignoring advertisements from unauthenticated paths, and two peers using the same disco key.
+- State machine. In the investigation's regression test for "while the host holds the tunnel's old disco key," both sides go direct within 1 second of the WireGuard handshake **without changing netmap**.
+- Interop (`tailnet` tool, real Go peer). ① Restart the Swift node to change its disco key and verify a direct path forms with netmap updates to the Go peer blocked (tool map suppression). Go receives and uses Swiftail's advertisement. ② Conversely, change the Go peer's disco key and verify a direct path forms with netmap updates to the Swift node blocked. Swiftail receives and uses Go's advertisement. Document why if either case cannot be set up with the tool.
+- Swift ↔ Swift. With two nodes in one process, restart one and measure time to a direct path without a netmap update.
 
-### 구현하며 정해진 것 (2026-11-16)
+### Implementation Decisions (2026-11-16)
 
-근거는 tailscale.com v1.104.7과 Tailscale 포크 wireguard-go `v0.0.0-20261106233718-9e0ab45c16ca`다. 광고에 쓰이는 함수(`PriorityMessageForPeer`, `HandleDiscoKeyAdvertisement`, `endpoint.go`, `peermap.go`, `tsmp.go`, `wrap.go`)는 관문 도구가 쓰는 v1.104.6과 글자 하나 다르지 않다.
+Reference sources are tailscale.com v1.104.7 and the Tailscale fork of wireguard-go `v0.0.0-20261106233718-9e0ab45c16ca`. The functions used for advertisement (`PriorityMessageForPeer`, `HandleDiscoKeyAdvertisement`, `endpoint.go`, `peermap.go`, `tsmp.go`, `wrap.go`) are identical character for character to v1.104.6, which the gate tool uses.
 
-1. **보내는 때와 횟수**(`device/receive.go:416`, `:483`, `device/send.go:111-140`): 시작한 쪽은 response를 받아 세션이 선 직후 광고 → keepalive(대기열이 비었을 때) 또는 대기열 순서다. 응답한 쪽은 새 keypair로 온 첫 transport가 AEAD·재전송 검사를 통과해 next를 확인할 때 광고 → 대기열 순서이고, 그다음 받은 패킷을 올린다. keypair 하나에 한 번이고 rekey(시작한 쪽 keypair 120초)마다 양쪽이 다시 보낸다. 대기열(staged)을 거치지 않으므로 대기 중인 데이터보다 앞선다. 보낼 세션이 없으면 핸드셰이크를 시작하지 않고 그만둔다. 데이터 송신으로 센다(새 핸드셰이크 타이머). 크기 한도는 512바이트(`MaxPriorityMessageContentSize`)이고 광고는 IPv4 53바이트, IPv6 73바이트다. Swiftail은 `WireGuardDevice.setPriorityMessage(_:for:)`로 옮겼고, 엔진이 netmap을 적용할 때(키 만료 재계산 포함) 피어마다 광고 바이트를 정한다.
-2. **내용**: 출발지는 netmap의 자기 `Addresses` 가운데 피어의 첫 `Addresses` 주소(Go `endpoint.nodeAddr`)와 계열이 같은 첫 한 주소짜리 주소, 목적지는 그 첫 주소, 키는 `Magicsock.discoPublicKey`(엔진 `init`의 `discoKey`)다. 맞는 주소가 없거나 키가 0이면 보내지 않는다. WireGuard 전용 피어는 엔진에 오르지 않으므로 따로 거르지 않는다. 바이트(ID 0, TTL 64, IPv4 머리 체크섬)는 Go `Marshal`의 출력과 같다(`Tools/interop/cmd/tsmpvectors`, `Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json`, `TSMPVectorTests`).
-3. **받는 길**: 엔진은 WireGuard가 복호화하고 그 피어의 AllowedIPs로 출발지를 검사한 패킷만 TSMP로 해석한다. TSMP 종류 `'a'`이고 본문이 33바이트 이상이며(뒤에 남는 바이트는 Go처럼 무시한다) 키가 0이 아니면 `.discoKeyAdvertised(키, from: 그 WireGuard 피어)`를 내고, 노드가 `Magicsock.receiveDiscoKeyAdvertisement(_:from:at:)`에 넘긴다. Go는 출발 주소로 피어를 찾지만(`wgengine/userspace.go:618`) 출발지 검사를 통과한 주소의 주인은 그 WireGuard 피어 하나이므로 결과가 같다. 인증되지 않은 길은 쓰이지 않는다: UDP·DERP로 온 맨 패킷은 WireGuard가 형식 오류로 버리고, AllowedIPs 밖 출발지는 `disallowedSource`로 버리며, 앱·netstack에서 내려온 TSMP는 엔진이 보내지 않고 버린다(엔진 시험 `unauthenticatedAdvertisementsAreIgnored`).
-4. **활성 키 판정표**(`endpoint.go:382-436`, `:1552-1688`, `magicsock.go:4579-4622`, 값 타입 `PeerDiscoKeys`, 시험 `PeerDiscoKeysTests`). "다시 찾기"는 `PeerPathState.resetForNewDiscoKey()`(Go `changedActiveDiscoLocked`: 신뢰·송신 기록·진행 중인 Ping을 지운다)다.
+1. **Send timing and count** (`device/receive.go:416`, `:483`, `device/send.go:111-140`). Immediately after receiving the response and establishing the session, the initiator sends advertisement → keepalive (if the queue is empty) or queued data. The responder sends advertisement → queued data when the first transport using the new keypair passes AEAD and replay checks and confirms next, then delivers the received packet. Send once per keypair. Both sides send again on every rekey (initiator keypair 120 seconds). It bypasses the staged queue and precedes pending data. If there is no session for sending, stop without initiating a handshake. It counts as a data send (new handshake timer). The size limit is 512 bytes (`MaxPriorityMessageContentSize`), and an advertisement is 53 bytes for IPv4 and 73 bytes for IPv6. Swiftail ports this as `WireGuardDevice.setPriorityMessage(_:for:)`, and the engine determines per-peer advertisement bytes when applying netmap (including recomputation on key expiration).
+2. **Contents.** The source is the first single-address prefix in the node's netmap `Addresses` whose family matches the peer's first `Addresses` address (Go `endpoint.nodeAddr`). The destination is that first peer address, and the key is `Magicsock.discoPublicKey` (the engine `init`'s `discoKey`). Skip sending if no address matches or the key is 0. WireGuard-only peers do not enter the engine, so no separate filter is needed. The bytes (ID 0, TTL 64, IPv4 header checksum) match Go's `Marshal` output (`Tools/interop/cmd/tsmpvectors`, `Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json`, `TSMPVectorTests`).
+3. **Receive path.** The engine parses as TSMP only packets that WireGuard decrypted and whose sources it checked against that peer's AllowedIPs. If the TSMP type is `'a'`, the body is at least 33 bytes (ignore trailing bytes as in Go), and the key is not 0, emit `.discoKeyAdvertised(key, from: that WireGuard peer)`. The node passes it to `Magicsock.receiveDiscoKeyAdvertisement(_:from:at:)`. Go finds the peer by source address (`wgengine/userspace.go:618`), but that WireGuard peer is the sole owner of a source address that passed validation, so the result is the same. Unauthenticated paths are unused. WireGuard drops bare packets received over UDP or DERP as malformed, drops sources outside AllowedIPs with `disallowedSource`, and the engine drops outgoing TSMP from the app or netstack (engine test `unauthenticatedAdvertisementsAreIgnored`).
+4. **Active key decision table** (`endpoint.go:382-436`, `:1552-1688`, `magicsock.go:4579-4622`, value type `PeerDiscoKeys`, tests `PeerDiscoKeysTests`). "Rediscover" means `PeerPathState.resetForNewDiscoKey()` (Go `changedActiveDiscoLocked`, which clears trust, send history, and in-flight Pings).
 
-   | 지금 | 들어온 것 | 활성 | 다시 찾기 |
+   | Current state | Input | Active | Rediscover |
    | --- | --- | --- | --- |
-   | netmap 키 C만 | 광고 T(≠C) | T | 예 |
-   | netmap 키 C만 | 처음 온 광고 C | C(TSMP 쪽) | 예. Go는 값이 같아도 바뀐 것으로 본다 |
-   | TSMP 키 T 활성 | 같은 광고 T | T | 아니오 |
-   | TSMP 키 T 활성 | netmap이 다른 키 C2를 줌 | T | 예 |
-   | TSMP 키 T 활성 | netmap이 T를 줌(따라잡음) | T | 예 |
-   | 키 없음 | 광고 T, 뒤에 netmap C | T, 그대로 T | 예, 예 |
-   | netmap 키 C2 | netmap보다 낡은 광고 C | C. 광고가 늘 이긴다(Go는 순서를 따지지 않는다) | 예 |
-   | TSMP 키 T 활성 | netmap 키 C로 봉한 UDP Ping(Ping의 node 키가 그 피어) 또는 DERP CallMeMaybe(DERP 보낸 쪽이 그 피어) | C | 예 |
-   | 위처럼 C로 돌아간 뒤 | 같은 광고 T | C | 아니오(이전 TSMP 키와 같으면 "바뀌지 않음") |
-   | 두 키 | netmap 키가 사라짐(0이거나 저차수) | T | 예 |
+   | Netmap key C only | Advertisement T (≠C) | T | Yes |
+   | Netmap key C only | First advertisement C | C (TSMP side) | Yes. Go treats it as changed even though the value is equal |
+   | TSMP key T active | Same advertisement T | T | No |
+   | TSMP key T active | Netmap supplies a different key C2 | T | Yes |
+   | TSMP key T active | Netmap supplies T (catches up) | T | Yes |
+   | No key | Advertisement T, then netmap C | T, still T | Yes, yes |
+   | Netmap key C2 | Advertisement C older than netmap | C. The advertisement always wins (Go ignores order) | Yes |
+   | TSMP key T active | UDP Ping sealed with netmap key C (Ping's node key is that peer) or DERP CallMeMaybe (DERP sender is that peer) | C | Yes |
+   | After reverting to C as above | Same advertisement T | C | No (same as previous TSMP key means "unchanged") |
+   | Two keys | Netmap key disappears (0 or low-order) | T | Yes |
 
-   계약 T4는 "활성 키가 바뀌면 지운다"였다. Go는 갱신 함수가 참을 돌려줄 때마다 지우므로(위 표의 "값이 같아도") Go를 따랐다. Pong은 활성을 바꾸지 않는다(Go와 같다). 받은 disco의 보낸 쪽 키는 두 키 모두로 찾고(Go `knownPeerDiscoKey`), 보내는 disco는 활성 키로 봉한다. 앞 TSMP 키는 새 광고가 오면 잊는다(netmap 키와 같으면 남는다).
-5. **같은 disco 키를 두 피어가 쓸 때**(독립 검토 뒤 고침, 아래 "독립 검토 결과"): 처음 구현은 동작 B1(키 하나에 피어 하나)을 TSMP 키에도 써서, 피어 C가 피어 B의 새 키를 B보다 먼저 광고하면 B의 광고를 거절하고 B가 그 키로 봉한 Ping도 C에게만 넘겼다. 지금은 Go와 같은 모형이다: 키 하나를 여러 피어가 쥐고(`Magicsock.DiscoKeyHolders`), 받은 메시지의 주인은 메시지마다 Go의 규칙으로 가린다. netmap 키에도 같은 모형을 쓴다(B1). 바꾸는 범위가 표 하나였고 둘을 다르게 두면 규칙이 둘이 되어서다.
+   Contract T4 said to clear state "when the active key changes." Go clears it whenever the update function returns true (including "even though the value is equal" in the table), so the implementation follows Go. Pong does not change the active key (as in Go). Look up the sender key of incoming disco using both keys (Go `knownPeerDiscoKey`), and seal outgoing disco with the active key. Forget the previous TSMP key when a new advertisement arrives (it remains if it equals the netmap key).
+5. **When two peers use the same disco key** (fixed after independent review, see "Independent Review Results" below). The first implementation applied behavior B1 (one peer per key) to TSMP keys too. If peer C advertised peer B's new key before B, it rejected B's advertisement and delivered Pings that B sealed with the key only to C. The current model matches Go. Multiple peers hold one key (`Magicsock.DiscoKeyHolders`), and the owner of each incoming message is determined by Go's rules. The same model applies to netmap keys (B1). The change affected one table, and treating them differently would create two sets of rules.
 
-   근거: `peermap.go` 전체(`nodesOfDisco`, `upsertEndpoint`, `cleanFromNodesOfDisco`, `deleteEndpoint`, `forEachEndpointWithDiscoKey`), `magicsock.go:2213-2538`(`handleDiscoMessage`), `:2547-2577`(`unambiguousNodeKeyOfPingLocked`), `:2581-2684`(`handlePingLocked`), `:3237-3345`(`upsertPeerLocked`), `:4579-4622`(`HandleDiscoKeyAdvertisement`), `endpoint.go:1645-1688`(`checkAndUpdateDiscoKey`), `:1929-2022`(`handlePongConnLocked`). 판정표(K는 보낸 쪽 disco 키, "쥔 피어"는 K를 netmap 키나 TSMP 키로 가진 피어). Go와 Swiftail이 같다.
+   Reference sources are all of `peermap.go` (`nodesOfDisco`, `upsertEndpoint`, `cleanFromNodesOfDisco`, `deleteEndpoint`, `forEachEndpointWithDiscoKey`), `magicsock.go:2213-2538` (`handleDiscoMessage`), `:2547-2577` (`unambiguousNodeKeyOfPingLocked`), `:2581-2684` (`handlePingLocked`), `:3237-3345` (`upsertPeerLocked`), `:4579-4622` (`HandleDiscoKeyAdvertisement`), `endpoint.go:1645-1688` (`checkAndUpdateDiscoKey`), and `:1929-2022` (`handlePongConnLocked`). K in the decision table is the sender's disco key, and a "holder" is a peer with K as its netmap or TSMP key. Go and Swiftail agree.
 
-   | 들어온 것 | 보낼 수 있는 쪽 | 바뀌는 것 | 바뀌지 않는 것 | 시험 |
+   | Input | Who can send it | What changes | What stays the same | Tests |
    | --- | --- | --- | --- | --- |
-   | netmap | 제어 서버 | 각 피어의 netmap 키. 같은 키를 여러 피어가 내세우면 모두 쥔다 | 남은 피어의 TSMP 키(다른 피어가 같은 키를 netmap으로 내세워도) | `sharedDiscoKey`, `netmapKeepsTSMPKey`, `recoversOnNetmap` |
-   | TSMP 광고 K, 피어 P에게서 | P(WireGuard가 인증) | P의 TSMP 키 = K, 활성 = K, P의 경로 다시 찾기. 앞 TSMP 키는 P가 놓는다 | K를 이미 쥔 다른 피어의 키·경로·신뢰 | `advertisingAnotherPeersKey`, `ownerAdvertisementIsAcceptedAfterSquat` |
-   | UDP Ping(K로 봉함, 안의 node 키 N) | K의 개인 키를 가진 쪽 | 쥔 피어 모두의 후보에 출처. N이 쥔 피어면 N의 활성 키 = K. Pong은 한 번 | N이 K를 쥐지 않았으면 N의 키·후보. K를 쥐지 않은 피어 | `udpPingReachesAllHolders`, `pingNodeKeyMustHoldSenderKey`, `ownersPingReachesOwner` |
-   | DERP Ping(K, DERP 보낸 쪽 D) | K의 개인 키를 가진 쪽 | 없음. D에게 Pong만(D가 아는 피어일 때) | 어느 피어의 후보·키 | `derpPingTouchesNoCandidates` |
-   | Pong(K, TxID) | K의 개인 키를 가진 쪽 | 그 TxID의 Ping을 보낸 피어 하나의 경로 | 쥔 다른 피어 | `pongGoesToPingOwner`, `squatterPathPointsAtOwner` |
-   | CallMeMaybe(K, DERP 보낸 쪽 D) | D(DERP가 node 키로 인증)이면서 K의 개인 키를 가진 쪽 | D가 K를 쥐었으면 D의 후보와 D의 활성 키 = K | 쥔 다른 피어. D가 K를 쥐지 않았으면 버림 | `sharedDiscoKey`, `callMeMaybeFromInactiveKey` |
+   | Netmap | Control server | Each peer's netmap key. If multiple peers claim the same key, all hold it | Remaining peers' TSMP keys (even if another peer claims the same key through netmap) | `sharedDiscoKey`, `netmapKeepsTSMPKey`, `recoversOnNetmap` |
+   | TSMP advertisement K from peer P | P (authenticated by WireGuard) | P's TSMP key = K, active = K, and P's path is rediscovered. P releases the previous TSMP key | Keys, paths, and trust of other peers already holding K | `advertisingAnotherPeersKey`, `ownerAdvertisementIsAcceptedAfterSquat` |
+   | UDP Ping (sealed with K, node key N inside) | Holder of K's private key | The source becomes a candidate for all holders. If N is a holder, N's active key = K. One Pong | N's keys and candidates if N does not hold K. Peers that do not hold K | `udpPingReachesAllHolders`, `pingNodeKeyMustHoldSenderKey`, `ownersPingReachesOwner` |
+   | DERP Ping (K, DERP sender D) | Holder of K's private key | None. Only a Pong to D (if D is known) | Every peer's candidates and keys | `derpPingTouchesNoCandidates` |
+   | Pong (K, TxID) | Holder of K's private key | Path of the single peer whose state sent the Ping with that TxID | Other holders | `pongGoesToPingOwner`, `squatterPathPointsAtOwner` |
+   | CallMeMaybe (K, DERP sender D) | D (authenticated by DERP with its node key) holding K's private key | D's candidates and D's active key = K if D holds K | Other holders. Drop if D does not hold K | `sharedDiscoKey`, `callMeMaybeFromInactiveKey` |
 
-   그래서 다른 피어의 키를 광고한 피어(C)가 바꿀 수 있는 것은 C 자신의 상태뿐이다. Go가 허용하는 것도 같게 두었다: C가 B의 키를 쥐면 B의 Ping이 C의 후보에도 B의 주소를 넣고, C에게 보내는 Ping은 그 키로 봉해져 B가 답하므로 C의 경로가 B의 주소로 직접이 된다(`squatterPathPointsAtOwner`). C에게 가는 WireGuard는 B가 버리므로 C는 자기 트래픽만 잃고, WireGuard가 종단을 지키므로 내용은 아무도 읽지 못한다. B의 경로·신뢰·활성 키는 그대로다.
+   A peer (C) advertising another peer's key can therefore change only its own state. Preserve what Go allows. If C holds B's key, B's Ping adds B's address to C's candidates, too. A Ping to C is sealed with that key and B replies, so C's path becomes direct to B's address (`squatterPathPointsAtOwner`). B drops WireGuard traffic sent to C, so C loses only its own traffic. WireGuard protects the endpoints, so no one can read the contents. B's path, trust, and active key stay the same.
 
-   **Go와 다른 점**: (가) Go는 피어의 앞 TSMP 키가 그 피어의 netmap 키와 같을 때 새 광고가 오면 그 키에서 피어를 빼고(`upsertEndpoint`가 `oldDiscoKey`를 지운다), netmap 키가 바뀔 때도 그 키가 TSMP 키와 같으면 뺀다. 그 뒤 그 키로 온 disco는 다른 피어가 쥐지 않았으면 버려진다. Swiftail은 피어가 아직 쥔 키를 표에 남긴다. (나) UDP Ping이 어느 쥔 피어에게 재전송이면 Go는 무작위 순서로 돌다 그 자리에서 멈춰 뒤의 피어에 후보를 넣지 않을 수 있다. Swiftail은 모두 넣고, Pong을 보내지 않는 것은 같다. (다) 공유 키를 계산할 수 없는 저차수 키는 쥐지 않는다(Go는 받는다. B2와 같다).
-6. **계산**: 공유 키(X25519)는 바뀐 광고 키에만, WireGuard가 인증한 피어에게서만 계산한다(Go `discoInfoForKnownPeerLocked`와 같다). 모르는 키를 내세운 UDP·DERP 쓰레기는 여전히 계산을 일으키지 못한다.
-7. **로그**: 노드는 광고를 받을 때 `TSMP disco 키 광고 받음`(debug)만 남긴다. 키·주소·이름은 남기지 않는다.
-8. **상태 기계 회귀 시험**(`MagicsockStartupTests.staleDiscoKeyWithAdvertisement`): 호스트가 터널의 옛 disco 키를 쥔 채로 핸드셰이크 시각(+30·+40 ms)에 광고를 넣으면 netmap 갱신 없이 첫 데이터 뒤 0.51초(다음 데이터 송신)에 양쪽이 직접이 된다. 광고가 없으면 같은 상황이 netmap까지 중계로 남는다(`staleDiscoKeyUntilNetmap`).
-9. **상호 운용 관문**(`Tests/SwiftailInteropTests/DiscoAdvertisementTests.swift`, `tailnet` 도구, 루프백): ① Swift 노드를 다시 띄우고 Go 피어의 자동 맵을 막은 채 10.3~10.5초, ② Go 피어를 다시 띄우고(새 도구 명령 `restartPeer`: 같은 상태 폴더, 같은 node 키, 새 disco 키·포트) Swift 노드의 맵을 막은 채 10.5~10.8초, Swift ↔ Swift(한쪽을 다시 띄움) 10.8초에 양쪽이 직접이 된다(각 3회). 시간의 대부분은 광고 전의 WireGuard 세션 수립이다: 오래 떠 있는 쪽은 다시 띄우기 전 주소를 마지막 Pong 뒤 6.5초 동안 믿어 핸드셰이크 응답을 그 죽은 주소로만 보내고, 다시 띄운 쪽은 5초마다 다시 시도한다(Go와 같은 규칙). 광고를 받은 뒤에는 노드 로그에서 0.1초 안에 양쪽이 직접이 됐다. 이 단위 전의 코드로 같은 시험을 돌리면 셋 다 20초 안에 직접이 되지 않고 중계로 남는다. 두 Swift 노드가 같은 순간마다 보내면 initiation이 서로 엇갈려(받은 initiation이 자기 것을 지우고, 다음 재시도도 같은 송신에 맞춰진다) 5초씩 늦어진다. WireGuard 규칙대로이므로 시험의 송신 간격을 다르게 두었다.
-10. **이 절 밖의 줄**: 결정 표의 "TSMP 광고" 줄, 동작 B1·C1~C5는 독립 검토 뒤 지금 동작으로 고쳤다. 제외 표의 "TSMP 광고 보내기, TSMP 키 활성 전환" 줄은 지웠다.
-11. **엔진 `init`의 `discoKey`**: 기본값 없이 받는다. 빠뜨리면 광고가 조용히 꺼지므로 부르는 쪽이 늘 넘긴다(광고가 필요 없는 시험은 `.zero`).
+   **Differences from Go.** (a) If a peer's previous TSMP key equals its netmap key, Go removes that peer from the key when a new advertisement arrives (`upsertEndpoint` removes `oldDiscoKey`). It also removes the peer on a netmap key change if the key matches the TSMP key. Afterward, disco using that key is dropped unless another peer holds it. Swiftail keeps keys the peer still holds in its table. (b) If a UDP Ping is a replay for any holder, Go may stop there while iterating in random order, leaving later peers without the candidate. Swiftail inserts it for all peers. Both skip the Pong. (c) Swiftail does not retain low-order keys for which a shared key cannot be calculated (Go accepts them, see B2).
+6. **Computation.** Compute the shared key (X25519) only for a changed advertised key and only from a peer authenticated by WireGuard (as in Go `discoInfoForKnownPeerLocked`). Garbage UDP or DERP packets claiming unknown keys still cannot trigger computation.
+7. **Logging.** On receiving an advertisement, the node logs only `Received TSMP disco key advertisement` (debug). It logs no keys, addresses, or names.
+8. **State machine regression test** (`MagicsockStartupTests.staleDiscoKeyWithAdvertisement`). With the host still holding the tunnel's old disco key, inject advertisements at handshake times (+30 and +40 ms). Both sides go direct 0.51 seconds after the first data (on the next data send) without a netmap update. Without the advertisement, the same scenario stays relayed until netmap arrives (`staleDiscoKeyUntilNetmap`).
+9. **Interop gate** (`Tests/SwiftailInteropTests/DiscoAdvertisementTests.swift`, `tailnet` tool, loopback). Both sides go direct in ① 10.3~10.5 seconds after restarting the Swift node with automatic maps to the Go peer blocked, ② 10.5~10.8 seconds after restarting the Go peer (new tool command `restartPeer`, same state directory and node key, new disco key and port) with maps to the Swift node blocked, and 10.8 seconds for Swift ↔ Swift (one side restarted), each run 3 times. Most of the time is WireGuard session establishment before advertisement. The long-running side trusts the pre-restart address for 6.5 seconds after the last Pong and sends the handshake response only to that dead address. The restarted side retries every 5 seconds (same rules as Go). After receiving advertisements, node logs showed both sides going direct within 0.1 seconds. Running the same tests with code predating this unit leaves all three relayed without going direct within 20 seconds. When two Swift nodes send at the same instants, their initiations cross (an incoming initiation clears the local one, and the next retries are also triggered by the same sends), adding 5 seconds each time. This follows WireGuard rules, so the tests use different send intervals.
+10. **Lines outside this section.** The decision table's "TSMP advertisement" row and behaviors B1 and C1~C5 were updated to the current behavior after independent review. The exclusions table's "sending TSMP advertisements and switching the active TSMP key" row was removed.
+11. **Engine `init`'s `discoKey`.** Accept it without a default. Omitting it would silently disable advertisement, so callers always supply it (tests that do not need advertisements use `.zero`).
 
-### 독립 검토 결과 (2026-11-16)
+### Independent Review Results (2026-11-16)
 
-다른 세션의 독립 검토가 이 절의 구현을 Go 소스와 견줬다. 재현 시험은 `Tests/SwiftailMagicsockTests/DiscoKeyAdvertisementReviewTests.swift`와 `Tests/SwiftailEngineTests/TSMPAdvertisementReviewTests.swift`다. 발견은 보통 1, 낮음 4다.
+An independent review by another session compared this section's implementation with the Go source. Reproduction tests are in `Tests/SwiftailMagicsockTests/DiscoKeyAdvertisementReviewTests.swift` and `Tests/SwiftailEngineTests/TSMPAdvertisementReviewTests.swift`. Findings were 1 medium and 4 low.
 
-| # | 정도 | 발견 | 처리 |
+| # | Severity | Finding | Resolution |
 | --- | --- | --- | --- |
-| 1 | 보통 | 다른 피어가 주인보다 먼저 광고한 disco 키가 주인의 광고와 그 키로 봉한 Ping까지 막는다(T5). 주인은 netmap이 그 키를 줄 때까지 직접 경로를 맺지 못한다 | 고침: 위 5의 Go 모형과 판정표. 재현 시험 둘의 `withKnownIssue`를 벗겼다(`ownerAdvertisementIsAcceptedAfterSquat`, `ownersPingReachesOwner`로 이름을 바꿨다). `recoversOnNetmap`은 뜻이 바뀌었다: netmap이 키를 주인에게 줘도 키를 광고한 다른 피어는 그 키를 계속 쓴다(Go와 같다. 그 피어는 자기 트래픽만 잃는다) |
-| 2 | 낮음 | 엔진 `init`의 `discoKey` 기본값 `.zero`: 빠뜨리면 광고가 조용히 꺼진다 | 고침: 필수 인자(위 11) |
-| 3 | 낮음 | 해석 벡터가 IPv4 본문만 덮고 IPv6·조각은 Swift 시험으로만 덮었다 | 고침: `tsmpvectors`에 IPv6 광고, IPv4 조각 셋(MF, offset 1, offset 10), IPv6 조각 머리 셋(첫 조각 M 1·0, 뒤 조각)을 더해 Go의 판정을 뽑았다. IPv6 첫 조각 둘은 Go가 받고 Swiftail은 버린다. `TSMPVectorTests`가 그 둘을 알려진 차이로 따로 확인한다. Go 피어는 73바이트 광고를 조각내지 않으므로 놓치는 광고는 없다 |
-| 4 | 낮음 | 이 절 밖의 계약 줄(결정 표, 제외 표, B1·C2·C4)이 실제 동작과 다르다 | 고침: 위 10 |
-| 5 | 낮음 | 늦게 온 낡은 광고가 새 키를 덮고, 키를 계속 바꾸는 광고가 X25519를 일으킨다 | 그대로 둠(아래) |
+| 1 | Medium | If another peer advertises a disco key before its owner, it blocks the owner's advertisement and Pings sealed with that key (T5). The owner cannot establish a direct path until netmap supplies the key | Fixed using the Go model and decision table in item 5 above. Removed `withKnownIssue` from two reproduction tests (renamed to `ownerAdvertisementIsAcceptedAfterSquat` and `ownersPingReachesOwner`). `recoversOnNetmap` changed meaning. Even when netmap gives the key to its owner, the other peer that advertised the key keeps using it (as in Go, that peer loses only its own traffic) |
+| 2 | Low | The engine `init` defaults `discoKey` to `.zero`. Omitting it silently disables advertisements | Fixed by requiring the argument (item 11 above) |
+| 3 | Low | Parsing vectors cover only IPv4 bodies. IPv6 and fragments were covered only by Swift tests | Fixed by adding an IPv6 advertisement, three IPv4 fragments (MF, offset 1, offset 10), and three IPv6 fragment headers (first fragment M 1 and 0, later fragment) to `tsmpvectors` and generating Go verdicts. Go accepts the two IPv6 first fragments and Swiftail drops them. `TSMPVectorTests` checks those two as known differences. Go peers do not fragment 73-byte advertisements, so no advertisements are missed |
+| 4 | Low | Contract lines outside this section (decision table, exclusions table, B1, C2, and C4) differ from actual behavior | Fixed in item 10 above |
+| 5 | Low | A delayed stale advertisement overwrites the new key, and advertisements that keep changing keys trigger X25519 | Retained (below) |
 
-그대로 둔 것과 까닭:
-- **늦게 온 낡은 광고**: 광고에는 순서 번호가 없어 늦게 온 옛 광고가 새 TSMP 키를 덮을 수 있다. Go도 순서를 따지지 않는다(위 4의 표 "netmap보다 낡은 광고"). 광고는 WireGuard keypair마다 한 번 오므로 다음 rekey(120초 안)의 광고가 바로잡고, 그 사이 비활성 키로 봉한 Ping·CallMeMaybe를 받으면 활성 키가 그쪽으로 돌아가며, netmap도 회복의 길이다.
-- **키를 계속 바꾸는 광고의 비용**: 인증된 피어는 광고마다 X25519 한 번을 일으킬 수 있다. Go도 같다(`discoInfoForKnownPeerLocked`). 표는 피어마다 키 둘(netmap 키와 TSMP 키)을 넘지 않는다(`rotatingAdvertisementsAreBounded`). 광고는 WireGuard transport 하나이므로 보내는 쪽도 그만큼의 일을 한다.
+Items retained and their rationale follow.
+- **Delayed stale advertisements.** Advertisements have no sequence number, so a delayed old advertisement can overwrite the new TSMP key. Go also ignores order (the "advertisement older than netmap" row in item 4 above). An advertisement arrives once per WireGuard keypair, so the next rekey's advertisement (within 120 seconds) corrects it. Meanwhile, a Ping or CallMeMaybe sealed with the inactive key makes that key active again on receipt, and netmap is also a recovery path.
+- **Cost of advertisements that keep changing keys.** An authenticated peer can trigger one X25519 per advertisement. Go does the same (`discoInfoForKnownPeerLocked`). The table holds at most two keys per peer (netmap and TSMP keys, `rotatingAdvertisementsAreBounded`). An advertisement is one WireGuard transport, so the sender performs that much work too.
 
-확인하지 못한 것: 실제 tailnet(실제 제어 서버와 그 netmap 전파 시간)에서의 동작, IPv6만 되는 망. 같은 disco 키를 여러 피어가 쥐는 실제 경우(노드 공유, 계정 전환)도 실제 tailnet에서 보지 못했다. 상호 운용 시험은 루프백의 Go 피어로만 돌렸다.
+Unverified items include behavior in a real tailnet (a production control server and its netmap propagation time) and on an IPv6-only network. Real cases of several peers holding the same disco key (node sharing and account switching) were also unobserved in a real tailnet. Interop tests ran only against Go peers on loopback.
 
-## 실기기 재측정 (2026-11-16, 첫 사용처 세션)
+## Real-Device Remeasurement (2026-11-16, First Adopter Session)
 
-TSMP disco 키 광고가 든 `b27b482`로 양쪽을 빌드해 같은 Wi-Fi에서 다시 쟀다(iPhone 14 Pro iOS 27.2의 Swiftail 터널, Mac의 Swiftail 호스트. 운영 tailnet, lock 켜짐). 기록은 iPhone 확장의 것이다. Mac 쪽 `Swiftail`/`node` 로그는 info 수준이라 디스크에 남지 않아 이번에는 얻지 못했다.
+Both sides were built with `b27b482`, which includes TSMP disco key advertisement, and measured again on the same Wi-Fi (Swiftail tunnel on iPhone 14 Pro with iOS 27.2, Swiftail host on Mac, production tailnet with lock enabled). The record is from the iPhone extension. Mac `Swiftail`/`node` logs were at info level and did not persist to disk, so they were unavailable for this run.
 
-| 상대 | 터널 `running` | 첫 접촉(`relayed`) | `direct` | 버린 disco |
+| Peer | Tunnel `running` | First contact (`relayed`) | `direct` | Dropped disco |
 | --- | --- | --- | --- | --- |
-| Go 호스트 | +0초 | +9초 | 같은 초(`relayed → direct → none → relayed → direct`가 0.0초 간격) | 0 |
-| Swiftail 호스트 | +0초 | +9초 | 약 2초 뒤(`relayed(20)` → 0.7초 `none` → `relayed(20)` → 1.5초 `direct`) | 0 |
+| Go host | +0 seconds | +9 seconds | Same second (`relayed → direct → none → relayed → direct` at 0.0-second intervals) | 0 |
+| Swiftail host | +0 seconds | +9 seconds | About 2 seconds later (`relayed(20)` → 0.7 seconds `none` → `relayed(20)` → 1.5 seconds `direct`) | 0 |
 
-- 앞선 값(TSMP 광고를 넣기 전, 25~44초)과 견줄 값은 **약 2초**다. 계정 없는 환경의 약 10.5초(netmap 갱신을 막은 채)보다 빠른 것은 실제 제어 서버가 netmap도 함께 주기 때문으로 본다.
-- **광고가 그 까닭이었는지는 이 기록으로 가려지지 않는다.** 새 disco 키를 광고로 배우는 쪽은 먼저 떠 있던 Mac인데 그쪽 로그가 없다. iPhone 기록에는 `TSMP disco 키 광고 받음`이 없었다(받은 키가 netmap의 키와 같으면 아무 줄도 남기지 않는다). 조건도 달랐다: 이번의 Mac 노드는 터널을 켜기 약 40초 전에 다시 등록했다. 다음 측정에서 Mac 쪽 `피어 경로:`와 `TSMP disco 키 광고 받음` 줄로 확인한다.
-- 중계 지역이 처음에는 20, 뒤에는 7로 찍혔다. 방금 등록한 Mac 노드의 홈 DERP가 STUN 회차 전의 대체 홈에서 바뀐 것으로 본다(확인하지 않음).
+- The value comparable to the earlier result (25~44 seconds before TSMP advertisement) is **about 2 seconds**. It appears faster than the roughly 10.5 seconds in the account-free environment (netmap updates blocked) because the production control server also provides netmap.
+- **This record cannot establish that the advertisement caused the improvement.** The already running Mac would learn the new disco key from the advertisement, and its logs are missing. The iPhone record had no `Received TSMP disco key advertisement` (no line is logged if the received key equals the netmap key). Conditions differed as well. This time the Mac node reregistered about 40 seconds before the tunnel was enabled. In the next measurement, check the Mac's `Peer path:` and `Received TSMP disco key advertisement` lines.
+- The relay region was logged first as 20 and later as 7. The recently registered Mac node's home DERP appears to have changed from the pre-STUN fallback home (unverified).
 
-### direct가 선 뒤 약 100초에 `relayed`
+### `relayed` About 100 Seconds After Going Direct
 
-두 측정 모두 iPhone 쪽에서, 마지막 경로 사건 뒤 96.5초와 105.3초에 `relayed(7)`이 한 번 찍혔다. 버린 disco는 0이다.
+In both measurements the iPhone logged `relayed(7)` once, at 96.5 and 105.3 seconds since the last path event. Dropped disco was 0.
 
-- Go 호스트 측정에서는 100MiB 전송의 끝 무렵이었고 5.8초 뒤 `direct`로 돌아왔다. 돌아오는 데 걸린 시간은 같은 후보에 5초 안에는 다시 Ping하지 않는 규칙(`pingInterval`, Go와 같다)과 맞는다.
-- Swiftail 호스트 측정에서는 전송이 끝난 뒤였고 6.6초 뒤 유휴의 `none`이 이어졌다.
-- `relayed`는 마지막 Pong 뒤 6.5초 동안 Pong이 없었거나(`trustDuration`), UDP 소켓을 다시 묶어 경로를 버렸을 때(`noteConnectivityChange`)만 나온다. 그 시각의 확장 기록을 거르지 않고 받아 보니 두 구간 모두 `네트워크 경로:`·재결속·DERP 줄이 없었다(재결속은 터널을 켠 순간 한 번뿐). 재결속은 아니다.
-- 전송은 끊기지 않았다(DERP로 이어 갔다). 판정은 아래 "조사 결과"에 있다.
+- In the Go host measurement it was near the end of a 100MiB transfer and returned to `direct` 5.8 seconds later. The return time fits the rule against Pinging the same candidate again within 5 seconds (`pingInterval`, as in Go).
+- In the Swiftail host measurement it was after the transfer finished, followed 6.6 seconds later by idle `none`.
+- `relayed` occurs only after 6.5 seconds without a Pong since the last Pong (`trustDuration`), or when rebinding the UDP socket discards the path (`noteConnectivityChange`). The unfiltered extension logs for those times showed no `Network path:`, rebind, or DERP lines in either interval (the only rebind was when enabling the tunnel). Rebinding was ruled out.
+- The transfer continued over DERP. See "Investigation Results" below for the verdict.
 
-### 조사 결과 (2026-11-16)
+### Investigation Results (2026-11-16)
 
-뒤에 알게 된 것: iPhone은 Mac의 노드 둘(첫 사용처 앱의 Go 노드, 홈 지역 7로 보임. 시험 서버의 Swiftail 노드, 홈 지역 20으로 보임)과 통신했고 `피어 경로:` 줄은 피어를 가리지 않았다. "앞 사건 뒤"도 어느 피어든 앞 사건부터였다. 그래서 두 `relayed(7)`은 Go 노드 쪽 경로로 본다. 측정 1은 전송 상대가 그 Go 노드였고(앱의 "같은 네트워크 직접 연결"을 끈 상태), 측정 2의 `relayed(7)`은 전송 상대(Swiftail 서버)와 무관할 수 있다. 아래는 측정 1을 앞에 둔다.
+Later findings. The iPhone communicated with two nodes on the Mac (the Go node in the first adopter's app, apparently home region 7, and the test server's Swiftail node, apparently home region 20), and `Peer path:` lines did not distinguish peers. "Since previous event" also meant the previous event for any peer. Both `relayed(7)` events therefore appear to concern the Go node's path. In measurement 1, the transfer peer was that Go node (the app's "direct connection on the same network" was disabled). In measurement 2, `relayed(7)` may be unrelated to the transfer peer (the Swiftail server). The findings below prioritize measurement 1.
 
-**`relayed`가 나오는 길**(direct였던 피어가 relayed로 가는 길 전부, Go v1.104.7과 줄 단위로 같다):
+**Ways to reach `relayed`** (all paths from direct to relayed, matching Go v1.104.7 line for line).
 
-| 길 | Swiftail | 일어나는 시각 | Go |
+| Path | Swiftail | When it occurs | Go |
 | --- | --- | --- | --- |
-| 신뢰 만료 | 마지막 Pong 뒤 6.5초(`PeerPathState.path(at:)`, `advance`의 만료 기한). heartbeat가 3초마다 `bestAddr`에 Ping하므로(`heartbeat`) Pong을 **연달아 둘** 받지 못해야 나온다 | heartbeat 시각 + 0.5초 + 왕복 | `endpoint.go:926-930`(heartbeat Ping), `:2003-2019`(Pong이 신뢰를 늘림), `:635-652`(신뢰가 지나면 DERP로도), `magicsock.go:4099`·`:4103` |
-| 후보 지움 | `dropBestAddrIfRemoved` ← `removeStaleCandidates`(전체 Ping, netmap 갱신, 후보 100개 넘음), `receiveCallMeMaybe` | 그 호출의 시각(heartbeat 시각, netmap·CallMeMaybe가 온 시각) | `:510-521`(`shouldDeleteLocked`), `:1423-1433`, `:1762-1800`, `:1810-1846`, `:2150-2215` |
-| 재결속 | `noteConnectivityChange` | 재결속 줄과 같은 시각 | `:1876`(`noteConnectivityChange`) |
-| Ping 기한 | `expirePings`가 `bestAddr`를 지움 | 신뢰가 이미 지난 뒤에만 지우므로 새 `relayed`를 만들지 않는다 | `:1244-1257` |
-| disco 키 바뀜 | `resetForNewDiscoKey`(netmap, TSMP 광고, 비활성 키로 온 disco) | 송신 기록을 지워 `relayed`가 아니라 곧바로 `none`이 된다. 다음 송신이 `relayed → direct` | `:1694-1697`(`changedActiveDiscoLocked`), `:2294-2310`(`lastSendExt = 0`) |
+| Trust expiry | 6.5 seconds after the last Pong (`PeerPathState.path(at:)`, expiry deadline in `advance`). The heartbeat Pings `bestAddr` every 3 seconds (`heartbeat`), so **two consecutive** Pongs must be missed | Heartbeat time + 0.5 seconds + round trip | `endpoint.go:926-930` (heartbeat Ping), `:2003-2019` (Pong extends trust), `:635-652` (also send through DERP after expiry), `magicsock.go:4099` and `:4103` |
+| Candidate removal | `dropBestAddrIfRemoved` ← `removeStaleCandidates` (full Ping round, netmap update, more than 100 candidates), `receiveCallMeMaybe` | Time of the call (heartbeat time or arrival of netmap or CallMeMaybe) | `:510-521` (`shouldDeleteLocked`), `:1423-1433`, `:1762-1800`, `:1810-1846`, `:2150-2215` |
+| Rebinding | `noteConnectivityChange` | Same time as the rebind log line | `:1876` (`noteConnectivityChange`) |
+| Ping deadline | `expirePings` clears `bestAddr` | Clears only after trust has expired, so it does not produce a new `relayed` | `:1244-1257` |
+| Disco key change | `resetForNewDiscoKey` (netmap, TSMP advertisement, disco under an inactive key) | Clears send history and goes directly to `none`, skipping `relayed`. The next send yields `relayed → direct` | `:1694-1697` (`changedActiveDiscoLocked`), `:2294-2310` (`lastSendExt = 0`) |
 
-**가른 것**
-- 상태 기계 시험 `MagicsockLongSessionTests.repeatedDownloads`: 두 `Magicsock`을 가상 시계로 잇고(한쪽 지연 2·10·30 ms), 300초 동안 26초 내려받기(호스트 20 ms마다, 단말 100 ms마다)와 42초 유휴를 되풀이하며 netmap을 네 모양(처음 한 번, 30초마다 같은 목록, 30초마다 바뀌는 목록, 단말이 호스트 주소를 Ping으로만 배움)으로 넣었다. 12가지 모두 direct 뒤 `relayed`도 nil도 없다. 손실이 없으면 후보 지움(45초 규칙 포함), heartbeat 멈춤, netmap 갱신은 까닭이 아니다. Ping으로 배운 후보도 내려받기 동안은 호스트의 heartbeat Ping이 3초마다 새로 하고, 42초 유휴는 호스트 heartbeat(마지막 송신 뒤 45초) 안이다. 실제 Go 노드는 CallMeMaybe에 자기 엔드포인트를 실으므로 그 주소는 지우지 않는 CallMeMaybe 후보가 되기도 한다.
-- 상호 운용 시험 `LongDownloadPathTests`(루프백, 실제 Go 피어, 같은 26초·42초 되풀이): 162초 동안 780MiB를 받는 사이 경로 사건 0개. 루프백은 왕복 5 ms 아래라 1분마다의 전체 Ping 길은 타지 않는다.
-- 측정 1의 시각: 앞 사건(23:38:30.5, 첫 송신과 같은 순간이라 heartbeat 시각의 기준)에서 96.5초 = 32번째 heartbeat(96.0초) + 0.5초. 마지막 Pong이 30번째 heartbeat(90.0초)의 것이면 신뢰는 96.5초 + 왕복에 끝난다. 후보 지움이었다면 heartbeat 시각 그대로이거나 netmap이 온 시각이어야 하고, 재결속 줄은 없으며, disco 키 바뀜이었다면 `none`이 찍혀야 한다.
-- 상태 기계 시험 `MagicsockLongSessionTests.pongLossDuringDownload`: 내려받는 동안 9초 동안 호스트의 Pong만 잃게 하면 마지막 Pong(73.02초) 뒤 6.5초(79.52초)에 `relayed`, 손실이 끝난 뒤 첫 Pong(84.02초)에 `direct`다. 관측과 같은 모양이다.
+**Findings that distinguish the cases**
+- State machine test `MagicsockLongSessionTests.repeatedDownloads`. Connect two `Magicsock` instances with a virtual clock (one-way latency of 2, 10, and 30 ms). For 300 seconds, repeat 26-second downloads (host sends every 20 ms, client every 100 ms) and 42-second idle periods. Supply netmap in four ways (once at the start, same list every 30 seconds, changed list every 30 seconds, client learns the host address only through Ping). None of the 12 cases show `relayed` or nil after direct. Without loss, candidate removal (including the 45-second rule), stopping heartbeats, and netmap updates are not the cause. Even Ping-learned candidates are refreshed by the host's heartbeat Ping every 3 seconds during downloads, and 42 seconds of idleness is within the host heartbeat window (45 seconds since the last send). A real Go node also includes its endpoints in CallMeMaybe, so the address may become a CallMeMaybe candidate that is kept.
+- Interop test `LongDownloadPathTests` (loopback, real Go peer, same 26-second and 42-second repetition). 0 path events while receiving 780MiB over 162 seconds. Loopback has a round trip below 5 ms, so it does not exercise the full Ping path that runs every 1 minute.
+- Measurement 1 timing. The preceding event (23:38:30.5, simultaneous with the first send and therefore the heartbeat baseline) plus 96.5 seconds equals the 32nd heartbeat (96.0 seconds) + 0.5 seconds. If the last Pong was for the 30th heartbeat (90.0 seconds), trust expires at 96.5 seconds plus the round trip. Candidate removal would have coincided exactly with the heartbeat or with a netmap arrival. No rebind line is present, and a disco key change would have logged `none`.
+- State machine test `MagicsockLongSessionTests.pongLossDuringDownload`. Dropping only the host's Pongs for 9 seconds during a download yields `relayed` 6.5 seconds (79.52 seconds) after the last Pong (73.02 seconds) and `direct` at the first Pong after loss ends (84.02 seconds). This matches the observed pattern.
 
-**판정**
-- 까닭(유력, 확정 아님): iPhone이 Go 노드에게서 heartbeat의 Pong을 연달아 둘 넘게 받지 못했다(Ping이나 Pong이 사라졌거나 5초 넘게 늦었다). 신뢰 만료 규칙과 타이머 값은 Go와 같다. Go가 그 자리의 받는 쪽이었어도 안에서 같은 신뢰 만료(DERP로도 보냄)가 일어난다. Go는 경로 사건을 내지 않아 보이지 않을 뿐이다. 그래서 동작을 바꾸지 않았다.
-- 어디서 사라졌는지는 가리지 못했다. 후보: Wi-Fi(전송 끝 무렵의 큐), 상대 Go 노드의 UDP 송신(송신 버퍼가 차면 그 데이터그램을 버린다. 확인하지 않음), iPhone의 받은 큐(`DatagramSocket`, 256개·1MiB, 오래된 것부터 버림). 셋째는 Swiftail의 것이지만 루프백 780MiB에서는 나타나지 않았다. 같은 Wi-Fi의 Swiftail 서버와 100MiB를 주고받은 측정 2와 셀룰러 측정의 서버 쪽 기록에는 전송 중 `relayed`가 없다.
-- 측정 1의 5.8초: 신뢰가 지난 뒤 93초 Ping의 기한(98초)이 `bestAddr`를 지운다. 그러면 heartbeat는 `bestAddr`에 Ping하지 않고 전체 Ping만 하는데, 후보마다 5초 안에는 다시 Ping하지 않으므로(`pingInterval`, Go `endpoint.go:1437-1439`) 96초에 Ping한 그 주소는 101초부터 다시 Ping된다. 전송은 23:40:11(100.5초)에 끝나 101초에 송신(전체 Ping의 계기)이 없었고, 102초 heartbeat의 Ping에 Pong이 와 `direct`가 되었다(96.5초 + 5.5초 + 왕복). 그러니 Pong 둘(93·96초)만 잃었어도 5.8초가 나온다. 전송 중이면 5초가 차는 순간의 송신이 곧바로 Ping한다(위 시험의 84.02초).
-- 측정 2(`relayed(7)` → 6.6초 → `none`, 그사이 `direct` 없음, 버린 disco 0): 같은 피어라면 `none`이 마지막 송신 뒤 45초가 아니라 6.6초에 나오는 길은 둘뿐이다(`Magicsock.path(of:)`, `idleDeadline`). (가) 유휴이던 Go 노드에 앱의 한 묶음을 보내 `relayed`(신뢰 없음, 전체 Ping과 CallMeMaybe), 6.6초 안에 Pong이 없었고, 그 뒤 그 피어의 활성 disco 키가 바뀌어(예: 이번 실행에서 그 피어의 TSMP 광고를 처음 받음. 값이 netmap 키와 같아도 경로를 다시 찾는다, Go와 같다) 송신 기록이 지워져 곧바로 `none`. (나) 그 피어가 netmap에서 빠졌다. 다른 피어의 줄이 섞였다면 (다) `relayed`는 신뢰 만료, `none`은 다른 피어의 유휴일 수도 있다. 새 로그에서는 각각 `none (disco 키 바뀜, …)`, `none (피어 빠짐, …)`, 서로 다른 피어 번호로 갈린다. Pong이 오지 않은 까닭은 기록으로 가릴 수 없다.
+**Verdict**
+- Likely, unconfirmed cause. The iPhone missed more than two consecutive heartbeat Pongs from the Go node (Ping or Pong was lost or delayed by more than 5 seconds). The expiry rule and timer values match Go. If Go were the receiver there, the same expiry would happen internally (also send through DERP). Go emits no path events, so it is invisible. Behavior was therefore unchanged.
+- Where packets were lost could not be determined. Candidates are Wi-Fi (queue near the end of the transfer), UDP sending on the remote Go node (drops the datagram when the send buffer fills, unverified), and the iPhone receive queue (`DatagramSocket`, 256 entries and 1MiB, oldest first). The third is part of Swiftail, but the 780MiB loopback run did not show it. There is no `relayed` during transfer in measurement 2, which exchanged 100MiB with the Swiftail server on the same Wi-Fi, or in the server-side record for the cellular measurement.
+- Measurement 1's 5.8 seconds. After trust expires, the deadline for the Ping at 93 seconds (98 seconds) clears `bestAddr`. The heartbeat then stops Pinging `bestAddr` and only runs full Ping rounds. Each candidate cannot be Pinged again within 5 seconds (`pingInterval`, Go `endpoint.go:1437-1439`), so the address Pinged at 96 seconds can be Pinged again starting at 101 seconds. The transfer ended at 23:40:11 (100.5 seconds), so there was no send at 101 seconds to trigger a full Ping round. The 102-second heartbeat Ping received a Pong and restored `direct` (96.5 seconds + 5.5 seconds + round trip). Losing just two Pongs (93 and 96 seconds) thus accounts for 5.8 seconds. During transfer, a send as soon as the 5 seconds elapse triggers a Ping (84.02 seconds in the test above).
+- Measurement 2 (`relayed(7)` → 6.6 seconds → `none`, no `direct` in between, 0 dropped disco). For the same peer, there are only two ways for `none` to occur at 6.6 seconds instead of 45 seconds after the last send (`Magicsock.path(of:)`, `idleDeadline`). (a) The app sends one batch to the idle Go node, yielding `relayed` (no trust, full Ping round and CallMeMaybe). No Pong arrives within 6.6 seconds. Then that peer's active disco key changes (for example, its first TSMP advertisement this run. Even if it equals the netmap key, it triggers rediscovery, as in Go). Clearing the send history immediately yields `none`. (b) The peer was removed from netmap. If lines from different peers interleaved, (c) `relayed` could indicate trust expiry and `none` could be idleness for another peer. New logs distinguish these with `none (disco key changed, …)`, `none (peer removed, …)`, and distinct peer numbers, respectively. The record cannot establish why no Pong arrived.
 
-**바꾼 것**: 진단 로그만(위 "고친 것"의 진단 로그 줄, 동작 G4). 상태 기계의 동작은 그대로다.
+**Changes.** Diagnostic logs only (the diagnostic log item under "Fixes" above, behavior G4). State machine behavior stayed the same.
 
-**영향을 줄일 선택지**(모두 Go와 달라지므로 손실의 출처를 가린 뒤에 고른다): 신뢰가 지나는 순간 5초 규칙과 상관없이 `bestAddr`에 한 번 더 Ping하기(측정 1이면 `direct` 복귀가 약 3초 빨라진다), 신뢰 기간이나 heartbeat 간격 바꾸기(동작 D6이 막는다). 신뢰가 지난 동안에도 UDP로 계속 보내고 DERP로도 함께 보내므로 전송은 끊기지 않는다(관측도 그렇다).
+**Options to reduce the impact** (all differ from Go, so choose after determining the source of loss). Ping `bestAddr` once more at trust expiry regardless of the 5-second rule (would restore `direct` about 3 seconds sooner in measurement 1), or change the trust duration or heartbeat interval (behavior D6 precludes this). After trust expires, sending continues over UDP and also goes through DERP, so the transfer continues (as observed).
 
-**다음 실기기 측정에서 볼 줄**: iPhone과 Mac 양쪽의 `피어 N 경로:` 줄.
-- `relayed(…) (신뢰 만료, …)`가 전송 중에 나오면 Pong이 끊긴 것이다. 같은 시각에 Swiftail 쪽 상대도 그 피어를 `신뢰 만료`로 내렸는지(양쪽 다 끊김), 아닌지(한쪽 방향만 끊김) 본다.
-- `후보 지움`이면 netmap이나 CallMeMaybe가 바꾼 후보다. 그 시각의 netmap 갱신 줄을 본다.
-- `재결속`이면 `SwiftailTunnel.md`의 "같은 인터페이스의 경로 갱신에 전체 재결속"이다.
+**Lines to check in the next real-device measurement** are the `Peer N path:` lines on both iPhone and Mac.
+- `relayed(…) (trust expired, …)` during transfer means Pongs stopped arriving. Check whether the Swiftail peer also downgraded that peer for `trust expired` at the same time (loss in both directions) or did not (loss in one direction only).
+- `candidate removed` means netmap or CallMeMaybe changed the candidate. Check the netmap update line at that time.
+- `rebind` refers to "Full Rebind on a Path Update for the Same Interface" in `SwiftailTunnel.md`.
