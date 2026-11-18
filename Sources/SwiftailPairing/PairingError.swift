@@ -18,8 +18,9 @@ public enum PairingError: Error, Sendable, Equatable {
     case storeWriteFailed
     /// The host's `challenge` did not arrive within 60 seconds (name lookup failed, no route, or the host does not know this node yet).
     case unreachable
-    /// The OS socket connection did not traverse the tunnel. Its local endpoint differs from this device's tailnet address (`localAddress`), or its remote
-    /// endpoint is outside the tailnet range. The tunnel was not connected or the name resolved elsewhere.
+    /// The OS socket became ready, but its numeric local endpoint address differs from `localAddress` or its numeric remote endpoint is outside the
+    /// tailnet ranges. This occurs before any pairing payload is sent. DNS resolution and TCP setup may already have happened.
+    /// If the dial never becomes ready or numeric endpoints remain unavailable, the result is `unreachable` after the retry window.
     case notOnTailnet
     /// The host did not accept the joiner. There is no open offer, the offer expired or was already used, or the secret is wrong.
     case rejected

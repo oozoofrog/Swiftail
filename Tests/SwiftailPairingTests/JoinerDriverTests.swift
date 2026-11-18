@@ -1,4 +1,5 @@
 import Foundation
+import SwiftailBase
 import Synchronization
 import Testing
 @testable import SwiftailPairing
@@ -16,6 +17,7 @@ struct JoinerDriverTests {
         private let continuation: AsyncStream<[UInt8]>.Continuation
         private let closed = Mutex(false)
         private let requested = Mutex<String?>(nil)
+        private let received = Mutex(0)
 
         init(offer: PairingOffer = Sample.offer(), decision: Bool? = true) throws {
             var machine = PairingHostMachine()
@@ -28,10 +30,12 @@ struct JoinerDriverTests {
         }
 
         var isClosed: Bool { closed.withLock { $0 } }
+        var receivedByteCount: Int { received.withLock { $0 } }
         /// The SAS that the host showed the app.
         var confirmationCode: String? { requested.withLock { $0 } }
 
         func send(_ bytes: [UInt8]) async {
+            received.withLock { $0 += bytes.count }
             let actions = machine.withLock { machine in
                 var actions = machine.receive(bytes, on: 1, wallClock: Sample.wallClock, now: .now)
                 if case .requestDecision? = actions.last, let decision {
@@ -144,6 +148,25 @@ struct JoinerDriverTests {
         let dialer = Dialer([.failed(failure)])
         #expect(await pairingError { try await Self.join(dialer) } == failure)
         #expect(dialer.callCount == 1)
+    }
+
+    @Test("An exact local address match with an out-of-range remote is rejected before pairing sends bytes (J2)")
+    func rejectsOutOfRangeRemoteWithMatchingLocalAddress() async throws {
+        let localAddress = try #require(IPAddress("100.64.0.2"))
+        let endpoints = try Sample.endpoints(host: "192.0.2.1:4747")
+        try #require(endpoints.joiner.address == localAddress)
+        // An expired offer makes an incorrectly admitted dial end immediately after hello.
+        let peer = try RehearsedHost(offer: Sample.offer(expires: Sample.wallClock))
+
+        // The OS socket dial has no endpoint injection seam. Apply its endpoint check at the driver's injected dial boundary.
+        let error = await pairingError {
+            try await PairingJoiner.join(Sample.offer(), deviceName: "rd-phone-5e6f7a8b", awaitingApproval: { _ in }) {
+                guard endpoints.isOnTailnet(localAddress: localAddress) else { return .failed(.notOnTailnet) }
+                return .connected(peer, endpoints)
+            }
+        }
+        #expect(error == .notOnTailnet)
+        #expect(peer.receivedByteCount == 0)
     }
 
     @Test("Failure after receiving challenge never retries")
