@@ -1,42 +1,42 @@
-// 계약 시험 6: 어떤 바이트열을 receive에 넣어도 죽지 않는다(길이 0~200의 무작위·경계 입력).
-// 입력은 고정 시드의 의사 난수라 실패하면 그대로 재현된다.
+// Contract test 6. Passing any byte sequence to receive must not crash (random and boundary inputs of length 0–200).
+// Inputs are pseudorandom with a fixed seed so failures can be reproduced exactly.
 
 import Testing
 
 @testable import SwiftailWireGuard
 
-@Suite("임의 입력")
+@Suite("Arbitrary input")
 struct FuzzTests {
-    @Test("경계 입력은 malformed")
+    @Test("Boundary inputs yield malformed")
     func boundaries() throws {
         var pair = Pair()
         let malformed: [[UInt8]] = [
             [],
             [4],
-            [4, 0, 0, 0] + zeros(27),                // 31바이트: 최소 32바이트 미만
+            [4, 0, 0, 0] + zeros(27),                // 31 bytes, below the 32-byte minimum
             [1, 0, 0, 0] + zeros(143),               // initiation 147
             [1, 0, 0, 0] + zeros(145),               // initiation 149
             [2, 0, 0, 0] + zeros(87),                // response 91
             [2, 0, 0, 0] + zeros(89),                // response 93
             [3, 0, 0, 0] + zeros(59),                // cookie reply 63
             [3, 0, 0, 0] + zeros(61),                // cookie reply 65
-            [1, 0, 0, 1] + zeros(144),               // 예약 바이트가 0이 아니다
+            [1, 0, 0, 1] + zeros(144),               // Reserved bytes are not all 0
             [4, 1, 0, 0] + zeros(28),
             [0, 0, 0, 0] + zeros(28),                // type 0
-            [5, 0, 0, 0] + zeros(28),                // 모르는 type
+            [5, 0, 0, 0] + zeros(28),                // Unknown type
             [UInt8](repeating: 0xFF, count: 200),
         ]
         for input in malformed {
-            #expect(throws: WireGuardError.malformed, "길이 \(input.count)") { try pair.bob.receive(input, at: t0) }
+            #expect(throws: WireGuardError.malformed, "Length \(input.count)") { try pair.bob.receive(input, at: t0) }
         }
-        // 크기가 맞는 메시지는 형식 검사를 통과하고 다음 단계에서 거절된다.
+        // Messages of the correct size pass format checks and are rejected at the next step.
         #expect(throws: WireGuardError.authenticationFailed) { try pair.bob.receive([1, 0, 0, 0] + zeros(144), at: t0) }
         #expect(throws: WireGuardError.authenticationFailed) { try pair.bob.receive([2, 0, 0, 0] + zeros(88), at: t0) }
         #expect(throws: WireGuardError.unknownPeer) { try pair.bob.receive([3, 0, 0, 0] + zeros(60), at: t0) }
         #expect(throws: WireGuardError.unknownPeer) { try pair.bob.receive([4, 0, 0, 0] + zeros(28), at: t0) }
     }
 
-    @Test("무작위 데이터그램으로 죽지 않고 세션 상태도 바뀌지 않는다")
+    @Test("Random datagrams do not crash or change session state")
     func randomDatagrams() throws {
         var pair = Pair()
         try pair.establish()
@@ -49,16 +49,16 @@ struct FuzzTests {
             for _ in 0..<8 {
                 inputs.append(random.bytes(length))
             }
-            // type 머리가 맞는 입력.
+            // Input with a valid type header.
             for type in UInt8(1)...4 where length >= 4 {
                 inputs.append([type, 0, 0, 0] + random.bytes(length - 4))
             }
-            // 살아 있는 receiver index를 가진 transport: 복호화 단계까지 들어간다.
+            // Transport with an active receiver index reaches decryption.
             if length >= 8 {
                 inputs.append([4, 0, 0, 0] + bobIndex.littleEndianBytes + random.bytes(length - 8))
             }
         }
-        // mac1이 맞는 initiation·response: DH와 AEAD 단계까지 들어간다.
+        // Initiation and response with a valid mac1 reach the DH and AEAD stages.
         for _ in 0..<64 {
             let initiation = [1, 0, 0, 0] + random.bytes(112)
             inputs.append(initiation + MAC.authenticate(initiation, key: mac1Key) + random.bytes(16))
@@ -69,8 +69,8 @@ struct FuzzTests {
         let deadline = pair.bob.nextDeadline
         let keypairs = pair.keypairs(of: .bob)?.localIndices
         for input in inputs {
-            // mac1이 맞는 핸드셰이크 메시지가 한 시각에 문턱(1초 안에 128개)을 넘으면 그 뒤로는 부하 상태라 오류 대신
-            // cookie reply로 답한다. 그 밖의 입력은 모두 거절된다.
+            // Once handshake messages with valid mac1 at one instant cross the threshold (128 within 1 second), the device is under load and returns
+            // a cookie reply instead of an error. All other input is rejected.
             do {
                 let outputs = try pair.bob.receive(input, at: t0)
                 #expect(outputs.count == 1 && outputs.allSatisfy { if case .cookieReply = $0 { true } else { false } })
@@ -79,7 +79,7 @@ struct FuzzTests {
         #expect(pair.bob.nextDeadline == deadline)
         #expect(pair.keypairs(of: .bob)?.localIndices == keypairs)
 
-        // 세션은 그대로 쓸 수 있다.
+        // The session remains usable.
         let packet = pair.packet(from: .alice)
         let outputs = try pair.alice.send(packet, to: pair.key(.bob), at: t0 + .seconds(1))
         #expect(try pair.deliver(outputs, from: .alice, at: t0 + .seconds(1))[.bob] == [packet])

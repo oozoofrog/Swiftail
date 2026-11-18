@@ -1,9 +1,9 @@
-// Argon2i(RFC 9106) 시험.
+// Argon2i (RFC 9106) tests.
 //
-// 출처:
-// - RFC 9106 5.2: Argon2i 시험 벡터(t=3, m=32 KiB, p=4, T=32, 비밀 키·연관 자료 있음)와 H0(Pre-hashing digest)
-// - `Vectors/argon2i-go.json`: golang.org/x/crypto v0.58.0 `argon2.Key`의 출력. `Tools/interop/cmd/argon2fixtures`가 만든다.
-//   마지막 항목은 Tailnet Lock 끄기 비밀의 인자 그대로이고 도구가 `tka.DisablementKDF`와도 견준다.
+// Origin
+// - RFC 9106 §5.2 Argon2i test vector (t=3, m=32 KiB, p=4, T=32, with a secret key and associated data) and H0 (Pre-hashing digest)
+// - `Vectors/argon2i-go.json` contains output from golang.org/x/crypto v0.58.0 `argon2.Key`. `Tools/interop/cmd/argon2fixtures` generates it.
+//   The last entry uses the exact parameters of the Tailnet Lock disablement secret, and the tool also checks it against `tka.DisablementKDF`.
 
 import Foundation
 import Testing
@@ -40,15 +40,15 @@ private func describe(_ v: GoArgon2Vectors.Vector) -> String {
     "t=\(v.iterations) m=\(v.memoryKiB) p=\(v.parallelism) T=\(v.output.count / 2) |P|=\(v.password.count / 2) |S|=\(v.salt.count / 2)"
 }
 
-/// Tailnet Lock 끄기 비밀의 인자(tailscale.com/tka/state.go `DisablementKDF`)는 메모리 16 MiB를 채운다.
+/// The parameters for the Tailnet Lock disablement secret (tailscale.com/tka/state.go `DisablementKDF`) fill 16 MiB of memory.
 private let tkaMemoryKiB: UInt32 = 16 * 1024
 
-/// 새로 뽑아 견줄 Go 도구. `sh Scripts/build-interop-tools.sh argon2fixtures`가 출력한 경로를 준다.
+/// The Go tool used to generate fresh comparison values. Supply the path printed by `sh Scripts/build-interop-tools.sh argon2fixtures`.
 private let argon2FixturesBinary = ProcessInfo.processInfo.environment["SWIFTAIL_ARGON2FIXTURES"].flatMap { $0.isEmpty ? nil : $0 }
 
 @Suite("Argon2i")
 struct Argon2iTests {
-    @Test("RFC 9106 5.2: Argon2i 벡터와 H0")
+    @Test("RFC 9106 §5.2 Argon2i vector and H0")
     func rfcVector() throws {
         let password = [UInt8](repeating: 0x01, count: 32)
         let salt = [UInt8](repeating: 0x02, count: 16)
@@ -69,7 +69,7 @@ struct Argon2iTests {
         #expect(tag == bytes("c814d9d1dc7f37aa13f0d77f2494bda1c8de6b016dd388d29952a4c4672b6ce8"))
     }
 
-    @Test("Go argon2.Key 기준값: 패스·메모리·병렬도·출력 길이(H'의 긴 경로)·비밀·솔트 길이")
+    @Test("Go argon2.Key reference values for passes, memory, parallelism, output length (the long H' path), and secret and salt lengths")
     func goVectors() throws {
         let fixtures = try loadGoVectors()
         let vectors = fixtures.vectors.filter { $0.memoryKiB < tkaMemoryKiB }
@@ -79,7 +79,7 @@ struct Argon2iTests {
         }
     }
 
-    @Test("TKA 인자(t=4, m=16 MiB, p=4, T=32): DisablementKDF(0xa5 × 32)", .timeLimit(.minutes(1)))
+    @Test("TKA parameters (t=4, m=16 MiB, p=4, T=32) for DisablementKDF(0xa5 × 32)", .timeLimit(.minutes(1)))
     func tkaParameters() throws {
         let fixtures = try loadGoVectors()
         let v = try #require(fixtures.vectors.last)
@@ -93,13 +93,13 @@ struct Argon2iTests {
             iterations: 4, memoryKiB: tkaMemoryKiB, parallelism: 4, outputByteCount: 32
         )
         let elapsed = clock.now - start
-        print("Argon2i TKA 인자 1회: \(elapsed)")
+        print("Argon2i with TKA parameters, 1 run: \(elapsed)")
         #expect(output == bytes("c3fea8a0d70ede2555990ca60d70a8a03cbe627d2c9f3cb0e2ba7093d0884e2f"))
         #expect(output == bytes(v.output))
     }
 
     @Test(
-        "Go 도구로 새로 뽑은 값과 견준다(SWIFTAIL_ARGON2FIXTURES가 없으면 건너뜀)",
+        "Matches fresh Go tool output (skips if SWIFTAIL_ARGON2FIXTURES is absent)",
         .enabled(if: argon2FixturesBinary != nil), .timeLimit(.minutes(2))
     )
     func freshGoVectors() throws {
@@ -113,13 +113,13 @@ struct Argon2iTests {
         #expect(process.terminationStatus == 0)
         let fresh = try JSONDecoder().decode(GoArgon2Vectors.self, from: data)
         let stored = try loadGoVectors()
-        #expect(fresh.vectors.map(\.output) == stored.vectors.map(\.output), "저장된 argon2i-go.json이 도구 출력과 다르다")
+        #expect(fresh.vectors.map(\.output) == stored.vectors.map(\.output), "Stored argon2i-go.json differs from the tool output")
         for v in fresh.vectors {
             #expect(try derive(v) == bytes(v.output), "\(describe(v))")
         }
     }
 
-    @Test("RFC 9106 3.1 범위 밖의 인자는 invalidLength, 경계값은 받는다")
+    @Test("RFC 9106 §3.1 out-of-range parameters yield invalidLength, and boundary values are accepted")
     func invalidParameters() {
         let salt = [UInt8](repeating: 0x02, count: 16)
         func derive(t: UInt32 = 1, m: UInt32 = 32, p: UInt8 = 4, length: Int = 32) throws(CryptoError) -> [UInt8] {
@@ -134,7 +134,7 @@ struct Argon2iTests {
         #expect(throws: CryptoError.invalidLength) { try derive(length: 3) }
         #expect(throws: CryptoError.invalidLength) { try derive(length: 0) }
         #expect(throws: CryptoError.invalidLength) { try derive(length: -1) }
-        // 경계값은 받는다.
+        // Boundary values are accepted.
         #expect((try? derive(m: 32, p: 4))?.count == 32)
         #expect((try? derive(m: 8, p: 1, length: 4))?.count == 4)
         #expect((try? Argon2i.derive(password: [], salt: [], iterations: 1, memoryKiB: 8, parallelism: 1, outputByteCount: 4))?.count == 4)

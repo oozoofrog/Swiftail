@@ -1,6 +1,6 @@
-// 전송 패킷 경로의 비용 기록. 시간은 단언하지 않는다: 릴리스 빌드에서 돌려 값을 읽는 용도다.
+// Records the cost of the transport packet path. There are no timing assertions. Run a release build to read the measurements.
 //
-//     eyebuild swift <용도> -- test -c release -Xswiftc -enable-testing --filter TransportCostTests
+//     eyebuild swift <purpose> -- test -c release -Xswiftc -enable-testing --filter TransportCostTests
 
 import Foundation
 import Testing
@@ -9,8 +9,8 @@ import SwiftailBase
 @testable import SwiftailWireGuard
 
 struct TransportCostTests {
-    /// 메모리에서 이어진 장치 둘 사이로 1,280바이트 IP 패킷의 `send`(seal)와 `receive`(open) 한 번의 평균 시간.
-    /// 패딩이 없는 크기이고, 데이터그램은 미리 만들어 두어 두 시간을 따로 잰다.
+    /// Measures the mean time per `send` (seal) and `receive` (open) for a 1,280-byte IP packet between devices connected in memory.
+    /// This size needs no padding. Datagrams are prepared in advance to measure the two times separately.
     @Test func sealAndOpenOf1280ByteDatagrams() throws {
         var pair = Pair()
         try pair.establish()
@@ -47,12 +47,12 @@ struct TransportCostTests {
         let seals = sealMicroseconds.sorted()
         let opens = openMicroseconds.sorted()
         print(
-            "TransportCost 1280B seal(send) 최소 \(String(format: "%.2f", seals[0]))µs 중앙값 \(String(format: "%.2f", seals[rounds / 2]))µs, "
-                + "open(receive) 최소 \(String(format: "%.2f", opens[0]))µs 중앙값 \(String(format: "%.2f", opens[rounds / 2]))µs (\(rounds)회 × \(count)개)"
+            "TransportCost 1280B seal(send) minimum \(String(format: "%.2f", seals[0]))µs median \(String(format: "%.2f", seals[rounds / 2]))µs, "
+                + "open(receive) minimum \(String(format: "%.2f", opens[0]))µs median \(String(format: "%.2f", opens[rounds / 2]))µs (\(rounds) rounds × \(count) packets)"
         )
     }
 
-    /// 피어 수만큼의 비용: `nextDeadline`과 기한이 지난 것이 없는 `advance(to:)` 한 번의 평균 시간.
+    /// Measures cost at the given peer count as the mean time per `nextDeadline` and `advance(to:)` call when no deadline has expired.
     @Test func deadlineQueriesWithManyPeers() throws {
         var pair = Pair()
         try pair.establish()
@@ -73,7 +73,7 @@ struct TransportCostTests {
                 sink &+= alice.advance(to: t0).count
             }
         }
-        print("TransportCost 피어 64명 nextDeadline \(String(format: "%.3f", deadline.microseconds / Double(count)))µs, advance(만료 없음) \(String(format: "%.3f", advance.microseconds / Double(count)))µs (\(sink))")
+        print("TransportCost 64 peers nextDeadline \(String(format: "%.3f", deadline.microseconds / Double(count)))µs, advance(no expiration) \(String(format: "%.3f", advance.microseconds / Double(count)))µs (\(sink))")
     }
 }
 

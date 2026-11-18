@@ -3,23 +3,23 @@ import Testing
 import SwiftailBase
 @testable import SwiftailMagicsock
 
-// 실기기 관측(같은 Wi-Fi, 내려받는 단말 쪽에서 direct가 선 뒤 약 100초에 `relayed`, 5.8초 뒤 `direct`)을 상태 기계로
-// 옮긴 시험이다. `docs/contracts/SwiftailMagicsock.md` "direct가 선 뒤 약 100초에 `relayed`"의 "조사 결과".
+// Models a real device observation (on the same Wi-Fi, the downloading device saw `relayed` about 100 seconds after direct was established and `direct` 5.8 seconds later)
+// in the state machine. See "Investigation results" under "`relayed` about 100 seconds after direct was established" in `docs/contracts/SwiftailMagicsock.md`.
 
-/// netmap이 주기적으로 오는 모양.
+/// Patterns of periodic netmap delivery.
 enum NetmapRefresh: CaseIterable, Sendable {
-    /// 처음 한 번뿐이다.
+    /// Arrives once at startup.
     case none
-    /// 30초마다 같은 목록이 온다.
+    /// The same list arrives every 30 seconds.
     case same
-    /// 30초마다 상대의 엔드포인트 목록이 바뀐다(닿지 않는 주소가 더해지고 빠지며 순서가 바뀐다). 닿는 주소는 늘 있다.
+    /// The peer's endpoint list changes every 30 seconds (unreachable addresses are added, removed, and reordered). The reachable address is always present.
     case changing
-    /// 단말의 netmap에는 호스트의 닿는 주소가 없고, 호스트는 자기 엔드포인트를 몰라(STUN 지역 없음) CallMeMaybe를 보내지 못한다.
-    /// 단말은 호스트가 보낸 Ping의 출처로만 그 주소를 배운다(마지막 Ping 뒤 45초에 지우는 후보).
+    /// The device's netmap lacks the host's reachable address, and the host cannot send CallMeMaybe because it has no STUN region and does not know its own endpoints.
+    /// The device learns the address only from the source of the host's Ping (a candidate removed 45 seconds after the last Ping).
     case pingLearned
 }
 
-/// 노드 0("호스트")은 내려받기를 보내고, 노드 1("단말")은 받으며 ACK 꼴로 드물게 보낸다. 같은 LAN이고 홈 지역은 7이다.
+/// Node 0 ("host") sends the download. Node 1 ("device") receives it and sends rarely, like ACKs. Both are on the same LAN with home region 7.
 private struct DownloadSession {
     var network: TestNetwork
     let host: TestIdentity
@@ -43,7 +43,7 @@ private struct DownloadSession {
         network.setRegions(1, [region])
     }
 
-    /// 지금 netmap을 두 노드에 넣는다. `changing`이면 부를 때마다 목록이 바뀐다.
+    /// Applies the current netmap to both nodes. With `changing`, the list changes on every call.
     mutating func applyNetmap() {
         var hostEndpoints = [host.address], phoneEndpoints = [phone.address]
         switch refresh {
@@ -62,7 +62,7 @@ private struct DownloadSession {
         network.setPeers(1, [host.peer(homeDERP: 7, endpoints: hostEndpoints)])
     }
 
-    /// `seconds` 동안 돌린다. `refresh`가 `.none`이 아니면 30초마다 netmap을 다시 넣는다.
+    /// Runs for `seconds`. If `refresh` is other than `.none`, reapplies netmap every 30 seconds.
     mutating func run(seconds: Int64) {
         let end = network.now + .seconds(seconds)
         while refresh != .none, nextRefresh <= end {
@@ -76,7 +76,7 @@ private struct DownloadSession {
         sockT0 + .seconds(30 * Int64(refreshCount))
     }
 
-    /// 내려받기 하나: 단말의 요청 하나, 그 뒤 `seconds` 동안 호스트는 20 ms마다, 단말은 100 ms마다 보낸다.
+    /// Runs one download with one request from the device, then sends from the host every 20 ms and the device every 100 ms for `seconds`.
     mutating func download(seconds: Int64) {
         network.send(from: 1, to: 0)
         network.sendRepeatedly(from: 0, to: 1, every: .milliseconds(20))
@@ -86,21 +86,21 @@ private struct DownloadSession {
         network.sendRepeatedly(from: 1, to: 0, every: nil)
     }
 
-    /// 노드 `node`가 낸 상대의 경로 사건.
+    /// Returns the peer path events emitted by node `node`.
     func events(_ node: Int) -> [(time: ContinuousClock.Instant, path: PeerPath?)] {
         network.pathEvents(node, peer: 1 - node)
     }
 
-    /// 단말이 UDP로 받은 호스트의 Pong 시각.
+    /// Returns the times at which the device received the host's Pongs over UDP.
     var pongsAtPhone: [ContinuousClock.Instant] {
         network.discoLog.filter { $0.from == 0 && $0.to == 1 && !$0.viaDERP && $0.message.isPong }.map(\.time)
     }
 }
 
-@Suite("Magicsock 긴 세션")
+@Suite("Long Magicsock sessions")
 struct MagicsockLongSessionTests {
     @Test(
-        "300초 동안 26초 내려받기와 42초 유휴를 되풀이해도 한 번 direct가 된 뒤에는 relayed도 nil도 나오지 않는다",
+        "Repeating 26 seconds of downloading and 42 seconds of idle time for 300 seconds emits neither relayed nor nil once the path is direct",
         arguments: [2, 10, 30], NetmapRefresh.allCases
     )
     func repeatedDownloads(latencyMilliseconds: Int, refresh: NetmapRefresh) throws {
@@ -114,27 +114,27 @@ struct MagicsockLongSessionTests {
 
         for node in [0, 1] {
             let events = session.events(node)
-            let firstDirect = try #require(events.firstIndex { if case .direct = $0.path { true } else { false } }, "노드 \(node)")
-            #expect(events[firstDirect].time < sockT0 + .seconds(2), "노드 \(node)의 첫 direct")
+            let firstDirect = try #require(events.firstIndex { if case .direct = $0.path { true } else { false } }, "Node \(node)")
+            #expect(events[firstDirect].time < sockT0 + .seconds(2), "First direct path for node \(node)")
             let later = events[(firstDirect + 1)...].map(\.path)
-            #expect(later.allSatisfy { if case .direct = $0 { true } else { false } }, "노드 \(node): \(later)")
+            #expect(later.allSatisfy { if case .direct = $0 { true } else { false } }, "Node \(node): \(later)")
         }
         if refresh == .pingLearned {
             let learned = session.network.nodes[1].sock.peers[session.host.nodeKey]?.path.candidates.first { $0.address == session.host.address }
-            #expect(learned?.lastPingReceived != nil && learned?.fromCallMeMaybe == false, "단말의 bestAddr는 Ping으로 배운 후보여야 한다")
+            #expect(learned?.lastPingReceived != nil && learned?.fromCallMeMaybe == false, "The device's bestAddr must be a candidate learned from a Ping")
         }
         #expect(session.network.deadlineViolations == 0)
     }
 
-    /// Go와 같은 규칙이다: heartbeat는 3초마다 `bestAddr`에 Ping하고(`endpoint.go:926-930`), Pong이 신뢰를 6.5초 늘리며
-    /// (`:2003-2019`), 신뢰가 지나면 DERP로도 보낸다(`:635-652`). 그래서 받는 쪽이 Pong을 연달아 둘 잃으면 마지막 Pong
-    /// 뒤 6.5초(heartbeat 시각 + 0.5초 + 왕복 지연)에 relayed가 되고, Pong이 다시 오는 첫 Ping에 direct로 돌아온다.
-    @Test("내려받는 동안 호스트의 Pong이 끊기면 마지막 Pong 뒤 6.5초에 relayed(신뢰 만료), 끊김이 끝난 뒤 5초 안의 Ping에 direct")
+    /// Follows Go's rules. The heartbeat Pings `bestAddr` every 3 seconds (`endpoint.go:926-930`), and a Pong extends trust by 6.5 seconds
+    /// (`:2003-2019`). After trust expires, it also sends over DERP (`:635-652`). Thus, if the receiving side loses two consecutive Pongs, it becomes relayed
+    /// 6.5 seconds after the last Pong (heartbeat time + 0.5 seconds + round-trip delay) and returns to direct on the first Ping that gets a Pong again.
+    @Test("If host Pongs stop during a download, the path becomes relayed 6.5 seconds after the last Pong (trust expires) and direct on a Ping within 5 seconds after the interruption ends")
     func pongLossDuringDownload() throws {
         var session = try DownloadSession(latency: .milliseconds(10), refresh: .none)
         session.run(seconds: 1)
         session.download(seconds: 74)
-        // 측정 1처럼 내려받기가 이어지는 동안 heartbeat 셋의 Pong(약 9초)을 잃는다.
+        // As in measurement 1, lose Pongs for three heartbeats (about 9 seconds) while the download continues.
         let lossStart = session.network.now, lossEnd = lossStart + .seconds(9)
         session.network.pongLoss = (from: 0, during: lossStart..<lossEnd)
         session.download(seconds: 26)
@@ -149,12 +149,12 @@ struct MagicsockLongSessionTests {
         #expect(recovered.path == .direct(session.host.address))
         #expect(recovered.time == session.pongsAtPhone.first { $0 >= lossEnd })
         #expect(recovered.time <= lossEnd + PeerPathState.pingInterval + .milliseconds(20))
-        // 호스트 쪽은 단말의 Pong을 받으므로 direct 그대로다.
+        // The host stays direct because it receives the device's Pongs.
         #expect(session.events(0).allSatisfy { $0.time < lossStart })
         #expect(session.network.deadlineViolations == 0)
     }
 
-    @Test("경로가 나빠진 까닭: 신뢰 만료, 후보 지움, 재결속, disco 키 바뀜, 유휴, 피어 빠짐")
+    @Test("Path downgrade reasons include trust expiration, candidate removal, rebinding, a disco key change, idleness, and peer removal")
     func downgradeCauses() throws {
         var session = try DownloadSession(latency: .milliseconds(10), refresh: .none)
         let host = session.host.nodeKey
@@ -164,15 +164,15 @@ struct MagicsockLongSessionTests {
         #expect(session.network.nodes[1].sock.path(to: host, at: session.network.now) == .direct(session.host.address))
         #expect(session.network.nodes[1].sock.downgrade(of: host) == nil)
 
-        // 신뢰 만료: 호스트의 Pong을 잃는다.
+        // Trust expiration. Drop the host's Pongs.
         session.network.pongLoss = (from: 0, during: session.network.now..<(session.network.now + .seconds(10)))
         session.run(seconds: 9)
         #expect(session.network.nodes[1].sock.path(to: host, at: session.network.now) == .relayed(derpRegion: 7))
         #expect(session.network.nodes[1].sock.downgrade(of: host) == .trustExpired)
         session.run(seconds: 8)
-        #expect(session.network.nodes[1].sock.downgrade(of: host) == nil, "direct로 돌아오면 까닭이 없다")
+        #expect(session.network.nodes[1].sock.downgrade(of: host) == nil, "Returning to direct clears the reason")
 
-        // 후보 지움: netmap이 `bestAddr`인 netmap 후보를 뺀다.
+        // Candidate removal. Netmap removes the netmap candidate that is `bestAddr`.
         let elsewhere = try #require(IPEndpoint("203.0.113.9:41641"))
         session.network.setPeers(1, [session.host.peer(homeDERP: 7, endpoints: [elsewhere])])
         #expect(session.network.nodes[1].sock.path(to: host, at: session.network.now) == .relayed(derpRegion: 7))
@@ -180,7 +180,7 @@ struct MagicsockLongSessionTests {
         session.network.setPeers(1, [session.host.peer(homeDERP: 7, endpoints: [session.host.address])])
         session.run(seconds: 6)
 
-        // 재결속.
+        // Rebinding.
         var random = PathTestRandom(state: 9)
         _ = session.network.nodes[1].sock.rebind(
             localPort: session.phone.address.port, localAddresses: [], loopbackAddresses: [],
@@ -190,19 +190,19 @@ struct MagicsockLongSessionTests {
         session.run(seconds: 6)
         #expect(session.network.nodes[1].sock.path(to: host, at: session.network.now) == .direct(session.host.address))
 
-        // disco 키 바뀜: 처음 온 TSMP 광고는 netmap 키와 같아도 경로를 다시 찾게 한다(Go와 같다). 송신 기록이 지워져 nil이다.
+        // Disco key change. The first TSMP advertisement triggers path rediscovery even if it matches the netmap key (as in Go). Clearing send history yields nil.
         session.network.advertiseDiscoKey(from: 0, to: 1)
         #expect(session.network.nodes[1].sock.path(to: host, at: session.network.now) == nil)
         #expect(session.network.nodes[1].sock.downgrade(of: host) == .discoKeyChanged)
 
-        // 유휴: 마지막 송신 뒤 45초.
+        // Idleness. 45 seconds after the last send.
         session.run(seconds: 1)
         session.network.sendRepeatedly(from: 1, to: 0, every: nil)
         session.run(seconds: 46)
         #expect(session.network.nodes[1].sock.path(to: host, at: session.network.now) == nil)
         #expect(session.network.nodes[1].sock.downgrade(of: host) == .idle)
 
-        // 피어 빠짐.
+        // Peer removal.
         session.network.setPeers(1, [])
         #expect(session.network.nodes[1].sock.downgrade(of: host) == .peerRemoved)
     }

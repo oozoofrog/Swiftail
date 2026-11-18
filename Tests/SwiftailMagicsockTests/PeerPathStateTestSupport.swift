@@ -3,20 +3,20 @@ import Testing
 import SwiftailBase
 @testable import SwiftailMagicsock
 
-/// 시험의 기준 시각. 모든 시각은 여기서 몇 밀리초 뒤로 적는다.
+/// The test reference time. All times are given in milliseconds after it.
 let pathT0 = ContinuousClock.now
 
-/// 기준 시각에서 `milliseconds` 뒤.
+/// Returns the time `milliseconds` after the reference time.
 func pathTime(_ milliseconds: Int64) -> ContinuousClock.Instant {
     pathT0 + .milliseconds(milliseconds)
 }
 
-/// `"주소:포트"`를 읽는다. 읽지 못하면 시험 실패다.
+/// Parses `"address:port"`. The test fails if parsing fails.
 func pathEndpoint(_ text: String) throws -> IPEndpoint {
     try #require(IPEndpoint(text))
 }
 
-/// 고정 시드 난수(SplitMix64). 같은 시드면 같은 TxID열이 나온다.
+/// A fixed-seed random generator (SplitMix64). The same seed yields the same TxID sequence.
 struct PathTestRandom: RandomNumberGenerator {
     var state: UInt64
 
@@ -30,12 +30,12 @@ struct PathTestRandom: RandomNumberGenerator {
 }
 
 extension [PeerPathState.Action] {
-    /// Ping의 목적지들(순서대로).
+    /// Returns Ping destinations in order.
     var pingDestinations: [IPEndpoint] {
         compactMap { if case let .ping(_, to) = $0 { to } else { nil } }
     }
 
-    /// `destination`으로 간 첫 Ping의 TxID.
+    /// Returns the TxID of the first Ping to `destination`.
     func txID(to destination: IPEndpoint) throws -> TransactionID {
         let found = compactMap { action -> TransactionID? in
             if case let .ping(txID, to) = action, to == destination { txID } else { nil }
@@ -46,19 +46,19 @@ extension [PeerPathState.Action] {
     var callMeMaybeCount: Int { filter { $0 == .callMeMaybe }.count }
 }
 
-/// `PeerPathState` 하나를 메모리 "망"에 물려 시각 순서대로 돌린다.
+/// Connects one `PeerPathState` to an in-memory "network" and runs it in time order.
 ///
-/// `responders`의 주소로 간 Ping에는 그 지연 뒤에 그 주소에서 Pong이 온다. 같은 시각에는 Pong 배달,
-/// `advance`, 송신 순서로 처리한다. 상태 기계가 낸 기한(`nextDeadline`)마다 `advance`를 부른다.
+/// A Ping to an address in `responders` gets a Pong from that address after its delay. At the same time, process Pong delivery,
+/// `advance`, and sends in that order. Call `advance` at every deadline (`nextDeadline`) emitted by the state machine.
 struct PathHarness {
     var state: PeerPathState
     var random = PathTestRandom(state: 1)
     private(set) var now = pathT0
-    /// Ping에 답하는 주소와 그 왕복 지연.
+    /// The addresses that answer Pings and their round-trip latencies.
     var responders: [IPEndpoint: Duration] = [:]
-    /// 낸 Action과 그 시각.
+    /// The emitted Action and its time.
     private(set) var actions: [(time: ContinuousClock.Instant, action: PeerPathState.Action)] = []
-    /// 송신마다의 계획과 그 시각.
+    /// The plan and time for each send.
     private(set) var plans: [(time: ContinuousClock.Instant, plan: PeerPathState.SendPlan)] = []
     private var pendingPongs: [(time: ContinuousClock.Instant, txID: TransactionID, from: IPEndpoint)] = []
     private var sendInterval: Duration?
@@ -68,7 +68,7 @@ struct PathHarness {
         self.state = state
     }
 
-    /// 지금 WireGuard 데이터그램 하나를 보낸다.
+    /// Sends one WireGuard datagram now.
     @discardableResult
     mutating func send() -> PeerPathState.SendPlan {
         let plan = state.planSend(at: now, using: &random)
@@ -77,13 +77,13 @@ struct PathHarness {
         return plan
     }
 
-    /// 지금부터 `interval`마다 보낸다. nil이면 멈춘다.
+    /// Sends every `interval` starting now. Nil stops sending.
     mutating func sendRepeatedly(every interval: Duration?) {
         sendInterval = interval
         nextSend = interval.map { now + $0 }
     }
 
-    /// `end`까지 사건을 시각 순서로 처리하고 시각을 `end`로 둔다.
+    /// Processes events in time order through `end` and sets the time to `end`.
     mutating func run(until end: ContinuousClock.Instant) {
         while let next = [pendingPongs.map(\.time).min(), state.nextDeadline, nextSend].compactMap({ $0 }).min(),
               next <= end {
@@ -104,14 +104,14 @@ struct PathHarness {
         now = end
     }
 
-    /// `destination`으로 Ping을 보낸 시각들.
+    /// Returns the times of Pings to `destination`.
     func pingTimes(to destination: IPEndpoint) -> [ContinuousClock.Instant] {
         actions.compactMap { entry in
             if case let .ping(_, to) = entry.action, to == destination { entry.time } else { nil }
         }
     }
 
-    /// `time`에 한 송신의 계획.
+    /// Returns the send plan at `time`.
     func plan(at time: ContinuousClock.Instant) throws -> PeerPathState.SendPlan {
         try #require(plans.last { $0.time == time }?.plan)
     }

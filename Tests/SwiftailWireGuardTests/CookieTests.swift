@@ -1,7 +1,7 @@
-// 계약 시험 5: cookie reply를 받으면 이후 핸드셰이크 메시지에 mac2가 붙고, 120초가 지나면 쓰지 않는다.
+// Contract test 5. After a cookie reply arrives, subsequent handshake messages carry mac2. It is no longer used after 120 seconds.
 //
-// 받는 쪽의 형식을 따로 고정하려고, 부하 상태의 응답자가 보낼 reply를 시험이 규격대로 직접 만든다
-// (wireguard-go `device/cookie.go`의 `CreateReply`와 같은 식). 장치가 보내는 쪽은 `CookieReplyTests.swift`.
+// To pin down the receiver's format independently, the test constructs the reply an under-load responder would send according to the specification
+// (using the same formula as `CreateReply` in wireguard-go `device/cookie.go`). `CookieReplyTests.swift` covers the device as sender.
 
 import Testing
 
@@ -10,7 +10,7 @@ import SwiftailCrypto
 
 @Suite("cookie")
 struct CookieTests {
-    /// 응답자(receiver)가 거절한 메시지에 대해 보낼 cookie reply.
+    /// Builds the cookie reply the responder (receiver) sends for a rejected message.
     private func cookieReply(rejecting message: [UInt8], cookie: [UInt8], receiver: PublicKey, nonce: [UInt8]) throws -> [UInt8] {
         let mac1 = Array(message[(message.count - 32)..<(message.count - 16)])
         let encrypted = try XChaCha20Poly1305.seal(cookie, key: MAC.cookieKey(for: receiver), nonce: nonce, authenticating: mac1)
@@ -20,16 +20,16 @@ struct CookieTests {
     private let cookie: [UInt8] = Array(0x10..<0x20)
     private let nonce: [UInt8] = Array(0..<24)
 
-    @Test("cookie가 없으면 mac2는 0이다")
+    @Test("mac2 is 0 without a cookie")
     func noCookieNoMAC2() throws {
         var pair = Pair()
         let initiation = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: t0).datagrams[0]
         #expect(initiation[132..<148].allSatisfy { $0 == 0 })
-        // mac1 = MAC(HASH("mac1----" ‖ bob 공개 키), 앞 116바이트).
+        // mac1 = MAC(HASH("mac1----" ‖ bob's public key), first 116 bytes).
         #expect(Array(initiation[116..<132]) == MAC.authenticate(Array(initiation[..<116]), key: MAC.mac1Key(for: pair.key(.bob))))
     }
 
-    @Test("reply를 소비한 뒤의 initiation에는 mac2가 붙고, 120초가 지나면 다시 0이다")
+    @Test("Initiations carry mac2 after consuming a reply, and it returns to 0 after 120 seconds")
     func mac2AfterCookieReply() throws {
         var pair = Pair()
         let first = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: t0).datagrams[0]
@@ -38,20 +38,20 @@ struct CookieTests {
         let receivedAt = t0 + .milliseconds(10)
         #expect(try pair.alice.receive(reply, at: receivedAt).isEmpty)
 
-        // 거절된 initiation을 곧바로 다시 보내지는 않는다. 다음 재시도부터 mac2가 붙는다.
+        // The rejected initiation is not resent immediately. mac2 is attached starting with the next retry.
         let retryAt = try #require(pair.alice.nextDeadline)
         let retry = pair.alice.advance(to: retryAt).datagrams[0]
         #expect(Array(retry[132..<148]) == MAC.authenticate(Array(retry[..<132]), key: cookie))
         #expect(!retry[132..<148].allSatisfy { $0 == 0 })
 
-        // 재시도가 모두 실패한 뒤, cookie를 받은 지 120초가 넘어 만든 initiation에는 mac2가 없다.
+        // After all retries fail, an initiation made more than 120 seconds after receiving the cookie has no mac2.
         while let deadline = pair.alice.nextDeadline, !pair.alice.advance(to: deadline).isEmpty {}
         let late = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: receivedAt + .seconds(121))
         #expect(late.messageTypes == [1])
         #expect(late.datagrams[0][132..<148].allSatisfy { $0 == 0 })
     }
 
-    @Test("cookie는 받은 지 120초 정각까지 쓰고 그 뒤에는 쓰지 않는다")
+    @Test("A cookie is used through exactly 120 seconds after receipt and expires after that")
     func cookieRefreshBoundary() throws {
         let receiver = try #require(PublicKey(rawValue: [UInt8](repeating: 0x42, count: 32)))
         var generator = CookieGenerator(peer: receiver)
@@ -70,7 +70,7 @@ struct CookieTests {
         #expect(afterLimit.mac2 == [UInt8](repeating: 0, count: 16))
     }
 
-    @Test("변조한 reply와 모르는 receiver는 거절하고 mac2를 붙이지 않는다")
+    @Test("Rejects a tampered reply or unknown receiver and omits mac2")
     func invalidReplies() throws {
         var pair = Pair()
         let first = try pair.alice.send(pair.packet(from: .alice), to: pair.key(.bob), at: t0).datagrams[0]
@@ -84,7 +84,7 @@ struct CookieTests {
         var unknown = reply
         unknown[4] ^= 0xFF
         #expect(throws: WireGuardError.unknownPeer) { try pair.alice.receive(unknown, at: t0) }
-        // 다른 키(bob 대신 alice 자신)로 암호화한 cookie도 열리지 않는다.
+        // A cookie encrypted with a different key (alice's own key instead of bob's) also fails to open.
         let wrongKey = try cookieReply(rejecting: first, cookie: cookie, receiver: pair.key(.alice), nonce: nonce)
         #expect(throws: WireGuardError.authenticationFailed) { try pair.alice.receive(wrongKey, at: t0) }
 
@@ -93,7 +93,7 @@ struct CookieTests {
         #expect(retry[132..<148].allSatisfy { $0 == 0 })
     }
 
-    @Test("mac2가 붙은 initiation도 부하 상태가 아닌 응답자는 받아들인다")
+    @Test("A responder that is not under load also accepts initiations with mac2")
     func responderAcceptsMAC2() throws {
         var pair = Pair()
         let packet = pair.packet(from: .alice)

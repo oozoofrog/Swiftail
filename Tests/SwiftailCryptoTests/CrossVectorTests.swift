@@ -8,7 +8,7 @@ import SwiftailCrypto
             let key = bytes(v.key), input = bytes(v.input), expected = bytes(v.output)
             switch v.kind {
             case "blake2s":
-                #expect(BLAKE2s.hash(input, outputByteCount: expected.count, key: key) == expected, "\(name), 입력 길이 \(input.count), 키 길이 \(key.count), 출력 길이 \(expected.count)")
+                #expect(BLAKE2s.hash(input, outputByteCount: expected.count, key: key) == expected, "\(name), input length \(input.count), key length \(key.count), output length \(expected.count)")
                 var h = BLAKE2s(outputByteCount: expected.count, key: key)
                 let cut = input.count / 2
                 h.update(input.prefix(cut))
@@ -35,7 +35,7 @@ import SwiftailCrypto
                 #expect(try XChaCha20Poly1305.seal(input, key: key, nonce: nonce, authenticating: aad) == expected)
                 #expect(try XChaCha20Poly1305.open(expected, key: key, nonce: nonce, authenticating: aad) == input)
             default:
-                Issue.record("알 수 없는 벡터 종류: \(v.kind)")
+                Issue.record("Unknown vector kind \(v.kind)")
             }
         }
     }

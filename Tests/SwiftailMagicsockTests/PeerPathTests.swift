@@ -5,7 +5,7 @@ import SwiftailMagicsock
 
 @Suite("PeerPath")
 struct PeerPathTests {
-    @Test("직접과 DERP 경로는 값으로 구분된다")
+    @Test("Direct and DERP paths are distinguishable by value")
     func equality() throws {
         let endpoint = try #require(IPEndpoint("192.0.2.1:41641"))
         let other = try #require(IPEndpoint("192.0.2.1:41642"))

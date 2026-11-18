@@ -5,7 +5,7 @@ import SwiftailBase
 import SwiftailCrypto
 @testable import SwiftailMagicsock
 
-/// 시험용 노드 하나의 신원: disco 개인 키, node 키, UDP 주소. 키는 고정 바이트에서 만든 시험용 값이다.
+/// The identity of one test node, including its disco private key, node key, and UDP address. Test keys are derived from fixed bytes.
 struct TestIdentity {
     let discoKey: Curve25519.KeyAgreement.PrivateKey
     let nodeKey: NodePublicKey
@@ -19,12 +19,12 @@ struct TestIdentity {
 
     var discoPublicKey: DiscoPublicKey { DiscoPublicKey(discoKey.publicKey) }
 
-    /// 이 신원을 netmap의 피어로 본 값.
+    /// Represents this identity as a netmap peer.
     func peer(homeDERP: Int64 = 1, endpoints: [IPEndpoint]) -> Magicsock.Peer {
         Magicsock.Peer(key: nodeKey, discoKey: discoPublicKey, homeDERP: homeDERP, endpoints: endpoints)
     }
 
-    /// 이 신원의 `Magicsock`. 인터페이스 주소는 `localAddresses`, 포트는 자기 주소의 포트다.
+    /// Creates a `Magicsock` for this identity using `localAddresses` for the interface addresses and its own address's port.
     func magicsock(localAddresses: [IPAddress] = [], at now: ContinuousClock.Instant = sockT0) -> Magicsock {
         Magicsock(
             discoKey: discoKey, nodeKey: nodeKey, localPort: address.port,
@@ -32,18 +32,18 @@ struct TestIdentity {
         )
     }
 
-    /// 이 신원이 받은 disco 패킷을 연다. 보낸 쪽 키는 패킷에서 읽는다.
+    /// Opens a disco packet received by this identity. Reads the sender key from the packet.
     func open(_ packet: [UInt8]) throws -> DiscoMessage {
         let sender = try #require(DiscoPacket.senderKey(of: packet))
         return try DiscoPacket.open(packet, sharedKey: DiscoSharedKey(privateKey: discoKey, peerPublicKey: sender))
     }
 
-    /// 이 신원이 `receiver`에게 보낼 disco 패킷.
+    /// Builds a disco packet for this identity to send to `receiver`.
     func seal(_ message: DiscoMessage, to receiver: DiscoPublicKey, nonce: UInt8 = 1) throws -> [UInt8] {
         try seal(plaintext: message.plaintext, to: receiver, nonce: nonce)
     }
 
-    /// 임의 평문을 봉한 disco 패킷. 처리하지 않는 종류를 만드는 데 쓴다.
+    /// Seals arbitrary plaintext into a disco packet, for making unsupported types.
     func seal(plaintext: [UInt8], to receiver: DiscoPublicKey, nonce: UInt8 = 1) throws -> [UInt8] {
         let sharedKey = try DiscoSharedKey(privateKey: discoKey, peerPublicKey: receiver)
         let nonceBytes = [UInt8](repeating: nonce, count: NaClSecretBox.nonceByteCount)
@@ -51,14 +51,14 @@ struct TestIdentity {
     }
 }
 
-/// 시험의 기준 시각과 그 뒤의 시각.
+/// The test reference time and times after it.
 let sockT0 = ContinuousClock.now
 
 func sockTime(_ milliseconds: Int64) -> ContinuousClock.Instant {
     sockT0 + .milliseconds(milliseconds)
 }
 
-/// 시험용 STUN 서버: 요청의 TxID와 보낸 쪽 주소로 XOR-MAPPED-ADDRESS 응답을 만든다(RFC 5389 15.2).
+/// A test STUN server that builds an XOR-MAPPED-ADDRESS response from the request TxID and source address (RFC 5389 §15.2).
 enum TestSTUN {
     static func server() throws -> IPEndpoint { try #require(IPEndpoint("198.51.100.53:3478")) }
 
@@ -73,12 +73,12 @@ enum TestSTUN {
 }
 
 extension Magicsock.Output {
-    /// STUN 요청이면 그 바이트.
+    /// Returns the bytes if this is a STUN request.
     var stunRequest: [UInt8]? {
         if case .udp(let bytes, _) = self, STUNMessage.looksLikeSTUN(bytes) { bytes } else { nil }
     }
 
-    /// disco 패킷이면 그 바이트와 갈 곳.
+    /// Returns the bytes and destination if this is a disco packet.
     var discoPacket: (bytes: [UInt8], udp: IPEndpoint?, derp: NodePublicKey?)? {
         switch self {
         case .udp(let bytes, let to) where DiscoPacket.isDisco(bytes): (bytes, to, nil)
@@ -88,7 +88,7 @@ extension Magicsock.Output {
     }
 }
 
-/// 시험 데이터그램: WireGuard transport 모양(type 4)에 일련번호를 담는다. disco·STUN으로 보이지 않는다.
+/// A test datagram that looks like WireGuard transport (type 4) and carries a sequence number. It is distinguishable from disco and STUN.
 func testDatagram(_ sequence: UInt32) -> [UInt8] {
     [4, 0, 0, 0, UInt8(sequence >> 24), UInt8(sequence >> 16 & 0xFF), UInt8(sequence >> 8 & 0xFF), UInt8(sequence & 0xFF)]
 }
@@ -97,12 +97,12 @@ func isTestDatagram(_ bytes: [UInt8]) -> Bool {
     bytes.count == 8 && bytes[0] == 4
 }
 
-/// `Magicsock` 둘을 메모리에서 맞물린 망.
+/// A network connecting two `Magicsock` instances in memory.
 ///
-/// 각 노드의 `.udp`는 그 주소의 노드(또는 시험 STUN 서버)로, `.derp`는 그 키의 노드로 지연 뒤에 배달한다. 망은
-/// UDP를 막을 수 있고(STUN은 막지 않는다) 한 노드가 UDP로 보내는 Pong만 한동안 잃을 수도 있다. 시각 순서대로
-/// 배달 → 기한(`advance`) → 예약한 송신을 처리한다. 예약한 송신은 보내는 쪽·받는 쪽 짝마다 하나다.
-/// 받은 WireGuard 데이터그램은 `echo`인 노드가 보낸 쪽으로 되보낸다.
+/// Delivers each node's `.udp` to the node at that address (or the test STUN server) and `.derp` to the node for that key, after a delay. The network
+/// can block UDP (STUN is exempt) and can temporarily drop only one node's outgoing UDP Pongs. In time order, it processes
+/// delivery → deadlines (`advance`) → scheduled sends. Each sender-receiver pair has at most one scheduled send.
+/// An `echo` node sends received WireGuard datagrams back to their sender.
 struct TestNetwork {
     struct Node {
         let identity: TestIdentity
@@ -116,7 +116,7 @@ struct TestNetwork {
         case derp([UInt8], from: NodePublicKey, region: Int64)
     }
 
-    /// 배달된 disco 메시지 하나.
+    /// One delivered disco message.
     struct DiscoRecord {
         let time: ContinuousClock.Instant
         let from: Int
@@ -125,7 +125,7 @@ struct TestNetwork {
         let message: DiscoMessage
     }
 
-    /// 한 노드의 송신 한 번(같은 시각, 같은 바이트의 UDP·DERP 출력을 묶는다).
+    /// One send from a node, grouping UDP and DERP output with the same bytes and time.
     struct DataSend {
         let time: ContinuousClock.Instant
         var udp: Bool
@@ -137,19 +137,19 @@ struct TestNetwork {
     let stunServer: IPEndpoint
     private(set) var now = sockT0
     var udpBlocked = false
-    /// 이 노드가 이 기간(끝 제외)에 UDP로 보내는 Pong을 잃는다.
+    /// Drops UDP Pongs sent by this node during this range (exclusive end).
     var pongLoss: (from: Int, during: Range<ContinuousClock.Instant>)?
-    /// UDP 한쪽 길의 지연.
+    /// One-way UDP latency.
     var udpLatency: Duration = .milliseconds(1)
     let derpLatency: Duration = .milliseconds(10)
     let stunLatency: Duration = .milliseconds(5)
 
-    /// 모든 출력과 그 시각·노드.
+    /// All output, with its time and node.
     private(set) var log: [(time: ContinuousClock.Instant, node: Int, output: Magicsock.Output)] = []
     private(set) var discoLog: [DiscoRecord] = []
-    /// 노드가 `.wireGuard`로 올린 데이터그램.
+    /// Datagrams a node delivered as `.wireGuard`.
     private(set) var received: [(time: ContinuousClock.Instant, node: Int, bytes: [UInt8])] = []
-    /// `nextDeadline`이 부품 기한의 최솟값과 달랐거나 `advance` 뒤에도 지난 시각에 머문 횟수.
+    /// Counts how often `nextDeadline` differed from the earliest component deadline or stayed in the past after `advance`.
     private(set) var deadlineViolations = 0
 
     private var inFlight: [(time: ContinuousClock.Instant, to: Int, delivery: Delivery)] = []
@@ -163,7 +163,7 @@ struct TestNetwork {
         stunServer = try TestSTUN.server()
     }
 
-    // MARK: 입력
+    // MARK: Inputs
 
     mutating func setPeers(_ node: Int, _ peers: [Magicsock.Peer]) {
         apply(nodes[node].sock.setPeers(peers, at: now), from: node)
@@ -174,19 +174,19 @@ struct TestNetwork {
         apply(step(node) { $0.setRegions(regions, at: now, using: &$1) }, from: node)
     }
 
-    /// `from`의 TSMP disco 키 광고가 지금 `to`에 닿은 것으로 넣는다(WireGuard 세션이 선 순간. 이 망에는 WireGuard가 없다).
+    /// Injects `from`'s TSMP disco key advertisement as arriving at `to` now (the moment a WireGuard session is established, since this network has no WireGuard).
     mutating func advertiseDiscoKey(from: Int, to: Int) {
         let key = nodes[from].sock.discoPublicKey, sender = nodes[from].identity.nodeKey
         apply(nodes[to].sock.receiveDiscoKeyAdvertisement(key, from: sender, at: now), from: to)
     }
 
-    /// 지금 `from`에서 `to`로 시험 데이터그램 하나를 보낸다.
+    /// Sends one test datagram from `from` to `to` now.
     mutating func send(from: Int, to: Int) {
         sequence += 1
         send(testDatagram(sequence), from: from, to: to)
     }
 
-    /// 지금부터 `interval`마다 `from`에서 `to`로 보낸다. nil이면 그 짝의 송신을 멈춘다.
+    /// Sends from `from` to `to` every `interval` starting now. Nil stops sends for that pair.
     mutating func sendRepeatedly(from: Int, to: Int, every interval: Duration?) {
         schedules.removeAll { $0.from == from && $0.to == to }
         if let interval {
@@ -194,13 +194,13 @@ struct TestNetwork {
         }
     }
 
-    /// `end`까지 사건을 처리하고 시각을 `end`로 둔다.
+    /// Processes events through `end` and sets the time to `end`.
     mutating func run(until end: ContinuousClock.Instant) {
         var steps = 0
         while let next = nextEventTime(), next <= end {
             steps += 1
             guard steps < 200_000 else {
-                Issue.record("사건이 끝나지 않는다(\(now))")
+                Issue.record("Event processing did not finish (\(now))")
                 return
             }
             now = next
@@ -224,9 +224,9 @@ struct TestNetwork {
         now = end
     }
 
-    // MARK: 조회
+    // MARK: Queries
 
-    /// `node`가 낸 `peer`의 경로 사건과 그 시각.
+    /// Returns `peer` path events emitted by `node` and their times.
     func pathEvents(_ node: Int, peer: Int) -> [(time: ContinuousClock.Instant, path: PeerPath?)] {
         let key = nodes[peer].identity.nodeKey
         return log.compactMap { entry in
@@ -235,7 +235,7 @@ struct TestNetwork {
         }
     }
 
-    /// `node`가 보낸 시험 데이터그램(되보낸 것 포함)마다 UDP·DERP로 나갔는지.
+    /// Reports whether each test datagram sent by `node` (including echoes) went out over UDP or DERP.
     func dataSends(_ node: Int) -> [DataSend] {
         var sends: [DataSend] = []
         var lastKey: (ContinuousClock.Instant, [UInt8])?
@@ -259,9 +259,9 @@ struct TestNetwork {
         return sends
     }
 
-    // MARK: 망
+    // MARK: Network
 
-    /// 노드 하나의 `Magicsock`과 난수로 `body`를 부른다(같은 배열의 두 칸을 함께 inout으로 넘길 수 없어서다).
+    /// Calls `body` with a node's `Magicsock` and random generator because two elements of the same array cannot be passed together as inout.
     private mutating func step(
         _ index: Int,
         _ body: (inout Magicsock, inout PathTestRandom) -> [Magicsock.Output]
@@ -310,7 +310,7 @@ struct TestNetwork {
         }
     }
 
-    /// `pongLoss`에 걸린 Pong인가.
+    /// Checks whether `pongLoss` applies to this Pong.
     private func losesPong(_ bytes: [UInt8], from node: Int, to target: Int) -> Bool {
         guard let pongLoss, pongLoss.from == node, pongLoss.during.contains(now), DiscoPacket.isDisco(bytes) else { return false }
         return (try? nodes[target].identity.open(bytes))?.isPong == true
@@ -338,7 +338,7 @@ struct TestNetwork {
         discoLog.append(DiscoRecord(time: now, from: from, to: node, viaDERP: viaDERP, message: message))
     }
 
-    /// `nextDeadline`이 부품들의 기한(유휴 기한 포함) 가운데 가장 이른 것인지 본다.
+    /// Checks that `nextDeadline` is the earliest component deadline, including the idle deadline.
     private mutating func checkDeadlines() {
         for node in nodes {
             let parts = node.sock.peers.values.flatMap { [$0.path.nextDeadline, Magicsock.idleDeadline(of: $0)] }

@@ -1,5 +1,5 @@
-// 계약 시험 1: Swift 장치 둘을 메모리에서 연결한다.
-// 양쪽 역할의 핸드셰이크, 양방향 데이터, keepalive, 대기열 방출.
+// Contract test 1 connects two Swift devices in memory.
+// Covers both handshake roles, bidirectional data, keepalive, and queue flushing.
 
 import CryptoKit
 import Foundation
@@ -9,27 +9,27 @@ import SwiftailBase
 
 @testable import SwiftailWireGuard
 
-@Suite("세션: 핸드셰이크와 데이터")
+@Suite("Session handshake and data")
 struct SessionTests {
-    @Test("핸드셰이크 뒤 양방향 데이터", arguments: [Pair.Side.alice, .bob])
+    @Test("Bidirectional data after the handshake", arguments: [Pair.Side.alice, .bob])
     func handshakeAndData(initiator: Pair.Side) throws {
         var pair = Pair()
         let responder = initiator.other
         let first = pair.packet(from: initiator)
 
-        // 세션이 없으니 initiation만 나간다.
+        // Without a session, only an initiation goes out.
         let initiation = try pair[initiator].send(first, to: pair.key(responder), at: t0)
         #expect(initiation.messageTypes == [1])
         #expect(initiation.datagrams.first?.count == Initiation.size)
 
-        // 응답자는 response를 보낸다.
+        // The responder sends a response.
         let response = try pair[responder].receive(initiation.datagrams[0], at: t0)
         #expect(response.messageTypes == [2])
         #expect(response.datagrams.first?.count == Response.size)
         #expect(pair.keypairs(of: responder)?.next != nil)
         #expect(pair.keypairs(of: responder)?.current == nil)
 
-        // 초기자는 response를 받자마자 대기열의 패킷을 보낸다. 이 패킷이 응답자의 next를 확인시킨다.
+        // The initiator sends queued packets as soon as it receives the response. This packet confirms the responder's next.
         let transport = try pair[initiator].receive(response.datagrams[0], at: t0)
         #expect(transport.messageTypes == [4])
         let delivered = try pair[responder].receive(transport.datagrams[0], at: t0)
@@ -37,7 +37,7 @@ struct SessionTests {
         #expect(pair.keypairs(of: responder)?.current != nil)
         #expect(pair.keypairs(of: responder)?.next == nil)
 
-        // 이제 양쪽 모두 바로 보낸다.
+        // Both sides now send immediately.
         let reply = pair.packet(from: responder, payload: Array(0..<100))
         let replyOutputs = try pair[responder].send(reply, to: pair.key(initiator), at: t0 + .milliseconds(1))
         #expect(replyOutputs.messageTypes == [4])
@@ -48,7 +48,7 @@ struct SessionTests {
         #expect(try pair.deliver(againOutputs, from: initiator, at: t0 + .milliseconds(2))[responder] == [again])
     }
 
-    @Test("transport는 16바이트 배수로 패딩되고, 받는 쪽은 IP 길이로 패딩을 뗀다")
+    @Test("Transport is padded to a multiple of 16 bytes and the receiver strips padding using the IP length")
     func padding() throws {
         var pair = Pair()
         try pair.establish()
@@ -66,14 +66,14 @@ struct SessionTests {
         #expect(Keypair.paddingSize(for: 1421, mtu: 1420) == 15)
     }
 
-    @Test("데이터를 받고 10초 동안 보낼 것이 없으면 keepalive를 보낸다")
+    @Test("Sends a keepalive if there is nothing to send for 10 seconds after receiving data")
     func keepalive() throws {
         var pair = Pair()
         try pair.establish()
 
-        // bob은 데이터를 받았으니 10초 뒤 keepalive가 걸려 있다.
+        // bob received data, which schedules a keepalive for 10 seconds later.
         #expect(pair.bob.nextDeadline == t0 + .seconds(10))
-        // alice는 데이터를 보냈으니 15초+지터 뒤 새 핸드셰이크가 걸려 있다.
+        // alice sent data, which schedules a new handshake for 15 seconds plus jitter later.
         let aliceDeadline = try #require(pair.alice.nextDeadline)
         #expect(aliceDeadline >= t0 + .seconds(15) && aliceDeadline < t0 + .seconds(15) + .milliseconds(334))
 
@@ -83,7 +83,7 @@ struct SessionTests {
         #expect(keepalive.messageTypes == [4])
         #expect(keepalive.datagrams.first?.count == TransportData.minimumSize)
 
-        // keepalive는 IP 패킷으로 올라오지 않고, alice의 새 핸드셰이크 타이머를 푼다.
+        // The keepalive cancels alice's new handshake timer and is never delivered as an IP packet.
         let delivered = try pair.deliver(keepalive, from: .bob, at: t0 + .seconds(10))
         #expect(delivered[.alice] == [])
         #expect(pair.alice.nextDeadline == t0 + .seconds(540))
@@ -91,7 +91,7 @@ struct SessionTests {
         #expect(aliceLater.isEmpty)
     }
 
-    @Test("데이터를 이미 답으로 보냈으면 keepalive를 보내지 않는다")
+    @Test("Omits the keepalive if data was already sent in reply")
     func noKeepaliveAfterReply() throws {
         var pair = Pair()
         try pair.establish()
@@ -101,14 +101,14 @@ struct SessionTests {
         #expect(afterReply.isEmpty)
     }
 
-    @Test("응답자는 확인 전에 보낸 패킷을 대기열에 두었다가 확인 뒤 내보낸다")
+    @Test("The responder queues packets sent before confirmation and flushes them after confirmation")
     func responderReleasesQueueOnConfirmation() throws {
         var pair = Pair()
         let first = pair.packet(from: .alice)
         let initiation = try pair.alice.send(first, to: pair.key(.bob), at: t0)
         let response = try pair.bob.receive(initiation.datagrams[0], at: t0)
 
-        // bob에게는 아직 current가 없다. response를 보낸 지 5초가 안 되어 initiation도 보내지 않는다.
+        // bob has no current yet. Less than 5 seconds have passed since sending the response, so it also sends no initiation.
         let early = pair.packet(from: .bob, payload: [1, 2, 3])
         #expect(try pair.bob.send(early, to: pair.key(.alice), at: t0 + .milliseconds(1)).isEmpty)
 
@@ -117,7 +117,7 @@ struct SessionTests {
         #expect(delivered[.alice] == [early])
     }
 
-    @Test("세션 전 대기열은 64개이고 넘치면 오래된 것부터 버린다")
+    @Test("The presession queue holds 64 packets and drops the oldest first on overflow")
     func stagedQueueLimit() throws {
         var pair = Pair()
         let packets = (0..<70).map { pair.packet(from: .alice, payload: [UInt8($0)]) }
@@ -125,13 +125,13 @@ struct SessionTests {
         for packet in packets {
             initiation += try pair.alice.send(packet, to: pair.key(.bob), at: t0)
         }
-        // 첫 send만 initiation을 보내고 나머지는 5초 억제에 걸린다.
+        // Only the first send emits an initiation. The 5-second suppression applies to the rest.
         #expect(initiation.messageTypes == [1])
         let delivered = try pair.deliver(initiation, from: .alice, at: t0)
         #expect(delivered[.bob] == Array(packets.suffix(64)))
     }
 
-    @Test("send의 입력 검사")
+    @Test("send input validation")
     func sendValidation() throws {
         var pair = Pair()
         let stranger = try #require(PublicKey(rawValue: [UInt8](repeating: 9, count: 32)))
@@ -139,11 +139,11 @@ struct SessionTests {
         #expect(throws: WireGuardError.malformed) { try pair.alice.send([], to: pair.key(.bob), at: t0) }
         let tooLarge = [UInt8](repeating: 0, count: 65535 - 40 + 1)
         #expect(throws: WireGuardError.packetTooLarge) { try pair.alice.send(tooLarge, to: pair.key(.bob), at: t0) }
-        // 거절한 send는 핸드셰이크를 시작하지 않는다.
+        // A rejected send leaves the handshake unstarted.
         #expect(pair.alice.nextDeadline == nil)
     }
 
-    @Test("addPeer는 기존 피어의 세션을 유지하고 AllowedIPs만 바꾼다")
+    @Test("addPeer preserves an existing peer's session and updates only AllowedIPs")
     func addPeerKeepsSession() throws {
         var pair = Pair()
         try pair.establish()
@@ -153,7 +153,7 @@ struct SessionTests {
         #expect(try pair.bob.receive(outputs.datagrams[0], at: t0 + .seconds(1)) == [.rejectedIPPacket(.disallowedSource, from: pair.key(.alice))])
     }
 
-    @Test("PublicKey 표기는 앞 8자리만")
+    @Test("PublicKey formatting shows only the first 8 digits")
     func publicKeyDescription() throws {
         let key = try #require(PublicKey(rawValue: [UInt8](repeating: 0xAB, count: 32)))
         #expect(key.description == "abababab…")
@@ -161,9 +161,9 @@ struct SessionTests {
     }
 }
 
-@Suite("키 재료 노출")
+@Suite("Key material exposure")
 struct SecretExposureTests {
-    @Test("print·dump 출력에 비밀 키와 핸드셰이크·세션 재료가 나오지 않는다")
+    @Test("print and dump output omit secret keys and handshake and session material")
     func reflectionHidesSecrets() throws {
         let privateKey = Curve25519.KeyAgreement.PrivateKey()
         var device = WireGuardDevice(privateKey: privateKey, now: t0, wallClock: Date(timeIntervalSince1970: 1_800_000_000))
@@ -179,7 +179,7 @@ struct SecretExposureTests {
         let state = try #require(device.peers[peer.publicKey])
         #expect(!printed.contains(Array(privateKey.rawRepresentation).hex))
         #expect(!printed.contains(try #require(state.staticStaticSecret).hex))
-        // 피어 안의 비밀 필드는 이름조차 펼쳐지지 않는다.
+        // Even the names of secret fields within the peer remain hidden.
         for field in ["staticstaticsecret", "pendinghandshake", "chainingkey", "keypairs", "cookie"] {
             #expect(!printed.contains(field), "\(field)")
         }

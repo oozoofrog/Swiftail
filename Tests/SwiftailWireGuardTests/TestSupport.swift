@@ -1,4 +1,4 @@
-// 시험 공용 도우미: 메모리에서 이어진 장치 둘, IP 패킷 만들기, 출력 분류.
+// Shared test helpers for two devices connected in memory, IP packet construction, and output classification.
 
 import CryptoKit
 import Foundation
@@ -7,10 +7,10 @@ import Testing
 import SwiftailBase
 @testable import SwiftailWireGuard
 
-/// 시험의 기준 시각. 실제 시간은 기다리지 않고 이 값에 Duration을 더해 넘긴다.
+/// The reference time for tests. Pass this value plus a Duration to avoid waiting in real time.
 let t0 = ContinuousClock.now
 
-/// 메모리에서 이어진 장치 둘. alice는 100.64.0.1, bob은 100.64.0.2를 쓴다.
+/// Two devices connected in memory. alice uses 100.64.0.1 and bob uses 100.64.0.2.
 struct Pair {
     enum Side {
         case alice, bob
@@ -26,7 +26,7 @@ struct Pair {
 
     init(at now: ContinuousClock.Instant = t0) {
         alice = WireGuardDevice(privateKey: .init(), now: now, wallClock: Date(timeIntervalSince1970: 1_800_000_000))
-        // 두 노드의 벽시계가 서로 달라도 된다.
+        // The two nodes may have different wall-clock times.
         bob = WireGuardDevice(privateKey: .init(), now: now, wallClock: Date(timeIntervalSince1970: 1_700_000_000.5))
         alice.addPeer(bob.publicKey, allowedIPs: [IPPrefix("\(Self.bobAddress)/32")].compactMap { $0 })
         bob.addPeer(alice.publicKey, allowedIPs: [IPPrefix("\(Self.aliceAddress)/32")].compactMap { $0 })
@@ -41,7 +41,7 @@ struct Pair {
 
     func key(_ side: Side) -> PublicKey { self[side].publicKey }
 
-    /// side가 보내는 IP 패킷(출발 주소는 side의 주소).
+    /// An IP packet sent by side with side's address as the source.
     func packet(from side: Side, payload: [UInt8] = [0xAB, 0xCD]) -> [UInt8] {
         ipv4Packet(
             source: side == .alice ? Self.aliceAddress : Self.bobAddress,
@@ -50,8 +50,8 @@ struct Pair {
         )
     }
 
-    /// side의 출력을 상대에게 넘기고, 그 응답을 다시 넘기기를 조용해질 때까지 반복한다.
-    /// 양쪽에서 위로 올라온 IP 패킷을 돌려준다. 모든 수신은 성공해야 한다.
+    /// Delivers side's output to the other device and repeats with each reply until there is no more output.
+    /// Returns the IP packets delivered upward on both sides. Every receive must succeed.
     @discardableResult
     mutating func deliver(_ outputs: [WireGuardDevice.Output], from side: Side, at now: ContinuousClock.Instant) throws -> [Side: [[UInt8]]] {
         var delivered: [Side: [[UInt8]]] = [.alice: [], .bob: []]
@@ -64,7 +64,7 @@ struct Pair {
                 let replies = try self[sender.other].receive(bytes, at: now)
                 queue += replies.map { (from: sender.other, output: $0) }
             case let .cookieReply(bytes):
-                // 받은 데이터그램의 출처, 곧 방금 보낸 상대에게 되돌아간다.
+                // Send the reply back to the source of the received datagram, which is the peer that just sent it.
                 let replies = try self[sender.other].receive(bytes, at: now)
                 queue += replies.map { (from: sender.other, output: $0) }
             case let .ipPacket(bytes, from: source):
@@ -77,7 +77,7 @@ struct Pair {
         return delivered
     }
 
-    /// alice → bob 핸드셰이크와 데이터 한 번으로 세션을 연다. alice가 초기자다.
+    /// Opens a session with an alice → bob handshake and one data send. alice is the initiator.
     mutating func establish(initiator: Side = .alice, at now: ContinuousClock.Instant = t0) throws {
         let packet = packet(from: initiator)
         let outputs = try self[initiator].send(packet, to: key(initiator.other), at: now)
@@ -85,25 +85,25 @@ struct Pair {
         #expect(delivered[initiator.other] == [packet])
     }
 
-    /// 이 장치가 피어에게 쓰는 keypair.
+    /// Returns the keypair this device uses for the peer.
     func keypairs(of side: Side) -> Keypairs? {
         self[side].peers[key(side.other)]?.keypairs
     }
 }
 
 extension WireGuardDevice.Source {
-    /// 출처가 상관없는 시험이 쓰는 UDP 출처 `192.0.2.1:41553`.
+    /// The UDP source `192.0.2.1:41553` for tests where the source does not matter.
     static let test = Self(address: [192, 0, 2, 1, 0x51, 0xA2], host: [192, 0, 2, 1])
 }
 
 extension WireGuardDevice {
-    /// 출처가 상관없는 시험용: 늘 `Source.test`에서 받은 것으로 넘긴다.
+    /// Receives input as if it always came from `Source.test`, for tests where the source does not matter.
     mutating func receive(_ datagram: [UInt8], at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         try receive(datagram, from: .test, at: now)
     }
 }
 
-/// 최소 IPv4 패킷: 머리 20바이트(옵션 없음) + payload. 체크섬은 0이다(장치는 보지 않는다).
+/// Builds a minimal IPv4 packet with a 20-byte header (no options) plus payload. The checksum is 0 because the device does not check it.
 func ipv4Packet(source: String, destination: String, payload: [UInt8]) -> [UInt8] {
     let total = 20 + payload.count
     let src = IPAddress(source)?.bytes ?? []
@@ -111,7 +111,7 @@ func ipv4Packet(source: String, destination: String, payload: [UInt8]) -> [UInt8
     return [0x45, 0, UInt8(total >> 8), UInt8(total & 0xFF), 0, 0, 0, 0, 64, 17, 0, 0] + src + dst + payload
 }
 
-/// 최소 IPv6 패킷: 머리 40바이트 + payload.
+/// Builds a minimal IPv6 packet with a 40-byte header plus payload.
 func ipv6Packet(source: String, destination: String, payload: [UInt8]) -> [UInt8] {
     let src = IPAddress(source)?.bytes ?? []
     let dst = IPAddress(destination)?.bytes ?? []
@@ -119,34 +119,34 @@ func ipv6Packet(source: String, destination: String, payload: [UInt8]) -> [UInt8
 }
 
 extension [WireGuardDevice.Output] {
-    /// 데이터그램 출력만.
+    /// Returns only the outgoing datagrams.
     var datagrams: [[UInt8]] {
         compactMap {
             if case let .datagram(bytes, to: _) = $0 { bytes } else { nil }
         }
     }
 
-    /// 위로 올린 IP 패킷만.
+    /// Returns only the IP packets delivered upward.
     var ipPackets: [[UInt8]] {
         compactMap {
             if case let .ipPacket(bytes, from: _) = $0 { bytes } else { nil }
         }
     }
 
-    /// 데이터그램들의 메시지 type.
+    /// Returns the message types of the datagrams.
     var messageTypes: [UInt8] {
         datagrams.map { $0.first ?? 0 }
     }
 }
 
 extension Array where Element == UInt8 {
-    /// offset에서 시작하는 little-endian uint32.
+    /// Reads a little-endian uint32 starting at offset.
     func uint32(at offset: Int) -> UInt32 {
         self[offset..<offset + 4].reversed().reduce(0) { $0 << 8 | UInt32($1) }
     }
 }
 
-/// 재현할 수 있는 의사 난수(SplitMix64). 퍼즈 입력용이다.
+/// Generates reproducible pseudorandom values (SplitMix64) for fuzz inputs.
 struct SplitMix64: RandomNumberGenerator {
     private var state: UInt64
 

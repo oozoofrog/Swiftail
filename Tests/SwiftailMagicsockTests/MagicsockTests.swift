@@ -5,9 +5,9 @@ import SwiftailBase
 import SwiftailCrypto
 @testable import SwiftailMagicsock
 
-// 기대값은 계약(`docs/contracts/SwiftailMagicsock.md`)과 노트(`docs/protocol-notes/disco-magicsock.md`)에서 정했다.
-// 타이머 값(신뢰 6.5초, Ping 기한 5초, heartbeat 3초, 후보별 Ping 간격 5초, CallMeMaybe 신선도 27초, 유휴 45초,
-// STUN 0·100·200 ms와 3초)은 Go `wgengine/magicsock`·`net/netcheck`(BSD-3-Clause)의 값을 노트 5절에서 옮겼다.
+// Expected values come from the contract (`docs/contracts/SwiftailMagicsock.md`) and notes (`docs/protocol-notes/disco-magicsock.md`).
+// Timer values (trust 6.5 seconds, Ping timeout 5 seconds, heartbeat 3 seconds, per-candidate Ping interval 5 seconds, CallMeMaybe freshness 27 seconds, idle 45 seconds,
+// STUN 0, 100, and 200 ms and 3 seconds) are taken from notes §5, which records Go `wgengine/magicsock` and `net/netcheck` values (BSD-3-Clause).
 
 private func txID(_ value: UInt8) throws -> TransactionID {
     try #require(TransactionID([UInt8](repeating: value, count: TransactionID.byteCount)))
@@ -17,7 +17,7 @@ private func endpoint(_ text: String) throws -> IPEndpoint {
     try #require(IPEndpoint(text))
 }
 
-/// 두 노드 A(0)·B(1)와 시험 STUN 서버 하나를 둔 망. B는 받은 데이터를 되보낸다.
+/// A network with two nodes, A (0) and B (1), and one test STUN server. B echoes received data.
 private func twoNodes(aKnowsB: IPEndpoint?, bKnowsA: Bool, regions: Bool) throws -> TestNetwork {
     let a = try TestIdentity(1, address: "192.0.2.1:41641")
     let b = try TestIdentity(2, address: "192.0.2.2:41641")
@@ -33,11 +33,11 @@ private func twoNodes(aKnowsB: IPEndpoint?, bKnowsA: Bool, regions: Bool) throws
     return network
 }
 
-// MARK: - 두 노드
+// MARK: - Two nodes
 
-@Suite("Magicsock 두 노드")
+@Suite("Two Magicsock nodes")
 struct MagicsockNetworkTests {
-    @Test("netmap으로 서로의 엔드포인트를 알면 처음에는 DERP로 가다가 Ping·Pong 뒤 직접 경로가 선다")
+    @Test("If netmap gives both nodes each other's endpoints, traffic starts over DERP and a Ping and Pong establish a direct path")
     func directPathFromNetmap() throws {
         var network = try twoNodes(aKnowsB: try endpoint("192.0.2.2:41641"), bKnowsA: true, regions: true)
         let a = network.nodes[0].identity, b = network.nodes[1].identity
@@ -47,7 +47,7 @@ struct MagicsockNetworkTests {
         network.sendRepeatedly(from: 0, to: 1, every: nil)
         network.run(until: sockTime(10_100))
 
-        // 노트 4.5 2·4.8 2: 첫 송신은 신뢰된 직접 경로가 없어 DERP로 간다.
+        // Notes §4.5 2 and §4.8 2. The first send uses DERP because there is no trusted direct path.
         let sends = network.dataSends(0)
         let first = try #require(sends.first)
         #expect(first.derp && !first.udp)
@@ -55,24 +55,24 @@ struct MagicsockNetworkTests {
         let aEvents = network.pathEvents(0, peer: 1)
         #expect(aEvents.first?.path == .relayed(derpRegion: 1))
         let direct = try #require(aEvents.first { $0.path == .direct(b.address) })
-        // 첫 Ping의 Pong이 오면 바로 선다(UDP 왕복 2 ms).
+        // The path is established as soon as the first Ping's Pong arrives (2 ms UDP round trip).
         #expect(direct.time <= sockTime(1_000) + .milliseconds(5))
         #expect(network.pathEvents(1, peer: 0).last?.path == .direct(a.address))
         #expect(network.nodes[0].sock.path(to: b.nodeKey, at: network.now) == .direct(b.address))
 
-        // 노트 4.5 1: 신뢰된 직접 경로가 선 뒤에는 UDP로만 보낸다.
+        // Notes §4.5 1. Once a trusted direct path is established, sends use only UDP.
         let afterDirect = sends.filter { $0.time > direct.time }
         #expect(!afterDirect.isEmpty)
         #expect(afterDirect.allSatisfy { $0.udp && !$0.derp })
-        // 보낸 데이터는 WireGuard 데이터그램으로 올라가고 되돌아온다.
+        // The data sent is delivered as a WireGuard datagram and echoed.
         #expect(network.received.filter { $0.node == 1 }.count == sends.count)
         #expect(network.received.contains { $0.node == 0 && isTestDatagram($0.bytes) })
         #expect(network.deadlineViolations == 0)
     }
 
-    @Test("B가 A의 엔드포인트를 몰라도 받은 Ping의 출처로 배워 직접 경로가 선다(노트 4.8 계산)")
+    @Test("Even without A's endpoint, B learns it from the source of the received Ping and establishes a direct path (calculation in notes §4.8)")
     func learnsFromPingSource() throws {
-        // 지역이 없으면 엔드포인트를 정하지 못해 CallMeMaybe가 나가지 않는다. Ping 출처만으로 서는지 본다.
+        // Without a region, endpoints cannot be determined and no CallMeMaybe goes out. Check that the Ping source alone establishes the path.
         var network = try twoNodes(aKnowsB: try endpoint("192.0.2.2:41641"), bKnowsA: false, regions: false)
         let a = network.nodes[0].identity
         network.sendRepeatedly(from: 0, to: 1, every: .seconds(1))
@@ -83,9 +83,9 @@ struct MagicsockNetworkTests {
         #expect(network.pathEvents(0, peer: 1).last?.path == .direct(network.nodes[1].identity.address))
     }
 
-    @Test("CallMeMaybe를 받은 쪽은 곧바로 그 주소에 Ping하고, 둘 다 직접 경로가 선다")
+    @Test("A CallMeMaybe recipient immediately Pings the advertised address and both sides establish a direct path")
     func callMeMaybeExchange() throws {
-        // A가 아는 B의 주소는 닿지 않는 옛 주소이고 B는 A를 모른다. A의 CallMeMaybe만이 길을 연다.
+        // A knows an old, unreachable address for B, and B does not know A's address. Only A's CallMeMaybe opens the path.
         var network = try twoNodes(aKnowsB: try endpoint("198.51.100.99:41641"), bKnowsA: false, regions: true)
         let a = network.nodes[0].identity, b = network.nodes[1].identity
         network.run(until: sockTime(1_000))
@@ -94,20 +94,20 @@ struct MagicsockNetworkTests {
 
         let callMeMaybe = try #require(network.discoLog.first { $0.from == 0 && $0.message.callMeMaybeEndpoints != nil })
         #expect(callMeMaybe.viaDERP)
-        // 노트 4.8 4.2: 자기 엔드포인트 전체(여기서는 STUN 결과 하나)를 담는다.
+        // Notes §4.8 4.2. Includes all local endpoints (here, one STUN result).
         #expect(callMeMaybe.message.callMeMaybeEndpoints == [a.address])
-        // 노트 4.8 5: 받자마자 Ping한다(UDP 지연 1 ms 뒤 A에 닿는다).
+        // Notes §4.8 5. Pings immediately on receipt (reaches A after 1 ms of UDP latency).
         let bPing = try #require(network.discoLog.first { $0.from == 1 && $0.message.isPing })
         #expect(bPing.time == callMeMaybe.time + network.udpLatency)
         #expect(!bPing.viaDERP)
-        // 받은 CallMeMaybe가 부른 전체 Ping은 CallMeMaybe를 되보내지 않는다.
+        // The full Ping sweep triggered by the incoming CallMeMaybe sends no CallMeMaybe back.
         #expect(!network.discoLog.contains { $0.from == 1 && $0.message.callMeMaybeEndpoints != nil && $0.time <= bPing.time })
 
         #expect(network.pathEvents(1, peer: 0).last?.path == .direct(a.address))
         #expect(network.pathEvents(0, peer: 1).last?.path == .direct(b.address))
     }
 
-    @Test("UDP를 막으면 마지막 Pong + 6.5초에 .relayed가 되고, 그 사이 데이터는 UDP와 DERP로 함께 나가며, 풀면 다시 .direct가 된다")
+    @Test("Blocking UDP makes the path .relayed at last Pong + 6.5 seconds, sends data over both UDP and DERP in the meantime, and returns to .direct when unblocked")
     func blockAndUnblock() throws {
         var network = try twoNodes(aKnowsB: try endpoint("192.0.2.2:41641"), bKnowsA: true, regions: true)
         let b = network.nodes[1].identity
@@ -120,31 +120,31 @@ struct MagicsockNetworkTests {
         network.udpBlocked = true
         network.run(until: sockTime(40_000))
 
-        // 마지막으로 A에 닿은 B의 UDP Pong.
+        // The last UDP Pong from B that reached A.
         let lastPong = try #require(network.discoLog.last { $0.to == 0 && $0.from == 1 && !$0.viaDERP && $0.message.isPong })
         #expect(lastPong.time <= blockedAt)
         let trustEnd = lastPong.time + .milliseconds(6_500)
 
-        // 계약 D7·G1: 신뢰가 끝나는 시각의 advance에서 .relayed가 나온다(신뢰는 그 시각을 포함한다).
+        // Contract D7 and G1. advance emits .relayed at the time trust expires (the trust period includes that exact time).
         let relayed = try #require(network.pathEvents(0, peer: 1).first { $0.time > blockedAt })
         #expect(relayed.path == .relayed(derpRegion: 1))
         #expect(relayed.time > trustEnd)
         #expect(relayed.time <= trustEnd + .milliseconds(1))
 
         let sends = network.dataSends(0).filter { $0.time > blockedAt && $0.time < sockTime(40_000) }
-        // 노트 4.5 1: 신뢰 기간에는 UDP로만.
+        // Notes §4.5 1. Uses only UDP during the trust period.
         #expect(sends.filter { $0.time <= trustEnd }.allSatisfy { $0.udp && !$0.derp })
-        // 노트 4.5 2: 신뢰가 지난 뒤에는 남은 bestAddr와 DERP로 함께.
+        // Notes §4.5 2. After trust expires, uses both the remaining bestAddr and DERP.
         let heartbeatPingExpiry = lastPong.time + .seconds(3) + .seconds(5)
         #expect(sends.contains { $0.time > trustEnd && $0.time < heartbeatPingExpiry && $0.udp && $0.derp })
-        // 노트 4.6 3: 신뢰가 지난 뒤 기한이 지난 heartbeat Ping(Pong 뒤 3초 안에 보냄, 5초 기한)이 bestAddr를 지워 DERP만 남는다.
+        // Notes §4.6 3. After trust expires, an expired heartbeat Ping (sent within 3 seconds after the Pong, with a 5-second deadline) clears bestAddr and leaves only DERP.
         let derpOnly = sends.filter { $0.time > heartbeatPingExpiry }
         #expect(!derpOnly.isEmpty)
         #expect(derpOnly.allSatisfy { $0.derp && !$0.udp })
-        // 막힌 동안에도 데이터는 DERP로 닿는다.
+        // Data still arrives over DERP while UDP is blocked.
         #expect(network.received.contains { $0.node == 1 && $0.time > heartbeatPingExpiry })
 
-        // 풀면: 송신마다 하는 전체 Ping(후보별 5초 간격)의 Pong으로 돌아온다(노트 7.2 3).
+        // Once UDP is unblocked, a Pong from the full Ping sweep on each send (5-second interval per candidate) restores the direct path (notes §7.2 3).
         let unblockedAt = network.now
         network.udpBlocked = false
         network.run(until: sockTime(50_000))
@@ -156,9 +156,9 @@ struct MagicsockNetworkTests {
     }
 }
 
-// MARK: - 한 노드: 분류와 규칙
+// MARK: - One node, classification and rules
 
-@Suite("Magicsock 받기와 규칙")
+@Suite("Magicsock receive handling and rules")
 struct MagicsockRulesTests {
     let a: TestIdentity
     let b: TestIdentity
@@ -180,7 +180,7 @@ struct MagicsockRulesTests {
         sock.peers[peer.nodeKey]?.path.candidates.map(\.address) ?? []
     }
 
-    /// 출력 가운데 UDP로 나가는 disco Ping의 목적지. 모두 `a`의 node 키를 담은 Ping이어야 한다.
+    /// Returns the destinations of outgoing UDP disco Pings. Every Ping must contain the node key of `a`.
     private func pingDestinations(_ outputs: [Magicsock.Output], openedBy peer: TestIdentity) throws -> [IPEndpoint] {
         try outputs.compactMap(\.discoPacket).compactMap { packet -> IPEndpoint? in
             guard let destination = packet.udp else { return nil }
@@ -190,9 +190,9 @@ struct MagicsockRulesTests {
         }
     }
 
-    // MARK: 분류 (동작 A)
+    // MARK: Classification (behavior A)
 
-    @Test("disco·STUN이 아닌 데이터그램은 내용을 보지 않고 .wireGuard로 올라간다")
+    @Test("Datagrams other than disco and STUN are delivered as .wireGuard without inspecting their contents")
     func plainDatagram() {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -200,12 +200,12 @@ struct MagicsockRulesTests {
         for datagram in [testDatagram(1), [], initiation] {
             #expect(sock.receiveUDP(datagram, from: b.address, at: sockT0, using: &random) == [.wireGuard(datagram, from: .udp(b.address))])
         }
-        // 피어의 후보가 아닌 주소에서 온 것도 그 주소를 출처로 싣는다(WireGuard가 cookie reply를 그리로 되돌린다).
+        // The source is preserved even if the address is outside the peer's candidates (WireGuard sends the cookie reply there).
         let stranger = IPEndpoint(address: b.address.address, port: b.address.port &+ 1)
         #expect(sock.receiveUDP(initiation, from: stranger, at: sockT0, using: &random) == [.wireGuard(initiation, from: .udp(stranger))])
     }
 
-    @Test("IPv6이나 포트 0인 출처는 받지 않는다", arguments: ["[2001:db8::1]:41641", "192.0.2.2:0"])
+    @Test("Rejects source addresses with IPv6 or port 0", arguments: ["[2001:db8::1]:41641", "192.0.2.2:0"])
     func unsupportedSource(_ text: String) throws {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -216,7 +216,7 @@ struct MagicsockRulesTests {
         #expect(candidates(sock, b).isEmpty)
     }
 
-    @Test("회차 밖이거나 해석할 수 없는 STUN 응답은 버리고, 회차의 응답은 엔드포인트가 된다")
+    @Test("Drops out-of-round or unparseable STUN responses, and uses responses for the current round as endpoints")
     func stunResponses() throws {
         var sock = a.magicsock()
         var random = PathTestRandom(state: 7)
@@ -226,19 +226,19 @@ struct MagicsockRulesTests {
 
         let start = sock.setRegions([Magicsock.Region(id: 1, stunServers: [server])], at: sockT0, using: &random)
         let request = try #require(start.compactMap(\.stunRequest).first)
-        // 주소 속성이 없는 응답: STUN 모양이라 WireGuard로도 가지 않는다.
+        // A response without an address attribute still looks like STUN, so it is never delivered to WireGuard.
         var headerOnly = Array(TestSTUN.response(to: request, mapped: a.address).prefix(STUNMessage.headerLength))
         headerOnly[3] = 0
         #expect(sock.receiveUDP(headerOnly, from: server, at: sockTime(1), using: &random) == [.dropped(.unexpectedSTUN)])
 
         let response = TestSTUN.response(to: request, mapped: a.address)
-        // 계약 E4: STUN 전역 주소(.stun) 뒤에 인터페이스 주소(여기서는 없음).
+        // Contract E4. STUN global addresses (.stun) precede interface addresses (none here).
         #expect(sock.receiveUDP(response, from: server, at: sockTime(5), using: &random)
             == [.endpointsChanged([Magicsock.Endpoint(address: a.address, source: .stun)])])
         #expect(sock.receiveUDP(response, from: server, at: sockTime(6), using: &random) == [.dropped(.unexpectedSTUN)])
     }
 
-    @Test("setRegions는 대체 홈을 곧바로 내고, 회차가 끝나면 지연으로 홈을 고르고 엔드포인트를 올린다")
+    @Test("setRegions emits the fallback home immediately, then chooses a home by latency and publishes endpoints at the end of the round")
     func regionsAndHome() throws {
         let local = try #require(IPAddress("192.0.2.1"))
         var sock = a.magicsock(localAddresses: [local])
@@ -248,7 +248,7 @@ struct MagicsockRulesTests {
             [Magicsock.Region(id: 1, stunServers: [server1]), Magicsock.Region(id: 2, stunServers: [server2])],
             at: sockT0, using: &random
         )
-        // 계약 E6 "대체 홈": 지역 ID가 가장 작은 것.
+        // Contract E6 "fallback home" uses the lowest region ID.
         #expect(start.first == .homeRegionChanged(1))
         let requests = start.compactMap { output -> (bytes: [UInt8], to: IPEndpoint)? in
             if case .udp(let bytes, let to) = output, STUNMessage.looksLikeSTUN(bytes) { (bytes, to) } else { nil }
@@ -257,10 +257,10 @@ struct MagicsockRulesTests {
         let request1 = try #require(requests.first { $0.to == server1 }), request2 = try #require(requests.first { $0.to == server2 })
 
         let mapped = try endpoint("203.0.113.7:61000")
-        // 지역 2가 5 ms, 지역 1이 50 ms에 답한다. 둘 다 답해야 회차가 끝난다.
+        // Region 2 replies at 5 ms and region 1 at 50 ms. Both must reply for the round to finish.
         #expect(sock.receiveUDP(TestSTUN.response(to: request2.bytes, mapped: mapped), from: server2, at: sockTime(5), using: &random) == [])
         let finished = sock.receiveUDP(TestSTUN.response(to: request1.bytes, mapped: mapped), from: server1, at: sockTime(50), using: &random)
-        // 45 ms 차이(10 ms 이상)이고 5 ms가 50 ms의 2/3보다 작으므로 홈을 옮긴다(DERP 노트 4.10 5).
+        // The home switches because the difference is 45 ms (at least 10 ms) and 5 ms is below 2/3 of 50 ms (DERP notes §4.10 5).
         #expect(finished == [
             .endpointsChanged([
                 Magicsock.Endpoint(address: mapped, source: .stun),
@@ -270,7 +270,7 @@ struct MagicsockRulesTests {
         ])
     }
 
-    @Test("Geneve로 감싼 데이터그램은 버리고, Go가 맨 WireGuard로 보는 머리는 그대로 올린다")
+    @Test("Drops Geneve-wrapped datagrams and delivers packets whose headers Go treats as bare WireGuard unchanged")
     func geneve() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -288,9 +288,9 @@ struct MagicsockRulesTests {
         }
     }
 
-    // MARK: disco 받기 (동작 B·C)
+    // MARK: Receiving disco (behaviors B and C)
 
-    @Test("모르는 disco 키의 패킷은 공유 키를 계산하지 않고 버린다")
+    @Test("Drops packets from unknown disco keys without computing a shared key")
     func unknownDiscoKey() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -300,7 +300,7 @@ struct MagicsockRulesTests {
         #expect(Array(sock.discoPeers.keys) == [b.discoPublicKey])
     }
 
-    @Test("열리지 않거나 잘린 disco는 malformedDisco로 버리고 Pong하지 않는다")
+    @Test("Drops disco that cannot be opened or is truncated as malformedDisco and sends no Pong")
     func malformedDisco() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -319,7 +319,7 @@ struct MagicsockRulesTests {
         #expect(candidates(sock, b) == [b.address])
     }
 
-    @Test("처리하지 않는 disco 종류(peer relay)는 상태를 바꾸지 않고 버린다", arguments: UInt8(0x04)...UInt8(0x09))
+    @Test("Drops unsupported disco types (peer relay) with state intact", arguments: UInt8(0x04)...UInt8(0x09))
     func relayTypes(_ type: UInt8) throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -330,7 +330,7 @@ struct MagicsockRulesTests {
         #expect(sock.peers[b.nodeKey]?.path.candidates == before)
     }
 
-    @Test("UDP로 온 Ping에는 출처로 Pong하고 출처를 후보로 배우며, 같은 Ping의 재전송에는 답하지 않는다")
+    @Test("Replies to a UDP Ping with a Pong to the source, learns the source as a candidate, and ignores replays of that Ping")
     func udpPing() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -340,19 +340,19 @@ struct MagicsockRulesTests {
         let outputs = sock.receiveUDP(ping, from: source, at: sockT0, using: &random)
         try #require(outputs.count == 1)
         guard case .udp(let pong, let destination) = outputs[0] else {
-            Issue.record("Pong이 UDP로 나가지 않았다: \(outputs)")
+            Issue.record("Pong did not go out over UDP: \(outputs)")
             return
         }
         #expect(destination == source)
         #expect(try b.open(pong) == .pong(id, source: source))
         #expect(sock.receiveUDP(ping, from: source, at: sockTime(1), using: &random) == [])
 
-        // 배운 출처는 다음 송신의 Ping 대상이다(노트 4.2 4.2).
+        // The learned source is a Ping target on the next send (notes §4.2 4.2).
         let sent = sock.send(testDatagram(1), to: b.nodeKey, at: sockTime(2), using: &random)
         #expect(try pingDestinations(sent, openedBy: b) == [source])
     }
 
-    @Test("DERP로 온 Ping에는 같은 지역 DERP로 Pong하고 Src는 127.3.3.40:<지역>이며 후보를 넣지 않는다")
+    @Test("Replies to a DERP Ping over DERP in the same region with Src 127.3.3.40:<region> and adds no candidate")
     func derpPing() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -361,7 +361,7 @@ struct MagicsockRulesTests {
         let outputs = sock.receiveDERP(ping, from: b.nodeKey, region: 7, at: sockT0, using: &random)
         try #require(outputs.count == 1)
         guard case .derp(let pong, let to, let region) = outputs[0] else {
-            Issue.record("Pong이 DERP로 나가지 않았다: \(outputs)")
+            Issue.record("Pong did not go out over DERP: \(outputs)")
             return
         }
         #expect(to == b.nodeKey)
@@ -370,7 +370,7 @@ struct MagicsockRulesTests {
         #expect(candidates(sock, b) == [b.address])
     }
 
-    @Test("모르는 DERP 보낸 쪽의 Ping은 버리고 답하지 않는다")
+    @Test("Drops a Ping from an unknown DERP sender without a reply")
     func derpPingFromUnknownSender() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -378,7 +378,7 @@ struct MagicsockRulesTests {
         #expect(sock.receiveDERP(ping, from: c.nodeKey, region: 1, at: sockT0, using: &random) == [.dropped(.misroutedDisco)])
     }
 
-    @Test("UDP로 온 CallMeMaybe와 DERP 보낸 쪽의 disco 키가 맞지 않는 CallMeMaybe는 버린다")
+    @Test("Drops UDP CallMeMaybe and CallMeMaybe with a disco key that does not match the DERP sender")
     func misroutedCallMeMaybe() throws {
         var sock = makeSock(peers: [b.peer(endpoints: []), c.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -389,12 +389,12 @@ struct MagicsockRulesTests {
         #expect(candidates(sock, b).isEmpty && candidates(sock, c).isEmpty)
     }
 
-    @Test("DERP로 온 CallMeMaybe는 모든 후보에 곧바로 Ping하고 CallMeMaybe를 되보내지 않는다")
+    @Test("A DERP CallMeMaybe immediately triggers a Ping to every candidate without sending a CallMeMaybe back")
     func callMeMaybePingsAllCandidates() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
         let x = try endpoint("203.0.113.10:41641"), y = try endpoint("203.0.113.11:41641")
-        // 후보별 5초 간격을 CallMeMaybe가 풀어 주는지 보려고 먼저 한 번 Ping해 둔다.
+        // Ping once first to check whether CallMeMaybe overrides the 5-second per-candidate interval.
         _ = sock.send(testDatagram(1), to: b.nodeKey, at: sockT0, using: &random)
         let callMeMaybe = try b.seal(.callMeMaybe([x, y]), to: a.discoPublicKey)
         let outputs = sock.receiveDERP(callMeMaybe, from: b.nodeKey, region: 1, at: sockTime(10), using: &random)
@@ -403,7 +403,7 @@ struct MagicsockRulesTests {
         #expect(outputs.count == 3)
     }
 
-    @Test("DERP로 온 WireGuard 데이터그램은 아는 피어의 것만 보낸 쪽과 지역을 실어 올린다")
+    @Test("Only known peers' DERP WireGuard datagrams are delivered, with sender and region")
     func derpWireGuard() {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -411,7 +411,7 @@ struct MagicsockRulesTests {
         #expect(sock.receiveDERP(testDatagram(2), from: c.nodeKey, region: 1, at: sockT0, using: &random) == [.dropped(.unknownDERPSender)])
     }
 
-    @Test("disco 길이 한도: 한도 길이의 패딩 Ping에는 답하고, 1바이트 넘으면 열지 않고 버린다")
+    @Test("At the disco length limit, a padded Ping gets a reply. A Ping 1 byte over the limit is dropped unopened")
     func discoLengthLimit() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -429,9 +429,9 @@ struct MagicsockRulesTests {
         #expect(sock.receiveUDP(over, from: b.address, at: sockTime(1), using: &random) == [.dropped(.malformedDisco)])
     }
 
-    // MARK: 보내기 (동작 D·F)
+    // MARK: Sending (behaviors D and F)
 
-    @Test("직접 주소도 DERP 지역도 없으면 데이터그램을 버리고, 그때도 Ping은 보낸다")
+    @Test("With neither a direct address nor a DERP region, the datagram is dropped and Pings still go out")
     func noRouteToPeer() throws {
         let d = try TestIdentity(4, address: "192.0.2.4:41641")
         var sock = makeSock(peers: [b.peer(homeDERP: 0, endpoints: [b.address]), c.peer(homeDERP: 0, endpoints: [])])
@@ -445,7 +445,7 @@ struct MagicsockRulesTests {
         #expect(sock.send(testDatagram(3), to: d.nodeKey, at: sockT0, using: &random) == [.dropped(.noRouteToPeer)])
     }
 
-    @Test("엔드포인트가 27초보다 낡았으면 CallMeMaybe를 미루고 회차를 시작하며, 회차가 끝나면 보낸다")
+    @Test("If endpoints are older than 27 seconds, CallMeMaybe is deferred and a round starts. CallMeMaybe is sent when the round finishes")
     func deferredCallMeMaybe() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -460,11 +460,11 @@ struct MagicsockRulesTests {
             }
         }
 
-        // 엔드포인트를 정한 지 27초 안: Ping과 함께 곧바로 보낸다.
+        // Within 27 seconds of determining endpoints, send immediately with the Ping.
         let fresh = sock.send(testDatagram(1), to: b.nodeKey, at: sockTime(5 + 26_999), using: &random)
         #expect(try callMeMaybes(fresh) == [[a.address]])
 
-        // 27초가 지남: 미루고 회차를 시작한다. 한 번 더 보내도 피어당 한 칸이다.
+        // After 27 seconds, defer and start a round. Even with another send, there is one slot per peer.
         let staleAt = sockTime(5 + 26_999 + 5_000)
         let stale = sock.send(testDatagram(2), to: b.nodeKey, at: staleAt, using: &random)
         #expect(try callMeMaybes(stale).isEmpty)
@@ -479,9 +479,9 @@ struct MagicsockRulesTests {
         #expect(sock.pendingCallMeMaybe.isEmpty)
     }
 
-    // MARK: 피어 표 (동작 B·G)
+    // MARK: Peer table (behaviors B and G)
 
-    @Test("새 피어는 보내기 전까지 경로가 없고, 보내면 .relayed(홈 DERP), 홈이 바뀌면 새 지역, 빼면 nil이 나오며 같은 값은 다시 내지 않는다")
+    @Test("A new peer has no path until a send emits .relayed (home DERP), a home change emits the new region, and removal emits nil. Repeated values are suppressed")
     func peerEvents() {
         var sock = a.magicsock()
         var random = PathTestRandom(state: 7)
@@ -494,12 +494,12 @@ struct MagicsockRulesTests {
         #expect(sock.setPeers([], at: sockTime(4)) == [.pathChanged(b.nodeKey, nil)])
         #expect(sock.path(to: b.nodeKey, at: sockTime(4)) == nil)
         #expect(sock.discoPeers.isEmpty)
-        // 알린 적 없는(유휴) 피어는 빠져도 nil을 다시 내지 않는다.
+        // Removing an idle peer whose path was never reported emits no nil.
         _ = sock.setPeers([c.peer(endpoints: [])], at: sockTime(5))
         #expect(sock.setPeers([], at: sockTime(6)) == [])
     }
 
-    @Test("마지막 송신 뒤 45초가 넘으면 그 시각의 advance가 경로 nil을 내고, 다시 보내면 그때의 경로가 나온다(동작 G3)")
+    @Test("After more than 45 seconds since the last send, advance at that time emits a nil path. The next send emits the path at that time (behavior G3)")
     func idlePeerHasNoPath() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -512,7 +512,7 @@ struct MagicsockRulesTests {
                 events.append((deadline, path))
             }
         }
-        // 신뢰가 끝나 .relayed가 되고(Pong이 더 오지 않는다), 45초 경계에서 nil이 된다. 그 뒤로는 걸린 기한이 없다.
+        // Trust expires and the path becomes .relayed (no more Pongs), then becomes nil at the 45-second boundary. No deadline remains after that.
         #expect(events.map(\.1) == [.relayed(derpRegion: 1), nil])
         #expect(events.last?.0 == idleAt)
         #expect(sock.path(to: b.nodeKey, at: idleAt - .nanoseconds(1)) == .relayed(derpRegion: 1))
@@ -523,7 +523,7 @@ struct MagicsockRulesTests {
         #expect(resumed.last == .pathChanged(b.nodeKey, .relayed(derpRegion: 1)))
     }
 
-    @Test("netmap 엔드포인트가 바뀌면 새 주소에 Ping하고 빠진 주소에는 하지 않는다")
+    @Test("When netmap endpoints change, Pings go to new addresses and skip removed addresses")
     func endpointChange() throws {
         let old = try endpoint("203.0.113.20:41641"), new = try endpoint("203.0.113.21:41641")
         var sock = makeSock(peers: [b.peer(endpoints: [old])])
@@ -533,12 +533,12 @@ struct MagicsockRulesTests {
         #expect(try pingDestinations(sock.send(testDatagram(2), to: b.nodeKey, at: sockTime(200), using: &random), openedBy: b) == [new])
     }
 
-    /// `sock`이 `peer`에게 보내고, `peer`가 그 Ping에 Pong해 직접 경로를 세운다.
+    /// Sends from `sock` to `peer`. Then `peer` returns a Pong to establish a direct path.
     private func establishDirect(_ sock: inout Magicsock, with peer: TestIdentity, at time: ContinuousClock.Instant, random: inout PathTestRandom) throws {
         let outputs = sock.send(testDatagram(1), to: peer.nodeKey, at: time, using: &random)
         let ping = try #require(outputs.compactMap(\.discoPacket).first { $0.udp == peer.address })
         guard case .ping(let id, _) = try peer.open(ping.bytes) else {
-            Issue.record("Ping이 아니다")
+            Issue.record("Expected a Ping")
             return
         }
         let pong = try peer.seal(.pong(id, source: a.address), to: a.discoPublicKey)
@@ -546,7 +546,7 @@ struct MagicsockRulesTests {
             == [.pathChanged(peer.nodeKey, .direct(peer.address))])
     }
 
-    @Test("피어의 disco 키가 바뀌면 신뢰를 지우고 옛 키를 버린다")
+    @Test("Changing a peer's disco key clears trust and discards the old key")
     func discoKeyChange() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -555,14 +555,14 @@ struct MagicsockRulesTests {
         let rotated = try TestIdentity(9, address: "192.0.2.9:41641")
         var changed = b.peer(endpoints: [b.address])
         changed.discoKey = rotated.discoPublicKey
-        // Go처럼 송신 기록도 지우므로(`invalidateDiscoPathLocked`의 `lastSendExt = 0`) 다음 송신까지 유휴다.
+        // As in Go, this also clears send history (`lastSendExt = 0` in `invalidateDiscoPathLocked`), so it stays idle until the next send.
         #expect(sock.setPeers([changed], at: sockTime(10)) == [.pathChanged(b.nodeKey, nil)])
         #expect(Array(sock.discoPeers.keys) == [rotated.discoPublicKey])
         let oldPing = try b.seal(.ping(try txID(3), nodeKey: b.nodeKey), to: a.discoPublicKey)
         #expect(sock.receiveUDP(oldPing, from: b.address, at: sockTime(11), using: &random) == [.dropped(.unknownDiscoKey)])
     }
 
-    @Test("같은 disco 키를 두 netmap 피어가 내세우면 둘 다 그 키로 disco를 한다(Go `nodesOfDisco`, 동작 B1)")
+    @Test("If two netmap peers claim the same disco key, both use it for disco (Go `nodesOfDisco`, behavior B1)")
     func sharedDiscoKey() throws {
         var cWithBKey = c.peer(endpoints: [c.address])
         cWithBKey.discoKey = b.discoPublicKey
@@ -570,10 +570,10 @@ struct MagicsockRulesTests {
         var random = PathTestRandom(state: 7)
         #expect(sock.discoPeers.count == 1)
         #expect(sock.discoPeers[b.discoPublicKey]?.nodes == [b.nodeKey, c.nodeKey])
-        // c에게 보내면 c의 주소로 그 키로 봉한 Ping이 나간다.
+        // Sending to c emits a Ping sealed with that key to c's address.
         #expect(try pingDestinations(sock.send(testDatagram(1), to: c.nodeKey, at: sockT0, using: &random), openedBy: b) == [c.address])
 
-        // CallMeMaybe는 DERP 보낸 쪽 피어가 그 키를 쥐었으면 그 피어만 받는다.
+        // Only the DERP sender peer receives CallMeMaybe if that peer holds the key.
         let callMeMaybe = try b.seal(.callMeMaybe([try endpoint("203.0.113.10:41641")]), to: a.discoPublicKey)
         let before = candidates(sock, b)
         #expect(!sock.receiveDERP(callMeMaybe, from: c.nodeKey, region: 1, at: sockTime(1), using: &random).contains(.dropped(.misroutedDisco)))
@@ -581,7 +581,7 @@ struct MagicsockRulesTests {
         #expect(candidates(sock, b) == before)
     }
 
-    @Test("disco 키가 0인 피어는 DERP만 쓴다")
+    @Test("A peer whose disco key is 0 uses only DERP")
     func zeroDiscoKey() {
         var peer = b.peer(endpoints: [b.address])
         peer.discoKey = .zero
@@ -592,7 +592,7 @@ struct MagicsockRulesTests {
             == [.derp(testDatagram(1), to: b.nodeKey, region: 1), .pathChanged(b.nodeKey, .relayed(derpRegion: 1))])
     }
 
-    @Test("빠진 피어는 미뤄 둔 CallMeMaybe 목록에서도 빠진다")
+    @Test("Removing a peer also removes it from the deferred CallMeMaybe list")
     func removedPeerLeavesPendingList() {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -602,9 +602,9 @@ struct MagicsockRulesTests {
         #expect(sock.pendingCallMeMaybe.isEmpty)
     }
 
-    // MARK: 기한 (동작 D7·E5)
+    // MARK: Deadlines (behaviors D7 and E5)
 
-    @Test("nextDeadline은 STUN 회차와 피어 타이머의 기한 가운데 가장 이른 것이고, advance는 그것을 처리한다")
+    @Test("nextDeadline is the earliest deadline among the STUN round and peer timers, and advance handles it")
     func deadlines() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         var random = PathTestRandom(state: 7)
@@ -612,7 +612,7 @@ struct MagicsockRulesTests {
         _ = sock.setRegions([Magicsock.Region(id: 1, stunServers: [try TestSTUN.server()])], at: sockT0, using: &random)
         _ = sock.send(testDatagram(1), to: b.nodeKey, at: sockTime(50), using: &random)
 
-        // STUN 요청 100·200 ms, 회차 마감 3초(계약 E2), heartbeat 송신 + 3초, Ping 기한 송신 + 5초(노트 5절).
+        // STUN requests at 100 and 200 ms, round deadline at 3 seconds (contract E2), heartbeat at send + 3 seconds, and Ping deadline at send + 5 seconds (notes §5).
         var seen: [ContinuousClock.Instant] = []
         while let deadline = sock.nextDeadline, deadline <= sockTime(5_050) {
             seen.append(deadline)
@@ -622,7 +622,7 @@ struct MagicsockRulesTests {
         #expect(seen == [sockTime(100), sockTime(200), sockTime(3_000), sockTime(3_050), sockTime(5_050)])
     }
 
-    @Test("45초 넘게 보내지 않으면 heartbeat와 주기 STUN이 멈추고, 다음 송신이 회차를 다시 건다")
+    @Test("After more than 45 seconds without sending, heartbeat and periodic STUN stop, and the next send restarts the round")
     func idleStopsPeriodicSTUN() throws {
         var sock = makeSock(peers: [b.peer(endpoints: [])])
         var random = PathTestRandom(state: 7)
@@ -639,7 +639,7 @@ struct MagicsockRulesTests {
             }
         }
         #expect(sock.nextDeadline == nil)
-        // 송신 뒤 45초 안에 시작한 주기 회차만 있다(20–26초 간격).
+        // The only periodic rounds are those started within 45 seconds of the send (20–26-second intervals).
         #expect(!requestTimes.isEmpty)
         #expect(requestTimes.allSatisfy { $0 <= sockTime(1_000 + 45_000) + .milliseconds(200) })
 
@@ -647,9 +647,9 @@ struct MagicsockRulesTests {
         #expect(resumed.contains { $0.stunRequest != nil })
     }
 
-    // MARK: 신뢰할 수 없는 입력과 비밀 (동작 H·I)
+    // MARK: Untrusted input and secrets (behaviors H and I)
 
-    @Test("임의 바이트열(고정 시드)로 죽지 않고, disco 모양은 WireGuard로 넘어가지 않으며, 공유 키는 피어 수를 넘지 않는다")
+    @Test("Arbitrary bytes (fixed seed) do not crash, disco-shaped input never reaches WireGuard, and shared keys never outnumber peers")
     func randomInputs() throws {
         var leaks = 0
         for seed in UInt64(1)...3 {
@@ -686,7 +686,7 @@ struct MagicsockRulesTests {
         #expect(leaks == 0)
     }
 
-    @Test("dump와 설명에 disco 개인 키와 공유 키가 나오지 않는다")
+    @Test("dump and descriptions hide the disco private key and shared keys")
     func secretsAreHidden() throws {
         let sock = makeSock(peers: [b.peer(endpoints: [b.address])])
         let privateKey = Array(a.discoKey.rawRepresentation)

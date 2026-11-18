@@ -3,10 +3,10 @@ import Testing
 import SwiftailBase
 @testable import SwiftailMagicsock
 
-// 기대값은 계약 `docs/contracts/SwiftailTunnel.md` 동작 N 2·3.3과 노트 `docs/protocol-notes/disco-magicsock.md` 4.11에서 정했다.
-// Go가 재결속 때 지우는 것(`endpoint.go` `noteConnectivityChange`)과 남기는 것은 `PeerPathStateTests`가 따로 덮는다.
+// Expected values come from the `docs/contracts/SwiftailTunnel.md` contract, behavior N 2 and 3.3, and `docs/protocol-notes/disco-magicsock.md` §4.11.
+// `PeerPathStateTests` separately covers what Go clears and retains when rebinding (`noteConnectivityChange` in `endpoint.go`).
 
-/// 재결속 시험의 한 장면: 노드 `a`가 피어 `b`와 직접 경로를 세운 상태.
+/// A rebind test scenario where node `a` has established a direct path to peer `b`.
 private struct Scene {
     let a: TestIdentity
     let b: TestIdentity
@@ -15,7 +15,7 @@ private struct Scene {
     let localAddress: IPAddress
     var sock: Magicsock
     var random = PathTestRandom(state: 7)
-    /// 마지막으로 보낸 시각. 이 뒤의 시각만 쓴다.
+    /// The time of the last send. The test uses only later times.
     var now = sockT0
 
     init(withDirectPath: Bool = true) throws {
@@ -38,24 +38,24 @@ private struct Scene {
         }
     }
 
-    /// 출력 가운데 `b`의 주소로 간 Ping의 TxID.
+    /// Returns the TxID of the Ping sent to `b`'s address in the output.
     func pingID(in outputs: [Magicsock.Output]) throws -> TransactionID {
         let ping = try #require(outputs.compactMap(\.discoPacket).first { $0.udp == b.address })
         guard case .ping(let id, _) = try b.open(ping.bytes) else {
-            Issue.record("Ping이 아니다")
+            Issue.record("Expected a Ping")
             throw CancellationError()
         }
         return id
     }
 
-    /// 출력 가운데 DERP로 `b`에게 간 CallMeMaybe가 담은 주소들. 없으면 nil.
+    /// Returns the addresses in a CallMeMaybe sent over DERP to `b` in the output, or nil if absent.
     func callMeMaybe(in outputs: [Magicsock.Output]) throws -> [IPEndpoint]? {
         try outputs.compactMap(\.discoPacket).filter { $0.derp == b.nodeKey }.compactMap {
             try b.open($0.bytes).callMeMaybeEndpoints
         }.first
     }
 
-    /// 지금 인터페이스 주소와 포트로 `rebind`한다.
+    /// Calls `rebind` with the current interface addresses and port.
     mutating func rebind(
         port: UInt16 = 41641,
         addresses: [IPAddress]? = nil,
@@ -67,9 +67,9 @@ private struct Scene {
     }
 }
 
-@Suite("Magicsock 재결속")
+@Suite("Magicsock rebinding")
 struct MagicsockRebindTests {
-    @Test("직접 경로가 선 피어는 rebind 뒤 .relayed가 되고 .pathChanged가 한 번 나오며, Pong이 오면 다시 .direct가 된다")
+    @Test("A direct peer becomes .relayed after rebind, emits .pathChanged once, and returns to .direct when a Pong arrives")
     func directPathFallsBackAndRecovers() throws {
         var scene = try Scene()
         let at = sockTime(1000)
@@ -77,16 +77,16 @@ struct MagicsockRebindTests {
         #expect(outputs.filter { if case .pathChanged = $0 { true } else { false } }
             == [.pathChanged(scene.b.nodeKey, .relayed(derpRegion: 1))])
         #expect(scene.sock.path(to: scene.b.nodeKey, at: at) == .relayed(derpRegion: 1))
-        // 같은 상태에서 다시 부르면 바뀐 것이 없으므로 경로 사건이 없다.
+        // Calling it again in the same state produces no path event because nothing has changed.
         let again = scene.rebind(at: at + .milliseconds(1))
         #expect(again.allSatisfy { if case .pathChanged = $0 { false } else { true } })
 
-        // 다음 송신은 전체 Ping을 내고 DERP로도 보낸다(신뢰가 없으므로. Go와 같다).
+        // The next send Pings all candidates and also sends over DERP because there is no trust, as in Go.
         let send = scene.sock.send(testDatagram(2), to: scene.b.nodeKey, at: sockTime(1100), using: &scene.random)
         #expect(send.contains(.derp(testDatagram(2), to: scene.b.nodeKey, region: 1)))
         #expect(!send.contains(.udp(testDatagram(2), to: scene.b.address)))
         let id = try scene.pingID(in: send)
-        // CallMeMaybe는 옛 소켓의 엔드포인트를 담지 않도록 새 회차가 끝날 때까지 미뤄진다(Go와 다르다).
+        // CallMeMaybe waits for the new round to finish so it does not advertise the old socket's endpoints. Go behaves differently.
         #expect(try scene.callMeMaybe(in: send) == nil)
         let request = try #require(again.compactMap(\.stunRequest).first)
         let fresh = try #require(IPEndpoint("203.0.113.9:62000"))
@@ -100,7 +100,7 @@ struct MagicsockRebindTests {
         #expect(recovered == [.pathChanged(scene.b.nodeKey, .direct(scene.b.address))])
     }
 
-    @Test("rebind 전에 보낸 Ping의 Pong은 뒤늦게 와도 경로를 세우지 않는다")
+    @Test("A late Pong for a Ping sent before rebind does not establish a path")
     func pongOfPreRebindPingIsIgnored() throws {
         var scene = try Scene(withDirectPath: false)
         let sent = scene.sock.send(testDatagram(1), to: scene.b.nodeKey, at: sockTime(10), using: &scene.random)
@@ -113,7 +113,7 @@ struct MagicsockRebindTests {
         #expect(scene.sock.peers[scene.b.nodeKey]?.path.bestAddr == nil)
     }
 
-    @Test("rebind가 버린 회차의 STUN 응답은 뒤늦게 와도 받지 않고, 새 회차의 응답만 엔드포인트를 정한다")
+    @Test("Late STUN responses for the round discarded by rebind are rejected. Only new-round responses determine endpoints")
     func staleRoundResponseIsDropped() throws {
         var scene = try Scene(withDirectPath: false)
         let first = scene.sock.restartSTUN(at: sockTime(100), using: &scene.random)
@@ -137,19 +137,19 @@ struct MagicsockRebindTests {
         ])])
     }
 
-    @Test("새 포트와 주소는 다음 .endpointsChanged에 반영되고, 같은 값이면 나오지 않는다")
+    @Test("The new port and addresses appear in the next .endpointsChanged, and identical values produce no event")
     func newInputsReachEndpoints() throws {
         var scene = try Scene(withDirectPath: false)
         let newAddress = try #require(IPAddress("192.0.2.50"))
 
-        // 같은 값: STUN 결과도 같으므로 집합이 같다.
+        // Same values. The STUN result is also the same, so the set stays the same.
         let same = scene.rebind(at: sockTime(100))
         let sameRequest = try #require(same.compactMap(\.stunRequest).first)
         #expect(scene.sock.receiveUDP(
             TestSTUN.response(to: sameRequest, mapped: scene.mapped), from: scene.server, at: sockTime(105), using: &scene.random
         ) == [])
 
-        // 새 포트·주소: 인터페이스 주소가 바뀐다. STUN 바깥 주소는 같다.
+        // New port and addresses. The interface address changes and the external STUN address stays the same.
         let changed = scene.rebind(port: 41700, addresses: [newAddress], at: sockTime(200))
         let request = try #require(changed.compactMap(\.stunRequest).first)
         #expect(scene.sock.receiveUDP(
@@ -160,7 +160,7 @@ struct MagicsockRebindTests {
         ])])
     }
 
-    @Test("STUN만 다시 시작하는 진입점은 회차를 곧바로 시작하고 경로 상태를 건드리지 않으며, 진행 중이면 한 번 더 시작하지 않는다")
+    @Test("The STUN-only restart entry point starts a round immediately, preserves path state, and leaves an in-progress round running without starting another")
     func restartSTUNOnly() throws {
         var scene = try Scene()
         let at = sockTime(1000)
@@ -174,7 +174,7 @@ struct MagicsockRebindTests {
         #expect(scene.sock.restartSTUN(at: at + .milliseconds(1), using: &scene.random) == [])
     }
 
-    @Test("지역이 없으면 rebind는 소켓 입력만 바꾸고 STUN을 내지 않으며, 지역이 오면 새 값으로 엔드포인트를 정한다")
+    @Test("With no regions, rebind updates only the socket inputs and sends no STUN. Once a region arrives, it uses the new inputs to determine endpoints")
     func withoutRegions() throws {
         let a = try TestIdentity(1, address: "192.0.2.1:41641")
         var sock = a.magicsock()
@@ -195,14 +195,14 @@ struct MagicsockRebindTests {
             ])])
     }
 
-    @Test("유휴 피어(경로 nil)는 rebind 뒤에도 nil이고 경로 사건이 나오지 않는다")
+    @Test("An idle peer with a nil path still has a nil path after rebind and emits no path event")
     func idlePeerStaysIdle() throws {
         var scene = try Scene(withDirectPath: false)
-        // 보낸 적이 없다.
+        // No sends yet.
         #expect(scene.rebind(at: sockTime(100)).allSatisfy { if case .pathChanged = $0 { false } else { true } })
         #expect(scene.sock.path(to: scene.b.nodeKey, at: sockTime(100)) == nil)
 
-        // 보낸 뒤 45초가 지나 nil을 알린 피어.
+        // A peer whose path was reported as nil 45 seconds after sending.
         _ = scene.sock.send(testDatagram(1), to: scene.b.nodeKey, at: sockTime(200), using: &scene.random)
         let idleAt = sockTime(200) + PeerPathState.sessionActiveTimeout + .nanoseconds(1)
         #expect(scene.sock.path(to: scene.b.nodeKey, at: idleAt) == nil)
@@ -213,9 +213,9 @@ struct MagicsockRebindTests {
     }
 }
 
-@Suite("PeerPathState 연결 변경")
+@Suite("PeerPathState connectivity changes")
 struct PeerPathConnectivityTests {
-    @Test("noteConnectivityChange는 bestAddr·신뢰·Ping 기록을 지우고 후보와 그 출처, 송신 기록은 남긴다(Go noteConnectivityChange)")
+    @Test("noteConnectivityChange clears bestAddr, trust, and Ping history and retains candidates, their sources, and send history (Go noteConnectivityChange)")
     func clearsDerivedState() throws {
         let netmapEndpoint = try pathEndpoint("203.0.113.1:41641")
         let learned = try pathEndpoint("203.0.113.2:41641")
@@ -240,11 +240,11 @@ struct PeerPathConnectivityTests {
         #expect(state.candidates.map(\.inNetmap) == [true, false, false])
         #expect(state.candidates.map { $0.lastPingReceived != nil } == [false, true, false])
         #expect(state.candidates.map(\.fromCallMeMaybe) == [false, false, true])
-        // 송신 기록과 heartbeat는 그대로다. 재결속은 세션을 끊지 않는다(Go는 `lastSendExt`를 건드리지 않는다).
+        // Send history and heartbeat persist. Rebinding preserves the session (Go leaves `lastSendExt` intact).
         #expect(state.lastSend == pathTime(0))
         #expect(state.heartbeatDeadline == pathTime(0) + PeerPathState.heartbeatInterval)
 
-        // 다음 송신은 모든 후보에 Ping하고 CallMeMaybe도 낸다.
+        // The next send Pings every candidate and also emits CallMeMaybe.
         let plan = state.planSend(at: pathTime(30), using: &random)
         #expect(Set(plan.actions.pingDestinations) == [netmapEndpoint, learned, fromCallMeMaybe])
         #expect(plan.actions.callMeMaybeCount == 1)

@@ -1,10 +1,10 @@
-// BLAKE2b(RFC 7693) 시험.
+// BLAKE2b (RFC 7693) tests.
 //
-// 출처:
-// - RFC 7693 부록 A: BLAKE2b-512("abc")
-// - RFC 7693 부록 E: 자체 시험 모듈의 "hash of hashes"(출력 20·32·48·64, 입력 0·3·128·129·255·1024, 키 있음·없음)
-// - BLAKE2 공식 KAT(`Vectors/blake2b-kat.json`, 출처는 `Vectors/README.md`): 키 없음 256개, 키 64바이트 256개
-// - "교차 계산" 표시가 붙은 값은 Python hashlib.blake2b의 결과다. 입력은 `pattern(_:_:_:)`으로 정해진 바이트열이다.
+// Origin
+// - RFC 7693 Appendix A gives BLAKE2b-512("abc").
+// - RFC 7693 Appendix E gives the self-test module's "hash of hashes" (output lengths 20, 32, 48, 64, input lengths 0, 3, 128, 129, 255, 1024, keyed and unkeyed).
+// - Official BLAKE2 KAT (`Vectors/blake2b-kat.json`, origin in `Vectors/README.md`) has 256 unkeyed vectors and 256 with a 64-byte key.
+// - Values labeled "cross-check" come from Python hashlib.blake2b. `pattern(_:_:_:)` defines the input bytes.
 
 import Foundation
 import Testing
@@ -15,12 +15,12 @@ private func hexString(_ bytes: [UInt8]) -> String {
     bytes.map { String(format: "%02x", $0) }.joined()
 }
 
-/// 교차 계산 입력: i번째 바이트 = (i·mul + add) mod 256.
+/// Generates input for cross-checks, with byte i equal to (i·mul + add) mod 256.
 private func pattern(_ count: Int, _ mul: Int, _ add: Int) -> [UInt8] {
     (0..<count).map { UInt8(truncatingIfNeeded: $0 * mul + add) }
 }
 
-/// RFC 7693 부록 E의 `selftest_seq`(피보나치 수열의 위 8비트).
+/// Generates `selftest_seq` from RFC 7693 Appendix E (the top 8 bits of the Fibonacci sequence).
 private func selfTestSequence(_ count: Int, seed: UInt32) -> [UInt8] {
     var a = 0xDEAD_4BAD &* seed
     var b: UInt32 = 1
@@ -34,14 +34,14 @@ private func selfTestSequence(_ count: Int, seed: UInt32) -> [UInt8] {
 
 @Suite("BLAKE2b")
 struct BLAKE2bTests {
-    @Test("RFC 7693 부록 A: BLAKE2b-512(\"abc\")")
+    @Test("RFC 7693 Appendix A BLAKE2b-512(\"abc\")")
     func abc() {
         let expected = "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d1"
             + "7d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"
         #expect(hexString(BLAKE2b.hash(Array("abc".utf8))) == expected)
     }
 
-    @Test("RFC 7693 부록 E: 자체 시험의 hash of hashes")
+    @Test("RFC 7693 Appendix E self-test hash of hashes")
     func selfTest() {
         var grand = BLAKE2b(outputByteCount: 32)
         for outputLength in [20, 32, 48, 64] {
@@ -55,23 +55,23 @@ struct BLAKE2bTests {
         #expect(hexString(grand.finalize()) == "c23a7800d98123bd10f506c61e29da5603d763b8bbad2e737f5e765a7bccd475")
     }
 
-    @Test("BLAKE2 공식 KAT: 키 없음·키 64바이트, 입력 = 00 01 02 … (0~255바이트), 조각낸 update도 같다")
+    @Test("Official BLAKE2 KAT with no key or a 64-byte key, input = 00 01 02 … (0–255 bytes), with matching results from chunked updates")
     func officialKAT() throws {
         let vectors = try loadVectors("blake2b-kat")
         #expect(vectors.count == 512)
         #expect(vectors.filter { $0.key.isEmpty }.count == 256)
         for v in vectors {
             let key = bytes(v.key), input = bytes(v.input), expected = bytes(v.output)
-            #expect(BLAKE2b.hash(input, key: key) == expected, "입력 길이 \(input.count), 키 길이 \(key.count)")
+            #expect(BLAKE2b.hash(input, key: key) == expected, "Input length \(input.count), key length \(key.count)")
             var hasher = BLAKE2b(key: key)
             let cut = input.count / 3
             hasher.update(input.prefix(cut))
             hasher.update(input.dropFirst(cut))
-            #expect(hasher.finalize() == expected, "조각낸 입력, 길이 \(input.count)")
+            #expect(hasher.finalize() == expected, "Chunked input, length \(input.count)")
         }
     }
 
-    @Test("출력 길이 1·32·64: 잘라 낸 값이 아니라 매개변수 블록에 길이가 들어간 값(교차 계산)")
+    @Test("Output lengths 1, 32, and 64 use the length in the parameter block and yield untruncated values (cross-check)")
     func outputLengths() {
         let abc = Array("abc".utf8)
         #expect(hexString(BLAKE2b.hash(abc, outputByteCount: 1)) == "6b")
@@ -80,7 +80,7 @@ struct BLAKE2bTests {
         #expect(BLAKE2b.hash(abc, outputByteCount: 64).count == 64)
     }
 
-    @Test("블록 경계 0·1·127·128·129·255·256바이트: 키 없음 64바이트, 키 16바이트 32바이트 출력(교차 계산)")
+    @Test("Block boundaries at 0, 1, 127, 128, 129, 255, and 256 bytes with 64-byte unkeyed and 32-byte keyed output (16-byte key, cross-check)")
     func blockBoundaries() {
         let rows: [(Int, String, String)] = [
             (0, "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce",
@@ -101,12 +101,12 @@ struct BLAKE2bTests {
         let key = pattern(16, 9, 4)
         for (length, plain, keyed) in rows {
             let data = pattern(length, 7, 3)
-            #expect(hexString(BLAKE2b.hash(data)) == plain, "키 없음, 길이 \(length)")
-            #expect(hexString(BLAKE2b.hash(data, outputByteCount: 32, key: key)) == keyed, "키 있음, 길이 \(length)")
+            #expect(hexString(BLAKE2b.hash(data)) == plain, "Unkeyed, length \(length)")
+            #expect(hexString(BLAKE2b.hash(data, outputByteCount: 32, key: key)) == keyed, "Keyed, length \(length)")
         }
     }
 
-    @Test("한 바이트씩·블록 크기에 맞춰·어긋나게 나눈 update가 한 번에 넣은 것과 같고, finalize는 상태를 바꾸지 않는다")
+    @Test("Bytewise, block-aligned, and unaligned updates match a single update, and finalize preserves state")
     func incremental() {
         let data = pattern(1000, 5, 1)
         let whole = BLAKE2b.hash(data)
@@ -118,7 +118,7 @@ struct BLAKE2bTests {
                 hasher.update(data[start..<end])
                 start = end
             }
-            #expect(hasher.finalize() == whole, "조각 \(chunk)바이트")
+            #expect(hasher.finalize() == whole, "\(chunk)-byte chunks")
             #expect(hasher.finalize() == whole)
         }
         var hasher = BLAKE2b()
