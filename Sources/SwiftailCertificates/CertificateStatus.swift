@@ -21,3 +21,22 @@ public struct CertificateStatus: Sendable, Equatable {
         self.nextAttempt = nextAttempt
     }
 }
+
+extension CertificateStatus: CustomStringConvertible, CustomReflectable {
+    /// 로그에 남겨도 되는 것만 표시한다. `domain`에는 tailnet 이름이 들어 있어 가린다(동작 K2).
+    public var description: String {
+        """
+        CertificateStatus(notAfter: \(String(describing: notAfter)), lastFailure: \(String(describing: lastFailure)), \
+        nextAttempt: \(String(describing: nextAttempt)))
+        """
+    }
+
+    /// 반영과 덤프에서 `domain`을 뺀다.
+    public var customMirror: Mirror {
+        Mirror(
+            self,
+            children: ["notAfter": notAfter as Any, "lastFailure": lastFailure as Any, "nextAttempt": nextAttempt as Any],
+            displayStyle: .struct
+        )
+    }
+}

@@ -41,6 +41,7 @@ extension ControlClient {
         )
         let httpRequest = connection.jsonRequest("POST", path: "/machine/map", nodeKey: nodeKey)
         let body = try Self.encode(request)
+        sentTKAHead = tkaHead
         try await withControlTimeout(timeouts.request) {
             var reader = try await connection.responseStream(to: httpRequest, body: body)
             try Self.check(status: reader.status, retryAfter: reader.header("retry-after"))

@@ -3,7 +3,7 @@
 //
 // - 맵 스트림에 시험이 정한 응답을 보낸다: 스트림이 열릴 때의 첫 응답과, 열린 스트림에 밀어 넣는 응답.
 // - TKA RPC 셋에 답한다. 서버 쪽 서명 권한 상태는 실제 `Authority`라서 동기화의 답(`MissingAUMs`)이 진짜 계산이다.
-//   경로마다 고정 답을 걸거나(`faults`) 답을 붙들어 둘 수 있다(`hold`·`release`).
+//   경로마다 고정 답을 걸거나(`faults`) 답을 붙들어 둘 수 있다(`hold`·`release`). 상태 올리기도 붙들 수 있다.
 //
 // 흐름 제어 창은 갱신하지 않는다(클라이언트는 받는 창을 강제하지 않는다).
 
@@ -22,6 +22,8 @@ final class LockFakeControlServer: Sendable {
     static let bootstrapPath = "/machine/tka/bootstrap"
     static let syncOfferPath = "/machine/tka/sync/offer"
     static let syncSendPath = "/machine/tka/sync/send"
+    /// 상태 올리기와 맵 스트림의 경로. `faults`에 `hold`를 걸면 상태 올리기(스트림이 아닌 요청)만 붙든다.
+    static let mapPath = "/machine/map"
 
     /// 서버가 받은 HTTP/2 요청 하나.
     struct Request: Sendable {
@@ -185,6 +187,9 @@ final class LockFakeControlServer: Sendable {
         let object = request.object
         let base64 = { (bytes: [UInt8]) in Data(bytes).base64EncodedString() }
         switch request.path {
+        case mapPath:
+            // 붙들어 둔 상태 올리기를 놓을 때만 여기 온다.
+            return .respond(status: 200, body: [])
         case bootstrapPath:
             guard let authority = lock.authority, let checkpoint = authority.aums.first else {
                 return .json(#"{"DisablementSecret":"\#(base64(lock.disablementSecret))"}"#)
@@ -359,7 +364,12 @@ final class LockFakeControlServer: Sendable {
                 Self.send(.json(#"{"MachineAuthorized":true}"#), on: stream, over: link)
             case "/machine/map":
                 guard request.object["Stream"] as? Bool == true else {
-                    Self.sendHead(200, on: stream, over: link, endStream: true)
+                    // 상태 올리기. 고정 답(`hold`)이 걸려 있으면 붙들어 둔다.
+                    if case .hold = state.lock.faults[request.path] {
+                        state.held.append((request, link, stream))
+                    } else {
+                        Self.sendHead(200, on: stream, over: link, endStream: true)
+                    }
                     return
                 }
                 Self.sendHead(200, on: stream, over: link, endStream: false)

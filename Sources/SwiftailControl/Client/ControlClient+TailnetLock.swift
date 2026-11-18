@@ -330,9 +330,13 @@ extension ControlClient {
         }
     }
 
-    /// 로컬 머리가 마지막으로 올린 값과 달라졌으면 상태 올리기를 한 번 더 건다(동작 N4, Go `SetTKAHead`).
+    /// 로컬 머리가 마지막으로 보낸 값과 달라졌으면 상태 올리기를 한 번 더 건다(동작 N4, Go `SetTKAHead`).
+    ///
+    /// 응답을 받은 값(`uploadedTKAHead`)이 아니라 보낸 값과 견준다. 올리는 응답을 기다리는 사이 머리가 바뀌어도(lock이 꺼져
+    /// 빈 머리로 돌아가도) 그 응답 뒤에 지금 머리를 올린다. Go는 바뀔 때마다 세대를 올려 같은 일을 한다(`auto.go`
+    /// `updateControl`·`updateRoutine`). 같은 머리를 거듭 올리지 않는 것은 `uploadStatus`가 맡는다.
     private func announceLockHead() {
-        guard lockHeadText != uploadedTKAHead, !isStatusChangeQueued, let signals else { return }
+        guard lockHeadText != sentTKAHead, !isStatusChangeQueued, let signals else { return }
         isStatusChangeQueued = true
         signals.yield(.statusChanged)
     }
