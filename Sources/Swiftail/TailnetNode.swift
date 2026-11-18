@@ -10,41 +10,43 @@ import SwiftailMagicsock
 import SwiftailNetstack
 import os
 
-/// tailnet의 노드 하나. 터널 장치(utun 또는 메모리)로 IP 패킷을 주고받고, 앱이 OS에 적용할 터널 설정을 내고, 서비스 IP의
-/// MagicDNS 질의에 답한다. 피어와는 직접 UDP 경로를 찾아 쓰고, 찾지 못하거나 끊기면 DERP 중계로 보낸다. `.inProcess`
-/// 장치에서는 OS 없이 프로세스 안의 TCP 스택으로 듣고 건다(`listen(port:)`, `connect(to:port:)`).
+/// A node on a tailnet. Exchanges IP packets through a tunnel device (utun or in-memory), publishes tunnel settings for
+/// the app to apply to the OS, and answers MagicDNS queries for the service IP. Finds and uses direct UDP paths to
+/// peers. Falls back to DERP relay if it cannot find a path or the path drops. With an `.inProcess` device, listens and
+/// connects using the in-process TCP stack without OS sockets (`listen(port:)`, `connect(to:port:)`).
 ///
-/// 이 actor는 가장자리다. 프로토콜의 판단은 `ControlClient`(등록·맵), `DERPClient`(중계), 그리고 입출력 없는 상태 기계들
-/// (`TailnetEngine`: WireGuard·필터·로컬 응답, `Magicsock`: 경로 찾기·STUN·홈 지역, `TCPStack`: 프로세스 안의 TCP,
-/// `NodeStateMachine`: 노드 상태, `NetworkSettingsPublisher`: 설정 내기, `DefaultLink`: 망 전환 판정)이 하고, 여기서는
-/// 그것들과 장치·소켓·시계를 잇는다.
+/// This actor is the edge. Protocol decisions belong to `ControlClient` (registration and maps), `DERPClient` (relay),
+/// and the I/O-free state machines: `TailnetEngine` (WireGuard, filtering, local replies), `Magicsock` (path discovery,
+/// STUN, home region), `TCPStack` (in-process TCP), `NodeStateMachine` (node state), `NetworkSettingsPublisher`
+/// (settings publication), and `DefaultLink` (network change decisions). This actor connects them to devices, sockets,
+/// and clocks.
 ///
-/// 상태 기계는 값 타입이라 이 actor의 저장 프로퍼티로 두고 제자리에서만 바꾼다. 사건 하나(받은 UDP, 받은 DERP 패킷, 장치에서
-/// 읽은 IP 패킷, 타이머)를 처리할 때는 한쪽의 출력을 다른 쪽에 넘기는 일을 `await` 없이 끝까지 돌리고, 입출력은 통로에
-/// 넣기만 한다. 그래서 actor 재진입이 두 상태 사이에 끼어들지 못한다. 시각(`ContinuousClock.now`, `Date()`)을 만드는 곳도
-/// 여기뿐이다.
+/// The state machines are value types stored in this actor's properties and mutated only in place. For one event
+/// (received UDP, received DERP packet, IP packet read from the device, or timer), run outputs between components to
+/// completion without `await` and only enqueue I/O. This prevents actor reentrancy between their states. This is also
+/// the only place that obtains current time (`ContinuousClock.now`, `Date()`).
 ///
-/// 동시성은 구조적이다. 모든 일은 `run()` 안의 TaskGroup 자식이고, `run()`을 부른 Task를 취소하면 모두 멈춘다.
+/// Concurrency is structured. All work runs as children of the TaskGroup in `run()`. Canceling the Task that called `run()` stops all of it.
 ///
 /// ```
 /// run()
-///  └ TaskGroup: 노드의 수명. 자식 하나가 끝나면 나머지를 취소하고 run()이 돌아온다
-///     ├ control.run()             등록, 맵 스트림, 끊기면 다시 잇기. 끝나는 실패면 던진다
-///     ├ follow(control)           제어 사건 → 엔진·Magicsock, 상태 기계, 설정
-///     ├ forwardLoginRequests      startInteractiveLogin() → 제어
-///     ├ forwardInterfaces         setDefaultInterface()가 고른 인터페이스 → 제어(다시 잇기)
-///     ├ uploadLocalStatus         Magicsock이 바꾼 엔드포인트·홈 지역 → 제어
-///     ├ receiveUDP()              열린 UDP 소켓마다 데이터그램 → Magicsock. 소켓이 닫히면 그 소켓의 일이 끝난다
-///     ├ rebindUDP()               재결속 요청마다 새 소켓을 연다(같은 포트, 안 되면 0) → Magicsock.rebind
-///     ├ maintainDERP()            열린 지역 연결마다 아래 묶음 하나. 연결의 우편함을 닫으면 그 묶음이 접힌다
-///     │   └ TaskGroup: DERP 지역 연결 하나의 수명
+///  └ TaskGroup: Node lifetime. When one child ends, cancel the rest and return from run()
+///     ├ control.run()             Register, stream maps, and reconnect on disconnect. Throw on terminal failure
+///     ├ follow(control)           Control events → engine and Magicsock, state machine, settings
+///     ├ forwardLoginRequests      startInteractiveLogin() → control
+///     ├ forwardInterfaces         Interface selected by setDefaultInterface() → control (reconnect)
+///     ├ uploadLocalStatus         Endpoints and home region changed by Magicsock → control
+///     ├ receiveUDP()              Datagrams from each open UDP socket → Magicsock. Work for a socket ends when it closes
+///     ├ rebindUDP()               Open a new socket on each rebind request (same port, or 0 on failure) → Magicsock.rebind
+///     ├ maintainDERP()            One group below per open region connection. Closing its mailbox ends the group
+///     │   └ TaskGroup: Lifetime of one DERP region connection
 ///     │      ├ client.run()
-///     │      ├ client.events → Magicsock, 상태 기계
-///     │      └ 이 지역으로 보낼 데이터그램 → client.send. 우편함이 닫히면 끝나고 묶음 전체를 접는다
-///     ├ runTimer()                엔진·Magicsock·스택의 이른 기한에 깨어나 셋 다 advance
-///     ├ releaseHandles()          버려진 TailnetConnection·TailnetListener(deinit) → RST로 끊기, 듣기 그만두기
-///     ├ awaitFailure()            재결속에서 UDP를 열지 못함, 메모리 장치 실패(시험) → 그 실패로 끝난다
-///     └ readTunnel()              (utun일 때) 장치에서 읽은 패킷 → 엔진. 장치가 닫히면 tunnelDeviceClosed로 끝난다
+///     │      ├ client.events → Magicsock, state machine
+///     │      └ Datagrams for this region → client.send. Mailbox closure ends this and winds down the group
+///     ├ runTimer()                Wake at the earliest engine, Magicsock, or stack deadline and advance all three
+///     ├ releaseHandles()          Released TailnetConnection or TailnetListener (deinit) → abort with RST or stop listening
+///     ├ awaitFailure()            Could not open UDP on rebind, or in-memory device failure (tests) → end with that failure
+///     └ readTunnel()              (With utun) Packets read from the device → engine. Device closure ends with tunnelDeviceClosed
 /// ```
 ///
 /// ```swift
@@ -52,153 +54,160 @@ import os
 ///     configuration: .init(stateDirectory: directory, hostname: "rd-phone-1a2b3c4d"),
 ///     device: .utun(fileDescriptor: descriptor, mtu: 1280))
 /// let runTask = Task { try await node.run() }
-/// for await settings in node.networkSettings { … }   // 앱이 OS에 적용
-/// runTask.cancel(); _ = await runTask.result          // 정지
+/// for await settings in node.networkSettings { … }   // The app applies these settings to the OS
+/// runTask.cancel(); _ = await runTask.result          // Stop
 /// ```
 ///
-/// 계약 `docs/contracts/SwiftailTunnel.md`, `docs/contracts/SwiftailEngine.md` "노드 API (`Swiftail`)"와 "M4에서 바뀌는 것",
-/// `docs/contracts/SwiftailNetstack.md` 동작 N·A.
+/// Contract `docs/contracts/SwiftailTunnel.md`, `docs/contracts/SwiftailEngine.md` “Node API (`Swiftail`)” and “Changes
+/// in M4,” and `docs/contracts/SwiftailNetstack.md` behaviors N and A.
 public actor TailnetNode {
-    /// 읽지 않은 사건 수의 한도. 넘으면 오래된 것부터 버린다.
+    /// The unread event limit. Drops the oldest events first on overflow.
     static let eventBufferLimit = 64
-    /// 읽지 않은 받은 패킷 수의 한도(메모리 장치). 넘으면 오래된 것부터 버린다(IP는 원래 그렇다).
+    /// The unread inbound packet limit for an in-memory device. Drops the oldest first on overflow, as IP allows.
     static let inboundPacketLimit = 256
-    /// DERP로 아직 넘기지 못한 데이터그램 수와 바이트 합의 한도(지역 연결마다). 넘으면 오래된 것부터 버린다. WireGuard가
-    /// 다시 보낸다(계약 동작 M).
+    /// The count and total byte limits for data still waiting to go over DERP, per region connection. Drops the oldest
+    /// datagrams first on overflow. WireGuard retransmits them (contract behavior M).
     static let outboundDatagramLimit = 256
     static let outboundByteLimit = 1 << 20
 
-    /// 비밀 없는 요약만 남긴다: 상태 전이, 제어·DERP 연결과 끊김, 경로 전환, 재결속, 설정 산출. 키·인증 키·로그인 URL·
-    /// 주소 전체·DNS 이름은 남기지 않는다(첫 사용처 검토 결과 5).
+    /// Logs only summaries without secrets: state transitions, control and DERP connects and disconnects, path changes,
+    /// rebinding, and settings computation. Omits keys, auth keys, login URLs, full addresses, and DNS names (first
+    /// adopter review result 5).
     static let log = Logger(subsystem: "Swiftail", category: "node")
 
     let configuration: NodeConfiguration
     let device: TunnelDevice
-    /// utun 장치의 인터페이스 이름. `init`이 읽는다. 기본 인터페이스 통지에서 자기 utun을 걸러 낸다(동작 N 1).
+    /// The utun device's interface name. `init` reads it. Used to filter out the node's own utun from default interface
+    /// notifications (behavior N 1).
     let tunnelName: String?
     let identityStore: NodeIdentityStore
-    /// 읽지 않은 사건. `events`가 여기서 당겨 간다(`NodeEventQueue`).
+    /// Unread events. `events` pulls from this queue (`NodeEventQueue`).
     nonisolated let eventQueue = NodeEventQueue()
     let inboundContinuation: AsyncStream<[UInt8]>.Continuation
     let settingsContinuation: AsyncStream<TunnelNetworkSettings>.Continuation
     private let eventStream: AsyncStream<NodeEvent>
     private let inboundStream: AsyncStream<[UInt8]>
     private let settingsStream: AsyncStream<TunnelNetworkSettings>
-    /// 인증서 관리자에게 낼 사실(`certificateFacts`)의 구독.
+    /// The subscription for facts published to the certificate manager (`certificateFacts`).
     nonisolated let certificateFactsPublisher = CertificateFactsPublisher(CertificateFacts(state: .starting, netmap: nil))
-    /// `startInteractiveLogin()`이 `run()` 밖에서도 불릴 수 있으므로 요청을 흐름에 담아 두고 자식이 제어로 넘긴다.
+    /// `startInteractiveLogin()` can be called outside `run()`, so buffer requests in the stream and have a child pass them to control.
     private let loginRequests: AsyncStream<Void>
     private let loginContinuation: AsyncStream<Void>.Continuation
-    /// 제어 연결을 묶을 인터페이스. 마지막 것만 의미가 있다.
+    /// The interface to bind the control connection to. Only the latest one matters.
     private let interfaceRequests: AsyncStream<NWInterface>
     let interfaceContinuation: AsyncStream<NWInterface>.Continuation
-    /// 제어 서버에 올릴 상태. 마지막 것만 의미가 있다.
+    /// The status to upload to the control server. Only the latest one matters.
     private let statusUploads: AsyncStream<ControlClient.LocalStatus>
     let statusUploadContinuation: AsyncStream<ControlClient.LocalStatus>.Continuation
-    /// 새로 연 DERP 지역 연결. `maintainDERP()`가 받아 돌린다. 그 자식이 돌기 전에 연 연결도 잃지 않게 여기서 만든다.
+    /// Newly opened DERP region connections. `maintainDERP()` takes and runs them. Created here so connections opened
+    /// before that child starts are retained.
     let openedDERPLinks: AsyncStream<DERPLink>
     let openedDERPLinkContinuation: AsyncStream<DERPLink>.Continuation
-    /// 새로 연 UDP 소켓. `receiveUDP()`가 받아 읽는다.
+    /// Newly opened UDP sockets. `receiveUDP()` takes and reads them.
     let openedSockets: AsyncStream<DatagramSocket>
     let openedSocketContinuation: AsyncStream<DatagramSocket>.Continuation
-    /// UDP 소켓을 새 인터페이스로 다시 열어 달라는 요청. 겹치면 하나로 합친다.
+    /// Requests to reopen the UDP socket on a new interface. Overlapping requests coalesce into one.
     let rebindRequests: AsyncStream<Void>
     let rebindContinuation: AsyncStream<Void>.Continuation
-    /// 버려진 연결·리스너 핸들. `deinit`은 기다릴 수 없으므로 여기에 넣고, `run()`의 자식이 받아 끊는다(계약 동작 N9).
-    /// `run()`이 끝나면 닫혀 그 뒤의 것은 버려진다.
+    /// Released connection and listener handles. `deinit` cannot wait, so enqueue them here. A child in `run()` takes
+    /// and closes them (contract behavior N9). The stream closes at the end of `run()`, and later items are dropped.
     let handleReleaseStream: AsyncStream<HandleRelease>
     nonisolated let handleReleases: AsyncStream<HandleRelease>.Continuation
-    /// `run()`을 끝내는 실패. 처음 것만 쓴다.
+    /// A failure that ends `run()`. Only the first is used.
     private let failures: AsyncStream<NodeError>
     let failureContinuation: AsyncStream<NodeError>.Continuation
     private(set) var hasRun = false
-    /// `run()`이 돌고 있다(시작 검사를 마친 뒤부터 끝날 때까지).
+    /// `run()` is in progress, from the end of startup checks until completion.
     var isRunning = false
 
-    /// 이 노드의 disco 개인 키. 저장하지 않고 노드마다 새로 만든다(노트 disco-magicsock 4.10 4). 사건·오류·`dump`에
-    /// 나오지 않는다(`customMirror`).
+    /// This node's private disco key. Generated anew per node and never stored (disco-magicsock notes §4.10 item 4).
+    /// Omitted from events, errors, and `dump` (`customMirror`).
     let discoKey = Curve25519.KeyAgreement.PrivateKey()
 
-    // MARK: 데이터면 상태
+    // MARK: Data Plane State
 
-    /// `run()` 동안 열려 있는 UDP 소켓. WireGuard·disco·STUN이 함께 쓴다. 재결속하는 동안 잠깐 nil이다.
+    /// The UDP socket open during `run()`, shared by WireGuard, disco, and STUN. Briefly nil while rebinding.
     var socket: DatagramSocket?
-    /// 마지막으로 읽은 인터페이스 주소. `Magicsock`의 local 엔드포인트가 된다.
+    /// The last interface addresses read. Become `Magicsock`'s local endpoints.
     var interfaceAddresses: (regular: [SwiftailBase.IPAddress], loopback: [SwiftailBase.IPAddress]) = ([], [])
-    /// `run()` 동안 쓰는 utun 장치(복제본). 메모리 장치면 nil.
+    /// The duplicate utun device used during `run()`. Nil for an in-memory device.
     var tunnel: UTUNDevice?
-    /// 등록을 마친 뒤에 생긴다. node 키가 바뀌면 `magicsock`과 함께 새로 만든다.
+    /// Created after registration. Recreated together with `magicsock` if the node key changes.
     var engine: TailnetEngine?
-    /// 피어와의 경로를 고른다. `engine`과 함께 생기고 함께 바뀐다.
+    /// Selects paths to peers. Created and replaced with `engine`.
     var magicsock: Magicsock?
-    /// 엔진과 DERP 클라이언트가 쓰는 node 개인 키. 신원 파일에서 읽는다.
+    /// The private node key used by the engine and DERP client. Read from the identity file.
     var nodeKey: Curve25519.KeyAgreement.PrivateKey?
-    /// 마지막으로 받은 netmap. 엔진을 새로 만들 때 다시 적용하고, DERP 지역의 서버를 찾고, `status`를 만든다.
+    /// The last netmap received. Reapplied when recreating the engine and used to find DERP region servers and create `status`.
     var lastNetmap: Netmap?
-    /// 데이터면의 주소 → 그 주소의 주인 노드. 엔진이 피어를 다시 계산할 때마다(netmap 적용, 키 만료) 엔진의 표로 바꾼다.
-    /// `whoIs`가 읽고, 스택의 주인 확인(`Netstack.addressOwners`)이 여기서 나온다(`updateAddressOwners(for:)`).
+    /// Maps data plane addresses to their owner nodes. Replaces it with the engine's table whenever the engine
+    /// recomputes peers (netmap application or key expiration). `whoIs` reads it. The stack's ownership check
+    /// (`Netstack.addressOwners`) also comes from it (`updateAddressOwners(for:)`).
     var addressOwners: [SwiftailBase.IPAddress: Node] = [:]
-    /// 데이터면 피어의 키와 이름.
+    /// Data plane peer keys and names.
     var peerDirectory = PeerDirectory()
-    /// `Magicsock`이 고른 홈 DERP 지역. 0이면 아직 없다.
+    /// The home DERP region selected by `Magicsock`. 0 means none yet.
     var homeRegion: Int64 = 0
-    /// 열려 있는 DERP 지역 연결. 지역 ID → 연결.
+    /// Open DERP region connections, keyed by region ID.
     var derpLinks: [Int64: DERPLink] = [:]
-    /// 서버와 연결되어 있는 지역.
+    /// Regions with an established server connection.
     var connectedDERPRegions: Set<Int64> = []
-    /// 제어 연결이 끊긴 뒤 아직 netmap을 다시 받지 못했다. 다시 이어진 것을 로그에 한 번 남기는 데만 쓴다.
+    /// The control connection dropped and no netmap has arrived since. Used only to log reconnection once.
     var isControlDisconnected = false
-    /// 제어 서버에 올릴 이 노드의 상태(disco 키, 엔드포인트, 홈 지역).
+    /// This node's status to upload to the control server (disco key, endpoints, home region).
     var localStatus = ControlClient.LocalStatus()
-    /// 시험용: 이 원격 포트로 보낼 UDP와 이 포트에서 온 UDP를 소켓 경계에서 버린다.
+    /// For tests. Drops UDP sent to this remote port and UDP received from this port at the socket edge.
     var blockedUDPPorts: Set<UInt16> = []
-    /// 이번 처리에서 보낼 UDP 데이터그램. 가장 바깥 처리가 닫힐 때 소켓의 송신 큐로 넘긴다.
+    /// UDP datagrams to send during this processing pass. Passed to the socket's send queue when the outermost pass ends.
     var outgoingUDP: [DatagramSocket.OutgoingDatagram] = []
-    /// 경로 사건 로그에 붙일 진단(피어 번호, 같은 피어의 앞 사건 뒤 시간, 버린 disco 개수).
+    /// Diagnostics attached to path event logs (peer number, time since the same peer's previous event, and dropped disco counts).
     var pathEventTally = PathEventTally()
 
-    // MARK: 기본 인터페이스 (동작 N)
+    // MARK: Default Interface (Behavior N)
 
-    /// 앱이 마지막으로 알린 기본 인터페이스. 새로 여는 모든 소켓과 연결을 여기에 묶는다. nil이면 묶지 않는다.
+    /// The last default interface reported by the app. All new sockets and connections bind to it. Nil leaves them unbound.
     var defaultInterface: NWInterface?
-    /// 지금 소켓·연결을 묶은 인터페이스와 그때의 주소. `run()` 동안만 있다.
+    /// The interface currently bound to sockets and connections and the addresses read at the time. Present only during `run()`.
     var defaultLink: DefaultLink?
 
-    // MARK: 알린 상태
+    // MARK: Published State
 
     var stateMachine = NodeStateMachine()
-    /// 마지막으로 `statusChanged`를 낼 때의 `status`. 처음 모습(`.starting`, netmap 없음)에서 시작한다.
+    /// The `status` at the last `statusChanged`. Starts with the initial snapshot (`.starting`, no netmap).
     var announcedStatus = NodeStatus(state: .starting, netmap: nil, networkSettings: nil)
     var settingsPublisher = NetworkSettingsPublisher()
-    /// `run()` 동안의 제어 클라이언트. `setDNS`가 쓴다.
+    /// The control client used during `run()`. Used by `setDNS`.
     var control: ControlClient?
 
-    // MARK: 프로세스 안의 TCP (`.inProcess`)
+    // MARK: In-Process TCP (`.inProcess`)
 
-    /// 스택과 응용이 쥔 연결. `.inProcess` 장치의 `run()` 동안만 있다(계약 M6 동작 N).
+    /// The stack and application-held connections. Present only during `run()` with an `.inProcess` device (contract M6 behavior N).
     var netstack: Netstack?
-    /// 열린 리스너. `run()` 전에 연 것은 스택 없이 적어 두었다가 `run()`이 시작할 때 스택에 올린다(동작 A1).
+    /// Open listeners. Records listeners opened before `run()` without a stack and installs them on the stack when
+    /// `run()` starts (behavior A1).
     var listenerRecords: [UInt64: ListenerRecord] = [:]
     var nextListenerToken: UInt64 = 1
-    /// 시험용: 스택과 엔진 사이에서 패킷을 버리는 확률과 난수(계약 동작 N11). nil이면 버리지 않는다.
+    /// For tests. The packet loss probability and random number generator between the stack and engine (contract
+    /// behavior N11). Nil disables drops.
     var inProcessLoss: PacketLoss?
 
-    // MARK: 처리의 깊이
+    // MARK: Processing Depth
 
-    /// 열려 있는 처리의 수(`beginProcessing()`). 0으로 돌아갈 때 쌓인 일을 마무리한다(`endProcessing(at:)`).
+    /// The number of open processing passes (`beginProcessing()`). Finishes accumulated work when it returns to 0 (`endProcessing(at:)`).
     var processingDepth = 0
 
-    // MARK: 타이머를 깨우는 통로
+    // MARK: Timer Wakeup Channel
 
-    /// 다음 기한이 타이머가 잠든 시각보다 앞당겨졌다.
+    /// The next deadline moved earlier than the timer's scheduled wakeup.
     var timerChanged: AsyncStream<Void>.Continuation?
-    /// 타이머가 깨어나기로 한 시각.
+    /// The scheduled wakeup time.
     var armedDeadline: ContinuousClock.Instant?
 
-    /// 설정과 장치를 검사한다. 파일·소켓·Task를 만들지 않는다(utun 검사는 읽기만 하는 시스템 호출이다).
+    /// Validates configuration and the device. Creates no files, sockets, or Tasks. utun validation uses read-only system calls.
     ///
-    /// - Throws: `NodeError.invalidConfiguration`. 상태 디렉터리가 파일 URL이 아니거나, 제어 서버 URL이 `http(s)://`가
-    ///   아니거나 호스트가 없거나, 호스트 이름이 비었거나, MTU가 1280…1420 밖이거나, utun 기술자가 아니다.
+    /// - Throws: `NodeError.invalidConfiguration` if the state directory is not a file URL, the control server URL does
+    ///   not use `http(s)://` or has no host, the hostname is empty, the MTU is outside 1280…1420, or the descriptor is
+    ///   not a utun descriptor.
     public init(configuration: NodeConfiguration, device: TunnelDevice = .memory()) throws(NodeError) {
         try configuration.validate()
         tunnelName = try device.validate()
@@ -219,43 +228,46 @@ public actor TailnetNode {
         (failures, failureContinuation) = AsyncStream.makeStream(of: NodeError.self, bufferingPolicy: .bufferingOldest(1))
     }
 
-    /// 상태·경로·lock·모습의 사건. 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// Events for changes in state, paths, lock, and status. One subscriber. The stream ends when `run()` ends.
     ///
-    /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. `statusChanged`는 읽지 않은 것 하나만 맨 뒤에 남고
-    /// 이 한도에 세지 않는다(`NodeEvent.statusChanged`).
+    /// Keeps only the newest 64 unread events and drops older events first. Keeps only one unread `statusChanged` at
+    /// the end, outside this limit (`NodeEvent.statusChanged`).
     ///
-    /// 소비하던 Task를 취소하면 흐름이 끝나고 다시 구독할 수 없다. 앱의 한 곳에서 한 번 구독한다.
+    /// Canceling the consumer Task ends the stream and prevents resubscription. Subscribe once from one place in the app.
     public nonisolated var events: AsyncStream<NodeEvent> { eventStream }
 
-    /// 앱이 OS에 적용할 터널 설정. 바뀐 경우에만 나오고, 읽지 않은 것은 가장 새 것 하나만 남는다(동작 E).
-    /// 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// Tunnel settings for the app to apply to the OS. Emits only changes and keeps only the newest unread settings
+    /// (behavior E). One subscriber. The stream ends when `run()` ends.
     public nonisolated var networkSettings: AsyncStream<TunnelNetworkSettings> { settingsStream }
 
-    /// 메모리 장치일 때 장치로 쓸 IP 패킷: 피어가 보냈고 필터를 통과한 것, 노드가 로컬에서 만든 응답(MagicDNS 등), 자기
-    /// 주소로 보내 되돌아온 것. utun·`.inProcess` 장치일 때는 아무것도 내지 않는다(패킷은 utun이나 스택으로 간다).
-    /// 구독자는 하나다. `run()`이 끝나면 흐름도 끝난다.
+    /// IP packets for the in-memory device to write, including packets from peers that passed the filter, locally
+    /// generated replies (such as MagicDNS), and packets sent to local addresses and looped back. Emits nothing for
+    /// utun and `.inProcess` devices because packets go to utun or the stack. One subscriber. The stream ends when
+    /// `run()` ends.
     ///
-    /// 소비가 느리면 가장 새 것 256개까지만 쥐고 오래된 것부터 버린다.
+    /// If the consumer falls behind, keeps only the newest 256 and drops the oldest first.
     public nonisolated var inboundPackets: AsyncStream<[UInt8]> { inboundStream }
 
-    /// 지금 노드의 모습. 바뀌면 `events`에 `statusChanged`가 나온다.
+    /// The node's current status. Changes produce `statusChanged` in `events`.
     public var status: NodeStatus {
         NodeStatus(state: stateMachine.state, netmap: lastNetmap, networkSettings: settingsPublisher.published)
     }
 
-    /// 등록하고, netmap을 받아 데이터면을 유지한다. 호출한 Task가 취소될 때까지 돌아오지 않는다. 노드 하나에 한 번만 부른다.
+    /// Registers the node, receives netmaps, and maintains the data plane. Does not return until the calling Task is
+    /// canceled. Call once per node.
     ///
-    /// 끊긴 연결은 안에서 물러났다가 다시 잇는다. 다시 켜도 소용없는 실패만 던진다: 제어의 끝난 실패(`control`), 장치 닫힘
-    /// (`tunnelDeviceClosed`), 같은 프로세스의 다른 노드가 상태 디렉터리를 쓰는 중(`stateDirectoryInUse`, 파일·소켓을 열기
-    /// 전), UDP 소켓을 열지 못함(`udpUnavailable`). 실행 중이든 끝난 뒤든 다시 부르면 `invalidConfiguration`이다.
+    /// On disconnect, backs off and reconnects internally. Throws only failures that restarting would not resolve: a
+    /// terminal control failure (`control`), device closure (`tunnelDeviceClosed`), another node in the process using
+    /// the state directory (`stateDirectoryInUse`, before opening files or sockets), or inability to open a UDP socket
+    /// (`udpUnavailable`). Calling again during or after a run throws `invalidConfiguration`.
     ///
-    /// `Task { }` 안에서 부를 때는 `do throws(NodeError) { try await node.run() } catch { … }`로 적어야 `catch`의
-    /// `error`가 `NodeError`다. `throws(NodeError)`를 빼면 `any Error`로 추론된다.
+    /// Inside `Task { }`, write `do throws(NodeError) { try await node.run() } catch { … }` to get a `NodeError` as the
+    /// `error` in `catch`. Omitting `throws(NodeError)` infers `any Error`.
     public func run() async throws(NodeError) {
-        guard !hasRun else { throw .invalidConfiguration("run()은 노드 하나에 한 번만 부른다") }
+        guard !hasRun else { throw .invalidConfiguration("Call run() only once per node") }
         hasRun = true
         defer {
-            // 시작 검사에서 끝났으면 `run()` 전에 연 리스너가 여기서 끝난다.
+            // If startup checks end the run, close listeners opened before `run()` here.
             stopNetstack()
             eventQueue.finish()
             inboundContinuation.finish()
@@ -272,7 +284,7 @@ public actor TailnetNode {
                 throw NodeError(openingTunnel: error)
             }
         }
-        // 읽지 못하면 local 엔드포인트 없이 계속한다. STUN이 찾은 엔드포인트만 올라간다(계약 N1).
+        // If addresses cannot be read, proceed without local endpoints. Only endpoints found by STUN are advertised (contract N1).
         interfaceAddresses = (try? LocalInterfaceAddresses.current()) ?? ([], [])
         if let defaultInterface {
             defaultLink = DefaultLink(defaultInterface, addresses: interfaceAddresses)
@@ -289,8 +301,9 @@ public actor TailnetNode {
         isRunning = true
         defer {
             isRunning = false
-            // 끝난 노드는 키·세션·연결·기술자를 쥐지 않는다. `path(toPeerNamed:)`는 nil이 되고 `send`는 버린다.
-            // utun은 복제본만 닫는다(동작 U2). 소켓은 `stopNetstack()`이 송신 큐에 넣은 RST를 보낸 뒤 닫힌다.
+            // A stopped node retains no keys, sessions, connections, or descriptors. `path(toPeerNamed:)` returns nil
+            // and `send` drops input. Closes only the duplicate utun descriptor (behavior U2). The socket closes after
+            // sending the RSTs `stopNetstack()` placed in the send queue.
             self.socket?.closeAfterSending()
             self.socket = nil
             tunnel?.close()
@@ -304,7 +317,7 @@ public actor TailnetNode {
             defaultLink = nil
         }
         startNetstack()
-        // 위의 정리보다 먼저 돈다: 소켓과 엔진이 있을 때 열린 연결마다 RST를 낸다(동작 N8).
+        // Runs before the cleanup above, emitting one RST per open connection while the socket and engine still exist (behavior N8).
         defer { stopNetstack() }
 
         let control = ControlClient(
@@ -318,7 +331,7 @@ public actor TailnetNode {
         )
         self.control = control
         defer { self.control = nil }
-        // 0이 아닌 DiscoKey를 올려야 Go 피어가 이 노드를 피어로 만든다(노트 derp-stun 6절 7).
+        // Advertise a nonzero DiscoKey so Go peers install this node as a peer (derp-stun notes §6 item 7).
         localStatus = .init(discoKey: DiscoPublicKey(discoKey.publicKey))
         await control.setLocalStatus(localStatus)
         if let defaultInterface {
@@ -348,8 +361,9 @@ public actor TailnetNode {
                 group.addTask { await self.readTunnel(tunnel) }
             }
 
-            // 자식들은 취소될 때까지 돌므로, 하나라도 끝났다면 노드가 끝난 것이다. 나머지를 거두며 실패를 모은다.
-            // 제어가 실패하면 사건 흐름도 함께 끝나므로 어느 쪽이 먼저 돌아올지 모른다. 그래서 첫 결과만 보지 않는다.
+            // Children run until canceled, so if any child ends, the node has ended. Cancel the rest and collect
+            // failures. A control failure also ends the event stream, so either can return first. Check more than just
+            // the first result.
             var failure: NodeError?
             for await result in group {
                 group.cancelAll()
@@ -358,45 +372,47 @@ public actor TailnetNode {
             return failure
         }
         if let failure {
-            Self.log.error("노드가 끝남: \(failure.kind, privacy: .public)")
+            Self.log.error("Node terminated: \(failure.kind, privacy: .public)")
             throw failure
         }
-        Self.log.info("노드가 멈춤")
+        Self.log.info("Node stopped")
     }
 
-    /// 메모리 장치일 때 IP 패킷 하나를 넣는다(utun에서 읽은 것과 같은 처리). 보낼 수 없으면(등록 전, 피어 없음, 경로 없음)
-    /// 조용히 버린다. utun 장치와 `.inProcess` 장치일 때는 버린다.
+    /// Passes in one IP packet with an in-memory device, using the same processing as a utun read. Silently drops it
+    /// when unable to send (before registration, no peer, or no path). Drops it with utun and `.inProcess` devices.
     public func send(_ ipPacket: [UInt8]) {
         guard case .memory = device else { return }
         deliverFromDevice(ipPacket)
     }
 
-    /// 이름이 `fqdn`인 피어의 지금 경로. 그런 피어가 데이터면에 없거나 45초 넘게 주고받은 것이 없으면(유휴) nil.
+    /// The current path to the peer named `fqdn`. Nil if no such peer is in the data plane or it has neither sent nor
+    /// received traffic for more than 45 seconds (idle).
     ///
-    /// 이름은 끝의 점 하나를 떼고 ASCII 대소문자를 무시해 비교한다. 같은 이름이 둘이면 node ID가 작은 쪽이다.
-    /// 경로의 뜻은 Go `tailscale status`의 직접 주소(`CurAddr`)와 같다(`PeerPath`).
+    /// Compares names after removing one trailing dot and ignoring ASCII case. If two peers share a name, the lower
+    /// node ID wins. A path has the same meaning as the direct address (`CurAddr`) in Go `tailscale status`
+    /// (`PeerPath`).
     public func path(toPeerNamed fqdn: String) -> PeerPath? {
         guard let key = peerDirectory.key(named: fqdn) else { return nil }
         return magicsock?.path(to: key, at: .now)
     }
 
-    /// `stableID`인 피어까지의 경로. `path(toPeerNamed:)`와 뜻이 같고 찾는 열쇠만 다르다.
+    /// The path to the peer with `stableID`. Has the same meaning as `path(toPeerNamed:)` and uses a different lookup key.
     ///
-    /// 이름은 바뀔 수 있지만 `StableID`는 바뀌지 않으므로, 피어를 오래 기억하는 쪽(허용 목록, 페어링 기록)은 이것으로
-    /// 묻는다. netmap에 그 ID의 피어가 없으면 nil이다. 빈 문자열은 어떤 피어와도 맞지 않는다.
+    /// A name can change, but `StableID` stays fixed. Use this for persistent peer references such as allowlists and
+    /// pairing records. Nil if the netmap has no peer with that ID. An empty string matches no peer.
     public func path(toPeerWithStableID stableID: String) -> PeerPath? {
         guard !stableID.isEmpty, let key = lastNetmap?.peers.first(where: { $0.stableID == stableID })?.key else { return nil }
         return magicsock?.path(to: key, at: .now)
     }
 
-    /// 대화형 로그인 URL을 새로 요청한다(이미 등록되어 있어도). URL은 `.stateChanged(.needsLogin(url))`로 온다.
+    /// Requests a new interactive login URL even if already registered. The URL arrives via `.stateChanged(.needsLogin(url))`.
     public func startInteractiveLogin() {
         loginContinuation.yield()
     }
 
-    /// 시험 전용(공개 API 아님). 이 원격 UDP 포트로 보낼 것과 이 포트에서 온 것을 소켓 경계에서 버린다.
+    /// For tests only (outside the public API). At the socket edge, drops UDP sent to this remote port and received from this port.
     ///
-    /// 직접 경로가 끊긴 상황을 만든다. `Magicsock`과 엔진은 이 집합을 모른다. 기본은 빈 집합이다(계약 N8).
+    /// Simulates a broken direct path. `Magicsock` and the engine are unaware of this set. It is empty by default (contract N8).
     package func setBlockedUDPPorts(_ ports: Set<UInt16>) {
         blockedUDPPorts = ports
     }
@@ -419,7 +435,7 @@ public actor TailnetNode {
         }
     }
 
-    /// `run()`을 끝내는 실패를 기다린다.
+    /// Waits for a failure that ends `run()`.
     private func awaitFailure() async -> NodeError? {
         for await failure in failures {
             return failure
@@ -427,16 +443,16 @@ public actor TailnetNode {
         return nil
     }
 
-    /// 상태 기계가 낸 새 상태를 알린다.
+    /// Reports the new state emitted by the state machine.
     func announce(_ state: NodeState?) {
         guard let state else { return }
-        Self.log.info("상태: \(state.logName, privacy: .public)")
+        Self.log.info("State: \(state.logName, privacy: .public)")
         eventQueue.push(.stateChanged(state))
         announceStatusIfChanged()
         publishCertificateFacts()
     }
 
-    /// `status`가 마지막으로 알린 것과 다르면 `statusChanged`를 낸다. 한 번의 갱신에서 나오는 다른 사건 뒤에 부른다.
+    /// Emits `statusChanged` when `status` differs from the last reported value. Call after the other events from the same update.
     func announceStatusIfChanged() {
         let current = status
         guard current != announcedStatus else { return }
@@ -446,7 +462,7 @@ public actor TailnetNode {
 }
 
 extension TailnetNode: CustomReflectable {
-    /// node 개인 키, disco 개인 키, 엔진(WireGuard 세션)을 쥐므로 자식을 감춘다.
+    /// Hides its children because it holds the private node key, private disco key, and engine (WireGuard sessions).
     public nonisolated var customMirror: Mirror {
         Mirror(self, children: ["hostname": configuration.hostname])
     }
@@ -459,7 +475,7 @@ extension DefaultLink {
 }
 
 extension NodeState {
-    /// 로그에 남길 이름. 로그인 URL은 남기지 않는다.
+    /// A name for logging. Omits the login URL.
     var logName: String {
         switch self {
         case .starting: "starting"
@@ -471,16 +487,17 @@ extension NodeState {
 }
 
 extension NodeError {
-    /// utun을 복제하지 못한 실패. 검사(`init`) 뒤에 기술자가 닫혔거나 바뀐 것은 설정 오류, 그 밖은 장치를 쓸 수 없는 것이다.
+    /// A failure to duplicate utun. A descriptor closed or changed after validation (`init`) is a configuration error.
+    /// Other failures indicate the device is unavailable.
     init(openingTunnel error: SocketError) {
         if case .invalidDevice = error {
-            self = .invalidConfiguration("utun 기술자가 아니다")
+            self = .invalidConfiguration("Not a utun descriptor")
         } else {
             self = .tunnelDeviceClosed(error.message)
         }
     }
 
-    /// 로그에 남길 종류. 서버의 진단 문자열은 남기지 않는다.
+    /// The kind to log. Omits server diagnostic strings.
     var kind: String {
         switch self {
         case let .control(error): "control(\(error.kind))"
@@ -493,7 +510,7 @@ extension NodeError {
 }
 
 extension ControlError {
-    /// 로그에 남길 종류.
+    /// The kind to log.
     var kind: String {
         switch self {
         case .invalidConfiguration: "invalidConfiguration"
@@ -508,7 +525,7 @@ extension ControlError {
 }
 
 extension SocketError {
-    /// errno 이름 등 사람이 읽을 메시지. 경로나 키를 담지 않는다.
+    /// A human-readable message such as an errno name. Omits paths and keys.
     var message: String {
         switch self {
         case let .connectFailed(message), let .readFailed(message), let .bindFailed(message), let .sendFailed(message),

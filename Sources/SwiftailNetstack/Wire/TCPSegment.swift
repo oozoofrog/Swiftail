@@ -1,94 +1,101 @@
 import SwiftailBase
 
-/// 검증을 마친 TCP 세그먼트 하나. IP 패킷 바이트와 서로 바뀐다.
+/// A validated TCP segment that can be converted to or from IP packet bytes.
 ///
-/// 연결 상태 기계는 바이트가 아니라 이 값을 본다. 바이트열을 해석하는 일은 경계에서 한 번만 하고(`init(parsingIPPacket:)`),
-/// 그 뒤의 코드는 머리 길이·옵션·체크섬을 다시 따지지 않는다. 만드는 쪽도 이 값에서 한 번에 패킷 바이트를 낸다
+/// The connection state machine uses this value. Parsing bytes happens once at the edge (`init(parsingIPPacket:)`), so
+/// later code does not recheck header lengths, options, or checksums. Serialization also produces the packet bytes from
+/// this value in a single step
 /// (`ipPacket(hopLimit:)`).
 ///
-/// 담는 것은 상태 기계가 쓰는 필드뿐이다. urgent pointer와 CWR·ECE는 받을 때 버리고 보낼 때 0으로 둔다.
-/// 시퀀스·확인 번호는 `SequenceNumber`로만 다룬다.
+/// Stores only fields the state machine uses. Drops the urgent pointer, CWR, and ECE on receipt and sets them to 0 on
+/// send. Uses only `SequenceNumber` for sequence and acknowledgment numbers.
 ///
-/// 규격: RFC 9293 3.1(머리, 체크섬), 3.2(옵션), RFC 7323 2.2(Window Scale), RFC 2018 2·3(SACK-Permitted, SACK),
-/// `docs/protocol-notes/tcp-netstack.md` 3절,
-/// `docs/contracts/SwiftailNetstack.md` 동작 W.
+/// Specifications: RFC 9293 §3.1 (header, checksum), §3.2 (options), RFC 7323 §2.2 (Window Scale), RFC 2018 §§2 and 3
+/// (SACK-Permitted, SACK), `docs/protocol-notes/tcp-netstack.md` §3, `docs/contracts/SwiftailNetstack.md` behavior W.
 package struct TCPSegment: Sendable, Equatable {
-    /// 제어 비트. 상태 기계가 쓰는 다섯 개만 둔다.
+    /// Control bits. Contains the five the state machine uses.
     package struct Flags: OptionSet, Sendable {
-        /// TCP 머리의 플래그 바이트(오프셋 13)에서 쓰는 비트. 그 밖의 비트(URG, ECE, CWR)는 해석할 때 버린다.
+        /// The bits used in the TCP header's flags byte (offset 13). Parsing drops the other bits (URG, ECE, CWR).
         package let rawValue: UInt8
 
-        /// 비트 값으로 만든다. 위의 다섯 비트만 뜻이 있다.
+        /// Creates flags from their bit values. Only the five bits above are meaningful.
         package init(rawValue: UInt8) {
             self.rawValue = rawValue
         }
 
-        /// 보내는 쪽이 더 보낼 것이 없다.
+        /// The sender has no more data to send.
         package static let fin = Flags(rawValue: 0x01)
-        /// 시퀀스 번호를 맞춘다(연결을 연다).
+        /// Synchronizes sequence numbers to open a connection.
         package static let syn = Flags(rawValue: 0x02)
-        /// 연결을 끊는다.
+        /// Resets the connection.
         package static let rst = Flags(rawValue: 0x04)
-        /// 받는 쪽이 곧바로 응용에 넘긴다. 상태 기계는 쓰지 않는다.
+        /// The receiver passes data to the application immediately. The state machine does not use this flag.
         package static let psh = Flags(rawValue: 0x08)
-        /// `acknowledgmentNumber`가 뜻을 가진다.
+        /// `acknowledgmentNumber` is meaningful.
         package static let ack = Flags(rawValue: 0x10)
     }
 
-    /// IP 패킷 바이트를 세그먼트로 해석하지 못한 까닭. 어느 쪽이든 연결을 끊지 않고 그 패킷만 버린다.
+    /// The reason IP packet bytes could not be parsed as a segment. Each case drops only that packet and leaves the connection open.
     package enum ParseError: Error, Sendable, Equatable {
-        /// TCP(프로토콜 6)가 아니다. IPv6 확장 헤더가 앞에 붙은 패킷도 여기다(체인을 따라가지 않는다).
+        /// The packet is not TCP (protocol 6). This includes IPv6 packets with preceding extension headers, since the
+        /// parser does not follow the chain.
         case notTCP
-        /// 길이·버전·머리 길이가 맞지 않거나, 조각이거나, 옵션의 길이가 잘못됐다.
+        /// The length, version, or header length is invalid, the packet is fragmented, or an option length is invalid.
         case malformed
-        /// IPv4 머리나 TCP 세그먼트의 체크섬이 틀리다.
+        /// The IPv4 header or TCP segment checksum is incorrect.
         case badChecksum
     }
 
-    /// 출발 주소와 포트.
+    /// The source address and port.
     package var source: IPEndpoint
-    /// 목적 주소와 포트.
+    /// The destination address and port.
     package var destination: IPEndpoint
-    /// SEG.SEQ. SYN이 켜져 있으면 ISS(SYN 자신이 쓰는 번호)다.
+    /// SEG.SEQ. With SYN set, this is ISS, the sequence number SYN itself consumes.
     package var sequenceNumber: SequenceNumber
-    /// SEG.ACK. `.ack`가 꺼져 있으면 뜻이 없다(받은 값을 그대로 둔다).
+    /// SEG.ACK. Meaningless when `.ack` is clear. Preserves the received value.
     package var acknowledgmentNumber: SequenceNumber
-    /// 제어 비트.
+    /// The control bits.
     package var flags: Flags
-    /// SEG.WND. 머리에 실린 16비트 값 그대로다. 창 확장은 곱하지 않았다(SYN이 아닌 세그먼트는 상태 기계가 협상한 shift로 읽는다).
+    /// SEG.WND. The exact 16-bit value from the header, before window scaling. The state machine interprets non-SYN
+    /// segments using the negotiated shift.
     package var window: UInt16
-    /// MSS 옵션. SYN이 켜진 세그먼트에만 있다. 해석할 때 0은 기본값(IPv4 536, IPv6 1220)으로 바뀐다. 광고하지 않으면 `nil`.
+    /// The MSS option. Present only in segments with SYN set. Parsing replaces 0 with the default (536 for IPv4, 1220
+    /// for IPv6). Returns `nil` if not advertised.
     package var maximumSegmentSize: UInt16?
-    /// Window Scale 옵션의 shift. SYN이 켜진 세그먼트에만 있다. 해석할 때 14를 넘는 값은 14가 된다(RFC 7323 2.3). 광고하지 않으면 `nil`.
+    /// The Window Scale option shift. Present only in segments with SYN set. Parsing clamps values above 14 to 14 (RFC
+    /// 7323 §2.3). Returns `nil` if not advertised.
     package var windowScale: UInt8?
-    /// SACK-Permitted 옵션(RFC 2018 2). SYN이 켜진 세그먼트에서만 뜻이 있다(SYN이 아닌 세그먼트의 것은 해석할 때 버린다).
+    /// The SACK-Permitted option (RFC 2018 §2). Meaningful only in segments with SYN set. Parsing drops it from non-SYN segments.
     package var sackPermitted: Bool
-    /// SACK 옵션의 블록(RFC 2018 3), 옵션에 실린 순서 그대로. SYN이 꺼진 세그먼트에만 있다. 해석은 형식만 검사하고
-    /// 번호의 뜻(왼쪽 끝이 오른쪽 끝보다 앞인지, 창 안인지)은 따지지 않는다. 만들 때 4개를 넘으면 머리에 들어가지 않는다.
+    /// The SACK option blocks (RFC 2018 §3), in wire order. Present only in segments with SYN clear. Parsing validates
+    /// only the format and does not interpret the numbers, such as whether the left edge precedes the right edge or
+    /// falls within the window. More than 4 blocks cannot fit in the header when serializing.
     package var sackBlocks: [SACKBlock]
-    /// 데이터.
+    /// The data.
     package var payload: [UInt8]
 
-    /// SACK 블록 하나: 받는 쪽이 빈 곳 너머에 받아 둔 이어진 바이트 `[leftEdge, rightEdge)`(RFC 2018 3).
+    /// One SACK block, the contiguous bytes `[leftEdge, rightEdge)` the receiver has buffered beyond a gap (RFC 2018 §3).
     package struct SACKBlock: Sendable, Equatable {
-        /// 블록의 첫 번호.
+        /// The block's first sequence number.
         package var leftEdge: SequenceNumber
-        /// 블록의 마지막 바이트 다음 번호.
+        /// The sequence number after the block's last byte.
         package var rightEdge: SequenceNumber
 
-        /// 두 끝으로 만든다. 값을 검사하지 않는다.
+        /// Creates a block from its two edges without validating them.
         package init(leftEdge: SequenceNumber, rightEdge: SequenceNumber) {
             self.leftEdge = leftEdge
             self.rightEdge = rightEdge
         }
     }
 
-    /// SACK 옵션 하나에 실을 수 있는 블록의 최대 수. 옵션 공간 40바이트에 `2 + 8n`이 들어가는 가장 큰 n이다(RFC 2018 3).
+    /// The maximum number of blocks one SACK option can carry. This is the largest n for which `2 + 8n` fits into the
+    /// 40-byte option area (RFC 2018 §3).
     package static let maximumSACKBlockCount = 4
 
-    /// 필드로 세그먼트를 만든다. 값을 검사하지 않는다(상태 기계와 시험이 만드는 값이다. 받은 바이트는 `init(parsingIPPacket:)`
-    /// 으로만 들인다). `maximumSegmentSize`·`windowScale`·`sackPermitted`는 SYN이 켜진 세그먼트에서만, `sackBlocks`는 SYN이
-    /// 꺼진 세그먼트에서만 `ipPacket(hopLimit:)`이 싣는다.
+    /// Creates a segment from its fields without validating them. The state machine and tests construct these values.
+    /// Received bytes enter only through `init(parsingIPPacket:)`. `ipPacket(hopLimit:)` includes `maximumSegmentSize`,
+    /// `windowScale`, and `sackPermitted` only on segments with SYN set, and `sackBlocks` only on segments with SYN
+    /// clear.
     package init(
         source: IPEndpoint,
         destination: IPEndpoint,
@@ -115,7 +122,7 @@ package struct TCPSegment: Sendable, Equatable {
         self.payload = payload
     }
 
-    /// SEG.LEN: 데이터 바이트 수에 SYN과 FIN을 1씩 더한 값(RFC 9293 3.4). 시퀀스 번호 공간에서 이 세그먼트가 차지하는 길이다.
+    /// SEG.LEN, the number of data bytes plus 1 each for SYN and FIN (RFC 9293 §3.4). This is the segment's length in sequence space.
     package var sequenceLength: UInt32 {
         UInt32(clamping: payload.count) + (flags.contains(.syn) ? 1 : 0) + (flags.contains(.fin) ? 1 : 0)
     }

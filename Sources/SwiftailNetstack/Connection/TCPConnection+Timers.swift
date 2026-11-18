@@ -1,14 +1,15 @@
-/// 타이머: 기한이 지난 것을 이른 순서로 하나씩 처리한다.
+/// Handles expired timers one at a time in deadline order.
 ///
-/// 처리마다 그 타이머를 지우거나 `now`보다 뒤로 다시 건다(재전송·탐침·keep-alive는 `now` 기준으로 다음 간격을 잰다).
-/// 그래서 `advance(to:)`의 반복은 끝나고, 처리한 뒤의 `nextDeadline`은 늘 `now`보다 뒤이거나 `nil`이다.
+/// Each handler clears its timer or reschedules it after `now`. Retransmission, probes, and keep-alive measure the next
+/// interval from `now`. This ensures the `advance(to:)` loop terminates and the resulting `nextDeadline` is always
+/// after `now` or `nil`.
 extension TCPConnection {
-    /// 가장 이른 타이머의 기한. 끝난 연결은 `nil`.
+    /// The earliest timer deadline. Returns `nil` for an ended connection.
     package var nextDeadline: ContinuousClock.Instant? {
         state == .closed ? nil : timers.earliest?.deadline
     }
 
-    /// `now`까지 기한이 지난 타이머를 모두 처리한다. 미뤄 둔 ACK도 여기서 나간다.
+    /// Processes all timers due by `now`. Also emits delayed ACKs.
     package mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
         var outputs: [Output] = []
         while state != .closed, let (kind, deadline) = timers.earliest, deadline <= now {
@@ -37,16 +38,19 @@ extension TCPConnection {
         }
     }
 
-    /// 재전송 타이머 만료(RFC 6298 5.4~5.6, 계약 동작 R3·R4·R7).
+    /// Retransmission timer expiration (RFC 6298 §§5.4~5.6, contract behaviors R3, R4, and R7).
     ///
-    /// SYN·SYN-ACK는 7번까지 다시 보내고, 그 뒤의 만료(247초)에 끝낸다. 데이터·FIN은 15번까지다. RTO를 두 배로 하고
-    /// 혼잡 제어에 알린 뒤(cwnd 1 세그먼트), `SND.UNA`부터 slow start가 허락하는 대로 다시 보낸다(go-back-N).
+    /// Retransmits SYN and SYN-ACK up to 7 times and ends the connection on the following expiration (247 seconds).
+    /// Retransmits data and FIN up to 15 times. Doubles RTO, reports to congestion control (cwnd of 1 segment), then
+    /// retransmits from `SND.UNA` as slow start allows (go-back-N).
     ///
-    /// 데이터가 날아가는 중에 상대가 창을 0으로 줄였고 마지막 만료 뒤에도 ACK했으면, 그 만료는 15번에 세지 않는다. 살아 있는
-    /// 상대가 창 밖의 데이터를 받지 않을 뿐이다(RFC 9293 3.8.6: 창 밖 데이터가 확인되지 않는다고 끊지 않는다 SHLD-17, 창이 0이면
-    /// 탐침한다 MUST-35. gVisor는 이때 0 창 탐침으로 바꾸고 재전송 수를 보지 않는다, `snd.go:556`). 다시 보내는 세그먼트가
-    /// 탐침을 겸한다. 다만 응용이 `close`로 놓은 연결은 이 예외 없이 세고, 한도에서 RST를 보내 상대가 쥔 상태도 놓게 한다
-    /// (0 창 탐침의 한도와 같은 까닭이다. `sendZeroWindowProbe`).
+    /// If the peer reduced its window to 0 with data in flight and ACKed after the last expiration, that expiration
+    /// does not count toward the 15. The peer is alive and merely rejects out-of-window data (RFC 9293 §3.8.6 SHLD-17
+    /// says not to close because data outside the window goes unacknowledged, and MUST-35 requires probing a zero
+    /// window). In this case gVisor switches to zero-window probes and ignores the retransmission count (`snd.go:556`).
+    /// The retransmitted segment doubles as a probe. For connections the application released with `close`, count
+    /// without this exception and send RST at the limit so the peer releases its state too. This is the same rationale
+    /// as the zero-window probe limit (`sendZeroWindowProbe`).
     private mutating func retransmissionTimerExpired(at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         switch state {
         case .synSent, .synReceived:
@@ -84,13 +88,16 @@ extension TCPConnection {
         }
     }
 
-    /// 0 창 탐침(RFC 9293 3.8.6.1, 계약 동작 F8). `<SEQ=SND.UNA−1><ACK=RCV.NXT><CTL=ACK>`에 0 한 바이트를 싣는다
-    /// (gVisor `snd.go:1009-1034`와 같은 형식). 이미 확인된 번호라 상대는 데이터로 받지 않고 지금의 창을 담은 ACK로 답한다.
-    /// 상대가 ACK하는 동안은 끝내지 않고(MUST-37), 아무 ACK 없이 15번이면 끝낸다. 간격은 RTO에서 두 배씩, 60초까지(SHLD-30).
+    /// Zero-window probe (RFC 9293 §3.8.6.1, contract behavior F8). Sends one zero byte with
+    /// `<SEQ=SND.UNA−1><ACK=RCV.NXT><CTL=ACK>` (same format as gVisor `snd.go:1009-1034`). The number has already been
+    /// acknowledged, so the peer does not accept it as data and replies with an ACK carrying its current window. Keeps
+    /// the connection open while the peer ACKs (MUST-37) and ends it after 15 probes without an ACK. Intervals double
+    /// from RTO up to 60 seconds (SHLD-30).
     ///
-    /// 응용이 `close`로 놓은 연결은 상대가 답해도 진전 없이 15번이면 RST를 보내고 끝낸다(계약 동작 F8). 상대가 창 0을 둔 채
-    /// 탐침에 ACK만 하면 주인 없는 연결이 칸 하나와 보내는 버퍼를 무기한 쥐기 때문이다. MUST-37의 이 예외는 RFC 9293 3.8.6.1이
-    /// 가리키는 자원 관리다(RFC 6429 3·4: 주인 없는 연결을 운영체제가 끊을 수 있다).
+    /// A connection released by the application with `close` sends RST and ends after 15 probes without progress, even
+    /// if the peer replies (contract behavior F8). If the peer leaves the window at 0 and merely ACKs probes, the
+    /// ownerless connection holds a slot and the send buffer indefinitely. This exception to MUST-37 is the resource
+    /// management referred to in RFC 9293 §3.8.6.1 (RFC 6429 §§3 and 4 allow the OS to close ownerless connections).
     private mutating func sendZeroWindowProbe(at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         guard zeroWindowProbeCount < Self.zeroWindowProbeLimit else {
             if readClosed {
@@ -106,9 +113,10 @@ extension TCPConnection {
         timers[.zeroWindowProbe] = now + zeroWindowProbeInterval
     }
 
-    /// keep-alive(계약 동작 T8, RFC 9293 3.8.4). 받은 것 없이 2시간이 지나면 `<SEQ=SND.NXT−1><ACK=RCV.NXT><CTL=ACK>`를
-    /// 75초마다 보내고, 9번 보내도록 답이 없으면 끝낸다. 확인받지 못한 데이터나 보낼 것이 있으면 재전송·탐침 타이머가 맡으므로
-    /// 탐침을 보내지 않는다(MUST-26).
+    /// Keep-alive (contract behavior T8, RFC 9293 §3.8.4). After 2 hours without receiving anything, sends
+    /// `<SEQ=SND.NXT−1><ACK=RCV.NXT><CTL=ACK>` every 75 seconds and ends the connection if 9 sends get no reply. With
+    /// unacknowledged data or something to send, retransmission and probe timers handle it, so no keep-alive probe is
+    /// sent (MUST-26).
     private mutating func sendKeepalive(at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         switch state {
         case .established, .closeWait, .finWait2: break

@@ -1,13 +1,15 @@
 import SwiftailBase
 
-/// 연결 표 다루기: 연결의 출력을 스택의 출력으로 바꾸고, 연결이 움직인 뒤 상태에 맞춰 표를 고친다.
+/// Manages the connection table by converting connection output to stack output and updating the table after the connection takes a step.
 ///
-/// 연결을 움직이는 모든 길(받기, 시각, 응용 호출)은 끝에서 `process(_:of:at:into:)`를 부른다. 그래서 맺는 중 → 대기열,
-/// TIME-WAIT → 기록, 닫힘 → 지움이 한 곳에서 일어나고, 상한을 세는 값(맺는 중인 수, 대기열)이 표와 어긋나지 않는다.
+/// Every path that drives a connection (receive, time, application call) ends by calling `process(_:of:at:into:)`. That
+/// centralizes transitions from establishment to queue, TIME-WAIT to record, and closed to removal, so counts for the
+/// limits (establishing connections and queued connections) stay consistent with the table.
 extension TCPStack {
-    /// 연결 하나를 제자리에서 고친다. 없는 ID면 `nil`.
+    /// Updates one connection in place. Returns `nil` for an unknown ID.
     ///
-    /// 항목을 꺼냈다가 다시 넣으면 그 사이 버퍼의 저장소가 둘에게 쥐여 고칠 때 통째로 복사되므로, 표 안에서 바로 고친다.
+    /// Removing and reinserting an entry would temporarily give the buffer storage two owners and copy the entire
+    /// buffer on mutation. Update it in place in the table.
     mutating func modifyConnection<Result>(
         _ id: ConnectionID, _ body: (inout TCPConnection) -> Result
     ) -> Result? {
@@ -15,9 +17,10 @@ extension TCPStack {
         return body(&connections.values[index].connection)
     }
 
-    /// 연결 `id`가 낸 출력을 스택의 출력으로 옮기고 표를 고친다.
+    /// Converts output from connection `id` to stack output and updates the table.
     ///
-    /// 세그먼트는 IP 패킷으로, 사건은 응용이 쥔 연결의 것만 ID를 붙여 옮긴다(타입 문서). 순서는 연결이 낸 그대로다.
+    /// Converts segments to IP packets and forwards only events for application-held connections, tagging them with IDs
+    /// (see the type documentation). Preserves the connection's output order.
     mutating func process(
         _ connectionOutputs: [TCPConnection.Output], of id: ConnectionID, at now: ContinuousClock.Instant,
         into outputs: inout [Output]
@@ -33,14 +36,15 @@ extension TCPStack {
         settle(id, at: now, into: &outputs)
     }
 
-    /// 세그먼트를 IP 패킷으로 만들어 낸다. 연결의 두 주소는 늘 같은 계열이고 세그먼트는 MTU 안이라 만들기가 실패하지 않는다.
+    /// Serializes and emits a segment as an IP packet. Both connection addresses are always in the same family and the
+    /// segment fits within the MTU, so serialization succeeds.
     func append(_ segment: TCPSegment, to outputs: inout [Output]) {
         if let packet = segment.ipPacket() {
             outputs.append(.ipPacket(packet))
         }
     }
 
-    /// 응용이 쥔 연결의 사건이면 ID를 붙여 낸다. 끝남은 `reportClose(_:of:into:)`가 한 번만 알린다.
+    /// Emits the event with the ID if the application holds the connection. `reportClose(_:of:into:)` reports closure only once.
     private mutating func report(_ event: TCPConnection.Event, of id: ConnectionID, into outputs: inout [Output]) {
         if case .closed(let reason) = event {
             reportClose(CloseReason(reason), of: id, into: &outputs)
@@ -58,9 +62,9 @@ extension TCPStack {
         }
     }
 
-    /// TCP의 일이 끝난 연결(CLOSED가 됐거나 TIME-WAIT에 들었다)을 연결마다 한 번 알린다. 응용이 쥔 연결이면 `.closed` 사건,
-    /// 응용이 놓은 연결이면 로그에만 쓰는 `.releasedConnectionClosed`다(계약 "연결 종료 통계 로그"). 맺는 중이거나 대기열의
-    /// 연결은 알리지 않는다.
+    /// Reports once per connection when TCP processing ends (it reaches CLOSED or enters TIME-WAIT). Emits `.closed`
+    /// for an application-held connection and `.releasedConnectionClosed` for a released connection, for logging only
+    /// (contract “Connection Closure Statistics Log”). Does not report establishing or queued connections.
     private mutating func reportClose(_ reason: CloseReason, of id: ConnectionID, into outputs: inout [Output]) {
         guard let index = connections.index(forKey: id), !connections.values[index].hasReportedClose else { return }
         let statistics = connections.values[index].connection.statistics
@@ -72,15 +76,18 @@ extension TCPStack {
         connections.values[index].hasReportedClose = true
     }
 
-    /// 연결이 움직인 뒤의 상태에 맞춰 표를 고친다.
+    /// Updates the table to reflect the connection's new state after it takes a step.
     ///
-    /// - 맺는 중이던 수동 열기가 맺어지면 대기열로 옮기고 `.acceptable`을 낸다(계약 동작 S5).
-    /// - 닫혔으면 지운다. 맺는 중이던 연결이 `.reset`으로 닫힌 것(RFC 9293 3.10.7.4 둘째의 "LISTEN으로 돌아감")도 알리지 않고
-    ///   지운다. 응용이 쥔 연결에 읽지 않은 데이터가 남았으면 응용이 놓을 때까지 그것만 둔다.
-    /// - TIME-WAIT에 들었으면 `.closed(.finished)`(놓은 연결이면 `.releasedConnectionClosed(.finished)`)를 알리고, 상대 FIN에 대한 ACK가 나간 뒤 기록으로 옮긴다(계약 동작
-    ///   S6). 기록이 1,024개면 옮기지 않고 연결 그대로 두어 TIME-WAIT를 마치게 한다(기록도 연결도 상한을 넘지 않는다).
-    ///   기록의 수명은 연결이 TIME-WAIT에 든 때부터 240초까지다(`TimeWaitRecord.lifetimeEnd`).
-    /// - 그 밖에는 연결의 기한을 다시 적는다.
+    /// - When a passive open establishes, moves it to the queue and emits `.acceptable` (contract behavior S5).
+    /// - Removes a closed connection. Also silently removes an establishing connection closed with `.reset` (the second
+    ///   step in RFC 9293 §3.10.7.4, “return to LISTEN”). If an application-held connection has unread data, retains
+    ///   only that until the application releases it.
+    /// - On entering TIME-WAIT, reports `.closed(.finished)` (or `.releasedConnectionClosed(.finished)` for a released
+    ///   connection) and moves it to a record after the ACK of the peer's FIN goes out (contract behavior S6). At 1,024
+    ///   records, keeps the connection itself until TIME-WAIT ends, so neither records nor connections exceed their
+    ///   limits. A record lives for up to 240 seconds after the connection entered TIME-WAIT
+    ///   (`TimeWaitRecord.lifetimeEnd`).
+    /// - Otherwise, records the connection's deadline again.
     private mutating func settle(_ id: ConnectionID, at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         guard let index = connections.index(forKey: id), !connections.values[index].isDetached else { return }
         let state = connections.values[index].connection.state
@@ -115,7 +122,7 @@ extension TCPStack {
         }
     }
 
-    /// TCP의 일이 끝난 연결을 표에서 뺀다. 응용이 쥔 연결에 읽지 않은 데이터가 남았으면 그것만 남긴다.
+    /// Removes a connection whose TCP processing has ended. If an application-held connection has unread data, retains only that.
     private mutating func finish(_ id: ConnectionID) {
         guard let index = connections.index(forKey: id) else { return }
         if connections.values[index].role == .application, connections.values[index].connection.readableByteCount > 0 {
@@ -127,14 +134,14 @@ extension TCPStack {
         }
     }
 
-    /// 아무것도 보내지 않고 연결을 끝낸다. 응용이 쥔 연결이면 `.closed(reason)`, 놓은 연결이면
-    /// `.releasedConnectionClosed(reason)`을 알린다(계약 동작 S9, X10).
+    /// Ends a connection without sending anything. Reports `.closed(reason)` for an application-held connection or
+    /// `.releasedConnectionClosed(reason)` for a released one (contract behaviors S9 and X10).
     mutating func discard(_ id: ConnectionID, reason: CloseReason, into outputs: inout [Output]) {
         reportClose(reason, of: id, into: &outputs)
         removeConnection(id)
     }
 
-    /// 맺는 중인 연결 하나가 빠진다(맺어졌거나 지워졌다).
+    /// Removes one connection from the establishing count because it established or was removed.
     mutating func leaveHalfOpen(_ remoteAddress: IPAddress, listener listenerID: ListenerID) {
         halfOpenCount -= 1
         let remaining = halfOpenCountByAddress[remoteAddress, default: 1] - 1
@@ -142,13 +149,13 @@ extension TCPStack {
         listeners[listenerID]?.halfOpenCount -= 1
     }
 
-    /// 새 연결 ID. 스택 안에서 다시 쓰지 않는다(2⁶⁴개를 다 쓸 일은 없다). 표에 넣는 일은 `insertConnection(_:)`이 한다.
+    /// A new connection ID. Never reused within the stack (it will not exhaust 2⁶⁴ IDs). `insertConnection(_:)` inserts it in the table.
     mutating func makeConnectionID() -> ConnectionID {
         defer { nextIdentifier &+= 1 }
         return ConnectionID(rawValue: nextIdentifier)
     }
 
-    /// 새 리스너 ID. 연결 ID와 같은 번호 줄을 쓴다.
+    /// A new listener ID. Uses the same number sequence as connection IDs.
     mutating func makeListenerID() -> ListenerID {
         defer { nextIdentifier &+= 1 }
         return ListenerID(rawValue: nextIdentifier)

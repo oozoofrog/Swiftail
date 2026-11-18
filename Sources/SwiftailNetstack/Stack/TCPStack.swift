@@ -1,84 +1,91 @@
 import SwiftailBase
 
-/// 여러 TCP 연결과 리스너를 묶는 스택(계약 동작 S, X7·X8·X10).
+/// A stack that groups multiple TCP connections and listeners (contract behaviors S, X7, X8, and X10).
 ///
-/// 소켓·시계·난수가 없는 값 타입이다. 입력은 IP 패킷 바이트(`receive(_:at:)`), 시각(`advance(to:)`), 응용의 호출
-/// (리스너 열기·닫기, accept 대기열에서 꺼내기, `connect`, 연결 ID로 부르는 `write`·`read`·`finishWriting`·`close`·`abort`),
-/// 자기 주소 목록의 갱신이다. 출력은 내보낼 IP 패킷, 사건, 버린 것(`Output`)이고 낸 순서대로 처리해야 한다(계약 동작 S10).
+/// A value type without sockets, clocks, or random numbers. Inputs are IP packet bytes (`receive(_:at:)`), time
+/// (`advance(to:)`), application calls (opening and closing listeners, taking from the accept queue, `connect`, and
+/// calling `write`, `read`, `finishWriting`, `close`, or `abort` by connection ID), and updates to the local address
+/// list. Outputs are outgoing IP packets, events, and drops (`Output`), which must be processed in emission order
+/// (contract behavior S10).
 ///
-/// 노드가 부르는 순서:
-/// 1. 만든 뒤 `setLocalAddresses(_:)`로 자기 tailnet 주소를, `setRemoteAddressGroups(_:)`로 피어별 상대 주소 묶음을
-///    넘긴다(netmap을 적용할 때마다 다시).
-/// 2. 받은 패킷 묶음을 하나씩 `receive(_:at:)`에 넣고, 묶음이 끝나면 **같은 시각으로 `advance(to:)`를 부른다**. 곧바로 보낼
-///    ACK(순서가 어긋난 데이터 등)는 그 패킷의 `receive` 출력으로 나오고, 순서대로 온 데이터의 ACK만 2×MSS마다 하나로
-///    합쳐진다(계약 동작 F5).
-/// 3. `nextDeadline`에 타이머를 맞추고, 깨면 `advance(to:)`를 부른다.
+/// The node calls the stack in the following order.
+/// 1. After creation, pass the local tailnet addresses with `setLocalAddresses(_:)` and the per-peer groups of remote
+///    addresses with `setRemoteAddressGroups(_:)`. Repeat each time a netmap is applied.
+/// 2. Pass each packet in a received group to `receive(_:at:)`, then **call `advance(to:)` with the same time** at the
+///    end of the group. Immediate ACKs (for example, out-of-order data) come from the packet's `receive` output. Only
+///    ACKs for in-order data are coalesced, one per 2×MSS (contract behavior F5).
+/// 3. Set a timer for `nextDeadline` and call `advance(to:)` when it fires.
 ///
-/// 연결은 `ConnectionID`로, 리스너는 `ListenerID`로 가리킨다. 둘 다 스택 하나 안에서 다시 쓰지 않는 번호라, 끝난 연결의
-/// 옛 ID로 부른 호출은 새 연결에 닿지 않고 아무 일도 하지 않는다. 사건은 응용이 쥔 연결(`connect`로 건 것, `accept`로 꺼낸 것)
-/// 에 대해서만 나온다. 맺는 중이거나 대기열에 있는 연결의 일, 응용이 `close`·`abort`한 뒤의 일은 알리지 않는다. 다만 놓은
-/// 연결의 끝은 로그용 출력 `.releasedConnectionClosed`로 한 번 낸다.
+/// A `ConnectionID` identifies a connection and a `ListenerID` identifies a listener. Neither number is reused within a
+/// stack, so calls with a stale ID for an ended connection have no effect and cannot reach a new connection. Events are
+/// emitted only for application-held connections, opened with `connect` or taken with `accept`. Events during
+/// establishment, while queued, or after the application calls `close` or `abort` are unreported. The end of a released
+/// connection produces one `.releasedConnectionClosed` for logging.
 ///
-/// 이 파일은 타입의 선언과 상태, 시각을 담는다. 받기·응용 호출·연결 정리·ISN·TIME-WAIT 기록은 같은 폴더의 파일에 있다.
-/// 계약: `docs/contracts/SwiftailNetstack.md` 동작 S·X·M. 노트: `docs/protocol-notes/tcp-netstack.md` 4.2·4.3절.
+/// This file contains the type declaration, state, and time handling. Receiving, application calls, connection cleanup,
+/// ISNs, and TIME-WAIT records are in files in the same directory. Contract `docs/contracts/SwiftailNetstack.md`
+/// behaviors S, X, and M. Notes `docs/protocol-notes/tcp-netstack.md` §§4.2 and 4.3.
 package struct TCPStack: Sendable {
-    /// 연결 하나의 이름. 스택 안에서 다시 쓰지 않는다.
+    /// Identifies one connection. Never reused within the stack.
     package struct ConnectionID: Hashable, Sendable {
-        /// 스택이 차례로 매기는 번호. 리스너 ID와 같은 번호 줄을 쓴다. 차례(결정적인 출력 순서)를 정하는 데 쓴다.
+        /// A number the stack assigns in sequence, shared with listener IDs. Determines order for deterministic output.
         package let rawValue: UInt64
     }
 
-    /// 리스너 하나의 이름. 스택 안에서 다시 쓰지 않는다(같은 포트를 다시 열어도 새 이름이다).
+    /// Identifies one listener. Never reused within the stack, even when reopening the same port.
     package struct ListenerID: Hashable, Sendable {
-        /// 스택이 차례로 매기는 번호. 연결 ID와 같은 번호 줄을 쓴다.
+        /// A number the stack assigns in sequence, shared with connection IDs.
         package let rawValue: UInt64
     }
 
-    /// 스택이 내놓는 일. 낸 순서대로 처리한다. 한 연결의 패킷은 시퀀스 순서로 나온다(계약 동작 S10).
+    /// An output of the stack. Process in emission order. Packets for a connection are emitted in sequence order (contract behavior S10).
     package enum Output: Sendable, Equatable {
-        /// 내보낼 IP 패킷. 노드가 엔진에 넣는다.
+        /// An outgoing IP packet. The node passes it to the engine.
         case ipPacket([UInt8])
-        /// 응용에 알릴 일.
+        /// An event to report to the application.
         case event(Event)
-        /// 받은 패킷을 버렸다. 노드가 로그의 횟수를 센다(계약 동작 K2).
+        /// A received packet was dropped. The node counts drops for logging (contract behavior K2).
         case dropped(Drop)
-        /// 응용이 `close`·`abort`로 놓은 연결의 TCP 일이 끝났다(CLOSED가 됐거나 TIME-WAIT에 들었다). 까닭과 그때까지의
-        /// 통계를 싣는다(놓은 뒤의 재전송도 들어간다). 노드는 `연결이 끝남` 로그에만 쓰고 응용의 호출을 깨우지 않는다(계약
-        /// "연결 종료 통계 로그"의 "응용이 놓은 연결"). 연결마다 한 번이고, 쥔 채 `.closed`를 이미 낸 연결과 `abortAll()`로
-        /// 버리는 연결에는 나오지 않는다.
+        /// TCP processing has ended for a connection the application released with `close` or `abort` (it reached
+        /// CLOSED or entered TIME-WAIT). Carries the reason and statistics to that point, including retransmissions
+        /// after release. The node uses it solely for the `Connection ended` log and does not wake application calls
+        /// (contract “Connection Closure Statistics Log,” “Connections Released by the Application”). Emitted once per
+        /// connection, except for connections that already emitted `.closed` while held and those discarded by
+        /// `abortAll()`.
         case releasedConnectionClosed(CloseReason, TCPConnection.Statistics)
     }
 
-    /// 응용에 알릴 일. 응용이 쥔 연결과 리스너의 것만 나온다.
+    /// An event to report to the application. Events are emitted only for connections held by the application and for listeners.
     package enum Event: Sendable, Equatable {
-        /// `connect`로 건 연결이 맺어졌다.
+        /// A connection opened with `connect` was established.
         case established(ConnectionID)
-        /// 리스너의 accept 대기열에 연결이 하나 들어왔다. `accept(from:)`로 꺼낸다.
+        /// A connection entered the listener's accept queue. Take it with `accept(from:)`.
         case acceptable(ListenerID)
-        /// 읽을 바이트가 없다가 생겼다.
+        /// Bytes became readable after there were none.
         case readable(ConnectionID)
-        /// 보내는 버퍼가 찼다가 자리가 났다.
+        /// Space became available in a previously full send buffer.
         case writable(ConnectionID)
-        /// 상대가 쓰기를 닫았다(FIN). 그 전에 받은 데이터는 모두 읽을 수 있다.
+        /// The peer closed its write side (FIN). All data received before it can be read.
         case endOfStream(ConnectionID)
-        /// 연결이 끝났다. 이 뒤로는 그 연결의 사건이 없다. `.finished`면 읽지 않은 데이터를 아직 읽을 수 있다.
-        /// 끝날 때까지의 전송 통계를 싣는다(TIME-WAIT에 들며 알린 연결은 든 때까지의 값).
+        /// The connection ended. No further events follow for this connection. If `.finished`, unread data remains
+        /// readable. Carries transmission statistics through the end, or through entry into TIME-WAIT for a connection
+        /// reported at that point.
         case closed(ConnectionID, CloseReason, TCPConnection.Statistics)
     }
 
-    /// 연결이 끝난 까닭. `TCPConnection.CloseReason`에 스택이 내는 `peerRemoved`를 더했다.
+    /// The reason the connection ended. Extends `TCPConnection.CloseReason` with `peerRemoved` from the stack.
     package enum CloseReason: Sendable, Equatable {
-        /// 양쪽 FIN이 오갔다. TIME-WAIT에 들어간 때에 알린다(남은 60초는 스택이 기록으로 지킨다).
+        /// Both FINs were exchanged. Reported on entering TIME-WAIT. The stack keeps a record for the remaining 60 seconds.
         case finished
-        /// 상대가 RST로 끊었다.
+        /// The peer aborted with RST.
         case reset
-        /// 건 연결을 상대가 거절했다(SYN에 RST, 또는 상대 MSS가 64보다 작음).
+        /// The peer refused the outgoing connection (RST in response to SYN, or a peer MSS below 64).
         case refused
-        /// 상대가 답하지 않는다(재전송 한도, 0 창 탐침, keep-alive, FIN-WAIT-2의 기한).
+        /// The peer did not respond (retransmission limit, zero-window probes, keep-alive, or FIN-WAIT-2 deadline).
         case timedOut
-        /// 이 쪽이 끊었다(`abort`, 읽지 않은 데이터가 있을 때의 `close`, `close` 뒤에 온 데이터).
+        /// This side aborted (`abort`, `close` with unread data, or data arriving after `close`).
         case aborted
-        /// 이 쪽 주소가 바뀌었거나(계약 동작 S9) 상대 주소의 주인이 바뀌었다(계약 동작 X10). 아무것도 보내지 않았다.
+        /// The local address changed (contract behavior S9) or the remote address's owner changed (contract behavior X10). Nothing was sent.
         case peerRemoved
 
         init(_ reason: TCPConnection.CloseReason) {
@@ -92,133 +99,139 @@ package struct TCPStack: Sendable {
         }
     }
 
-    /// 받은 패킷을 버린 까닭. 프로토콜이 조용히 버리라는 세그먼트(연결 없는 곳의 RST 등)는 여기 넣지 않는다.
+    /// The reason a received packet was dropped. Excludes segments the protocol drops silently, such as an RST for an absent connection.
     package enum Drop: Sendable, Equatable {
-        /// TCP가 아니다(계약 동작 N2. ICMP·UDP는 다루지 않는다).
+        /// The packet is not TCP (contract behavior N2). ICMP and UDP are not handled.
         case notTCP
-        /// 길이·머리·옵션이 맞지 않거나 조각이다.
+        /// An invalid length, header, or option, or a fragment.
         case malformed
-        /// 체크섬이 틀리다.
+        /// An incorrect checksum.
         case badChecksum
-        /// 목적지가 자기 tailnet 주소가 아니다(계약 동작 S1).
+        /// The destination is not a local tailnet address (contract behavior S1).
         case notForUs
-        /// 상한에 닿아 SYN에 답하지 않았다(계약 동작 S4~S6).
+        /// A limit was reached, so the SYN went unanswered (contract behaviors S4~S6).
         case limitReached(Limit)
     }
 
-    /// SYN을 버리게 한 상한(계약 동작 M의 표).
+    /// The limit that caused a SYN to be dropped (the table in contract behavior M).
     package enum Limit: Sendable, Equatable {
-        /// 맺는 중인 연결 64개(스택 전체).
+        /// 64 establishing connections across the stack.
         case halfOpenConnections
-        /// 맺는 중인 연결 16개(상대 피어 하나. 피어의 주소들을 함께 센다, `setRemoteAddressGroups(_:)`).
+        /// 16 establishing connections for one remote peer. Counts its addresses together (`setRemoteAddressGroups(_:)`).
         case halfOpenConnectionsPerAddress
-        /// 리스너 하나의 accept 대기열 32개(맺는 중인 것을 함께 센다).
+        /// 32 entries in a listener's accept queue, including establishing connections.
         case acceptQueue
-        /// 리스너 하나의 accept 대기열에서 상대 피어 하나가 쥘 수 있는 16개(맺는 중인 것을 함께 센다). 한 피어가 대기열을
-        /// 다 채워 다른 피어의 SYN을 막지 못하게 한다.
+        /// 16 entries that one remote peer can hold in a single listener's accept queue, including establishing
+        /// connections. Prevents one peer from filling the queue and blocking SYNs from others.
         case acceptQueueShare
-        /// 연결 256개(스택 전체).
+        /// 256 connections across the stack.
         case connections
-        /// 연결 64개(상대 피어 하나). 한 피어가 256개를 채워 다른 피어를 막지 못하게 한다(M6 검토 A).
+        /// 64 connections for one remote peer. Prevents one peer from filling all 256 slots and blocking others (M6 review A).
         case connectionsPerAddress
-        /// TIME-WAIT 기록 1,024개(스택 전체).
+        /// 1,024 TIME-WAIT records across the stack.
         case timeWaitRecords
     }
 
-    /// `listen(on:)`의 실패.
+    /// A failure of `listen(on:)`.
     package enum ListenError: Error, Sendable, Equatable {
-        /// 그 포트에 이미 리스너가 있다.
+        /// The port already has a listener.
         case addressInUse
-        /// 리스너가 16개다.
+        /// There are 16 listeners.
         case limitReached
     }
 
-    /// `connect(to:at:)`의 실패.
+    /// A failure of `connect(to:at:)`.
     package enum ConnectError: Error, Sendable, Equatable {
-        /// 목적지와 같은 계열의 자기 주소가 없다(계약 동작 S8. 노드는 `unknownHost`로 알린다).
+        /// No local address shares the destination's address family (contract behavior S8). The node reports `unknownHost`.
         case noLocalAddress
-        /// 연결이 256개이거나, 그 상대 피어의 연결이 64개이거나, TIME-WAIT 기록이 1,024개이거나, 그 목적지로 쓸 나가는
-        /// 포트가 없다.
+        /// There are 256 connections, 64 connections to that remote peer, 1,024 TIME-WAIT records, or no outgoing port
+        /// for the destination.
         case limitReached
     }
 
-    // MARK: 상한 (계약 동작 M)
+    // MARK: Limits (Contract Behavior M)
     //
-    // 이름이 `PerAddress`인 상한은 상대 피어 하나의 몫이다. 피어의 주소들(IPv4·IPv6)을 함께 세고, 노드가 피어의 것으로 알려
-    // 주지 않은 주소는 그 주소 하나가 한 몫이다(`setRemoteAddressGroups(_:)`).
+    // Limits with `PerAddress` in the name apply to each remote peer. A peer's IPv4 and IPv6 addresses count together.
+    // An address that the node did not identify as belonging to a peer gets its own share
+    // (`setRemoteAddressGroups(_:)`).
 
     static let maximumListeners = 16
     static let maximumHalfOpenConnections = 64
     static let maximumHalfOpenConnectionsPerAddress = 16
     static let maximumAcceptQueueLength = 32
-    /// 리스너 하나의 accept 대기열(맺는 중인 것 포함)에서 상대 피어 하나가 쥘 수 있는 수. 대기열의 절반이고 피어 하나의
-    /// 맺는 중 상한과 같다.
+    /// The number of entries one remote peer can hold in a listener's accept queue, including establishing connections.
+    /// Half the queue and equal to the per-peer limit for establishing connections.
     static let maximumAcceptQueueShare = maximumAcceptQueueLength / 2
     static let maximumConnections = 256
     static let maximumConnectionsPerAddress = 64
     static let maximumTimeWaitRecords = 1_024
     static let maximumTimeWaitRecordsPerAddress = 64
-    /// 나가는 연결의 포트(계약 동작 S8).
+    /// Ports for outgoing connections (contract behavior S8).
     static let ephemeralPorts: ClosedRange<UInt16> = 49_152...65_535
 
-    // MARK: 상태
+    // MARK: State
 
-    /// 자기 tailnet 주소. 이 주소로 온 패킷만 받고, 나가는 연결의 출발 주소를 여기서 고른다.
+    /// Local tailnet addresses. Accepts packets only for these addresses and chooses source addresses for outgoing connections from them.
     package internal(set) var localAddresses: [IPAddress] = []
-    /// 모든 연결. 맺는 중·대기열·응용이 쥔 것·응용이 놓았지만 아직 닫는 중인 것·남은 데이터만 있는 것. 256개까지다.
-    /// `insertConnection(_:)`과 `removeConnection(_:)`으로만 넣고 뺀다(상대 주소별 수가 어긋나지 않게). 항목의 값은 제자리에서
-    /// 고친다.
+    /// All connections, including establishing, queued, application-held, released but still closing, and those with
+    /// only remaining data. At most 256. Insert and remove only with `insertConnection(_:)` and `removeConnection(_:)`
+    /// to keep per-address counts consistent. Mutate entry values in place.
     var connections: [ConnectionID: ConnectionEntry] = [:]
-    /// 상대 주소별 연결 수(`connections`의 항목 수). 상한(64)은 피어의 주소들을 합쳐서 본다.
+    /// The number of connections (`connections` entries) per remote address. The limit (64) counts the peer's addresses together.
     private(set) var connectionCountByAddress: [IPAddress: Int] = [:]
-    /// 상대 주소 → 상한을 함께 세는 묶음(피어 하나)의 주소들. 노드가 netmap마다 넘긴다(`setRemoteAddressGroups(_:)`).
-    /// 여기에 없는 주소는 그 주소 하나가 한 묶음이다.
+    /// Maps a remote address to the addresses in its group (one peer) that share limits. The node supplies it for each
+    /// netmap (`setRemoteAddressGroups(_:)`). An address absent here forms a group of one.
     private(set) var remoteAddressGroups: [IPAddress: [IPAddress]] = [:]
-    /// 4-튜플 → 연결. TCP가 끝난(TIME-WAIT 기록으로 옮겼거나 닫힌) 연결은 여기서 빠진다.
+    /// Maps a 4-tuple to a connection. Connections whose TCP processing has ended are removed here, either because they
+    /// moved to a TIME-WAIT record or because they closed.
     var connectionsByTuple: [FourTuple: ConnectionID] = [:]
-    /// 연결마다의 `nextDeadline`. 연결을 움직일 때마다 고친다(기한 찾기가 연결의 타이머를 다시 훑지 않게).
+    /// The `nextDeadline` for each connection. Updated whenever a connection takes a step, so finding a deadline does not rescan its timers.
     var connectionDeadlines: [ConnectionID: ContinuousClock.Instant] = [:]
-    /// TIME-WAIT 기록. 1,024개까지이고 기한 전에 버리지 않는다(계약 동작 S6). 다만 상대 피어 하나의 기록이 64개를 넘으면
-    /// 그 피어의 가장 오래된 기록을 지운다(M6 검토 A). 아래 "TIME-WAIT 기록"의 함수로만 고친다.
+    /// TIME-WAIT records. Holds up to 1,024 and does not drop them before their deadline (contract behavior S6). If a
+    /// remote peer exceeds 64 records, removes its oldest record (M6 review A). Only functions in “TIME-WAIT Records”
+    /// below modify these records.
     private(set) var timeWaitRecords: [FourTuple: TimeWaitRecord] = [:]
-    /// 상대 주소별 TIME-WAIT 기록의 4-튜플. 만든 순서이고 `timeWaitRecords`와 같은 기록을 가리킨다.
+    /// The 4-tuples of TIME-WAIT records per remote address. In creation order and referring to the same records as `timeWaitRecords`.
     private(set) var timeWaitTuplesByAddress: [IPAddress: [FourTuple]] = [:]
-    /// TIME-WAIT 기록 가운데 가장 이른 기한. 기한이 된 것이 없는 `advance`가 기록을 훑지 않게 한다.
+    /// The earliest TIME-WAIT record deadline. Lets `advance` skip scanning records when none is due.
     private(set) var earliestTimeWaitDeadline: ContinuousClock.Instant?
     var listeners: [ListenerID: Listener] = [:]
     var listenersByPort: [UInt16: ListenerID] = [:]
-    /// SYN-RECEIVED인 연결 수(스택 전체, 상대 주소별). 상대 하나의 상한(16)은 피어의 주소들을 합쳐서 본다.
+    /// The number of SYN-RECEIVED connections, both stack-wide and per remote address. The limit for one peer (16)
+    /// counts its addresses together.
     var halfOpenCount = 0
     var halfOpenCountByAddress: [IPAddress: Int] = [:]
-    /// 다음에 줄 ID. 연결과 리스너가 함께 쓴다.
+    /// The next ID to assign, shared by connections and listeners.
     var nextIdentifier: UInt64 = 1
-    /// 다음에 시도할 나가는 포트.
+    /// The next outgoing port to try.
     var nextEphemeralPort = TCPStack.ephemeralPorts.lowerBound
     let initialSequenceNumbers: InitialSequenceNumberGenerator
 
-    /// 스택을 만든다.
+    /// Creates a stack.
     ///
-    /// - Parameters:
-    ///   - isnSecret: ISN의 비밀(RFC 6528 3). 노드가 `run()`마다 시스템 난수로 32바이트를 뽑아 넘긴다. 사건·오류·
-    ///     `description`·`dump`에 나오지 않는다(계약 동작 K1).
-    ///   - now: ISN의 시계 성분이 0인 시각.
+    /// - Parameters: - isnSecret: The ISN secret (RFC 6528 §3). On each `run()`, the node supplies 32 bytes drawn from
+    ///   system randomness. Omitted from events, errors, `description`, and `dump` (contract behavior K1). - now: The
+    ///   time at which the ISN clock component is 0.
     package init(isnSecret: [UInt8], now: ContinuousClock.Instant) {
         initialSequenceNumbers = InitialSequenceNumberGenerator(secret: isnSecret, origin: now)
     }
 
-    // MARK: 읽을 수 있는 값
+    // MARK: Readable Values
 
-    /// 연결의 지금 값(상태, 주소, 읽을 수 있는 바이트 수, 쓸 자리, FIN 수신 여부). 없는 ID면 `nil`.
+    /// The connection's current value (state, addresses, number of readable bytes, space to write, and whether FIN
+    /// arrived). Returns `nil` for an unknown ID.
     ///
-    /// 값의 복사본이다. 읽고 곧바로 버린다(쥐고 있으면 스택이 버퍼를 고칠 때 버퍼 전체가 복사된다).
+    /// This is a copy of the value. Read it and immediately discard it. Retaining it makes the stack copy the entire
+    /// buffer when mutating the buffer.
     package func connection(_ id: ConnectionID) -> TCPConnection? {
         connections[id]?.connection
     }
 
-    /// 모든 연결과 TIME-WAIT 기록 가운데 가장 이른 기한. 없으면 `nil`.
+    /// The earliest deadline across all connections and TIME-WAIT records. Returns `nil` when none exists.
     ///
-    /// 연결마다 적어 둔 기한(256개까지)을 훑고 TIME-WAIT 기록의 가장 이른 기한과 견준다.
-    // shortcut: 연결의 기한은 힙 없이 훑는다(계약 제외 표 "스택의 기한 찾기"). 연결 상한을 크게 올리면 바꾼다.
+    /// Scans the stored connection deadlines (up to 256) and compares with the earliest TIME-WAIT record deadline.
+    // shortcut: Scans connection deadlines without a heap (contract exclusions table “Finding Stack Deadlines”). Change
+    // this if the connection limit increases substantially.
     package var nextDeadline: ContinuousClock.Instant? {
         var earliest = earliestTimeWaitDeadline
         for deadline in connectionDeadlines.values where earliest.map({ deadline < $0 }) ?? true {
@@ -227,10 +240,11 @@ package struct TCPStack: Sendable {
         return earliest
     }
 
-    // MARK: 시각
+    // MARK: Time
 
-    /// `now`까지 기한이 지난 일을 모두 한다: 기한이 된 TIME-WAIT 기록을 지우고, 기한이 된 연결을 `advance(to:)`한다.
-    /// 미뤄 둔 ACK도 여기서 나간다. 연결은 기한, 같은 기한이면 ID 순으로 움직인다(출력이 결정적이게).
+    /// Processes all deadlines up to `now`. Removes due TIME-WAIT records and calls `advance(to:)` on due connections.
+    /// Delayed ACKs also go out here. Processes connections in deadline order, breaking ties by ID to make output
+    /// deterministic.
     package mutating func advance(to now: ContinuousClock.Instant) -> [Output] {
         expireTimeWaitRecords(at: now)
 
@@ -249,10 +263,11 @@ package struct TCPStack: Sendable {
     }
 }
 
-// MARK: - 연결 표
+// MARK: - Connection Table
 
 extension TCPStack {
-    /// 새 연결을 표에 넣고 ID를 준다. 상대 주소별 연결 수는 여기서만 늘린다(줄이는 곳은 `removeConnection(_:)`).
+    /// Inserts a new connection in the table and assigns an ID. Only this method increments the count per remote
+    /// address (`removeConnection(_:)` decrements it).
     mutating func insertConnection(_ entry: ConnectionEntry) -> ConnectionID {
         let id = makeConnectionID()
         connections[id] = entry
@@ -261,7 +276,8 @@ extension TCPStack {
         return id
     }
 
-    /// 연결을 표에서 지운다. 아무것도 보내지 않는다. 맺는 중인 수와 대기열, 상대 주소별 연결 수를 함께 고친다.
+    /// Removes a connection from the table without sending anything. Updates the establishing count, queue, and count
+    /// per remote address together.
     mutating func removeConnection(_ id: ConnectionID) {
         guard let entry = connections.removeValue(forKey: id) else { return }
         connectionDeadlines[id] = nil
@@ -282,24 +298,27 @@ extension TCPStack {
         }
     }
 
-    /// 상대 주소 `address`를 가진 피어의 연결이 64개다. 새 SYN과 `connect`를 받지 않는다.
+    /// The peer with remote `address` has 64 connections. Rejects new SYNs and `connect` calls.
     func isConnectionLimitReached(for address: IPAddress) -> Bool {
         let count = addressesSharingLimits(with: address).reduce(0) { $0 + connectionCountByAddress[$1, default: 0] }
         return count >= Self.maximumConnectionsPerAddress
     }
 }
 
-// MARK: - 상대 주소의 묶음
+// MARK: - Remote Address Groups
 
 extension TCPStack {
-    /// 상대 주소를 피어별로 묶는다. 노드가 netmap을 적용할 때마다 자기 주소와 함께 넘긴다(계약 동작 S의 "피어 하나의 몫").
+    /// Groups remote addresses by peer. The node supplies them alongside local addresses whenever it applies a netmap
+    /// (contract behavior S, “One Peer's Share”).
     ///
-    /// 상대 하나의 몫으로 둔 상한(연결 64, 맺는 중 16, 리스너 대기열의 몫 16, TIME-WAIT 기록 64)은 같은 묶음의 주소를
-    /// 합쳐서 센다. 주소별로만 세면 IPv4·IPv6 주소를 가진 피어 하나가 몫을 두 번 쥔다. 수는 주소별로 적어 두고 볼 때 합치므로,
-    /// 묶음이 바뀌어도 고칠 것이 없다.
+    /// Limits for one remote peer (64 connections, 16 establishing connections, 16 entries in a listener queue, and 64
+    /// TIME-WAIT records) count addresses in the same group together. Counting per address alone would give a peer with
+    /// IPv4 and IPv6 addresses two shares. Counts are stored per address and added when checked, so a change to the
+    /// grouping needs no count updates.
     ///
-    /// - Parameter groups: 상대 주소 → 묶음의 이름. 같은 값을 가진 주소끼리 한 묶음이다. 값의 뜻은 스택이 모른다(노드는
-    ///   그 주소를 가진 피어의 node ID를 넘긴다). 여기에 없는 주소는 그 주소 하나가 한 묶음이다.
+    /// - Parameter groups: Maps a remote address to a group name. Addresses with the same value share a group. The
+    ///   stack does not interpret the value. The node supplies the node ID of the peer with that address. An absent
+    ///   address forms its own group.
     package mutating func setRemoteAddressGroups(_ groups: [IPAddress: Int]) {
         var members: [Int: [IPAddress]] = [:]
         for (address, group) in groups {
@@ -307,7 +326,7 @@ extension TCPStack {
         }
         remoteAddressGroups = [:]
         for addresses in members.values where addresses.count > 1 {
-            // 차례를 정해 둔다(같은 입력에 같은 기록을 지우게).
+            // Establish an order so the same input removes the same records.
             let sorted = addresses.sorted { $0.bytes.lexicographicallyPrecedes($1.bytes) }
             for address in sorted {
                 remoteAddressGroups[address] = sorted
@@ -315,21 +334,22 @@ extension TCPStack {
         }
     }
 
-    /// `address`와 상한을 함께 세는 상대 주소들(`address` 포함).
+    /// The remote addresses that share a limit with `address`, including `address`.
     func addressesSharingLimits(with address: IPAddress) -> [IPAddress] {
         remoteAddressGroups[address] ?? [address]
     }
 }
 
-// MARK: - TIME-WAIT 기록
+// MARK: - TIME-WAIT Records
 
 extension TCPStack {
-    /// 기록을 더한다. 4-튜플의 연결은 이미 표에서 빠졌어야 하고, 그 4-튜플의 기록은 없어야 한다.
+    /// Adds a record. Its 4-tuple's connection must already be out of the table, and no record may exist for that 4-tuple.
     ///
-    /// 상대 피어의 기록이 이미 64개면 그 피어의 가장 오래된 기록을 먼저 지운다. 기한 전에 버리지 않는다는 동작 S6의 예외이고,
-    /// 영향은 그 피어 자신의 옛 연결에만 간다(그 4-튜플의 늦은 세그먼트에는 RST로 답하게 된다). 한 피어가 기록 1,024개를 채워
-    /// 다른 피어의 SYN과 `connect`를 막지 못하게 한다(M6 검토 A). 피어의 주소들을 합쳐 세고, 가장 오래된 것은 주소마다의 첫
-    /// 기록(만든 순서) 가운데 TIME-WAIT에 먼저 든 것(`lifetimeEnd`가 이른 것)이다.
+    /// If the remote peer already has 64 records, first removes its oldest. This is the exception to behavior S6's rule
+    /// against early removal. It affects only that peer's old connections, since late segments for that 4-tuple receive
+    /// RST. This prevents one peer from filling all 1,024 records and blocking SYNs and `connect` calls from others (M6
+    /// review A). Counts the peer's addresses together. The oldest is whichever first record per address (in creation
+    /// order) entered TIME-WAIT earliest (earliest `lifetimeEnd`).
     mutating func addTimeWaitRecord(_ record: TimeWaitRecord, for tuple: FourTuple) {
         let address = tuple.remote.address
         let tupleLists = addressesSharingLimits(with: address).compactMap { timeWaitTuplesByAddress[$0] }
@@ -351,21 +371,21 @@ extension TCPStack {
         earliestTimeWaitDeadline = min(earliestTimeWaitDeadline ?? record.deadline, record.deadline)
     }
 
-    /// `tuple`의 기록에 온 세그먼트에 답한다(`TimeWaitRecord.reply`). 기록이 없으면 `nil`.
+    /// Replies to a segment for `tuple`'s record (`TimeWaitRecord.reply`). Returns `nil` if the record is missing.
     mutating func replyInTimeWait(
         to segment: TCPSegment, for tuple: FourTuple, at now: ContinuousClock.Instant
     ) -> TCPSegment? {
         guard let index = timeWaitRecords.index(forKey: tuple) else { return nil }
         let previousDeadline = timeWaitRecords.values[index].deadline
         let reply = timeWaitRecords.values[index].reply(to: segment, at: now)
-        // 기한은 뒤로만 간다. 가장 이른 것이 늦춰졌을 때만 다시 찾는다.
+        // Deadlines only move later. Recompute the earliest deadline only when it moves later.
         if timeWaitRecords.values[index].deadline != previousDeadline, previousDeadline == earliestTimeWaitDeadline {
             earliestTimeWaitDeadline = timeWaitRecords.values.lazy.map(\.deadline).min()
         }
         return reply
     }
 
-    /// 기한이 된 기록을 지운다. 가장 이른 기한이 아직이면 훑지 않는다.
+    /// Removes due records. Skips the scan if the earliest deadline has yet to arrive.
     mutating func expireTimeWaitRecords(at now: ContinuousClock.Instant) {
         guard let earliest = earliestTimeWaitDeadline, earliest <= now else { return }
         var expired: [FourTuple] = []
@@ -378,7 +398,7 @@ extension TCPStack {
         earliestTimeWaitDeadline = timeWaitRecords.values.lazy.map(\.deadline).min()
     }
 
-    /// 기록 하나를 표와 주소별 목록에서 뺀다. 가장 이른 기한은 부른 쪽이 다시 찾는다.
+    /// Removes one record from the table and the per-address list. The caller recomputes the earliest deadline.
     @discardableResult
     private mutating func forgetTimeWaitRecord(_ tuple: FourTuple) -> TimeWaitRecord? {
         guard let record = timeWaitRecords.removeValue(forKey: tuple) else { return nil }
@@ -391,42 +411,43 @@ extension TCPStack {
     }
 }
 
-// MARK: - 표의 항목
+// MARK: - Table Entries
 
-/// 연결을 찾는 열쇠: (자기 주소, 자기 포트, 상대 주소, 상대 포트).
+/// The connection lookup key (local address, local port, remote address, remote port).
 struct FourTuple: Hashable, Sendable {
     var local: IPEndpoint
     var remote: IPEndpoint
 }
 
-/// 듣는 포트 하나.
+/// A single listening port.
 struct Listener: Sendable {
     let port: UInt16
-    /// 맺어졌지만 응용이 아직 꺼내지 않은 연결. 들어온 순서다.
+    /// Established connections the application has yet to take, in arrival order.
     var queue: [TCPStack.ConnectionID] = []
-    /// 이 리스너에 온 SYN으로 만든, 아직 맺는 중인 연결 수. 대기열과 합쳐 32개까지다.
+    /// The number of still-establishing connections created from SYNs to this listener. At most 32 when combined with the queue.
     var halfOpenCount = 0
 }
 
-/// 연결 표의 항목.
+/// A connection table entry.
 struct ConnectionEntry: Sendable {
-    /// 연결을 누가 쥐는가.
+    /// Who holds the connection.
     enum Role: Sendable, Equatable {
-        /// SYN-RECEIVED. 리스너에 온 SYN으로 만들었다.
+        /// SYN-RECEIVED. Created from a SYN that arrived at the listener.
         case halfOpen(TCPStack.ListenerID)
-        /// 맺어져 리스너의 대기열에 있다.
+        /// Established and in the listener's queue.
         case queued(TCPStack.ListenerID)
-        /// 응용이 쥐고 있다(`connect`, `accept`). 사건을 알린다.
+        /// Held by the application (`connect`, `accept`). Reports events.
         case application
-        /// 응용이 `close`로 놓았다. TCP가 닫기를 마치면 지운다.
+        /// The application released it with `close`. Removed when TCP finishes closing.
         case released
     }
 
     var connection: TCPConnection
     var role: Role
-    /// 응용에 `.closed`를 알렸다. 그 뒤의 사건은 내지 않는다.
+    /// The application was notified with `.closed`. No events are emitted afterward.
     var hasReportedClose = false
-    /// TCP의 일이 끝났다(닫혔거나 TIME-WAIT 기록으로 옮겼다). 응용이 읽지 않은 데이터만 남아, 응용이 `close`·`abort`할 때까지 둔다.
+    /// TCP processing ended (closed or moved to a TIME-WAIT record). Retains only the unread application data until the
+    /// application calls `close` or `abort`.
     var isDetached = false
 
     var tuple: FourTuple {

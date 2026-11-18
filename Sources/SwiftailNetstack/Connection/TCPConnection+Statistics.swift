@@ -1,30 +1,33 @@
 extension TCPConnection {
-    /// 연결 하나의 전송 통계. 연결이 끝날 때 스택이 `.closed` 사건에 실어 내고, 노드가 로그 한 줄로 남긴다
-    /// (계약 "연결 종료 통계 로그"). 보내는 쪽 SACK 회복(M6-10b)을 열지 정하는 데 쓴다(계약 M6-10b S1).
+    /// Transmission statistics for one connection. When it ends, the stack includes these in the `.closed` event, and
+    /// the node logs them on one line (contract “Connection Closure Statistics Log”). Used to decide whether to enable
+    /// sender-side SACK recovery (M6-10b, contract M6-10b S1).
     ///
-    /// 값은 사건이 일어나는 자리에서 한 번씩 센다. 주소·포트·데이터는 담지 않는다.
+    /// Each value is counted once where the event occurs. Contains no addresses, ports, or data.
     package struct Statistics: Sendable, Equatable {
-        /// SYN(능동 열기) 또는 SYN-ACK(수동 열기)를 처음 보낸 시각. 수명은 끝난 시각에서 이것을 뺀 값이다.
+        /// The time the first SYN (active open) or SYN-ACK (passive open) was sent. Lifetime is the end time minus this time.
         package let openedAt: ContinuousClock.Instant
-        /// 상대 SYN에 SACK-Permitted가 있었다. 이 쪽은 능동 열기면 늘, 수동 열기면 상대가 보냈을 때만 실으므로 서로 협상했다는 뜻이다.
+        /// The peer's SYN contained SACK-Permitted. The local side always sends it for an active open and sends it for
+        /// a passive open only if the peer did, so this means both sides negotiated it.
         package var sackPermitted = false
-        /// 처음 보낸 데이터 바이트(SYN·FIN 제외).
+        /// Data bytes first sent, excluding SYN and FIN.
         package var sentBytes = 0
-        /// 다시 보낸 데이터 바이트(RTO 뒤의 go-back-N, fast retransmit, partial ACK). 0 창 탐침의 1바이트는 세지 않는다.
+        /// Retransmitted data bytes (go-back-N after RTO, fast retransmit, partial ACK). Excludes the 1 byte of a zero-window probe.
         package var retransmittedBytes = 0
-        /// 데이터·FIN의 재전송 타이머가 만료된 횟수(SYN·SYN-ACK의 만료는 세지 않는다).
+        /// The number of retransmission timer expirations for data or FIN. Excludes SYN and SYN-ACK expirations.
         package var retransmissionTimeouts = 0
-        /// 중복 ACK 셋으로 fast retransmit에 들어간 횟수(RFC 5681 3.2).
+        /// The number of entries into fast retransmit after three duplicate ACKs (RFC 5681 §3.2).
         package var fastRetransmits = 0
-        /// fast recovery 중의 partial ACK로 한 세그먼트를 다시 보낸 횟수(RFC 6582 3.2 3).
+        /// The number of single-segment retransmissions triggered by a partial ACK during fast recovery (RFC 6582 §3.2 step 3).
         package var partialAcknowledgmentRetransmits = 0
-        /// 받은 중복 ACK의 수(RFC 5681 2의 정의).
+        /// The number of duplicate ACKs received (definition in RFC 5681 §2).
         package var duplicateAcknowledgments = 0
-        /// 받은 세그먼트 가운데 ACK 검사(RFC 5961 5.2)를 통과했고 SACK 옵션이 실려 있던 것의 수. 블록은 아직 쓰지 않는다(M6-10b).
+        /// The number of received segments that passed the ACK check (RFC 5961 §5.2) and carried a SACK option. The
+        /// blocks are not used yet (M6-10b).
         package var acknowledgmentsWithSACK = 0
-        /// fast recovery 밖에서 새 데이터를 확인한 직후 cwnd의 최댓값(바이트). 회복 중의 부풀린 값은 넣지 않는다.
+        /// The peak cwnd in bytes immediately after new data is acknowledged outside fast recovery. Excludes inflated values during recovery.
         package var maximumCongestionWindow = 0
-        /// 손실(중복 ACK 셋, 처음 RTO 만료)로 ssthresh가 전보다 작아진 횟수.
+        /// The number of times ssthresh fell due to loss (three duplicate ACKs, first RTO expiration).
         package var slowStartThresholdReductions = 0
 
         package init(openedAt: ContinuousClock.Instant) {

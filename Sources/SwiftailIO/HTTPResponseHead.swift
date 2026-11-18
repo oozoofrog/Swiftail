@@ -1,28 +1,30 @@
-/// HTTP/1.1 응답 머리: 상태 코드, 헤더, 머리 뒤에 이미 도착한 바이트.
+/// An HTTP/1.1 response head with its status code, headers, and any bytes already received after the head.
 ///
-/// TCP 읽기 한 번에 머리와 그 뒤의 프로토콜 바이트(Noise, DERP 프레임)가 함께 들어올 수 있다. 그래서 `Parser`가
-/// 머리를 다 읽었을 때 `remainder`로 남은 바이트를 돌려줘 다음 계층에 넘기게 한다.
+/// One TCP read can contain both the head and protocol bytes after it (Noise, DERP frames). When `Parser` finishes the
+/// head, it returns any remaining bytes in `remainder` for the next layer.
 ///
-/// 줄 끝은 CRLF만 받는다(Go 서버가 그렇게 보낸다). 상태 줄과 헤더 값 안에 홀로 있는 CR·LF와 탭 외의
-/// C0 제어 문자, DEL이 있으면 거절한다. 헤더 이름은 HTTP token 문자만, 값은 앞뒤 공백·탭을 걷어 낸다.
+/// Accepts only CRLF line endings, as sent by the Go server. Rejects bare CR or LF, C0 control characters other than
+/// tab, and DEL in the status line and header values. Header names accept only HTTP token characters. Leading and
+/// trailing spaces and tabs are stripped from values.
 ///
-/// `docs/protocol-notes/control-transport.md` 3.6절, 4.4절 2단계 3~4
-/// (출처: tailscale.com `control/controlhttp/client.go`).
+/// `docs/protocol-notes/control-transport.md` §3.6, §4.4 step 2, 3~4 (origin: tailscale.com
+/// `control/controlhttp/client.go`).
 package struct HTTPResponseHead: Sendable {
-    /// 헤더 한 줄. 이름과 값은 바이트 그대로다(값에 0x80 이상의 바이트가 올 수 있다).
+    /// One header line. The name and value retain their original bytes. A value can contain bytes of 0x80 or higher.
     package struct Header: Sendable, Equatable {
         package let name: [UInt8]
         package let value: [UInt8]
     }
 
-    /// 상태 코드(`HTTP/1.1 101 ...`의 101).
+    /// The status code (101 in `HTTP/1.1 101 ...`).
     package let status: Int
-    /// 머리에 적힌 순서대로의 헤더.
+    /// The headers in the order they appear in the head.
     package let headers: [Header]
-    /// 머리의 빈 줄 바로 뒤에 이미 도착한 바이트.
+    /// The bytes already received immediately after the head's blank line.
     package let remainder: [UInt8]
 
-    /// 이름이 같은 첫 헤더의 값. 이름은 대소문자를 가리지 않는다(Go의 `Header.Get`처럼 첫 값을 쓴다).
+    /// Returns the value of the first header with the given name. Matching is case-insensitive and uses the first
+    /// value, like Go's `Header.Get`.
     package func firstValue(ofHeader name: String) -> [UInt8]? {
         let wanted = name.utf8.map(Self.lowercased)
         return headers.first { $0.name.map(Self.lowercased) == wanted }?.value
@@ -34,36 +36,36 @@ package struct HTTPResponseHead: Sendable {
 }
 
 extension HTTPResponseHead {
-    /// 머리를 읽지 못한 이유.
+    /// The reason the head could not be read.
     package enum ParseError: Error, Sendable, Equatable {
-        /// 상태 줄의 형식이 틀리거나 상태 줄에 제어 문자가 있다.
+        /// The status line is malformed or contains a control character.
         case malformedStatusLine
-        /// 상태 줄은 읽었으나 헤더 줄의 형식이 틀리거나 값에 제어 문자가 있다. 부르는 쪽이 상태를 먼저 판단할 수 있게
-        /// 상태 코드를 함께 낸다.
+        /// The status line was read, but a header line is malformed or its value contains a control character. Includes
+        /// the status code so the caller can handle it first.
         case malformedHeader(status: Int)
-        /// 빈 줄에 닿기 전에 머리가 `maximumHeadSize`에 이르렀다.
+        /// The head reached `maximumHeadSize` before the blank line.
         case tooLarge
-        /// 머리를 이미 돌려줬거나 실패한 뒤에 다시 불렀다.
+        /// The parser was called again after returning a head or failing.
         case closed
     }
 
-    /// 조각난 입력에서 응답 머리를 읽는다. 소켓도 시계도 갖지 않는다.
+    /// Parses a response head from fragmented input. It has no socket or clock.
     package struct Parser: Sendable {
-        /// 빈 줄까지 포함한 응답 머리의 한도.
+        /// The response head size limit, including the blank line.
         package static let maximumHeadSize = 16 * 1024
 
-        /// 아직 빈 줄에 닿지 않은 머리. 끝나거나 실패하면 비운다.
+        /// The head accumulated before reaching a blank line. Cleared on completion or failure.
         package private(set) var buffer: [UInt8] = []
         private var isDone = false
 
         package init() {}
 
-        /// 머리가 아직 다 오지 않았으면 nil.
+        /// Returns nil if the head is still incomplete.
         ///
-        /// - Throws: `ParseError` 참고. 머리를 돌려줬거나 실패한 뒤에는 `closed`.
+        /// - Throws: See `ParseError`. Throws `closed` after returning the head or failing.
         package mutating func receive(_ bytes: [UInt8]) throws(ParseError) -> HTTPResponseHead? {
             guard !isDone else { throw .closed }
-            // 앞서 받은 끝 3바이트와 이어서 빈 줄이 완성될 수 있다.
+            // The last 3 bytes from the previous input may be part of the blank line.
             let searchStart = max(0, buffer.count - 3)
             buffer += bytes
 
@@ -84,7 +86,7 @@ extension HTTPResponseHead {
             return try Self.parse(head, remainder: remainder)
         }
 
-        /// `\r\n\r\n` 바로 뒤의 인덱스. `searchEnd`를 넘는 곳은 보지 않는다.
+        /// Returns the index immediately after `\r\n\r\n`. Does not look past `searchEnd`.
         private static func endOfHead(in bytes: [UInt8], from searchStart: Int, to searchEnd: Int) -> Int? {
             let firstEnd = searchStart + 4
             guard firstEnd <= searchEnd else { return nil }
@@ -105,7 +107,7 @@ extension HTTPResponseHead {
             return HTTPResponseHead(status: status, headers: headers, remainder: remainder)
         }
 
-        /// `HTTP/1.x SP 3DIGIT [SP reason]`의 상태 코드.
+        /// Returns the status code from `HTTP/1.x SP 3DIGIT [SP reason]`.
         private static func statusCode(of line: ArraySlice<UInt8>) throws(ParseError) -> Int {
             let parts = line.split(separator: UInt8(ascii: " "), maxSplits: 2, omittingEmptySubsequences: false)
             guard !line.contains(where: isForbiddenControl),
@@ -123,7 +125,8 @@ extension HTTPResponseHead {
             (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
         }
 
-        /// 줄 안에 올 수 없는 바이트: 탭을 뺀 C0 제어 문자와 DEL (RFC 9110 5.5의 field-value, RFC 9112 4의 reason-phrase).
+        /// Bytes disallowed within a line are C0 control characters other than tab and DEL (field-value in RFC 9110
+        /// §5.5 and reason-phrase in RFC 9112 §4).
         fileprivate static func isForbiddenControl(_ byte: UInt8) -> Bool {
             (byte < 0x20 && byte != 0x09) || byte == 0x7F
         }
@@ -134,7 +137,7 @@ extension HTTPResponseHead {
 }
 
 extension HTTPResponseHead.Header {
-    /// `name: value` 한 줄을 읽는다. 형식이 틀리면 nil.
+    /// Parses one `name: value` line. Returns nil if malformed.
     fileprivate init?(parsing line: ArraySlice<UInt8>) {
         guard let colon = line.firstIndex(of: UInt8(ascii: ":")) else { return nil }
         let name = line[..<colon]

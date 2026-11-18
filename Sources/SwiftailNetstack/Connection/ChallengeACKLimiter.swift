@@ -1,18 +1,19 @@
-/// challenge ACK의 속도 제한(RFC 5961 7, 계약 동작 X4).
+/// Rate-limits challenge ACKs (RFC 5961 §7, contract behavior X4).
 ///
-/// 5초 창 안에서 10개까지만 허락한다. RFC 5961 7이 말하듯 타이머 없이 창의 시작 시각과 세는 값만 둔다.
-/// 연결은 challenge ACK(RST·SYN 검사)와, 데이터 없는 창 밖 세그먼트·범위 밖 ACK에 답하는 ACK(동작 X2, X3)에 이것을 쓴다.
-/// 피어가 틀린 세그먼트를 쏟아부어도 이 연결이 내는 답은 5초에 10개를 넘지 않는다(ACK 고리를 막는다).
+/// Allows up to 10 ACKs per 5-second window. As in RFC 5961 §7, keeps only the window start and a count, with no timer.
+/// The connection uses this for challenge ACKs (RST and SYN checks) and ACKs in response to out-of-window segments
+/// without data or out-of-range ACKs (behaviors X2 and X3). Even if the peer floods it with invalid segments, this
+/// connection sends at most 10 replies per 5 seconds, preventing ACK loops.
 struct ChallengeACKLimiter: Sendable, Equatable {
-    /// 창의 길이(RFC 5961 7의 예).
+    /// The window duration (example in RFC 5961 §7).
     static let interval = Duration.seconds(5)
-    /// 창 하나에서 보낼 수 있는 수(RFC 5961 7의 예).
+    /// The number of ACKs that can be sent in one window (example in RFC 5961 §7).
     static let limit = 10
 
     private var windowStart: ContinuousClock.Instant?
     private var sentInWindow = 0
 
-    /// `now`에 하나를 보내도 되면 세고 `true`.
+    /// Counts one and returns `true` if it can be sent at `now`.
     mutating func permit(at now: ContinuousClock.Instant) -> Bool {
         if let start = windowStart, now - start < Self.interval {
             guard sentInWindow < Self.limit else { return false }

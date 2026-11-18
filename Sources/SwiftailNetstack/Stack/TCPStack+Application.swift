@@ -1,14 +1,16 @@
 import SwiftailBase
 
-/// 응용과 노드의 호출: 듣기, 걸기, 연결 ID로 부르는 읽기·쓰기·닫기, 주소 바뀜(계약 동작 S3·S5·S8·S9, X10).
+/// Application and node calls for listening, connecting, reading, writing and closing by connection ID, and changing
+/// addresses (contract behaviors S3, S5, S8, S9, and X10).
 ///
-/// 연결 ID로 부르는 호출은 응용이 쥔 연결(`connect`로 건 것, `accept`로 꺼낸 것)에만 듣는다. 없는 ID, 응용이 `close`·`abort`로
-/// 놓은 ID, 대기열에 있는 ID는 아무 일도 하지 않는다(쓰기는 0바이트, 읽기는 빈 배열).
+/// Calls by connection ID affect only connections held by the application, either opened with `connect` or taken with
+/// `accept`. An unknown ID, an ID released by the application with `close` or `abort`, or an ID in the queue has no
+/// effect. Writes return 0 bytes and reads return an empty array.
 extension TCPStack {
-    // MARK: 리스너
+    // MARK: Listeners
 
-    /// 자기 노드의 모든 tailnet 주소(IPv4·IPv6)에서 `port`를 듣는다(계약 동작 S3). 포트 하나에 하나, 16개까지다.
-    /// 포트 0을 거르는 일은 노드가 한다.
+    /// Listens on `port` at all the local node's tailnet addresses (IPv4 and IPv6) (contract behavior S3). Allows one
+    /// listener per port and up to 16 total. The node filters out port 0.
     package mutating func listen(on port: UInt16) throws(ListenError) -> ListenerID {
         guard listenersByPort[port] == nil else { throw .addressInUse }
         guard listeners.count < Self.maximumListeners else { throw .limitReached }
@@ -18,8 +20,9 @@ extension TCPStack {
         return id
     }
 
-    /// 듣기를 그만둔다. 대기열의 연결은 RST로 끊고 맺는 중인 연결은 아무것도 보내지 않고 버린다(계약 동작 S5).
-    /// 응용이 이미 꺼낸 연결은 그대로다. 없는 ID면 아무 일도 하지 않는다.
+    /// Stops listening. Aborts queued connections with RST and discards connections still establishing without sending
+    /// anything (contract behavior S5). Connections already taken by the application are unaffected. An unknown ID has
+    /// no effect.
     package mutating func stopListening(_ id: ListenerID) -> [Output] {
         guard let listener = listeners.removeValue(forKey: id) else { return [] }
         listenersByPort[listener.port] = nil
@@ -40,11 +43,12 @@ extension TCPStack {
         return outputs
     }
 
-    /// 리스너의 accept 대기열에서 맺어진 연결 하나를 꺼낸다. 비었거나 없는 리스너면 `nil`.
+    /// Takes one established connection from the listener's accept queue. Returns `nil` for an empty queue or an unknown listener.
     ///
-    /// 꺼낸 연결은 응용이 쥔 것이 되어 그 뒤의 사건이 나온다. 대기열에 있는 동안 받은 데이터와 FIN은 사건으로 알리지 않았으므로,
-    /// 노드는 꺼낸 뒤 `connection(_:)`으로 읽을 것과 FIN 여부를 본다. 대기열에 있는 동안 작게 묶어 둔 받는 창을 여기서 열고,
-    /// 출력에 그 창 갱신 ACK가 든다(`TCPConnection.openReceiveWindow(at:)`).
+    /// The application now holds the connection and receives subsequent events. Because data and FIN received while
+    /// queued did not produce events, the node checks for readable bytes and FIN with `connection(_:)` after taking it.
+    /// This opens the receive window that was capped while queued and includes a window update ACK in the output
+    /// (`TCPConnection.openReceiveWindow(at:)`).
     package mutating func accept(
         from listenerID: ListenerID, at now: ContinuousClock.Instant
     ) -> (connection: ConnectionID, outputs: [Output])? {
@@ -57,15 +61,16 @@ extension TCPStack {
         return (id, outputs)
     }
 
-    // MARK: 걸기
+    // MARK: Connecting
 
-    /// `remote`로 연결을 건다(능동 열기). SYN이 출력에 들어 있고, 맺어지면 `.established(id)`, 거절되면 `.closed(id, .refused)`가
-    /// 나온다.
+    /// Connects to `remote` (active open). The output contains a SYN, followed by `.established(id)` on establishment
+    /// or `.closed(id, .refused)` on refusal.
     ///
-    /// 출발 주소는 목적지와 같은 계열의 첫 자기 주소이고, 포트는 49152…65535에서 차례로 고르되 연결이나 TIME-WAIT 기록이 쓰는
-    /// 4-튜플은 건너뛴다(계약 동작 S8).
+    /// Uses the first local address in the destination's family as the source. Selects ports in order from 49152…65535,
+    /// skipping 4-tuples used by connections or TIME-WAIT records (contract behavior S8).
     ///
-    /// 연결이 256개이거나, 그 상대 피어의 연결이 64개이거나, TIME-WAIT 기록이 1,024개면 `limitReached`다(계약 동작 S6과 그 아래).
+    /// Returns `limitReached` at 256 connections, 64 connections to that remote peer, or 1,024 TIME-WAIT records
+    /// (contract behavior S6 and the text below it).
     package mutating func connect(
         to remote: IPEndpoint, at now: ContinuousClock.Instant
     ) throws(ConnectError) -> (connection: ConnectionID, outputs: [Output]) {
@@ -86,7 +91,7 @@ extension TCPStack {
         return (id, outputs)
     }
 
-    /// 나가는 연결의 자기 쪽 주소와 포트. `nextEphemeralPort`부터 한 바퀴 돌며 쓰이지 않는 4-튜플을 찾는다.
+    /// The local address and port for an outgoing connection. Makes one pass starting at `nextEphemeralPort` to find an unused 4-tuple.
     private mutating func freeLocalEndpoint(address: IPAddress, remote: IPEndpoint) -> IPEndpoint? {
         let range = Self.ephemeralPorts
         for _ in range {
@@ -100,9 +105,10 @@ extension TCPStack {
         return nil
     }
 
-    // MARK: 연결 ID로 부르는 호출
+    // MARK: Calls by Connection ID
 
-    /// 보내는 버퍼에 자리가 있는 만큼 넣는다(`TCPConnection.write`). 다 받지 못했으면 자리가 날 때 `.writable(id)`가 나온다.
+    /// Writes as much as fits in the send buffer (`TCPConnection.write`). If it cannot accept all bytes, emits
+    /// `.writable(id)` when space becomes available.
     package mutating func write(
         _ bytes: ArraySlice<UInt8>, to id: ConnectionID, at now: ContinuousClock.Instant
     ) -> (accepted: Int, outputs: [Output]) {
@@ -113,7 +119,7 @@ extension TCPStack {
         return (result.accepted, outputs)
     }
 
-    /// 읽을 수 있는 바이트를 `maximumLength`까지 꺼낸다(`TCPConnection.read`). 끝난 연결에 남은 데이터도 읽는다.
+    /// Takes up to `maximumLength` readable bytes (`TCPConnection.read`). Also reads data left on ended connections.
     package mutating func read(
         upTo maximumLength: Int, from id: ConnectionID, at now: ContinuousClock.Instant
     ) -> (bytes: [UInt8], outputs: [Output]) {
@@ -129,7 +135,7 @@ extension TCPStack {
         return (result.bytes, outputs)
     }
 
-    /// 보내기를 끝낸다(`TCPConnection.finishWriting`). 읽기는 계속할 수 있다.
+    /// Finishes sending (`TCPConnection.finishWriting`). Reads can continue.
     package mutating func finishWriting(_ id: ConnectionID, at now: ContinuousClock.Instant) -> [Output] {
         guard isLive(id) else { return [] }
         let connectionOutputs = modifyConnection(id) { $0.finishWriting(at: now) } ?? []
@@ -138,9 +144,10 @@ extension TCPStack {
         return outputs
     }
 
-    /// 연결을 닫고 놓는다(`TCPConnection.close`). 마무리(FIN 주고받기, TIME-WAIT)는 스택이 하고 그 사건은 알리지 않는다.
-    /// 마무리가 끝나면(CLOSED, TIME-WAIT) 로그용 `.releasedConnectionClosed`가 한 번 나온다. 이 호출에서 곧바로
-    /// 끝나면(읽지 않은 데이터가 있어 RST) 대신 `.closed(id, .aborted)`가 나온다.
+    /// Closes and releases the connection (`TCPConnection.close`). The stack handles the finish (FIN exchange,
+    /// TIME-WAIT) without reporting those events. When it finishes (CLOSED or TIME-WAIT), emits one
+    /// `.releasedConnectionClosed` for logging. If this call ends it immediately with RST because of unread data, emits
+    /// `.closed(id, .aborted)` instead.
     package mutating func close(_ id: ConnectionID, at now: ContinuousClock.Instant) -> [Output] {
         guard let index = connections.index(forKey: id), connections.values[index].role == .application else {
             return []
@@ -156,7 +163,7 @@ extension TCPStack {
         return outputs
     }
 
-    /// 연결을 곧바로 끊고 놓는다(`TCPConnection.abort`). `.closed(id, .aborted)`가 나온다.
+    /// Immediately aborts and releases the connection (`TCPConnection.abort`). Emits `.closed(id, .aborted)`.
     package mutating func abort(_ id: ConnectionID, at now: ContinuousClock.Instant) -> [Output] {
         guard let index = connections.index(forKey: id), connections.values[index].role == .application else {
             return []
@@ -171,11 +178,11 @@ extension TCPStack {
         return outputs
     }
 
-    /// 남은 연결을 모두 끊고 버린다. 노드가 멈출 때 부른다(계약 동작 N8).
+    /// Aborts and discards all remaining connections. Called when the node stops (contract behavior N8).
     ///
-    /// 응용이 쥔 것뿐 아니라 맺는 중인 것, 대기열에 있는 것, 응용이 `close`로 놓았지만 아직 FIN을 주고받는 것까지 RST를 한 번씩
-    /// 낸다(`TCPConnection.abort`가 RST를 내지 않는 상태는 그대로 버린다). 사건은 내지 않는다. 리스너와 TIME-WAIT 기록은
-    /// 건드리지 않는다.
+    /// Sends one RST for application-held, establishing, and queued connections, and for connections the application
+    /// released with `close` that are still exchanging FINs. Discards connections in states where `TCPConnection.abort`
+    /// sends no RST. Emits no events. Leaves listeners and TIME-WAIT records alone.
     package mutating func abortAll() -> [Output] {
         var outputs: [Output] = []
         for id in connections.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
@@ -188,33 +195,35 @@ extension TCPStack {
         return outputs
     }
 
-    /// 응용이 쥐었고 TCP가 아직 도는 연결.
+    /// A connection held by the application whose TCP processing is still active.
     private func isLive(_ id: ConnectionID) -> Bool {
         guard let entry = connections[id] else { return false }
         return entry.role == .application && !entry.isDetached
     }
 
-    // MARK: 주소 바뀜
+    // MARK: Address Changes
 
-    /// 자기 tailnet 주소를 바꾼다. 노드가 netmap을 적용할 때마다 부른다(계약 동작 S9, N7).
+    /// Updates local tailnet addresses. The node calls this whenever it applies a netmap (contract behaviors S9 and N7).
     ///
-    /// 자기 주소가 아니게 된 주소를 쓰는 연결은 아무것도 보내지 않고 끝난다. 응용이 쥔 연결에는 `.closed(id, .peerRemoved)`가
-    /// 나오고, 맺는 중이거나 대기열에 있는 연결은 알리지 않고 지운다. TIME-WAIT 기록은 기한까지 둔다.
+    /// Connections using an address no longer local end without sending anything. Emits `.closed(id, .peerRemoved)` for
+    /// application-held connections, and removes establishing and queued connections without reporting them. Keeps
+    /// TIME-WAIT records until their deadlines.
     package mutating func setLocalAddresses(_ addresses: [IPAddress]) -> [Output] {
         localAddresses = addresses
         return discardConnections { !addresses.contains($0.local.address) }
     }
 
-    /// 상대 주소가 `remoteAddress`인 연결을 모두 아무것도 보내지 않고 끝낸다(계약 동작 X10의 스택 쪽).
+    /// Ends all connections whose remote address is `remoteAddress` without sending anything (the stack side of contract behavior X10).
     ///
-    /// 노드는 netmap을 적용할 때 연결을 맺을 때의 주소 주인(node 키)과 견주어, 주인이 없어지거나 바뀐 주소마다 이것을 부른다.
-    /// 응용이 쥔 연결에는 `.closed(id, .peerRemoved)`가 나오고, 맺는 중이거나 대기열에 있는 연결은 알리지 않고 지운다.
-    /// TIME-WAIT 기록은 기한까지 둔다(새 주인이 같은 4-튜플로 거는 SYN은 기록이 challenge ACK로 받는다).
+    /// When applying a netmap, the node compares the current owner with the owner (node key) at establishment and calls
+    /// this for each address whose owner disappeared or changed. Emits `.closed(id, .peerRemoved)` for application-held
+    /// connections, and removes establishing and queued connections without reporting them. Keeps TIME-WAIT records
+    /// until their deadlines. A record responds with a challenge ACK to a SYN using its 4-tuple from the new owner.
     package mutating func removeConnections(toRemoteAddress remoteAddress: IPAddress) -> [Output] {
         discardConnections { $0.remote.address == remoteAddress }
     }
 
-    /// TCP가 아직 도는 연결 가운데 4-튜플이 `matches`인 것을 ID 순으로 끝낸다.
+    /// Ends active TCP connections whose 4-tuples match `matches`, in ID order.
     private mutating func discardConnections(where matches: (FourTuple) -> Bool) -> [Output] {
         let doomed = connections.compactMap { id, entry in
             !entry.isDetached && matches(entry.tuple) ? id : nil

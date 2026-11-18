@@ -1,5 +1,5 @@
-// `computedName`의 규칙은 Go 구현을 따라 옮겼다.
-// 출처: tailscale.com v1.104.6 `tailcfg/tailcfg.go`(`Node.InitDisplayNames`), `util/dnsname/dnsname.go`(`HasSuffix`,
+// The `computedName` rules were ported from the Go implementation. Origin: tailscale.com v1.104.6 `tailcfg/tailcfg.go`
+// (`Node.InitDisplayNames`), `util/dnsname/dnsname.go` (`HasSuffix`),
 // `TrimSuffix`, `TrimCommonSuffixes`, `SanitizeHostname`, `SanitizeLabel`), `types/netmap/netmap.go`
 // (`MagicDNSSuffixOfNodeName`), `ipn/ipnlocal/local.go`(`WhoIs`), `ipn/ipnlocal/node_backend.go`(`updateNodeByAddrLocked`).
 // Copyright (c) Tailscale Inc & AUTHORS. BSD-3-Clause.
@@ -9,20 +9,22 @@ import SwiftailBase
 import SwiftailControl
 import SwiftailEngine
 
-/// tailnet 노드 하나의 신원. 제어 서버가 netmap으로 알려 준 값이다.
+/// The identity of one tailnet node, supplied by the control server in the netmap.
 public struct PeerIdentity: Sendable, Equatable {
-    /// 노드의 바뀌지 않는 ID(`tailcfg.Node.StableID`). 비어 있지 않다. 허용 목록의 키로 쓴다.
+    /// The node's stable ID (`tailcfg.Node.StableID`). Nonempty. Use as an allowlist key.
     public var stableID: String
-    /// MagicDNS 이름에서 끝의 점을 뗀 것(`rd-phone-1a2b3c4d.tail0001.ts.net`). 이름이 없으면 빈 문자열이다.
+    /// The MagicDNS name with its trailing dot removed (`rd-phone-1a2b3c4d.tail0001.ts.net`). An empty string if there is no name.
     public var name: String
-    /// 표시용 이름. Go `Node.ComputedName`의 규칙이다(동작 W4): 자기 tailnet의 접미사가 레이블 경계에서 맞을 때만
-    /// 그것을 떼고 끝의 점을 뗀다(`rd-phone-1a2b3c4d`). 다른 tailnet에서 공유받은 노드는 접미사가 달라 끝 점 없는
-    /// FQDN이 남는다. 결과가 비면 정리한 호스트 이름, 그것도 비면 node 공개 키의 텍스트(`nodekey:` + hex).
+    /// The display name. Follows Go `Node.ComputedName` (behavior W4). Removes the local tailnet suffix only when it
+    /// matches at a label boundary, and strips the trailing dot (`rd-phone-1a2b3c4d`). A node shared from another
+    /// tailnet has a different suffix, so keeps the FQDN without its trailing dot. Falls back to the sanitized hostname
+    /// if empty, and to the node public key text (`nodekey:` + hex) if that is also empty.
     public var computedName: String
-    /// 노드를 만든 사용자의 로그인 이름(`alice@example.com`). 표시용이다. 태그 노드에서는 사람을 가리키지 않는다.
+    /// The login name of the user who created the node (`alice@example.com`). For display. On tagged nodes it does not identify a person.
     public var loginName: String
 
-    /// 값을 직접 채운다. 노드는 netmap에서 만들므로 쓰지 않는다. 이 타입을 받는 쪽의 코드를 노드 없이 시험할 때 쓴다.
+    /// Creates an identity from supplied values. The node creates identities from the netmap and does not use this
+    /// initializer. Use it to test consumers of this type without a node.
     public init(stableID: String, name: String, computedName: String, loginName: String) {
         self.stableID = stableID
         self.name = name
@@ -31,24 +33,26 @@ public struct PeerIdentity: Sendable, Equatable {
     }
 }
 
-// MARK: 주소로 찾기(동작 W1~W3)
+// MARK: Lookup by Address (Behaviors W1~W3)
 
 extension PeerIdentity {
-    /// 데이터면에서 `address`의 주인인 노드의 신원. 없으면 nil.
+    /// The identity of the node that owns `address` in the data plane. Returns nil when absent.
     ///
-    /// 피어의 주소는 엔진이 그 주소를 AllowedIPs로 준 피어의 것이다(`owners`, `EnginePeer.addressOwners`). 그 주소에서 온
-    /// 패킷을 보낼 수 있는 노드가 그 피어뿐이므로, 연결의 원격 주소로 물은 답이 그 연결의 상대다. 그래서 데이터면에 오르지
-    /// 않는 노드(키가 만료된 노드, 지원하지 않는 피어)의 주소는 nil이고, 같은 주소를 가진 노드가 여럿이면 엔진이 고른 쪽
-    /// (node ID가 작은 쪽)이다. 서브넷 경로 안의 주소는 찾지 않는다. Go의 `WhoIs`는 netmap의 `Addresses` 표에서 나중 것을
-    /// 고르지만, 그 표는 겹치는 netmap에서 데이터면과 다른 노드를 가리킨다.
+    /// A peer address belongs to the peer whose AllowedIPs the engine assigned it to (`owners`,
+    /// `EnginePeer.addressOwners`). Only that peer can send packets from the address, so the result for a connection's
+    /// remote address identifies that connection's peer. Returns nil for addresses of nodes absent from the data plane
+    /// (expired keys, unsupported peers) and uses the engine's choice (lower node ID) when multiple nodes have the same
+    /// address. Skips addresses in subnet routes. Go's `WhoIs` selects the last entry in the netmap `Addresses` table,
+    /// but for overlapping addresses that table can point to a different node than the data plane.
     ///
-    /// 자기 노드의 한 주소짜리 `Addresses`는 자기 노드다. 다만 그 주소를 데이터면 피어도 가졌으면 그 주소에서 온 연결이 누구의
-    /// 것인지 가릴 수 없으므로 nil이다(닫힌 쪽). IPv4-mapped IPv6 주소는 IPv4로 바꿔 찾는다(데이터면은 mapped 주소를 피어의
-    /// 주소로 받지 않는다). 찾은 노드의 `StableID`가 비었거나 사용자 프로필이 netmap에 없으면 nil이다.
+    /// A single-address entry in the local node's `Addresses` identifies the local node. If a data plane peer also has
+    /// that address, returns nil (fails closed) because the origin of a connection from the address is ambiguous.
+    /// Converts an IPv4-mapped IPv6 address to IPv4 before lookup. The data plane does not accept mapped peer
+    /// addresses. Returns nil if the matched node's `StableID` is empty or its user profile is absent from the netmap.
     ///
-    /// - Parameters:
-    ///   - owners: 데이터면의 주소 → 주인 노드. 노드가 엔진의 피어와 함께 바꾸는 표다(`TailnetNode.addressOwners`).
-    ///   - netmap: 자기 노드, 사용자 프로필, 자기 tailnet의 접미사를 읽는 netmap.
+    /// - Parameters: - owners: Maps data plane addresses to their owner nodes. The node replaces this table alongside
+    ///   the engine peers (`TailnetNode.addressOwners`). - netmap: The netmap from which to read the local node, user
+    ///   profiles, and the local tailnet suffix.
     init?(address: IPAddress, owners: [IPAddress: Node], in netmap: Netmap) {
         let address = address.unmappedIPv4
         let peer = owners[address]
@@ -69,14 +73,14 @@ extension PeerIdentity {
 }
 
 private extension Node {
-    /// `Addresses`에 `address` 한 주소짜리 접두(/32, /128)가 있는가. Go `IsSingleIP`.
+    /// Returns whether `Addresses` contains a single-address prefix (/32 or /128) for `address`. Go `IsSingleIP`.
     func hasSingleAddress(_ address: IPAddress) -> Bool {
         addresses.contains { $0.address == address && $0.length == address.bytes.count * 8 }
     }
 }
 
 private extension IPAddress {
-    /// IPv4-mapped IPv6(`::ffff:a.b.c.d`)는 IPv4로 바꾼 주소, 그 밖에는 자기 자신. Go `Addr.Unmap`.
+    /// Converts IPv4-mapped IPv6 (`::ffff:a.b.c.d`) to IPv4 and returns other addresses unchanged. Go `Addr.Unmap`.
     var unmappedIPv4: IPAddress {
         let mappedPrefix: [UInt8] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF]
         guard bytes.count == 16, bytes.starts(with: mappedPrefix) else { return self }
@@ -84,19 +88,17 @@ private extension IPAddress {
     }
 }
 
-// MARK: 표시 이름(동작 W4)
+// MARK: Display Name (Behavior W4)
 
 extension PeerIdentity {
-    /// Go `Node.InitDisplayNames`의 `ComputedName`.
+    /// `ComputedName` from Go `Node.InitDisplayNames`.
     ///
-    /// 노드 이름에서 `magicDNSSuffix`를 뗀 것이다. 접미사가 레이블 경계에서 맞을 때만 떼므로 다른 tailnet의 이름은 FQDN
-    /// 그대로 남는다(끝 점은 뗀다). 결과가 비면 `hostname`을 정리한 것, 그것도 비면 node 공개 키의 텍스트다.
+    /// Removes `magicDNSSuffix` from the node name. Removes the suffix only if it matches at a label boundary, so names
+    /// from other tailnets stay fully qualified (with the trailing dot removed). If the result is empty, uses the
+    /// sanitized `hostname`, or the node public key text if that too is empty.
     ///
-    /// - Parameters:
-    ///   - nodeName: netmap `Node.name`.
-    ///   - hostname: 노드가 알린 `Hostinfo.hostname`.
-    ///   - key: 노드의 공개 키.
-    ///   - magicDNSSuffix: 자기 tailnet의 접미사(`Netmap.magicDNSSuffix(ofNodeName:)`).
+    /// - Parameters: - nodeName: netmap `Node.name`. - hostname: `Hostinfo.hostname` reported by the node. - key: The
+    ///   node's public key. - magicDNSSuffix: The local tailnet suffix (`Netmap.magicDNSSuffix(ofNodeName:)`).
     static func computedName(nodeName: String, hostname: String, key: NodePublicKey, magicDNSSuffix: String) -> String {
         let name = trimmingSuffix(magicDNSSuffix, from: nodeName)
         guard name.isEmpty else { return name }
@@ -104,7 +106,7 @@ extension PeerIdentity {
         return host.isEmpty ? key.description : host
     }
 
-    /// Go `dnsname.TrimSuffix`: `name`이 `.suffix`로 끝날 때만(레이블 경계) 접미사를 떼고, 끝 점 하나를 뗀다.
+    /// Go `dnsname.TrimSuffix`: Removes the suffix only when `name` ends in `.suffix` (a label boundary), then removes one trailing dot.
     private static func trimmingSuffix(_ suffix: String, from name: String) -> String {
         var name = name
         if hasSuffix(suffix, in: name) {
@@ -114,8 +116,9 @@ extension PeerIdentity {
         return name.removingSuffix(".")
     }
 
-    /// Go `dnsname.HasSuffix`: 끝의 점과 접미사 앞뒤의 점을 하나씩 무시하고, `name`이 `<레이블>.<suffix>`로 끝나는가.
-    /// 접미사가 비어 있으면 false다. 접미사만 있는 이름도 false다.
+    /// Go `dnsname.HasSuffix`: Ignores one trailing dot and one leading and trailing dot on the suffix, then checks
+    /// whether `name` ends in `<label>.<suffix>`. Returns false if the suffix is empty or the name consists only of the
+    /// suffix.
     private static func hasSuffix(_ suffix: String, in name: String) -> Bool {
         let name = name.removingSuffix(".")
         let suffix = String(suffix.removingSuffix(".").removingPrefix("."))
@@ -123,15 +126,16 @@ extension PeerIdentity {
         return base.count < name.count && base.hasSuffix(".")
     }
 
-    /// Go `dnsname.SanitizeHostname`: `.local`·`.localdomain`·`.lan`을 이 차례로 한 번씩 떼고 DNS 레이블로 정리한다.
+    /// Go `dnsname.SanitizeHostname`: Removes `.local`, `.localdomain`, and `.lan` once each in that order and
+    /// sanitizes the result as a DNS label.
     private static func sanitizedHostname(_ hostname: String) -> String {
         let trimmed = hostname.removingSuffix(".local").removingSuffix(".localdomain").removingSuffix(".lan")
         return sanitizedLabel(trimmed)
     }
 
-    /// Go `dnsname.SanitizeLabel`(RFC 1035). 바이트 단위로 본다.
-    /// 63바이트로 자르고, 처음과 끝의 영숫자가 아닌 바이트를 버리고, 가운데의 구분자(공백·`.`·`@`·`_`)를 `-`로 바꾸고,
-    /// 영숫자와 `-`가 아닌 바이트를 버리고, 대문자를 소문자로 바꾼다.
+    /// Go `dnsname.SanitizeLabel` (RFC 1035). Works byte by byte. Truncates to 63 bytes, drops leading and trailing
+    /// non-alphanumeric bytes, replaces internal separators (spaces, `.`, `@`, and `_`) with `-`, drops bytes other
+    /// than alphanumerics and `-`, and lowercases uppercase letters.
     private static func sanitizedLabel(_ label: String) -> String {
         let bytes = Array(label.utf8)
         var start = 0
@@ -155,12 +159,12 @@ extension PeerIdentity {
 }
 
 private extension String {
-    /// `suffix`로 끝나면 그것을 뗀 문자열. Go `strings.TrimSuffix`.
+    /// The string with `suffix` removed if it ends with it. Go `strings.TrimSuffix`.
     func removingSuffix(_ suffix: String) -> String {
         hasSuffix(suffix) ? String(dropLast(suffix.count)) : self
     }
 
-    /// `prefix`로 시작하면 그것을 뗀 문자열. Go `strings.TrimPrefix`.
+    /// The string with `prefix` removed if it starts with it. Go `strings.TrimPrefix`.
     func removingPrefix(_ prefix: String) -> Substring {
         hasPrefix(prefix) ? dropFirst(prefix.count) : self[...]
     }

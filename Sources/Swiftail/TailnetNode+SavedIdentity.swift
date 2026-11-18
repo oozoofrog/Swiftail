@@ -2,23 +2,26 @@ import Foundation
 import SwiftailControl
 
 extension TailnetNode {
-    /// `stateDirectory`에 등록을 마친 신원이 저장되어 있는가. 앱이 노드를 띄우기 전에 "저장된 신원으로 스스로 이을지, 인증
-    /// 키나 로그인을 받을지"를 정할 때 묻는다. 파일·소켓을 만들지 않고 신원 파일을 읽기만 한다.
+    /// Checks whether `stateDirectory` contains a registered identity. Before starting the node, the app uses this to
+    /// decide whether to connect automatically with the saved identity or obtain an auth key or login. Reads only the
+    /// identity file and creates no files or sockets.
     ///
-    /// 파일이 있는지만 보지 않고 `run()`과 같은 규칙으로 읽어 형식까지 본다(심볼릭 링크를 따라가지 않음, 정규 파일만,
-    /// 64KiB까지). 있기만 하고 읽을 수 없는 파일은 `run()`도 `control(.storage)`로 끝나므로, 여기서 같은 실패를 먼저 알려야
-    /// 앱이 인증 키를 받아 놓고 시작에서 실패하는 일이 없다. 그리고 node 키가 있어야 참이다. machine 키만 있는 파일은 등록을
-    /// 마치기 전에 멈춘 것이라(`run()`은 등록 전에 machine 키를 저장한다) 인증 키나 로그인이 다시 필요하다.
+    /// Reads and validates the file's format using the same rules as `run()`, rather than checking only for existence.
+    /// Follows no symlinks, accepts only regular files, and limits size to 64KiB. An existing but unreadable file also
+    /// ends `run()` with `control(.storage)`. Reporting that failure first keeps the app from obtaining an auth key and
+    /// then failing to start. Returns true only when there is a node key. A file with only a machine key means
+    /// registration stopped before completion (`run()` saves the machine key before registration), and an auth key or
+    /// login is needed again.
     ///
-    /// 참이어도 제어 서버가 그 노드를 지웠거나 node 키가 만료됐으면 `run()`이 `.needsLogin`이나 `control(_:)` 실패로
-    /// 알린다. 그것은 서버에 물어야 안다. 신원의 내용(키)은 내보내지 않는다.
+    /// Even if true, `run()` reports `.needsLogin` or a `control(_:)` failure if the control server removed the node or
+    /// the node key expired. Only the server can answer that. Does not expose the identity contents (keys).
     ///
-    /// - Parameter stateDirectory: `NodeConfiguration.stateDirectory`에 줄 디렉터리.
-    /// - Returns: 등록을 마친 신원이 있으면 true. 신원 파일이 없거나 등록 전의 것이면 false.
-    /// - Throws: 파일 URL이 아니면 `invalidConfiguration`. 신원 파일이 심볼릭 링크이거나, 정규 파일이 아니거나, 한도보다
-    ///   크거나, 읽을 수 없거나, 형식이 맞지 않으면 `control(.storage)`.
+    /// - Parameter stateDirectory: The directory to pass to `NodeConfiguration.stateDirectory`.
+    /// - Returns: True if a registered identity exists. False if the identity file is absent or is from before registration.
+    /// - Throws: `invalidConfiguration` for a URL other than a file URL. Throws `control(.storage)` if the identity
+    ///   file is a symlink, is not a regular file, exceeds the limit, cannot be read, or has an invalid format.
     public static func hasSavedIdentity(in stateDirectory: URL) throws(NodeError) -> Bool {
-        guard stateDirectory.isFileURL else { throw .invalidConfiguration("상태 디렉터리는 파일 URL이어야 한다") }
+        guard stateDirectory.isFileURL else { throw .invalidConfiguration("State directory must be a file URL") }
         do throws(ControlError) {
             return try NodeIdentityStore(directory: stateDirectory).load()?.nodeKey != nil
         } catch {

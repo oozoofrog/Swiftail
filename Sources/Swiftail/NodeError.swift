@@ -1,28 +1,31 @@
 import SwiftailControl
 
-/// `TailnetNode`의 실패. `init`이 설정 오류를, `run()`이 다시 켜도 소용없는 실패를 던진다.
+/// A `TailnetNode` failure. `init` throws configuration errors and `run()` throws failures that restarting would not resolve.
 ///
-/// `run()`은 일시적인 실패(연결 끊김, 서버의 일시 오류, 시간 초과)를 던지지 않는다. 노드가 안에서 물러났다가 다시 시도한다.
-/// 다시 시도하지 않는 `logOut()`은 그것도 `control(.connection)`·`control(.http(status:))`로 던진다.
-/// 메시지에는 키·인증 키·파일 경로·기술자 번호를 넣지 않는다. 앱은 사용자 문구를 종류로 고르고, 연관 문자열은 진단에만 쓴다.
+/// `run()` does not throw transient failures (disconnects, temporary server errors, or timeouts). The node backs off
+/// and retries internally. `logOut()` does not retry and throws these as `control(.connection)` or
+/// `control(.http(status:))`. Messages omit keys, auth keys, file paths, and descriptor numbers. The app selects
+/// user-facing text by error kind and uses the associated strings only for diagnosis.
 public enum NodeError: Error, Sendable {
-    /// 제어 클라이언트가 끝낸 실패: 인증 키를 실은 등록 거절(`authKeyRejected`), 인증 키 없는 등록 거절
-    /// (`registrationRejected`), 새 키로도 node 키 만료(`nodeKeyExpired`), 신원 파일(`storage`).
+    /// A failure that ended the control client: registration rejected with an auth key (`authKeyRejected`) or without
+    /// one (`registrationRejected`), node key expiration even with a new key (`nodeKeyExpired`), or an identity file
+    /// failure (`storage`).
     ///
-    /// tailnet lock은 실패가 아니다. 잠긴 노드도 `.running`까지 가고, 잠김은 `NodeStatus.tailnetLock`으로 안다.
+    /// Tailnet lock does not cause a failure. A locked node still reaches `.running`. Check `NodeStatus.tailnetLock` for the lock state.
     case control(ControlError)
-    /// 설정이 잘못되었다: 상태 디렉터리, 제어 서버 URL, 호스트 이름, utun 기술자, MTU. `run()`을 두 번 부른 것도 여기다.
+    /// Invalid configuration: state directory, control server URL, hostname, utun descriptor, or MTU. Calling `run()` twice also falls here.
     case invalidConfiguration(String)
-    /// UDP 소켓을 열거나 묶지 못했다. 메시지에는 errno 이름만 담는다(예: `EADDRINUSE`).
+    /// Could not open or bind the UDP socket. The message contains only the errno name (for example, `EADDRINUSE`).
     case udpUnavailable(String)
-    /// 같은 프로세스의 다른 노드가 이 상태 디렉터리로 돌고 있다.
+    /// Another node in the same process is running with this state directory.
     case stateDirectoryInUse
-    /// 터널 장치를 더 읽을 수 없다(utun 읽기 오류나 끝). 메시지에는 errno 이름(끝은 `EOF`)만 담는다.
+    /// Can no longer read the tunnel device (utun read error or end of file). The message contains only the errno name,
+    /// or `EOF` at end of file.
     case tunnelDeviceClosed(String)
 }
 
 extension NodeError {
-    /// 제어 클라이언트의 실패를 노드의 실패로 옮긴다. 설정 오류는 설정 오류로 둔다.
+    /// Converts a control client failure to a node failure. Configuration errors remain configuration errors.
     init(_ error: ControlError) {
         if case let .invalidConfiguration(message) = error {
             self = .invalidConfiguration(message)

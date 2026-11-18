@@ -1,35 +1,39 @@
-/// `TailnetNode`가 알리는 변화. `TailnetNode.events`로 받는다.
+/// A change reported by `TailnetNode`. Receive it through `TailnetNode.events`.
 ///
-/// 주소·이름 같은 지금의 모습은 사건에 싣지 않고 `TailnetNode.status`로 읽는다. 같은 사실을 두 길로 알리지 않는다
-/// (`docs/contracts/SwiftailTunnel.md` 총괄 확인 T1).
+/// Read current values such as addresses and names from `TailnetNode.status`. Events omit them so the same information
+/// is reported only one way (`docs/contracts/SwiftailTunnel.md`, lead session confirmation T1).
 ///
-/// 한 번의 갱신(netmap 하나, 상태 전이 하나)에서 나오는 사건의 차례는 `tailnetLockChanged` → `peerPathChanged` →
-/// `stateChanged` → `statusChanged`다. 사건이 나올 때 `status`는 이미 그 갱신을 담고 있다.
+/// Events from one update (one netmap or state transition) arrive in this order: `tailnetLockChanged` →
+/// `peerPathChanged` → `stateChanged` → `statusChanged`. When each event arrives, `status` already reflects the update.
 public enum NodeEvent: Sendable, Equatable {
-    /// 상태가 바뀌었다. 같은 상태는 다시 내지 않는다. 처음 상태는 `.starting`이고 그것은 내지 않는다.
+    /// The state changed. Repeated states are suppressed. The initial `.starting` state emits no event.
     case stateChanged(NodeState)
-    /// 피어의 경로가 바뀌었다. 뜻은 `TailnetNode.path(toPeerNamed:)`와 같다.
+    /// The peer's path changed. Has the same meaning as `TailnetNode.path(toPeerNamed:)`.
     ///
-    /// nil은 그 피어가 데이터면에서 빠졌거나 45초 넘게 주고받은 것이 없다(유휴)는 뜻이다. 다시 주고받기 시작하면
-    /// 그때의 경로로 다시 나온다. 이름이 빈 피어는 알리지 않는다.
+    /// Nil means the peer left the data plane or neither sent nor received traffic for more than 45 seconds (idle).
+    /// When traffic resumes, emits another event with the path at that time. A peer with an empty name produces no
+    /// event.
     ///
-    /// - Parameter fqdn: netmap의 노드 이름에서 끝의 점을 뗀 것(`rd-mac-1a2b3c4d.tail0001.ts.net`).
+    /// - Parameter fqdn: The node name in the netmap with its trailing dot removed (`rd-mac-1a2b3c4d.tail0001.ts.net`).
     case peerPathChanged(fqdn: String, path: PeerPath?)
-    /// tailnet lock의 모습이 바뀌었다. 값은 그때의 `NodeStatus.tailnetLock`과 같다. 같은 값은 다시 내지 않는다. 처음 값은
-    /// `.disabled`이고 그것은 내지 않는다.
+    /// The tailnet lock state changed. The value matches `NodeStatus.tailnetLock` at that time. Repeated values are
+    /// suppressed. The initial `.disabled` value emits no event.
     ///
-    /// 한 netmap에서 나오는 사건 가운데 맨 앞이다. 그래서 잠긴 노드의 `stateChanged(.running)`보다 먼저 오고, 앱은 "연결됨"을
-    /// 보이기 전에 서명 안내(`signingRequest`)를 안다. 서명 기기가 서명하면 다시 시작하지 않아도 다음 netmap에서
-    /// `signingRequest`가 nil인 값으로 다시 나온다. `docs/contracts/SwiftailTailnetLock.md` 결정 L4, 첫 사용처 검토 F2.
+    /// This comes first among events from a netmap. It precedes a locked node's `stateChanged(.running)`, so the app
+    /// sees the signing instructions (`signingRequest`) before showing “Connected.” Once a signing device signs the
+    /// node, the next netmap emits the new value with a nil `signingRequest` without a restart.
+    /// `docs/contracts/SwiftailTailnetLock.md` decision L4, first adopter review F2.
     case tailnetLockChanged(TailnetLockStatus)
-    /// `TailnetNode.status`의 값이 바뀌었다. 지금의 모습은 `status`로 읽는다.
+    /// The value of `TailnetNode.status` changed. Read current values from `status`.
     ///
-    /// 앞서 알린 `status`와 실제로 다를 때만 나온다(피어 수, 자기 이름·주소·`StableID`, 인증서 이름, 터널 설정, 상태, tailnet lock 가운데
-    /// 하나라도). 상태와 lock이 바뀌면 `stateChanged`·`tailnetLockChanged` 뒤에 이것도 나온다. 그 둘은 전이 자체를
-    /// 알리고(로그인 URL 열기, 서명 안내), 이것은 화면에 보일 모습을 다시 읽으라는 신호다. 화면만 맞추는 앱은 이 사건만
-    /// 보면 된다.
+    /// Emitted only when `status` actually differs from the previously reported value in at least one of peer count,
+    /// local name, addresses, or `StableID`, certificate names, tunnel settings, state, or tailnet lock. Changes to
+    /// state or lock also emit this after `stateChanged` or `tailnetLockChanged`. Those two report the transitions
+    /// themselves, such as opening a login URL or showing signing instructions. This event tells the app to read the
+    /// state it should display. An app that only updates its display needs only this event.
     ///
-    /// 읽지 않은 것은 하나만 남는다. 새로 나면 앞의 것을 지우고 맨 뒤에 둔다. 그래서 사건 버퍼의 한도에 세지 않고 다른 사건을
-    /// 밀어내지 않는다. 처음 모습(`.starting`, netmap 없음)은 내지 않으니 앱은 시작할 때 `status`를 한 번 읽는다.
+    /// Keeps only one unread event. A new event removes its predecessor and goes at the end. It therefore does not
+    /// count toward the event buffer limit or displace other events. The initial snapshot (`.starting`, no netmap)
+    /// emits no event, so the app reads `status` once at startup.
     case statusChanged
 }

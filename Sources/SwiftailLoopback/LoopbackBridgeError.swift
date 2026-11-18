@@ -1,14 +1,16 @@
-/// `LoopbackBridge.forward(_:toLoopbackPort:)`가 잇지 못한 까닭. 어느 경우든 tailnet 연결은 RST로 끊긴 뒤다.
+/// The reason `LoopbackBridge.forward(_:toLoopbackPort:)` could not forward a connection. In every case, the tailnet
+/// connection has already been aborted with RST.
 ///
-/// 잇기 시작한 뒤 한쪽이 끊기거나 실패한 것(`reset`, `timedOut`, `peerRemoved`, 루프백의 실패, 노드가 멈춤)은 오류가
-/// 아니다. 다리는 두 연결을 정리하고 돌아온다. 메시지에는 주소·이름을 담지 않는다(계약 동작 K).
+/// A disconnect or failure on either side after forwarding begins (`reset`, `timedOut`, `peerRemoved`, loopback
+/// failure, or node stop) is not an error. The bridge cleans up both connections and returns. Messages omit addresses
+/// and names (contract behavior K).
 public enum LoopbackBridgeError: Error, Sendable, Equatable {
-    /// 상대 주소의 신원을 netmap에서 찾지 못했다.
+    /// No identity for the peer address was found in the netmap.
     case unknownPeer
-    /// 다리가 잇고 있는 연결이 상한(256)에 닿았다.
+    /// The bridge reached its concurrent connection limit (256).
     case limitReached
-    /// 루프백 포트에 걸지 못했다(듣는 쪽이 없다, 시간 초과, 토큰을 표에 적거나 보내지 못했다).
+    /// Could not connect to the loopback port (no listener, timeout, or failure to record or send the token).
     case loopbackUnavailable(String)
-    /// 부른 Task가 취소되었다.
+    /// The calling Task was canceled.
     case cancelled
 }

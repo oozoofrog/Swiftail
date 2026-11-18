@@ -1,15 +1,16 @@
 import SwiftailBase
 
-/// 패킷 받기: 해석, 찾기, LISTEN, 연결 없는 곳의 RST(계약 동작 S1~S6, X7·X8).
+/// Packet reception, including parsing, lookup, LISTEN, and RST for an absent connection (contract behaviors S1~S6, X7 and X8).
 extension TCPStack {
-    /// IP 패킷 하나를 받는다. 어떤 바이트열을 넣어도 죽지 않는다(계약 동작 X1).
+    /// Receives one IP packet. Accepting arbitrary input bytes does not crash (contract behavior X1).
     ///
-    /// 찾는 순서(계약 동작 S1): 목적지가 자기 주소가 아니면 버린다 → 4-튜플의 연결 → 같은 4-튜플의 TIME-WAIT 기록 →
-    /// 목적지 포트의 리스너 → 어디에도 없으면 RST로 답한다(S2). TIME-WAIT 기록이 리스너보다 앞이라, 기록이 있는 동안 같은
-    /// 4-튜플의 SYN은 새 연결이 되지 않는다.
+    /// Lookup order (contract behavior S1). Drop packets whose destination is not a local address, then look for a
+    /// connection by 4-tuple, a TIME-WAIT record for the same 4-tuple, and a listener on the destination port, in that
+    /// order. If none exists, reply with RST (S2). A TIME-WAIT record comes before a listener, so a SYN with the same
+    /// 4-tuple does not create a new connection while the record exists.
     ///
-    /// 곧바로 보낼 순수 ACK는 이 패킷의 출력으로 나온다. 40ms 기한으로 미룬 ACK는 `advance(to:)`가 낸다. 묶음을 다 넣은 뒤
-    /// 같은 시각으로 `advance(to:)`를 부른다.
+    /// Immediate pure ACKs come out in this packet's output. `advance(to:)` emits ACKs delayed on a 40ms deadline. Call
+    /// `advance(to:)` with the same time after passing the entire group.
     package mutating func receive(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output] {
         let segment: TCPSegment
         do {
@@ -21,7 +22,7 @@ extension TCPStack {
             case .badChecksum: return [.dropped(.badChecksum)]
             }
         }
-        // 필터가 이미 걸렀지만 스택도 본다(계약 동작 S1).
+        // The filter has already checked this, but the stack checks it too (contract behavior S1).
         guard localAddresses.contains(segment.destination.address) else { return [.dropped(.notForUs)] }
 
         var outputs: [Output] = []
@@ -43,16 +44,17 @@ extension TCPStack {
 
     // MARK: LISTEN (RFC 9293 3.10.7.2)
 
-    /// 리스너에 온 세그먼트. SYN만 있는 세그먼트(ACK·RST 없음)면 상한을 본 뒤 연결을 만든다. SYN의 보안·구획 검사(같은 절
-    /// 셋째)는 쓰지 않는다.
+    /// A segment arrived at a listener. For a SYN-only segment (no ACK or RST), checks the limits and creates a
+    /// connection. Skips SYN security and compartment checks (the third step in the same section).
     ///
-    /// 그 밖의 세그먼트에는 듣지 않는 포트와 똑같이 답한다(`reset(answering:)`): RST는 무시, ACK가 있으면
-    /// `<SEQ=SEG.ACK><CTL=RST>`, 둘 다 없으면 `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>`. 마지막 것은 RFC 9293
-    /// 3.10.7.2 넷째("버린다")와 다르다: 수신 필터가 SYN만 규칙에 견주므로(계약 동작 X), 조용히 버리면 ACL이 막은 피어가
-    /// FIN만 든 세그먼트의 답이 있고 없음으로 듣는 포트를 가려낸다.
+    /// Responds to other segments as on an unlistened port (`reset(answering:)`). Ignores RST, sends
+    /// `<SEQ=SEG.ACK><CTL=RST>` if ACK is set, and sends `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>` if neither is set.
+    /// The last differs from step four of RFC 9293 §3.10.7.2 (“drop”). Because the receive filter checks only SYN
+    /// against the rules (contract behavior X), a silent drop would let an ACL-blocked peer distinguish listening ports
+    /// by whether a FIN-only segment gets a reply.
     ///
-    /// 상한(계약 동작 S4~S6, X7, 상대 피어 하나의 연결 64개와 대기열 몫 16개)에 닿은 SYN은 응답 없이 버린다. 상대는 SYN을
-    /// 다시 보낸다.
+    /// Drops a SYN without a reply when a limit is reached (contract behaviors S4~S6, X7, 64 connections for one remote
+    /// peer and its 16-entry share of the queue). The peer retransmits the SYN.
     private mutating func receiveInListen(
         _ segment: TCPSegment, listener listenerID: ListenerID, at now: ContinuousClock.Instant,
         into outputs: inout [Output]
@@ -101,7 +103,8 @@ extension TCPStack {
                 segment, initialSequenceNumber: initialSequenceNumber,
                 receiveWindowLimit: TCPConnection.unacceptedReceiveWindow, at: now)
         } catch {
-            // 상대 MSS가 64보다 작으면 그 SYN에 RST로 답한다(계약 동작 X9). notInitialSYN은 위에서 걸렀다.
+            // Responds to the SYN with RST when the peer's MSS is less than 64 (contract behavior X9). The check above
+            // already filtered notInitialSYN.
             if case .unacceptableMaximumSegmentSize(let reset) = error {
                 append(reset, to: &outputs)
             }
@@ -115,9 +118,9 @@ extension TCPStack {
         process(opened.outputs, of: id, at: now, into: &outputs)
     }
 
-    /// 리스너 `listenerID`의 대기열과 맺는 중인 연결 가운데 상대 주소가 `addresses`에 드는 것의 수.
-    // shortcut: SYN마다 연결 표(256개까지)를 훑는다. 리스너마다 피어별 수를 따로 적으면 옮기고 지우는 길마다 맞춰야 한다.
-    // 필요해지는 시점: 연결 상한을 크게 올릴 때.
+    /// Counts the entries in listener `listenerID`'s queue and its establishing connections with a remote address in `addresses`.
+    // shortcut: Scan the connection table (up to 256 entries) per SYN. Separate per-peer counts on each listener would
+    // need updates on every move and removal. Revisit this when the connection limit increases substantially.
     private func pendingConnectionCount(of listenerID: ListenerID, from addresses: [IPAddress]) -> Int {
         connections.values.lazy.filter { entry in
             (entry.role == .halfOpen(listenerID) || entry.role == .queued(listenerID))
@@ -125,12 +128,13 @@ extension TCPStack {
         }.count
     }
 
-    // MARK: 연결 없는 곳 (RFC 9293 3.10.7.1)
+    // MARK: No Connection (RFC 9293 §3.10.7.1)
 
-    /// 연결도 기록도 리스너도 없는 곳으로 온 세그먼트에 답할 RST. RST에는 답하지 않는다(`nil`).
+    /// The RST response to a segment for which no connection, record, or listener exists. Does not reply to RST (`nil`).
     ///
-    /// ACK가 꺼져 있으면 `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>`, 켜져 있으면 `<SEQ=SEG.ACK><CTL=RST>`. 답은 데이터가 없어
-    /// 받은 것보다 크지 않으므로 증폭이 없다. 따로 속도를 제한하지 않는다(계약 동작 X8).
+    /// If ACK is clear, returns `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>`. If it is set, returns
+    /// `<SEQ=SEG.ACK><CTL=RST>`. The reply carries no data and is no larger than the input, so there is no
+    /// amplification. Applies no separate rate limit (contract behavior X8).
     static func reset(answering segment: TCPSegment) -> TCPSegment? {
         guard !segment.flags.contains(.rst) else { return nil }
         if segment.flags.contains(.ack) {

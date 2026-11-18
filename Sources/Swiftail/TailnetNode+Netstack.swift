@@ -4,31 +4,35 @@ import SwiftailControl
 import SwiftailEngine
 import SwiftailNetstack
 
-/// 노드와 프로세스 안의 TCP 스택 잇기(`docs/contracts/SwiftailNetstack.md` 동작 N, X10, K).
+/// Connects the node to the in-process TCP stack (`docs/contracts/SwiftailNetstack.md` behaviors N, X10, and K).
 ///
 /// ```
 /// engine.receive ─ .ipPacket ─► deliverToDevice ─► inbox ─► stack.receive ─┬ .ipPacket ─► engine.send ─► Magicsock …
-///                                                                       │                  └ .ipPacket(자기 주소) ─► inbox
-///                                                                       └ .event ─► 기다리던 read·write·accept·connect를 깨움
-/// 앱의 호출(read·write·connect·close…) ─► stack.<호출> ─► 위와 같이 출력 처리
-/// 타이머 ─► stack.advance(to:)
+///                                                                       │                  └ .ipPacket(local address) ─► inbox
+///                                                                       └ .event ─► Wake waiting read, write, accept, or connect
+/// App call (read, write, connect, close…) ─► stack.<call> ─► Process output as above
+/// Timer ─► stack.advance(to:)
 /// ```
 ///
-/// 스택은 노드 actor의 저장 프로퍼티인 값이고, 스택·엔진·`Magicsock` 사이의 주고받기는 한 번의 actor 실행 안에서 `await`
-/// 없이 끝난다. 그래서 노드와 스택 사이에 버퍼·버림·둘째 타이머가 없다(구조 3).
+/// The stack is a value stored on the node actor. Exchanges between the stack, engine, and `Magicsock` complete in one
+/// actor execution without `await`. There is therefore no buffer, drop, or second timer between the node and stack
+/// (Structure, item 3).
 ///
-/// 사건 하나에서 비롯된 일은 재귀가 아니라 대기열(`Netstack.inbox`)로 돈다(동작 N4): 엔진이 장치로 낸 패킷(피어가 보낸 것,
-/// 자기 주소로 건 연결에서 되돌린 것)은 대기열에 쌓이고, 노드의 가장 바깥 처리가 닫힐 때 차례로 스택에 넣는다
-/// (`settleNetstack(at:)`). 대기열이 비면 같은 시각으로 `advance(to:)`를 불러 미뤄 둔 ACK를 낸다.
+/// Work from one event runs through a queue (`Netstack.inbox`) without recursion (behavior N4). Packets the engine
+/// emits for the device (from peers, or looped back from a connection to a local address) accumulate in the queue. Pass
+/// them to the stack in order when the node's outermost processing pass ends (`settleNetstack(at:)`). When the queue is
+/// empty, call `advance(to:)` at the same time to emit delayed ACKs.
 ///
-/// 기다리는 호출은 `suspend(until:)`로 멈추고 스택의 사건이 깨운다. 깨우는 통로는 값을 나르지 않는다: 깨어난 호출이 상태를
-/// 다시 보고 무엇을 할지 정한다. 그래서 취소와 깨우기가 겹쳐도 데이터나 연결을 잃지 않는다.
+/// Waiting calls suspend with `suspend(until:)` and stack events wake them. The wakeup channel carries no value. The
+/// resumed call checks state again and decides what to do. This avoids losing data or connections if cancellation races
+/// with wakeup.
 extension TailnetNode {
-    // MARK: 수명 (동작 N8)
+    // MARK: Lifecycle (Behavior N8)
 
-    /// `run()`이 시작할 때 스택을 만든다. `.inProcess`가 아니면 아무것도 하지 않는다(다른 장치에는 스택의 상태가 없다).
+    /// Creates the stack at the start of `run()`. Does nothing for devices other than `.inProcess`, which have no stack state.
     ///
-    /// ISN의 비밀 32바이트는 `run()`마다 시스템 난수로 뽑는다(계약 동작 S7). `run()` 전에 연 리스너를 스택에 올린다(동작 A1).
+    /// Draws the 32-byte ISN secret from system randomness on each `run()` (contract behavior S7). Installs listeners
+    /// opened before `run()` on the stack (behavior A1).
     func startNetstack() {
         guard case .inProcess = device else { return }
         closeDroppedListeners()
@@ -40,17 +44,19 @@ extension TailnetNode {
             do throws(TCPStack.ListenError) {
                 listenerRecords[token]?.stackID = try netstack?.stack.listen(on: port)
             } catch {
-                // `listen(port:)`이 스택과 같은 중복·상한을 먼저 보므로 일어나지 않는다. 일어나면 그 리스너의 흐름을 끝낸다.
+                // This does not occur because `listen(port:)` checks the same duplicate and limit rules as the stack
+                // first. If it occurs, end that listener's stream.
                 listenerRecords.removeValue(forKey: token)?.waiter?.finish()
             }
         }
     }
 
-    /// `run()`이 끝날 때 부른다. 두 번 불러도 된다.
+    /// Called at the end of `run()`. May be called twice.
     ///
-    /// 리스너를 모두 닫고(받아 가지 않은 연결은 RST), 응용이 쥔 연결마다 RST를 한 번 낸다. 소켓과 엔진이 아직 있을 때 불러야
-    /// 직접 경로로 나간다(DERP 통로에 있던 것은 사라질 수 있다). 기다리던 호출을 모두 깨운다: 깨어난 호출은 스택이 없는 것을
-    /// 보고 `notRunning`을 던지고, 리스너의 흐름은 끝난다. 그 뒤에 버려진 핸들은 무시한다.
+    /// Closes all listeners (RST for unaccepted connections) and emits one RST per application-held connection. Call
+    /// while the socket and engine still exist so the RSTs can go out directly. Items in the DERP channel may be lost.
+    /// Wakes all waiting calls, which see the missing stack and throw `notRunning`, and ends listener streams. Ignores
+    /// handles released afterward.
     func stopNetstack() {
         let now = ContinuousClock.now
         for token in listenerRecords.keys.sorted() {
@@ -60,8 +66,9 @@ extension TailnetNode {
             for id in ids {
                 process(netstack?.stack.abort(id, at: now) ?? [], at: now)
             }
-            // 응용이 `close`로 놓았지만 아직 닫는 중인 연결, 맺는 중인 연결도 RST로 끊는다. 상대가 재전송 한도까지 기다리지
-            // 않게 한다.
+            // Also aborts connections with RST if the application released them with `close` but they are still
+            // closing, or if they are still establishing. This keeps the peer from waiting until the retransmission
+            // limit.
             process(netstack?.stack.abortAll() ?? [], at: now)
             netstack?.connections.values.forEach { $0.finishWaiters() }
             netstack = nil
@@ -69,15 +76,16 @@ extension TailnetNode {
         handleReleases.finish()
     }
 
-    /// 핸들이 버려진 리스너를 닫는다(`listen(port:)`과 `run()`의 시작이 먼저 부른다). 버려진 핸들의 닫기 요청은 `run()`의 자식만
-    /// 받으므로, `run()` 전에 버렸거나 그 자식이 아직 받지 못한 리스너가 포트와 상한을 쥐고 있지 않게 한다.
+    /// Closes listeners whose handles were released, first called by `listen(port:)` and the start of `run()`. Only a
+    /// child of `run()` receives close requests from released handles, so this keeps listeners released before `run()`
+    /// or not yet received by the child from holding ports or counting toward the limit.
     func closeDroppedListeners() {
         for token in listenerRecords.keys.sorted() where listenerRecords[token]?.handle == nil {
             closeListener(token)
         }
     }
 
-    /// 버려진 핸들을 처리한다. 취소될 때까지 돈다(동작 N9).
+    /// Handles released handles. Runs until canceled (behavior N9).
     func releaseHandles() async {
         for await release in handleReleaseStream {
             switch release {
@@ -89,18 +97,18 @@ extension TailnetNode {
         }
     }
 
-    // MARK: 출력 처리 (동작 N2~N5)
+    // MARK: Output Processing (Behaviors N2~N5)
 
-    /// 엔진이 장치로 쓰라고 낸 패킷 하나를 스택의 대기열에 넣는다(동작 N2). 노드의 처리 안에서만 불리고, 가장 바깥 처리가
-    /// 닫힐 때 스택에 들어간다. TCP가 아닌 것은 스택이 버린다.
+    /// Enqueues one packet emitted by the engine for the device (behavior N2). Called only within a node processing
+    /// pass. The packet enters the stack when the outermost pass ends. The stack drops non-TCP packets.
     func deliverToNetstack(_ ipPacket: [UInt8]) {
         guard netstack != nil, inProcessLoss?.dropsNext() != true else { return }
         netstack?.inbox.append(ipPacket)
         netstack?.needsSettling = true
     }
 
-    /// 스택의 출력을 낸 순서대로 처리한다. 스택을 바꾼 모든 호출 뒤에 부른다. 대기열과 미뤄 둔 ACK는 가장 바깥 처리가
-    /// 닫힐 때 마무리한다.
+    /// Processes stack output in emission order. Called after every call that mutates the stack. Finishes the queue and
+    /// delayed ACKs at the end of the outermost pass.
     func process(_ outputs: [TCPStack.Output], at now: ContinuousClock.Instant) {
         guard netstack != nil else { return }
         beginProcessing()
@@ -109,9 +117,11 @@ extension TailnetNode {
         endProcessing(at: now)
     }
 
-    /// 이번 처리에서 스택을 움직였으면 대기열의 패킷을 차례로 스택에 넣고, 대기열이 빈 뒤 같은 시각으로 `advance(to:)`를 불러
-    /// 기한이 된 ACK를 낸다. 그 출력이 되돌아와(자기 주소로 건 연결) 대기열이 다시 차면 되풀이한다(버퍼가 묶으므로 끝난다).
-    /// 노드의 가장 바깥 처리가 닫힐 때(`endProcessing(at:)`) 부른다. 받은 UDP 묶음 전체가 한 번의 `advance`로 끝난다.
+    /// If the stack took a step during this pass, passes queued packets to it in order. Once the queue is empty, calls
+    /// `advance(to:)` at the same time to send due ACKs. If output loops back (a connection to a local address) and
+    /// fills the queue again, repeats until done. The buffers bound the loop. Called when the node's outermost
+    /// processing pass ends (`endProcessing(at:)`). A whole group of received UDP datagrams concludes with one
+    /// `advance`.
     func settleNetstack(at now: ContinuousClock.Instant) {
         guard netstack?.needsSettling == true else { return }
         repeat {
@@ -130,7 +140,8 @@ extension TailnetNode {
         for output in outputs {
             switch output {
             case let .ipPacket(bytes):
-                // 엔진은 M5의 로컬 처리를 그대로 한다: 자기 주소로 간 것은 되돌리고(→ 대기열), 서비스 IP는 RST로 거절한다(N3).
+                // The engine preserves M5 local processing. Loops back packets to local addresses (→ queue) and refuses
+                // the service IP with RST (N3).
                 guard inProcessLoss?.dropsNext() != true else { continue }
                 process(engine?.send(bytes, at: now) ?? [], at: now)
             case let .event(event):
@@ -145,7 +156,7 @@ extension TailnetNode {
         }
     }
 
-    /// 스택의 사건으로 기다리던 호출을 깨운다(동작 N5).
+    /// Wakes waiting calls on stack events (behavior N5).
     private func dispatch(_ event: TCPStack.Event, at now: ContinuousClock.Instant) {
         switch event {
         case let .established(id):
@@ -160,8 +171,8 @@ extension TailnetNode {
         case let .writable(id):
             wakeWriter(id)
         case let .closed(id, reason, statistics):
-            // 기록이 없으면 앱이 close·abort로 놓은 연결이 그 호출 안에서 곧바로 끝난 것이다(abort, 읽지 않은 데이터가 있던
-            // close, 취소된 connect). 깨울 호출은 없고 로그만 남긴다.
+            // A missing record means a connection released by the app via close or abort ended immediately within that
+            // call (abort, close with unread data, or a canceled connect). There is no call to wake, so only log it.
             let isHeld = netstack?.connections[id] != nil
             if isHeld {
                 netstack?.connections[id]?.closeReason = reason
@@ -172,7 +183,7 @@ extension TailnetNode {
         }
     }
 
-    /// `연결이 끝남` 한 줄을 남긴다(계약 "연결 종료 통계 로그"). 숫자와 참·거짓만이다.
+    /// Logs one `Connection ended` line (contract “Connection Closure Statistics Log”). Contains only numbers and Booleans.
     private func logClose(
         _ reason: TCPStack.CloseReason, _ statistics: TCPConnection.Statistics, afterRelease: Bool,
         at now: ContinuousClock.Instant
@@ -181,61 +192,67 @@ extension TailnetNode {
             "\(statistics.closeLogLine(reason: reason, closedAt: now, afterRelease: afterRelease), privacy: .public)")
     }
 
-    /// 읽기 쪽 사건을 적고 기다리던 `read`를 깨운다. 적어 두는 것은, 사건이 호출 자신의 출력 처리 안에서 나와 깨울 대상이
-    /// 아직 없을 때(자기 주소로 건 연결) 호출이 기다리기 전에 보고 다시 시도하게 하기 위해서다.
+    /// Records a read-side event and wakes a waiting `read`. An event may occur in the call's own output processing
+    /// before anything is waiting to be woken, as on a connection to a local address. The record lets the call check
+    /// and retry before waiting.
     func wakeReader(_ id: TCPStack.ConnectionID) {
         netstack?.connections[id]?.hasReadEvent = true
         netstack?.connections[id]?.readWaiter?.finish()
     }
 
-    /// 쓰기 쪽 사건(자리가 남, 맺어짐, 끝남)을 적고 기다리던 `write`·`connect`를 깨운다.
+    /// Records a write-side event (space, establishment, or closure) and wakes a waiting `write` or `connect`.
     func wakeWriter(_ id: TCPStack.ConnectionID) {
         netstack?.connections[id]?.hasWriteEvent = true
         netstack?.connections[id]?.writeWaiter?.finish()
     }
 
-    /// 상한에 닿아 버린 SYN을 센다. 홍수에 로그가 넘치지 않게 1·2·4·8…번째에만 남긴다(동작 K2).
+    /// Counts SYNs dropped at a limit. Logs only the 1st, 2nd, 4th, 8th, and so on, to keep a flood from overwhelming the log (behavior K2).
     private func countLimitDrop(_ limit: TCPStack.Limit) {
         netstack?.limitDropCount += 1
         let count = netstack?.limitDropCount ?? 0
         guard count & (count - 1) == 0 else { return }
-        Self.log.notice("상한에 닿아 SYN을 버림: \(limit.logName, privacy: .public), 누적 \(count, privacy: .public)개")
+        Self.log.notice("Dropped SYN at limit: \(limit.logName, privacy: .public), \(count, privacy: .public) total")
     }
 
-    // MARK: 기다리기
+    // MARK: Waiting
 
-    /// 깨우는 통로를 `register`로 상태에 걸고, 깨우기나 호출한 Task의 취소까지 기다린다.
+    /// Installs the wakeup channel in state through `register` and waits for a wakeup or cancellation of the calling Task.
     ///
-    /// 통로는 기다릴 때마다 새로 만들어 한 번만 쓰고, 깨우는 쪽은 `finish()`만 부른다(정확히 한 번 깨어난다: 이미 끝난 통로의
-    /// `finish()`는 아무 일도 하지 않는다). 통로를 상태에서 지우는 것은 깨어난 호출이다. 거는 일과 기다리기 사이에 `await`가
-    /// 없으므로 그 사이의 깨우기를 놓치지 않는다. 지켜야 할 것 둘:
-    /// - 걸 자리(기록)가 있는지 먼저 확인하고 부른다. 없는 자리에 건 통로는 아무도 깨우지 않는다.
-    /// - 기록을 상태에서 통째로 지우는 쪽은 그 기록의 통로를 `finish()`한다.
+    /// Creates a fresh one-use channel per wait. The waking side only calls `finish()`, so the call wakes exactly once
+    /// because `finish()` on an already ended channel has no effect. The resumed call removes the channel from state.
+    /// There is no `await` between registration and waiting, so a wakeup in between cannot be missed. Two requirements
+    /// follow.
+    /// - Before calling, check that there is a record where the channel can be installed. No one wakes a channel installed without a record.
+    /// - Any code that removes a whole record from state calls `finish()` on that record's channel.
     func suspend(until register: (Wakeup) -> Void) async {
         let (wakeups, wakeup) = AsyncStream.makeStream(of: Void.self)
         register(wakeup)
         for await _ in wakeups {}
     }
 
-    // MARK: netmap (동작 N7, S9, X10)
+    // MARK: Netmap (Behaviors N7, S9, X10)
 
-    /// 엔진이 피어를 다시 계산할 때마다 부른다: netmap을 적용할 때, 그리고 키 만료를 처리했을 때(새 netmap 없이 주소의
-    /// 주인이 바뀐다). 주인 표를 엔진이 피어와 함께 만든 것으로 바꾸고 스택에 넘긴다. `whoIs`와 스택이 같은 때의 같은 표를
-    /// 보므로, 살아 있는 연결의 원격 주소에 대한 `whoIs`의 답은 그 연결을 맺은 피어의 것이다(호스트 계약 동작 W6).
+    /// Called whenever the engine recomputes peers, both when applying a netmap and after handling key expiration
+    /// (which changes address ownership without a new netmap). Replaces the owner table with the one the engine built
+    /// alongside its peers and passes it to the stack. Since `whoIs` and the stack see the same table from the same
+    /// instant, `whoIs` on a live connection's remote address identifies the peer that established the connection (host
+    /// contract behavior W6).
     ///
-    /// 엔진이 없으면(등록 전) 데이터면도 없다. 같은 계산을 netmap에서 직접 한다.
+    /// Without an engine (before registration), there is no data plane. Performs the same calculation directly from the netmap.
     func updateAddressOwners(for netmap: Netmap) {
         addressOwners = engine?.addressOwners ?? EnginePeer.addressOwners(in: netmap, at: Date())
         updateNetstack(for: netmap)
     }
 
-    /// 주인 표(`addressOwners`)가 바뀔 때마다 부른다. 자기 주소를 스택에 넘기고, 데이터면 피어의 주소마다 주인(node 키)을
-    /// 견주어 주인이 없어지거나 바뀐 주소의 연결을 끊는다(`peerRemoved`, 아무것도 보내지 않는다). 주소를 물려받은 다른 노드가
-    /// 앞 노드의 연결을 이어 쓰는 것을 막는다(계약 총괄 확정 N8). 같은 표에서 피어별 주소 묶음도 넘겨, 스택이 피어 하나의
-    /// 몫을 그 피어의 주소들(IPv4·IPv6)에 걸쳐 세게 한다.
+    /// Called on every change to the owner table (`addressOwners`). Passes local addresses to the stack and compares
+    /// each data plane peer address's owner (node key). Ends connections for addresses whose owner disappeared or
+    /// changed (`peerRemoved`, sends nothing). Prevents a different node inheriting an address from continuing the
+    /// previous node's connection (contract lead session decision N8). Also passes per-peer address groups from the
+    /// same table so the stack counts one peer's share across its IPv4 and IPv6 addresses.
     ///
-    /// 피어의 패킷은 그 피어의 AllowedIPs로 출발지를 검사받으므로(엔진 계약 M3 동작 2·5), 한 주소의 연결은 모두 그때의 주인과
-    /// 맺은 것이다. 그래서 연결마다 키를 적지 않고 주소마다의 주인을 견준다. 맺는 중이거나 대기열에 있는 연결도 함께 끊긴다.
+    /// Peer packets have their source checked against that peer's AllowedIPs (engine contract M3 behaviors 2 and 5), so
+    /// all connections for an address were established with its owner at the time. Compare owners per address without
+    /// storing keys per connection. Also ends establishing and queued connections.
     private func updateNetstack(for netmap: Netmap) {
         guard netstack != nil else { return }
         let owners = addressOwners.mapValues(\.key)
@@ -252,59 +269,62 @@ extension TailnetNode {
         process(outputs, at: .now)
     }
 
-    // MARK: 시험용 손실 (동작 N11)
+    // MARK: Test Loss (Behavior N11)
 
-    /// 시험 전용(공개 API 아님). 스택과 엔진 사이의 패킷을 양방향으로 `rate`의 확률로 버린다. 난수는 `seed`에서 만들어
-    /// 같은 씨앗이면 같은 패킷 차례에서 버린다. 0이면(기본) 버리지 않는다. 자기 주소로 건 연결의 패킷은 나갈 때와 돌아올
-    /// 때 두 번 걸린다. `rate`는 0…1로 자른다.
+    /// For tests only (outside the public API). Drops packets between the stack and engine in both directions with
+    /// probability `rate`. Generates randomness from `seed`, so the same seed drops packets at the same positions. A
+    /// value of 0 (the default) drops nothing. Packets for a connection to a local address are checked twice, on the
+    /// way out and back. Clamps `rate` to 0…1.
     ///
-    /// 관문(`SwiftailInteropTests`)이 손실 1%·5%의 처리량을 잴 때 쓴다(계약 관문 (가) 8·9). Go 피어 쪽에는 주입이 없다.
+    /// Used by the gate (`SwiftailInteropTests`) to measure throughput at 1% and 5% loss (contract gate (a) items 8 and
+    /// 9). No loss injection on the Go peer's side.
     package func setInProcessLoss(rate: Double, seed: UInt64) {
         let clamped = rate.isNaN ? 0 : min(max(rate, 0), 1)
         inProcessLoss = clamped > 0 ? PacketLoss(rate: clamped, generator: SplitMix64(seed: seed)) : nil
     }
 }
 
-// MARK: - 노드가 쥐는 값
+// MARK: - Values Held by the Node
 
-/// 버려진 핸들(`deinit`). `run()`의 자식이 받아 끊는다.
+/// A released handle (`deinit`). A child of `run()` receives and closes it.
 enum HandleRelease: Sendable {
     case connection(TCPStack.ConnectionID)
     case listener(UInt64)
 }
 
-/// 기다리는 호출 하나를 깨우는 통로(`TailnetNode.suspend(until:)`).
+/// A channel for waking one waiting call (`TailnetNode.suspend(until:)`).
 typealias Wakeup = AsyncStream<Void>.Continuation
 
-/// `.inProcess` 장치에서 `run()` 동안 노드가 쥐는 TCP 상태.
+/// TCP state the node holds during `run()` with an `.inProcess` device.
 struct Netstack: Sendable {
     var stack: TCPStack
-    /// 데이터면 피어의 tailnet 주소 → 그 주소의 주인. 노드의 주인 표가 바뀔 때마다 견준다(동작 X10).
+    /// Maps data plane peers' tailnet addresses to their owners. Compared whenever the node's owner table changes (behavior X10).
     var addressOwners: [IPAddress: NodePublicKey] = [:]
-    /// 응용이 쥔 연결과 거는 중인 연결. 응용이 `close`·`abort`하거나 핸들이 버려지면 지운다.
+    /// Connections held by the application or still connecting. Removed on app `close` or `abort`, or when the handle is released.
     var connections: [TCPStack.ConnectionID: ConnectionRecord] = [:]
-    /// 엔진이 장치로 낸 뒤 아직 스택에 넣지 않은 패킷(동작 N4).
+    /// Packets the engine emitted for the device that have yet to enter the stack (behavior N4).
     var inbox: [[UInt8]] = []
-    /// 이번 처리에서 스택을 움직였거나 대기열에 패킷이 들어왔다. 가장 바깥 처리가 닫힐 때 대기열을 넣고 `advance`한다.
+    /// The stack took a step or a packet entered the queue in this pass. Pass in the queue and call `advance` when the outermost pass ends.
     var needsSettling = false
-    /// 상한에 닿아 버린 SYN 수(로그용).
+    /// The count of SYNs dropped at a limit, for logging.
     var limitDropCount = 0
 }
 
-/// 응용이 쥔(또는 거는 중인) 연결 하나의 가장자리 상태. 데이터는 스택에만 있다(가장자리에 따로 쌓는 버퍼가 없다, 동작 A5).
+/// Edge state for one application-held or connecting connection. Only the stack holds data. There is no separate buffer
+/// at the edge (behavior A5).
 struct ConnectionRecord: Sendable {
-    /// 기다리는 `read`.
+    /// A waiting `read`.
     var readWaiter: Wakeup?
-    /// 기다리는 `write`, 또는 맺어지기를 기다리는 `connect`.
+    /// A waiting `write`, or a `connect` waiting for establishment.
     var writeWaiter: Wakeup?
-    /// 마지막 시도 뒤 읽기·쓰기 쪽 사건이 왔다(`TailnetNode.wakeReader(_:)`).
+    /// A read-side or write-side event arrived after the last attempt (`TailnetNode.wakeReader(_:)`).
     var hasReadEvent = false
     var hasWriteEvent = false
-    /// 세 방향 핸드셰이크가 끝났다. 받은 연결은 처음부터 참이다.
+    /// The three-way handshake completed. True from the start on an accepted connection.
     var isEstablished = false
-    /// 응용이 `finishWriting`을 불렀다. 그 뒤의 `write`는 `closed`다.
+    /// The application called `finishWriting`. Later `write` calls return `closed`.
     var hasFinishedWriting = false
-    /// 스택이 알린 끝난 까닭. `finished`면 남은 데이터를 읽은 뒤 nil을 돌려준다.
+    /// The closure reason reported by the stack. For `finished`, returns nil after remaining data is read.
     var closeReason: TCPStack.CloseReason?
 
     func finishWaiters() {
@@ -313,30 +333,31 @@ struct ConnectionRecord: Sendable {
     }
 }
 
-/// 열린 리스너 하나.
+/// An open listener.
 struct ListenerRecord: Sendable {
     let port: UInt16
-    /// 앱이 쥔 핸들. 약한 참조다: 핸들이 버려졌으면 nil이고, 노드가 `deinit`의 닫기 요청(`HandleRelease`)을 처리하기 전이라도
-    /// 그 리스너는 이미 닫힌 것으로 본다(`TailnetNode.closeDroppedListeners()`).
+    /// The handle held by the app. A weak reference, so nil means the handle was released. Treat the listener as closed
+    /// even before the node handles the `deinit` close request (`HandleRelease`,
+    /// `TailnetNode.closeDroppedListeners()`).
     weak var handle: TailnetListener?
-    /// 스택의 리스너. `run()` 전에 열었으면 `run()`이 시작할 때까지 nil이다.
+    /// The stack listener. If opened before `run()`, nil until `run()` starts.
     var stackID: TCPStack.ListenerID?
-    /// 다음 연결을 기다리는 흐름.
+    /// A stream waiting for the next connection.
     var waiter: Wakeup?
 }
 
-/// 시험용 손실 주입(`TailnetNode.setInProcessLoss(rate:seed:)`).
+/// Loss injection for tests (`TailnetNode.setInProcessLoss(rate:seed:)`).
 struct PacketLoss: Sendable {
     let rate: Double
     var generator: SplitMix64
 
-    /// 다음 패킷을 버릴지 정한다.
+    /// Decides whether to drop the next packet.
     mutating func dropsNext() -> Bool {
         Double.random(in: 0..<1, using: &generator) < rate
     }
 }
 
-/// 씨앗이 있는 난수(SplitMix64, Steele·Lea·Flood 2014). 시험의 손실 주입에만 쓴다. 암호용이 아니다.
+/// A seeded random number generator (SplitMix64, Steele·Lea·Flood 2014). Used only for loss injection in tests. It is not cryptographic.
 struct SplitMix64: RandomNumberGenerator, Sendable {
     private var state: UInt64
 
@@ -354,15 +375,15 @@ struct SplitMix64: RandomNumberGenerator, Sendable {
 }
 
 extension IPPrefix {
-    /// 주소 하나짜리 접두(/32, /128). 노드의 tailnet 주소다.
+    /// A prefix for one address (/32, /128). These are the node's tailnet addresses.
     var isSingleAddress: Bool {
         length == address.bytes.count * 8
     }
 }
 
 extension ConnectionError {
-    /// 스택이 알린 끝난 까닭을 그 뒤의 호출이 던질 오류로 옮긴다. `finished`는 오류가 아니다(남은 데이터를 읽고 nil).
-    /// `aborted`는 이 쪽이 끊은 것이라 `closed`다.
+    /// Converts the closure reason reported by the stack to the error later calls throw. `finished` is not an error, so
+    /// read remaining data and then return nil. `aborted` means this side aborted, so it maps to `closed`.
     init?(closedBy reason: TCPStack.CloseReason) {
         switch reason {
         case .finished: return nil
@@ -376,7 +397,7 @@ extension ConnectionError {
 }
 
 extension TCPStack.CloseReason {
-    /// 로그에 남길 이름.
+    /// A name for logging.
     var logName: String {
         switch self {
         case .finished: "finished"
@@ -390,23 +411,24 @@ extension TCPStack.CloseReason {
 }
 
 extension TCPConnection.Statistics {
-    /// 연결이 끝날 때 남길 한 줄(숫자와 참·거짓만. 계약 "연결 종료 통계 로그"가 각 값의 뜻을 적는다). 앱이 놓은 뒤 끝난
-    /// 연결이면 끝에 `, 놓은 뒤 끝남`을 붙인다.
+    /// The line to log when the connection ends. It contains only numbers and Booleans. The contract's “Connection
+    /// Closure Statistics Log” describes each value. If the connection ended after the app released it, appends
+    /// `, ended after release`.
     func closeLogLine(
         reason: TCPStack.CloseReason, closedAt now: ContinuousClock.Instant, afterRelease: Bool
     ) -> String {
         let lifetime = Int((now - openedAt) / .milliseconds(1))
-        return "연결이 끝남: \(reason.logName), 수명 \(lifetime)ms, 보냄 \(sentBytes)B, 다시 보냄 \(retransmittedBytes)B, "
-            + "RTO \(retransmissionTimeouts), 빠른 재전송 \(fastRetransmits), "
-            + "partial ACK 재전송 \(partialAcknowledgmentRetransmits), 중복 ACK \(duplicateAcknowledgments), "
-            + "SACK 실린 ACK \(acknowledgmentsWithSACK), SACK 협상 \(sackPermitted), "
-            + "cwnd 최대 \(maximumCongestionWindow)B, ssthresh 줄임 \(slowStartThresholdReductions)"
-            + (afterRelease ? ", 놓은 뒤 끝남" : "")
+        return "Connection ended: \(reason.logName), lifetime \(lifetime)ms, sent \(sentBytes)B, retransmitted \(retransmittedBytes)B, "
+            + "RTO \(retransmissionTimeouts), fast retransmits \(fastRetransmits), "
+            + "partial ACK retransmits \(partialAcknowledgmentRetransmits), duplicate ACKs \(duplicateAcknowledgments), "
+            + "ACKs with SACK \(acknowledgmentsWithSACK), SACK negotiated \(sackPermitted), "
+            + "peak cwnd \(maximumCongestionWindow)B, ssthresh reductions \(slowStartThresholdReductions)"
+            + (afterRelease ? ", ended after release" : "")
     }
 }
 
 extension TCPStack.Limit {
-    /// 로그에 남길 이름.
+    /// A name for logging.
     var logName: String {
         switch self {
         case .halfOpenConnections: "halfOpenConnections"
