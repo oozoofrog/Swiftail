@@ -12,11 +12,8 @@
 //   밖에서 가르지 못한다. 걸린 시간만 남긴다.
 // - Go 노드는 깨진 bootstrap에서 lock을 켜지 않고 거르지 않는다(Swiftail은 `.unverified`로 닫는다. 결정 U1·L4의 의도된 차이).
 //
-// 남겨 둔 실패(Swift 쪽 결함으로 판단, 2026-11-15): 항목 7에서 틀린 끄기 비밀 뒤 서버가 맞는 비밀을 알리는 맵을 다시 보내면
-// Go는 그 맵에서 bootstrap을 다시 불러 끄는데, Swift 노드는 그 맵이 앞의 맵과 내용이 같아 절차를 다시 돌지 않는다
-// (`MapSession.apply`가 바뀌지 않은 netmap을 nil로 내고 `ControlClient.receivedLock`은 그때 일을 깨우지 않는다).
-// 내용이 다른 맵이 오면 끈다. 깨진 bootstrap을 되돌린 맵(항목 10)도 같은 까닭으로 곧바로 다시 시도하지 않지만, 그쪽은 재시도
-// 타이머가 있어 통과 기준("다음 재시도에")을 지킨다.
+// 항목 7은 서버가 맞는 끄기 비밀로 바꾸고 내용이 같은 맵을 다시 보낼 때, Swift와 Go 모두 bootstrap을 다시 불러 lock을
+// 끄는지 확인한다. Swift는 할 일이 남아 있으면 KeepAlive가 아닌 맵 응답에서 내용이 같아도 절차를 다시 시도한다(5cde854).
 
 import Foundation
 import SwiftailBase
