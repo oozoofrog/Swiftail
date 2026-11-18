@@ -70,7 +70,8 @@ public enum PairingJoiner {
     /// 끝난다(J2). 이 길에서는 짝이 된 뒤의 연결에서 상대가 그 짝인지 라이브러리로 확인할 수 없다.
     ///
     /// - Parameter localAddress: 이 기기의 tailnet 주소(`100.64.0.1`). 터널 확장이 노드의 `status.addresses`에서 읽어
-    ///   앱에 넘긴 값이어야 한다. OS의 인터페이스 목록에서 짐작한 값을 넣으면 이 검사가 뜻을 잃는다.
+    ///   앱에 넘긴 값이어야 한다. IPv4-mapped IPv6는 IPv4로 바꿔 쓴다. OS의 인터페이스 목록에서 짐작한 값을 넣으면
+    ///   이 검사가 뜻을 잃는다.
     /// - Throws: 위 `pair(with:deviceName:node:awaitingApproval:)`의 것과, `localAddress`가 tailnet 대역 밖이면
     ///   `invalidConfiguration`, 연결이 터널을 거친 것이 아니면 `notOnTailnet`.
     public static func pair(
@@ -85,10 +86,12 @@ public enum PairingJoiner {
     /// OS 소켓으로 들어온다. `requiringTunnel`은 루프백으로 도는 시험만 끈다(공개하지 않는다): 끄면 대역 검사와
     /// 인터페이스 금지를 하지 않는다. 로컬 끝이 `localAddress`인지는 꺼도 본다.
     static func pair(
-        with offer: PairingOffer, deviceName: String, localAddress: SwiftailBase.IPAddress, requiringTunnel: Bool,
+        with offer: PairingOffer, deviceName: String, localAddress suppliedAddress: SwiftailBase.IPAddress,
+        requiringTunnel: Bool,
         awaitingApproval: @escaping @Sendable (_ confirmationCode: String) -> Void
     ) async throws(PairingError) -> PairedHost {
-        guard !requiringTunnel || PairingEndpoints.isTailnetAddress(localAddress) else {
+        let localAddress = suppliedAddress.unmappedIPv4
+        guard !requiringTunnel || localAddress.isTailscaleAddress else {
             throw .invalidConfiguration("localAddress는 이 기기의 tailnet 주소여야 한다")
         }
         return try await join(offer, deviceName: deviceName, awaitingApproval: awaitingApproval) {

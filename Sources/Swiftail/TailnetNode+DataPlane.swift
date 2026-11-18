@@ -241,8 +241,8 @@ extension Magicsock.Source {
 /// 줄에는 피어 번호, 경로, 나빠졌으면 그 까닭, 같은 피어의 앞 경로 사건 뒤 시간, 앞 경로 사건(어느 피어든) 뒤 버린
 /// disco의 종류별 개수가 들어간다. 예: `피어 2 경로: relayed(7) (신뢰 만료, 앞 사건 뒤 96.5초, 버린 disco: 모르는 키 0,
 /// 열리지 않음 0, 경로 규칙 0)`.
-/// - 피어 번호는 이번 실행에서 그 피어의 경로 사건이 처음 난 순서다(1부터). 공개 저장소에 로그가 실리므로 키·주소·이름·
-///   안정 ID는 담지 않는다. 번호는 노드가 끝날 때까지 바뀌지 않는다.
+/// - 피어 번호는 경로의 첫 사건에 1부터 차례로 붙인다. 피어가 빠지면 기록을 버리고 번호는 다시 쓰지 않는다.
+///   공개 저장소에 로그가 실리므로 키·주소·이름·안정 ID는 담지 않는다.
 /// - 버린 disco가 모르는 키로 쌓였으면 상대의 새 disco 키를 아직 모른 것이고(netmap이 늦음), 열리지 않음이 쌓였으면
 ///   상대가 이 노드의 옛 키로 봉한 것이며, 둘 다 없으면 disco는 오갔으나 UDP가 닿지 않은 것이다.
 ///
@@ -250,9 +250,15 @@ extension Magicsock.Source {
 struct PathEventTally: Sendable {
     /// 경로 사건을 낸 피어의 번호와 그 피어의 앞 사건 시각.
     private var peers: [NodePublicKey: (number: Int, lastEvent: ContinuousClock.Instant)] = [:]
+    private var nextPeerNumber = 1
     private var unknownKey = 0
     private var unopened = 0
     private var misrouted = 0
+
+    /// 빠진 피어의 마지막 경로 사건을 처리한 뒤 기록을 거둬, 오래 실행해도 기록이 쌓이지 않게 한다.
+    mutating func retainPeers(_ keys: Set<NodePublicKey>) {
+        peers = peers.filter { keys.contains($0.key) }
+    }
 
     /// disco를 버린 까닭이면 센다. 다른 까닭은 세지 않는다.
     mutating func count(_ drop: Magicsock.Drop) {
@@ -282,7 +288,8 @@ struct PathEventTally: Sendable {
             let tenths = seconds * 10 + attoseconds / 100_000_000_000_000_000
             details.append("앞 사건 뒤 \(tenths / 10).\(tenths % 10)초")
         } else {
-            number = peers.count + 1
+            number = nextPeerNumber
+            nextPeerNumber += 1
             details.append("첫 사건")
         }
         details.append("버린 disco: 모르는 키 \(unknownKey), 열리지 않음 \(unopened), 경로 규칙 \(misrouted)")

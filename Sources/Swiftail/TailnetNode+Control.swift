@@ -136,6 +136,7 @@ extension TailnetNode {
         }
         process(magicsock?.setPeers(sockPeers, at: now) ?? [], at: now)
         peerDirectory = directory
+        pathEventTally.retainPeers(Set(peers.map(\.key)))
         // shortcut: 키 만료로 엔진이 `advance`에서 내린 피어는 다음 netmap까지 `Magicsock`에 남는다. 엔진이 그 피어에게
         // 데이터그램을 내지 않으므로 heartbeat는 45초 뒤 멈추고, 받은 WireGuard는 장치가 버린다(계약 N5).
         process(magicsock?.setRegions(Magicsock.Region.homeCandidates(in: netmap.derpMap), at: now) ?? [], at: now)

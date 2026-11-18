@@ -310,6 +310,35 @@ struct TailnetEngineTests {
         #expect(peer.endpoints == [try #require(IPEndpoint("127.0.0.1:41641")), try #require(IPEndpoint("[2001:db8::1]:41641"))])
     }
 
+    @Test("Addresses가 겹쳐도 목적지의 AllowedIPs 주인에게 보낸다")
+    func sendUsesAllowedIPOwner() throws {
+        var pair = try EnginePair()
+        let addressClaimant = makeNodeJSON(
+            id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32", "100.64.0.3/32"],
+            extra: #","AllowedIPs":["100.64.0.2/32"],"HomeDERP":1"#
+        )
+        let ownerKey = NodePublicKey(Curve25519.KeyAgreement.PrivateKey().publicKey)
+        let owner = makeNodeJSON(
+            id: 3, key: ownerKey, addresses: ["100.64.0.3/32", "100.64.0.4/32"],
+            extra: #","AllowedIPs":["100.64.0.3/32"],"HomeDERP":1"#
+        )
+        let netmap = try pair.netmap(for: .alice, peers: [addressClaimant, owner])
+        _ = pair.alice.apply(netmap, at: clockStart, wallClock: wallClockStart)
+
+        let packet = TestPacket.udp(from: "100.64.0.1", 40000, to: "100.64.0.3", 7)
+        let outputs = pair.alice.send(packet, at: clockStart)
+        let recipients = outputs.compactMap { output -> NodePublicKey? in
+            if case let .datagram(_, to: key) = output { return key }
+            return nil
+        }
+        let sentToOwner = recipients == [ownerKey]
+        #expect(sentToOwner)
+
+        let unowned = TestPacket.udp(from: "100.64.0.1", 40000, to: "100.64.0.4", 7)
+        let droppedUnowned = pair.alice.send(unowned, at: clockStart) == [.dropped(.noPeerForDestination)]
+        #expect(droppedUnowned)
+    }
+
     @Test("키 만료 시각에 피어가 내려간다")
     func peerKeyExpiry() throws {
         var pair = try EnginePair()
