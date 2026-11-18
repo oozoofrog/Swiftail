@@ -153,6 +153,38 @@ extension NodeStatusEventTests {
     }
 }
 
+extension NodeStatusEventTests {
+    @Test("기다리던 소비자의 Task를 취소하면 그 소비자는 nil을 받고, 취소된 자리가 뒤의 사건을 가로채지 않는다")
+    func cancelledWaiterDoesNotSwallowEvents() async {
+        let queue = NodeEventQueue()
+        let cancelled = Task { await queue.next() }
+        // 소비자가 기다리기 시작했는지는 밖에서 알 수 없다. 시작 전에 취소돼도, 기다리다 취소돼도 결과는 같아야 한다.
+        await Task.yield()
+        cancelled.cancel()
+        #expect(await cancelled.value == nil)
+
+        queue.push(.statusChanged)
+        #expect(await queue.next() == .statusChanged)
+    }
+
+    @Test("소비하던 Task를 취소하면 events 흐름이 끝나고, 다시 구독해도 사건을 받지 못한다")
+    func cancellingTheConsumerEndsEvents() async throws {
+        let node = try Self.node()
+        let consumer = Task {
+            var count = 0
+            for await _ in node.events { count += 1 }
+            return count
+        }
+        await Task.yield()
+        consumer.cancel()
+        #expect(await consumer.value == 0)
+
+        node.eventQueue.push(.statusChanged)
+        var again = node.events.makeAsyncIterator()
+        #expect(await again.next() == nil)
+    }
+}
+
 private extension TailnetNode {
     /// 홈 DERP 연결이 선 것처럼 상태 기계에 넣는다(netmap 뒤면 `.running`).
     func markHomeConnectedForStatusTesting() {

@@ -96,43 +96,91 @@ struct HostEventTests {
         }
     }
 
+    /// `run()`이 도는 `.inProcess` 노드에 netmap을 적용해 `body`에 넘긴다. 자기 주소로 건 연결을 같은 노드가 받으니 노드 하나로
+    /// 짝 맺기를 끝까지 돌릴 수 있다.
+    private static func withRunningNode<T>(_ directory: URL, _ body: (TailnetNode) async throws -> T) async throws -> T {
+        let node = try TailnetNode(configuration: try configuration(directory), device: .inProcess)
+        let stopping = Mutex(false)
+        let run = Task {
+            do throws(NodeError) {
+                try await node.run()
+            } catch {
+                if !stopping.withLock({ $0 }) { Issue.record("시험 중에 run()이 끝났다: \(error)") }
+            }
+        }
+        defer {
+            stopping.withLock { $0 = true }
+            run.cancel()
+        }
+        while await !node.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        await node.prepareForPairingTesting(try netmap())
+        return try await body(node)
+    }
+
+    @Test("제안이 쓰였다는 used는 그 연결의 decide가 불렸을 때 이미 흐름에 닿아 있다")
+    func usedPrecedesDecide() async throws {
+        try await Self.withDirectory { directory in
+            try await Self.withRunningNode(directory) { node in
+                // decide가 호스트의 흐름을 읽어야 하는데 호스트는 decide를 받아 만들어진다. 만든 뒤에 흐름을 건넨다.
+                let stream = Mutex<AsyncStream<PairingHost.Event>?>(nil)
+                let seenInDecide = Mutex<[PairingHost.Event]?>(nil)
+                let host = try await PairingHost(
+                    node: node, port: Sample.port, storeDirectory: directory.appending(path: "store")
+                ) { _ in
+                    guard let events = stream.withLock({ $0 }) else { return false }
+                    // decide가 불린 순간 이미 쌓여 있어야 할 사건을 읽는다. 쌓여 있으면 바로 돌아온다. `used`가 아예 나오지
+                    // 않는 퇴행에서 끝없이 기다리지 않도록 5초 뒤 취소해 읽은 데까지만 본다.
+                    let reader = Task {
+                        var seen: [PairingHost.Event] = []
+                        for await event in events {
+                            seen.append(event)
+                            if event == .offerChanged(.used) { break }
+                        }
+                        return seen
+                    }
+                    let watchdog = Task {
+                        try await Task.sleep(for: .seconds(5))
+                        reader.cancel()
+                    }
+                    let seen = await reader.value
+                    watchdog.cancel()
+                    seenInDecide.withLock { $0 = seen }
+                    return true
+                }
+                stream.withLock { $0 = host.events }
+                let serving = Task { try await host.run() }
+                defer { serving.cancel() }
+                let offer = try await host.openOffer()
+                _ = try await PairingJoiner.pair(with: offer, deviceName: "rd-phone-5e6f7a8b", node: node)
+
+                #expect(seenInDecide.withLock { $0 } == [.offerChanged(.opened), .offerChanged(.used)])
+            }
+        }
+    }
+
     @Test("들어오는 쪽이 제안을 쓰면 used, 승인해 저장하면 pairedPeerAdded가 차례로 나온다")
     func pairs() async throws {
         try await Self.withDirectory { directory in
-            let node = try TailnetNode(configuration: try Self.configuration(directory), device: .inProcess)
-            let stopping = Mutex(false)
-            let run = Task {
-                do throws(NodeError) {
-                    try await node.run()
-                } catch {
-                    if !stopping.withLock({ $0 }) { Issue.record("시험 중에 run()이 끝났다: \(error)") }
+            try await Self.withRunningNode(directory) { node in
+                let host = try await PairingHost(
+                    node: node, port: Sample.port, storeDirectory: directory.appending(path: "store")) { _ in true }
+                var events = host.events.makeAsyncIterator()
+                let serving = Task { try await host.run() }
+                defer { serving.cancel() }
+                let offer = try await host.openOffer()
+                let paired = try await PairingJoiner.pair(with: offer, deviceName: "rd-phone-5e6f7a8b", node: node)
+                #expect(paired.stableID == "nStableSelf")
+
+                #expect(await events.next() == .offerChanged(.opened))
+                #expect(await events.next() == .offerChanged(.used))
+                guard case .pairedPeerAdded(let peer) = await events.next() else {
+                    Issue.record("pairedPeerAdded가 아니다")
+                    return
                 }
+                #expect(peer.peer.stableID == "nStableSelf")
+                #expect(peer.deviceName == "rd-phone-5e6f7a8b")
+                #expect(await host.pairedPeers == [peer])
             }
-            defer {
-                stopping.withLock { $0 = true }
-                run.cancel()
-            }
-            while await !node.isRunning { try await Task.sleep(for: .milliseconds(10)) }
-            await node.prepareForPairingTesting(try Self.netmap())
-
-            let host = try await PairingHost(
-                node: node, port: Sample.port, storeDirectory: directory.appending(path: "store")) { _ in true }
-            var events = host.events.makeAsyncIterator()
-            let serving = Task { try await host.run() }
-            defer { serving.cancel() }
-            let offer = try await host.openOffer()
-            let paired = try await PairingJoiner.pair(with: offer, deviceName: "rd-phone-5e6f7a8b", node: node)
-            #expect(paired.stableID == "nStableSelf")
-
-            #expect(await events.next() == .offerChanged(.opened))
-            #expect(await events.next() == .offerChanged(.used))
-            guard case .pairedPeerAdded(let peer) = await events.next() else {
-                Issue.record("pairedPeerAdded가 아니다")
-                return
-            }
-            #expect(peer.peer.stableID == "nStableSelf")
-            #expect(peer.deviceName == "rd-phone-5e6f7a8b")
-            #expect(await host.pairedPeers == [peer])
         }
     }
 
@@ -157,6 +205,27 @@ struct HostEventTests {
             try await host?.removePairedPeer(withStableID: "nEXAMPLEJOINER")
             host = nil
             #expect(await Self.drain(events) == [.pairedPeerRemoved(stableID: "nEXAMPLEJOINER")])
+        }
+    }
+
+    // MARK: 구독
+
+    @Test("소비하던 Task를 취소하면 흐름이 끝난다. 다시 구독해도 사건을 받지 못한다")
+    func cancellingTheConsumerEndsTheStream() async throws {
+        try await Self.withDirectory { directory in
+            let host = try await Self.host(in: directory)
+            let consumer = Task {
+                var seen: [PairingHost.Event] = []
+                for await event in host.events { seen.append(event) }
+                return seen
+            }
+            consumer.cancel()
+            #expect(await consumer.value.isEmpty)
+
+            // 끝난 흐름에는 사건이 닿지 않고, 새로 구독해도 같은 흐름이라 곧바로 끝난다.
+            _ = try await host.openOffer()
+            var again = host.events.makeAsyncIterator()
+            #expect(await again.next() == nil)
         }
     }
 
