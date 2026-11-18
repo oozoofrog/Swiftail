@@ -1,4 +1,4 @@
-// 구동 함수 `issueCertificate`: 상태 기계를 전송·시계·TXT 올리기와 함께 끝까지 돌리고, 취소되면 멈춘다.
+// The driver function `issueCertificate` runs the state machine to completion with a transport, clock, and TXT publication, and stops on cancellation.
 
 import Foundation
 import Synchronization
@@ -6,9 +6,9 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("ACME 구동 함수")
+@Suite("ACME driver function")
 struct ACMEIssuanceTests {
-    @Test("가짜 전송과 시계로 발급을 끝까지 돌린다")
+    @Test("Runs issuance to completion with a fake transport and clock")
     func runsToCompletion() async throws {
         let transport = QueueTransport(Steps.accountFound + [Steps.newOrder(Body.order("pending"))] + Steps.pendingAuthorization() + [
             Steps.readOrder(Body.order("ready")),
@@ -34,7 +34,7 @@ struct ACMEIssuanceTests {
         #expect(transport.remaining == 0)
     }
 
-    @Test("TXT 올리기의 실패가 결과가 된다")
+    @Test("A TXT publication failure becomes the result")
     func publishFailure() async throws {
         let transport = QueueTransport(Steps.accountFound + [Steps.newOrder(Body.order("pending"))] + Steps.pendingAuthorization())
         let result = try await issueCertificate(
@@ -47,7 +47,7 @@ struct ACMEIssuanceTests {
         #expect(result == .failed(.network("control"), retryNotBefore: nil, accountURL: Fake.accountURL))
     }
 
-    @Test("기다리는 중에 취소되면 CancellationError를 던지고 요청을 더 보내지 않는다")
+    @Test("Cancellation during a wait throws CancellationError and sends no further requests")
     func cancellation() async throws {
         let transport = QueueTransport(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -59,7 +59,7 @@ struct ACMEIssuanceTests {
                 transport: transport,
                 now: { Date() },
                 sleep: { (_: Date) async throws(CancellationError) in
-                    // 실제로 오래 기다린다. 취소가 깨운다.
+                    // Wait for a long time in real time. Cancellation wakes the wait.
                     try await sleepUntil(Date().addingTimeInterval(3600))
                 },
                 publishTXT: { _, _ in nil }
@@ -76,7 +76,7 @@ struct ACMEIssuanceTests {
     }
 }
 
-/// 받은 요청에 교환을 차례로 돌려주는 전송. 요청의 모양은 `ACMEScript`가 따로 본다.
+/// A transport that returns exchanges in order for received requests. `ACMEScript` checks the request shape separately.
 private final class QueueTransport: ACMETransport {
     private let state: Mutex<(queue: [Exchange], sent: Int, nonce: Int)>
 

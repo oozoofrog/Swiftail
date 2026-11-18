@@ -3,10 +3,10 @@ import SwiftailBase
 import Testing
 @testable import SwiftailPairing
 
-@Suite("OS 소켓 페어링 주소")
+@Suite("Pairing addresses on OS sockets")
 struct SocketAddressRegressionTests {
     @Test(
-        "ChromeOS VM 대역의 연결은 tailnet 연결로 인정하지 않는다",
+        "Connections in the ChromeOS VM address range are rejected as tailnet connections",
         arguments: ["100.115.92.0:4747", "100.115.93.255:4747", "[::ffff:100.115.92.1]:4747"]
     )
     func rejectsChromeOSRange(host: String) throws {
@@ -15,7 +15,7 @@ struct SocketAddressRegressionTests {
         #expect(!endpoints.isOnTailnet(localAddress: endpoints.joiner.address))
     }
 
-    @Test("IPv4-mapped localAddress로 이름을 풀어 IPv4 리스너에 닿은 뒤 로컬 끝을 검사한다", .timeLimit(.minutes(2)))
+    @Test("Resolves the name with an IPv4-mapped localAddress, reaches the IPv4 listener, and checks the local endpoint", .timeLimit(.minutes(2)))
     func mappedLocalAddressDialsIPv4() async throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -43,7 +43,7 @@ struct SocketAddressRegressionTests {
         var iterator = ports.makeAsyncIterator()
         let port = try #require(await iterator.next())
 
-        // 연결은 IPv4로 서지만 앱이 넘긴 주소는 그 연결의 로컬 끝과 다르다.
+        // The connection uses IPv4, but the address supplied by the app differs from the connection's local endpoint.
         let mappedAddress = try #require(IPAddress("::ffff:127.0.0.2"))
         let failure = await pairingError {
             try await PairingJoiner.pair(

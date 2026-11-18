@@ -2,8 +2,8 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 정적 검사(계약 동작 A1, 7절 시험 4, Go `AUM.StaticValidate`·`Key.StaticValidate`·`staticValidateCheckpoint`).
-@Suite("AUM 정적 검사")
+/// Static validation (contract behavior A1, §7 test 4, Go `AUM.StaticValidate`, `Key.StaticValidate`, and `staticValidateCheckpoint`).
+@Suite("AUM static validation")
 struct AUMValidationTests {
     static let key = TrustedKey(kind: 1, votes: 1, publicKey: [UInt8](repeating: 0x21, count: 32))
     static let keyID = [UInt8](repeating: 0x21, count: 32)
@@ -20,10 +20,10 @@ struct AUMValidationTests {
 
     static func isValid(_ aum: AUM) -> Bool { (try? aum.validate()) != nil }
 
-    @Test("종류마다 필수 필드와 금지 필드")
+    @Test("Required and forbidden fields by kind")
     func kinds() {
         let state = Self.checkpointState()
-        // AddKey: Key 필수, KeyID·State·Votes·Meta 금지.
+        // AddKey requires Key and forbids KeyID, State, Votes, and Meta.
         #expect(Self.isValid(AUM(messageKind: 1, prevAUMHash: nil, key: Self.key)))
         #expect(!Self.isValid(AUM(messageKind: 1, prevAUMHash: nil)))
         #expect(!Self.isValid(AUM(messageKind: 1, prevAUMHash: nil, key: Self.key, keyID: Self.keyID)))
@@ -31,7 +31,7 @@ struct AUMValidationTests {
         #expect(!Self.isValid(AUM(messageKind: 1, prevAUMHash: nil, key: Self.key, state: state)))
         #expect(!Self.isValid(AUM(messageKind: 1, prevAUMHash: nil, key: Self.key, votes: 0)))
         #expect(!Self.isValid(AUM(messageKind: 1, prevAUMHash: nil, key: Self.key, meta: [])))
-        // RemoveKey: 비지 않은 KeyID 필수, Key·State·Votes·Meta 금지.
+        // RemoveKey requires nonempty KeyID and forbids Key, State, Votes, and Meta.
         #expect(Self.isValid(AUM(messageKind: 2, prevAUMHash: nil, keyID: [1])))
         #expect(!Self.isValid(AUM(messageKind: 2, prevAUMHash: nil)))
         #expect(!Self.isValid(AUM(messageKind: 2, prevAUMHash: nil, keyID: [])))
@@ -39,27 +39,27 @@ struct AUMValidationTests {
         #expect(!Self.isValid(AUM(messageKind: 2, prevAUMHash: nil, keyID: [1], state: state)))
         #expect(!Self.isValid(AUM(messageKind: 2, prevAUMHash: nil, keyID: [1], votes: 1)))
         #expect(!Self.isValid(AUM(messageKind: 2, prevAUMHash: nil, keyID: [1], meta: [])))
-        // UpdateKey: 비지 않은 KeyID와 Votes·Meta 가운데 하나 이상(빈 맵도 있음), Key·State 금지.
+        // UpdateKey requires nonempty KeyID and at least one of Votes and Meta (an empty map counts), and forbids Key and State.
         #expect(Self.isValid(AUM(messageKind: 4, prevAUMHash: nil, keyID: [1], votes: 0)))
         #expect(Self.isValid(AUM(messageKind: 4, prevAUMHash: nil, keyID: [1], meta: [])))
         #expect(!Self.isValid(AUM(messageKind: 4, prevAUMHash: nil, keyID: [1])))
         #expect(!Self.isValid(AUM(messageKind: 4, prevAUMHash: nil, keyID: [], votes: 1)))
         #expect(!Self.isValid(AUM(messageKind: 4, prevAUMHash: nil, key: Self.key, keyID: [1], votes: 1)))
         #expect(!Self.isValid(AUM(messageKind: 4, prevAUMHash: nil, keyID: [1], state: state, votes: 1)))
-        // Checkpoint: State 필수, KeyID·Key·Votes·Meta 금지.
+        // Checkpoint requires State and forbids KeyID, Key, Votes, and Meta.
         #expect(Self.isValid(AUM(messageKind: 5, prevAUMHash: nil, state: state)))
         #expect(!Self.isValid(AUM(messageKind: 5, prevAUMHash: nil)))
         #expect(!Self.isValid(AUM(messageKind: 5, prevAUMHash: nil, keyID: [], state: state)))
         #expect(!Self.isValid(AUM(messageKind: 5, prevAUMHash: nil, key: Self.key, state: state)))
         #expect(!Self.isValid(AUM(messageKind: 5, prevAUMHash: nil, state: state, votes: 1)))
         #expect(!Self.isValid(AUM(messageKind: 5, prevAUMHash: nil, state: state, meta: [])))
-        // NoOp, 종류 0, 6 이상은 종류별 검사가 없다.
+        // NoOp and kinds 0 and 6 or higher have no kind-specific checks.
         for kind: UInt8 in [0, 3, 6, 9, 255] {
             #expect(Self.isValid(AUM(messageKind: kind, prevAUMHash: nil, keyID: [], votes: 7, meta: [])), "\(kind)")
         }
     }
 
-    @Test("Key: Votes 1~4,096, Meta 512바이트, 종류 1. 종류와 관계없이 본다")
+    @Test("Key: Votes 1–4,096, Meta 512 bytes, and kind 1. Checks regardless of kind")
     func keyLimits() {
         func addKey(_ key: TrustedKey) -> Bool { Self.isValid(AUM(messageKind: 1, prevAUMHash: nil, key: key)) }
         for (votes, valid) in [(0, false), (1, true), (4_096, true), (4_097, false)] as [(UInt64, Bool)] {
@@ -77,7 +77,7 @@ struct AUMValidationTests {
             key.kind = kind
             #expect(!addKey(key), "\(kind)")
         }
-        // 공개 키의 길이는 보지 않는다.
+        // Public key length is not checked.
         for publicKey: [UInt8]? in [nil, [], [1], [UInt8](repeating: 1, count: 33)] {
             var key = Self.key
             key.publicKey = publicKey
@@ -88,7 +88,7 @@ struct AUMValidationTests {
         #expect(!Self.isValid(AUM(messageKind: 3, prevAUMHash: nil, key: badKey)))
     }
 
-    @Test("서명: KeyID 32바이트, 서명 64바이트")
+    @Test("Signatures: 32-byte KeyID and 64-byte signature")
     func signatures() {
         func noOp(keyIDCount: Int, signatureCount: Int) -> Bool {
             let signature = AUMSignature(
@@ -103,7 +103,7 @@ struct AUMValidationTests {
         #expect(!noOp(keyIDCount: 32, signatureCount: 65))
     }
 
-    @Test("PrevAUMHash: 길이 0은 거절, null과 그 밖의 길이는 통과")
+    @Test("PrevAUMHash rejects length 0 and accepts null and other lengths")
     func prevAUMHash() {
         #expect(Self.isValid(AUM(messageKind: 3, prevAUMHash: nil)))
         #expect(!Self.isValid(AUM(messageKind: 3, prevAUMHash: [])))
@@ -111,14 +111,14 @@ struct AUMValidationTests {
         #expect(Self.isValid(AUM(messageKind: 3, prevAUMHash: [UInt8](repeating: 1, count: 33))))
     }
 
-    @Test("체크포인트 상태: 끄기 값 1~32개·32바이트·서로 다름, 키 1~512개·검사 통과·서로 다름, LastAUMHash 없음")
+    @Test("Checkpoint state: 1–32 distinct 32-byte disablement values, 1–512 distinct valid keys, and no LastAUMHash")
     func checkpointState() throws {
         func checkpoint(_ state: AuthorityState) -> Bool { Self.isValid(AUM(messageKind: 5, prevAUMHash: nil, state: state)) }
         for (count, valid) in [(0, false), (1, true), (32, true), (33, false)] {
-            #expect(checkpoint(Self.checkpointState(disablementCount: count)) == valid, "끄기 값 \(count)")
+            #expect(checkpoint(Self.checkpointState(disablementCount: count)) == valid, "Disablement values \(count)")
         }
         for (count, valid) in [(0, false), (1, true), (512, true), (513, false)] {
-            #expect(checkpoint(Self.checkpointState(keyCount: count)) == valid, "키 \(count)")
+            #expect(checkpoint(Self.checkpointState(keyCount: count)) == valid, "Keys \(count)")
         }
         var state = Self.checkpointState(disablementCount: 2)
         state.disablementValues[1] = state.disablementValues[0]
@@ -132,7 +132,7 @@ struct AUMValidationTests {
         state.keys[1].publicKey = state.keys[0].publicKey
         state.keys[1].votes = 9
         #expect(!checkpoint(state))
-        // null 공개 키와 빈 공개 키는 KeyID로 같은 키다(동작 E6).
+        // A null public key and an empty public key are the same key by KeyID (behavior E6).
         state = Self.checkpointState(keyCount: 2)
         state.keys[0].publicKey = nil
         state.keys[1].publicKey = []
@@ -143,11 +143,11 @@ struct AUMValidationTests {
         state = Self.checkpointState()
         state.lastAUMHash = AUMHash([UInt8](repeating: 0, count: 32))
         #expect(!checkpoint(state))
-        // 종류와 관계없이 State가 있으면 본다.
+        // Checks State whenever present, regardless of kind.
         #expect(!Self.isValid(AUM(messageKind: 3, prevAUMHash: nil, state: Self.checkpointState(keyCount: 0))))
     }
 
-    @Test("맨 바깥 null은 모든 필드가 0 값인 AUM이고 정적 검사를 통과한다(동작 D7)")
+    @Test("Top-level null is an AUM with all zero-valued fields and passes static validation (behavior D7)")
     func topLevelNull() throws {
         for hex in ["f6", "f7"] {
             let aum = try ModelTesting.decodeAUM(hex).get()

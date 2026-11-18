@@ -1,4 +1,4 @@
-/// 재현할 수 있는 의사 난수(SplitMix64). 퍼즈 입력용이다. 실패하면 같은 시드로 그대로 재현된다.
+/// Reproducible pseudorandom numbers (SplitMix64) for fuzz inputs. The same seed reproduces a failure exactly.
 struct SplitMix64: RandomNumberGenerator {
     private var state: UInt64
 

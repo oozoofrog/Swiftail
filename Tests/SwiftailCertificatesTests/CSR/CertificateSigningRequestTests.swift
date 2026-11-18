@@ -1,5 +1,5 @@
-// 계약 7절 시험 7: CSR. 주체·SAN·알고리즘의 구조(고정 키), `certificationRequestInfo`의 바이트, CN의
-// `PrintableString`(0x13), CryptoKit과 시스템 openssl의 서명 검증.
+// Contract §7 test 7: CSR. Subject, SAN, and algorithm structure (fixed key), `certificationRequestInfo` bytes, CN encoded as
+// `PrintableString` (0x13), and signature verification with CryptoKit and system openssl.
 
 import CryptoKit
 import Foundation
@@ -16,26 +16,26 @@ struct CertificateSigningRequestTests {
         try #require(CertificateDomain(name))
     }
 
-    /// RFC 7515 A.3 키와 `rd-mac-1a2b3c4d.tail0001.ts.net`(31자 = 0x1f)으로 손으로 적은 `certificationRequestInfo`.
-    /// 좌표는 RFC 7515 A.3의 x·y를 16진으로 풀어 적은 것이다.
+    /// Hand-encoded `certificationRequestInfo` using the RFC 7515 A.3 key and `rd-mac-1a2b3c4d.tail0001.ts.net` (31 characters = 0x1f).
+    /// The coordinates are the RFC 7515 A.3 x and y values decoded to hex.
     private static var expectedInfo: String {
         let n = Array(name.utf8).hex
         let x = "7fcdce2770f6c45d4183cbee6fdb4b7b580733357be9ef13bacf6e3c7bd15445"
         let y = "c7f144cd1bbd9b7e872cdfedb9eeb9f4b3695d6ea90b24ad8a4623288588e5ad"
-        return "3081c9"                                             // SEQUENCE, 201바이트(긴 형식)
+        return "3081c9"                                             // SEQUENCE, 201 bytes (long form)
             + "020100"                                              // version 0
             + "302a" + "3128" + "3026"                              // Name → RDN SET → AttributeTypeAndValue
             + "0603550403" + "131f" + n                             // commonName, PrintableString
             + "3059" + "3013"                                       // SubjectPublicKeyInfo → AlgorithmIdentifier
             + "06072a8648ce3d0201" + "06082a8648ce3d030107"         // id-ecPublicKey, secp256r1
-            + "0342" + "00" + "04" + x + y                          // BIT STRING(안 쓰는 비트 0) 비압축 점
+            + "0342" + "00" + "04" + x + y                          // BIT STRING (0 unused bits), uncompressed point
             + "a03d" + "303b"                                       // attributes [0] → Attribute
             + "06092a864886f70d01090e" + "312e"                     // extensionRequest, SET
             + "302c" + "302a" + "0603551d11"                        // Extensions → Extension, subjectAltName
             + "0423" + "3021" + "821f" + n                          // OCTET STRING → GeneralNames → [2] dNSName
     }
 
-    @Test("certificationRequestInfo의 바이트가 손으로 계산한 값과 같다(고정 키)")
+    @Test("certificationRequestInfo bytes match the hand-calculated value (fixed key)")
     func certificationRequestInfoBytes() throws {
         let publicKey = try RFC7515Example.publicKey()
         #expect(CertificateSigningRequest.certificationRequestInfo(domain: try Self.domain(), publicKey: publicKey).encoded.hex == Self.expectedInfo)
@@ -43,7 +43,7 @@ struct CertificateSigningRequestTests {
         #expect(csr.certificationRequestInfo.hex == Self.expectedInfo)
     }
 
-    @Test("SubjectPublicKeyInfo가 CryptoKit의 derRepresentation과 같다 (RFC 5480 2절)")
+    @Test("SubjectPublicKeyInfo matches CryptoKit derRepresentation (RFC 5480 §2)")
     func subjectPublicKeyInfoMatchesCryptoKit() throws {
         for _ in 0..<50 {
             let key = P256.Signing.PrivateKey().publicKey
@@ -53,7 +53,7 @@ struct CertificateSigningRequestTests {
         #expect(Self.expectedInfo.contains(Array(try RFC7515Example.publicKey().derRepresentation).hex))
     }
 
-    @Test("CSR 전체의 구조와 ECDSA-SHA256 서명이 CryptoKit으로 검증된다")
+    @Test("CryptoKit verifies the full CSR structure and ECDSA-SHA256 signature")
     func structureAndSignature() throws {
         let key = P256.Signing.PrivateKey()
         let csr = try CertificateSigningRequest(domain: try Self.domain(), signedWith: key)
@@ -66,7 +66,7 @@ struct CertificateSigningRequestTests {
         let signature = try elements.read()
         #expect(elements.isAtEnd)
         #expect(info.whole == csr.certificationRequestInfo)
-        #expect(algorithm.whole.hex == "300a06082a8648ce3d040302")  // ecdsa-with-SHA256, 매개변수 없음(RFC 5758 3.2)
+        #expect(algorithm.whole.hex == "300a06082a8648ce3d040302")  // ecdsa-with-SHA256, no parameters (RFC 5758 3.2)
         #expect(signature.tag == 0x03 && signature.content.first == 0x00)
         let der = Array(signature.content.dropFirst())
         let ecdsa = try P256.Signing.ECDSASignature(derRepresentation: der)
@@ -75,13 +75,13 @@ struct CertificateSigningRequestTests {
     }
 
     #if os(macOS)
-    /// `SWIFTAIL_TEST_SCRATCH`(빌드 디렉터리 아래의 임시 자리)와 `/usr/bin/openssl`이 있을 때만 돈다.
+    /// Runs only when `SWIFTAIL_TEST_SCRATCH` (a temporary location under the build directory) and `/usr/bin/openssl` are available.
     private static let scratch = ProcessInfo.processInfo.environment["SWIFTAIL_TEST_SCRATCH"]
     private static let openssl = "/usr/bin/openssl"
 
     @Test(
-        "시스템 openssl이 CSR의 서명과 이름을 받아들인다",
-        .enabled(if: scratch != nil && FileManager.default.isExecutableFile(atPath: openssl), "SWIFTAIL_TEST_SCRATCH나 /usr/bin/openssl이 없다")
+        "System openssl accepts the CSR signature and name",
+        .enabled(if: scratch != nil && FileManager.default.isExecutableFile(atPath: openssl), "SWIFTAIL_TEST_SCRATCH or /usr/bin/openssl is missing")
     )
     func opensslVerifies() throws {
         let directory = URL(fileURLWithPath: try #require(Self.scratch), isDirectory: true)
@@ -117,7 +117,7 @@ struct CertificateSigningRequestTests {
     #endif
 }
 
-/// 시험에서 CSR을 나눠 보는 최소 DER 읽기(태그 한 바이트, 정규 길이만). 라이브러리에는 DER 읽기가 없다.
+/// Minimal DER reader for inspecting the CSR in tests (single-byte tags and canonical lengths only). The library has no DER reader.
 private struct TLVReader {
     struct Element {
         var tag: UInt8

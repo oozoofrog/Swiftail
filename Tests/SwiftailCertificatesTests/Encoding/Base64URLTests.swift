@@ -1,4 +1,4 @@
-// 계약 7절 시험 4(인코딩): base64url. RFC 4648 10절의 벡터와 RFC 7515 부록 A의 값.
+// Contract §7 test 4 (encoding): base64url. Vectors from RFC 4648 §10 and values from RFC 7515 Appendix A.
 
 import Testing
 
@@ -6,8 +6,8 @@ import Testing
 
 @Suite("base64url")
 struct Base64URLTests {
-    /// RFC 4648 10절의 시험 벡터에서 채움 문자를 뗀 것(이 벡터에는 `+`·`/`가 없어 두 알파벳이 같다).
-    @Test("RFC 4648 10절의 벡터", arguments: [
+    /// The test vectors from RFC 4648 §10 with padding removed. These vectors contain neither `+` nor `/`, so the two alphabets are equivalent for them.
+    @Test("RFC 4648 §10 vectors", arguments: [
         ("", ""), ("f", "Zg"), ("fo", "Zm8"), ("foo", "Zm9v"),
         ("foob", "Zm9vYg"), ("fooba", "Zm9vYmE"), ("foobar", "Zm9vYmFy"),
     ])
@@ -16,14 +16,14 @@ struct Base64URLTests {
         #expect(Base64URL.decode(encoded) == Array(plain.utf8))
     }
 
-    @Test("URL 알파벳: 62는 -, 63은 _ (RFC 4648 5절)")
+    @Test("URL alphabet: 62 is -, 63 is _ (RFC 4648 §5)")
     func urlAlphabet() {
         #expect(Base64URL.encode([0xFB, 0xFF]) == "-_8")
         #expect(Base64URL.encode([0xFF, 0xFF, 0xFE]) == "___-")
         #expect(Base64URL.decode("___-") == [0xFF, 0xFF, 0xFE])
     }
 
-    @Test("RFC 7515 부록 A의 머리와 본문")
+    @Test("Header and body from RFC 7515 Appendix A")
     func rfc7515Values() {
         #expect(Base64URL.encode(#"{"alg":"ES256"}"#.utf8) == "eyJhbGciOiJFUzI1NiJ9")
         let payload = "{\"iss\":\"joe\",\r\n \"exp\":1300819380,\r\n \"http://example.com/is_root\":true}"
@@ -31,7 +31,7 @@ struct Base64URLTests {
             == "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ")
     }
 
-    @Test("엄격한 읽기: 채움, 공백, 표준 알파벳, 잘린 글, 0이 아닌 남는 비트를 거절", arguments: [
+    @Test("Strict parsing rejects padding, whitespace, the standard alphabet, truncated text, and nonzero trailing bits", arguments: [
         "Zg==", "Zm8=", "Zm9v=", "Zm 9v", "Zm9v\n", " Zm9v", "+/8", "-/8", "Z", "Zm9vY",
         "Zh", "Zm9", "Zm9vYmF", "é", "Zm9v\u{0}",
     ])
@@ -39,7 +39,7 @@ struct Base64URLTests {
         #expect(Base64URL.decode(text) == nil)
     }
 
-    @Test("길이 0~66의 왕복")
+    @Test("Round trips for lengths 0–66")
     func roundTrip() {
         var random = SplitMix64(seed: 0x6234_7375_726c)
         for count in 0...66 {
@@ -50,7 +50,7 @@ struct Base64URLTests {
         }
     }
 
-    @Test("임의 글로 죽지 않고, 읽힌 글은 정규 인코딩이다")
+    @Test("Arbitrary text does not cause a crash, and accepted text is canonically encoded")
     func randomText() {
         var random = SplitMix64(seed: 0xb64)
         let characters = Array("AZaz09-_+/= \n.é".unicodeScalars)

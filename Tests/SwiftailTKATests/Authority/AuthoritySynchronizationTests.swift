@@ -2,8 +2,8 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 계약 7절 시험 9: 동기화 계산(동작 Y1·Y4). 1,000·2,000의 경계는 `tka-fixtures.json`의 `sync`/`long`이 Go와 견준다.
-@Suite("서명 권한 상태 기계: 동기화 계산")
+/// Contract §7 test 9: synchronization calculation (behaviors Y1 and Y4). `sync`/`long` in `tka-fixtures.json` compares the 1,000 and 2,000 boundaries with Go.
+@Suite("Signing authority state machine: synchronization calculation")
 struct AuthoritySynchronizationTests {
     typealias T = AuthorityTesting
 
@@ -13,7 +13,7 @@ struct AuthoritySynchronizationTests {
         try Authority(bootstrappingWith: T.checkpoint(T.checkpointState([a.trusted()]), by: [a]))
     }
 
-    /// 조상 목록: 체크포인트가 없으면 뿌리 하나, 있으면 새것부터 그 해시들과 끝의 뿌리.
+    /// Ancestor list: the root alone if there are no checkpoints, otherwise checkpoint hashes from newest to oldest followed by the root.
     @Test func offerAncestors() throws {
         var authority = try start()
         #expect(authority.syncOffer() == SyncOffer(head: authority.bootstrap, ancestors: [authority.bootstrap]))
@@ -36,7 +36,7 @@ struct AuthoritySynchronizationTests {
         #expect(try authority.missingAUMs(for: authority.syncOffer()).isEmpty)
     }
 
-    /// 머리 교차: 상대의 머리가 로컬 사슬에 있으면 그 뒤의 것을 보낸다.
+    /// Head intersection: if the peer's head is on the local chain, send what follows it.
     @Test func headIntersection() throws {
         let root = try start()
         let chain = T.noOpChain(after: root.head, count: 5, by: a)
@@ -45,13 +45,13 @@ struct AuthoritySynchronizationTests {
         var local = root
         try local.inform(chain)
         #expect(try local.missingAUMs(for: remote.syncOffer()) == Array(chain.dropFirst(2)))
-        // 뒤처진 쪽은 상대의 머리를 모르므로 꼬리 교차(뿌리)부터 자기 사슬을 보낸다(Go `basic/behind`와 같다).
+        // The side that is behind does not know the peer's head, so it sends its chain from the tail intersection (the root), as in Go `basic/behind`.
         #expect(try remote.missingAUMs(for: local.syncOffer()) == Array(chain.prefix(2)))
         try remote.inform(local.missingAUMs(for: remote.syncOffer()))
         #expect(remote.head == local.head)
     }
 
-    /// 꼬리 교차: 갈라진 두 쪽은 공통 조상 다음부터 자기 활성 사슬을 보낸다(진 갈래는 보내지 않는다).
+    /// Tail intersection: peers on different branches send their own active chains starting after the common ancestor and omit losing branches.
     @Test func tailIntersection() throws {
         let b = T.Signer()
         var root = try Authority(
@@ -68,7 +68,7 @@ struct AuthoritySynchronizationTests {
         #expect(try local.missingAUMs(for: remote.syncOffer()) == [shared] + ours)
         #expect(try remote.missingAUMs(for: local.syncOffer()) == [shared, theirs])
 
-        // 서로 받으면 같은 머리(b의 2표가 이긴다)로 모인다. 로컬은 상대의 머리를 진 갈래로 쥔다.
+        // After mutual receipt, both converge on the same head (b's 2 votes win). The local side retains the peer's head on a losing branch.
         let toRemote = try local.missingAUMs(for: remote.syncOffer())
         let toLocal = try remote.missingAUMs(for: local.syncOffer())
         try local.inform(toLocal)
@@ -85,8 +85,8 @@ struct AuthoritySynchronizationTests {
         #expect(throws: TKAError.noIntersection) { try local.missingAUMs(for: SyncOffer(head: unknown, ancestors: [])) }
     }
 
-    /// 상대의 조상은 중복을 지운 뒤 앞의 1,001개만 본다(TL-11a 항목 3). 되풀이한 조상은 수에 들지 않고, 1,002번째의 교차는
-    /// 찾지 않는다. 로컬에 없는 조상도 수에 든다.
+    /// Checks only the first 1,001 distinct peer ancestors (TL-11a item 3). Repeated ancestors do not count, and an intersection at 1,002 is
+    /// missed. Ancestors unknown locally also count.
     @Test func remoteAncestorsAreDeduplicatedAndCapped() throws {
         var authority = try start()
         let chain = T.noOpChain(after: authority.head, count: 2, by: a)
@@ -104,12 +104,12 @@ struct AuthoritySynchronizationTests {
         #expect(try authority.missingAUMs(for: atLimit) == chain)
         let pastLimit = SyncOffer(head: unknown, ancestors: fillers + [authority.bootstrap])
         #expect(throws: TKAError.noIntersection) { try authority.missingAUMs(for: pastLimit) }
-        // 되풀이를 섞어도 서로 다른 것만 센다.
+        // Counts only distinct ancestors even with duplicates interleaved.
         let mixed = SyncOffer(head: unknown, ancestors: fillers.dropLast().flatMap { [$0, $0] } + [authority.bootstrap])
         #expect(try authority.missingAUMs(for: mixed) == chain)
     }
 
-    /// 반복 한도의 경계: 체크포인트를 포함한 경로가 한도 개수까지는 된다(Go `computeStateAt`·`fastForward`와 같은 셈).
+    /// Iteration limit boundary: a path including the checkpoint can reach the limit count, as counted by Go `computeStateAt` and `fastForward`.
     @Test func iterationLimitBoundaries() throws {
         var authority = try start()
         let chain = T.noOpChain(after: authority.head, count: 5, by: a)

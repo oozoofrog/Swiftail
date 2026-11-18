@@ -1,23 +1,23 @@
-// 시험 전용: 사슬 검증(계약 동작 X3·S3)의 자료가 될 최소한의 X.509 v3 인증서(RFC 5280 4.1)를 그 자리에서 만든다.
-// 라이브러리에는 X.509 쓰기가 없다(해석·검증은 Security가 한다).
+// Test-only generator for minimal X.509 v3 certificates (RFC 5280 4.1) on demand for chain verification fixtures (contract behaviors X3 and S3).
+// The library does not write X.509. Security handles parsing and verification.
 //
-// `Encoding/DER.swift`의 `DERValue`는 CSR에 필요한 형만 있고 OID를 밖에서 만들 수 없으므로(basicConstraints·
-// keyUsage·extKeyUsage·키 식별자의 OID, BOOLEAN, UTCTime, 명시적 태그가 없다) 여기서는 태그·길이·내용을 직접 잇는
-// 작은 쓰기를 둔다. 길이 규칙은 DER(X.690 10.1)와 같다.
+// `DERValue` in `Encoding/DER.swift` has only the forms needed for CSR and cannot create OIDs externally. It lacks basicConstraints,
+// keyUsage, extKeyUsage, and key identifier OIDs, BOOLEAN, UTCTime, and explicit tags. This small writer concatenates tag, length, and content
+// directly. It uses the DER length rules (X.690 10.1).
 
 import CryptoKit
 import Foundation
 
 @testable import SwiftailCertificates
 
-/// 시험용 인증 기관 하나: 키와 그 인증서.
+/// One test certificate authority, with its key and certificate.
 struct TestCertificateAuthority {
     let key: P256.Signing.PrivateKey
     let commonName: String
-    /// 이 기관의 인증서(DER).
+    /// This authority's certificate (DER).
     let certificate: [UInt8]
 
-    /// 자기 서명 루트.
+    /// A self-signed root.
     static func root(_ commonName: String, from notBefore: Date, to notAfter: Date) -> Self {
         let key = P256.Signing.PrivateKey()
         let der = X509.certificate(
@@ -27,7 +27,7 @@ struct TestCertificateAuthority {
         return Self(key: key, commonName: commonName, certificate: der)
     }
 
-    /// 이 기관이 서명한 중간 기관.
+    /// An intermediate authority signed by this authority.
     func intermediate(_ commonName: String, from notBefore: Date, to notAfter: Date) -> Self {
         let child = P256.Signing.PrivateKey()
         let der = X509.certificate(
@@ -37,7 +37,7 @@ struct TestCertificateAuthority {
         return Self(key: child, commonName: commonName, certificate: der)
     }
 
-    /// 이 기관이 서명한 TLS 서버 leaf(SAN `dNSName` 하나, EKU serverAuth).
+    /// A TLS server leaf signed by this authority (one SAN `dNSName` and EKU serverAuth).
     func leaf(_ dnsName: String, publicKey: P256.Signing.PublicKey, from notBefore: Date, to notAfter: Date) -> [UInt8] {
         X509.certificate(
             subject: dnsName, subjectKey: publicKey, issuer: commonName, issuerKey: key,
@@ -47,12 +47,12 @@ struct TestCertificateAuthority {
     }
 }
 
-/// PEM 사슬(leaf 먼저).
+/// The PEM chain, leaf first.
 func pemChain(_ certificates: [[UInt8]]) -> [UInt8] {
     Array(certificates.map { PEM.encode(PEMBlock(label: .certificate, der: $0)) }.joined().utf8)
 }
 
-/// X.509 v3의 조립.
+/// Assembles X.509 v3.
 private enum X509 {
     static func certificate(
         subject: String, subjectKey: P256.Signing.PublicKey, issuer: String, issuerKey: P256.Signing.PrivateKey,
@@ -68,7 +68,7 @@ private enum X509 {
             Array(subjectKey.derRepresentation),                         // SubjectPublicKeyInfo
             explicit(3, sequence(extensions))
         )
-        // 시험 자료라 서명의 무작위성은 상관없다(검증하는 것은 Security다).
+        // Signature randomness is fine for test fixtures. Security performs verification.
         let signature = (try? issuerKey.signature(for: tbs))?.derRepresentation ?? Data()
         return sequence(tbs, ecdsaWithSHA256, bitString(Array(signature)))
     }
@@ -90,7 +90,7 @@ private enum X509 {
         [
             // keyUsage: digitalSignature(critical)
             ext(oid(2, 5, 29, 15), critical: true, tlv(0x03, [0x07, 0x80])),
-            // extKeyUsage: id-kp-serverAuth 1.3.6.1.5.5.7.3.1. Apple의 SSL 정책이 요구한다.
+            // extKeyUsage: id-kp-serverAuth 1.3.6.1.5.5.7.3.1. Apple's SSL policy requires it.
             ext(oid(2, 5, 29, 37), critical: false, sequence(oid(1, 3, 6, 1, 5, 5, 7, 3, 1))),
             // subjectAltName: dNSName [2] IMPLICIT IA5String
             ext(oid(2, 5, 29, 17), critical: false, sequence(tlv(0x82, Array(dnsName.utf8)))),
@@ -99,16 +99,16 @@ private enum X509 {
         ]
     }
 
-    // MARK: - 부품
+    // MARK: - Components
 
     static let ecdsaWithSHA256 = sequence(oid(1, 2, 840, 10045, 4, 3, 2))
 
-    /// `Name`: CN 하나(UTF8String).
+    /// `Name` with one CN (UTF8String).
     static func name(_ commonName: String) -> [UInt8] {
         sequence(tlv(0x31, sequence(oid(2, 5, 4, 3), tlv(0x0C, Array(commonName.utf8)))))
     }
 
-    /// RFC 5280 4.1.2.5: 2049년까지는 UTCTime, 그 뒤는 GeneralizedTime.
+    /// RFC 5280 4.1.2.5: UTCTime through 2049, then GeneralizedTime.
     static func time(_ date: Date) -> [UInt8] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
@@ -121,7 +121,7 @@ private enum X509 {
             : tlv(0x18, Array((String(format: "%04d", year) + rest + "Z").utf8))
     }
 
-    /// RFC 5280 4.2.1.2 방법 (1): 공개 키 BIT STRING의 SHA-1.
+    /// RFC 5280 4.2.1.2 method (1): SHA-1 of the public key BIT STRING.
     static func keyIdentifier(_ key: P256.Signing.PublicKey) -> [UInt8] {
         Array(Insecure.SHA1.hash(data: key.x963Representation))
     }

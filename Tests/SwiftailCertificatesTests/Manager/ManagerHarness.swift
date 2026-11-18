@@ -1,7 +1,7 @@
-// `CertificateManager` 시험의 틀: 노드 없이 내부 init에 가짜 접점(사실의 흐름, set-dns, 대본 전송)과 넘기는 시계를 준다.
+// A `CertificateManager` test harness that supplies a fake facts stream, set-dns, scripted transport, and manually advanced clock to the internal initializer without a node.
 //
-// 시각은 시험이 넘긴다(`TestClock.advance`). 실제로 흐르는 것은 동시성의 차례를 맞추는 짧은 기다림(`eventually`)뿐이다.
-// 파일은 `SWIFTAIL_TEST_SCRATCH` 아래에만 만든다.
+// Tests advance the clock (`TestClock.advance`). Only short waits that coordinate the order of concurrent work (`eventually`) use real time.
+// Creates files only under `SWIFTAIL_TEST_SCRATCH`.
 
 import CryptoKit
 import Foundation
@@ -12,7 +12,7 @@ import Swiftail
 @testable import SwiftailCertificates
 import SwiftailControl
 
-/// 시험이 넘기는 벽시계. `sleep(until:)`은 시험이 그 시각을 넘길 때까지(또는 취소될 때까지) 돌아오지 않는다.
+/// A wall clock advanced by the test. `sleep(until:)` returns when the test advances to that time or cancels the wait.
 final class TestClock: Sendable {
     private struct Sleeper {
         let id: UInt64
@@ -35,7 +35,7 @@ final class TestClock: Sendable {
 
     func now() -> Date { state.withLock { $0.now } }
 
-    /// 기다리는 시각들(이른 것부터).
+    /// Pending wake times, earliest first.
     var deadlines: [Date] { state.withLock { $0.sleepers.map(\.deadline).sorted() } }
 
     func sleep(until deadline: Date) async throws(CancellationError) {
@@ -69,7 +69,7 @@ final class TestClock: Sendable {
         }
     }
 
-    /// 시각을 넘기고, 그 시각이 된 기다림을 깨운다.
+    /// Advances time and wakes waits whose deadlines have arrived.
     func advance(to date: Date) {
         let due = state.withLock { state -> [Sleeper] in
             state.now = max(state.now, date)
@@ -86,14 +86,14 @@ final class TestClock: Sendable {
     }
 }
 
-/// 대본 전송: 요청이 오면 차례로 응답한다. 기대한 메서드·URL이 아니면 시험 실패로 적는다.
+/// A scripted transport that responds to requests in order. An unexpected method or URL is recorded as a test failure.
 final class ScriptedTransport: ACMETransport {
-    /// 대본 한 줄.
+    /// One script entry.
     struct Entry: Sendable {
         var exchange: Exchange
-        /// 응답할 때 본문을 만든다(인증서 내려받기: 그때의 시각과 인증서 키로 leaf를 만든다).
+        /// Builds the body at response time. For certificate download, creates the leaf with the current time and certificate key.
         var body: (@Sendable () -> [UInt8])?
-        /// 응답하지 않고 취소될 때까지 붙잡는다.
+        /// Holds the request without responding until canceled.
         var hangs = false
     }
 
@@ -129,11 +129,11 @@ final class ScriptedTransport: ACMETransport {
             return state.queue.isEmpty ? nil : state.queue.removeFirst()
         }
         guard let entry else {
-            Issue.record("대본에 없는 요청: \(request.method) \(request.url)")
+            Issue.record("Request missing from the script: \(request.method) \(request.url)")
             throw .network
         }
         #expect(request.method == entry.exchange.method && request.url == entry.exchange.url,
-                "기대한 요청은 \(entry.exchange.method) \(entry.exchange.url), 받은 것은 \(request.method) \(request.url)")
+                "Expected \(entry.exchange.method) \(entry.exchange.url), received \(request.method) \(request.url)")
         if entry.hangs {
             try? await Task.sleep(for: .seconds(3600))
             throw .network
@@ -150,12 +150,12 @@ final class ScriptedTransport: ACMETransport {
     }
 }
 
-/// 가짜 set-dns: 받은 요청을 적고, 정해 둔 실패를 던진다.
+/// A fake set-dns that records requests and throws a preset failure.
 final class FakeDNS: Sendable {
     private struct State {
         var calls: [(name: String, value: String)] = []
         var failure: ControlError?
-        /// 참이면 `release()`까지 답하지 않는다.
+        /// When true, waits for `release()` before responding.
         var isHeld = false
         var heldWaiter: CheckedContinuation<Void, Never>?
     }
@@ -193,7 +193,7 @@ final class FakeDNS: Sendable {
     }
 }
 
-/// 시험마다 하나씩 쓰는 상태 디렉터리. `SWIFTAIL_TEST_SCRATCH` 아래에 만들고 끝나면 지운다.
+/// A state directory for one test. Creates it under `SWIFTAIL_TEST_SCRATCH` and removes it when done.
 struct ManagerScratch {
     static let root = ProcessInfo.processInfo.environment["SWIFTAIL_TEST_SCRATCH"]
 
@@ -219,7 +219,7 @@ struct ManagerScratch {
         try #require(try FileManager.default.attributesOfItem(atPath: file(name).path)[.posixPermissions] as? Int)
     }
 
-    /// 관리자를 거치지 않고 파일을 쓴다(저장된 인증서, 깨진 계정 키).
+    /// Writes a file directly, such as a stored certificate or a corrupt account key, without going through the manager.
     func put(_ bytes: [UInt8], _ name: String) throws {
         let certs = url.appending(path: "certs", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: certs, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -228,11 +228,11 @@ struct ManagerScratch {
     }
 }
 
-/// 관리자 하나와 그 접점.
+/// One manager and its interfaces.
 struct ManagerHarness {
     static let name = TestPKI.domainName
     static let day: TimeInterval = 24 * 3600
-    /// 발급하는 인증서의 수명. 2/3 지점은 발급 시각 + 60일이다.
+    /// The lifetime of an issued certificate. The 2/3 point is issuance time + 60 days.
     static let lifetime: TimeInterval = 90 * day
 
     let pki: TestPKI
@@ -242,16 +242,16 @@ struct ManagerHarness {
     let dns = FakeDNS()
     let manager: CertificateManager
     private let factsContinuation: AsyncStream<CertificateFacts>.Continuation
-    /// 관리자가 만든 인증서 키(차례대로).
+    /// Certificate keys generated by the manager, in order.
     private let keys = KeyLog()
 
-    /// 시험 루트를 어디로 주는가.
+    /// Where to supply the test root.
     enum AnchorSource {
-        /// 내부 초기화의 `anchors` 인자(대부분의 시험).
+        /// The `anchors` parameter of the internal initializer, used by most tests.
         case parameter
-        /// 공개 설정의 `trustAnchors`(앱이 스테이징을 쓸 때의 길).
+        /// `trustAnchors` in the public configuration, the path for apps using staging.
         case configuration
-        /// 주지 않는다. 시스템 신뢰 저장소로 검증하므로 시험 루트의 사슬은 통과하지 못한다.
+        /// Supplies no anchor. Verification uses the system trust store, so the test root's chain fails.
         case none
     }
 
@@ -291,7 +291,7 @@ struct ManagerHarness {
         factsContinuation.yield(facts)
     }
 
-    /// `run()`을 돌린다. 끝난 결과를 돌려주는 Task다.
+    /// Runs `run()`. Returns a Task that yields the final result.
     func start(with facts: CertificateFacts = ManagerHarness.facts()) -> Task<CertificateError?, Never> {
         send(facts)
         let manager = manager
@@ -307,12 +307,12 @@ struct ManagerHarness {
 
     func status() async -> CertificateStatus { await manager.status }
 
-    // MARK: - 대본
+    // MARK: - Scripts
 
-    /// 발급 한 번의 대본. `firstAttempt`면 계정을 찾고, 아니면 아는 계정 URL로 곧바로 주문한다.
+    /// A script for one issuance attempt. With `firstAttempt`, looks up the account. Otherwise orders directly with the known account URL.
     ///
-    /// 내려받기의 본문은 그때 관리자가 만든 마지막 인증서 키로 leaf를 만든다(발급 시각부터 90일). `leafName`·`leafKey`로
-    /// 다른 이름·다른 키의 leaf를 낼 수 있다.
+    /// The download body builds a leaf with the last certificate key the manager generated at that time (90 days from issuance). `leafName` and `leafKey` can
+    /// produce a leaf for another name or key.
     func issuance(
         firstAttempt: Bool = true, orderName: String = ManagerHarness.name, leafName: String = ManagerHarness.name,
         leafKey: P256.Signing.PublicKey? = nil
@@ -340,7 +340,7 @@ struct ManagerHarness {
         return ordering.map { ScriptedTransport.Entry(exchange: $0) } + [download]
     }
 
-    /// 계정을 찾은 뒤 newOrder가 이 응답을 받는 대본(실패의 대본).
+    /// A failure script in which newOrder receives this response after account lookup.
     func failingOrder(_ exchange: Exchange, firstAttempt: Bool = true) -> [ScriptedTransport.Entry] {
         let account: [Exchange] = firstAttempt
             ? Steps.accountFound
@@ -348,7 +348,7 @@ struct ManagerHarness {
         return (account + [exchange]).map { ScriptedTransport.Entry(exchange: $0) }
     }
 
-    /// 저장된 인증서 파일을 둔다(관리자를 거치지 않고).
+    /// Places a stored certificate file without going through the manager.
     func storeCertificate(
         name: String = ManagerHarness.name, key: P256.Signing.PrivateKey = P256.Signing.PrivateKey(),
         pairedKey: P256.Signing.PrivateKey? = nil, from start: Date, to end: Date
@@ -359,7 +359,7 @@ struct ManagerHarness {
     }
 }
 
-/// 관리자가 만든 인증서 키의 기록.
+/// The record of certificate keys generated by the manager.
 final class KeyLog: Sendable {
     private let keys = Mutex<[P256.Signing.PrivateKey]>([])
 
@@ -372,9 +372,9 @@ final class KeyLog: Sendable {
     }
 }
 
-/// 조건이 설 때까지 짧게 기다린다. 시각을 넘기는 것이 아니라 다른 Task의 차례를 기다린다.
+/// Briefly waits for the condition to become true. This gives other Tasks a turn without advancing the clock.
 func eventually(
-    _ message: String = "조건이 서지 않았다",
+    _ message: String = "The condition was not met",
     sourceLocation: SourceLocation = #_sourceLocation,
     _ condition: () async -> Bool
 ) async throws {
@@ -386,7 +386,7 @@ func eventually(
     throw CancellationError()
 }
 
-/// 관리자가 잠시 더 돌 틈을 준다(일어나지 않아야 할 일을 확인하기 전).
+/// Gives the manager a little longer to run before checking that something did not happen.
 func settle() async throws {
     for _ in 0..<20 {
         await Task.yield()
@@ -394,7 +394,7 @@ func settle() async throws {
     try await Task.sleep(for: .milliseconds(30))
 }
 
-/// 흐름에 남은 것을 모두 꺼낸다. 흐름이 끝나 있어야 한다(`run()`이 돌아온 뒤).
+/// Drains the stream. The stream must have ended, after `run()` returns.
 func drain(_ stream: AsyncStream<TailnetCertificate>) async -> [TailnetCertificate] {
     var collected: [TailnetCertificate] = []
     for await certificate in stream { collected.append(certificate) }

@@ -1,16 +1,16 @@
-// 계약 `docs/contracts/SwiftailPairing.md` 7절 6: 가짜 전송으로 요청의 모양(K1), 응답·오류의 분류(K6), 검사(K4),
-// 수명(K3), 가림. 실제 관리 API에는 나가지 않는다.
+// Contract §7 test 6 in `docs/contracts/SwiftailPairing.md` uses a fake transport to test request shape (K1), response and error classification (K6), validation (K4),
+// lifetime (K3), and redaction. The tests make no calls to the real management API.
 
 import Foundation
 import Testing
 
 @testable import SwiftailPairing
 
-@Suite("인증 키 발급")
+@Suite("Auth key issuance")
 struct AuthKeyIssuerTests {
-    // MARK: K1 요청의 모양
+    // MARK: K1 Request shape
 
-    @Test("토큰 요청(머리 방식): POST /api/v2/oauth/token, Basic(QueryEscape(id):QueryEscape(secret)), 폼 본문")
+    @Test("Token request using the header: POST /api/v2/oauth/token, Basic(QueryEscape(id):QueryEscape(secret)), and a form body")
     func tokenRequestHeaderStyle() throws {
         let request = AuthKeyExchange.tokenRequest(baseURL: try Example.baseURL(), client: Example.client, style: .header)
         #expect(request.url.absoluteString == "https://api.invalid/api/v2/oauth/token")
@@ -19,7 +19,7 @@ struct AuthKeyIssuerTests {
         #expect(request.authorization == Example.basic)
     }
 
-    @Test("토큰 요청(본문 방식): Authorization 없이 client_id·client_secret을 키 순 폼에 싣는다")
+    @Test("Token request using the body sends client_id and client_secret in key order in the form without Authorization")
     func tokenRequestParameterStyle() throws {
         let request = AuthKeyExchange.tokenRequest(baseURL: try Example.baseURL(), client: Example.client, style: .parameters)
         #expect(request.url.absoluteString == "https://api.invalid/api/v2/oauth/token")
@@ -28,14 +28,14 @@ struct AuthKeyIssuerTests {
         #expect(String(decoding: request.body, as: UTF8.self) == Example.parametersForm)
     }
 
-    @Test("queryEscape는 Go url.QueryEscape와 같다")
+    @Test("queryEscape matches Go url.QueryEscape")
     func queryEscape() {
         #expect(AuthKeyExchange.queryEscape("aZ09-_.~") == "aZ09-_.~")
         #expect(AuthKeyExchange.queryEscape("a b") == "a+b")
         #expect(AuthKeyExchange.queryEscape(":/?#[]@!$&'()*+,;=%\"") == "%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D%25%22")
     }
 
-    @Test("키 요청: POST /api/v2/tailnet/-/keys, Bearer, 고정 값의 JSON 본문")
+    @Test("Key request: POST /api/v2/tailnet/-/keys, Bearer, and a JSON body with fixed values")
     func keyRequestShape() throws {
         let request = AuthKeyExchange.keyRequest(
             baseURL: try Example.url("https://api.invalid/"), token: Example.token, tags: ["tag:example", "tag:b"], expirySeconds: 600
@@ -47,7 +47,7 @@ struct AuthKeyIssuerTests {
             #"{"capabilities":{"devices":{"create":{"ephemeral":false,"preauthorized":true,"reusable":false,"tags":["tag:example","tag:b"]}}},"expirySeconds":600}"#)
     }
 
-    @Test("issue는 머리 방식으로 토큰을 받아 그 토큰으로 키를 만든다")
+    @Test("issue gets a token using the header and uses the token to create a key")
     func issueFlow() async throws {
         let transport = FakeAuthKeyTransport([Example.tokenOK, Example.keyOK])
         let issuer = try AuthKeyIssuer(client: Example.client, baseURL: try Example.baseURL(), transport: transport)
@@ -63,7 +63,7 @@ struct AuthKeyIssuerTests {
         #expect(body.contains(#""expirySeconds":600"#) && body.contains(#""tags":["tag:example"]"#))
     }
 
-    @Test("머리 방식이 실패하면 본문 방식으로 한 번만 다시 묻는다", arguments: [
+    @Test("If the header method fails, retry once using the body", arguments: [
         Example.response(401, #"{"error":"invalid_client"}"#),
         Example.response(400, "{}"),
         Example.response(500, ""),
@@ -83,7 +83,7 @@ struct AuthKeyIssuerTests {
         #expect(String(decoding: requests[1].body, as: UTF8.self) == Example.parametersForm)
     }
 
-    @Test("취소되면 다시 묻지 않는다")
+    @Test("Cancellation prevents a retry")
     func noFallbackOnCancel() async throws {
         let transport = FakeAuthKeyTransport([.failure(.cancelled), Example.tokenOK, Example.keyOK])
         let issuer = try AuthKeyIssuer(client: Example.client, baseURL: try Example.baseURL(), transport: transport)
@@ -91,7 +91,7 @@ struct AuthKeyIssuerTests {
         #expect(transport.requests.count == 1)
     }
 
-    @Test("토큰과 자격 방식은 호출마다 새로 정한다(K2)")
+    @Test("Each call obtains a fresh token and chooses a credential method anew (K2)")
     func tokenPerCall() async throws {
         let rejected = Example.response(401, "{}")
         let transport = FakeAuthKeyTransport([rejected, Example.tokenOK, Example.keyOK, Example.tokenOK, Example.keyOK])
@@ -101,19 +101,19 @@ struct AuthKeyIssuerTests {
         #expect(transport.requests.map(\.url.path) == [
             Example.tokenPath, Example.tokenPath, Example.keyPath, Example.tokenPath, Example.keyPath,
         ])
-        #expect(transport.requests[3].authorization == Example.basic, "두 번째 호출도 머리 방식부터 묻는다")
+        #expect(transport.requests[3].authorization == Example.basic, "The second call also tries the header method first")
     }
 
-    // MARK: K3 수명
+    // MARK: K3 Lifetime
 
-    @Test("수명은 초 단위로 버린다", arguments: [
+    @Test("The lifetime is rounded down to whole seconds", arguments: [
         (Duration.milliseconds(1900), Int64(1)), (.seconds(600), 600), (.seconds(7_776_001), 7_776_001), (.seconds(Int64.max), Int64.max),
     ])
     func lifetimeTruncation(lifetime: Duration, seconds: Int64) throws {
         #expect(try AuthKeyExchange.expirySeconds(for: lifetime) == seconds)
     }
 
-    @Test("1초보다 짧은 수명은 아무것도 보내지 않고 invalidLifetime", arguments: [
+    @Test("A lifetime shorter than 1 second returns invalidLifetime without sending anything", arguments: [
         Duration.zero, .milliseconds(999), .seconds(-5), .nanoseconds(-1),
     ])
     func invalidLifetime(lifetime: Duration) async throws {
@@ -123,9 +123,9 @@ struct AuthKeyIssuerTests {
         #expect(transport.requests.isEmpty)
     }
 
-    // MARK: K6 분류
+    // MARK: K6 Classification
 
-    @Test("두 방식이 모두 실패하면 마지막 토큰 응답으로 분류한다", arguments: [
+    @Test("If both methods fail, the last token response determines the classification", arguments: [
         (Example.response(400, #"{"error":"invalid_client"}"#), AuthKeyIssueError.clientRejected),
         (Example.response(401, "{}"), .clientRejected),
         (Example.response(200, #"{"error":"invalid_client","access_token":"tskey-api-EXAMPLE"}"#), .clientRejected),
@@ -144,10 +144,10 @@ struct AuthKeyIssuerTests {
         let transport = FakeAuthKeyTransport([Example.response(401, "{}"), last])
         let issuer = try AuthKeyIssuer(client: Example.client, baseURL: try Example.baseURL(), transport: transport)
         await #expect(throws: expected) { try await issuer.issue(lifetime: .seconds(60)) }
-        #expect(transport.requests.count == 2, "토큰을 받지 못하면 키를 요청하지 않는다")
+        #expect(transport.requests.count == 2, "Without a token, no key is requested")
     }
 
-    @Test("토큰 성공은 2xx이고 token_type은 거르지 않는다", arguments: [
+    @Test("A 2xx token response succeeds without filtering on token_type", arguments: [
         Example.response(201, #"{"access_token":"tskey-api-EXAMPLE-token"}"#),
         Example.response(200, #"{"access_token":"tskey-api-EXAMPLE-token","token_type":"bearer"}"#),
         Example.response(200, #"{"access_token":"tskey-api-EXAMPLE-token","token_type":"mac"}"#),
@@ -161,7 +161,7 @@ struct AuthKeyIssuerTests {
         #expect(transport.requests.last?.authorization == "Bearer tskey-api-EXAMPLE-token")
     }
 
-    @Test("키 응답의 분류", arguments: [
+    @Test("Key response classification", arguments: [
         (Example.response(401, "{}"), AuthKeyIssueError.unauthorized),
         (Example.response(403, #"{"message":"tag not permitted"}"#), .forbidden),
         (Example.response(400, "{}"), .http(status: 400)),
@@ -180,10 +180,10 @@ struct AuthKeyIssuerTests {
         let transport = FakeAuthKeyTransport([Example.tokenOK, response])
         let issuer = try AuthKeyIssuer(client: Example.client, baseURL: try Example.baseURL(), transport: transport)
         await #expect(throws: expected) { try await issuer.issue(lifetime: .seconds(60)) }
-        #expect(transport.requests.count == 2, "키 요청은 다시 보내지 않는다")
+        #expect(transport.requests.count == 2, "The key request is never retried")
     }
 
-    @Test("만료 시각은 소수 초가 있어도 읽는다")
+    @Test("The expiration time accepts fractional seconds")
     func fractionalExpiry() async throws {
         let key = Example.response(200, #"{"key":"tskey-auth-EXAMPLE","expires":"2026-01-01T00:10:00.5Z"}"#)
         let issuer = try AuthKeyIssuer(
@@ -193,9 +193,9 @@ struct AuthKeyIssuerTests {
         #expect(issued.expires == Date(timeIntervalSince1970: 1_767_226_200.5))
     }
 
-    // MARK: K4 검사
+    // MARK: K4 Validation
 
-    @Test("클라이언트 ID와 비밀은 QueryEscape가 그대로 두는 글자만 받는다", arguments: [
+    @Test("The client ID and secret accept only characters left unchanged by QueryEscape", arguments: [
         ("", Example.secret), ("id EXAMPLE", Example.secret), ("id:EXAMPLE", Example.secret), ("id+EXAMPLE", Example.secret),
         ("id\nEXAMPLE", Example.secret), ("아이디", Example.secret), (String(repeating: "a", count: 513), Example.secret),
         (Example.clientID, "EXAMPLE"), (Example.clientID, "tskey-auth-EXAMPLE"), (Example.clientID, "tskey-client-EX/AMPLE"),
@@ -208,7 +208,7 @@ struct AuthKeyIssuerTests {
         }
     }
 
-    @Test("512바이트까지의 A-Za-z0-9-_.~는 받는다")
+    @Test("A-Za-z0-9-_.~ is accepted up to 512 bytes")
     func validClientBoundary() throws {
         let client = TailscaleOAuthClient(
             id: String(repeating: "a", count: 512), secret: "tskey-client-AZaz09-_.~", tags: ["tag:example"]
@@ -216,7 +216,7 @@ struct AuthKeyIssuerTests {
         _ = try AuthKeyIssuer(client: client, baseURL: try Example.baseURL())
     }
 
-    @Test("태그는 Go tailcfg.CheckTag의 규칙을 따른다", arguments: [
+    @Test("Tags follow the Go tailcfg.CheckTag rules", arguments: [
         [], ["example"], ["tag:"], ["tag:1abc"], ["tag:-abc"], ["tag:a_b"], ["tag:a.b"], ["tag:a b"], ["tag:é"],
         ["TAG:example"], ["tag:example", "tag:"],
     ])
@@ -227,14 +227,14 @@ struct AuthKeyIssuerTests {
         }
     }
 
-    @Test("올바른 태그(길이 상한 없음)", arguments: [
+    @Test("Valid tags have no length limit", arguments: [
         ["tag:a"], ["tag:Example-1"], ["tag:a-"], ["tag:" + String(repeating: "x", count: 1000)], ["tag:example", "tag:b"],
     ])
     func validTags(tags: [String]) throws {
         _ = try AuthKeyIssuer(client: TailscaleOAuthClient(id: Example.clientID, secret: Example.secret, tags: tags), baseURL: try Example.baseURL())
     }
 
-    @Test("baseURL은 https이거나 루프백의 http다", arguments: [
+    @Test("baseURL requires https or loopback http", arguments: [
         ("https://api.invalid", true), ("https://api.invalid/", true), ("https://api.invalid:8443/prefix", true),
         ("http://127.0.0.1:8080", true), ("http://localhost:8080", true), ("http://[::1]:8080", true),
         ("http://api.invalid", false), ("http://10.0.0.1", false), ("ftp://127.0.0.1", false),
@@ -253,15 +253,15 @@ struct AuthKeyIssuerTests {
         }
     }
 
-    @Test("base에 경로가 있으면 그 뒤에 잇는다")
+    @Test("If the base has a path, append to it")
     func baseURLWithPath() throws {
         let request = AuthKeyExchange.tokenRequest(baseURL: try Example.url("https://api.invalid/prefix/"), client: Example.client, style: .header)
         #expect(request.url.absoluteString == "https://api.invalid/prefix/api/v2/oauth/token")
     }
 
-    // MARK: 가림
+    // MARK: Redaction
 
-    @Test("description과 dump에 비밀·키가 나오지 않는다")
+    @Test("description and dump omit secrets and keys")
     func redaction() async throws {
         let issuer = try AuthKeyIssuer(
             client: Example.client, baseURL: try Example.baseURL(), transport: FakeAuthKeyTransport([Example.tokenOK, Example.keyOK])
@@ -278,7 +278,7 @@ struct AuthKeyIssuerTests {
         #expect(String(describing: Example.client).contains(Example.clientID))
     }
 
-    @Test("오류 값에 비밀·토큰·서버 본문이 실리지 않는다")
+    @Test("Error values omit secrets, tokens, and server bodies")
     func errorsCarryNoSecrets() async throws {
         let echo = Example.response(403, #"{"message":"tskey-api-EXAMPLE-token tskey-client-EXAMPLE"}"#)
         let issuer = try AuthKeyIssuer(
@@ -286,7 +286,7 @@ struct AuthKeyIssuerTests {
         )
         do {
             _ = try await issuer.issue(lifetime: .seconds(60))
-            Issue.record("403인데 성공했다")
+            Issue.record("Unexpected success for a 403 response")
         } catch {
             var dumped = ""
             dump(error, to: &dumped)

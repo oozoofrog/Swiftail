@@ -2,8 +2,8 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 계약 7절 시험 6·7: 갈래 해소(동작 F1)와 들이기(동작 F4).
-@Suite("서명 권한 상태 기계: 갈래와 들이기")
+/// Contract §7 tests 6 and 7: fork resolution (behavior F1) and admission (behavior F4).
+@Suite("Signing authority state machine: forks and admission")
 struct AuthorityChainTests {
     typealias T = AuthorityTesting
 
@@ -16,7 +16,7 @@ struct AuthorityChainTests {
         return try Authority(bootstrappingWith: T.checkpoint(T.checkpointState(keys), by: [a]))
     }
 
-    /// `first`·`second`를 어느 차례로 들여도 머리가 `winner`다.
+    /// Admitting `first` and `second` in either order gives `winner` as the head.
     func expectWinner(_ winner: AUM, among first: AUM, _ second: AUM, from authority: Authority) throws {
         for order in [[first, second], [second, first]] {
             var copy = authority
@@ -28,19 +28,19 @@ struct AuthorityChainTests {
         #expect(batch.head == winner.hash)
     }
 
-    // MARK: 갈래 해소(시험 6)
+    // MARK: Fork resolution (test 6)
 
     @Test func heavierSignatureWeightWins() throws {
         let authority = try start(votes: (1, 2, 1))
         let light = T.noOp(after: authority.head, by: [a])
         let heavy = T.noOp(after: authority.head, by: [b])
         try expectWinner(heavy, among: light, heavy, from: authority)
-        // 키 둘(1표 + 1표)이 키 하나(1표)를 이긴다.
+        // Two keys (1 vote + 1 vote) beat one key (1 vote).
         let both = T.noOp(after: authority.head, by: [a, c])
         try expectWinner(both, among: light, both, from: authority)
     }
 
-    /// 같은 키의 서명 둘은 한 번만 센다: a(2표) × 2 = 2 < c(3표). 두 번 세면 4로 이긴다.
+    /// Two signatures from one key count once: a (2 votes) × 2 = 2 < c (3 votes). Counting both would win with 4.
     @Test func sameKeyCountsOnce() throws {
         let authority = try start(votes: (2, 1, 3))
         let twice = T.signed(AUM(messageKind: AUM.Kind.noOp, prevAUMHash: authority.head.bytes), by: [a, a])
@@ -49,7 +49,7 @@ struct AuthorityChainTests {
         try expectWinner(once, among: twice, once, from: authority)
     }
 
-    /// 가중치가 같으면 RemoveKey가 이긴다. 해시만 보면 다른 쪽이 이기도록 고른다.
+    /// RemoveKey wins at equal weight. Choose hashes such that the other side would win on hash alone.
     @Test func removeKeyWinsATie() throws {
         let authority = try start()
         let noOp = T.noOp(after: authority.head, by: [a])
@@ -68,7 +68,7 @@ struct AuthorityChainTests {
         try expectWinner(winner, among: first, second, from: authority)
     }
 
-    /// 갈래의 진 쪽에 자식이 붙어도 머리는 그대로다. 이긴 쪽에 자식이 붙으면 그리 옮겨 간다.
+    /// A child on the losing branch leaves the head unchanged. A child on the winning branch becomes the head.
     @Test func losingBranchGrowsWithoutMovingTheHead() throws {
         var authority = try start(votes: (1, 2, 1))
         let winner = T.noOp(after: authority.head, by: [b])
@@ -81,14 +81,14 @@ struct AuthorityChainTests {
         let next = T.noOp(after: winner.hash, by: [a])
         try authority.inform([next])
         #expect(authority.head == next.hash)
-        // 진 쪽의 상태를 따라 그 갈래 위의 AUM도 검증한다: 진 쪽에서 지운 키의 서명은 그 갈래에서 거절된다.
+        // AUMs on the losing branch are verified against that branch's state. A key removed on that branch can no longer sign for it.
         let removal = T.removeKey(c.publicKey, after: loserChain[2].hash, by: [a])
         try authority.inform([removal])
         #expect(T.informError(&authority, [T.noOp(after: removal.hash, by: [c])]) == .untrustedSigner)
         #expect(authority.head == next.hash)
     }
 
-    // MARK: 들이기(시험 7)
+    // MARK: Admission (test 7)
 
     @Test func emptyBatch() throws {
         var authority = try start()
@@ -114,13 +114,13 @@ struct AuthorityChainTests {
         try authority.inform([update])
         try authority.inform([update, update])
         #expect(authority.aums == before.aums && authority.head == before.head && authority.state == before.state)
-        // 이미 쥔 것 뒤에 새것이 이어지면 새것만 더한다.
+        // When a new AUM follows one already retained, only the new AUM is added.
         let next = T.noOp(after: update.hash, by: [b])
         try authority.inform([update, next])
         #expect(authority.aums.count == 3 && authority.head == next.hash)
     }
 
-    /// 묶음 가운데 하나라도 틀리면 그 앞의 것까지 아무것도 들이지 않는다.
+    /// If any member of the group is invalid, the entire group is rejected, including preceding members.
     @Test func oneBadUpdateRejectsTheBatch() throws {
         var authority = try start()
         let chain = T.noOpChain(after: authority.head, count: 3, by: a)
@@ -136,7 +136,7 @@ struct AuthorityChainTests {
         #expect(authority.head == chain[2].hash)
     }
 
-    /// 받은 순서대로 처리하고 정렬하지 않는다.
+    /// Processes in received order without sorting.
     @Test func outOfOrderBatch() throws {
         var authority = try start()
         let chain = T.noOpChain(after: authority.head, count: 2, by: a)
@@ -145,7 +145,7 @@ struct AuthorityChainTests {
         #expect(authority.head == chain[1].hash)
     }
 
-    /// 갈래를 만드는 묶음: 진 쪽이 더 길어도 머리는 갈래 해소 규칙이 정한다.
+    /// A group that creates a fork uses the fork resolution rule to select the head even when the losing branch is longer.
     @Test func batchThatForks() throws {
         var authority = try start(votes: (1, 3, 1))
         let heavy = T.noOp(after: authority.head, by: [b])

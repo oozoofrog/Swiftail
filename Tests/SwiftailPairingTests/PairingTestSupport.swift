@@ -1,4 +1,4 @@
-// 페어링 단위 시험의 공용 값과 도우미. 값은 모두 가짜다(가짜 tailnet `tail0001`, 가짜 주소 `100.64.0.x`).
+// Shared values and helpers for pairing unit tests. All values are fake (fake tailnet `tail0001`, fake addresses `100.64.0.x`).
 
 import Foundation
 import Swiftail
@@ -12,7 +12,7 @@ enum Sample {
     static let port: UInt16 = 4747
     static let secret = [UInt8](repeating: 0x5A, count: 32)
     static let authKey = "tskey-auth-EXAMPLE-0000"
-    /// 제안이 살아 있는 시각과 만료 시각.
+    /// A time when the offer is valid and the expiration time.
     static let wallClock = Date(timeIntervalSince1970: 1_900_000_000)
     static let expires = Date(timeIntervalSince1970: 1_900_000_300)
     static let joinerNonce = [UInt8](repeating: 0x11, count: 32)
@@ -41,10 +41,10 @@ enum Sample {
         try #require(DeviceName(text))
     }
 
-    /// 여는 쪽이 `challenge`에 싣는 약속 commitH.
+    /// The commitment commitH that the host puts in `challenge`.
     static let hostCommitment = PairingTranscript.commitment(toHostNonce: hostNonce)
 
-    /// `Sample`의 값으로 만든 P. 들어오는 쪽의 nonce, 제안, 연결의 두 끝은 바꿀 수 있다.
+    /// Builds P from `Sample` values, with optional overrides for the joiner nonce, offer, and connection endpoints.
     static func proofTranscript(
         joinerNonce: [UInt8] = joinerNonce, offer: PairingOffer = offer(), endpoints: PairingEndpoints? = nil
     ) throws -> PairingProofTranscript {
@@ -53,7 +53,7 @@ enum Sample {
             deviceName: Array("rd-phone-5e6f7a8b".utf8), endpoints: try endpoints ?? Sample.endpoints())
     }
 
-    /// 같은 값으로 만든 T(여는 쪽의 nonce까지 열린 뒤).
+    /// Builds T from the same values after the host nonce is also opened.
     static func transcript(
         joinerNonce: [UInt8] = joinerNonce, offer: PairingOffer = offer(), endpoints: PairingEndpoints? = nil
     ) throws -> PairingTranscript {
@@ -61,18 +61,18 @@ enum Sample {
             try proofTranscript(joinerNonce: joinerNonce, offer: offer, endpoints: endpoints).opened(with: hostNonce))
     }
 
-    /// 여는 쪽이 `Sample`의 값으로 보낼 `accepted`: 열어 보인 nonceH와 T의 HMAC.
+    /// The `accepted` that the host sends using `Sample` values, with the revealed nonceH and the HMAC of T.
     static func accepted() throws -> [UInt8] {
         hostNonce + (try transcript()).accepted(secret: secret)
     }
 
-    /// 시험이 만들고 지우는 빈 임시 디렉터리의 자리(만들지는 않는다).
+    /// Returns the path to an empty temporary directory for the test to create and remove. The directory is not created here.
     static func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory.appending(path: "swiftail-pairing-\(UUID().uuidString)")
     }
 }
 
-/// 여는 쪽 상태 기계가 낸 할 일을 견줄 수 있는 모양으로 줄인 것(`PairingRequest`는 `Equatable`이 아니다).
+/// Reduces host state machine actions to a comparable form because `PairingRequest` is not `Equatable`.
 enum HostStep: Equatable {
     case send([UInt8])
     case requestDecision(stableID: String, deviceName: String, confirmationCode: String)
@@ -95,7 +95,7 @@ enum HostStep: Equatable {
 }
 
 extension [PairingHostMachine.Action] {
-    /// 보낼 바이트를 차례대로 이어 붙인 것.
+    /// The bytes to send, concatenated in order.
     var sentBytes: [UInt8] {
         flatMap { action -> [UInt8] in if case .send(let bytes) = action { bytes } else { [] } }
     }
@@ -106,7 +106,7 @@ extension [PairingJoinerSession.Action] {
         flatMap { action -> [UInt8] in if case .send(let bytes) = action { bytes } else { [] } }
     }
 
-    /// 절차가 끝났으면 그 결과.
+    /// The outcome if the flow has finished.
     var result: Result<PairingJoinerSession.Approval, PairingError>? {
         compactMap { action in if case .finish(let result) = action { result } else { nil } }.first
     }
@@ -116,7 +116,7 @@ extension [PairingJoinerSession.Action] {
     }
 }
 
-/// 여는 쪽 상태 기계 하나와 들어오는 쪽 연결 하나를 메모리에서 맞물린 것. 단계마다 멈춰 끼어들 수 있다.
+/// Wires a host state machine and joiner connection together in memory. Tests can stop and intervene after each step.
 struct PairingRehearsal {
     static let sessionID: PairingHostMachine.SessionID = 1
 
@@ -125,7 +125,7 @@ struct PairingRehearsal {
     let start = ContinuousClock.now
     let offer: PairingOffer
 
-    /// 제안을 열고, 연결 하나를 받고, 들어오는 쪽 연결을 만든다.
+    /// Opens an offer, accepts one connection, and creates the joiner connection.
     init(
         offer: PairingOffer = Sample.offer(), hostSees: PairingEndpoints? = nil, joinerSees: PairingEndpoints? = nil,
         deviceName: String = "rd-phone-5e6f7a8b"
@@ -141,30 +141,30 @@ struct PairingRehearsal {
             endpoints: try joinerSees ?? Sample.endpoints(), challengeDeadline: start + .seconds(60))
     }
 
-    /// 들어오는 쪽의 바이트를 여는 쪽에 넣는다.
+    /// Feeds bytes from the joiner into the host.
     mutating func toHost(_ bytes: [UInt8], wallClock: Date = Sample.wallClock) -> [PairingHostMachine.Action] {
         machine.receive(bytes, on: Self.sessionID, wallClock: wallClock, now: start)
     }
 
-    /// 여는 쪽의 바이트를 들어오는 쪽에 넣는다.
+    /// Feeds bytes from the host into the joiner.
     mutating func toJoiner(_ bytes: [UInt8]) -> [PairingJoinerSession.Action] {
         joiner.receive(bytes, at: start)
     }
 
-    /// `hello`와 `challenge`, `proof`와 `accepted`를 주고받아 결정을 기다리는 데까지 간다. 여는 쪽이 낸 요청의 확인
-    /// 숫자와 들어오는 쪽이 받은 확인 숫자를 돌려준다.
+    /// Exchanges `hello` and `challenge`, then `proof` and `accepted`, leaving the decision pending. Returns the SAS from the host request
+    /// and the SAS received by the joiner.
     mutating func reachDecision() throws -> (hostCode: String, joinerCode: String) {
         let challenge = toHost(joiner.hello)
         let proof = toJoiner(challenge.sentBytes)
         let accepted = toHost(proof.sentBytes)
         guard case .requestDecision(let request)? = accepted.last else {
-            throw RehearsalFailure(description: "결정 요청이 나오지 않았다: \(HostStep.steps(accepted))")
+            throw RehearsalFailure(description: "No decision request was issued: \(HostStep.steps(accepted))")
         }
         let waiting = toJoiner(accepted.sentBytes)
         return (request.confirmationCode, try #require(waiting.confirmationCode))
     }
 
-    /// 앱이 승인했고 저장도 됐을 때 여는 쪽이 낸 할 일.
+    /// The actions issued by the host after app approval and successful storage.
     mutating func approve(saving succeeded: Bool = true) -> [PairingHostMachine.Action] {
         let decided = machine.decided(
             Self.sessionID, approved: true, currentPeer: Sample.joinerIdentity, host: Sample.hostIdentity,
@@ -178,7 +178,7 @@ struct RehearsalFailure: Error, CustomStringConvertible {
     let description: String
 }
 
-/// `body`가 던진 `PairingError`. 던지지 않으면 nil. 다른 오류는 시험 실패다.
+/// Returns the `PairingError` thrown by `body`, or nil if it does not throw. Any other error fails the test.
 func pairingError<T>(_ body: () async throws -> T) async -> PairingError? {
     do {
         _ = try await body()
@@ -186,7 +186,7 @@ func pairingError<T>(_ body: () async throws -> T) async -> PairingError? {
     } catch let error as PairingError {
         return error
     } catch {
-        Issue.record("PairingError가 아닌 오류: \(error)")
+        Issue.record("Unexpected error type instead of PairingError: \(error)")
         return nil
     }
 }

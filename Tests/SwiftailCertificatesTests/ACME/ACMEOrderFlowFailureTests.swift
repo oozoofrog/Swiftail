@@ -1,19 +1,19 @@
-// 계약 7절 시험 8의 실패 갈래: finalize의 invalid·모르는 상태·되풀이 초과, 주문·authorization의 invalid와
-// deactivated·expired·revoked, badNonce 한 번·세 번·네 번, Retry-After(초·날짜·지난 날짜·읽지 못함·5분 기한·7일),
-// rateLimited, 문제 문서, 식별자·wildcard·개수·URL·크기·nonce의 경계, 전송·TXT의 실패, 기한.
+// Failure paths in contract §7 test 8: invalid and unknown finalize statuses and excess retries, invalid orders and authorizations,
+// deactivated, expired, and revoked statuses, badNonce once, three times, and four times, Retry-After (seconds, date, past date, unparseable, 5-minute deadline, and 7 days),
+// rateLimited, problem documents, identifier, wildcard, count, URL, size, and nonce boundaries, transport and TXT failures, and deadlines.
 
 import Foundation
 import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("ACME 주문 절차: 실패 갈래")
+@Suite("ACME order flow: failure paths")
 struct ACMEOrderFlowFailureTests {
     private let issued = ACMEIssuanceResult.issued(certificateChainPEM: Fake.chainPEM, accountURL: Fake.accountURL)
 
-    // MARK: 주문과 authorization의 상태
+    // MARK: Order and authorization status
 
-    @Test("finalize 응답이 invalid이고 authorization이 invalid면 validationFailed")
+    @Test("An invalid finalize response and an invalid authorization return validationFailed")
     func finalizeInvalidWithInvalidAuthorization() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -25,7 +25,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .validationFailed(type: Fake.problem("dns")))
     }
 
-    @Test("주문이 invalid인데 authorization이 모두 valid면 orderFailed(주문의 error)")
+    @Test("An invalid order with all authorizations valid returns orderFailed (the order's error)")
     func pollInvalidWithoutAuthorizationFailure() {
         let run = ACMEScript().run(Steps.accountFound + [Steps.newOrder(Body.order("pending"))] + Steps.pendingAuthorization() + [
             Steps.readOrder(Body.order("invalid", errorType: Fake.problem("badCSR"))),
@@ -34,13 +34,13 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .orderFailed(type: Fake.problem("badCSR")))
     }
 
-    @Test("새 주문이 처음부터 invalid면 orderFailed")
+    @Test("A new order that is already invalid returns orderFailed")
     func createdInvalid() {
         let run = ACMEScript().run(Steps.accountFound + [Steps.newOrder(Body.order("invalid"))])
         #expect(run.failure == .orderFailed(type: ""))
     }
 
-    @Test("authorization이 invalid면 validationFailed(challenge의 error)")
+    @Test("An invalid authorization returns validationFailed (the challenge's error)")
     func authorizationInvalid() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -51,7 +51,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .validationFailed(type: Fake.problem("incorrectResponse")))
     }
 
-    @Test("challenge가 invalid면 validationFailed")
+    @Test("An invalid challenge returns validationFailed")
     func challengeInvalid() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -62,7 +62,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .validationFailed(type: Fake.problem("dns")))
     }
 
-    @Test("이어 갈 수 없는 authorization은 orderFailed", arguments: ["deactivated", "expired", "revoked"])
+    @Test("An authorization that cannot proceed returns orderFailed", arguments: ["deactivated", "expired", "revoked"])
     func unusableAuthorization(status: String) {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -71,7 +71,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .orderFailed(type: ""))
     }
 
-    @Test("모르는 상태는 unexpectedResponse")
+    @Test("An unknown status returns unexpectedResponse")
     func unknownStatuses() {
         let script = ACMEScript()
         let finalize = script.run(Steps.accountFound + [
@@ -96,7 +96,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(challenge.failure == .unexpectedResponse)
     }
 
-    @Test("finalize 뒤 ready·pending의 두 번째 되풀이는 unexpectedResponse")
+    @Test("A second repetition of ready or pending after finalize returns unexpectedResponse")
     func secondRepeatFails() {
         let ready = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -115,13 +115,13 @@ struct ACMEOrderFlowFailureTests {
         #expect(pending.failure == .unexpectedResponse)
     }
 
-    @Test("pending 주문에 authorization이 없으면 unexpectedResponse")
+    @Test("A pending order without an authorization returns unexpectedResponse")
     func pendingWithoutAuthorizations() {
         let run = ACMEScript().run(Steps.accountFound + [Steps.newOrder(Body.order("pending", authorizations: []))])
         #expect(run.failure == .unexpectedResponse)
     }
 
-    @Test("valid 주문에 certificate URL이 없으면 unexpectedResponse")
+    @Test("A valid order without a certificate URL returns unexpectedResponse")
     func validWithoutCertificateURL() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -130,7 +130,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .unexpectedResponse)
     }
 
-    @Test("계정의 status가 valid가 아니면 실패")
+    @Test("An account with a status other than valid fails")
     func accountNotValid() {
         let run = ACMEScript().run([
             .get(Fake.directoryURL, 200, Body.directory()),
@@ -140,9 +140,9 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .unexpectedResponse)
     }
 
-    // MARK: 식별자와 개수
+    // MARK: Identifiers and counts
 
-    @Test("요청한 이름이 아닌 authorization은 unexpectedResponse")
+    @Test("An authorization for a name other than the requested name returns unexpectedResponse")
     func mismatchedAuthorizations() {
         let identifiers: [([String: String], Bool?)] = [
             (["type": "dns", "value": "rd-phone-1a2b3c4d.tail0001.ts.net"], nil),
@@ -158,7 +158,7 @@ struct ACMEOrderFlowFailureTests {
         }
     }
 
-    @Test("응답의 identifiers가 요청과 다르면 unexpectedResponse")
+    @Test("Response identifiers that differ from the request return unexpectedResponse")
     func mismatchedOrderIdentifiers() {
         let run = ACMEScript().run(Steps.accountFound + [Steps.newOrder(Body.order("ready", identifiers: [
             ["type": "dns", "value": Fake.domainName], ["type": "dns", "value": "rd-phone-1a2b3c4d.tail0001.ts.net"],
@@ -166,7 +166,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .unexpectedResponse)
     }
 
-    @Test("dns-01이 없는 authorization은 unexpectedResponse")
+    @Test("An authorization without dns-01 returns unexpectedResponse")
     func noDNS01Challenge() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -177,7 +177,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .unexpectedResponse)
     }
 
-    @Test("token이 base64url이 아니면 unexpectedResponse", arguments: ["", "abc=", "a+b", String(repeating: "a", count: 513)])
+    @Test("A token that is not base64url returns unexpectedResponse", arguments: ["", "abc=", "a+b", String(repeating: "a", count: 513)])
     func invalidToken(token: String) {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -187,7 +187,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.published.isEmpty)
     }
 
-    @Test("authorization 8개는 받고 9개는 unexpectedResponse")
+    @Test("Accepts 8 authorizations and returns unexpectedResponse for 9")
     func authorizationLimit() {
         let eight = (1...8).map(Fake.authorizationURL)
         let validAuthorization = Body.authorization("valid", challenges: [Body.challenge(status: "valid")])
@@ -201,9 +201,9 @@ struct ACMEOrderFlowFailureTests {
         #expect(rejected.failure == .unexpectedResponse)
     }
 
-    // MARK: URL과 크기
+    // MARK: URLs and sizes
 
-    @Test("https가 아니거나 2,048바이트를 넘는 URL은 unexpectedResponse")
+    @Test("A URL without https or over 2,048 bytes returns unexpectedResponse")
     func unacceptableURLs() {
         let long = "https://acme.invalid/" + String(repeating: "a", count: 2048 - 21 + 1)
         let exact = "https://acme.invalid/" + String(repeating: "a", count: 2048 - 21)
@@ -228,8 +228,8 @@ struct ACMEOrderFlowFailureTests {
         #expect(directory.failure == .unexpectedResponse)
     }
 
-    /// 서버가 준 URL을 따라 다른 호스트(루프백 포함)로 계정 키로 서명한 요청을 보내지 않는다.
-    @Test("디렉터리와 출처가 다른 URL로는 요청하지 않고 unexpectedResponse", arguments: [
+    /// Do not follow a server-provided URL to send a request signed with the account key to another host, including loopback.
+    @Test("A URL from an origin different from the directory returns unexpectedResponse without a request", arguments: [
         "https://other.invalid/order/1/finalize", "https://127.0.0.1:8443/finalize", "https://acme.invalid:8443/finalize",
     ])
     func crossOriginURLs(_ url: String) {
@@ -241,7 +241,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(nonce.failure == .unexpectedResponse)
     }
 
-    @Test("디렉터리 URL이 https가 아니면 요청 없이 끝난다")
+    @Test("A directory URL without https ends the flow without a request")
     func plainDirectoryURL() {
         var script = ACMEScript()
         script.directoryURL = "http://acme.invalid/directory"
@@ -250,7 +250,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.requests.isEmpty)
     }
 
-    @Test("64KiB를 넘는 JSON 응답은 unexpectedResponse")
+    @Test("A JSON response over 64KiB returns unexpectedResponse")
     func oversizedJSON() {
         var object = String(decoding: Body.order("ready"), as: UTF8.self)
         object.removeLast()
@@ -259,7 +259,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .unexpectedResponse)
     }
 
-    @Test("256KiB를 넘는 인증서 응답은 unexpectedResponse")
+    @Test("A certificate response over 256KiB returns unexpectedResponse")
     func oversizedChain() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -269,7 +269,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .unexpectedResponse)
     }
 
-    @Test("JSON이 아니거나 필드가 빠진 응답은 unexpectedResponse")
+    @Test("A non-JSON response or a response with missing fields returns unexpectedResponse")
     func malformedBodies() {
         for body in [Array("not json".utf8), Body.json(["status": "ready"]), Body.json([1, 2])] {
             let run = ACMEScript().run(Steps.accountFound + [Steps.newOrder(body)])
@@ -277,7 +277,7 @@ struct ACMEOrderFlowFailureTests {
         }
     }
 
-    @Test("기대한 것과 다른 성공 상태 코드는 unexpectedResponse")
+    @Test("An unexpected success status code returns unexpectedResponse")
     func unexpectedSuccessStatus() {
         let run = ACMEScript().run(Steps.accountFound + [.post(Fake.newOrderURL, 200, Body.order("ready"), location: Fake.orderURL)])
         #expect(run.failure == .unexpectedResponse)
@@ -285,7 +285,7 @@ struct ACMEOrderFlowFailureTests {
 
     // MARK: nonce
 
-    @Test("nonce가 없는 응답 뒤에는 HEAD newNonce로 얻는다")
+    @Test("After a response without a nonce, obtain one with HEAD newNonce")
     func missingNonceFetchesNew() {
         let run = ACMEScript().run([
             .get(Fake.directoryURL, 200, Body.directory()),
@@ -301,13 +301,13 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.requests(to: Fake.newNonceURL).count == 3)
     }
 
-    @Test("newNonce 응답에 nonce가 없으면 unexpectedResponse")
+    @Test("A newNonce response without a nonce returns unexpectedResponse")
     func newNonceWithoutNonce() {
         let run = ACMEScript().run([.get(Fake.directoryURL, 200, Body.directory()), .head(nonce: .omitted)])
         #expect(run.failure == .unexpectedResponse)
     }
 
-    @Test("badNonce는 그 응답의 nonce로 다시 서명해 3번까지 다시 보낸다", arguments: [1, 3])
+    @Test("On badNonce, sign again with the response nonce and resend up to 3 times", arguments: [1, 3])
     func badNonceRetried(times: Int) {
         let badNonce = Exchange.post(Fake.newOrderURL, 400, Body.problem(Fake.problem("badNonce")))
         let run = ACMEScript().run(Steps.accountFound + Array(repeating: badNonce, count: times) + Steps.readyToIssued)
@@ -315,7 +315,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.requests(to: Fake.newOrderURL).count == times + 1)
     }
 
-    @Test("badNonce 네 번째는 실패")
+    @Test("The fourth badNonce fails")
     func badNonceFourTimes() {
         let badNonce = Exchange.post(Fake.newOrderURL, 400, Body.problem(Fake.problem("badNonce")))
         let run = ACMEScript().run(Steps.accountFound + Array(repeating: badNonce, count: 4))
@@ -323,7 +323,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.unusedExchanges == 0)
     }
 
-    @Test("badNonce 응답에 nonce가 없으면 newNonce로 얻어 다시 보낸다")
+    @Test("On badNonce without a response nonce, get one from newNonce and resend")
     func badNonceWithoutNonce() {
         let run = ACMEScript().run(Steps.accountFound + [
             Exchange.post(Fake.newOrderURL, 400, Body.problem(Fake.problem("badNonce"))).nonce(.omitted),
@@ -332,7 +332,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.result == issued)
     }
 
-    @Test("요청마다 badNonce 횟수를 따로 센다")
+    @Test("Counts badNonce occurrences separately per request")
     func badNonceCountedPerRequest() {
         let badOrder = Exchange.post(Fake.newOrderURL, 400, Body.problem(Fake.problem("badNonce")))
         let badFinalize = Exchange.post(Fake.finalizeURL, 400, Body.problem(Fake.problem("badNonce")))
@@ -343,7 +343,7 @@ struct ACMEOrderFlowFailureTests {
 
     // MARK: Retry-After
 
-    @Test("주문 다시 읽기는 Retry-After(초)를 지킨다")
+    @Test("Order polling honors Retry-After in seconds")
     func retryAfterSeconds() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -355,7 +355,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.waits == [Fake.start.addingTimeInterval(7)])
     }
 
-    @Test("Retry-After의 HTTP 날짜를 지키고, 지난 날짜·읽지 못하는 값은 1초 간격이다")
+    @Test("Honors an HTTP date in Retry-After and uses 1-second intervals for past dates and unparseable values")
     func retryAfterDates() {
         let cases: [(String, TimeInterval)] = [
             (Self.imfDate(Fake.start.addingTimeInterval(42)), 42),
@@ -376,7 +376,7 @@ struct ACMEOrderFlowFailureTests {
         }
     }
 
-    @Test("Retry-After가 5분 기한을 넘으면 기다리지 않고 timedOut, 그 시각을 결과에 싣는다")
+    @Test("If Retry-After exceeds the 5-minute deadline, returns timedOut immediately and includes that time in the result")
     func retryAfterBeyondDeadline() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -387,7 +387,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.waits.isEmpty)
     }
 
-    @Test("rateLimited는 서버가 준 시각을 싣고, 7일로 묶는다")
+    @Test("rateLimited includes the server-provided time, capped at 7 days")
     func rateLimited() {
         let soon = ACMEScript().run(Steps.accountFound + [
             Exchange.post(Fake.newOrderURL, 429, Body.problem(Fake.problem("rateLimited"), status: 429)).header("Retry-After", "3600"),
@@ -411,7 +411,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(none.retryNotBefore == nil)
     }
 
-    @Test("5xx의 Retry-After도 결과에 싣는다")
+    @Test("A 5xx Retry-After is also included in the result")
     func serverErrorRetryAfter() {
         let run = ACMEScript().run(Steps.accountFound + [
             Exchange.post(Fake.newOrderURL, 503, Body.problem(Fake.problem("serverInternal"), status: 503)).header("Retry-After", "120"),
@@ -420,7 +420,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.retryNotBefore == Fake.start.addingTimeInterval(120))
     }
 
-    @Test("어느 응답의 Retry-After든 그 시각 전에는 다음 요청을 보내지 않는다")
+    @Test("Retry-After on any response keeps the next request from being sent before that time")
     func retryAfterOnAnyResponse() {
         let run = ACMEScript().run([
             .get(Fake.directoryURL, 200, Body.directory()),
@@ -432,9 +432,9 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.requests.dropFirst(2).allSatisfy { $0.time >= Fake.start.addingTimeInterval(30) })
     }
 
-    // MARK: 문제 문서
+    // MARK: Problem documents
 
-    @Test("오류 응답의 문제 문서는 type 전체 문자열로 든다")
+    @Test("Represents an error response's problem document by its full type string")
     func problemDocuments() {
         let long = "https://acme.invalid/problems/" + String(repeating: "가", count: 100)
         let cases: [([UInt8], String)] = [
@@ -457,13 +457,13 @@ struct ACMEOrderFlowFailureTests {
                 Exchange.post(Fake.newOrderURL, 403, body).header("Content-Type", "application/problem+json"),
             ])
             #expect(run.failure == .acme(status: 403, type: type))
-            // 접미사로 흉내 낸 badNonce는 다시 보내지 않는다.
+            // A suffix that mimics badNonce does not cause a resend.
             #expect(run.requests(to: Fake.newOrderURL).count == 1)
         }
         #expect(String(long.prefix(105)).utf8.count == 30 + 225)
     }
 
-    @Test("리다이렉트는 따르지 않고 오류로 본다")
+    @Test("Treats redirects as errors without following them")
     func redirectIsError() {
         let run = ACMEScript().run(Steps.accountFound + [
             Exchange.post(Fake.newOrderURL, 302, []).header("Location", "https://other.invalid/new-order"),
@@ -471,9 +471,9 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.failure == .acme(status: 302, type: ""))
     }
 
-    // MARK: 전송, TXT, 기한
+    // MARK: Transport, TXT, and deadlines
 
-    @Test("전송의 실패는 그 종류로 끝난다")
+    @Test("A transport failure ends with that failure type")
     func transportFailures() {
         let cases: [(ACMETransportError, CertificateFailure)] = [
             (.network, .network("ACME server unreachable")), (.timedOut, .timedOut),
@@ -482,14 +482,14 @@ struct ACMEOrderFlowFailureTests {
         for (error, failure) in cases {
             var flow = ACMEScript().flow
             guard case .send = flow.start(at: Fake.start) else {
-                Issue.record("첫 단계는 디렉터리 요청이어야 한다")
+                Issue.record("The first step must request the directory")
                 continue
             }
             #expect(flow.transportFailed(error, at: Fake.start) == .finished(.failed(failure, retryNotBefore: nil, accountURL: nil)))
         }
     }
 
-    @Test("TXT를 올리지 못하면 그 실패로 끝나고 challenge에 응답하지 않는다")
+    @Test("Failure to publish TXT ends with that failure and sends no challenge response")
     func publishFailure() {
         var script = ACMEScript()
         script.publishFailure = .controlRejected(status: 403)
@@ -499,7 +499,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.unusedExchanges == 1)
     }
 
-    @Test("5분 기한이 지나 받은 응답은 timedOut")
+    @Test("A response received after the 5-minute deadline returns timedOut")
     func deadline() {
         var script = ACMEScript()
         script.latency = 100
@@ -508,7 +508,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(run.finishedAt == Fake.start.addingTimeInterval(300))
     }
 
-    @Test("끝난 뒤의 입력은 같은 결과를 돌려주고, 기다리지 않은 입력은 죽지 않는다")
+    @Test("Input after completion returns the same result, and unexpected input does not cause a crash")
     func misuse() {
         var flow = ACMEScript().flow
         let response = ACMEHTTPResponse(status: 200, headers: [], body: [])
@@ -519,7 +519,7 @@ struct ACMEOrderFlowFailureTests {
         #expect(flow.start(at: Fake.start) == failed)
     }
 
-    @Test("dump에 키·계정 URL·이름이 나오지 않는다")
+    @Test("dump omits the key, account URL, and name")
     func mirrorHidesSecrets() {
         var script = ACMEScript()
         script.accountURL = Fake.accountURL

@@ -2,21 +2,21 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// `AUMHash`의 텍스트 표기(계약 7절 시험 3, 노트 3.8·8.1).
+/// Text representation of `AUMHash` (contract §7 test 3, note §§3.8 and 8.1).
 @Suite("AUMHash")
 struct AUMHashTests {
-    /// 노트 8.1: genesis 체크포인트의 해시.
+    /// Note §8.1: hash of the genesis checkpoint.
     static let genesisText = "JJRRHYGNBVUWY77ZY436U35DVPHXPY4C5HPQZA2PHUPBNM5252UA"
     static let genesisHex = "4a6313e0cd0d696c7ff9c737ea6fa3abcf77e382e9df0c834f3d1e16b3baeea8"
 
-    @Test("genesis 해시의 텍스트와 바이트가 Go와 같다")
+    @Test("Genesis hash text and bytes match Go")
     func genesis() throws {
         let hash = try #require(AUMHash(text: Self.genesisText))
         #expect(ModelTesting.hex(hash.bytes) == Self.genesisHex)
         #expect(try #require(AUMHash(ModelTesting.bytes(Self.genesisHex))).text == Self.genesisText)
     }
 
-    @Test("바이트는 32바이트만 받는다")
+    @Test("Accepts only 32 bytes")
     func byteCount() {
         #expect(AUMHash([UInt8](repeating: 1, count: 31)) == nil)
         #expect(AUMHash([UInt8](repeating: 1, count: 33)) == nil)
@@ -24,7 +24,7 @@ struct AUMHashTests {
         #expect(AUMHash([UInt8](repeating: 1, count: 32))?.bytes == [UInt8](repeating: 1, count: 32))
     }
 
-    @Test("임의의 해시를 텍스트로 쓰고 읽으면 같다")
+    @Test("Arbitrary hashes round-trip through text")
     func roundTrip() throws {
         var random = CBORTesting.Random(state: 0x7a32)
         for _ in 0..<300 {
@@ -37,7 +37,7 @@ struct AUMHashTests {
         #expect(AUMHash([UInt8](repeating: 0xff, count: 32))?.text == String(repeating: "7", count: 51) + "Q")
     }
 
-    @Test("소문자·패딩·51자·53자·알파벳 밖의 글자는 거절한다")
+    @Test("Rejects lowercase, padding, 51 or 53 characters, and characters outside the alphabet")
     func rejected() {
         let text = Self.genesisText
         #expect(AUMHash(text: text.lowercased()) == nil)
@@ -49,11 +49,11 @@ struct AUMHashTests {
         for character in ["0", "1", "8", "9", "a", " ", "\n", "é"] {
             #expect(AUMHash(text: character + String(text.dropFirst())) == nil, "\(character)")
         }
-        // Go는 `\r`·`\n`을 지우고 읽지만 Swiftail은 거절한다(보고의 "Go 판정 미확인").
+        // Go strips `\r` and `\n` before decoding, and Swiftail rejects them (Unverified Go outcomes in the report).
         #expect(AUMHash(text: String(text.dropLast()) + "\n") == nil)
     }
 
-    @Test("끝 글자의 남는 4비트는 보지 않는다: A·B·P는 같은 해시, Q는 다른 해시")
+    @Test("Ignores the last character's 4 trailing bits: A, B, and P give the same hash, and Q gives a different hash")
     func trailingBits() throws {
         let stem = String(Self.genesisText.dropLast())
         let a = try #require(AUMHash(text: stem + "A"))

@@ -4,7 +4,7 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("독립 ACME 서버 자체 검사")
+@Suite("Independent ACME server self-tests")
 struct FakeACMEServerTests {
     enum BadRequest: String, Sendable, CaseIterable {
         case reusedNonce, unknownNonce, missingNonce, wrongURL, bothKeys, neitherKey, wrongSignature
@@ -207,7 +207,7 @@ struct FakeACMEServerTests {
         #expect(invalid.status == 200)
         let object = try #require(JSONSerialization.jsonObject(with: Data(invalid.body)) as? [String: Any])
         #expect(object["status"] as? String == "invalid")
-        // 실패 뒤 올바른 TXT를 올려도 이미 invalid인 challenge를 되살려서는 안 된다.
+        // Publishing the correct TXT after failure must not revive an already invalid challenge.
         let token = try #require(object["token"] as? String)
         scenario.dns.publish(
             "_acme-challenge." + FakeACMEServer.domain,
@@ -224,7 +224,7 @@ struct FakeACMEServerTests {
     }
 }
 
-/// 서버 자체 시험용 클라이언트. 라이브러리 JWS·CSR 생성기를 쓰지 않는다.
+/// A client for server self-tests. It uses neither the library's JWS generator nor its CSR generator.
 private struct HandACMEClient {
     let server: FakeACMEServer
     let key: P256.Signing.PrivateKey
@@ -253,7 +253,7 @@ private struct HandACMEClient {
     }
 }
 
-/// CN만 쓰는 유효한 PKCS#10. RFC 8555 7.4는 CN 또는 SAN을 허용하므로 서버가 SAN을 강제하지 않는다.
+/// A valid PKCS#10 with CN only. RFC 8555 7.4 allows either CN or SAN, so the server does not require SAN.
 private func handCSR(_ key: P256.Signing.PrivateKey, name: String) throws -> Data {
     func tlv(_ tag: UInt8, _ content: Data) -> Data {
         var length = content.count

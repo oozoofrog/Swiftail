@@ -1,14 +1,14 @@
-// `import Swiftail`과 `import SwiftailPairing`만으로 페어링 공개 API에 나오는 타입의 이름을 쓴다. 이 파일은 다른 모듈을
-// 가져오지 않는다(`SwiftailBase`의 `IPAddress`는 `Swiftail`의 별명으로 쓴다).
+// Names types in the public pairing API using only `import Swiftail` and `import SwiftailPairing`. This file imports
+// no other modules. It uses the `Swiftail` alias for `SwiftailBase`'s `IPAddress`.
 
 import Foundation
 import Swiftail
 import SwiftailPairing
 import Testing
 
-@Suite("import Swiftail·SwiftailPairing만으로 쓰는 타입")
+@Suite("Types available with only import Swiftail and SwiftailPairing")
 struct PairingReexportedTypesTests {
-    @Test("페어링 공개 API에 나오는 다른 모듈의 타입을 이름으로 쓴다")
+    @Test("Names types from other modules that appear in the public pairing API")
     func names() throws {
         let identity = PeerIdentity(
             stableID: "nEXAMPLEJOINER", name: "rd-phone-5e6f7a8b.tail0001.ts.net", computedName: "rd-phone-5e6f7a8b",

@@ -3,17 +3,17 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// `Fixtures/cbor-vectors.json`(노트 8.1의 디코더 표). 필드의 뜻과 출처는 `Fixtures/README.md`.
+/// `Fixtures/cbor-vectors.json` (decoder tables in note §8.1). See `Fixtures/README.md` for field meanings and origin.
 struct CBORVectorFile: Decodable {
     struct Vector: Decodable {
         let name: String
         let section: String
         let hex: String
-        /// `CBOR.decode`의 판정: `accept`이거나 `CBORError`의 경우 이름.
+        /// The `CBOR.decode` outcome: `accept` or the `CBORError` case name.
         let cbor: String
-        /// 노트가 적은 Go `AUM` 디코딩의 판정: `accept`·`reject`. 구조 수준(TL-2)의 기대값이다.
+        /// The Go `AUM` decode outcome documented in the note: `accept` or `reject`. This expectation is for the structure level (TL-2).
         let aum: String
-        /// 받아들인 값을 정준으로 다시 쓴 바이트. 쓰는 길이 없는 값(음수, 단순값·실수)이 있으면 없다.
+        /// Bytes from writing an accepted value canonically. Absent if there is an unwritable value (negative integer, simple value, or float).
         let canonical: String?
 
         func input() throws -> [UInt8] {
@@ -29,9 +29,9 @@ struct CBORVectorFile: Decodable {
     }
 }
 
-@Suite("CBOR 벡터")
+@Suite("CBOR vectors")
 struct CBORVectorTests {
-    @Test("노트 8.1의 표: 항목 수준의 판정과 정준 다시 쓰기")
+    @Test("Note §8.1 table: item-level outcomes and canonical rewriting")
     func noteVectors() throws {
         let file = try CBORVectorFile.load()
         #expect(file.vectors.count == 63)
@@ -40,23 +40,23 @@ struct CBORVectorTests {
             let result = Result { () throws(CBORError) in try CBOR.decode(input) }
             switch result {
             case .success(let value):
-                #expect(vector.cbor == "accept", "\(vector.name): 받아들였다")
+                #expect(vector.cbor == "accept", "\(vector.name): Accepted")
                 if let canonical = vector.canonical {
                     #expect(CBORTesting.canonical(value).map(CBORTesting.hex) == canonical, "\(vector.name)")
                 } else {
-                    #expect(CBORTesting.canonical(value) == nil, "\(vector.name): 쓰는 길이 없는 값이 있어야 한다")
+                    #expect(CBORTesting.canonical(value) == nil, "\(vector.name): Must contain an unwritable value")
                 }
             case .failure(let error):
                 #expect(vector.cbor == "\(error)", "\(vector.name): \(error)")
             }
-            // 항목 수준에서 거절하는 입력은 Go도 거절한다.
+            // Go also rejects inputs that are rejected at the item level.
             if vector.cbor != "accept" {
                 #expect(vector.aum == "reject", "\(vector.name)")
             }
         }
     }
 
-    @Test("genesis 체크포인트는 정준이라 다시 쓰면 원본과 같다")
+    @Test("The genesis checkpoint is canonical and rewrites to the original bytes")
     func genesis() throws {
         let vector = try #require(CBORVectorFile.load().vectors.first { $0.name == "genesis 체크포인트" })
         let input = try vector.input()
@@ -64,9 +64,9 @@ struct CBORVectorTests {
         #expect(CBORTesting.canonical(try CBOR.decode(input)) == input)
     }
 
-    /// RFC 8949 부록 A의 예. 기대값은 부록의 진단 표기를 옮긴 것이다.
+    /// Examples from RFC 8949 Appendix A. The expected values are from the appendix's diagnostic notation.
     @Test(
-        "RFC 8949 부록 A: 받아들이는 예",
+        "RFC 8949 Appendix A: accepted examples",
         arguments: [
             ("00", CBORValue.unsigned(0)), ("01", .unsigned(1)), ("0a", .unsigned(10)), ("17", .unsigned(23)),
             ("1818", .unsigned(24)), ("1819", .unsigned(25)), ("1864", .unsigned(100)), ("1903e8", .unsigned(1_000)),
@@ -109,15 +109,15 @@ struct CBORVectorTests {
         let input = try #require(CBORTesting.bytes(hex: hex))
         let value = try CBOR.decode(input)
         #expect(value == expected)
-        // 부록의 예는 정준이므로 쓸 수 있는 값은 같은 바이트로 다시 쓴다. undefined만 null(f6)로 쓴다.
+        // The appendix examples are canonical, so writable values rewrite to the same bytes. Only undefined is written as null (f6).
         if let canonical = CBORTesting.canonical(value) {
             #expect(canonical == (input == [0xf7] ? [0xf6] : input))
         }
     }
 
-    /// 실수는 값을 쥐지 않지만 받아들인다(모르는 필드의 값, 노트 6.2).
+    /// Accepts floats without retaining their values (unknown field values, note §6.2).
     @Test(
-        "RFC 8949 부록 A: 실수",
+        "RFC 8949 Appendix A: floats",
         arguments: [
             "f90000", "f98000", "f93c00", "fb3ff199999999999a", "f93e00", "f97bff", "fa47c35000", "fa7f7fffff",
             "fb7e37e43c8800759c", "f90001", "f90400", "f9c400", "fbc010666666666666", "f97c00", "f97e00", "f9fc00",
@@ -129,7 +129,7 @@ struct CBORVectorTests {
     }
 
     @Test(
-        "RFC 8949 부록 A: 태그와 길이 미정은 거절한다",
+        "RFC 8949 Appendix A: rejects tags and indefinite lengths",
         arguments: [
             ("c249010000000000000000", CBORError.tag), ("c349010000000000000000", .tag),
             ("c074323031332d30332d32315432303a30343a30305a", .tag), ("c11a514b67b0", .tag), ("c1fb41d452d9ec200000", .tag),

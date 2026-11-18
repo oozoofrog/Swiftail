@@ -4,7 +4,7 @@ import Synchronization
 
 @testable import SwiftailCertificates
 
-/// 실제 대기 없이 발급 기한과 요청 시각을 함께 움직인다.
+/// Advances issuance deadlines and request times together without real waits.
 final class ScenarioClock: Sendable {
     static let epoch = Date(timeIntervalSince1970: 1_800_000_000)
     private let state = Mutex(ScenarioClock.epoch)
@@ -18,7 +18,7 @@ final class ScenarioClock: Sendable {
     }
 }
 
-/// 여러 TXT 값을 허용한다. authorization 둘의 token은 서로 다르다.
+/// Allows multiple TXT values. The two authorizations use different tokens.
 final class ScenarioDNS: Sendable {
     private let state = Mutex<[String: [String]]>([:])
 

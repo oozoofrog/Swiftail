@@ -2,16 +2,16 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 들이기의 성질(차례와 무관한 머리, 다시 들이기, 다시 열기), 한도의 경계(동작 F7·M), 망가진 입력.
-@Suite("서명 권한 상태 기계: 성질과 한도")
+/// Admission properties (order-independent head, readmission, and reopening), limit boundaries (behaviors F7 and M), and malformed input.
+@Suite("Signing authority state machine: properties and limits")
 struct AuthorityPropertyTests {
     typealias T = AuthorityTesting
 
-    /// 갈래가 여럿이고 키가 더해지고 지워지는 AUM 나무. `updates`는 만든 차례(부모가 먼저)다.
+    /// An AUM tree with several branches and key additions and removals. `updates` is in creation order (parents first).
     struct Tree {
         let root: AUM
         let updates: [AUM]
-        /// `updates`를 만든 차례대로 하나씩 들인 것.
+        /// The result of admitting `updates` one at a time in creation order.
         let reference: Authority
     }
 
@@ -46,7 +46,7 @@ struct AuthorityPropertyTests {
         return Tree(root: root, updates: updates, reference: builder)
     }
 
-    /// 부모가 먼저 오는 임의의 차례.
+    /// A random order with parents first.
     static func parentFirstOrder(_ updates: [AUM], root: AUMHash, random: inout CBORTesting.Random) -> [AUM] {
         var placed: Set<AUMHash> = [root]
         var remaining = updates
@@ -67,7 +67,7 @@ struct AuthorityPropertyTests {
         #expect(Set(authority.hashes) == Set(reference.hashes), sourceLocation: sourceLocation)
     }
 
-    /// 같은 AUM 집합을 부모가 먼저인 어떤 차례로, 어떤 묶음으로 나눠 들여도 머리와 상태가 같다.
+    /// Admitting the same set of AUMs in any parent-first order and with any grouping yields the same head and state.
     @Test(arguments: [UInt64(1), 2, 3])
     func headDoesNotDependOnOrder(seed: UInt64) throws {
         var random = CBORTesting.Random(state: seed)
@@ -85,7 +85,7 @@ struct AuthorityPropertyTests {
         }
     }
 
-    /// 이미 쥔 AUM을 다시 들여도(어떤 부분 집합이든) 상태가 같고, 다시 열면 같은 머리와 상태다.
+    /// Readmitting any subset of retained AUMs preserves the state, and reopening yields the same head and state.
     @Test func reinformingAndReopening() throws {
         var random = CBORTesting.Random(state: 7)
         let tree = try Self.randomTree(count: 30, random: &random)
@@ -100,7 +100,7 @@ struct AuthorityPropertyTests {
         Self.expectSame(reopened, tree.reference)
     }
 
-    /// 한 번에 들이는 AUM 수의 한도(4,096개)는 검증 전에 본다.
+    /// The limit on AUMs per admission (4,096) is checked before verification.
     @Test func batchCountLimit() throws {
         let a = T.Signer()
         var authority = try Authority(bootstrappingWith: T.checkpoint(T.checkpointState([a.trusted()]), by: [a]))
@@ -110,38 +110,38 @@ struct AuthorityPropertyTests {
         #expect(authority.aums.count == 2)
     }
 
-    /// 부모 상태를 찾아 거꾸로 가는 한도(체크포인트를 포함해 2,000개)와 쥐는 AUM 수의 한도(4,096개)의 경계.
+    /// Boundaries of the backward search for parent state (2,000 AUMs including the checkpoint) and of retained AUM count (4,096).
     @Test func scanAndCountLimits() throws {
         let a = T.Signer()
         var authority = try Authority(bootstrappingWith: T.checkpoint(T.checkpointState([a.trusted()]), by: [a]))
-        // 뿌리 다음 N1…N2001. 머리 사슬로 들이면 부모 상태를 찾지 않는다.
+        // N1…N2001 follow the root. Admission along the head chain does not look up parent state.
         let chain = T.noOpChain(after: authority.head, count: 2_001, by: a)
         try authority.inform(chain)
         #expect(authority.head == chain[2_000].hash)
 
-        // N2000(머리가 아님)의 자식: N2000…N1과 뿌리, 2,001개 → 한도를 넘는다. N1999의 자식: 2,000개 → 된다.
+        // A child of N2000 (which is not the head): N2000…N1 and root, 2,001 AUMs → over the limit. A child of N1999: 2,000 → accepted.
         #expect(T.informError(&authority, [T.noOp(after: chain[1_999].hash, by: [a])]) == .iterationLimit)
         try authority.inform([T.noOp(after: chain[1_998].hash, by: [a])])
         #expect(authority.aums.count == 2_003)
 
-        // 활성 사슬을 4,096개까지 채운다. 쥔 것 전체는 넘으므로 활성 사슬 밖의 것(갈래)을 버린다(TL-11a 항목 1).
+        // Fill the active chain to 4,096. The total retained count exceeds the limit, so discard AUMs outside the active chain (branches, TL-11a item 1).
         let active = T.activeChain(of: authority).count
         let rest = T.noOpChain(after: authority.head, count: Authority.maximumAUMCount - active, by: a)
         #expect(authority.aums.count + rest.count > Authority.maximumAUMCount)
         try authority.inform(rest)
         #expect(authority.aums.count == Authority.maximumAUMCount)
         #expect(T.activeChain(of: authority).count == Authority.maximumAUMCount)
-        // 활성 사슬이 넘는 묶음은 통째로 거절한다.
+        // Reject an entire group if the active chain exceeds the limit.
         let before = authority
         #expect(T.informError(&authority, [T.noOp(after: authority.head, by: [a])]) == .limitExceeded)
         #expect(authority.aums == before.aums && authority.head == before.head)
-        // 이미 쥔 것만 든 묶음은 한도에 걸리지 않는다.
+        // A group containing only retained AUMs does not hit the limit.
         try authority.inform([rest[0]])
     }
 
-    /// 한 묶음으로 들인 결과가 같은 AUM을 하나씩 들인 것과 같다: 판정(첫 오류), 머리, 상태, 쥔 AUM. 실패한 묶음은 아무것도
-    /// 바꾸지 않는다. 하나씩 들이면 부모 상태를 늘 저장소에서 다시 찾으므로, 묶음 안에서 더는 부모로 쓰이지 않는 상태를
-    /// 놓는 것(TL-11a 항목 4)이 판정을 바꾸지 않음을 본다. 묶음에는 되풀이한 AUM과 떨어지는 AUM을 섞는다.
+    /// Group admission matches admitting the same AUMs separately: outcome (first error), head, state, and retained AUMs. A failed group changes
+    /// nothing. Individual admission always looks up parent state in storage again, which checks that releasing state no longer needed as a parent
+    /// within the group (TL-11a item 4) preserves the outcome. The group mixes repeated AUMs and rejected AUMs.
     @Test(arguments: [UInt64(4), 5, 6])
     func batchMatchesOneByOne(seed: UInt64) throws {
         var random = CBORTesting.Random(state: seed)
@@ -155,7 +155,7 @@ struct AuthorityPropertyTests {
                 batch.insert(repeated, at: Int.random(in: 0...batch.count, using: &random))
             }
             if round % 2 == 1 {
-                // 부모가 묶음에 있는 AUM에 모르는 키의 서명을 붙인 것. 그 자리에서 묶음이 떨어진다.
+                // An AUM whose parent is in the group has a signature from an unknown key. The group fails there.
                 let parent = try #require(batch.randomElement(using: &random)).hash
                 batch.insert(T.noOp(after: parent, by: [stranger]), at: Int.random(in: 0...batch.count, using: &random))
             }
@@ -168,7 +168,7 @@ struct AuthorityPropertyTests {
                 singleError = T.informError(&single, [update])
                 if singleError != nil { break }
             }
-            #expect(batchError == singleError, "묶음 \(round)")
+            #expect(batchError == singleError, "Group \(round)")
             if batchError == nil {
                 Self.expectSame(batched, single)
                 Self.expectSame(batched, tree.reference)
@@ -178,7 +178,7 @@ struct AuthorityPropertyTests {
         }
     }
 
-    /// 쥐는 AUM의 정준 바이트 합 한도(16MiB). 키 512개에 `Meta`를 채운 체크포인트(약 280KiB)를 잇는다.
+    /// Limit on the total canonical bytes of retained AUMs (16MiB). Link checkpoints (about 280KiB each) with 512 keys filled with `Meta`.
     @Test func byteLimit() throws {
         let a = T.Signer()
         var random = CBORTesting.Random(state: 11)
@@ -210,7 +210,7 @@ struct AuthorityPropertyTests {
         #expect(authority.aums.count > 50)
     }
 
-    /// 들일 AUM의 바이트를 한 바이트씩 망가뜨려도 죽지 않고, 받아들이는 것은 정준 형태가 같은 AUM뿐이다.
+    /// Corrupting the bytes of an AUM under admission one at a time does not crash, and only AUMs with the same canonical form are accepted.
     @Test func corruptedBytesAreRejected() throws {
         let a = T.Signer()
         let authority = try Authority(bootstrappingWith: T.checkpoint(T.checkpointState([a.trusted()]), by: [a]))
@@ -223,7 +223,7 @@ struct AuthorityPropertyTests {
                 guard let update = try? AUM(decoding: corrupted) else { continue }
                 var copy = authority
                 if T.informError(&copy, [update]) == nil {
-                    #expect(update.hash == original.hash, "바이트 \(index)에 \(flip)")
+                    #expect(update.hash == original.hash, "Byte \(index) with \(flip)")
                 }
             }
         }

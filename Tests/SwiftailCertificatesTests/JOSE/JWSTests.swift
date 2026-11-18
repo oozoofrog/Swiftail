@@ -1,5 +1,5 @@
-// 계약 7절 시험 6: JWS. 보호 머리의 필드와 순서 무관한 해석, jwk·kid가 함께 나오지 않음, POST-as-GET의 `""`,
-// 서명이 64바이트(R ‖ S)이고 공개 키로 검증됨. RFC 7515 부록 A.3의 서명 검증과 RFC 8555의 예시 메시지 구조.
+// Contract §7 test 6: JWS. Protected header fields and order-independent interpretation, mutual exclusion of jwk and kid, `""` for POST-as-GET,
+// and a 64-byte signature (R ‖ S) verifiable with the public key. Also verifies the RFC 7515 Appendix A.3 signature and the structure of RFC 8555 example messages.
 
 import CryptoKit
 import Foundation
@@ -9,7 +9,7 @@ import Testing
 
 @Suite("JWS")
 struct JWSTests {
-    /// 보호 머리를 풀어 JSON 객체로 읽는다(멤버 순서와 무관하게 본다).
+    /// Decodes the protected header as a JSON object, ignoring member order.
     private static func header(_ jws: JWS) throws -> (text: String, object: [String: Any]) {
         let bytes = try #require(Base64URL.decode(jws.protected))
         let object = try #require(try JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any])
@@ -23,7 +23,7 @@ struct JWSTests {
         return publicKey.isValidSignature(signature, for: Array((jws.protected + "." + jws.payload).utf8))
     }
 
-    @Test("RFC 7515 부록 A.3의 ES256 서명을 공개 키로 검증한다")
+    @Test("Verifies the RFC 7515 Appendix A.3 ES256 signature with the public key")
     func rfc7515Signature() throws {
         let raw = try #require(Base64URL.decode(RFC7515Example.signature))
         #expect(raw.count == 64)
@@ -33,8 +33,8 @@ struct JWSTests {
         #expect(!publicKey.isValidSignature(signature, for: Array((RFC7515Example.signingInput + "x").utf8)))
     }
 
-    /// RFC 8555 8.4의 challenge 응답 예: kid, 본문 `{}`.
-    @Test("kid로 서명한 요청: 머리의 멤버와 Go와 같은 바이트, 본문 {}")
+    /// RFC 8555 8.4 challenge response example: kid and a `{}` body.
+    @Test("Request signed with kid: header members and bytes matching Go, and a {} body")
     func accountURLRequest() throws {
         let key = try RFC7515Example.privateKey()
         let jws = try JWS(
@@ -50,14 +50,14 @@ struct JWSTests {
         #expect(object["kid"] as? String == "https://example.com/acme/acct/evOfKhNU60wg")
         #expect(object["nonce"] as? String == "SS2sSl1PtspvFZ08kNtzKd")
         #expect(object["url"] as? String == "https://example.com/acme/chall/Rg5dV14Gh1Q")
-        // Go `jwsEncodeJSON`의 멤버 순서(alg, kid, nonce, url)와 공백 없는 직렬화.
+        // Go `jwsEncodeJSON` member order (alg, kid, nonce, url) and whitespace-free serialization.
         #expect(text == #"{"alg":"ES256","kid":"https://example.com/acme/acct/evOfKhNU60wg","nonce":"SS2sSl1PtspvFZ08kNtzKd","url":"https://example.com/acme/chall/Rg5dV14Gh1Q"}"#)
         #expect(jws.payload == "e30")
         #expect(try Self.verifies(jws, with: key.publicKey))
     }
 
-    /// RFC 8555 7.3의 newAccount 예: jwk, kid 없음.
-    @Test("jwk로 서명한 요청: 서명 키의 JWK가 실리고 kid는 없다")
+    /// RFC 8555 7.3 newAccount example: jwk and no kid.
+    @Test("A request signed with jwk carries the signing key's JWK and omits kid")
     func publicKeyRequest() throws {
         let key = P256.Signing.PrivateKey()
         let payload = Array(#"{"termsOfServiceAgreed":true}"#.utf8)
@@ -76,7 +76,7 @@ struct JWSTests {
         #expect(try !Self.verifies(jws, with: P256.Signing.PrivateKey().publicKey))
     }
 
-    @Test("POST-as-GET: 빈 본문은 payload가 \"\"이다 (RFC 8555 6.3)")
+    @Test("POST-as-GET: an empty body has a payload of \"\" (RFC 8555 6.3)")
     func postAsGet() throws {
         let key = P256.Signing.PrivateKey()
         let jws = try JWS(payload: [], url: "https://example.com/acme/order/1", nonce: "n", keyReference: .accountURL("https://example.com/acme/acct/1"), signedWith: key)
@@ -86,7 +86,7 @@ struct JWSTests {
         #expect(body == ["protected": jws.protected, "payload": "", "signature": jws.signature])
     }
 
-    @Test("Flattened JSON: 세 멤버를 Go jsonWebSignature의 순서로")
+    @Test("Flattened JSON: three members in Go jsonWebSignature order")
     func flattenedJSON() throws {
         let jws = try JWS(payload: Array("{}".utf8), url: "https://example.com/u", nonce: "n", keyReference: .publicKey, signedWith: P256.Signing.PrivateKey())
         #expect(String(decoding: jws.flattenedJSON, as: UTF8.self)
@@ -94,7 +94,7 @@ struct JWSTests {
         #expect(jws.signature.utf8.count == 86)
     }
 
-    @Test("URL과 nonce의 문자열은 Go처럼 이스케이프하고, URL은 다시 인코딩하지 않는다")
+    @Test("Escapes URL and nonce strings like Go and does not re-encode the URL")
     func headerEscaping() throws {
         let url = "https://example.com/acme/order?a=1&b=<2>%20"
         let jws = try JWS(payload: [], url: url, nonce: "n", keyReference: .accountURL("https://example.com/acct"), signedWith: P256.Signing.PrivateKey())
@@ -103,7 +103,7 @@ struct JWSTests {
         #expect(text.hasSuffix(#""url":"https://example.com/acme/order?a=1\u0026b=\u003c2\u003e%20"}"#))
     }
 
-    @Test("같은 입력의 서명은 실행마다 다르지만 모두 검증된다")
+    @Test("Signatures for identical inputs vary by run and all verify")
     func signaturesAreRandomizedButValid() throws {
         let key = P256.Signing.PrivateKey()
         let make = { () throws -> JWS in

@@ -3,13 +3,13 @@ import Synchronization
 import Testing
 @testable import SwiftailPairing
 
-/// 들어오는 쪽의 가장자리(`PairingJoiner.join`): 다시 걸기(J1), 취소(J7), 확인 숫자 알림, 여는 쪽 확인(J6).
-/// 연결은 여는 쪽 상태 기계를 물린 메모리 안의 것이다(계약 7절 시험 4의 "취소").
-@Suite("들어오는 쪽 구동", .timeLimit(.minutes(1)))
+/// Tests the joiner edge (`PairingJoiner.join`): retries (J1), cancellation (J7), SAS notification, and host verification (J6).
+/// The in-memory connection is wired to the host state machine (contract §7 test 4, cancellation).
+@Suite("Joiner driver", .timeLimit(.minutes(1)))
 struct JoinerDriverTests {
-    /// 여는 쪽 상태 기계가 답하는 가짜 연결.
+    /// A fake connection that uses the host state machine to respond.
     final class RehearsedHost: PairingTransport {
-        /// 여는 쪽 앱의 답. nil이면 답하지 않는다(승인을 기다리는 채로 둔다).
+        /// The host app's response. A nil value sends no response and leaves approval pending.
         let decision: Bool?
         private let machine: Mutex<PairingHostMachine>
         private let replies: AsyncStream<[UInt8]>
@@ -28,7 +28,7 @@ struct JoinerDriverTests {
         }
 
         var isClosed: Bool { closed.withLock { $0 } }
-        /// 여는 쪽이 앱에 보인 확인 숫자.
+        /// The SAS that the host showed the app.
         var confirmationCode: String? { requested.withLock { $0 } }
 
         func send(_ bytes: [UInt8]) async {
@@ -62,14 +62,14 @@ struct JoinerDriverTests {
         }
     }
 
-    /// 받자마자 닫는 연결(여는 쪽이 이 노드를 아직 몰라 읽지 않고 닫는 경우).
+    /// A connection that closes immediately on acceptance, as when the host does not yet know this node and closes without reading.
     struct ClosedAtOnce: PairingTransport {
         func receive() async -> [UInt8]? { nil }
         func send(_ bytes: [UInt8]) async {}
         func close() async {}
     }
 
-    /// 차례대로 내놓을 걸기 결과.
+    /// The dial results to return in order.
     final class Dialer: Sendable {
         private let results: Mutex<[PairingJoiner.Dialed]>
         private let calls = Mutex(0)
@@ -96,7 +96,7 @@ struct JoinerDriverTests {
             verifyHost: verifyHost)
     }
 
-    @Test("승인되면 짝을 돌려주고, 확인 숫자는 여는 쪽이 본 것과 같고 한 번만 알린다")
+    @Test("Approval returns the paired peer and reports the same SAS the host saw, exactly once")
     func pairs() async throws {
         let host = try RehearsedHost()
         let dialer = Dialer([.connected(host, try Sample.endpoints())])
@@ -110,25 +110,25 @@ struct JoinerDriverTests {
         #expect(host.isClosed && dialer.callCount == 1)
     }
 
-    @Test("PairedHost는 Codable로 보관한다")
+    @Test("PairedHost is stored using Codable")
     func pairedHostRoundTrips() async throws {
         let paired = try await Self.join(Dialer([.connected(try RehearsedHost(), try Sample.endpoints())]))
         let decoded = try JSONDecoder().decode(PairedHost.self, from: try JSONEncoder().encode(paired))
         #expect(decoded == paired)
     }
 
-    @Test("기기 이름이 맞지 않으면 걸지 않는다", arguments: ["", String(repeating: "a", count: 65), "a\u{202E}b", "a\nb"])
+    @Test("An invalid device name prevents dialing", arguments: ["", String(repeating: "a", count: 65), "a\u{202E}b", "a\nb"])
     func rejectsDeviceName(name: String) async {
         let dialer = Dialer([])
         let error = await pairingError { try await Self.join(dialer, deviceName: name) }
         guard case .invalidConfiguration = error else {
-            Issue.record("invalidConfiguration이어야 한다: \(String(describing: error))")
+            Issue.record("Expected invalidConfiguration: \(String(describing: error))")
             return
         }
         #expect(dialer.callCount == 0)
     }
 
-    @Test("닿지 못하면 1초 뒤에 다시 건다: 걸지 못함, 읽지 않고 닫힘, 그다음 성공(J1)")
+    @Test("An unreachable host is retried after 1 second: dial failure, close without reading, then success (J1)")
     func redials() async throws {
         let host = try RehearsedHost()
         let dialer = Dialer([.unreachable, .connected(ClosedAtOnce(), try Sample.endpoints()), .connected(host, try Sample.endpoints())])
@@ -136,19 +136,19 @@ struct JoinerDriverTests {
         let paired = try await Self.join(dialer)
         #expect(paired.stableID == "nEXAMPLEHOST")
         #expect(dialer.callCount == 3)
-        #expect(started.duration(to: .now) >= .seconds(2), "두 번 다시 걸었다")
+        #expect(started.duration(to: .now) >= .seconds(2), "Dialing was retried twice")
     }
 
-    @Test("다시 걸어도 소용없는 실패는 그대로 낸다", arguments: [PairingError.notOnTailnet, .invalidConfiguration("시험")])
+    @Test("Nonretryable failures are returned unchanged", arguments: [PairingError.notOnTailnet, .invalidConfiguration("test")])
     func doesNotRedialAfterFailure(failure: PairingError) async {
         let dialer = Dialer([.failed(failure)])
         #expect(await pairingError { try await Self.join(dialer) } == failure)
         #expect(dialer.callCount == 1)
     }
 
-    @Test("challenge를 받은 뒤의 실패에는 다시 걸지 않는다")
+    @Test("Failure after receiving challenge never retries")
     func doesNotRedialAfterChallenge() async throws {
-        let closedOffer = try RehearsedHost(offer: Sample.offer(expires: Sample.wallClock))   // 만료: 상태 1
+        let closedOffer = try RehearsedHost(offer: Sample.offer(expires: Sample.wallClock))   // Expired: status 1
         let dialer = Dialer([.connected(closedOffer, try Sample.endpoints())])
         #expect(await pairingError { try await Self.join(dialer) } == .rejected)
         #expect(dialer.callCount == 1 && closedOffer.isClosed)
@@ -159,14 +159,14 @@ struct JoinerDriverTests {
         #expect(second.callCount == 1)
     }
 
-    @Test("거절은 denied다")
+    @Test("Rejection returns denied")
     func reportsDenial() async throws {
         let host = try RehearsedHost(decision: false)
         let error = await pairingError { try await Self.join(Dialer([.connected(host, try Sample.endpoints())])) }
         #expect(error == .denied && host.isClosed)
     }
 
-    @Test("승인된 StableID가 연결 상대의 것이 아니면 hostNotVerified다(J6)")
+    @Test("Approval with a StableID other than the connected peer's returns hostNotVerified (J6)")
     func verifiesHostIdentity() async throws {
         let host = try RehearsedHost()
         let asked = Mutex<[String]>([])
@@ -182,7 +182,7 @@ struct JoinerDriverTests {
         #expect(asked.withLock { $0 } == ["nEXAMPLEHOST"])
     }
 
-    @Test("승인을 기다리는 동안 취소하면 연결을 끊고 cancelled다(J7)")
+    @Test("Canceling while waiting for approval closes the connection and returns cancelled (J7)")
     func cancelsWhileAwaitingApproval() async throws {
         let host = try RehearsedHost(decision: nil)
         let dialer = Dialer([.connected(host, try Sample.endpoints())])
@@ -197,7 +197,7 @@ struct JoinerDriverTests {
         #expect(host.isClosed && dialer.callCount == 1)
     }
 
-    @Test("다시 걸기를 기다리는 동안 취소해도 cancelled다")
+    @Test("Canceling while waiting to retry also returns cancelled")
     func cancelsWhileRedialing() async throws {
         let dialer = Dialer([])
         let pairing = Task { await pairingError { try await Self.join(dialer) } }

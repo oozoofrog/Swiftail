@@ -4,8 +4,8 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// `Fixtures/tka-fixtures.json`(Go `tka`를 실행한 판정, `Tools/interop/README.md`의 `tkafixtures` 절) 가운데 서명 권한
-/// 상태 기계에 해당하는 배열 셋(`chains`, `sync`, `disablement`)과 `disablement`가 가리키는 `authorities`.
+/// Three arrays for the signing authority state machine (`chains`, `sync`, and `disablement`) and the `authorities` referenced by `disablement`,
+/// from `Fixtures/tka-fixtures.json` (outcomes from running Go `tka`, `tkafixtures` section of `Tools/interop/README.md`).
 struct AuthorityFixtureFile: Decodable {
     typealias KeyValue = ModelFixtureFile.KeyValue
 
@@ -57,9 +57,9 @@ struct AuthorityFixtureFile: Decodable {
         struct Missing: Decodable {
             let ok: Bool
             let count: Int
-            /// 해시 32바이트를 차례로 이은 것의 SHA-256.
+            /// SHA-256 of the 32-byte hashes concatenated in order.
             let digest: String
-            /// 100개 이하일 때만 있다.
+            /// Present only for counts of 100 or fewer.
             let hashes: [String]?
         }
 
@@ -70,7 +70,7 @@ struct AuthorityFixtureFile: Decodable {
 
     struct NamedAuthority: Decodable {
         let name: String
-        /// 첫 것이 부트스트랩, 나머지는 한 묶음의 `Inform`.
+        /// The first is the bootstrap, and the rest form one `Inform` group.
         let aums: [String]
         let head: String
     }
@@ -93,9 +93,9 @@ struct AuthorityFixtureFile: Decodable {
     }
 }
 
-@Suite("Go 판정(tka-fixtures.json)과 같은 서명 권한 상태 기계")
+@Suite("Signing authority state machine matches Go outcomes (tka-fixtures.json)")
 struct AuthorityFixtureTests {
-    /// 사슬 19개의 모든 단계에서 부트스트랩 판정, 들이기 판정, 머리, 상태가 Go와 같다.
+    /// All steps of the 19 chains match Go's bootstrap outcome, admission outcome, head, and state.
     @Test func chains() throws {
         let file = try AuthorityFixtureFile.load()
         #expect(file.chains.count == 20)
@@ -105,12 +105,12 @@ struct AuthorityFixtureTests {
                 try Authority(bootstrappingWith: AUM(decoding: ModelTesting.bytes(chain.bootstrap)))
             }
             guard case var .success(authority) = bootstrapped else {
-                #expect(!chain.bootstrapOK, "\(chain.name): 부트스트랩이 거절되었다 \(bootstrapped)")
+                #expect(!chain.bootstrapOK, "\(chain.name): Bootstrap was rejected: \(bootstrapped)")
                 continue
             }
-            #expect(chain.bootstrapOK, "\(chain.name): Go는 부트스트랩을 거절한다")
+            #expect(chain.bootstrapOK, "\(chain.name): Go rejects bootstrap")
             if let initial = chain.initial {
-                AuthorityTesting.expect(authority, matches: initial, "\(chain.name) 처음")
+                AuthorityTesting.expect(authority, matches: initial, "\(chain.name) initial")
             }
             for step in chain.steps {
                 stepCount += 1
@@ -128,7 +128,7 @@ struct AuthorityFixtureTests {
         #expect(stepCount == 88)
     }
 
-    /// 동기화 사례(`그룹/사례`)와 끄기 비밀 사례의 이름. 사례마다 따로 돌려 병렬로 검증한다(서명 검증이 수천 번이다).
+    /// Names of synchronization cases (`group/case`) and disablement secret cases. Run each case independently for parallel verification (thousands of signatures are verified).
     static let syncCaseNames: [String] =
         (try? AuthorityFixtureFile.load()).map { file in
             file.sync.flatMap { group in group.cases.map { "\(group.name)/\($0.name)" } }
@@ -140,7 +140,7 @@ struct AuthorityFixtureTests {
         #expect(Self.disablementCaseNames.count == 9)
     }
 
-    /// 양쪽의 제안, 상대 제안에 대한 `MissingAUMs`, 상대 목록을 들인 판정과 머리가 Go와 같다.
+    /// The offers on both sides, `MissingAUMs` for the peer's offer, admission outcome for the peer's list, and head all match Go.
     @Test(arguments: syncCaseNames)
     func synchronization(_ name: String) throws {
         let file = try AuthorityFixtureFile.load()
@@ -163,7 +163,7 @@ struct AuthorityFixtureTests {
         receive(localSends, into: &remote, expected: syncCase.remote, "\(name) remote")
     }
 
-    /// 끄기 비밀의 판정이 Go와 같다(기준값 `0xa5` × 32, 여러 끄기 값 가운데 하나, 틀린 것, 빈 비밀, 체크포인트 앞뒤).
+    /// Disablement secret outcomes match Go (reference `0xa5` × 32, one of several disablement values, an incorrect secret, an empty secret, and before and after a checkpoint).
     @Test(arguments: disablementCaseNames)
     func disablement(_ name: String) throws {
         let file = try AuthorityFixtureFile.load()
@@ -176,7 +176,7 @@ struct AuthorityFixtureTests {
         #expect(authority.isValidDisablement(secret: ModelTesting.bytes(entry.secret)) == entry.valid)
     }
 
-    /// Go 시험 파일의 genesis 체크포인트(노트 7.1, `tka/aum_test.go:181`)로 부트스트랩하면 머리가 그 해시다(노트 8.1).
+    /// Bootstrapping with the genesis checkpoint from the Go test file (note §7.1, `tka/aum_test.go:181`) makes its hash the head (note §8.1).
     @Test func goTestGenesis() throws {
         let file = try AuthorityFixtureFile.load()
         let chain = try #require(file.chains.first { $0.name == "bootstrap/go-test-genesis" })
@@ -190,32 +190,32 @@ struct AuthorityFixtureTests {
         #expect(authority.state.keys.count == 2 && authority.state.disablementValues.count == 10)
     }
 
-    // MARK: 견주기
+    // MARK: Comparison
 
     private func expect(_ offer: SyncOffer, matches expected: AuthorityFixtureFile.SyncGroup.Offer, _ label: String) {
-        #expect(ModelTesting.hex(offer.head.bytes) == expected.head, "\(label) 제안 머리")
-        #expect(offer.ancestors.map { ModelTesting.hex($0.bytes) } == expected.ancestors, "\(label) 조상")
-        #expect(offer.head.text == expected.headText, "\(label) 머리 텍스트")
-        #expect(offer.ancestors.map(\.text) == expected.ancestorsText, "\(label) 조상 텍스트")
+        #expect(ModelTesting.hex(offer.head.bytes) == expected.head, "\(label) offered head")
+        #expect(offer.ancestors.map { ModelTesting.hex($0.bytes) } == expected.ancestors, "\(label) ancestors")
+        #expect(offer.head.text == expected.headText, "\(label) head text")
+        #expect(offer.ancestors.map(\.text) == expected.ancestorsText, "\(label) ancestor text")
     }
 
     private func expect(
         _ result: Result<[AUM], TKAError>, matches expected: AuthorityFixtureFile.SyncGroup.Missing, _ label: String
     ) {
         guard case let .success(missing) = result else {
-            #expect(!expected.ok, "\(label): MissingAUMs가 실패했다 \(result)")
+            #expect(!expected.ok, "\(label): MissingAUMs failed: \(result)")
             return
         }
-        #expect(expected.ok, "\(label): Go는 MissingAUMs가 실패한다")
+        #expect(expected.ok, "\(label): MissingAUMs fails in Go")
         let hashes = missing.map(\.hash.bytes)
-        #expect(missing.count == expected.count, "\(label) 수")
-        #expect(ModelTesting.hex(Array(SHA256.hash(data: hashes.flatMap { $0 }))) == expected.digest, "\(label) 요약")
+        #expect(missing.count == expected.count, "\(label) count")
+        #expect(ModelTesting.hex(Array(SHA256.hash(data: hashes.flatMap { $0 }))) == expected.digest, "\(label) summary")
         if let expectedHashes = expected.hashes {
-            #expect(hashes.map(ModelTesting.hex) == expectedHashes, "\(label) 목록")
+            #expect(hashes.map(ModelTesting.hex) == expectedHashes, "\(label) list")
         }
     }
 
-    /// Go 도구와 같이 상대의 계산이 성공했고 목록이 비지 않았을 때만 들인다.
+    /// As with the Go tool, admit only when the peer's computation succeeded and its list is nonempty.
     private func receive(
         _ sent: Result<[AUM], TKAError>, into authority: inout Authority,
         expected: AuthorityFixtureFile.SyncGroup.Side, _ label: String
@@ -224,7 +224,7 @@ struct AuthorityFixtureTests {
         if case let .success(aums) = sent, !aums.isEmpty {
             do throws(TKAError) { try authority.inform(aums) } catch { informed = false }
         }
-        #expect(informed == expected.informOK, "\(label) 들이기")
-        #expect(ModelTesting.hex(authority.head.bytes) == expected.headAfter, "\(label) 들인 뒤 머리")
+        #expect(informed == expected.informOK, "\(label) admission")
+        #expect(ModelTesting.hex(authority.head.bytes) == expected.headAfter, "\(label) head after admission")
     }
 }

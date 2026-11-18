@@ -4,7 +4,7 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("독립 ACME 발급 시나리오")
+@Suite("Independent ACME issuance scenarios")
 struct CertificateIssuanceScenarios {
     @Test
     func newAccountThenReuseAccountURL() async throws {
@@ -26,7 +26,7 @@ struct CertificateIssuanceScenarios {
         let values = scenario.dns.lookup("_acme-challenge." + FakeACMEServer.domain)
         #expect(values.count == 1)
         #expect(values.allSatisfy { $0.count == 43 && FakeACMECrypto.decode($0)?.count == 32 })
-        guard case let .issued(_, accountURL) = first else { Issue.record("첫 발급 실패"); return }
+        guard case let .issued(_, accountURL) = first else { Issue.record("First issuance failed"); return }
         let nextKey = P256.Signing.PrivateKey()
         let second = try await scenario.run(accountURL: accountURL, certificateKey: nextKey)
         _ = try await verified(second, in: scenario, key: nextKey)
@@ -191,7 +191,7 @@ struct CertificateIssuanceScenarios {
         let finalizations = records.filter { $0.endpoint == .finalize }
         if [.ready, .pending, .orderNotReady, .repeatedReady, .repeatedPending].contains(kind) {
             #expect(finalizations.count == 2)
-            // 새 서명의 바이트가 아니라 CSR 본문이 보존되는지 본다.
+            // Check whether the CSR body is preserved, disregarding the bytes of the new signature.
             #expect(finalizations.first?.payload == finalizations.last?.payload)
         }
         if expected != nil { #expect(records.allSatisfy { $0.endpoint != .certificate }) }
@@ -410,7 +410,7 @@ struct CertificateIssuanceScenarios {
         let count = await scenario.server.records.count
         task.cancel()
         await gate.resume()
-        do { _ = try await task.value; Issue.record("취소된 발급이 결과를 반환했다") }
+        do { _ = try await task.value; Issue.record("Canceled issuance returned a result") }
         catch is CancellationError { }
         #expect(await scenario.server.records.count == count)
         #expect(await scenario.server.records.last?.endpoint == .finalize)
@@ -446,18 +446,18 @@ struct CertificateIssuanceScenarios {
             } + [key.pemRepresentation]
             return secrets.allSatisfy { !reflection.contains($0) }
         }
-        // 키나 반사 문자열을 실패 진단의 인자로 넘기지 않는다.
+        // Do not pass keys or reflection strings as arguments to failure diagnostics.
         #expect(redacted)
     }
 }
 
 func expectFailure(_ result: ACMEIssuanceResult, _ expected: CertificateFailure, retry: Date? = nil) {
-    guard case let .failed(failure, retryNotBefore, _) = result else { Issue.record("실패해야 할 발급이 성공했다"); return }
+    guard case let .failed(failure, retryNotBefore, _) = result else { Issue.record("Issuance succeeded when it should have failed"); return }
     #expect(failure == expected)
     #expect(retryNotBefore == retry)
 }
 
-/// 사슬 바이트를 돌려주는 발급 단계와, 사슬을 검증하는 저장 경계를 실제로 이어 본다.
+/// Connects the issuance step that returns the chain bytes to the storage boundary that verifies the chain.
 private func verified(
     _ result: ACMEIssuanceResult, in scenario: CertificateScenario, key: P256.Signing.PrivateKey?
 ) async throws -> VerifiedCertificate {

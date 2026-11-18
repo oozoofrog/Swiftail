@@ -1,7 +1,7 @@
-// `URLSessionAuthKeyTransport`를 루프백의 작은 평문 HTTP/1.1 서버(시험 안의 `NWListener`)로 본다(계약 K5): 선 위의
-// 머리와 본문, 리다이렉트를 따르지 않음, 본문 한도, 취소. 실제 인터넷에는 나가지 않는다.
-// 서버는 `Tests/SwiftailCertificatesTests/ACME/URLSessionACMETransportTests.swift`의 것을 줄여 옮겼다(시험 타깃끼리
-// 나눠 쓸 수 없다).
+// Tests `URLSessionAuthKeyTransport` against a small plaintext HTTP/1.1 loopback server (an in-test `NWListener`, contract K5) for on-wire
+// headers and bodies, redirects left unfollowed, the body limit, and cancellation. The tests never reach the real internet.
+// The server is a reduced copy of the one in `Tests/SwiftailCertificatesTests/ACME/URLSessionACMETransportTests.swift` because the test targets
+// cannot share it.
 
 import Foundation
 import Network
@@ -10,13 +10,13 @@ import Testing
 
 @testable import SwiftailPairing
 
-@Suite("URLSession 인증 키 전송", .serialized)
+@Suite("URLSession auth key transport", .serialized)
 struct URLSessionAuthKeyTransportTests {
-    @Test("issue의 요청들이 선 위에서 POST·Authorization·Content-Type·본문을 싣고 쿠키는 없다")
+    @Test("On the wire, issue sends POST requests with Authorization, Content-Type, and a body, and without cookies")
     func wireShape() async throws {
         let server = try await LoopbackHTTPServer { request in
             if request.line.hasPrefix("POST /api/v2/oauth/token ") {
-                // 머리 방식은 거절하고 본문 방식만 받는다.
+                // Reject the header method and accept only the body method.
                 guard request.header("authorization") == nil else {
                     return LoopbackHTTPServer.response(status: "401 Unauthorized", headers: [], body: Array(#"{"error":"invalid_client"}"#.utf8))
                 }
@@ -47,7 +47,7 @@ struct URLSessionAuthKeyTransportTests {
         #expect(requests.allSatisfy { $0.header("cookie") == nil })
     }
 
-    @Test("리다이렉트를 따르지 않고 3xx를 돌려준다")
+    @Test("Returns 3xx without following redirects")
     func noRedirect() async throws {
         let target = Mutex("")
         let server = try await LoopbackHTTPServer { _ in
@@ -57,11 +57,11 @@ struct URLSessionAuthKeyTransportTests {
         target.withLock { $0 = server.url("/elsewhere") }
         let issuer = try AuthKeyIssuer(client: Example.client, baseURL: Example.url(server.url("")))
         await #expect(throws: AuthKeyIssueError.http(status: 307)) { try await issuer.issue(lifetime: .seconds(60)) }
-        // 머리 방식과 본문 방식의 토큰 요청 둘뿐이고, 리다이렉트 대상(/elsewhere)에는 가지 않는다.
+        // Only the two token requests, one using the header and one using the body, are sent. Neither goes to the redirect target (/elsewhere).
         #expect(server.requests.map(\.line) == ["POST /api/v2/oauth/token HTTP/1.1", "POST /api/v2/oauth/token HTTP/1.1"])
     }
 
-    @Test("본문은 64KiB까지 받고 넘으면 invalidResponse")
+    @Test("Accepts a body up to 64KiB and returns invalidResponse above the limit")
     func bodyLimit() async throws {
         let size = Mutex(64 * 1024)
         let server = try await LoopbackHTTPServer { _ in
@@ -77,14 +77,14 @@ struct URLSessionAuthKeyTransportTests {
         await #expect(throws: AuthKeyIssueError.invalidResponse) { _ = try await transport.send(request) }
     }
 
-    @Test("듣는 쪽이 없으면 network")
+    @Test("Returns network when nothing is listening")
     func connectionRefused() async throws {
         let port = try await LoopbackHTTPServer.unusedPort()
         let issuer = try AuthKeyIssuer(client: Example.client, baseURL: Example.url("http://127.0.0.1:\(port)"))
         await #expect(throws: AuthKeyIssueError.network) { try await issuer.issue(lifetime: .seconds(60)) }
     }
 
-    @Test("Task를 취소하면 cancelled")
+    @Test("Canceling the Task returns cancelled")
     func cancellation() async throws {
         let server = try await LoopbackHTTPServer { _ in nil }
         defer { server.close() }
@@ -96,7 +96,7 @@ struct URLSessionAuthKeyTransportTests {
     }
 }
 
-/// 루프백의 최소 HTTP/1.1 서버. 연결마다 요청 하나를 읽고 `respond`가 준 바이트를 보낸 뒤 닫는다. nil이면 답하지 않는다.
+/// A minimal loopback HTTP/1.1 server. Reads one request per connection, sends the bytes from `respond`, and closes. A nil value sends no response.
 private final class LoopbackHTTPServer: Sendable {
     struct Request: Sendable {
         var line: String
@@ -152,7 +152,7 @@ private final class LoopbackHTTPServer: Sendable {
         return Array((head + "\r\n").utf8) + body
     }
 
-    /// 잠깐 열었다 닫은 포트. 그 뒤로 듣는 쪽이 없다.
+    /// A port that was opened briefly and then closed, with nothing listening afterward.
     static func unusedPort() async throws -> UInt16 {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
@@ -182,7 +182,7 @@ private final class LoopbackHTTPServer: Sendable {
         }
     }
 
-    /// 머리 끝(`\r\n\r\n`)과 `Content-Length`만큼의 본문을 읽는다.
+    /// Reads through the end of the headers (`\r\n\r\n`) and reads the body for `Content-Length` bytes.
     private static func read(_ connection: NWConnection, buffer: [UInt8], then handle: @escaping @Sendable (Request) -> Void) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
             var buffer = buffer

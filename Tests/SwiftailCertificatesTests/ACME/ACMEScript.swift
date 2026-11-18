@@ -1,11 +1,11 @@
-// 주문 절차 시험의 틀: 가짜 응답을 차례로 넣고 시각을 넘긴다. 실제 대기도 소켓도 없다.
+// An order flow test harness that feeds fake responses in order and advances time. It uses no real waits or sockets.
 //
-// 틀이 모든 요청에서 스스로 확인하는 것(계약 7절 시험 8 "모든 요청의 JWS"):
-// - 기대한 메서드와 URL이다.
-// - POST의 본문은 Flattened JWS이고, 보호 머리의 `alg`가 ES256, `url`이 요청 URL 그대로, `nonce`가 직전 응답이 준 것,
-//   newAccount면 `jwk`(계정 공개 키)만, 그 밖이면 `kid`(계정 URL)만 싣고, 서명이 계정 공개 키로 검증된다.
-// - 같은 nonce를 두 번 쓰지 않는다. 쥔 nonce가 없으면 POST 전에 `HEAD newNonce`가 온다.
-// - 서버가 `Retry-After`로 알려 준 시각 전에는 요청이 오지 않는다.
+// The harness checks the following for every request (contract §7 test 8, JWS for every request):
+// - The method and URL match the expected values.
+// - The POST body is Flattened JWS. Its protected header carries ES256 as `alg`, the original request URL as `url`, and the preceding response's `nonce`.
+//     It carries only `jwk` (the account public key) for newAccount, or only `kid` (the account URL) otherwise. The account public key verifies the signature.
+// - A nonce is used at most once. If there is no nonce on hand, `HEAD newNonce` precedes POST.
+// - Requests do not arrive before the time the server supplied in `Retry-After`.
 
 import CryptoKit
 import Foundation
@@ -13,11 +13,11 @@ import Testing
 
 @testable import SwiftailCertificates
 
-/// 시험의 고정 값. 이름과 URL은 가짜다.
+/// Fixed test values. The name and URLs are fake.
 enum Fake {
     static let domainName = "rd-mac-1a2b3c4d.tail0001.ts.net"
     static var domain: CertificateDomain {
-        guard let domain = CertificateDomain(domainName) else { preconditionFailure("시험용 이름이 이름 검사를 통과해야 한다") }
+        guard let domain = CertificateDomain(domainName) else { preconditionFailure("The test name must pass name validation") }
         return domain
     }
 
@@ -40,11 +40,11 @@ enum Fake {
     static func problem(_ name: String) -> String { "urn:ietf:params:acme:error:" + name }
 }
 
-/// 응답 본문 JSON을 만든다.
+/// Builds the response body JSON.
 enum Body {
     static func json(_ object: Any) -> [UInt8] {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
-            preconditionFailure("시험의 JSON 값이 직렬화되어야 한다")
+            preconditionFailure("The test JSON value must serialize")
         }
         return Array(data)
     }
@@ -113,13 +113,13 @@ enum Body {
     }
 }
 
-/// 차례로 넣는 교환 하나: 기대하는 요청과 돌려줄 응답.
+/// One exchange in the sequence, with the expected request and response to return.
 struct Exchange {
     var method: ACMEHTTPRequest.Method
     var url: String
     var status: Int
     var body: [UInt8]
-    /// nil이면 틀이 새 nonce를 붙인다. `.omitted`면 붙이지 않는다. `.value`면 그 값을 그대로 붙인다(형식이 틀린 값 포함).
+    /// For nil, the harness adds a new nonce. For `.omitted`, it adds none. For `.value`, it adds that value verbatim, including malformed values.
     var nonce: NonceHeader = .fresh
     var headers: [ACMEHTTPResponse.Header] = []
 
@@ -152,13 +152,13 @@ struct Exchange {
     }
 }
 
-/// 받은 POST 하나를 푼 것.
+/// A decoded POST request.
 struct ReceivedRequest {
     var request: ACMEHTTPRequest
     var time: Date
-    /// 보호 머리(POST만).
+    /// The protected header (POST only).
     var header: [String: Any] = [:]
-    /// 풀어 낸 payload 바이트(POST만). POST-as-GET이면 빈 배열.
+    /// Decoded payload bytes (POST only). POST-as-GET has an empty array.
     var payload: [UInt8] = []
 
     var payloadObject: [String: Any]? {
@@ -166,15 +166,15 @@ struct ReceivedRequest {
     }
 }
 
-/// 시나리오를 돌린 결과.
+/// The result of running the scenario.
 struct ScriptRun {
     var result: ACMEIssuanceResult?
     var requests: [ReceivedRequest] = []
     var waits: [Date] = []
     var published: [(name: String, value: String)] = []
-    /// 쓰이지 않고 남은 교환 수.
+    /// The number of unused exchanges.
     var unusedExchanges = 0
-    /// 끝난 시각.
+    /// The time the flow ended.
     var finishedAt = Fake.start
 
     var failure: CertificateFailure? {
@@ -197,15 +197,15 @@ struct ScriptRun {
     }
 }
 
-/// 가짜 응답을 차례로 넣어 절차를 끝까지 돌린다.
+/// Runs the flow to completion by feeding fake responses in order.
 struct ACMEScript {
     let accountKey = P256.Signing.PrivateKey()
     let certificateKey = P256.Signing.PrivateKey()
     var accountURL: String?
     var directoryURL = Fake.directoryURL
-    /// 응답이 걸리는 시간(받은 시각 = 보낸 시각 + 이 값).
+    /// Response time (receipt time = send time + this value).
     var latency: TimeInterval = 0
-    /// TXT 올리기의 결과. nil이면 성공.
+    /// The TXT publication result. A nil value indicates success.
     var publishFailure: CertificateFailure?
 
     var flow: ACMEOrderFlow {
@@ -218,7 +218,7 @@ struct ACMEScript {
         )
     }
 
-    /// - Parameter sourceLocation: 틀의 확인이 실패했을 때 시험의 자리를 가리킨다.
+    /// - Parameter sourceLocation: The test location to report when a harness check fails.
     func run(_ exchanges: [Exchange], sourceLocation: SourceLocation = #_sourceLocation) -> ScriptRun {
         var flow = self.flow
         var run = ScriptRun()
@@ -239,7 +239,7 @@ struct ACMEScript {
                 return run
 
             case .wait(let until):
-                #expect(until > now, "기다림은 지금보다 뒤여야 한다", sourceLocation: sourceLocation)
+                #expect(until > now, "The wait must end after the current time", sourceLocation: sourceLocation)
                 run.waits.append(until)
                 now = max(now, until)
                 step = flow.resume(at: now)
@@ -250,14 +250,14 @@ struct ACMEScript {
 
             case .send(let request):
                 if let serverNotBefore {
-                    #expect(now >= serverNotBefore, "Retry-After 전에 요청했다", sourceLocation: sourceLocation)
+                    #expect(now >= serverNotBefore, "A request was sent before Retry-After", sourceLocation: sourceLocation)
                 }
                 var received = ReceivedRequest(request: request, time: now)
                 if request.method == .post {
                     let nonce = verifyJWS(request, into: &received, sourceLocation: sourceLocation)
-                    #expect(nonce != nil && nonce == heldNonce, "직전 응답의 nonce를 써야 한다", sourceLocation: sourceLocation)
+                    #expect(nonce != nil && nonce == heldNonce, "Must use the nonce from the previous response", sourceLocation: sourceLocation)
                     if let nonce {
-                        #expect(!usedNonces.contains(nonce), "nonce를 다시 썼다", sourceLocation: sourceLocation)
+                        #expect(!usedNonces.contains(nonce), "Nonce reused", sourceLocation: sourceLocation)
                         usedNonces.insert(nonce)
                     }
                     heldNonce = nil
@@ -267,7 +267,7 @@ struct ACMEScript {
                 run.requests.append(received)
 
                 guard let exchange = queue.popFirst() else {
-                    Issue.record("남은 교환이 없는데 요청이 왔다: \(request.method) \(request.url)", sourceLocation: sourceLocation)
+                    Issue.record("Received a request with no exchanges left: \(request.method) \(request.url)", sourceLocation: sourceLocation)
                     run.finishedAt = now
                     return run
                 }
@@ -295,11 +295,11 @@ struct ACMEScript {
                 step = flow.receive(ACMEHTTPResponse(status: exchange.status, headers: headers, body: exchange.body), at: now)
             }
         }
-        Issue.record("절차가 끝나지 않는다", sourceLocation: sourceLocation)
+        Issue.record("The flow did not finish", sourceLocation: sourceLocation)
         return run
     }
 
-    /// JWS를 풀어 보호 머리를 확인하고 서명을 검증한다. 머리의 nonce를 돌려준다.
+    /// Decodes the JWS, checks the protected header, and verifies the signature. Returns the header nonce.
     private func verifyJWS(
         _ request: ACMEHTTPRequest,
         into received: inout ReceivedRequest,
@@ -312,13 +312,13 @@ struct ACMEScript {
               let signatureBytes = Base64URL.decode(signature),
               let header = (try? JSONSerialization.jsonObject(with: Data(headerBytes))) as? [String: Any]
         else {
-            Issue.record("POST 본문이 Flattened JWS가 아니다", sourceLocation: sourceLocation)
+            Issue.record("The POST body is not Flattened JWS", sourceLocation: sourceLocation)
             return nil
         }
         received.header = header
         received.payload = payloadBytes
         #expect(header["alg"] as? String == "ES256", sourceLocation: sourceLocation)
-        #expect(header["url"] as? String == request.url, "JWS url은 요청 URL 그대로", sourceLocation: sourceLocation)
+        #expect(header["url"] as? String == request.url, "The JWS url must match the original request URL", sourceLocation: sourceLocation)
         let isNewAccount = request.url == Fake.newAccountURL
         if isNewAccount {
             #expect(header["kid"] == nil, sourceLocation: sourceLocation)
@@ -333,14 +333,14 @@ struct ACMEScript {
         let signed = (try? P256.Signing.ECDSASignature(rawRepresentation: signatureBytes)).map {
             accountKey.publicKey.isValidSignature($0, for: Array((protected + "." + payload).utf8))
         }
-        #expect(signed == true, "서명이 계정 공개 키로 검증되어야 한다", sourceLocation: sourceLocation)
+        #expect(signed == true, "The signature must verify with the account public key", sourceLocation: sourceLocation)
         return header["nonce"] as? String
     }
 }
 
-/// 자주 쓰는 교환 묶음.
+/// Common groups of exchanges.
 enum Steps {
-    /// directory, newNonce, 계정 찾기(이미 있음).
+    /// directory, newNonce, and lookup of an existing account.
     static let accountFound: [Exchange] = [
         .get(Fake.directoryURL, 200, Body.directory()),
         .head(),
@@ -351,7 +351,7 @@ enum Steps {
         .post(Fake.newOrderURL, 201, body, location: location)
     }
 
-    /// authorization 하나(pending, dns-01 pending)를 읽고 challenge에 응답한다.
+    /// Reads one authorization (pending, dns-01 pending) and responds to the challenge.
     static func pendingAuthorization(_ index: Int = 1) -> [Exchange] {
         [
             .post(Fake.authorizationURL(index), 200, Body.authorization("pending", challenges: [
@@ -368,6 +368,6 @@ enum Steps {
     static let finalizeValid = Exchange.post(Fake.finalizeURL, 200, Body.order("valid", certificate: Fake.certificateURL))
     static let download = Exchange.post(Fake.certificateURL, 200, Fake.chainPEM)
 
-    /// newOrder(ready)부터 내려받기까지.
+    /// From newOrder (ready) through download.
     static let readyToIssued: [Exchange] = [newOrder(Body.order("ready")), finalizeValid, download]
 }

@@ -2,8 +2,8 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 계약 7절 시험 8: 부트스트랩(동작 F5)과 다시 열기(동작 F6·결정 L14, 5절 TL-11a 항목 2).
-@Suite("서명 권한 상태 기계: 부트스트랩과 다시 열기")
+/// Contract §7 test 8: bootstrap (behavior F5) and reopening (behavior F6, decision L14, §5 TL-11a item 2).
+@Suite("Signing authority state machine: bootstrap and reopening")
 struct AuthorityBootstrapTests {
     typealias T = AuthorityTesting
 
@@ -12,7 +12,7 @@ struct AuthorityBootstrapTests {
 
     var rootState: AuthorityState { T.checkpointState([a.trusted(), b.trusted(votes: 2)]) }
 
-    /// 갈래가 있는 사슬: 뿌리 → x1 → x2(a), x1 → y2(b, 이김) → y3, 그리고 체크포인트 하나.
+    /// A forked chain: root → x1 → x2 (a), x1 → y2 (b, wins) → y3, plus one checkpoint.
     func grown() throws -> Authority {
         var authority = try Authority(bootstrappingWith: T.checkpoint(rootState, by: [a]))
         let x1 = T.noOp(after: authority.head, by: [a])
@@ -32,7 +32,7 @@ struct AuthorityBootstrapTests {
         #expect(throws: TKAError.notACheckpoint) { try Authority(bootstrappingWith: stateless) }
     }
 
-    /// 체크포인트는 자기 상태의 키로 서명되어야 한다.
+    /// A checkpoint must be signed by a key in its own state.
     @Test func bootstrapVerifiesAgainstItsOwnState() throws {
         #expect(throws: TKAError.untrustedSigner) {
             try Authority(bootstrappingWith: T.checkpoint(T.checkpointState([a.trusted()]), by: [b]))
@@ -45,7 +45,7 @@ struct AuthorityBootstrapTests {
         #expect(throws: TKAError.invalidSignature) { try Authority(bootstrappingWith: tampered) }
     }
 
-    /// genesis가 아닌 나중 체크포인트(부모 해시가 있다)도 부트스트랩한다(노트 8.2).
+    /// Also bootstraps from a later, non-genesis checkpoint with a parent hash (note §8.2).
     @Test func bootstrapFromALaterCheckpoint() throws {
         let parent = try #require(AUMHash(Array(repeating: 3, count: 32)))
         let checkpoint = T.checkpoint(rootState, parent: parent, by: [b])
@@ -57,7 +57,7 @@ struct AuthorityBootstrapTests {
         #expect(reopened.head == authority.head)
     }
 
-    /// 저장한 것을 다시 열면 같은 머리와 상태다. 저장의 차례가 바뀌어도 같다.
+    /// Reopening saved data yields the same head and state, even when storage order changes.
     @Test func reopeningGivesTheSameHeadAndState() throws {
         let authority = try grown()
         for stored in [authority.aums, authority.aums.reversed(), authority.aums.shuffled()] {
@@ -88,8 +88,8 @@ struct AuthorityBootstrapTests {
         #expect(throws: TKAError.invalidSignature) { try Authority(opening: stored, bootstrap: authority.bootstrap) }
     }
 
-    /// 빈 `Meta`(`07a0`)만 있는 UpdateKey는 받아들일 때 정적 검사를 통과하고, 정준 바이트로 저장했다 읽으면 떨어진다. 다시 열기는
-    /// 정적 검사를 하지 않으므로 같은 머리와 상태로 열린다(TL-11a 항목 2, Go `Open`도 연다).
+    /// An UpdateKey with only empty `Meta` (`07a0`) passes static validation on acceptance and fails after saving and reading canonical bytes. Reopening
+    /// skips static validation, so it opens with the same head and state (TL-11a item 2, Go `Open` also opens it).
     @Test func emptyMetaUpdateKeyReopens() throws {
         var authority = try grown()
         let update = T.signed(
@@ -100,15 +100,15 @@ struct AuthorityBootstrapTests {
         #expect(throws: TKAError.invalidAUM) { try stored.first { $0.hash == update.hash }?.validate() }
         let reopened = try Authority(opening: stored, bootstrap: authority.bootstrap)
         #expect(reopened.head == authority.head && reopened.state == authority.state)
-        // 서명이 바뀐 저장은 여전히 거절한다(`storeWithAChangedSignature`와 같은 검사가 이 AUM에도 걸린다).
+        // Storage with an altered signature is still rejected. The check from `storeWithAChangedSignature` also applies to this AUM.
         var tampered = stored
         let index = try #require(tampered.firstIndex { $0.hash == update.hash })
         tampered[index].signatures[0].signature[1] ^= 1
         #expect(throws: TKAError.invalidSignature) { try Authority(opening: tampered, bootstrap: authority.bootstrap) }
     }
 
-    /// 신뢰 키가 서명했지만 정적 검사에서 떨어지는 AUM(`Votes`가 4,096을 넘는 키의 AddKey)이 저장소에 있으면, Go `Open`과 같이
-    /// 열고 그 상태로 갈래를 고른다. 가중치는 Go `uint`와 같이 감긴다(2^64−1 두 표의 합 2^64−2가 1표를 이긴다). 트랩하지 않는다.
+    /// If storage contains an AUM signed by a trusted key that fails static validation (AddKey with key `Votes` over 4,096), reopening follows Go `Open`
+    /// and selects the branch using that state. Weights wrap like Go `uint` (the sum of two 2^64−1 votes is 2^64−2, which beats 1 vote). It does not trap.
     @Test func storeWithAStaticallyInvalidButSignedAUM() throws {
         let heavy1 = T.Signer()
         let heavy2 = T.Signer()
@@ -121,14 +121,14 @@ struct AuthorityBootstrapTests {
         let reopened = try Authority(opening: [root, add1, add2, lightChild, heavyChild], bootstrap: root.hash)
         #expect(reopened.head == heavyChild.hash)
         #expect(reopened.state.weight(of: heavyChild) == UInt64.max &+ UInt64.max)
-        // 받아들이는 길로는 들어오지 않는다.
+        // It cannot enter through the acceptance path.
         var informed = try Authority(bootstrappingWith: root)
         #expect(T.informError(&informed, [add1]) == .invalidAUM)
     }
 
     @Test func storeWithoutItsRootOrWithDuplicates() throws {
         let authority = try grown()
-        // 기록된 뿌리가 사슬 가운데의 체크포인트면 그 앞의 AUM에 닿지 못한다. 체크포인트가 아니면 부트스트랩부터 거절된다.
+        // If the recorded root is a checkpoint in the middle of a chain, earlier AUMs are unreachable. A non-checkpoint is rejected at bootstrap.
         let checkpoint = authority.aums[4]
         #expect(checkpoint.messageKind == AUM.Kind.checkpoint)
         #expect(throws: TKAError.corruptStore) { try Authority(opening: authority.aums, bootstrap: checkpoint.hash) }
@@ -138,7 +138,7 @@ struct AuthorityBootstrapTests {
         #expect(throws: TKAError.corruptStore) { try Authority(opening: [], bootstrap: authority.bootstrap) }
     }
 
-    /// 저장소의 AUM 수 한도(4,096개)는 검증 전에 본다.
+    /// The store's AUM count limit (4,096) is checked before verification.
     @Test func storeOverTheCountLimit() throws {
         let authority = try grown()
         let stored = Array(repeating: authority.aums[1], count: Authority.maximumAUMCount + 1)

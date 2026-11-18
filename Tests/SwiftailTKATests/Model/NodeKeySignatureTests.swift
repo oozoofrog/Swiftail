@@ -1,5 +1,5 @@
-// credential 기준값은 Go 시험에서 옮겼다: tailscale.com v1.104.7 `tka/sig_test.go:479`(`TestDecodeWrappedAuthkey`)의
-// 감싼 인증 키 가운데 `--TL` 뒤 첫 부분(credential NKS, base64 RawStd)을 16진으로 바꿨다. 개인 키 부분은 옮기지 않았다.
+// The credential reference comes from a Go test: from the wrapped auth key in tailscale.com v1.104.7 `tka/sig_test.go:479` (`TestDecodeWrappedAuthkey`),
+// convert the first part after `--TL` (credential NKS, base64 RawStd) to hex. The private key part was omitted.
 //   Copyright (c) Tailscale Inc & contributors, SPDX-License-Identifier: BSD-3-Clause.
 
 import SwiftailCrypto
@@ -7,7 +7,7 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// NKS의 읽기·정준 쓰기·SigHash(계약 동작 E4·E5·D·M, 노트 3.6·3.7).
+/// NKS decoding, canonical encoding, and SigHash (contract behaviors E4, E5, D, and M, note §§3.6 and 3.7).
 @Suite("NodeKeySignature")
 struct NodeKeySignatureTests {
     static let goCredential =
@@ -15,7 +15,7 @@ struct NodeKeySignatureTests {
         + "511bebb0605360e5173640a62e0b85e2c9ada03ea588d3182855869673d62ca204f0fe536ab10d001b337f96158d04065820c6656a1b9dc7bb"
         + "4460f8a9872453255217e0ce8f8040febe2a4f46cef2493ace"
 
-    @Test("Go 시험의 credential: 다시 쓰면 같고, SigHash에 대한 서명이 KeyID로 검증된다")
+    @Test("Go test credential: rewriting preserves the bytes, and the signature over SigHash verifies with KeyID")
     func goCredential() throws {
         let input = ModelTesting.bytes(Self.goCredential)
         let signature = try NodeKeySignature(decoding: input)
@@ -30,7 +30,7 @@ struct NodeKeySignatureTests {
         )
     }
 
-    @Test("SigHash는 바깥 서명만 빼고 안쪽 서명은 넣는다")
+    @Test("SigHash omits only the outer signature and includes inner signatures")
     func signatureHash() {
         let inner = NodeKeySignature(kind: 1, publicKey: [0x6e, 0x70, 1], keyID: [2], signature: [3])
         var outer = NodeKeySignature(kind: 2, publicKey: [0x6e, 0x70, 4], signature: [5], nested: inner)
@@ -44,35 +44,35 @@ struct NodeKeySignatureTests {
         #expect(outer.signatureHash != hash)
     }
 
-    @Test("SigKind는 늘, 나머지는 비지 않을 때만 쓴다. 맨 바깥 null은 a10100이다")
+    @Test("Always writes SigKind and writes other fields only when nonempty. Top-level null becomes a10100")
     func encoding() throws {
         #expect(ModelTesting.hex(NodeKeySignature(kind: 0).serialized()) == "a10100")
         #expect(ModelTesting.hex(try ModelTesting.decodeNKS("f6").get().serialized()) == "a10100")
         #expect(ModelTesting.hex(try ModelTesting.decodeNKS("f7").get().serialized()) == "a10100")
         let full = NodeKeySignature(kind: 2, publicKey: [1], keyID: [2], signature: [3], nested: NodeKeySignature(kind: 1), wrappingPublicKey: [4])
         #expect(ModelTesting.hex(full.serialized()) == "a6010202410103410204410305a1010106410" + "4")
-        // 빈 바이트열과 null은 둘 다 빠진다.
+        // Omits both empty byte sequences and null.
         #expect(try ModelTesting.decodeNKS("a601010240034004f605f606f6").get() == NodeKeySignature(kind: 1))
     }
 
-    @Test("읽기의 거절: 맨 바깥 맵 아님, 중복 키, 타입, 범위")
+    @Test("Decode rejection cases: top level is not a map, duplicate keys, types, and ranges")
     func rejected() throws {
         for hex in [
-            "80", "01", "4101",  // 맨 바깥
-            "a201010101", "a20101180101",  // 중복(비최단 포함)
-            "a20101036161", "a101190100", "a10120", "a10541 01", "a1058101",  // 타입·범위
-            "a20102028201190100",  // 바이트열 자리 배열의 256
-            "a1f601",  // null 키
+            "80", "01", "4101",  // Top level
+            "a201010101", "a20101180101",  // Duplicate (including non-shortest encodings)
+            "a20101036161", "a101190100", "a10120", "a10541 01", "a1058101",  // Type and range
+            "a20102028201190100",  // 256 in an array in a byte sequence field
+            "a1f601",  // null key
         ] {
             let input = hex.replacingOccurrences(of: " ", with: "")
             #expect(throws: TKAError.invalidStructure, "\(hex)") { try ModelTesting.decodeNKS(input).get() }
         }
         #expect(throws: TKAError.cbor(.trailingBytes)) { try ModelTesting.decodeNKS("a1010100").get() }
-        // 바이트열 자리의 정수 배열은 바이트열로 읽는다.
+        // An integer array in a byte sequence field decodes as bytes.
         #expect(try ModelTesting.decodeNKS("a201010282186e1870").get().publicKey == [0x6e, 0x70])
     }
 
-    @Test("중첩: 맨 바깥을 포함해 16단(rotation 15겹 위 direct)까지 읽고 17단은 거절한다")
+    @Test("Nesting: accepts up to 16 levels including the top level (15 rotations over direct) and rejects level 17")
     func nesting() throws {
         func chain(depth: Int) -> NodeKeySignature {
             var signature = NodeKeySignature(kind: 1, publicKey: [0x6e, 0x70], keyID: [1], signature: [2])
@@ -86,9 +86,9 @@ struct NodeKeySignatureTests {
         #expect(throws: TKAError.cbor(.nestingTooDeep)) { try NodeKeySignature(decoding: chain(depth: 17).serialized()) }
     }
 
-    @Test("8KiB까지 읽고 그보다 길면 디코딩 전에 거절한다")
+    @Test("Decodes up to 8KiB and rejects larger input before decoding")
     func byteLimit() throws {
-        // {1: 1, 8: h'…'}: 머리 7바이트(`a2 01 01 08 59 xxxx`)와 내용.
+        // {1: 1, 8: h'…'}: 7-byte header (`a2 01 01 08 59 xxxx`) plus contents.
         func exact(_ totalCount: Int) -> [UInt8] {
             let count = totalCount - 7
             return [0xa2, 0x01, 0x01, 0x08, 0x59, UInt8(count >> 8), UInt8(count & 0xff)] + [UInt8](repeating: 1, count: count)
@@ -98,17 +98,17 @@ struct NodeKeySignatureTests {
         #expect(throws: TKAError.limitExceeded) { try NodeKeySignature(decoding: exact(8 * 1_024 + 1)) }
     }
 
-    @Test("임의의 값: 쓰고 읽으면 같고, 비정준 인코딩도 같은 정준 바이트가 된다. 모든 접두는 거절한다")
+    @Test("Arbitrary values round-trip, noncanonical encodings yield the same canonical bytes, and all prefixes are rejected")
     func roundTripProperty() throws {
         var generator = ModelTesting.Generator(random: CBORTesting.Random(state: 0x4e4b))
         for index in 0..<300 {
             let signature = generator.nodeKeySignature()
             let canonical = signature.serialized()
-            #expect(try NodeKeySignature(decoding: canonical) == signature, "값 \(index)")
+            #expect(try NodeKeySignature(decoding: canonical) == signature, "Value \(index)")
             let loose = generator.looseEncoding(of: try CBOR.decode(canonical))
             let decoded = try NodeKeySignature(decoding: loose)
-            #expect(decoded.serialized() == canonical, "값 \(index)")
-            #expect(decoded.signatureHash == signature.signatureHash, "값 \(index)")
+            #expect(decoded.serialized() == canonical, "Value \(index)")
+            #expect(decoded.signatureHash == signature.signatureHash, "Value \(index)")
             if index < 20 {
                 for count in 0..<canonical.count {
                     #expect(throws: TKAError.self) { try NodeKeySignature(decoding: Array(canonical.prefix(count))) }

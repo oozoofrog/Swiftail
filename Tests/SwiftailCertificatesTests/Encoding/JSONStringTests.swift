@@ -1,27 +1,27 @@
-// JWS 보호 머리의 문자열을 Go `json.Marshal`과 같은 바이트로 적는지(Go `encoding/json` `appendString`의 규칙).
+// Checks that JWS protected header strings match Go `json.Marshal` byte for byte using the Go `encoding/json` `appendString` rules.
 
 import Foundation
 import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("JSON 문자열")
+@Suite("JSON strings")
 struct JSONStringTests {
-    @Test("Go json.Marshal과 같은 이스케이프", arguments: [
-        ("https://example.com/acme/acct/1", #""https://example.com/acme/acct/1""#),  // `/`는 그대로
+    @Test("Escapes like Go json.Marshal", arguments: [
+        ("https://example.com/acme/acct/1", #""https://example.com/acme/acct/1""#),  // Leaves `/` unchanged
         ("a\"b\\c", #""a\"b\\c""#),
         ("\u{08}\u{0C}\n\r\t", #""\b\f\n\r\t""#),
         ("\u{00}\u{01}\u{1F}", #""\u0000\u0001\u001f""#),
         ("<a>&", #""\u003ca\u003e\u0026""#),
         ("\u{2028}\u{2029}", #""\u2028\u2029""#),
-        ("é😀\u{7F}", "\"é😀\u{7F}\""),  // 그 밖의 문자는 그대로
+        ("é😀\u{7F}", "\"é😀\u{7F}\""),  // Leaves other characters unchanged
         ("", #""""#),
     ])
     func goEscaping(value: String, expected: String) {
         #expect(JSONString.quoted(value) == expected)
     }
 
-    @Test("JSON으로 읽으면 원래 문자열이다")
+    @Test("Parsing the JSON returns the original string")
     func roundTripThroughJSONSerialization() throws {
         var random = SplitMix64(seed: 0x6a73_6f6e)
         for _ in 0..<500 {

@@ -3,8 +3,8 @@ import Swiftail
 import Testing
 @testable import SwiftailPairing
 
-/// 짝 목록(계약 6절, 동작 S1~S5. 7절 시험 5).
-@Suite("짝 목록")
+/// Tests the paired peer list (contract §6, behaviors S1–S5, §7 test 5).
+@Suite("Paired peer list")
 struct PairedPeerStoreTests {
     private static func peer(
         _ stableID: String, deviceName: String = "rd-phone-5e6f7a8b", pairedAt: TimeInterval = 1_900_000_000
@@ -25,7 +25,7 @@ struct PairedPeerStoreTests {
         Data(#"{"version":\#(version),"peers":[\#(records.joined(separator: ","))]}"#.utf8)
     }
 
-    /// 빈 임시 디렉터리를 만들어 넘기고, 끝나면 지운다.
+    /// Creates and passes an empty temporary directory, then removes it when done.
     private static func withDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
         let directory = Sample.temporaryDirectory()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -45,9 +45,9 @@ struct PairedPeerStoreTests {
         try await PairingHost(node: node, port: port, storeDirectory: store) { _ in false }
     }
 
-    // MARK: 목록 (S1, S4)
+    // MARK: List (S1, S4)
 
-    @Test("같은 StableID가 다시 짝이 되면 그 자리의 항목을 바꾼다")
+    @Test("Pairing again with the same StableID replaces the existing entry in place")
     func replacesSameStableID() {
         var list = PairedPeerList()
         let again = Self.peer("nA", deviceName: "새 이름", pairedAt: 1_900_000_500)
@@ -56,10 +56,10 @@ struct PairedPeerStoreTests {
         #expect(list.peers == [again, Self.peer("nB")])
         #expect(list.peer(withStableID: "nA") == again)
         #expect(list.peer(withStableID: "nC") == nil)
-        #expect(list.peer(withStableID: "na") == nil, "StableID는 글자 그대로 견준다")
+        #expect(list.peer(withStableID: "na") == nil, "StableID uses literal character comparison")
     }
 
-    @Test("256개까지다. 가득 차면 새 짝은 넣지 않고, 있는 짝을 바꾸는 것은 된다")
+    @Test("The list holds up to 256 entries. A full list rejects new paired peers and allows replacement of existing ones")
     func limitsCount() {
         var list = PairedPeerList()
         let filled = (0..<256).map { list.insert(Self.peer("n\($0)")) }
@@ -75,9 +75,9 @@ struct PairedPeerStoreTests {
         #expect(afterRemoval && list.peers.count == 256)
     }
 
-    // MARK: 파일 (S2, S3)
+    // MARK: File (S2, S3)
 
-    @Test("저장한 목록을 다시 읽으면 같다")
+    @Test("Reloading the saved list returns the same list")
     func roundTrips() async throws {
         try await Self.withDirectory { directory in
             let file = PairedPeerFile(directory: directory)
@@ -88,11 +88,11 @@ struct PairedPeerStoreTests {
             #expect(try file.load() == list)
 
             let text = try String(contentsOf: directory.appending(path: "paired-peers.json"), encoding: .utf8)
-            #expect(text.hasPrefix(#"{"peers":[{"#) && text.hasSuffix(#""version":1}"#), "판과 peers 배열이 있다")
+            #expect(text.hasPrefix(#"{"peers":[{"#) && text.hasSuffix(#""version":1}"#), "The version and peers array are present")
         }
     }
 
-    @Test("파일이 없으면 빈 목록이고, 디렉터리가 없으면 첫 저장 때 만든다")
+    @Test("A missing file gives an empty list, and a missing directory is created on first save")
     func startsEmpty() async throws {
         try await Self.withDirectory { directory in
             let file = PairedPeerFile(directory: directory.appending(path: "pairing/store"))
@@ -104,7 +104,7 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("파일은 0600이고, 바꿔치기한 뒤 임시 파일이 남지 않는다")
+    @Test("The file has mode 0600, and no temporary file remains after replacement")
     func writesPrivateFileAtomically() async throws {
         try await Self.withDirectory { directory in
             let file = PairedPeerFile(directory: directory)
@@ -120,7 +120,7 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("모르는 필드는 넘긴다")
+    @Test("Unknown fields are ignored")
     func ignoresUnknownFields() async throws {
         try await Self.withDirectory { directory in
             let record = Self.record("nA").dropLast() + #","future":{"x":[1,2]}}"#
@@ -131,34 +131,34 @@ struct PairedPeerStoreTests {
     }
 
     private static let unreadable: [(String, Data)] = [
-        ("빈 파일", Data()),
-        ("JSON이 아님", Data("짝 목록".utf8)),
-        ("잘린 JSON", file([record("nA")]).dropLast(3)),
-        ("다른 version", file(version: 2, [record("nA")])),
-        ("version이 없음", Data(#"{"peers":[]}"#.utf8)),
-        ("peers가 없음", Data(#"{"version":1}"#.utf8)),
-        ("빈 StableID", file([record("nA"), record("")])),
-        ("겹친 StableID", file([record("nA"), record("nB"), record("nA")])),
-        ("필드가 빠진 항목", Data(#"{"version":1,"peers":[{"stableID":"nA"}]}"#.utf8)),
-        ("257개", file((0..<257).map { record("n\($0)") })),
-        ("1MiB 초과", Data((#"{"version":1,"peers":[],"pad":""# + String(repeating: "a", count: 1 << 20) + #""}"#).utf8)),
+        ("Empty file", Data()),
+        ("Non-JSON input", Data("짝 목록".utf8)),
+        ("Truncated JSON", file([record("nA")]).dropLast(3)),
+        ("Different version", file(version: 2, [record("nA")])),
+        ("Missing version", Data(#"{"peers":[]}"#.utf8)),
+        ("Missing peers", Data(#"{"version":1}"#.utf8)),
+        ("Empty StableID", file([record("nA"), record("")])),
+        ("Duplicate StableID", file([record("nA"), record("nB"), record("nA")])),
+        ("Entry with missing fields", Data(#"{"version":1,"peers":[{"stableID":"nA"}]}"#.utf8)),
+        ("257 entries", file((0..<257).map { record("n\($0)") })),
+        ("Over 1MiB", Data((#"{"version":1,"peers":[],"pad":""# + String(repeating: "a", count: 1 << 20) + #""}"#).utf8)),
     ]
 
-    @Test("읽지 못하는 파일은 빈 목록으로 보지 않고 실패한다(S3)", arguments: unreadable.map(\.0))
+    @Test("An unreadable file fails instead of producing an empty list (S3)", arguments: unreadable.map(\.0))
     func refusesUnreadableFile(label: String) async throws {
         let contents = try #require(Self.unreadable.first { $0.0 == label }?.1)
         try await Self.withDirectory { directory in
             let url = directory.appending(path: "paired-peers.json")
             try contents.write(to: url)
             #expect(await pairingError { try PairedPeerFile(directory: directory).load() } == .storeUnreadable)
-            // 호스트도 만들어지지 않고, 파일은 그대로다.
+            // The host is not created either, and the file stays unchanged.
             let node = try Self.node(directory)
             #expect(await pairingError { try await Self.host(node, store: directory) } == .storeUnreadable)
             #expect(try Data(contentsOf: url) == contents)
         }
     }
 
-    @Test("한도의 경계: 256개와 1MiB는 읽는다")
+    @Test("Limits: 256 entries and 1MiB are accepted")
     func readsAtLimits() async throws {
         try await Self.withDirectory { directory in
             let url = directory.appending(path: "paired-peers.json")
@@ -173,7 +173,7 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("심볼릭 링크는 따라가지 않는다")
+    @Test("Symbolic links are not followed")
     func refusesSymbolicLink() async throws {
         try await Self.withDirectory { directory in
             let target = directory.appending(path: "elsewhere.json")
@@ -184,17 +184,17 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("쓰지 못하면 storeWriteFailed이고 옛 파일은 그대로다")
+    @Test("A write failure returns storeWriteFailed and preserves the old file")
     func reportsWriteFailure() async throws {
         try await Self.withDirectory { directory in
-            // 디렉터리 자리에 파일이 있다.
+            // A file occupies the directory path.
             let blocked = directory.appending(path: "not-a-directory")
             try Data().write(to: blocked)
             var list = PairedPeerList()
             _ = list.insert(Self.peer("nA"))
             #expect(await pairingError { try PairedPeerFile(directory: blocked).save(list) } == .storeWriteFailed)
 
-            // 쓸 수 없는 디렉터리.
+            // A directory with no write access.
             let locked = directory.appending(path: "locked")
             try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
             let file = PairedPeerFile(directory: locked)
@@ -208,15 +208,15 @@ struct PairedPeerStoreTests {
         }
     }
 
-    // MARK: 호스트 (S5, 5절의 init·openOffer)
+    // MARK: Host (S5, init and openOffer in §5)
 
-    @Test("같은 디렉터리를 쓰는 호스트는 한 프로세스에 하나다. 버려지면 풀린다")
+    @Test("Each process can have one host per directory. Releasing the host frees the directory")
     func claimsStoreDirectory() async throws {
         try await Self.withDirectory { directory in
             let node = try Self.node(directory)
             let store = directory.appending(path: "store")
             var first: PairingHost? = try await Self.host(node, store: store)
-            // 같은 디렉터리의 다른 표기도 같은 것으로 본다.
+            // Another spelling of the same directory is treated as the same directory.
             for same in [store, directory.appending(path: "store/"), directory.appending(path: "x/../store")] {
                 #expect(await pairingError { try await Self.host(node, port: 4748, store: same) } == .storeInUse)
             }
@@ -228,7 +228,7 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("심볼릭 링크를 거친 경로도, 디렉터리가 생기기 전후에 같은 것으로 본다")
+    @Test("A path through a symbolic link refers to the same directory before and after creation")
     func claimsStoreDirectoryThroughSymlink() async throws {
         try await Self.withDirectory { directory in
             let node = try Self.node(directory)
@@ -244,7 +244,7 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("그룹이나 기타가 쓸 수 있는 디렉터리는 쓰지 않고, 쥐지도 않는다", arguments: [0o777, 0o770, 0o702])
+    @Test("Directories writable by the group or others are neither used nor reserved", arguments: [0o777, 0o770, 0o702])
     func refusesWritableStoreDirectory(mode: Int) async throws {
         try await Self.withDirectory { directory in
             let node = try Self.node(directory)
@@ -258,25 +258,25 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("짝 목록 디렉터리의 규칙: 디렉터리이고, 지금 사용자의 것이고, 그룹·기타가 쓸 수 없다(S2)")
+    @Test("The paired peer list directory must be a directory, owned by the current user, and not writable by the group or others (S2)")
     func judgesStoreDirectory() {
         let directory = mode_t(S_IFDIR)
         #expect(PairedPeerFile.isPrivateDirectory(mode: directory | 0o700, owner: 501, currentUser: 501))
         #expect(PairedPeerFile.isPrivateDirectory(mode: directory | 0o755, owner: 501, currentUser: 501))
-        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o700, owner: 502, currentUser: 501), "다른 사용자의 것")
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o700, owner: 502, currentUser: 501), "Owned by another user")
         #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o700, owner: 0, currentUser: 501))
-        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o720, owner: 501, currentUser: 501), "그룹이 쓴다")
-        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o702, owner: 501, currentUser: 501), "기타가 쓴다")
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o720, owner: 501, currentUser: 501), "Group-writable")
+        #expect(!PairedPeerFile.isPrivateDirectory(mode: directory | 0o702, owner: 501, currentUser: 501), "Other-writable")
         #expect(!PairedPeerFile.isPrivateDirectory(mode: mode_t(S_IFREG) | 0o600, owner: 501, currentUser: 501))
     }
 
-    @Test("장치가 .inProcess가 아니거나 포트가 0이면 만들지 못하고, 디렉터리를 쥐지도 않는다")
+    @Test("A device other than .inProcess or a port of 0 prevents creation and leaves the directory unreserved")
     func validatesConfiguration() async throws {
         try await Self.withDirectory { directory in
             let store = directory.appending(path: "store")
             for (node, port) in [(try Self.node(directory, device: .memory()), UInt16(4747)), (try Self.node(directory), 0)] {
                 guard case .invalidConfiguration = await pairingError({ try await Self.host(node, port: port, store: store) }) else {
-                    Issue.record("invalidConfiguration이어야 한다")
+                    Issue.record("Expected invalidConfiguration")
                     continue
                 }
             }
@@ -284,7 +284,7 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("저장된 짝을 읽어 답하고, 지우면 파일에서도 지운다")
+    @Test("Reads and returns stored paired peers, and removes deleted peers from the file")
     func servesAndRemovesStoredPeers() async throws {
         try await Self.withDirectory { directory in
             var list = PairedPeerList()
@@ -304,20 +304,20 @@ struct PairedPeerStoreTests {
         }
     }
 
-    @Test("openOffer: 수명과 인증 키를 먼저 보고, 노드에 FQDN이 없으면 notRunning이다")
+    @Test("openOffer checks the lifetime and auth key first, then returns notRunning if the node lacks an FQDN")
     func validatesOffer() async throws {
         try await Self.withDirectory { directory in
             let host = try await Self.host(try Self.node(directory), store: directory)
             for lifetime in [Duration.zero, .milliseconds(999), .seconds(3601), .seconds(-5)] {
                 guard case .invalidConfiguration = await pairingError({ try await host.openOffer(lifetime: lifetime) }) else {
-                    Issue.record("invalidConfiguration이어야 한다: \(lifetime)")
+                    Issue.record("Expected invalidConfiguration: \(lifetime)")
                     continue
                 }
             }
             for key in ["tskey-client-EXAMPLE", "tskey-auth-EXAMPLE_0", "tskey-auth-EXAMPLE--TLEXAMPLE-EXAMPLE", ""] {
                 #expect(await pairingError { try await host.openOffer(authKey: key) } == .invalidAuthKey)
             }
-            // 돌지 않는 노드에는 자기 FQDN이 없다.
+            // A node that is not running has no FQDN of its own.
             #expect(await pairingError { try await host.openOffer() } == .notRunning)
             #expect(await pairingError { try await host.openOffer(lifetime: .seconds(1), authKey: Sample.authKey) } == .notRunning)
             await host.closeOffer()

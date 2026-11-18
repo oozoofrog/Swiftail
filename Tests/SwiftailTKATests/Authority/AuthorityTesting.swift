@@ -4,9 +4,9 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 서명 권한 상태 기계 시험이 함께 쓰는 도구. 키는 시험마다 그 자리에서 만든다.
+/// Shared support for signing authority state machine tests. Each test generates its own keys on demand.
 enum AuthorityTesting {
-    /// 첫 것으로 부트스트랩하고 나머지를 한 묶음으로 들인다(`tkafixtures`가 Authority를 만드는 방식).
+    /// Bootstraps with the first AUM and admits the rest in a group, as `tkafixtures` builds an Authority.
     static func authority(_ aums: [AUM]) throws(TKAError) -> Authority {
         guard let first = aums.first else { throw .emptyUpdate }
         var authority = try Authority(bootstrappingWith: first)
@@ -14,26 +14,26 @@ enum AuthorityTesting {
         return authority
     }
 
-    /// 머리와 상태(키의 종류·`Votes`·공개 키·`Meta`, 끄기 값, StateID)가 Go가 적은 것과 같다.
-    /// Go의 nil `Meta`와 빈 `Meta`는 인코딩에서 둘 다 빠지므로 같게 본다.
+    /// Checks that the head and state (key type, `Votes`, public key, `Meta`, disablement values, and StateID) match Go's output.
+    /// Treats Go's nil and empty `Meta` as equivalent because encoding omits both.
     static func expect(
         _ authority: Authority, matches expected: AuthorityFixtureFile.StateValue, _ label: String,
         sourceLocation: SourceLocation = #_sourceLocation
     ) {
         let state = authority.state
-        #expect(ModelTesting.hex(authority.head.bytes) == expected.head, "\(label) 머리", sourceLocation: sourceLocation)
+        #expect(ModelTesting.hex(authority.head.bytes) == expected.head, "\(label) head", sourceLocation: sourceLocation)
         #expect(state.lastAUMHash == authority.head, "\(label)", sourceLocation: sourceLocation)
         #expect(
-            state.disablementValues.map(ModelTesting.hex) == (expected.disablementValues ?? []), "\(label) 끄기 값",
+            state.disablementValues.map(ModelTesting.hex) == (expected.disablementValues ?? []), "\(label) disablement values",
             sourceLocation: sourceLocation
         )
         #expect(String(state.stateID1) == expected.stateID1, "\(label) StateID1", sourceLocation: sourceLocation)
         #expect(String(state.stateID2) == expected.stateID2, "\(label) StateID2", sourceLocation: sourceLocation)
         let keys = expected.keys ?? []
-        #expect(state.keys.count == keys.count, "\(label) 키 수", sourceLocation: sourceLocation)
+        #expect(state.keys.count == keys.count, "\(label) key count", sourceLocation: sourceLocation)
         for (key, expectedKey) in zip(state.keys, keys) {
             #expect(key.kind == expectedKey.kind && key.votes == expectedKey.votes, "\(label)", sourceLocation: sourceLocation)
-            #expect(key.publicKey.map(ModelTesting.hex) == expectedKey.public, "\(label) 공개 키", sourceLocation: sourceLocation)
+            #expect(key.publicKey.map(ModelTesting.hex) == expectedKey.public, "\(label) public key", sourceLocation: sourceLocation)
             let meta = Dictionary(
                 key.meta.map { (String(decoding: $0.key, as: UTF8.self), String(decoding: $0.value, as: UTF8.self)) },
                 uniquingKeysWith: { first, _ in first }
@@ -42,9 +42,9 @@ enum AuthorityTesting {
         }
     }
 
-    // MARK: 서명한 AUM 만들기
+    // MARK: Creating signed AUMs
 
-    /// 신뢰 키 하나. CryptoKit의 서명은 결정적이지 않으므로 같은 AUM도 서명할 때마다 해시가 다르다.
+    /// One trusted key. CryptoKit signatures are nondeterministic, so signing the same AUM again changes its hash.
     struct Signer {
         let privateKey = Curve25519.Signing.PrivateKey()
         var publicKey: [UInt8] { Array(privateKey.publicKey.rawRepresentation) }
@@ -54,20 +54,20 @@ enum AuthorityTesting {
         }
 
         func signature(over aum: AUM) -> AUMSignature {
-            // 시험 키로 32바이트에 서명하는 일은 실패하지 않는다. 실패하면 빈 서명이 되어 시험이 떨어진다.
+            // Signing 32 bytes with a test key is expected to succeed. Failure yields an empty signature and fails the test.
             let signature = (try? privateKey.signature(for: aum.signatureHash)).map { Array($0) } ?? []
             return AUMSignature(keyID: publicKey, signature: signature)
         }
     }
 
-    /// `signers`가 차례로 서명한 `aum`.
+    /// The `aum` signed in order by `signers`.
     static func signed(_ aum: AUM, by signers: [Signer]) -> AUM {
         var signed = aum
         signed.signatures += signers.map { $0.signature(over: aum) }
         return signed
     }
 
-    /// 끄기 값 하나(32바이트)와 `keys`의 상태. StateID는 1·2다.
+    /// A state with one disablement value (32 bytes) and `keys`. The StateID values are 1 and 2.
     static func checkpointState(_ keys: [TrustedKey], stateID1: UInt64 = 1) -> AuthorityState {
         AuthorityState(disablementValues: [Array(repeating: 0xd1, count: 32)], keys: keys, stateID1: stateID1, stateID2: 2)
     }
@@ -88,7 +88,7 @@ enum AuthorityTesting {
         signed(AUM(messageKind: AUM.Kind.removeKey, prevAUMHash: parent.bytes, keyID: keyID), by: signers)
     }
 
-    /// `parent` 뒤에 `count`개의 NoOp을 잇는다.
+    /// Links `count` NoOps after `parent`.
     static func noOpChain(after parent: AUMHash, count: Int, by signer: Signer) -> [AUM] {
         var chain: [AUM] = []
         var parent = parent
@@ -100,7 +100,7 @@ enum AuthorityTesting {
         return chain
     }
 
-    /// 머리에서 뿌리까지 거꾸로 따라간 활성 사슬(머리가 먼저).
+    /// The active chain in reverse from head through root, head first.
     static func activeChain(of authority: Authority) -> [AUM] {
         var chain: [AUM] = []
         var cursor: AUMHash? = authority.head
@@ -111,12 +111,12 @@ enum AuthorityTesting {
         return chain
     }
 
-    /// 정준 바이트 수의 합.
+    /// The total number of canonical bytes.
     static func byteCount(_ aums: [AUM]) -> Int {
         aums.reduce(0) { $0 + $1.serialized().count }
     }
 
-    /// `inform`의 판정. 성공이면 nil, 아니면 오류.
+    /// The `inform` outcome, nil on success or the error on failure.
     static func informError(_ authority: inout Authority, _ updates: [AUM]) -> TKAError? {
         do throws(TKAError) {
             try authority.inform(updates)
