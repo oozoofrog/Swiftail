@@ -4,9 +4,9 @@ M6's goal is to **listen for and initiate TCP connections at tailnet addresses i
 
 This document is a **draft**. Finalize it after resolving "Lead session confirmation needed" and receiving the answers in "First adopter confirmation needed."
 
-Protocol details follow [tcp-netstack.md](../protocol-notes/tcp-netstack.md) ("TCP notes" below, **still unverified**). This document defines only scope, architecture, public API, limits, tests, and gates.
+Protocol details follow [tcp-netstack.md](../protocol-notes/tcp-netstack.md) ("TCP notes" below). The notes were **unverified in the initial draft**. The lead session decisions below record the later source review and what remains unverified. This document defines only scope, architecture, public API, limits, tests, and gates.
 
-This document adds the M6 changes to the existing contracts in [SwiftailTunnel.md](SwiftailTunnel.md) (M5) and [SwiftailEngine.md](SwiftailEngine.md) and takes precedence in a conflict.
+This document supplements the existing, unchanged contracts in [SwiftailTunnel.md](SwiftailTunnel.md) (M5) and [SwiftailEngine.md](SwiftailEngine.md) with the M6 changes. This contract takes precedence in a conflict.
 
 ## Targets
 
@@ -17,7 +17,7 @@ This document adds the M6 changes to the existing contracts in [SwiftailTunnel.m
 | `SwiftailEngine` | `ServiceIPReply+Checksum.swift` calls the relocated checksum. Behavior stays the same | Same rationale |
 | `Swiftail` | `TunnelDevice.inProcess`, public API (`listen` and `connect`, `TailnetListener`, `TailnetConnection`, and `ConnectionError`), node and stack integration, and resumption of waiting reads and writes | The public API stays in `Swiftail` alone (existing architecture) |
 
-The dependency direction is `SwiftailBase ◄─ SwiftailNetstack ◄─ Swiftail`. It reverses the diagram in plan §5 (`Swiftail ◄─ SwiftailNetstack`) (lead session confirmation needed N1). `SwiftailNetstack` uses only `SwiftailBase` and CryptoKit (to hash the ISN). It has no knowledge of the engine, control, or WireGuard.
+The dependency direction is `SwiftailBase ◄─ SwiftailNetstack ◄─ Swiftail`. It reverses the diagram in plan §5 (`Swiftail ◄─ SwiftailNetstack`) (lead session confirmation needed N1). `SwiftailNetstack` uses only `SwiftailBase` and CryptoKit (to generate ISNs by hashing). It has no knowledge of the engine, control, or WireGuard.
 
 ## Scope supported in M6
 
@@ -39,7 +39,7 @@ The scope follows the first adopter's actual use (TCP notes §8): one listener (
 | Receiver-side SACK with SACK-Permitted negotiation and SACK blocks for ranges in the receive buffer (M6-10a) | The peer (gVisor or kernel) retransmits multiple losses in one window without RTO. Gate loss measurements triggered this work (N3). Sender-side retransmission based on received blocks (RFC 6675) is in the exclusions table |
 | TIME-WAIT | MUST-13 |
 
-The "Exclusions" table below gives the rationale and when each feature would become necessary. Omitted features fail closed. Unnegotiated options are never sent and are ignored on receipt.
+The "Exclusions" table below gives the rationale and when each feature would become necessary. Omitted features fail closed. Options the stack does not negotiate are omitted on send and ignored on receipt.
 
 ## Architecture
 
@@ -139,7 +139,7 @@ public final class TailnetConnection: Sendable {
     public func read(upTo maximumLength: Int = 65_536) async throws(ConnectionError) -> [UInt8]?
 
     /// Waits until all bytes enter the send buffer. The peer may not have received them yet. A full buffer suspends the call until space becomes available.
-    /// Cancellation resets the connection with RST and throws `.cancelled` because the number of buffered bytes is unknown.
+    /// Cancellation resets the connection with RST and throws `.cancelled` because the caller cannot tell how many bytes the call already added to the buffer.
     public func write(_ bytes: [UInt8]) async throws(ConnectionError)
 
     /// Finishes sending (FIN) after all buffered bytes have been sent. Reads can continue. Corresponds to tsnet `CloseWrite`.
@@ -157,7 +157,7 @@ public final class TailnetConnection: Sendable {
 public enum ConnectionError: Error, Sendable, Equatable {
     /// The device is other than `.inProcess`, the port is 0, or the host is empty. The message states only what is invalid.
     case invalidConfiguration(String)
-    /// The node is no longer running (`run()` ended). `connect` also returns this error when the state is other than `.running`.
+    /// The node is no longer running (`run()` ended). `connect` also throws this error when the state is other than `.running`.
     case notRunning
     /// The netmap has no such name, or no peer owns that address.
     case unknownHost
@@ -200,7 +200,7 @@ Differences from the draft in `docs/plan.md` §6 are `dial(host:port:)` → `con
 
 ## Behaviors
 
-Tests and reviews refer to behaviors by number. Unless stated otherwise, values are proposed by this contract and are adjusted using gate measurements.
+Tests and reviews refer to behaviors by number. Unless stated otherwise, values are proposed by this contract and will be adjusted based on gate measurements.
 
 ### W. Segment codec (`TCPSegment`)
 
@@ -211,7 +211,7 @@ Tests and reviews refer to behaviors by number. Unless stated otherwise, values 
 Implementation decisions (M6-1, 2026-11-15)
 
 - Validation order is IP header structure → protocol (`notTCP`) → fragmentation → IPv4 header checksum → TCP header → TCP checksum → options. Check the IPv4 header checksum too (`badChecksum` on failure). IPv4 fragments (MF or offset) are `malformed`. IPv6 extension and fragmentation headers (next header other than 6) produce `notTCP`.
-- Skip MSS with a nonstandard length (other than 4) and Window Scale with a nonstandard length (other than 3) by length without reading the value. If an option occurs more than once, the last one wins (as in gVisor). Validate option lengths for non-SYN segments too.
+- Skip MSS with a nonstandard length (other than 4) and Window Scale with a nonstandard length (other than 3) using the declared length without reading the value. If an option occurs more than once, the last one wins (as in gVisor). Validate option lengths for non-SYN segments too.
 - Implementation decisions (M6-10a, 2026-11-15). Skip SACK-Permitted with a length other than 2 and SACK with a length other than `2 + 8n` (n ≥ 1, including length 2 with no blocks) by length without reading the value, under the same rule. gVisor stops parsing on a SACK whose length is other than `2 + 8n` (the result is the same if no more options follow) and reads a SACK of length 2 as 0 blocks, **clearing earlier blocks**, then moves to the next option (`header/tcp.go`). Thus, for "valid SACK followed by a SACK of length 2," Swift retains the earlier blocks and gVisor clears them. This combination is absent from the reference fixtures because the comparison tool cannot show the difference in blocks. Revisit it in M6-10b, when received blocks become used. The fields are `sackPermitted` (SYN only) and `sackBlocks` (`leftEdge` and `rightEdge` of `TCPSegment.SACKBlock`, non-SYN only). 13 SACK cases were added to the Go reference comparison (5 gVisor-encoded SYNs and ACKs also match Swift's encoded bytes. The 2 SACKs extending past the header are documented differences where gVisor stops parsing and the contract drops them as `malformed`).
 - Declaration. `TCPSegment` fields are `source` and `destination` (`IPEndpoint`), `sequenceNumber` and `acknowledgmentNumber` (`SequenceNumber`), `flags` (`fin`, `syn`, `rst`, `psh`, `ack`), `window` (the 16-bit header value as given), `maximumSegmentSize` and `windowScale` (SYN only), `payload`, and `sequenceLength` (SEG.LEN). The checksum uses `InternetChecksum` (`add`, `addPseudoHeader`, `value`) from `SwiftailBase`.
 
@@ -265,8 +265,8 @@ Implementation decisions (M6-4, 2026-11-15, `Sources/SwiftailNetstack/Connection
 
 1. The **receive buffer** is 256KiB per connection. Advertise the remaining buffer space (up to 16KiB while in a listener queue, behavior M). Never move the right edge of the window left (SHLD-14). Even when rounding down for window scaling produces an advertisement smaller than the last one, accept up to the previously allowed right edge (RFC 7323 §2.4).
 2. **Window scaling** (RFC 7323 §2.2~2.4). Always include the option in an active open SYN. In a passive open SYN-ACK, include it only if the peer's SYN included it. Enable scaling **only if both SYNs carry it**, with a separate shift per direction (the peer's shift for the send window and our shift for the advertised window). Do not scale the window field in SYN or SYN-ACK segments. Treat a peer shift above 14 as 14. Our shift is 3 (the smallest value satisfying `65535 << 3 >= 262144`, as in gVisor `FindWndScale`). With scaling disabled, the window is at most 65,535.
-3. **Receiver SWS avoidance**. Advance the right edge only when it can increase by at least `min(buffer/2, MSS)` (RFC 9293 §3.8.6.2.2). After the app reads enough to open the window by that amount, send a pure window-update ACK immediately **only if the remaining advertised window (advertised right edge − RCV.NXT) is at most half the receive buffer**. A larger remaining window leaves the peer ample room to send, so ACKs for data (behavior 5, 2×MSS or 40ms) and outgoing data carry the new window. This avoids a pure ACK every time the app reads a little (2026-11-15). A 0 or small window has at most half the buffer remaining, so announce as soon as the window opens by the threshold. Advance under the same rule even while a gap exists. A rule freezing the right edge while a gap existed to keep duplicate ACK windows equal was added and then removed. If a gap appeared after the remaining window rounded down to 0, draining the buffer did not reopen it, so the peer's 0-window probes never ended. At 1% loss, throughput was in the same range with and without the freeze (2026-11-15).
-4. Store **out-of-order data** only within the receive window, in its place in the receive buffer. Keep up to 32 ranges (groups separated by gaps). Drop the segment if it would exceed this limit. The peer retransmits it. For overlapping bytes, keep the first arrival. For segments straddling the left or right edge, accept only the portion inside the window.
+3. **Receiver SWS avoidance**. Advance the right edge only when it can increase by at least `min(buffer/2, MSS)` (RFC 9293 §3.8.6.2.2). After the app reads enough to open the window by that amount, send a pure window-update ACK immediately **only if the remaining advertised window (advertised right edge − RCV.NXT) is at most half the receive buffer**. A larger remaining window leaves the peer ample room to send, so ACKs for data (behavior 5, 2×MSS or 40ms) and outgoing data carry the new window. This avoids a pure ACK every time the app reads a little (2026-11-15). A 0 or small window has at most half the buffer remaining, so announce as soon as the window opens by the threshold. Advance under the same rule even while a gap exists. A rule freezing the right edge while a gap existed to keep duplicate ACK windows equal was added and then removed. If a gap appeared after the remaining window rounded down to 0 by the window scale shift, draining the buffer did not reopen it, so the peer's 0-window probes never ended. At 1% loss, throughput was in the same range with and without the freeze (2026-11-15).
+4. Store **out-of-order data** only within the receive window, in its place in the receive buffer. Keep up to 32 ranges (contiguous blocks separated by gaps). Drop the segment if it would exceed this limit. The peer retransmits it. For overlapping bytes, keep the first arrival. For segments straddling the left or right edge, accept only the portion inside the window.
    - Implementation decisions (M6-2, `ReceiveBuffer`). Store ranges as distances from `RCV.NXT`. The 32-range limit applies only to segments requiring a new range. Even at 32 ranges, accept segments that extend or join existing ranges or reach `RCV.NXT`. Reject even the in-window portion of a segment requiring a 33rd range. Use one ring per connection and grow only as needed (doubling from 4KiB). `shortcut:` Storage does not shrink after growing. `ReceiveBuffer.windowEnd` advances only when the app reads. The connection separately remembers the right edge after SWS avoidance and rounding down for the shift. The buffer only trims at the physical limit, so **the connection trims bytes beyond the advertised right edge before `insert`**.
 5. **Sending ACKs**. ACK out-of-order segments, segments that fill a gap, FIN, and segments outside the window immediately. ACK in-order data immediately for at least 2×MSS unacknowledged, otherwise within 40ms (the RFC limit is less than 500ms). Piggyback on an outgoing data segment if available. Even in a group of packets that the node processes together, emit one immediate ACK **per segment** (RFC 5681 §4.2 immediate ACK. Combining the out-of-order segments in the group into one duplicate ACK delays the peer's fast retransmit). Only ACKs for in-order data coalesce within a group, and even then emit one for each 2×MSS (MUST-58 and MUST-59, behavior N4).
    - **SACK blocks** (M6-10a, RFC 2018 §4 and §7, only when the peer sent SACK-Permitted, behavior T4). While a range beyond a gap is present in the receive buffer, include a SACK option in **every outgoing ACK** (pure ACK, data-bearing ACK, 0-window probe, keep-alive, and challenge ACK). Build up to 4 blocks as option space allows from the receive buffer's out-of-order ranges (behavior F4, up to 32 ranges). Timestamps are unused. **The first block is the range containing the segment that triggered the ACK.** This rule does not apply if that segment advanced RCV.NXT. Order the rest by when they were most recently reported. Because out-of-order segments always get immediate ACKs, record for each range the order in which it last gained a segment. Selecting in reverse order yields the order "most recently reported as the first block." Ranges do not overlap, so no block is a subset of an earlier block. Even if bytes arrive again within a previously received range, that range becomes the first block. Omit SACK when all gaps fill. Received data is never discarded (no reneging), so blocks always refer to bytes in the receive buffer. Omit SACK on RST and on ACKs from the stack's TIME-WAIT records, which have no receive buffer. `shortcut:` Omit D-SACK (RFC 2883). Reduce outgoing data segment payloads by the size of the SACK option (behavior T5).
@@ -286,7 +286,7 @@ Implementation decisions (M6-4, 2026-11-15, `Sources/SwiftailNetstack/Connection
 3. **Listeners**. Allow one per port and up to 16 in total. Listen on all local tailnet addresses (IPv4 and IPv6). Apply the LISTEN rules from TCP notes §4.2 to segments reaching a listener. Ignore RST, reply with RST if ACK is present, and create a connection on SYN. For segments without SYN, ACK, or RST (such as FIN alone), reply with the same `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>` as a port without a listener (behavior S2, 2026-11-17). The fourth step of RFC 9293 §3.10.7.2 says to drop them, but the receive filter checks only SYN against its rules. Silently dropping would let an ACL-blocked peer infer which ports listen from the presence or absence of a reply. All listener responses to non-SYN segments now match the responses of ports without listeners.
 4. **Limit on connections being established (SYN-RECEIVED)**. Allow 64 across the stack and 16 per remote peer (see "Per-peer share" below). Drop excess SYN without responding (like the gVisor forwarder, TCP notes §5). The peer retransmits SYN. Connections in this state have no buffers.
 5. **Accept queue**. Each listener allows up to 32 established connections that the app has yet to accept. When full, drop new SYN without response. Up to 16 may belong to one remote peer (see "Per-peer share" below). While waiting, a connection receives data up to its receive window (16KiB before acceptance, behavior M). Closing the listener resets queued connections with RST and discards connections still being established.
-6. **Connection count limit**. Allow 256 connections across establishment, established, and closing states. At the limit, drop new SYN without response and return `limitReached` from `connect`. Keep up to 1,024 separate TIME-WAIT records and **retain them until their deadline**. Discarding them would cause RST replies to the peer's FIN retransmissions and could let late segments from a previous connection enter a new connection with the same 4-tuple. At 1,024 records, drop new SYN without response and return `limitReached` from `connect` until a record expires (fail closed). Each record contains only the 4-tuple, two sequence numbers, and a deadline.
+6. **Connection count limit**. Allow 256 connections across establishment, established, and closing states. At the limit, drop new SYN without response and return `limitReached` from `connect`. Keep up to 1,024 separate TIME-WAIT records and **retain them until their deadline**, subject to the per-peer eviction rule below. Discarding them would cause RST replies to the peer's FIN retransmissions and could let late segments from a previous connection enter a new connection with the same 4-tuple. At 1,024 records, drop new SYN without response and return `limitReached` from `connect` until a record expires (fail closed). Each record contains only the 4-tuple, two sequence numbers, and a deadline.
 7. **ISN** (RFC 6528 §3). `ISN = M + F`. M increments by 1 every 4 microseconds from stack creation. F is the first 32 bits of `HMAC-SHA256(secret, local address ‖ local port ‖ remote address ‖ remote port)`. The node draws and supplies a 32-byte secret from the system RNG each `run()`.
 8. **Ports for outgoing connections**. Pick sequentially from 49152…65535, skipping an already-used 4-tuple (including TIME-WAIT). Use a local source address in the destination's family (as in tsnet). If there is no local address in that family, return `unknownHost`.
 9. **Address changes**. The node passes its local address list whenever it applies a netmap. Connections using addresses that are no longer local end with `.closed(.peerRemoved)` and send nothing.
@@ -313,7 +313,7 @@ Review fixes (M6 review A, 2026-11-15). Prevent one peer from exhausting another
 Per-peer share (fixed during data plane security verification, 2026-11-17)
 
 - **All limits above for "one remote address" apply per remote peer**. The limits are 64 connections, 16 connections being established, and 64 TIME-WAIT records. A peer has both IPv4 and IPv6 addresses, so counting by address alone gives one peer twice its share. With 16 × 2 = 32 connections being established, equal to the listener queue of 32, one peer blocked all other peers from one listener.
-- **Groups**. Every time the node updates the owner table (netmap application or key expiration handling), it passes a "remote address → group" table along with local addresses (`setRemoteAddressGroups(_:)`). It comes from the same table used to check address ownership (behavior X10, `EnginePeer.addressOwners` maps each address to the peer that has it in AllowedIPs). The group name is that peer's node ID, whose meaning is opaque to the stack. An address absent from the table (such as a local address) is a group of its own. The stack stores counts by address and adds the addresses in each group when it checks, so an updated table takes effect immediately for counting.
+- **Groups**. Every time the node updates the owner table (netmap application or key expiration handling), it passes a "remote address → group" table along with local addresses (`setRemoteAddressGroups(_:)`). It comes from the same table used to check address ownership (behavior X10, `EnginePeer.addressOwners` maps each address to the peer that has it in AllowedIPs). The group name is that peer's node ID, whose meaning is opaque to the stack. An address absent from the table (such as a local address) is a group of its own. The stack stores counts by address and sums the counts for the addresses in each group when it checks, so an updated table takes effect immediately for counting.
 - **One peer gets 16 slots in a listener's queue** (established and being established combined. Excess SYN produces `.dropped(.limitReached(.acceptQueueShare))`). Established connections leave the count of connections being established, so without this share a peer could fill the queue with 32 completed handshakes. 16 is half the queue and matches the per-peer limit on connections being established. It exceeds the first adopter's roughly 10 connections per device (review result 2) even if opened together. Two ACL-allowed peers can still fill one listener's queue and block a third peer. Reducing the share further would force legitimate peers' concurrent connections to wait for SYN retransmission.
 - For TIME-WAIT records, "the peer's oldest record" is the one that entered TIME-WAIT earliest among the first records (in creation order) for each of the peer's addresses.
 - `shortcut:` Count each listener's connections per peer by scanning the connection table (up to 256) for every SYN. Revisit when the connection limit increases substantially.
@@ -322,23 +322,23 @@ Per-peer share (fixed during data plane security verification, 2026-11-17)
 
 WireGuard authenticates tailnet peers, and the source address is checked against that peer's AllowedIPs (M3 engine contract behaviors 2 and 5, M-E2). A peer therefore cannot inject segments into **another peer's connection**. Remaining threats are invalid segments from the peer itself and resource exhaustion. The receive filter checks only TCP SYN against its rules (`PacketFilter`), so **non-SYN segments reach the stack even from peers blocked by ACLs.**
 
-1. Any input byte sequence must be safe to handle. Avoid out-of-bounds indices, integer overflow (length sums, window calculations, `SEG.SEQ + SEG.LEN`), and unbounded option traversal.
+1. No input byte sequence may cause a crash. Avoid out-of-bounds indices, integer overflow (length sums, window calculations, `SEG.SEQ + SEG.LEN`), and unbounded option traversal.
 2. **Sequence outside the window**. Reject it and reply only with ACK (TCP notes §4.2 item 1). ACKs for data-free, out-of-window segments are rate limited under item 4 to prevent ACK loops.
 3. **RST** (RFC 5961 §3.2). Silently drop outside the window, reset only for `SEG.SEQ = RCV.NXT`, and send a challenge ACK for other sequences inside the window. **SYN** (§4.2). In synchronized states, always send a challenge ACK and drop the segment. **ACK** (§5.2). Drop and send ACK if outside `SND.UNA − MAX.SND.WND =< SEG.ACK =< SND.NXT`.
 4. Allow up to 10 challenge ACKs per connection per 5 seconds (example in RFC 5961 §7). Suppress excess ACKs.
 5. **0 window**. Probes keep the connection alive even if the peer leaves its window at 0 (behavior F8). The send buffer stops at 256KiB and `write` waits. The connection remains within its memory limit.
 6. **Small segments**. Even if a peer sends scattered 1-byte segments, there are at most 32 out-of-order ranges (behavior F4). Data is stored within one receive buffer, with no separate memory retained per segment. The buffer grows to cover the written position, so 1 byte at the window's end grows that connection's buffer to the window size. Before the application accepts the connection, that window is 16KiB (behavior M).
 7. **SYN flood**. Apply the limits in behaviors S4, S5, and S6. Connections being established have no buffers and expire within 247 seconds (behavior R4). One remote peer can hold 16 across all its addresses and 16 in one listener's queue (behavior S, "Per-peer share").
-8. **Segments with no connection**. Reply with one RST per segment. The reply is at most the size received, so there is no amplification. There is no separate rate limit.
-9. **Peer-advertised values**. Cap MSS again by the local MTU (behavior T5). If the peer advertises an MSS below 64, **do not establish the connection**. On passive open, reply to SYN with RST. On active open, send RST and emit `.closed(.refused)`. Raising a small value would exceed the peer's receive limit (RFC 9293 §3.7.1 MUST-16), while following it could generate 1-byte segments indefinitely. 64 is this contract's value (gVisor raises the advertised value to 48 if it is other than 0, `gvisor/header/tcp.go:439`. The RFC does not provide a basis for this). Tolerate shrinking windows (MUST-34). Do not send new data when the usable window is negative.
-10. **Address ownership changes**. When the engine recomputes peers (netmap application or key expiration handling), the node compares the current data plane address owner table (`addressOwners`) with the previous table. If a remote address loses its owner or the node key changes, end connections for the address with `.closed(.peerRemoved)`. This prevents a different node that inherits the address from continuing the previous node's connection (N8). Go's netstack has no such handling. It leaves connections open when a peer disappears or address ownership changes and relies on retransmission, keep-alive, or application closure (near `wgengine/netstack/netstack.go:729`, TCP notes). Swiftail is stricter. Review decisions (M6 review B, 2026-11-15) follow.
+8. **Segments with no connection**. Reply with at most one RST per segment and ignore incoming RSTs, as in behavior S2. The reply is at most the size received, so there is no amplification. There is no separate rate limit.
+9. **Peer-advertised values**. Cap MSS again by the local MTU (behavior T5). If the peer advertises an MSS below 64, **do not establish the connection**. On passive open, reply to SYN with RST. On active open, send RST and emit `.closed(.refused)`. Raising a small value would exceed the peer's receive limit (RFC 9293 §3.7.1 MUST-16), while following it could generate 1-byte segments indefinitely. 64 is this contract's value (gVisor clamps a nonzero advertised MSS to a minimum of 48, `gvisor/header/tcp.go:463-470`. The RFC does not provide a basis for this). Tolerate shrinking windows (MUST-34). Do not send new data when the usable window is negative.
+10. **Address ownership changes**. When the engine recomputes peers (netmap application or key expiration handling), the node compares the current data plane table of address owners (`addressOwners`) with the previous table. If a remote address loses its owner or the node key changes, end connections for the address with `.closed(.peerRemoved)`. This prevents a different node that inherits the address from continuing the previous node's connection (N8). Go's netstack has no such handling. It leaves connections open when a peer disappears or address ownership changes and relies on retransmission, keep-alive, or application closure (near `wgengine/netstack/netstack.go:729`, TCP notes). Swiftail is stricter. Review decisions (M6 review B, 2026-11-15) follow.
     - Compare owners by **node key**. Even a key change on the same node (reauthentication) drops connections to that node with `peerRemoved`. This covers more than the intended case (a different node inheriting an address), but when the key changes the WireGuard session is established again and the receiver recovers by resuming. Comparing by node ID would require carrying the ID in `EnginePeer`. Revisit if interrupted long transfers during key rotation are reported as a problem.
 
 ### N. Node integration (`Swiftail`)
 
 1. **Device**. With `.inProcess`, the node uses neither utun nor the memory stream. `inboundPackets` emits nothing and `send(_:)` discards packets. `networkSettings` emits as in M5 (the app may leave it unread). On `.utun` or `.memory`, `listen` and `connect` produce `invalidConfiguration`.
 2. **Inbound path**. Feed `.ipPacket` outputs emitted by the engine for device writes (peer packets that passed the filter and packets looped back to local addresses) into `stack.receive(_:at:)`. The stack drops non-TCP packets as `.dropped(.notTCP)` (ICMP and UDP in the exclusions table).
-3. **Outbound path**. Feed stack `.ipPacket` outputs into `engine.send(_:at:)`. They follow M5 local handling (behavior L). The engine loops connections to local addresses back to the stack and rejects connections to service IPs with RST.
+3. **Outbound path**. Feed stack `.ipPacket` outputs into `engine.send(_:at:)`. They follow M5 local handling (behavior L). The engine loops packets from connections to local addresses back to the stack and rejects connections to service IPs with RST.
 4. **Complete each event**. Exchanges between the stack and engine stemming from one packet (or one app call or timer) run to completion without `await`. Use a queue to avoid recursion and growing call depth on large transfers to the node's own addresses. Emit deferred ACKs after the queue drains (behavior F5).
 5. **Events**. Stack events resume waiting calls. `readable` → the connection's `read`, `writable` → `write`, `established` → `connect` or the listener queue, `closed(reason)` → all waiting or subsequent calls for the connection receive the corresponding error.
 6. **Timer**. The node timer wakes at the earliest `nextDeadline` of the engine, `Magicsock`, and stack and calls `advance` on all three.
@@ -350,11 +350,11 @@ WireGuard authenticates tailnet peers, and the source address is checked against
 
 Implementation decisions (M6-8, 2026-11-15, `TailnetNode+Netstack*.swift`, `TailnetListener.swift`, and `TailnetConnection.swift` in `Sources/Swiftail/`)
 
-- **Processing loop**. With `.inProcess`, engine `.ipPacket` outputs enter the stack queue. One outermost call drains the queue: feed queued packets to `stack.receive` in order → when empty, call `advance(to:)` with the same time (deferred ACKs) → repeat if its outputs refill the queue → rearm the timer at the end. The engine loops packets for local connections back into the queue only, so recursion does not grow. There is no separate timer. The node timer wakes at the earliest deadline of the engine, `Magicsock`, and stack.
+- **Processing loop**. With `.inProcess`, engine `.ipPacket` outputs enter the stack queue. One outermost call drains the queue: feed queued packets to `stack.receive` in order → when empty, call `advance(to:)` with the same time (deferred ACKs) → repeat if its outputs refill the queue → rearm the timer at the end. Packets the engine loops back for connections to the node's own addresses only accumulate in the queue. The call depth stays constant. There is no separate timer. The node timer wakes at the earliest deadline of the engine, `Magicsock`, and stack.
 - **Stack lifetime**. The stack exists only during `run()` on `.inProcess`. At the start of `run()`, draw a 32-byte ISN secret from system randomness, create the stack, and register listeners opened before `run()`. On exit, close listeners, abort connections held by the application, and terminate the rest (being established, queued, or released by `close` but still closing) with `TCPStack.abortAll()`. Do this before closing sockets and the engine (RST goes out on direct paths. Packets left in the DERP channel may be lost).
 - **Waiting calls**. Install a new channel without a payload each time a call waits. The resumer only finishes it. A resumed call rechecks state before deciding what to do, which avoids double resumption. Code removing a record (`close`, `abort`, listener closure, or end of `run()`) must finish any installed channel. On local-address connections, an event may occur while the call processes its own outputs. Record missed events and check them before waiting.
-- **Cancellation**. `read` throws `cancelled` and preserves the connection and data. `write` aborts the connection (RST) and then throws `cancelled`. `connect` abandons the attempt and throws `cancelled`. The listener stream ends and the listener stays open. When `run()` ends, waiting calls receive `notRunning`. One child of `run()` reclaims dropped handles with RST (connections) or closure (listeners).
-- **Owner changes (X10)**. The node keeps no key per connection. When the engine recomputes peers (netmap application or key expiration handling), it compares the owner key of each data plane peer address with the previous one and calls `removeConnections(toRemoteAddress:)` on missing or changed addresses. The owner comes from the same table read by `whoIs` (`addressOwners` retained by the node from the engine, host contract behavior W6). AllowedIPs source checks mean all connections for an address were established with its owner at the time.
+- **Cancellation**. `read` throws `cancelled` and preserves the connection and data. `write` aborts the connection (RST) and then throws `cancelled`. `connect` abandons the attempt and throws `cancelled`. The listener stream ends and the listener stays open. When `run()` ends, waiting calls receive `notRunning`. One child Task of `run()` reclaims dropped handles with RST (connections) or closure (listeners).
+- **Owner changes (X10)**. The node keeps no key per connection. When the engine recomputes peers (netmap application or key expiration handling), it compares the owner key of each data plane peer address with the previous one and calls `removeConnections(toRemoteAddress:)` for each address whose owner key disappeared or changed. The owner comes from the same table read by `whoIs` (`addressOwners` retained by the node from the engine, host contract behavior W6). AllowedIPs source checks mean all connections for an address were established with its owner at the time.
 - **Name resolution**. On a name collision, the later node wins, as in Go (local node → peers in ID order). This differs from `path(toPeerNamed:)`, where the lower ID wins. Compare the suffix of a short name without changing case (as in Go).
 - **Public API details**. A `read(upTo:)` length of 0 or less produces `invalidConfiguration`. If two Tasks iterate a listener concurrently, the later Task's stream ends immediately (it cannot throw because `Failure = Never`). Two calls to `finishWriting()` are allowed. `connect` requires state `.running` (the app waits via `events`).
 - **Dropped listeners** (M6 review B). Listener records hold a weak handle reference. `listen(port:)` and the start of `run()` first close listeners whose handles were dropped. Thus, dropped listeners hold neither their port nor a slot in the limit (16) before or during `run()`. During `run()`, the child that reclaims dropped handles or the next `listen` closes the stack listener and resets queued connections (RST). A SYN arriving in the interim establishes a connection that is then reset with RST.
@@ -365,9 +365,9 @@ Implementation decisions (M6-8, 2026-11-15, `TailnetNode+Netstack*.swift`, `Tail
 ### A. Edge: listen, connect, read, and write
 
 1. **`listen`**. Validate the device and port, then register the listener with the stack. Before `run()`, record it and register it when `run()` starts. This avoids a failure when called immediately after launching `run()`. Listening before a netmap is allowed (SYN arrives only after the netmap and filter are ready).
-2. **`connect`**. ① If the state is other than `.running`, return `notRunning`. ② If `host` is an IP address, use it as given. Otherwise lowercase it, remove the trailing dot, and look up the name in the netmap among peer and local node FQDNs and short names with the MagicDNS suffix removed. Prefer IPv4, with IPv6 as fallback (Go `resolve.go:54-75`, `:115-140`). ③ Return `unknownHost` unless the address belongs to a data plane peer or the local node. ④ Send SYN and wait for establishment. The result is a connection, `refused`, `timedOut` (247 seconds), or `cancelled`. Names outside the tailnet are never resolved through system DNS or connected via OS sockets (unlike tsnet).
+2. **`connect`**. ① If the state is other than `.running`, throw `notRunning`. ② If `host` is an IP address, use it as given. Otherwise lowercase it, remove the trailing dot, and look up the name in the netmap among peer and local node FQDNs and short names with the MagicDNS suffix removed. Prefer IPv4, with IPv6 as fallback (Go `resolve.go:54-75`, `:115-140`). ③ Throw `unknownHost` unless the address belongs to a data plane peer or the local node. ④ Send SYN and wait for establishment. The result is a connection, `refused`, `timedOut` (247 seconds), or `cancelled`. Names outside the tailnet are never resolved through system DNS or connected via OS sockets (unlike tsnet).
 3. **`read`**. Return immediately if the receive buffer contains data, otherwise wait for `readable`. Return nil once the buffer is empty after the peer's FIN. Cancellation throws `.cancelled` and preserves the connection and buffered data.
-4. **`write`**. Buffer as much as fits. With bytes left, wait for `writable` and continue adding bytes. Release the actor between writes so a large write does not monopolize the node. `write` after `finishWriting` or `close` produces `closed`.
+4. **`write`**. Buffer as much as fits. With bytes left, wait for `writable` and continue adding bytes. Suspend the call between chunks so other work can run on the actor so a large write does not monopolize the node. `write` after `finishWriting` or `close` produces `closed`.
 5. **Backpressure**. On receive, the window opens only as the app reads (if it does not read, the peer stops at 256KiB). On send, `write` suspends at the 256KiB buffer limit. The edge has no separate backlog buffer.
 6. **Concurrent use**. One `read` and one `write` may wait concurrently on a connection. A second call in the same direction produces `concurrentUse`. One Task iterates the listener.
 7. **Ended connection**. After `closed(reason)`, `read`, `write`, and `finishWriting` throw the corresponding error (`reset`, `timedOut`, `peerRemoved`). After app `close` or `abort`, they produce `closed`.
@@ -389,7 +389,7 @@ Implementation decisions (M6-8, 2026-11-15, `TailnetNode+Netstack*.swift`, `Tail
 - "One remote peer" groups its addresses (IPv4 and IPv6). Addresses the node did not identify as belonging to a peer each have their own share (behavior S, "Per-peer share").
 - Buffers allocate as needed and grow to the limit. Idle connections hold no buffers.
 - **The receive window before acceptance is 16KiB** (2026-11-17). The receive buffer grows as one block up to the written position. With a 256KiB window, 1 in-order byte and 1 byte just before the window's end can allocate 256KiB for one connection, and one listener's queue (32 connections) can hold 8MiB before the app accepts. The stack caps the receive window for a connection created by a SYN to a listener at 16KiB and carries that value in the SYN-ACK window field. `accept(from:at:)` opens the window to the full buffer (256KiB) and sends an immediate window update ACK for an established connection. One queue can hold up to 32 × 16KiB = 512KiB of receive buffers. 16KiB was chosen because ① it is the smallest power of 2 that fits the peer's initial window (10 × MSS from RFC 6928, 12,400 bytes at MSS 1240), so the first request can arrive before acceptance without hitting the window limit. ② The SYN-ACK window field is unscaled (behavior F2), so the value must be at most 65,535 to fit as given. ③ It is a multiple of the local scale implied by shift 3, so rounding down does not distort the window field after establishment. A peer that fills 16KiB before acceptance waits at a 0 window and resumes sending after the window update ACK. Direct users of `TCPConnection` (the default in `accept(_:initialSequenceNumber:receiveWindowLimit:at:)`) and active opens retain the full buffer.
-- Worst case is 256 × 512KiB = 128MiB, based on the first adopter's Mac host. Using `.inProcess` inside an iOS extension with this limit would exceed the 50MiB limit (first adopter confirmation needed F6).
+- Worst case is 256 × 512KiB = 128MiB, based on the first adopter's Mac host. Using `.inProcess` inside an iOS extension with these limits could not guarantee staying within the 50MiB budget (first adopter confirmation needed F6).
 - Go comparison. gVisor defaults to 1MiB of buffer per direction and a limit of 2,048 connections being established on macOS (TCP notes §5).
 
 ### K. Secrets and logs
@@ -409,9 +409,9 @@ Implementation decisions (M6-8, 2026-11-15, `TailnetNode+Netstack*.swift`, `Tail
 | D6 | Unaccepted connections | Keep up to the queue limit (32) | tsnet's "close after 1 second" rule exists because its channel has no buffer (TODO in `tsnet.go:2406-2418`) |
 | D7 | Segments with no connection | RST | Matches the RFC and gVisor |
 | D8 | Checksum validation | Validate on receive | Tailscale also validates before the netstack. The gate catches errors in this implementation |
-| D9 | MTU | 1280 fixed | Default value for Tailscale TUN. No arguments provided |
+| D9 | MTU | 1280 fixed | Default value for Tailscale TUN. The MTU takes no argument |
 | D10 | Checksum code location | `SwiftailBase` (`package`) | Keep one copy of the RFC 1071 calculation. The engine changes only its call |
-| D11 | Access level of `SwiftailNetstack` | `package`, not a product | The app uses only the type from `Swiftail`. No public surface is expanded. |
+| D11 | Access level of `SwiftailNetstack` | `package`, not a product | The app uses only types exposed by `Swiftail`. The stack target adds no public API surface. |
 
 ## Lead session confirmation needed
 
@@ -431,13 +431,13 @@ Implementation decisions (M6-8, 2026-11-15, `TailnetNode+Netstack*.swift`, `Tail
 
 ### Lead session decisions (2026-11-15, draft stage)
 
-This is a review decision prior to the first adopter's review (below F1~F13). Any that may change based on the response are noted accordingly.
+These decisions precede the first adopter's review (F1–F13 below). The table marks decisions that may change based on the answers.
 
-| N1 | (a) `Swiftail` depends on `SwiftailNetstack` | Measure and record the iOS tunnel extension binary size increase after implementation. Update the plan §5 diagram and module table together after review |
+| # | Decision | Follow-up |
 | --- | --- | --- |
 | N1 | (a) `Swiftail` depends on `SwiftailNetstack` | Measure and record the iOS tunnel extension binary size increase after implementation. Update the plan §5 diagram and module table together after review |
 | N2 | (a) Handles and `listen(port:)` and `connect(to:port:)` | The plan §6 draft name `dial` is unused |
-| N3 | (a) Start without SACK and decide from gate records | Open M6-10 if throughput at 1% loss is below 1/10 of throughput at 0% loss |
+| N3 | (a) Start without SACK and decide from gate records | Criterion. Open M6-10 if throughput at 1% loss is below 1/10 of throughput at 0% loss |
 | N4 | (a) RTO lower bound set to 200ms | — |
 | N5 | (a) Always enable keep-alive | Document in the doc comments that this differs from the RFC's "off by default." Revisit based on the F5 answer |
 | N6 | Start with values in the table (256 connections, 256KiB buffers each) | Based on Mac host. If iOS extension uses `.inProcess` (F6), separately define lower values. |
@@ -453,7 +453,7 @@ A separate session revised the TCP notes (`docs/protocol-notes/tcp-netstack.md`)
 
 This section presents assumptions and questions formed from reviewing the committed code of the first adopter (`core/internal/node/node.go`·`tls.go`, `core/internal/proxy/proxy.go`, `core/internal/host/`, `docs/protocol.md`, `docs/protocol-addenda.md`, `docs/tunnel.md`). The clauses that change based on the answers are listed together.
 
-Response (Mac host):
+Mapping for the Mac host
 
 ```swift
 let node = try TailnetNode(configuration: configuration, device: .inProcess)
@@ -477,26 +477,26 @@ try await withThrowingDiscardingTaskGroup { group in
 | F3 | How many connections can be open simultaneously (at most, up to number of paired devices × connections per device)? | Dozens | Behavior M upper bound of 256, upper bound of S4·S5 |
 | F4 | Are the largest transfers 4GiB server → client (maximum for one file) and 4MB client → server? Do any exceed 4GiB? | Yes | At 4GiB the sequence number wraps (test 6). If larger transfers are common, revisit timestamps and PAWS (exclusions table) |
 | F5 | Does the Swift HTTP server also set `ReadHeaderTimeout` to 10 seconds and `IdleTimeout` to 60 seconds? Go has no timeout for reading a request body, so tsnet's keep-alive (2 hours) reclaims connections to vanished clients | keep-alive is needed | N5. If the server times out every read, keep-alive can be removed |
-| F6 | Is the proxy mode (diagnostic use) being migrated to Swiftail? If so, will it use `.inProcess` within the iOS extension? | No. `connect` is used in testing and `rdtestenv` | If migrated: the upper bound of behavior M must be reduced on iOS (50MiB), and a timeout parameter may be needed for `connect` (Go has 15 seconds), and whether `finishWriting` matches the `CloseWrite` action |
+| F6 | Is the proxy mode (diagnostic use) being migrated to Swiftail? Moving it would require using `.inProcess` in the iOS extension. | No. `connect` is used in testing and `rdtestenv` | If migrated, lower the behavior M limits on iOS (50MiB), determine whether `connect` needs a timeout parameter (15 seconds in Go), and check whether `finishWriting` can serve in place of `CloseWrite` |
 | F7 | Is `IPEndpoint` (address and port) sufficient for the connection's remote address? Is the `r.RemoteAddr` string used outside WhoIs anywhere? | Sufficient | Public API `remoteEndpoint` |
 | F8 | Today, listening starts after `Running`, and 3 listen failures produce `Error`. Swiftail's `listen` fails only for duplicate ports or limits, and can be called before `run()`. Can the retry logic be removed? | Yes | Behavior A1 |
 | F9 | When a node stops (app termination, restart), open connections are terminated with a single RST (it may not reach if the direct path is not available). Should ongoing transmissions be completed and then the node be halted? | A single RST is sufficient | Behavior N8 |
-| F10 | Is the transmission rate based on paths with loss (cellular, DERP)? If there is a record of IPA transmission rate from a Go host, it can be used as a benchmark for comparison. | No | N3(SACK), Gate (a) 8·9 records |
+| F10 | Is there a throughput target for lossy paths (cellular, DERP)? Use any recorded IPA transfer rates measured with the Go host as a baseline. | No | N3(SACK), Gate (a) 8·9 records |
 | F11 | Should the fake tailnet e2e test (`listenTLS=false`) use the Swift node's listener as-is? | Covered in M7 | Scope of gate (a) |
 | F12 | Is there a procedure to send an ICMP ping to the tailnet address on a Mac host for diagnostics? | No | N11 |
 | F13 | Does allowing up to 32 connections that the listener does not accept (Go closes them after 1 second) align with current behavior expectations? | It does not conflict | Decision D6 |
 
 ## First adopter review results (2026-11-15)
 
-The RemoteDebug session answered F1 through F13 (confirmed in the Go code at commit `2814b2c` and as proposed). All assumptions were valid, and the contract provisions are now firmly established as follows.
+The RemoteDebug session answered F1 through F13 with findings from its Go code at `2814b2c` and proposals. All assumptions were confirmed, and the following contract provisions are settled.
 
 1. **TLS and HTTP (F1)**. The first adopter writes the HTTP server in Swift. The current Go host uses `tls.NewListener` + `http.Server.Serve`, so it uses **HTTP/1.1 only**. TLS uses a **loopback bridge** that connects the Swiftail connection to an `NWListener` on `127.0.0.1` (TLS, ALPN `http/1.1`, minimum TLS 1.2). The first adopter already has an OS TCP listener independent of the tailnet (same-Wi-Fi direct connection), so one HTTP server will accept both entry points the same way. There will be no TLS server written in Swift. **M6's API remains a byte stream** (N9 is decided in M7). The M7 contract will decide the following.
    - Whether Swiftail provides the bridge as an optional product (accurately relaying backpressure and half-close) or the first adopter writes it. In either case, the HTTP server must be able to look up the loopback connection's source port → tailnet `IPEndpoint` mapping for every request (WhoIs).
    - Shape of the ts.net certificate API: a certificate chain (DER or PEM), private key (in a form usable to create a `SecKey`, X9.63 raw representation for P-256), and a renewal event. The first adopter adds them to the keychain and creates a `SecIdentity`.
 2. **Scope (F2, F3, F4, F6, F12)**. There is one listener (default 443), about 10 concurrent connections per device (the 256 cap is sufficient), and a maximum transfer of 4GiB server → client and 4MiB in the reverse direction. Proxy mode goes away with Go (no callers). So **the iOS extension has no use for `.inProcess`**, and behavior M limits remain based on the Mac host. Tests and diagnostics use `connect`. Do not respond to ICMP echo (N11 confirmed).
-3. **Timeouts and keep-alive (F5)**. The first adopter's Swift server sets 10 seconds for the header, 30 seconds without a response while reading the body, 60 seconds idle, and 60 seconds without write progress. Keep-alive stays on (N5 as written. Other adopters may have no timeouts). Enforce the write timeout by canceling the Task that called `write`. A canceled `write` resets the connection with RST and throws `.cancelled` (behavior A4 and the `write` comment in the public API).
+3. **Timeouts and keep-alive (F5)**. The first adopter's Swift server sets 10 seconds for the header, 30 seconds without progress reading the body, 60 seconds idle, and 60 seconds without write progress. Keep-alive stays on (N5 as written. Other adopters may have no timeouts). Enforce the write timeout by canceling the Task that called `write`. A canceled `write` resets the connection with RST and throws `.cancelled` (behavior A4 and the `write` comment in the public API).
 4. **Other items (F7, F8, F9, F13)**. `IPEndpoint` suffices for the remote address. Remove listen retry logic (`listen` can run before `run()`). One RST is sufficient on node shutdown (the receiver resumes with Range). Keeping up to 32 unaccepted connections does not conflict with current use.
-5. **Throughput baseline (F10)**. There are no records. The first adopter provides a measurement of the time to receive 100MB using the Go tunnel + Go host in gate (b) (direct Wi-Fi, and cellular and DERP if possible). This is the comparison baseline for N3 (SACK) and the gate results. **Measured value received (2026-11-15, iPhone 14 Pro, direct UDP path on the same Wi-Fi): 100MiB in 23.0 seconds (4.56MiB/s).** Cellular and DERP-only measurements are still unavailable. The Swift stack's loopback result at 0% loss (about 80MB/s) exceeds this baseline by more than tenfold. Real device testing will measure how far throughput under actual network loss falls below this baseline, rather than no-loss speed.
+5. **Throughput baseline (F10)**. There are no records. The first adopter provides a measurement of the time to receive 100MB using the Go tunnel + Go host in gate (b) (direct Wi-Fi, and cellular and DERP if possible). This is the comparison baseline for N3 (SACK) and the gate results. **Measured value received (2026-11-15, iPhone 14 Pro, direct UDP path on the same Wi-Fi): 100MiB in 23.0 seconds (4.56MB/s).** Cellular and DERP-only measurements are still unavailable. The Swift stack's loopback result at 0% loss (about 80MB/s) exceeds this baseline by more than tenfold. Real device testing will measure how far throughput under actual network loss falls below this baseline, rather than no-loss speed.
 6. **Integration test setup (F11)**. Fake-tailnet e2e is M7 work. First, document in `Tools/interop/README.md` how to run two in-process Swiftail nodes (one `listen`, one `connect`) against the `Tools/interop` test control server without an account (added to M6-9b). The first adopter builds the host migration integration test on this setup.
 7. **Copies in large transfers (proposal)**. Measure the effect of copying in `write(_: [UInt8])` on Mac CPU during a 4GiB transfer using the 100MB transfer in gate (a). If a problem appears, add a write API with fewer copies (`Span` family or `some Collection<UInt8>`). Keep unsafe pointers out of the public API (code standards in plan §5). Leave this as a `shortcut:`.
 8. **Kernel stack gate**. The first adopter session checks that an iPhone with the M5 tunnel enabled can receive a large file from the Mac's Swift listener. It builds a minimal HTTPS server on the Swift listener that serves one file with Range in time for that check.
@@ -505,16 +505,16 @@ The RemoteDebug session answered F1 through F13 (confirmed in the Go code at com
 
 | Excluded | Rationale | Time of need |
 | --- | --- | --- |
-| Sender-side SACK (selecting lost ranges from received blocks, RFC 6675), D-SACK (RFC 2883) | Receiver-side SACK (negotiation and emitting blocks, under behavior F5) shipped in M6-10a. The codec exposes received blocks as values, and the connection does not use them | Sender: M6-10b (opened based on measurements after 10a and real device records). D-SACK: when the peer's reordering detection becomes a problem |
+| Sender-side SACK (selecting lost ranges from received blocks, RFC 6675), D-SACK (RFC 2883) | Receiver-side SACK (negotiation and emitting blocks, under behavior F5) shipped in M6-10a. The codec exposes received blocks as values, and the connection does not use them | Sender: M6-10b (start based on measurements after 10a and real device records). D-SACK: when the peer's reordering detection becomes a problem |
 | Timestamps, PAWS | D3 | When RTO is inaccurate on a path with frequent retransmissions, or one connection passes 4GiB repeatedly and could confuse old segments with new ones |
-| CUBIC, RACK, limited transmit (RFC 3042) | D1 | On paths with high bandwidth and delay, NewReno's throughput becomes problematic |
+| CUBIC, RACK, limited transmit (RFC 3042) | D1 | When NewReno throughput is a problem on high-bandwidth, high-delay paths |
 | Nagle | D5 | When applications frequently perform small writes |
 | Simultaneous open (SYN without ACK in SYN-SENT) | The use cases have fixed accepting and connecting sides. Drop that SYN | When using a protocol where both sides connect simultaneously |
 | Urgent data | Ignore URG and read as normal data (differs from MUST-30) | When encountering a peer that uses urgent data |
 | ECN | Optional | |
 | IP fragment reassembly, path MTU discovery, ICMP error handling | The engine does not accept fragments. MSS fits within the 1280 MTU | When a path has a smaller MTU than the tunnel (this occurs outside WireGuard and is invisible to inner TCP) |
-| automatically adjusting receive buffer size | fixed at 256KiB | when the window is bottlenecked as recorded in throughput metrics |
-| address-specific listening, `tcp4`·`tcp6`, port 0 | the first adopter specifies only the port | when such an adopter is created |
+| Receive buffer autotuning | Fixed at 256KiB | When throughput measurements show that the window is the bottleneck |
+| address-specific listening, `tcp4`·`tcp6`, port 0 | the first adopter specifies only the port | When a use case requires them |
 | establishing connections outside the tailnet (system DNS, OS socket) | a convenience specific to tsnet | |
 | `connect` waiting for `Running` | The app waits through `events` | When there is a caller that cannot observe state |
 | timeout parameters for read, write, and connect | handled via task cancellation | depending on the response from F6 |
@@ -522,7 +522,7 @@ The RemoteDebug session answered F1 through F13 (confirmed in the Go code at com
 | TCP 53 at the service IP (DNS over TCP) | There is no OS resolver querying the service IP with `.inProcess`, and the utun device has no stack attached. Keep M5's RST | When MagicDNS responses over 512 bytes actually occur in tunnel mode (requires attaching the stack to the utun device) |
 | TLS, HTTP | N9, F1 | M7 |
 | Byte `AsyncSequence` (`for try await chunk in connection`) | A one-line loop around `read` | |
-| finding stack timeout: scans all connections | up to 256 connections | when the upper limit is increased |
+| Finding the stack's next deadline by scanning all connections | Up to 256 connections | When the limit increases substantially |
 | Per-packet `[UInt8]` allocation and copying | Same structure as through M5 | When gate throughput records show a bottleneck |
 
 ## Tests
@@ -531,12 +531,12 @@ The RemoteDebug session answered F1 through F13 (confirmed in the Go code at com
 
 `Tests/SwiftailNetstackTests/` (new test target):
 
-1. **Codec**. Round-trip parsing and encoding of IPv4 and IPv6 segments. Checksum (odd length, multiple carries, IPv6 pseudo-header). Options: MSS and Window Scale, alignment skewed by NOP, bytes after EOL, unknown options, length 0 or 1 or extending past the header, shift 15, MSS in a non-SYN segment. Data offset 4 and 16 (outside the header). Packet with IPv4 options. No crash on arbitrary bytes (10,000 fixed seeds).
+1. **Codec**. Round-trip parsing and encoding of IPv4 and IPv6 segments. Checksum (odd length, multiple carries, IPv6 pseudo-header). Options: MSS and Window Scale, alignment skewed by NOP, bytes after EOL, unknown options, length 0 or 1 or extending past the header, shift 15, MSS in a non-SYN segment. Data offset 4 and 16 (outside the header). Packet with IPv4 options. No crash on arbitrary bytes (10,000 inputs per fuzz case, with a fixed seed for each case).
 2. **Sequence number**: Comparison, difference, and window inclusion judgment when exceeding the 2^32 boundary.
 3. **State machine paths** (two connections linked in memory). Passive and active open, bidirectional data, all close orders (one side first, simultaneous, reverse-direction data after half-close), RST on `close` with unread data, RST for data received after close, `abort`, refusal (RST on SYN), retransmission limits and elapsed times for SYN, SYN-ACK, and data, FIN-WAIT-2 deadline, FIN retransmission in TIME-WAIT, keep-alive (probe after 2 hours, restart on response, close after 9 unanswered probes).
-4. **Segment processing order** (one test per line in TCP notes §4.2). Four cells in the acceptability table, ACK for out-of-window segments, trimming segments that straddle the window, RST for invalid ACK in SYN-SENT, RST for invalid ACK in SYN-RECEIVED, WL1 and WL2 window update rules, and `SEG.ACK > SND.NXT`.
+4. **Segment processing order** (one test per line in TCP notes §4.2). All four cases in the segment acceptability table, ACK for out-of-window segments, trimming segments that straddle the window, RST for invalid ACK in SYN-SENT, RST for invalid ACK in SYN-RECEIVED, WL1 and WL2 window update rules, and `SEG.ACK > SND.NXT`.
 5. **RFC 5961**. RST outside the window (drop), exactly at RCV.NXT (reset), and elsewhere in the window (challenge ACK). SYN in a synchronized state (challenge ACK), ACK outside its range, and suppression of the 11th challenge ACK within 5 seconds.
-6. **Sequence wraparound**: On a connection with ISS at `0xFFFF_F000`, sends 1MiB. Observes a full sequence wrap when transmitting beyond 4GiB, with fake data (only length) used to simulate a full cycle.
+6. **Sequence wraparound**: Send 1MiB over a connection with ISS `0xFFFF_F000`. For a transfer beyond 4GiB, use simulated data (length only) to verify a full sequence-number wrap.
 7. **Retransmission timer**. Compare to a table calculated by hand from the RFC 6298 §2.2 and §2.3 formulas. Minimum and maximum, backoff, Karn (discard samples for retransmitted segments), and §5.7.
 8. **Congestion control**. Initial window, transition from slow start to congestion avoidance, fast retransmit and cwnd on 3 duplicate ACKs, partial and full ACK, cwnd and ssthresh after RTO, and reduction after idle. Values come from a table calculated using RFC formulas.
 9. **Flow control**. The sender stops at the window if the receiver does not read. Test the 0-window probe interval and resume when the window opens, receiver and sender SWS avoidance, shrinking windows, and delayed ACK (immediately on the second segment, after 40ms for a single segment, and immediately for out-of-order data).
@@ -544,9 +544,9 @@ The RemoteDebug session answered F1 through F13 (confirmed in the Go code at com
 11. **Stack**. Connection and listener lookup, both RST forms with no connection, no response to RST, RST for ACK to a listener, limits (64 being established, 16 per peer, queue 32 and 16 per peer share, 256 connections, 16 listeners) and no response to excess SYN, two-address peer's share (combined across both addresses), identical non-SYN responses on listening and non-listening ports, 16KiB receive window before acceptance and window update after it, ISN increases with time for the same 4-tuple and differs for another 4-tuple, port selection skips TIME-WAIT 4-tuples, and address change yields `peerRemoved`.
 12. **Loss injection (property test)**. Put a fake link between two stacks (`LinkSimulator`, with seeded randomness for loss, reordering, duplication, and delay) and run on a fake clock. Send 1MiB in each direction with loss {0, 1, 5, 20}% × reordering {absent, present} × duplication {absent, present} × delay {1ms, 50ms, 500ms} × multiple seeds. Check ① matching hashes of received bytes, ② completion within the specified fake time, ③ buffers within limits at every step, and ④ both connections disappear into CLOSED afterward. Print the seed on failure.
 
-`Tests/SwiftailTests` (node, socket absent):
+`Tests/SwiftailTests` (node, no sockets):
 
-13. **Name Interpretation** (Behavior A2): IP address, FQDN, short name, case and dot, IPv4 first, unknown name, non-peer address, self name.
+13. **Name resolution** (behavior A2). IP address, FQDN, short name, letter case and trailing dot, IPv4 first, unknown name, non-peer address, and the node's own name.
 14. **Waiting and cancellation**. A `read` with no data waits and resumes, data remains after a canceled `read`, a canceled `write` ends the connection, a canceled `connect`, a second call in the same direction gets `concurrentUse`, waiting calls get `notRunning` when `run()` ends, and a dropped connection is reset with RST.
 15. **Address ownership changes** (behavior X10). Peer removal from the netmap, same address assigned to a different key, and a local address change.
 16. **Device**. `listen` and `connect` produce `invalidConfiguration` on `.utun` and `.memory`. `inboundPackets` is empty on `.inProcess`. A connection to a local address reaches the local listener and transfers 1MiB (queue from behaviors N3 and N4).
@@ -559,11 +559,11 @@ The RemoteDebug session answered F1 through F13 (confirmed in the Go code at com
 
 ### (a) Go peer (gVisor)
 
-Launches a Swift node in `.inProcess` mode against the `tailnet` (testcontrol + DERP + STUN + Go tsnet peer) in `Tools/interop`. The test is located in `Tests/SwiftailInteropTests/NetstackTests.swift` and is skipped if `SWIFTAIL_TAILNET` is not set.
+Start a Swift node with `.inProcess` against `tailnet` from `Tools/interop` (testcontrol + DERP + STUN + Go tsnet peer). The tests live in `Tests/SwiftailInteropTests/NetstackTests.swift` and skip when `SWIFTAIL_TAILNET` is absent.
 
 Commands to add to the `tailnet` tool. Each responds immediately and the transfer runs in the background because the tool handles commands sequentially.
 
-- `peerServe`: `{"cmd":"peerServe","name":"go-peer-a","port":9100}`. Open that peer's tsnet listener. Run "Transfer" below for each accepted connection.
+- `peerServe`: `{"cmd":"peerServe","name":"go-peer-a","port":9100}`. Open that peer's tsnet listener. Run the transfer described below for each accepted connection.
 - `peerDial`: `{"cmd":"peerDial","name":"go-peer-a","to":"100.64.0.2","port":9100,"send":104857600,"seed":1,"timeoutSec":15}`. The peer connects to the Swift node.
 - Implementation decisions (M6-9a, 2026-11-15. See `Tools/interop/README.md` for the exact protocol). `peerDial` returns a `transferID` immediately and the transfer runs in the background. The dialing side first sends a 16-byte header containing **the length the receiving side will send (UInt64 BE) + seed (UInt64 BE)**. The header does not count toward the byte total or SHA-256. Data concatenates successive updated LCG64 states (`x₀ = seed`, `xₙ₊₁ = 6364136223846793005 × xₙ + 1442695040888963407 mod 2⁶⁴`) as 8-byte little-endian values and truncates the final word at the length. Both directions run concurrently. On finishing a send, use `CloseWrite`, and read through EOF on the receiving side. `peerClose` only closes the listener. There is no loss or delay injection on the Go side (use the Swift node's loss hook). `addKernelPeer` was not implemented (N7). A bidirectional 100MB transfer between two Go peers took about 1.8 seconds (loopback).
 - `transfers`: List of completed or ongoing transfers. Each entry is `{"name","remote","sent","sentSHA256","received","receivedSHA256","elapsedMs","error","state"}`.
@@ -572,19 +572,19 @@ Commands to add to the `tailnet` tool. Each responds immediately and the transfe
 
 | # | Items to verify | Pass criteria |
 | --- | --- | --- |
-| 1 | Swift listens, Go connects | After 3-way handshake, both sides simultaneously send 100MB in each direction. Both sides compute SHA-256 hashes and byte counts, which must match. Record the elapsed time and throughput. |
-| 2 | Swift connects, Go listens | Identical to #1. Connects using different names (FQDN, short name) and IP addresses. |
+| 1 | Swift listens, Go connects | After 3-way handshake, each side sends 100MB to the other concurrently. Both sides compute SHA-256 hashes and byte counts, which must match. Record the elapsed time and throughput. |
+| 2 | Swift connects, Go listens | Same as item 1. Connect using each of the FQDN, short name, and IP address. |
 | 3 | IPv6 | As in #1 and #2, but using the peer's IPv6 tailnet address, sending 10MB each. |
 | 4 | DERP-only | Block the direct path using the M4 gate method and run item 1 with 100MB. Overflow in the DERP channel causes real loss. Hashes match and the transfer does not stall |
 | 5 | Refusal | When Go connects to a Swift port with no listener, the connection ends with "connection refused" before the timeout. When Swift connects to a Go port with no listener, the result is `refused`. |
 | 6 | Close and abort | Half-close (one direction completes even after the other finishes first). Go sees a reset error when Swift calls `abort`. Swift receives `reset` when Go aborts. A normal close yields EOF on both sides |
 | 7 | Concurrent connections | Open 32 connections simultaneously, sending 4MB in each direction. All hashes match. Record the peak `phys_footprint` of the process during this time. |
-| 8 | 1% loss | Run item 1 with 20MB and `setInProcessLoss(rate: 0.01, seed:)`. Hashes match and there is no interval longer than 30 seconds with no increase in received byte count. Record throughput for N3 |
+| 8 | 1% loss | Run item 1 with 20MB and `setInProcessLoss(rate: 0.01, seed:)`. Hashes match and the received byte count never stops increasing for 30 seconds or longer before the transfer completes. Record throughput for N3 |
 | 9 | 5% loss | Same as item 8 with `rate: 0.05` and the same criteria. Record throughput |
 | 10 | Limits | No reply to SYN for one peer's 65th connection (64 per remote peer) and 17th unaccepted connection (16 per-peer queue share, or 33rd before 2026-11-17). Connections establish once space becomes available. The node stays up. Unit tests check the total cap of 256 and queue cap of 32 because reaching them requires multiple peers |
 | 11 | Regression | M3, M4, and M5 gate (a) all continue to pass on the `.memory` device |
 
-"Does not stall" means that the transfer completes and the longest interval without an increase in received bytes is under 30 seconds.
+"Does not stall" means that the transfer completes and the longest interval without receive progress is under 30 seconds.
 
 Gate (a) results (2026-11-15, run by the lead session on a single development Mac's loopback tailnet, Go peer with gVisor netstack)
 
@@ -596,15 +596,15 @@ Gate (a) results (2026-11-15, run by the lead session on a single development Ma
   | Debug | Approximately 19 seconds (approximately 11 MB/s) | 40–55 seconds | Approximately 20 seconds |
   | Release | 8.85 seconds (23.7 MB/s, approximately 11.8 MB/s per direction) | Approximately 11.5 seconds | 9.0 seconds, CPU 23.6 seconds |
 
-  Measured with the same tool, a 100MB bidirectional transfer between two Go peers (gVisor ↔ gVisor) took about 1.8 seconds. **Swift is about 5 times slower even in release.** CPU time exceeds transfer time (1.3 cores), so per-packet processing cost (about 33µs) appears to be the bottleneck. This covers the whole UDP receive → `Magicsock` → WireGuard → engine → stack → application path, plus test data generation and hashing. Where it is spent was not measured. The gate criteria were met (matching hashes, no stall, and throughput recorded). Reducing the cost is a separate unit that starts with measurements.
-- **Loss** (20MiB per direction, seed 19766): debug 0% 11.1MB/s, 1% 7.8MB/s (70%), 5% 0.23MB/s. Release 0% 23.6MB/s, 1% 6.0MB/s (26%), 5% 0.22MB/s. Throughput at 1% loss is above 1/10 of that at 0%, so **N3: Leave SACK (M6-10) unopened** (it was opened on reevaluation after fixing the transfer path, see "Results after the three improvement units" below). At 5% loss, 20MiB takes about 3 minutes (no stall, longest receive interval about 3~4 seconds).
+  Measured with the same tool, a 100MB bidirectional transfer between two Go peers (gVisor ↔ gVisor) took about 1.8 seconds. **Swift is about 5 times slower even in release.** CPU time exceeds transfer time (1.3 cores), so per-packet processing cost (about 33µs) appears to be the bottleneck. This covers the whole UDP receive → `Magicsock` → WireGuard → engine → stack → application path, plus test data generation and hashing. The time spent in each part was unmeasured. The gate criteria were met (matching hashes, no stall, and throughput recorded). Reducing the cost is a separate unit that starts with measurements.
+- **Loss** (20MiB per direction, seed 19766): debug 0% 11.1MB/s, 1% 7.8MB/s (70%), 5% 0.23MB/s. Release 0% 23.6MB/s, 1% 6.0MB/s (26%), 5% 0.22MB/s. Throughput at 1% loss is above 1/10 of that at 0%, so **N3: Do not start SACK work (M6-10)** (it was opened on reevaluation after fixing the transfer path, see "Results after the three improvement units" below). At 5% loss, 20MiB takes about 3 minutes (no stall, longest receive interval about 3~4 seconds).
 - **Memory** (peak `phys_footprint` sample, entire test process): about 14MB for direct 100MiB transfer and about 50~57MB for 32 concurrent connections (debug). **A DERP-only 100MiB transfer used 81MB in release.** Why it is so much higher than direct remains unverified (check for accumulation on the DERP send side).
 
 Measurements (2026-11-15, taken by another session with `sample` in a release build before fixes)
 
 - The **node actor** is the bottleneck rather than the TCP stack. The actor accounts for 93% of time during transfer, which makes transfer times consistent across runs. Between 2 stacks connected in memory, 100MiB bidirectional takes about 0.44 seconds (about 2.4µs per packet). Through the node, one datagram takes about 33µs.
 - Breakdown: timer deadline calculation 24.6% (`rearmTimer` is called 3 times per datagram, each with a copy of the entire value and an array allocation), UDP `sendto` 21.2% (called in the actor), WireGuard 20% (about 30% of that is cryptographic computation, the rest copying and allocation), `recvfrom` 5.9%, concurrency runtime 4.9%, TCP state machine 3.2%, TCP buffers 0.2%. Allocation, deallocation, copying, and reference counting make up 30.8% of the total.
-- Group size was 1 (one actor entry per datagram, with `advance` each time). Delayed ACKs did not coalesce, so one pure ACK was sent per segment. The UDP receive queue (256 items) filled and dropped 913 packets. As a result, "simultaneous bidirectional" transfer effectively ran one direction at a time.
+- Batch size was 1 (one actor entry per datagram, with `advance` each time). Delayed ACKs did not coalesce, so one pure ACK was sent per segment. The UDP receive queue (256 items) filled and dropped 913 packets. As a result, "simultaneous bidirectional" transfer effectively ran one direction at a time.
 - **The 81MB on the DERP path came from Tasks for 5-second write deadlines, not the queue** (`withTimeout` in `DERPClient.writeLoop`). Tasks and timers stayed alive for 5 seconds even after writes finished, accumulating in proportion to write rate × 5 seconds (about 70,000 Tasks at peak). All contract queue limits were enforced. This is a defect that also affects iOS extension memory.
 - Effects of temporary fixes measured cumulatively: rearm the timer only at the outermost level and calculate deadlines without allocations → 6.9 seconds, window update condition → 6.6 seconds, group UDP receives and call `advance` once at the end → 3.6 seconds, move `sendto` outside the actor → **2.29 seconds, CPU 4.1 seconds** (before fixes, 8.87 seconds and 11.4 seconds).
 - This opened three improvement units: node transfer path (grouped receive, timer, `sendto`, window updates), DERP write deadline, and WireGuard copies.
@@ -615,22 +615,22 @@ Results after the three improvement units (2026-11-15, lead session run, same Ma
 | --- | --- | --- |
 | Direct path 100MiB × 2 | 8.85 seconds (23.7 MB/s) | 2.03 seconds (103 MB/s) |
 | CPU time | Approximately 11.5 seconds | Approximately 4.0 seconds |
-| Dedicated DERP 100MiB × 2 | 9.0 seconds, CPU 23.6 seconds | 4.1 seconds, CPU 10.1 seconds |
-| Peak sample of `phys_footprint` for dedicated DERP | 81 MB | 17 MB |
+| DERP-only 100MiB × 2 | 9.0 seconds, CPU 23.6 seconds | 4.1 seconds, CPU 10.1 seconds |
+| Peak sample of `phys_footprint` for DERP-only | 81 MB | 17 MB |
 | Peak sample of `phys_footprint` for direct path | Approximately 14 MB | Approximately 15 MB |
 | Loss 0% (20MiB × 2) | 23.6 MB/s | 81 MB/s |
 | Loss 1% | 6.0 MB/s (delegated session baseline measurement: 10.1 MB/s) | 3.6–5.0 MB/s (over three runs) |
 | 5% loss | 0.22MB/s | 0.20~0.27MB/s |
 
-- Passed a full test suite including 14 verification items (originally 16 groups in merge prior to review, now reduced to the gate group and fixed target unit tests after review).
-- Reduced to approximately 1.8 seconds between Go peers.
+- The full test suite, including the 14 verification items, passed. All 16 suites ran on the merged code before review fixes. After those fixes, the gate suite and the affected targets' unit tests passed.
+- Transfer time approached the roughly 1.8 seconds measured between two Go peers.
 - **Throughput at 1% loss decreased.** It was 0.04~0.06 times that at 0%. The cause is gVisor's duplicate ACK counting in behavior F5. Without SACK, data-bearing segments reset the duplicate ACK count to 0. This simultaneously bidirectional test waits for the peer's RTO (200ms) instead of fast retransmit. As Swift became faster, data-bearing segments went out closer together, magnifying the effect. One-way loss throughput had yet to be measured.
 - **One-way transfer** (20MiB, gate test `oneWayLoss`, closer to actual use with large transfers in one direction). Swift→Go at 0% loss 82MB/s and 1% loss 6.3MB/s. Go→Swift at 0% 80MB/s and 1% 2.0MB/s. At 0%, 20MiB finishes in about 0.25 seconds, so connection setup and teardown bound those measurements and the actual ratio is lower. At 1% loss, the longest receive interval is about 0.5 seconds, suggesting some losses wait for RTO (at least 200ms) instead of recovering through fast retransmit. Account for loopback's RTT of nearly 0, which makes one RTO look much costlier than on a real network.
 - **N3 reevaluation: Open SACK (M6-10) because throughput at 1% loss is below 1/10 of 0% in bidirectional and one-way transfers.** Split into two units.
   - M6-10a receiver side. Negotiate SACK-Permitted and emit receive-buffer ranges as SACK blocks (RFC 2018). This lets the peer (gVisor or kernel) retransmit multiple losses from one window at once. Targets Go→Swift, the slowest direction. This is a small change.
   - M6-10b sender side. Use received SACK blocks to select lost ranges and retransmit them (RFC 6675). This is the largest part of the state machine, so open implementation based on measurements after 10a and real device records (first adopter review result 5). First, check the TCP notes against RFC 6675.
   - SACK does not fully address the weakness of simultaneous bidirectional transfer. Even when it negotiates SACK, gVisor does not count data-bearing ACKs as duplicate ACKs (`isDupAck` in `snd.go` requires `seg.logicalLen() == 0`. The lead session verified this in the source).
-- The values prior to the fix were measured during a separate test process that consumed one CPU core for over three hours (the process was later terminated). The values after the fix show no such impact.
+- The values prior to the fix were measured during a separate test process that consumed one CPU core for over three hours (the process was later terminated). The post-fix measurements were free of interference from that process.
 
 After receiver-side SACK (M6-10a) (2026-11-15, same conditions. Throughput at 1% loss in MB/s, with ranges due to substantial run-to-run variation)
 
@@ -659,13 +659,13 @@ After receiver-side SACK (M6-10a) (2026-11-15, same conditions. Throughput at 1%
 | 1 | Kernel connects and Swift listens | Hashes match for 100MB in each direction. Record throughput |
 | 2 | Swift connects, kernel listens | Same as #1 |
 | 3 | 1%·5% loss | (a) Same criteria as 8·9 |
-| 4 | Close and break | Same as (a) 6 |
+| 4 | Close and abort | Same as gate (a) item 6 |
 | 5 | Options selected by the kernel | Capture SYN and SYN-ACK and record MSS, Window Scale, SACK-Permitted, and Timestamps (fill in TCP notes §11 item 4). The kernel uses only options Swift negotiates |
 | 6 | (Real device) iPhone receives 100MB from Mac's Swift listener | Hash matches. Record throughput for Wi-Fi and cellular separately. |
 
 #### (b) First measurements for item 6: real device, Wi-Fi (2026-11-15, first adopter session)
 
-Mac mini Swiftail host (`.inProcess`, minimal HTTPS server, TLS via bridge) → iPhone 14 Pro (iOS 27.2, Swiftail tunnel variant, kernel TCP) `GET /file`, on the same Wi-Fi. Production tailnet and staging certificate. Both sides recorded the same 100MiB (104,857,600-byte) length, with no disconnection.
+An iPhone 14 Pro (iOS 27.2, Swiftail tunnel variant, kernel TCP) requested `GET /file` from a Swiftail host on a Mac mini (`.inProcess`, minimal HTTPS server, TLS via the bridge) on the same Wi-Fi. Production tailnet and staging certificate. Both sides recorded the same 100MiB (104,857,600-byte) length, with no disconnection.
 
 | Execution | Path | Time | Speed | Longest pause |
 | --- | --- | --- | --- | --- |
@@ -676,12 +676,12 @@ Mac mini Swiftail host (`.inProcess`, minimal HTTPS server, TLS via bridge) → 
 
 - Baseline (Go tunnel + Go host over direct UDP in review result 5) was 23.0 seconds. This takes **about 1.4 times as long**.
 - Extension memory was 8.8MiB immediately before transfer and 9.0MiB immediately after. No samples during transfer.
-- There is no measurement starting on a clean direct path (both started on DERP or fluctuated). The 25~44 seconds to establish a direct path is investigated separately (`SwiftailMagicsock.md`).
+- There is no measurement starting on a clean direct path (both started on DERP or fluctuated). The 25~44 seconds to establish a direct path is investigated separately ([Direct Path Delay Investigation](SwiftailMagicsock.md#direct-path-delay-investigation-2026-11-16)).
 - The 0.57~1.15-second stalls look like RTO expirations. Add connection close statistics logging to observe RTO and retransmission counts and whether the iPhone kernel includes SACK (M6-10b S1 below). Measure again after inspecting that line.
 
 #### (b) Second measurements for item 6: starting on a direct path (2026-11-16, first adopter session)
 
-Same configuration, same Wi-Fi, both sides on `b27b482` (after TSMP disco key advertising was added). The first contact after enabling the tunnel established direct in about 2 seconds (`SwiftailMagicsock.md`, "Real device remeasurement"). Both full transfers started after direct was established. Neither fell back to `relayed` during transfer.
+Same configuration, same Wi-Fi, both sides on `b27b482` (after TSMP disco key advertising was added). The first contact after enabling the tunnel established direct in about 2 seconds ([Real-Device Remeasurement](SwiftailMagicsock.md#real-device-remeasurement-2026-11-16-first-adopter-session)). Both full transfers started after direct was established. Neither fell back to `relayed` during transfer.
 
 | Run | Path | iPhone measured time | Speed | Longest stall | Server measured time |
 | --- | --- | --- | --- | --- | --- |
@@ -699,7 +699,7 @@ Same configuration, same Wi-Fi, both sides on `b27b482` (after TSMP disco key ad
 Immediately after the iPhone left Wi-Fi for cellular (`pdp_ip0`), it received Range 0~8MiB once from the same server. The Mac was behind a home router. Both sides ran `b27b482`.
 
 ```
-Connection closed: finished, lifetime 5898ms, sent 8404074B, retransmitted 0B, RTO 0, fast retransmits 0, partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, max cwnd 4059334B, ssthresh reductions 0
+Connection ended: finished, lifetime 5898ms, sent 8404074B, retransmitted 0B, RTO 0, fast retransmits 0, partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, peak cwnd 4059334B, ssthresh reductions 0
 ```
 
 - **The iPhone kernel negotiates SACK** (`SACK negotiated true`). This satisfies one of S1's two conditions.
@@ -721,14 +721,14 @@ Dependencies on 10a (receiver side). Align names when 10a is finalized.
 | Added | Rationale |
 | --- | --- |
 | Scoreboard and Update, IsLost, and SetPipe (TCP notes §12.3) | RFC 6675 §4. Basis for recovery |
-| RFC 6675 definition of duplicate ACK (new SACK information) | RFC 6675 §2. Use data-bearing and window-changing ACKs as loss signals too (this direction of the bidirectional weakness in behavior F5) |
+| RFC 6675 definition of duplicate ACK (new SACK information) | RFC 6675 §2. Use data-bearing and window-changing ACKs as loss signals too (this addresses the Swift-to-peer direction of the weakness described in behavior F5) |
 | Entry into recovery (1)(2)(4), recovery in progress (A)(B)(C) | RFC 6675 §5 |
 | NextSeg rules 1·2·3 | RFC 6675 §4. Rule 3 is SHOULD (originally MAY from RFC 3517) |
-| Clearing scoreboard from RTO, retransmitting from left endpoint, skipping SACK intervals received after RTO | RFC 2018 §5 (SHOULD/MUST), RFC 6675 §5.1 (SHOULD) |
+| Clearing the scoreboard on RTO, retransmitting the leftmost segment, and skipping ranges SACKed after RTO | RFC 2018 §5 (SHOULD/MUST), RFC 6675 §5.1 (SHOULD) |
 | Condition for new recovery after RTO: `HighACK >= RecoveryPoint` | RFC 6675 §5.1 (MUST NOT) |
 | Verification of received blocks and scoreboard upper bound, reneging check | Behavior X. For portions not specified in RFC, this contract's choice applies (below §4) |
 
-| subtracts | reason | reopens condition |
+| Excluded | Rationale | When to revisit |
 | --- | --- | --- |
 | NextSeg rule 4 (rescue retransmission) | SHOULD. Applies only when there is a loss at the window end and no new data to send. For large transfers, it occurs once at the end of the response and costs one RTO (200ms) | When gate or real device records show RTO at the end of a response, or small HTTP response latency is reported as a problem (lead session confirmation S2) |
 | limited transmit (RFC 6675 §5 (3), RFC 3042) | MAY. Already omitted (exclusions table). Helps only with loss in small windows where 3 duplicate ACKs do not accumulate | When counters show RTOs with cwnd below 4 segments account for much of the total |
@@ -745,10 +745,10 @@ Dependencies on 10a (receiver side). Align names when 10a is finalized.
 
 - Representation is an array of half-open ranges `[start, end)` expressed as **distances from the send buffer's `startSequence` (data-side `SND.UNA`)**. Ordered by `start`, disjoint and nonadjacent, with `start >= 1`. The byte at `SND.UNA` cannot be SACKed because the cumulative ACK would already have passed it. This is the same approach as `ReceiveBuffer` expressing ranges as distances from `RCV.NXT`.
 - Upper bound is data-side `SND.NXT` (distance to `min(SND.NXT, FIN sequence number)`). The FIN sequence number is excluded from the scoreboard (gVisor also covers only data, TCP notes §12.8).
-- Also store `retransmittedEnd` (RFC HighRxt + 1, same distance representation). It is meaningful only on entering recovery.
+- Also store `retransmittedEnd` (RFC HighRxt + 1, same distance representation). It becomes meaningful only when recovery begins.
 - On cumulative ACK, shift the distances by that amount and remove ranges ending at `0` or below. Check for reneging at this point (behavior SR10).
 - **Limit: 32 ranges** (the same count and rules as behavior F4's receive buffer). An ACK can carry up to 4 blocks (RFC 2018 §3). Dividing a 256KiB send buffer by MSS 1240 gives about 212 segments, so the worst case of alternating ranges needs about 106 ranges. Loss detection needs only the top three ranges and a byte count (RFC 6675 §4). A Swift peer (32 receive-buffer ranges) cannot report more than 32. gVisor uses 100 (TCP notes §12.8). At 32 ranges, **discard blocks that need a new range** and accept blocks that extend or join existing ranges (gVisor discards even merging blocks at 100, which this does not follow). Discarded information only marks those bytes as not SACKed. Correctness is preserved, at the cost of possible unnecessary retransmission or conservative overestimation of pipe. Memory is at most 512 bytes per connection and at most 128KiB across 256 connections.
-- CPU. Each ACK merges 4 blocks × 32 ranges. SetPipe and loss boundary calculation scale with the number of ranges (SR6 and SR7 below), as does one NextSeg per segment sent. No calculation iterates byte by byte.
+- CPU. Merging is bounded by 4 blocks × 32 ranges per ACK. SetPipe and loss boundary calculation scale with the number of ranges (SR6 and SR7 below), as does one NextSeg per segment sent. No calculation iterates byte by byte.
 
 **Changes to existing types** (the implementation unit finalizes names and arguments)
 
@@ -764,47 +764,47 @@ Test and gate counters (lead session confirmation S9) are per-connection counts 
 ### 3. Behaviors (SR)
 
 1. **Branch**. For a non-SACK connection, keep existing behaviors R6 and R7 (NewReno). Even for an SACK connection, **if the scoreboard is empty when entering recovery** (the peer permits SACK but emits no blocks, which RFC 2018 §4 allows), use NewReno for that recovery. RFC 6675 recovery with an empty scoreboard cannot choose what to send on a partial ACK and waits for RTO (NextSeg rules 1 and 3 require SACK). Lead session confirmation S5.
-2. **Recording blocks** (RFC 6675 §4 Update, §5 (B.1)). For a segment that passed behavior X3 ACK validation, validate blocks under §4 below and merge them **after** processing cumulative ACK and moving `SND.UNA`. Return whether there was "new SACK information" (whether at least one previously un-SACKed byte was marked).
+2. **Recording blocks** (RFC 6675 §4 Update, §5 (B.1)). For a segment that passed behavior X3 ACK validation, process the cumulative ACK and move `SND.UNA` first. **Then** validate the blocks under §4 below and merge them. Return whether there was "new SACK information" (whether at least one previously un-SACKed byte was marked).
 3. **Duplicate ACKs** (RFC 6675 §2 and §5). On receiving a cumulative ACK, reset DupAcks to 0 (MUST), then increment it by 1 if this ACK is a duplicate (the source states the two sentences in this order). An SACK connection's duplicate ACK is one for which **SR2 produced new SACK information or the current RFC 5681 §2 definition is met** (lead session confirmation S4). Count the former regardless of data, window change, or cumulative ACK progress. Count the latter too so performance does not worsen with a peer that emits no blocks (SR1). The protection RFC 6675 §8 attributes to the SACK criterion (duplicate ACKs caused by forged out-of-window segments) is already provided by WireGuard in the tailnet (introduction to behavior X).
 4. **Entry** (RFC 6675 §5 (1), (2), and (4)). When outside recovery with a duplicate ACK and `SEG.ACK >= recover`, enter if `DupAcks >= 3` or `IsLost(SND.UNA)`. (4.1) Set `recover = SND.NXT`. (4.2) Set ssthresh and cwnd from the table above. (4.3) Retransmit `min(SMSS, start of first SACK range)` from `SND.UNA` and set `retransmittedEnd` to its end. (4.4) and (4.5) Run SetPipe, then (C). If neither condition matches, send nothing extra (limited transmit is absent. As now, only new data that cwnd permits goes out at the end of handling an incoming ACK).
 5. **ACKs in recovery** (RFC 6675 §5 (A)~(C)). (A) If `SEG.ACK >= recover`, finish recovery. Keep the scoreboard above `SND.UNA` (SHOULD NOT clear). With cwnd unchanged, up to `cwnd − FlightSize` bytes can go out in succession (the burst noted in RFC 6675 §5 and accepted here). (B) Apply SR2 and SetPipe. (C) While `cwnd − pipe >= SMSS`, send what NextSeg selects and add its bytes to pipe. During recovery, `transmitNext` equals `SND.NXT` (no go-back-N).
-6. **Loss detection** (RFC 6675 §4 IsLost). Sequence S is lost if there are 3 or more SACK ranges above it, or if the number of SACKed bytes above S is **greater than** `2·SMSS` (gVisor uses greater than or equal, which this does not follow. Lead session confirmation S8). SMSS is `sendMaximumSegmentSize` (Eff.snd.MSS). Count merged ranges in the scoreboard (TCP notes §12.11 item 1). The test is monotonic, becoming true as S decreases (the SACKed portion above it only grows), so lost bytes are the un-SACKed bytes from `SND.UNA` to a boundary L. L is the start of the first range to cross the threshold while scanning down from the highest range. Compute it in one pass proportional to the range count (derived in this contract and compared against a slow byte-level implementation in tests).
+6. **Loss detection** (RFC 6675 §4 IsLost). Sequence S is lost if there are 3 or more SACK ranges above it, or if the number of SACKed bytes above S is **greater than** `2·SMSS` (gVisor uses greater than or equal, which this does not follow. Lead session confirmation S8). SMSS is `sendMaximumSegmentSize` (Eff.snd.MSS). Count merged ranges in the scoreboard (TCP notes §12.8, difference 2). The test is monotonic, becoming true as S decreases (the SACKed portion above it only grows), so lost bytes are the un-SACKed bytes from `SND.UNA` to a boundary L. L is the start of the first range to cross the threshold while scanning down from the highest range. Compute it in one pass proportional to the range count (derived in this contract and compared against a slow byte-level implementation in tests).
 7. **pipe** (RFC 6675 §4 SetPipe). For each un-SACKed byte in `[SND.UNA, data-side SND.NXT)`, add 1 if it is at or above L and 1 if it is before `retransmittedEnd`. The sum is in bytes (gVisor uses segments). Compute it in proportion to range count.
 8. **Selecting what to send** (RFC 6675 §4 NextSeg). ① If the smallest un-SACKed sequence S2 at or above `max(SND.UNA, retransmittedEnd)` is below the end of the highest SACK range and below L, select `[S2, min(S2 + SMSS, start of next SACK range))`. ② Otherwise, select one new data segment (at most SMSS. Apply window and sender SWS avoidance under current `transmit` rules). ③ Otherwise, select S3 as in ① without the L condition. ④ Otherwise, send nothing. Trimming at the next SACK range is this contract's choice, unspecified by the RFC, and avoids retransmitting bytes already received. Sending through ① or ③ moves `retransmittedEnd` to the end of what was sent ((C.2)). As today, retransmissions ignore the peer's window (RFC 7323 §2.4), discard RTT samples per Karn (behavior R2), and do not count toward the retransmission limit (behavior R4. Only RTO expiration counts). If a selected range ends at the FIN sequence number and FIN has already been sent, include FIN (as in current `retransmitFirstUnacknowledgedSegment`).
 9. **RTO** (in addition to behaviors R3, R4, and R6, RFC 2018 §5 and RFC 6675 §5.1). Clear the entire scoreboard (SHOULD, as in gVisor), exit recovery if in it, and set `recover = SND.NXT`. Do not start new SACK recovery until `SEG.ACK >= recover` (MUST NOT). Keep go-back-N retransmission from `SND.UNA` (always retransmit the leftmost segment, MUST), but skip ranges SACKed by **blocks received after RTO** (SHOULD, as in gVisor `snd.go:1118-1123`). Follow RFC 6298 timer behavior unchanged (default in RFC 6675 §6).
 10. **reneging** (RFC 2018 §8, this contract's check). When a cumulative ACK moves `SND.UNA` to v, if v is at the start of or inside an SACK range (`start <= v < end`), the receiver no longer holds the SACKed data. If it still held that range, the cumulative ACK would be at or beyond its end. Late ACKs do not move `SND.UNA` and are outside this check. Clear the entire scoreboard. If in recovery, continue it (an empty scoreboard has nothing to select) and let RTO handle what remains. Data is retained until cumulative ACK, so it is not lost. Lead session confirmation S6.
 11. **0 window·persist·FIN·closing**:
     - 0-window probes (behavior F8) are enabled only when nothing is in flight, so they do not overlap recovery. If the peer's window becomes 0 in recovery, retransmissions under ① and ③ still go out (they were in-window when first sent), while new data under ② stops. The shrunk-window exception (under behavior F8) is unchanged because it concerns RTO counting.
-    - FIN is outside the scoreboard. If the right edge of a block exceeds the FIN number, the data is truncated to the end of the data (as below 4).
+    - FIN is outside the scoreboard. If the right edge of a block exceeds the FIN number, trim the block to the end of the data (see §4 below).
     - Recovery runs only in states where `transmit` currently runs (ESTABLISHED, CLOSE-WAIT, FIN-WAIT-1, CLOSING, LAST-ACK). Clear the scoreboard on entering TIME-WAIT or termination. The `readClosed` rule (released connections in behavior F8) stays the same.
-12. **Wording to update** (when finalizing this draft)
+12. **Wording to update when finalizing this draft**
     - NewReno row of "Scope supported in M6": Add "SACK connections use RFC 6675 recovery (M6-10b)."
     - At the end of behavior R6, prepend "If this is not an SACK connection or the SR1 exception applies" to "On 3 duplicate ACKs, apply RFC 5681 §3.2 steps 2~6 with …". The `recover` comparison (`ACK > recover`) under "Implementation decisions" uses `>=` in SACK recovery.
     - Behavior R7, "Retransmit one segment starting from SND.UNA every time (no SACK)". Use SR8 for SACK connections and SR9 skipping for go-back-N after RTO.
-    - At the end of the second item under behavior F5, "SACK (M6-10) addresses this loss recovery weakness". SR3 resolves it in the direction sent by Swift (counting data-bearing ACKs too), and it remains in the direction sent by Go because of gVisor's `isDupAck` (TCP notes §12.8, difference 1).
+    - At the end of the second item under behavior F5, "SACK (M6-10) addresses this loss recovery weakness". SR3 resolves it when Swift is the sender (counting data-bearing ACKs too), and it remains when Go is the sender because of gVisor's `isDupAck` (TCP notes §12.8, difference 1).
     - The 10b item under "Results after the three improvement units" points to this draft.
-    - Behavior M table: "SACK scoreboard section | 32 per connection | discards that block" row.
+    - Behavior M table: "SACK scoreboard ranges | 32 per connection | Drop that block" row.
     - Behavior X: new item (summary of below 4).
     - Replace the "SACK (sender and receiver)" exclusions row with the exclusions table in §1 above.
-    - Test 8·12: adds below 5. Ownership file for implementation unit M6-10 row: below 6's table.
+    - Add §5 below to tests 8 and 12. Use the table in §6 below for the files owned by implementation unit M6-10.
     - Code doc comments: "No SACK (contract lead session decision N3)" in `NewRenoCongestionControl.swift`, "Retransmissions always start at `SND.UNA` (contract behavior R7, no SACK)" in the `TCPConnection+Sending.swift` header, and the `isDuplicateAcknowledgment` doc comment in `TCPConnection+Receiving.swift`.
-    - Sentence in TCP note 4.7(7) defining duplicate ACKs, pointing to the SACK connection definition. Note 12.7 contains this list.
+    - In TCP notes §4.7 item 7 (definition of duplicate ACKs), add a sentence pointing to the definition for SACK connections. TCP notes §12.7 lists these changes.
 
 ### 4. Validation of received blocks
 
 For each block, from SR2, after processing the cumulative ACK, examine `SND.UNA` (denoted U) and data-side `SND.NXT` (denoted E). The distance is a signed 32-bit difference as per behavior W5.
 
-1. If not a SACK connection, do not process SACK option (the peer should not send it. RFC 2018 4).
+1. If not a SACK connection, ignore the SACK option. The peer must not send it (RFC 2018 §4).
 2. At most 4 blocks per segment (the codec validates option length `8*n+2`, 10a). Do not assume sorting (RFC 2018 §4).
-3. `s = left end − U`, `e = right end − U`. Discard the block if the following condition holds:
+3. `s = left edge − U`, `e = right edge − U`. Discard the block if the following condition holds:
    - `s <= 0` means the block starts at or below U. This includes D-SACK (below the cumulative ACK of the same packet), late ACKs, and inconsistent blocks. D-SACK is not identified separately or used, so the RFC 2883 §5 comparison rules are unnecessary.
    - `e <= s`: Empty or reversed. A block of nearly 2³² size, cycling through 2³², is here (gVisor does not perform this check. TCP note 12.9).
    - A right edge beyond `SND.NXT` SACKs unsent data.
-   Then truncate `e` to E (covering the FIN number portion). If after truncation `e <= s`, discard it.
+   Then truncate `e` to E (this removes any part covering the FIN sequence number). If after truncation `e <= s`, discard it.
 4. Merge remaining blocks. Discard blocks requiring a 33rd range (see §2 above).
-5. If D-SACK reiterates an already SACKed segment above the cumulative ACK, no change occurs upon combining (no new information, so it is not counted as a duplicate ACK).
-6. Discarded blocks do not respond and do not terminate the connection. ACK processing for different blocks of the same segment remains unchanged.
-7. Cumulative ACK reneging check (SR10).
+5. If D-SACK reiterates an already SACKed range above the cumulative ACK, no change occurs upon combining (no new information, so it is not counted as a duplicate ACK).
+6. Discarding a block produces no response and leaves the connection open. Process the other blocks and the ACK in the same segment as usual.
+7. Check for reneging on the cumulative ACK (SR10).
 
 This bounds memory used by false blocks (32 ranges) and CPU per ACK (4 blocks × 32 ranges), prevents permanently skipping unsent data due to SACK, and rejects reversed blocks under wrapping arithmetic. A peer can still delay **its own connection** until RTO through false SACKs or reneging (correctness holds, and if cumulative ACK does not advance, behavior R4's limit ends the connection). Even if false SACKs reduce pipe, in-flight bytes stay within cwnd (halved on entering recovery), the peer's window, and the 256KiB send buffer.
 
@@ -825,16 +825,16 @@ Connection (`Tests/SwiftailNetstackTests/Connection/ConnectionSACKRecoveryTests.
 8. Send 10 segments and lose the third → enter on the third ACK carrying blocks (DupAcks). Another case: three large segments are SACKed in one ACK → enter on the first ACK (`IsLost(SND.UNA)`). Compare cwnd, ssthresh, pipe, and `retransmittedEnd` at each step to a hand-calculated table.
 9. Lose three segments in one window (#2, #5, #7) → retransmit three ranges in one recovery without RTO, and the retransmitted bytes match the lost bytes.
 10. Lose new data sent during recovery → use ① in the same recovery. Lose the segment immediately following recover → after recovery ends, reenter with `SEG.ACK >= recover` (a case where NewReno would hit RTO).
-11. Lose retransmission → RTO → scoreboard empty, retransmit `SND.UNA` → skip interval after received block. During recovery, RTO → do not re-enter before `SEG.ACK >= recover`.
-12. An ACK carrying data, or an ACK with a changed window, triggers a duplicate ACK if it carries a new block. If SACK is not enabled, the current test (no data or window-change ACKs are recorded) proceeds as-is.
+11. Lose retransmission → RTO → scoreboard empty, retransmit `SND.UNA` → skip ranges covered by blocks received after the RTO. During recovery, RTO → do not re-enter before `SEG.ACK >= recover`.
+12. An ACK carrying data, or an ACK with a changed window, counts as a duplicate ACK if it carries a new block. If SACK is not enabled, the current test (data-bearing ACKs and ACKs with window changes do not count as duplicates) still passes unchanged.
 13. Peer allows SACK but does not send a block → NewReno recovery (the current recovery test is also run with SACK-enabled connection).
-14. Reneging: After sending SACK, if the cumulative ACK reaches within the segment → scoreboard is cleared and transmission continues to completion.
+14. Reneging: After the peer sends a SACK block, the cumulative ACK reaches a sequence number within that SACKed range → scoreboard is cleared and transmission continues to completion.
 15. Invalid blocks: 1,000 ACKs with 4 blocks each (fixed seed, mix below U, above `SND.NXT`, reversed, and valid) → no crash, at most 32 ranges, and received byte hashes match.
 16. Peer window becomes 0 during recovery (retransmissions go out and new data stops), a gap that includes FIN, recovery in CLOSE-WAIT and FIN-WAIT-1, and empty scoreboard after termination.
 
 `LinkSimulator` property tests (add to test 12)
 
-17. Add one more dimension: SACK on/off (enable and disable the negotiation on both sides of 10a). Add to current four properties (hash, time, buffer limit, CLOSED) the scoreboard segment ≤ 32.
+17. Add one more dimension: SACK on/off (enable and disable the negotiation on both sides of 10a). Add to current four properties (hash, time, buffer limit, CLOSED) the scoreboard range count ≤ 32.
 18. Burst loss: Use `DropRule` to drop k consecutive packets once in one direction (k ∈ {3, 10, 30}). With SACK enabled, there are 0 RTO expirations (seeds without retransmission loss), and the virtual completion time is shorter than with SACK disabled.
 
 Gate measurements. Add records only to gates (a) and (b), with no new pass criteria.
@@ -846,7 +846,7 @@ Gate measurements. Add records only to gates (a) and (b), with no new pass crite
 
 **Change Scale (Estimated)**:
 
-| File | Increased lines (including document comments) |
+| File | Lines added (including documentation comments) |
 | --- | --- |
 | `Sources/SwiftailNetstack/Recovery/SACKScoreboard.swift`(new) | about 200 |
 | `Sources/SwiftailNetstack/Recovery/NewRenoCongestionControl.swift` | about 40 |
@@ -861,8 +861,8 @@ About 400 lines of product code (about 12% of the current 3,348 lines of `Swifta
 
 - Overestimating pipe can keep `cwnd − pipe < SMSS` and stall until RTO. Underestimating it can cause a burst. Comparison with the byte-level reference implementation (test 6) is the main defense.
 - Off-by-one difference between the RFC's inclusive endpoints (HighRxt and RecoveryPoint) and this code's half-open endpoints.
-- State machine that combines recovery path and go-back-N (`transmitNext`). During recovery, the invariant `transmitNext = SND.NXT` is observed in every test.
-- Relies on the peer's SACK generation. If XNU does not generate a SACK block, the benefit is ineffective at the first adopter (TCP note 12.11 4).
+- State machine that combines recovery path and go-back-N (`transmitNext`). During recovery, the invariant `transmitNext = SND.NXT` is checked in tests.
+- Relies on the peer's SACK generation. If XNU does not generate a SACK block, the first adopter gains nothing from it (TCP notes §12.11 item 4).
 - cwnd stays unchanged when recovery ends, so a large cumulative ACK causes a burst (acknowledged in RFC 6675 §5).
 
 **Is it worth adding? Calculations and rationale.** The values below are all estimates. Use MSS 1240 (IPv4 tailnet, behavior T5) and a 200ms RTO minimum (behavior R1).
@@ -877,20 +877,20 @@ About 400 lines of product code (about 12% of the current 3,348 lines of `Swifta
    - **Loss of the segment immediately after recover**. The NewReno rule (`ACK − 1 > recover`) blocks entry and causes RTO. This is the first new data sent in recovery, so with 1% loss it occurs in about 1% of recoveries.
 5. **First adopter**: Large transfers use the path Mac(Swift) → iPhone kernel, mostly via direct Wi-Fi. It is still unknown whether XNU generates SACK blocks (gate (b) 5). If not, 10b has no effect.
 
-**Assessment**. There is a benefit. Compared with "throughput at 1% random loss" (estimated 5~15% on a real network), the benefit is mainly in **burst loss recovery time, stalls longer than 200ms due to RTO, and using data-bearing and window-changing ACKs as loss signals**. The first adopter's benefit depends on XNU emitting SACK. After 10a, ① check XNU's SACK-Permitted and SACK blocks in gate (b) item 5 and ② use the counters above to measure RTO expirations in current code and their causes (uncounted window-changing or data-bearing ACKs, loss of a retransmission, or insufficient duplicate ACKs). If XNU emits SACK, implement the scope in §1. If ② attributes most RTOs to the duplicate ACK definition, S2 option (b) also captures that benefit (SACK for entry only, about 100 lines).
+**Assessment**. There is a benefit. Compared with "throughput at 1% random loss" (estimated 5~15% on a real network), the main benefits are **faster recovery from burst loss, fewer RTO stalls over 200ms, and the use of data-bearing and window-changing ACKs as loss signals**. The first adopter's benefit depends on XNU emitting SACK. After 10a, ① check XNU's SACK-Permitted and SACK blocks in gate (b) item 5 and ② use the counters above to measure RTO expirations in current code and their causes (uncounted window-changing or data-bearing ACKs, loss of a retransmission, or insufficient duplicate ACKs). If XNU emits SACK, the recommendation is to implement the scope in §1. If ② attributes most RTOs to the duplicate ACK definition, S2 option (b) also captures that benefit (SACK for entry only, about 100 lines).
 
 ### M6-10b lead session confirmation needed
 
 | # | What | Options | Recommendation | Reason |
 | --- | --- | --- | --- | --- |
 | S1 | When to open | (a) Immediately after 10a / (b) After 10a, after checking XNU SACK and RTO counters / (c) Defer until after M7 | (b) | Assessment in §6. The benefit for the first adopter depends on XNU, and the cause of RTOs changes the answer to S2 |
-| S2 | Scope | (a) Table in §1 (NextSeg 1~3, pipe, skipping after RTO) / (b) SACK for entry only (enter using SR3's definition and `IsLost(SND.UNA)`, retransmit with NewReno) / (c) Add rescue (rule 4) to (a) | (a). Use (b) if counters point to the duplicate ACK definition | (b) addresses data-bearing and window-changing ACKs in about 100 lines but does not address burst loss. Rescue is SHOULD, but it costs one RTO at the end of the response, so open it based on the records |
+| S2 | Scope | (a) Table in §1 (NextSeg 1~3, pipe, skipping after RTO) / (b) SACK for entry only (enter using SR3's definition and `IsLost(SND.UNA)`, retransmit with NewReno) / (c) Add rescue (rule 4) to (a) | (a). Use (b) if counters point to the duplicate ACK definition | (b) addresses data-bearing and window-changing ACKs in about 100 lines but does not address burst loss. Rescue is SHOULD, but omitting it costs one RTO at the end of the response. Use measurements to decide whether to add it |
 | S3 | Scoreboard limit | (a) 32 ranges, drop only blocks requiring a new range / (b) 100 ranges (gVisor) / (c) Half the segment count of the send buffer (about 106) | (a) | Easy to read because the count and rule match the receive buffer. The top three ranges suffice for loss detection. Dropped information has only a conservative effect |
 | S4 | Duplicate ACK for SACK connection | (a) As defined in RFC 6675 or RFC 5681 / (b) Only as defined in RFC 6675 / (c) Both must be filled, as in gVisor | (a) | (b) Becomes worse than current when the peer does not send blocks. (c) Re-discards an ACK carrying data. Protection in RFC 6675 Section 8 is provided by WireGuard. |
 | S5 | SACK connection with scoreboard empty upon entry | (a) Recovery follows NewReno / (b) As per RFC 6675 verbatim | (a) | (b) Has no data to send for partial ACKs and thus waits for RTO. |
 | S6 | Reneging detection | (a) Clear if cumulative ACK reaches the start of or anywhere inside an SACK range (SR10) / (b) Clear only on RTO (gVisor) | (a) | One comparison proportional to the range count. Errata 1610 requires robust detection. Without it, correctness holds but recovery waits for RTO |
 | S7 | Scoreboard on RTO | (a) Clear (RFC 2018 §5 SHOULD, gVisor) / (b) Keep (allowed by Errata 1610, Linux) | (a) | (b) assumes robust reneging detection, and the erratum does not specify the method |
-| S8 | Byte threshold for IsLost | (a) greater than `2·SMSS` (RFC) / (b) or equal (gVisor) | (a) | RFC 6675 section 9 states that it maintains the requirement for "three segments" |
+| S8 | Byte threshold for IsLost | (a) greater than `2·SMSS` (RFC) / (b) at least `2·SMSS` (gVisor) | (a) | RFC 6675 §9 states that it maintains the requirement for "three segments" |
 | S9 | Test and gate counters | (a) Connection `package` counters (RTO expirations, recovery entries, retransmitted bytes) / (b) No counters, count from output segments | (a) | Property test 18 and S1's ② can read the RTO count directly. The counters are not logged, so they do not conflict with behavior K |
 
 Lead session decision (2026-11-15). **S1 is (b).** Open it after merging 10a and remeasuring, checking XNU SACK in gate (b) item 5, and reviewing RTO counters. Do not implement before then. Start S2~S9 as recommended when opening the work, and revisit S2 based on the counters. A different session verifies TCP notes §12 against the original RFCs before implementation.
@@ -909,9 +909,9 @@ Divide ownership so files do not overlap. "Architecture" and each behavior defin
 | M6-5 | Stack (behaviors S, X7·X8) | `Sources/SwiftailNetstack/Stack/*`, `Tests/SwiftailNetstackTests/Stack/*` | After M6-4 |
 | M6-6 | Independent tests: `LinkSimulator` and property tests (test 12), and cases from tests 4, 5, 6, and 10. Write using only the contract and TCP notes | `Tests/SwiftailNetstackTests/Support/*`, `Tests/SwiftailNetstackTests/Scenarios/*` | A **different session** from M6-4's author. Write the harness in parallel with M6-4 and run tests after M6-5 |
 | M6-7 | Go reference tool and fixtures, and comparison test | `Tools/interop/cmd/tcpfixtures/`, `Tests/SwiftailNetstackTests/Fixtures/tcp-segments.json`, `Tests/SwiftailNetstackTests/Wire/GoSegmentComparisonTests.swift`, new section in `Tools/interop/README.md` | Tool in **parallel**. A different session writes the comparison test after M6-1 |
-| M6-8 | Node integration (behavior N·A·K, X10): `TunnelDevice.inProcess`, stack linking and queue, public API, name parsing, pending calls, dropped handles, loss hook | `Sources/Swiftail/**`, `Tests/SwiftailTests/Netstack*` (tests 13–16) | After M6-5 |
-| M6-9 | Gate: (9a) `tailnet` tool's `peerServe`·`peerDial`·`transfers`·`peerClose`·`addKernelPeer` and README, (9b) `NetstackTests.swift` and documentation on how to attach two Swiftail nodes to a test control server to run `listen`·`connect` (first adopter review result 6) | `Tools/interop/cmd/tailnet/*`, the `tailnet` section in `Tools/interop/README.md`, `Tests/SwiftailInteropTests/NetstackTests.swift` | (9a) is used **in parallel** (differs from the README section in M6-7). (9b) follows M6-8 |
-| M6-10 | SACK. 10a receiver side (negotiation, emitting SACK blocks), 10b sender side (RFC 6675 recovery, opened based on measurements after 10a) | `Sources/SwiftailNetstack/Recovery/SACK*` and files from M6-1, M6-2, and M6-4 | Opened because gate (a) item 8 was below the N3 threshold (2026-11-15) |
+| M6-8 | Node integration (behavior N·A·K, X10): `TunnelDevice.inProcess`, stack linking and queue, public API, name resolution, pending calls, dropped handles, loss hook | `Sources/Swiftail/**`, `Tests/SwiftailTests/Netstack*` (tests 13–16) | After M6-5 |
+| M6-9 | Gate: (9a) `tailnet` tool's `peerServe`·`peerDial`·`transfers`·`peerClose`·`addKernelPeer` and README, (9b) `NetstackTests.swift` and documentation on how to attach two Swiftail nodes to a test control server to run `listen`·`connect` (first adopter review result 6) | `Tools/interop/cmd/tailnet/*`, the `tailnet` section in `Tools/interop/README.md`, `Tests/SwiftailInteropTests/NetstackTests.swift` | 9a can proceed **in parallel** because it edits a different README section from M6-7. 9b follows M6-8 |
+| M6-10 | SACK. 10a receiver side (negotiation, emitting SACK blocks), 10b sender side (RFC 6675 recovery, start based on measurements after 10a) | `Sources/SwiftailNetstack/Recovery/SACK*` and files from M6-1, M6-2, and M6-4 | Opened because gate (a) item 8 was below the N3 threshold (2026-11-15) |
 
 Order: M6-0 → (M6-1, 2, 3, 6 harness, 7 tool, 9a) in parallel → M6-4 → M6-5 → M6-6 tests → M6-8 → M6-9b → review by another session → lead session reruns gate (a) → gate (b) → M6-10 (if needed).
 
@@ -919,31 +919,31 @@ Order: M6-0 → (M6-1, 2, 3, 6 harness, 7 tool, 9a) in parallel → M6-4 → M6-
 
 One log line at connection closure records the values needed for M6-10b S1 (① how many RTOs and fast retransmits occurred, ② whether the peer kernel includes SACK blocks) without expanding the public diagnostic API.
 
-**Where counters are collected**. The connection state machine stores them in the `TCPConnection.Statistics` value (`package`). Each value is counted in one line at the point where the event occurs (`TCPConnection+Sending`, `+Receiving`, `+Timers`, and `+Opening`). The stack includes the value in `.closed(id, reason, statistics)` (for connections reported on entering TIME-WAIT, the counts stop at entry), and the node appends it to the `Connection closed` log entry (`privacy: .public`). The statistics contain only numbers and Booleans. The node omits addresses, ports, and peer names (behavior K2). Every connection the application has held gets one entry. Connections that end during establishment or while queued produce no event and therefore no log entry.
+**Where counters are collected**. The connection state machine stores them in the `TCPConnection.Statistics` value (`package`). Each value is counted in one line at the point where the event occurs (`TCPConnection+Sending`, `+Receiving`, `+Timers`, and `+Opening`). The stack includes the value in `.closed(id, reason, statistics)` (for connections reported on entering TIME-WAIT, the counts stop at entry), and the node appends it to the `Connection ended` log entry (`privacy: .public`). The statistics contain only numbers and Booleans. The node omits addresses, ports, and peer names (behavior K2). Every connection the application has held gets one entry. Connections that end during establishment or while queued produce no event and therefore no log entry.
 
-**Connections released by the application (updated 2026-11-16)**. A connection the application releases with `close` or `abort` also emits the same line **once** when TCP finishes and appends `, closed after release`. "When TCP finishes" means when the connection enters CLOSED (final ACK, RST, retransmission or keep-alive limit, or FIN-WAIT-2 deadline) or enters TIME-WAIT. The reason names and meanings are the same as for connections held by the application, and the values are counted up to that point (including retransmissions after release). Application events and `TailnetConnection` behavior stay the same. Closure of a released connection only produces a log entry and does not wake application calls. A connection that already logged closure while held and was then released does not log again. Connections dropped together when the node stops may omit the log entry.
+**Connections released by the application (updated 2026-11-16)**. A connection the application releases with `close` or `abort` also emits the same line **once** when TCP finishes and appends `, ended after release`. "When TCP finishes" means when the connection enters CLOSED (final ACK, RST, retransmission or keep-alive limit, or FIN-WAIT-2 deadline) or enters TIME-WAIT. The reason names and meanings are the same as for connections held by the application, and the values are counted up to that point (including retransmissions after release). Application events and `TailnetConnection` behavior stay the same. Closure of a released connection only produces a log entry and does not wake application calls. A connection that already logged closure while held and was then released does not log again. Connections dropped together when the node stops may omit the log entry.
 
 When a peer sent FIN first, the application called `close` immediately (common in HTTP servers), so even normal closure produced no log line. This is exactly the case for statistics from connections where the server sent a large response.
 
 The node uses the stack output `.releasedConnectionClosed(reason, statistics)` only for logging. It sits outside the application's `Event` type. An `abort` or a `close` that finishes immediately produces a single log line from the `.closed` emitted by that call. Tests are `StackReleasedCloseTests` and `NetstackCloseLogTests`. Gate (2026-11-16): 0 warnings, unit tests 79·231·226·142·340·37·243·256, interop tests 62·8·5.
 
-Line from a real transfer (2026-11-16, real tailnet, this node sent 100MiB to an HTTP server, relayed for the first 3 seconds and then direct)
+Line from a real transfer (2026-11-16, real tailnet, this node sent 100MiB as the HTTP server, relayed for the first 3 seconds and then direct)
 
 ```
-Connection closed: reset, lifetime 53189ms, sent 105002661B, retransmitted 439044B, RTO 7, fast retransmits 2, partial ACK retransmits 1, duplicate ACKs 428, ACKs with SACK 435, SACK negotiated true, max cwnd 4729196B, ssthresh reductions 8, closed after release
+Connection ended: reset, lifetime 53189ms, sent 105002661B, retransmitted 439044B, RTO 7, fast retransmits 2, partial ACK retransmits 1, duplicate ACKs 428, ACKs with SACK 435, SACK negotiated true, peak cwnd 4729196B, ssthresh reductions 8, ended after release
 ```
 
-The retransmitted amount was 0.42% of the sent amount. Of 10 loss recoveries, 7 were RTOs and only 2 were fast retransmits. There were 435 ACKs with SACK. Lifetime includes idle time after the transfer and cannot be used to infer transfer speed. One transfer does not determine the benefit of sender-side SACK.
+The retransmitted amount was 0.42% of the sent amount. Of 10 loss recoveries, 7 were RTOs and only 2 were fast retransmits. The sender received 435 ACKs with SACK. Lifetime includes idle time after the transfer and cannot be used to infer transfer speed. One transfer does not determine the benefit of sender-side SACK.
 
 **Format**
 
 ```
-Connection closed: aborted, lifetime 240ms, sent 262144B, retransmitted 0B, RTO 0, fast retransmits 0, partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, max cwnd 143840B, ssthresh reductions 0
+Connection ended: aborted, lifetime 240ms, sent 262144B, retransmitted 0B, RTO 0, fast retransmits 0, partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, peak cwnd 143840B, ssthresh reductions 0
 ```
 
 | Name | Meaning |
 | --- | --- |
-| lifetime | From the first SYN (active open) or SYN-ACK (passive open) until the node processed `.closed`, in milliseconds |
+| lifetime | From the first send of a SYN (active open) or SYN-ACK (passive open) until the node processed `.closed`, in milliseconds |
 | sent | Data bytes sent for the first time, excluding SYN and FIN |
 | retransmitted | Data bytes retransmitted by go-back-N after RTO, fast retransmit, or partial ACK. Excludes the 1-byte 0-window probe |
 | RTO | The number of retransmission timer expirations for data or FIN, excluding SYN or SYN-ACK expirations |
@@ -952,7 +952,7 @@ Connection closed: aborted, lifetime 240ms, sent 262144B, retransmitted 0B, RTO 
 | duplicate ACKs | The number of ACKs that met the RFC 5681 §2 definition (no data, same window as the previous ACK, and so on) |
 | ACKs with SACK | The number of received segments with a SACK option that passed ACK validation (RFC 5961 §5.2). Counts arrivals regardless of negotiation. Blocks are still unused |
 | SACK negotiated | The peer SYN (SYN-ACK) contained SACK-Permitted. This side always includes the option on an active open and includes it on a passive open only if the peer sent it, so both sides negotiated it |
-| max cwnd | The maximum cwnd in bytes immediately after acknowledgment of new data outside fast recovery. Excludes the inflated value during recovery. If no data was sent, this is the initial window (IPv4 12400). If the connection ended before establishment, this is 0 |
+| peak cwnd | The maximum cwnd in bytes immediately after acknowledgment of new data outside fast recovery. Excludes the inflated value during recovery. If no data was sent, this is the initial window (IPv4 12400). If the connection ended before establishment, this is 0 |
 | ssthresh reductions | The number of times a loss (three duplicate ACKs or the first RTO expiration for the same segment) reduced ssthresh from its previous value |
 
 Receiver-side values (maximum out-of-order range count and number of dropped segments) are omitted because they are not counted.
@@ -967,5 +967,5 @@ Receiver-side values (maximum out-of-order range count and number of dropped seg
 **How to use the statistics for M6-10b S1**. Run one 100MiB Mac (Swiftail) → iPhone transfer and inspect the log line for the sending connection.
 
 1. If `SACK negotiated true` and `ACKs with SACK` is greater than 0, XNU emits SACK blocks (the answer to gate (b) item 5). If `SACK negotiated false`, or loss occurred (`ssthresh reductions` > 0) and `ACKs with SACK` is 0, it emits none and 10b will have no effect for the first adopter (assessment in §6 item 5).
-2. If `RTO` is comparable to `fast retransmits`, RTO is the main cause of stalls. If the gap between `duplicate ACKs` and `ACKs with SACK` is large, the duplicate ACK definition accounts for that benefit (S2 option (b), SACK only for recovery entry). If the gap is small and there are many `partial ACK retransmits`, multiple losses in one window (burst loss) point to S2 option (a).
-3. If there are almost no `RTO` events and only `fast retransmits`, something other than loss recovery accounts for the difference between 32 seconds and 23 seconds (check max cwnd to see whether the window failed to grow). In that case, 10b offers little benefit.
+2. If `RTO` is comparable to `fast retransmits`, RTO is the main cause of stalls. If the gap between `duplicate ACKs` and `ACKs with SACK` is large, changing the duplicate ACK definition captures that part of the benefit (S2 option (b), SACK only for recovery entry). If the gap is small and there are many `partial ACK retransmits`, multiple losses in one window (burst loss) point to S2 option (a).
+3. If there are almost no `RTO` events and only `fast retransmits`, something other than loss recovery accounts for the difference between 32 seconds and 23 seconds (check `peak cwnd` to see whether the window failed to grow). In that case, 10b offers little benefit.
