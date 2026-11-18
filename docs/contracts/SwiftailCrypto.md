@@ -1,50 +1,50 @@
-# SwiftailCrypto 계약 (M0)
+# SwiftailCrypto Contract (M0)
 
-CryptoKit에 없는 암호 기본기를 제공한다. X25519와 ChaCha20-Poly1305(12바이트 nonce)는 CryptoKit을 그대로 쓰므로 여기에 감싸지 않는다.
+Provides cryptographic primitives missing from CryptoKit. Use CryptoKit directly for X25519 and ChaCha20-Poly1305 (12-byte nonce), so this module provides no wrappers for them.
 
-## 쓰는 곳
+## Uses
 
-| 기본기 | 쓰는 프로토콜 |
+| Primitive | Protocols that use it |
 | --- | --- |
-| BLAKE2s-256, HMAC-BLAKE2s, HKDF-BLAKE2s | WireGuard 핸드셰이크, 제어 프로토콜 Noise |
-| 키 있는 BLAKE2s(16바이트 출력) | WireGuard mac1·mac2 |
+| BLAKE2s-256, HMAC-BLAKE2s, HKDF-BLAKE2s | WireGuard handshake, control protocol Noise |
+| Keyed BLAKE2s (16-byte output) | WireGuard mac1 and mac2 |
 | XChaCha20-Poly1305 | WireGuard cookie reply |
-| NaCl box·secretbox (Curve25519-XSalsa20-Poly1305) | DERP clientInfo·serverInfo, disco |
+| NaCl box and secretbox (Curve25519-XSalsa20-Poly1305) | DERP clientInfo and serverInfo, disco |
 
-## 공개 API
+## Public API
 
-입력은 `some DataProtocol`, 키·nonce·출력은 `[UInt8]`이다. 길이가 틀린 키·nonce는 `CryptoError.invalidLength`를 던진다. 던지는 함수는 모두 타입 있는 오류(`throws(CryptoError)`)다. `BLAKE2s.init`만 예외로, 잘못된 길이는 프로그래머 오류이므로 `precondition`으로 막는다.
+Inputs use `some DataProtocol`, and keys, nonces, and outputs use `[UInt8]`. Keys and nonces of incorrect lengths throw `CryptoError.invalidLength`. All throwing functions use typed errors (`throws(CryptoError)`). The sole exception is `BLAKE2s.init`, which enforces lengths with a `precondition` because an incorrect length is a programmer error.
 
 ```swift
 public enum CryptoError: Error, Sendable, Equatable {
-    case invalidLength          // 키·nonce·암호문 길이가 규격과 다름
-    case authenticationFailed   // 태그 불일치
-    case invalidKey             // X25519 결과가 전부 0(저차 점)
+    case invalidLength          // Key, nonce, or ciphertext length differs from the specification
+    case authenticationFailed   // Tag mismatch
+    case invalidKey             // The X25519 result is all 0 (low-order point)
 }
 
-/// RFC 7693 BLAKE2s. 순차 모드만.
+/// RFC 7693 BLAKE2s in sequential mode only.
 public struct BLAKE2s: Sendable {
-    /// outputByteCount는 1...32, key는 0...32바이트.
+    /// The outputByteCount is 1...32, and the key is 0...32 bytes.
     public init(outputByteCount: Int = 32, key: [UInt8] = [])
     public mutating func update(_ data: some DataProtocol)
-    /// 지금까지의 입력에 대한 해시. 상태를 바꾸지 않으므로 이어서 update할 수 있다.
+    /// Returns the hash of the input so far. The state is unchanged, so you can continue calling update.
     public func finalize() -> [UInt8]
     public static func hash(_ data: some DataProtocol, outputByteCount: Int = 32, key: [UInt8] = []) -> [UInt8]
 }
 
-/// RFC 2104 HMAC, 해시는 BLAKE2s-256(블록 64바이트). 출력 32바이트.
+/// RFC 2104 HMAC using BLAKE2s-256 (64-byte block). The output is 32 bytes.
 public enum HMACBLAKE2s {
     public static func authenticationCode(for data: some DataProtocol, key: [UInt8]) -> [UInt8]
 }
 
-/// Noise·WireGuard의 KDFn.
+/// KDFn from Noise and WireGuard.
 /// PRK = HMAC(chainingKey, input), T1 = HMAC(PRK, 0x01), T2 = HMAC(PRK, T1 ‖ 0x02), T3 = HMAC(PRK, T2 ‖ 0x03).
 public enum HKDFBLAKE2s {
-    /// outputCount는 1...3. 각 출력은 32바이트.
+    /// Accepts an outputCount of 1...3. Each output is 32 bytes.
     public static func derive(chainingKey: [UInt8], input: some DataProtocol, outputCount: Int) -> [[UInt8]]
 }
 
-/// NaCl crypto_secretbox_xsalsa20poly1305. 출력 배치는 tag(16) ‖ ciphertext.
+/// NaCl crypto_secretbox_xsalsa20poly1305. The output layout is tag(16) ‖ ciphertext.
 public enum NaClSecretBox {
     public static let keyByteCount = 32
     public static let nonceByteCount = 24
@@ -53,14 +53,14 @@ public enum NaClSecretBox {
     public static func open(_ box: some DataProtocol, nonce: [UInt8], key: [UInt8]) throws(CryptoError) -> [UInt8]
 }
 
-/// NaCl crypto_box_curve25519xsalsa20poly1305의 사전 계산(beforenm).
-/// 결과 키로 NaClSecretBox.seal·open을 부르면 crypto_box와 같다.
+/// NaCl crypto_box_curve25519xsalsa20poly1305 precomputation (beforenm).
+/// Calling NaClSecretBox.seal or NaClSecretBox.open with the resulting key is equivalent to crypto_box.
 public enum NaClBox {
-    /// HSalsa20(key: X25519(privateKey, peerPublicKey), input: 0^16). 32바이트.
+    /// HSalsa20(key: X25519(privateKey, peerPublicKey), input: 0^16). 32 bytes.
     public static func sharedKey(privateKey: [UInt8], peerPublicKey: [UInt8]) throws(CryptoError) -> [UInt8]
 }
 
-/// draft-irtf-cfrg-xchacha-03. 출력 배치는 ciphertext ‖ tag(16).
+/// draft-irtf-cfrg-xchacha-03. The output layout is ciphertext ‖ tag(16).
 public enum XChaCha20Poly1305 {
     public static let keyByteCount = 32
     public static let nonceByteCount = 24
@@ -68,68 +68,68 @@ public enum XChaCha20Poly1305 {
     public static func open(_ sealed: some DataProtocol, key: [UInt8], nonce: [UInt8], authenticating aad: some DataProtocol) throws(CryptoError) -> [UInt8]
 }
 
-/// 길이가 같으면 내용과 무관한 시간에 비교한다. 길이가 다르면 false.
+/// Compares equal-length inputs in time independent of their contents. Returns false if the lengths differ.
 public func constantTimeEqual(_ a: [UInt8], _ b: [UInt8]) -> Bool
 ```
 
-## 구현 규칙
+## Implementation Rules
 
-- Salsa20 코어, HSalsa20, HChaCha20, Poly1305는 `internal`로 두고 시험은 `@testable import`로 한다.
-- XChaCha20-Poly1305는 HChaCha20으로 부분 키를 만든 뒤 CryptoKit `ChaChaPoly`에 맡긴다.
-- 비밀 값에 따라 달라지는 분기·표 조회를 쓰지 않는다. 태그 비교는 `constantTimeEqual`로 한다.
-- 인증에 실패하면 평문을 한 바이트도 돌려주지 않는다.
-- 처리량은 목표가 아니다(이 기본기들은 핸드셰이크와 제어 메시지에만 쓰인다). 읽기 쉬운 스칼라 구현으로 쓴다.
+- Keep the Salsa20 core, HSalsa20, HChaCha20, and Poly1305 `internal` and test them with `@testable import`.
+- For XChaCha20-Poly1305, derive the subkey with HChaCha20, then delegate to CryptoKit `ChaChaPoly`.
+- Avoid branches and table lookups that depend on secret values. Compare tags with `constantTimeEqual`.
+- Return no plaintext bytes if authentication fails.
+- Throughput is outside the goals (these primitives are used only for handshakes and control messages). Use readable scalar implementations.
 
-## 관문
+## Gate
 
-1. 규격의 공개 벡터: RFC 7693 부록, BLAKE2 공식 KAT(키 있는 BLAKE2s), RFC 8439의 Poly1305 벡터(§2.5.2, 부록 A.3), NaCl 문서의 box·secretbox 벡터, draft-irtf-cfrg-xchacha-03의 HChaCha20·AEAD 벡터, wireguard-go `device/kdf_test.go`의 HMAC·KDF 벡터.
-2. Go `golang.org/x/crypto`로 만든 교차 벡터(여러 길이, 블록 경계 포함).
-3. 변조 시험: 태그·암호문·nonce·AAD의 한 비트를 바꾸면 `authenticationFailed`.
-4. 구현을 쓴 제공자와 다른 제공자의 코드 검토.
+1. Public specification vectors include the RFC 7693 appendix, the official BLAKE2 KAT (keyed BLAKE2s), the RFC 8439 Poly1305 vectors (§2.5.2, Appendix A.3), the box and secretbox vectors from the NaCl documentation, the HChaCha20 and AEAD vectors from draft-irtf-cfrg-xchacha-03, and the HMAC and KDF vectors from wireguard-go `device/kdf_test.go`.
+2. Cross-implementation vectors generated with Go `golang.org/x/crypto` (multiple lengths, including block boundaries).
+3. Tampering tests. Changing one bit of the tag, ciphertext, nonce, or AAD yields `authenticationFailed`.
+4. Code review by a provider other than the provider that wrote the implementation.
 
-## Ed25519 서명 검증(M8)
+## Ed25519 Signature Verification (M8)
 
-Tailnet Lock의 서명 검증에 쓴다. 서명을 만들지 않고 비밀 값을 다루지 않는다. Go와 모든 입력에서 같은 판정을 내기 위해 CryptoKit의 검증 함수를 쓰지 않고 edwards25519를 순수 Swift로 구현한다(`docs/protocol-notes/tailnet-lock.md` 3.7·6.1).
+Tailnet Lock uses this for signature verification. It creates no signatures and handles no secret values. To match Go's verdict for every input, implement edwards25519 in pure Swift without CryptoKit's verification function (`docs/protocol-notes/tailnet-lock.md` §3.7 and §6.1).
 
 ```swift
 public enum Ed25519Verification {
-    /// ZIP-215 규칙(Go `github.com/hdevalence/ed25519consensus`의 `Verify`와 같은 판정).
+    /// Applies the ZIP-215 rules (the same verdict as `Verify` in Go's `github.com/hdevalence/ed25519consensus`).
     public static func isValidZIP215(signature: [UInt8], message: [UInt8], publicKey: [UInt8]) -> Bool
-    /// Go 표준 라이브러리 `crypto/ed25519`의 `Verify`와 같은 판정.
+    /// Returns the same verdict as `Verify` in Go's standard library `crypto/ed25519`.
     public static func isValidStandard(signature: [UInt8], message: [UInt8], publicKey: [UInt8]) -> Bool
 }
 ```
 
-두 규칙의 정의(Ed25519 순수 변형, k = SHA-512(R ‖ A ‖ M) mod L, R과 A는 받은 바이트 그대로 해시):
+The two rules are defined below (pure Ed25519 variant, k = SHA-512(R ‖ A ‖ M) mod L, hashing R and A exactly as received).
 
-| 검사 | `isValidZIP215` | `isValidStandard` |
+| Check | `isValidZIP215` | `isValidStandard` |
 | --- | --- | --- |
-| 길이(서명 64, 공개 키 32) | 아니면 거짓 | 아니면 거짓(Go는 공개 키 길이가 틀리면 panic) |
-| `sig[63] & 224 == 0` | 필요 | 필요 |
-| A 해독 | 비정준(y ≥ p, x = 0에 부호 비트) 허용, 곡선 밖은 거절 | 같음 |
-| R | 같은 규칙으로 해독 | 해독하지 않고 바이트로 비교 |
-| S | 정준(S < L) | 정준(S < L) |
-| 식 | [8]([S]B − [k]A − R) = 0 | ([S]B − [k]A)의 정준 인코딩 = `sig[0..<32]` |
+| Length (signature 64, public key 32) | False if incorrect | False if incorrect (Go panics if the public key length is wrong) |
+| `sig[63] & 224 == 0` | Required | Required |
+| Decode A | Allow noncanonical encodings (y ≥ p, sign bit with x = 0), reject points off the curve | Same |
+| R | Decode by the same rules | Compare bytes without decoding |
+| S | Canonical (S < L) | Canonical (S < L) |
+| Equation | [8]([S]B − [k]A − R) = 0 | Canonical encoding of ([S]B − [k]A) = `sig[0..<32]` |
 
-구현 규칙:
+Implementation rules follow.
 
-- 필드 GF(2^255−19)는 Go `crypto/internal/fips140/edwards25519/field`의 51비트 림 표현을 옮겼다(출처와 BSD-3-Clause는 `Sources/SwiftailCrypto/Edwards25519/FieldElement.swift` 머리). 점·스칼라·필드 타입은 `internal`이다.
-- 입력이 모두 공개 값이므로 이중 스칼라 곱과 비교는 가변 시간이다. 표를 미리 계산하지 않는다(릴리스 빌드에서 서명 하나 0.08~0.21ms).
-- 어떤 입력으로도 트랩하지 않는다. 길이가 틀리면 거짓이다.
+- Port the 51-bit limb representation for the field GF(2^255−19) from Go's `crypto/internal/fips140/edwards25519/field` (origin and BSD-3-Clause at the top of `Sources/SwiftailCrypto/Edwards25519/FieldElement.swift`). Point, scalar, and field types are `internal`.
+- All inputs are public, so double-scalar multiplication and comparison take variable time. No tables are precomputed (0.08~0.21ms per signature in a release build).
+- No input causes a trap. Incorrect lengths return false.
 
-시험 기준(`Tests/SwiftailCryptoTests/Ed25519VerificationTests.swift`):
+Test criteria (`Tests/SwiftailCryptoTests/Ed25519VerificationTests.swift`) follow.
 
-1. RFC 8032 7.1 벡터 5개: 두 규칙 모두 참.
-2. `ed25519consensus` `zip215_test.go`의 196개: ZIP-215는 모두 참, 표준이 참인 번호 집합은 Go 표준과 같다.
-3. `Tools/interop/cmd/ed25519fixtures`가 뽑은 Go 두 구현의 판정(`Vectors/ed25519-verify.json`): 모든 사례에서 두 규칙 모두 Go와 같다. `SWIFTAIL_ED25519FIXTURES`에 도구 경로를 주면 새로 뽑은 판정과도 견준다.
-4. 필드·스칼라 경계와 점 해독 실패의 단위 시험.
+1. The 5 RFC 8032 §7.1 vectors return true under both rules.
+2. The 196 vectors in `ed25519consensus` `zip215_test.go` all return true under ZIP-215. The set of vector numbers that return true under the standard rules matches standard Go.
+3. Verdicts from both Go implementations collected by `Tools/interop/cmd/ed25519fixtures` (`Vectors/ed25519-verify.json`). Both rules match Go in every case. Supplying the tool path in `SWIFTAIL_ED25519FIXTURES` also compares against freshly generated verdicts.
+4. Unit tests for field and scalar boundaries and point decoding failures.
 
-## BLAKE2b와 Argon2i (M8)
+## BLAKE2b and Argon2i (M8)
 
-Tailnet Lock의 끄기 비밀 검증(`docs/protocol-notes/tailnet-lock.md` 4.5)이 쓴다. Go `tka.DisablementKDF`는 `argon2.Key(secret, "tailscale network-lock disablement salt", 4, 16·1024, 4, 32)`이고, 이것은 Argon2i(버전 0x13, 비밀 키·연관 자료 없음)다. Apple 프레임워크에 둘 다 없어 Swift로 쓴다.
+Tailnet Lock disablement secret verification (`docs/protocol-notes/tailnet-lock.md` §4.5) uses these primitives. Go's `tka.DisablementKDF` is `argon2.Key(secret, "tailscale network-lock disablement salt", 4, 16·1024, 4, 32)`, which is Argon2i (version 0x13, no secret key or associated data). Apple frameworks provide neither primitive, so implement both in Swift.
 
 ```swift
-/// BLAKE2b(RFC 7693). 출력 1~64바이트, 키 0~64바이트. 범위 밖은 BLAKE2s처럼 precondition으로 멈춘다.
+/// BLAKE2b (RFC 7693) with a 1~64-byte output and a 0~64-byte key. A precondition stops execution for out-of-range values, as in BLAKE2s.
 public struct BLAKE2b: Sendable {
     public init(outputByteCount: Int = 64, key: [UInt8] = [])
     public mutating func update(_ data: some DataProtocol)
@@ -137,7 +137,7 @@ public struct BLAKE2b: Sendable {
     public static func hash(_ data: some DataProtocol, outputByteCount: Int = 64, key: [UInt8] = []) -> [UInt8]
 }
 
-/// Argon2i(RFC 9106, 버전 0x13). memoryKiB는 KiB 단위(Go argon2.Key의 memory와 같다).
+/// Argon2i (RFC 9106, version 0x13). memoryKiB is in KiB (the same as memory in Go argon2.Key).
 public enum Argon2i {
     public static func derive(
         password: [UInt8], salt: [UInt8], iterations: UInt32, memoryKiB: UInt32, parallelism: UInt8, outputByteCount: Int
@@ -145,26 +145,26 @@ public enum Argon2i {
 }
 ```
 
-- 범위(RFC 9106 3.1): `parallelism ≥ 1`, `iterations ≥ 1`, `memoryKiB ≥ 8 × parallelism`, `outputByteCount` 4~2^32-1, 입력 길이 2^32-1 이하가 아니면 `CryptoError.invalidLength`. 비용 인자용 경우를 `CryptoError`에 더하지 않은 것은 다른 타깃의 전수 `switch`(`SwiftailMagicsock/DiscoSharedKey.swift`)가 깨지기 때문이다. 솔트 길이의 하한은 RFC 9106 3.1에 없어 두지 않는다. Go는 작은 메모리를 조용히 `8p`로 올리고 출력 길이를 검사하지 않지만 여기서는 거절한다.
-- 차선은 한 스레드에서 조각(slice)마다 차례로 채운다. 같은 조각의 차선끼리는 서로 참조하지 않으므로(RFC 9106 3.4) 병렬 계산과 결과가 같다.
-- 참조 블록은 주소 블록(3.4.1.2)에서만 고른다. 블록 내용에서 색인을 뽑지 않으므로 메모리 접근 순서가 비밀에 따라 달라지지 않는다.
-- 메모리 `memoryKiB` KiB를 한 번에 잡는다. 호출자는 TKA 인자(16 MiB)처럼 감당할 수 있는 값만 준다.
+- Ranges (RFC 9106 §3.1) are `parallelism ≥ 1`, `iterations ≥ 1`, `memoryKiB ≥ 8 × parallelism`, `outputByteCount` of 4~2^32-1, and input lengths no greater than 2^32-1. Values outside these ranges yield `CryptoError.invalidLength`. Adding a cost-parameter case to `CryptoError` would break an exhaustive `switch` in another target (`SwiftailMagicsock/DiscoSharedKey.swift`). RFC 9106 §3.1 specifies no minimum salt length, so there is none here. Go silently raises small memory values to `8p` and skips output length validation. This implementation rejects those out-of-range values.
+- Fill the lanes sequentially, slice by slice, on one thread. Lanes in the same slice do not reference one another (RFC 9106 §3.4), so the result matches parallel computation.
+- Select reference blocks only from address blocks (§3.4.1.2). The memory access order is independent of secrets because the index does not come from block contents.
+- Allocate `memoryKiB` KiB at once. The caller supplies only values it can afford, such as the TKA parameter (16 MiB).
 
-관문:
+Gate criteria follow.
 
-1. BLAKE2b: RFC 7693 부록 A("abc")와 부록 E(자체 시험의 hash of hashes), BLAKE2 공식 KAT(키 없음·키 64바이트 각 256개, `Vectors/blake2b-kat.json`), 출력 길이 1·32·64, 블록 경계 0·1·127·128·129·255·256바이트, 나누어 넣은 `update`의 일치.
-2. Argon2i: RFC 9106 5.2 벡터(비밀 키·연관 자료는 `@testable` 내부 함수로)와 H0, Go `argon2.Key` 기준값 75개(`Vectors/argon2i-go.json`, `Tools/interop/cmd/argon2fixtures`가 만든다. 패스 1~4, 메모리 8~16384 KiB와 4p의 배수가 아닌 값, 병렬도 1·2·4·8, 출력 4~1024바이트, 비밀·솔트 길이 0~200), TKA 인자의 `DisablementKDF(0xa5 × 32)`. `SWIFTAIL_ARGON2FIXTURES`에 도구 경로를 주면 새로 뽑아 견준다.
-3. 범위 밖 인자의 오류.
+1. BLAKE2b. RFC 7693 Appendix A ("abc") and Appendix E (self-test hash of hashes), the official BLAKE2 KAT (256 each unkeyed and with a 64-byte key, `Vectors/blake2b-kat.json`), output lengths 1, 32, and 64, block boundaries at 0, 1, 127, 128, 129, 255, and 256 bytes, and matching results when splitting input across `update` calls.
+2. Argon2i. RFC 9106 §5.2 vectors (secret key and associated data through an internal `@testable` function) and H0, 75 Go `argon2.Key` reference values (`Vectors/argon2i-go.json`, generated by `Tools/interop/cmd/argon2fixtures`, with passes 1~4, memory 8~16384 KiB and values that are not multiples of 4p, parallelism 1, 2, 4, and 8, output 4~1024 bytes, and secret and salt lengths 0~200), and `DisablementKDF(0xa5 × 32)` with the TKA parameters. Supplying the tool path in `SWIFTAIL_ARGON2FIXTURES` generates fresh values for comparison.
+3. Errors for out-of-range parameters.
 
-## 독립 검토 결과 (2026-11-15, Ed25519 검증·BLAKE2b·Argon2i)
+## Independent Review Results (2026-11-15, Ed25519 Verification, BLAKE2b, and Argon2i)
 
-다른 세션이 세 부품을 Go 원본과 줄 단위로 대조하고, 작성 세션의 기준값과 다른 씨앗·다른 종류의 입력을 새로 뽑아 견줬다. **Go와 다른 판정은 찾지 못했다**(새 입력 58,854건: 스칼라 환원 6,131, 필드 연산 10,955짝, 점 해독과 연산 3,892, 이중 스칼라 곱 2,000, 검증 6,649, BLAKE2b 29,120, Argon2i 107. 기존 Ed25519 기준값 1,556건 포함). 새 종류의 입력 2,350건은 `Tests/SwiftailCryptoTests/Vectors/crypto-review-go.json`에 남겼다(임시 Go 프로그램으로 만든 것이라 이 저장소의 명령으로는 다시 만들 수 없다).
+Another session compared the three components against the original Go code line by line and generated new inputs using seeds and input types different from those in the authoring session's reference values. **It found no verdicts that differed from Go** (58,854 new inputs. Scalar reduction 6,131, field operations 10,955 pairs, point decoding and operations 3,892, double-scalar multiplication 2,000, verification 6,649, BLAKE2b 29,120, Argon2i 107. Includes 1,556 existing Ed25519 reference values). The 2,350 inputs of new types were saved in `Tests/SwiftailCryptoTests/Vectors/crypto-review-go.json` (a temporary Go program generated them, so they cannot be regenerated with a command in this repository).
 
-정한 것:
+Decisions follow.
 
-- `Argon2i.derive`의 범위 밖 인자는 따로 된 오류 종류 없이 `CryptoError.invalidLength`다. 부르는 곳이 TKA의 상수 인자뿐이라 종류를 가를 쓰임이 없다.
-- Argon2i는 끝난 뒤 작업 메모리와 중간값을 0으로 지우지 않는다. 입력(끄기 비밀)은 제어 서버가 준 값이고 검증이 참이면 lock을 끄는 데 쓰이고 끝난다. 안전하지 않은 포인터 없이 쓰는 0 대입은 최적화로 사라질 수 있어 지우기를 보장할 수도 없다.
-- `memoryKiB`에 상한이 없다(Go와 같다). 부르는 쪽이 감당할 수 있는 값만 준다.
-- 출력 1~3바이트와 메모리 `8p` 미만은 Go는 받고 Swift는 거절한다(RFC 9106의 범위). TKA 인자와 무관하다.
+- Out-of-range arguments to `Argon2i.derive` yield `CryptoError.invalidLength` without a separate error case. The only call site uses TKA's constant arguments, so it has no use for distinguishing error kinds.
+- Argon2i leaves its working memory and intermediate values without clearing them to 0 on completion. The input (the disablement secret) comes from the control server, and successful verification uses it to disable the lock, ending its use. Assignments of 0 without unsafe pointers can be optimized away, so erasure cannot be guaranteed in any case.
+- There is no upper limit on `memoryKiB` (as in Go). The caller supplies only values it can afford.
+- Go accepts 1~3-byte outputs and memory below `8p`, and Swift rejects them (RFC 9106 ranges). This does not affect the TKA parameters.
 
-확인하지 못한 것: 큰 위수 점의 비정준 인코딩을 쓴 "참인" ZIP-215 서명(그런 점의 이산 로그를 몰라 만들 수 없다. 해독 규칙과 검증 식은 따로 확인했다), Argon2i의 실행 시간이 비밀에 의존하지 않는다는 것의 실측(코드를 읽어 확인했다).
+Unverified items are a ZIP-215 signature that returns true using a noncanonical encoding of a large-order point (it cannot be constructed without knowing the discrete logarithm of such a point, and the decoding rules and verification equation were checked separately), and empirical confirmation that Argon2i execution time is independent of the secret (verified by reading the code).
