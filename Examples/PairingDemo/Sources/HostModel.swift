@@ -203,8 +203,7 @@ final class HostModel {
     /// `PairingHost`의 `decide`. 사용자의 답을 기다린다. 상대가 끊거나 120초가 지나면 이 Task가 취소되고, 그때는 승인
     /// 화면을 내리고 곧 돌아간다.
     private func decide(_ request: PairingRequest) async -> Bool {
-        // 증명을 마친 제안은 이미 쓰였다(계약 P4). 화면의 QR을 내린다.
-        offer = nil
+        // 쓰인 제안의 QR은 이보다 먼저 온 `.used`가 내린다. 여기서 지우면 그사이 새로 연 제안을 지운다.
         log.record(
             .host, "approval-requested",
             automation?.logsConfirmationCode == true ? "확인 숫자 \(request.confirmationCode)" : "사용자의 답을 기다림")
