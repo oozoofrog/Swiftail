@@ -5,7 +5,7 @@ import SwiftailBase
 /// Treat the plaintext as untrusted even after authentication because the remote peer created it. Check the length once here,
 /// strip padding using the IP header's length field, and extract the source address for the AllowedIPs check.
 ///
-/// Whitepaper §5.4.6 (cryptokey routing), `docs/protocol-notes/wireguard.md` "Transport data: receiving" 8
+/// Whitepaper §5.4.6 (cryptokey routing) and `docs/protocol-notes/wireguard.md`, “Receiving transport data,” item 8
 /// (origin: wireguard-go `device/receive.go`).
 struct InboundIPPacket {
     /// The IP packet with padding removed.
@@ -27,7 +27,7 @@ struct InboundIPPacket {
         case 6:
             let headerLength = 40
             guard plaintext.count >= headerLength else { return nil }
-            // Payload length + 40. Go performs this addition in UInt16, where it wraps. Here it is added in Int and compared directly.
+            // Payload length + 40. Go adds in `uint16`, which can wrap. Swift adds in `Int` and compares the result directly.
             length = Self.bigEndianLength(plaintext, at: 4) + headerLength
             guard length <= plaintext.count else { return nil }
             sourceRange = 8..<24

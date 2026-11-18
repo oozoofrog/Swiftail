@@ -18,7 +18,7 @@ enum STUNMessage {
     /// The magic cookie from RFC 5389. Used for address XOR and STUN detection.
     static let magicCookie: [UInt8] = [0x21, 0x12, 0xa4, 0x42]
 
-    /// The SOFTWARE attribute value. The Go STUN server uses it to identify the request origin (8 bytes, so there is no padding).
+    /// The SOFTWARE attribute value. The Go STUN server uses it as a marker of where the request came from. The 8-byte value needs no padding.
     private static let software = Array("tailnode".utf8)
     private static let softwareAttribute: UInt16 = 0x8022
     private static let fingerprintAttribute: UInt16 = 0x8028
@@ -43,9 +43,9 @@ enum STUNMessage {
         return bytes
     }
 
-    /// STUN detection from notes 4.1 1 requires length ≥ 20, high 2 bits 0, cookie, and byte 1 equal to 0x01 (binding method).
+    /// STUN detection in notes §4.1, item 1 requires at least 20 bytes, the two high bits of the first byte set to 0, a matching cookie, and byte 1 equal to 0x01 (binding method).
     ///
-    /// Checks only the format. Matching datagrams go to `Netcheck` for matching and are never forwarded to WireGuard.
+    /// Checks only the format. `Netcheck` matches these datagrams to requests and WireGuard never receives them.
     static func looksLikeSTUN(_ bytes: [UInt8]) -> Bool {
         hasSTUNHeader(bytes) && bytes[1] == 0x01
     }

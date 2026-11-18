@@ -14,8 +14,8 @@ extension DNSMessage {
 
     /// A validated DNS query containing the header and the first question.
     ///
-    /// Reads only the header and first question, as the Go responder does (notes 3.1). Even with multiple questions, skips the rest and the answer, authority, and additional sections,
-    /// and includes only the first question in the response. Ignores Opcode.
+    /// Reads only the header and first question, as the Go responder does (notes §3.1). Even when there are multiple questions, the remaining questions and the answer, authority,
+    /// and additional sections are left unread. The response includes only the first question. Ignores Opcode.
     struct Query: Equatable, Sendable {
         let header: Header
         let question: Question

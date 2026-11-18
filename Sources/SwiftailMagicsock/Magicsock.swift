@@ -9,8 +9,8 @@ import SwiftailCrypto
 /// "items to publish to the control server," and "peers whose paths changed." All entry points are nonthrowing. Discards are reported as `.dropped`.
 ///
 /// This type uses system randomness for disco nonces, TxIDs, and ReSTUN intervals (as does `WireGuardDevice`). The underlying
-/// stages (`PeerPathState`, `Netcheck`, `DiscoPacket.seal`) take random values as arguments. Tests pass fixed-seed randomness to internal entry points
-/// of the same name with `using:`.
+/// stages (`PeerPathState`, `Netcheck`, `DiscoPacket.seal`) take random values as arguments. Tests use fixed-seed randomness with the corresponding
+/// internal overloads that take `using:`.
 ///
 /// Pass a nondecreasing `now` across calls. The node calls `advance(to:)` at `nextDeadline`
 /// and processes outputs from each entry point in list order.
@@ -65,7 +65,7 @@ public struct Magicsock: Sendable {
         var discoKeys = PeerDiscoKeys()
         var path: PeerPathState
         /// The last path reported via `.pathChanged`. Nil means no path has been reported yet or an idle path was reported.
-        /// The same value is never reported twice (behavior G2).
+        /// Suppresses consecutive reports of the same path (behavior G2).
         var reportedPath: PeerPath?
         /// The reason if the last reported path event was a downgrade (behavior G4), or nil otherwise.
         var reportedDowngrade: PathDowngrade?
@@ -157,7 +157,7 @@ public struct Magicsock: Sendable {
 
     /// The reason if the peer's last path event was a downgrade (behavior G4). The node queries it when logging `.pathChanged`.
     ///
-    /// A peer absent from the table was removed (`.pathChanged(key, nil)` from `setPeers`). This is internal diagnostics.
+    /// A peer absent from the table was removed (`.pathChanged(key, nil)` from `setPeers`). This diagnostic method is outside the public API.
     package func downgrade(of peer: NodePublicKey) -> PathDowngrade? {
         guard let entry = peers[peer] else { return .peerRemoved }
         return entry.reportedDowngrade

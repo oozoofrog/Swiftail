@@ -3,15 +3,15 @@ import SwiftailBase
 import SwiftailControl
 
 extension EnginePeer {
-    /// Maps data-plane addresses to their owner nodes. The owner is the peer with the single-address prefix (/32 or /128) for that address in AllowedIPs.
+    /// Maps data-plane addresses to the nodes that own them. The owner of an address is the peer with that address's single-host prefix (/32 or /128) in AllowedIPs.
     ///
     /// WireGuard checks a packet's source address against the sending peer's AllowedIPs, so the node in this table is the remote end of a connection
     /// from that address. Built by the same computation the engine uses to install peers (`eligibleNodes(in:at:)`). It omits addresses of nodes outside the data plane
     /// (expired or unsupported peers). If several nodes claim the same address, it includes only the node the engine assigned that address to (the lower node ID).
     /// It omits the local node's addresses.
     ///
-    /// The node uses this for connection owner verification (`SwiftailNetstack` contract behavior X10), per-peer limits, and `whoIs`. If the three use different tables,
-    /// the app may see a connection's remote end under another node's identity. When an engine is present, use the table built alongside peer installation
+    /// The node uses this table to verify connection address owners (`SwiftailNetstack` contract behavior X10), enforce per-peer limits, and answer `whoIs`. Different tables for these operations
+    /// could cause the app to see another node's identity for the remote end of a connection. When an engine is present, use the table built alongside peer installation
     /// (`TailnetEngine.addressOwners`). Without an engine, this function runs the same computation directly on the netmap.
     ///
     /// - Parameter now: The current time (local wall clock) for checking key expiration.

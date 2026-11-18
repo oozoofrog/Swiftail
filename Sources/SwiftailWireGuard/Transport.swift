@@ -3,7 +3,7 @@
 /// Pad each IP packet with 0 to a multiple of 16 bytes to obscure its length, then encrypt it with the keypair's send key and counter.
 /// A transport message with empty plaintext is a keepalive.
 ///
-/// Whitepaper §5.4.6, `docs/protocol-notes/wireguard.md` "Transport data: sending" and "Transport data: receiving"
+/// Whitepaper §5.4.6 and `docs/protocol-notes/wireguard.md`, “Sending transport data” and “Receiving transport data”
 /// (origin: wireguard-go `device/send.go`, `device/receive.go`).
 extension Keypair {
     /// Encrypts the packet with the next counter. The caller checks `canSend(at:)` first.
@@ -30,8 +30,8 @@ extension Keypair {
         AEAD.open(message.encryptedPacket, key: receiveKey, counter: message.counter)
     }
 
-    /// Implements wireguard-go's `calculatePaddingSize`. For packets larger than the MTU, base padding on the remainder after dividing by the MTU
-    /// and cap the padded length at the MTU. A keepalive (0 bytes) needs no padding.
+    /// Implements wireguard-go's `calculatePaddingSize`. For packets larger than the MTU, calculate padding from the remainder modulo the MTU.
+    /// Cap the padded size of that final portion at the MTU. A keepalive (0 bytes) needs no padding.
     static func paddingSize(for packetSize: Int, mtu: Int) -> Int {
         let multiple = Constants.paddingMultiple
         let lastUnit = packetSize > mtu ? packetSize % mtu : packetSize

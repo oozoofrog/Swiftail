@@ -25,7 +25,7 @@ extension WireGuardDevice {
         case .retransmitHandshake:
             if peer.timers.handshakeAttempts > Constants.maxTimerHandshakes {
                 // No reply after 1 initial send + 19 retries = 20 sends. Give up and discard the queue.
-                // Clear the remaining handshake state after 540 seconds.
+                // If no key-material timer is armed, schedule it to clear the remaining handshake state in 540 seconds.
                 peer.timers[.sendKeepalive] = nil
                 peer.staged = []
                 if peer.timers[.zeroKeyMaterial] == nil {
@@ -45,7 +45,7 @@ extension WireGuardDevice {
             return outputs
 
         case .newHandshake:
-            // Sent data and received nothing for more than 15 seconds.
+            // No authenticated packet arrived after sending data and waiting 15 seconds plus jitter.
             return sendHandshakeInitiation(&peer, isRetry: false, at: now)
 
         case .zeroKeyMaterial:

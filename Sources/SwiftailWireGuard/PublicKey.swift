@@ -15,7 +15,7 @@ public struct PublicKey: Hashable, Sendable, CustomStringConvertible {
         self.rawValue = bytes
     }
 
-    /// A short representation for logs. The first 8 base-16 digits + "…".
+    /// A short representation for logs. The first 8 hexadecimal digits + "…".
     public var description: String { String(rawValue.hex.prefix(8)) + "…" }
 
     /// A CryptoKit public key is always 32 bytes, so no length check is needed.

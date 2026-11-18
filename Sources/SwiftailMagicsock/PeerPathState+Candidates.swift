@@ -25,7 +25,7 @@ extension PeerPathState {
         var lastPingReceivedTxID: TransactionID?
         /// Appeared in the last CallMeMaybe. Remove this candidate only if it is absent from the next CallMeMaybe.
         var fromCallMeMaybe = false
-        /// When the last Ping was sent to this address. A full Ping skips it if within `pingInterval`.
+        /// When the last Ping was sent to this address. A full Ping skips the address if it was pinged within `pingInterval`.
         var lastPingSent: ContinuousClock.Instant?
     }
 
@@ -77,7 +77,7 @@ extension PeerPathState {
 
     /// Handles CallMeMaybe received over DERP (notes 4.8 5). `Magicsock` has already verified the source.
     ///
-    /// Treats the listed addresses as CallMeMaybe candidates and removes addresses present only in the previous CallMeMaybe regardless of origin. Then
+    /// Treats the listed addresses as CallMeMaybe candidates. Removes addresses that appeared in the previous CallMeMaybe and are absent from this one, even if they have another origin. Then
     /// clears per-candidate Ping intervals and Pings every candidate immediately. This full Ping sends no CallMeMaybe back.
     mutating func receiveCallMeMaybe(
         _ endpoints: [IPEndpoint],
@@ -131,7 +131,7 @@ extension PeerPathState {
     }
 
     /// Adds a candidate absent from the table. If full, first removes eligible entries. If still full, evicts the candidate learned only from Pings
-    /// whose received Ping is oldest (excluding `bestAddr`). If nothing can be evicted, skips insertion.
+    /// whose last received Ping is oldest (excluding `bestAddr`). If nothing can be evicted, skips insertion.
     ///
     /// A candidate learned from a Ping is only a peer-controlled source. A table filled with them must not block the peer's new address. Go has no limit,
     /// so it also has no such eviction.
@@ -162,7 +162,7 @@ extension PeerPathState {
         }
     }
 
-    /// Addresses eligible as candidates. Preserves order and keeps only the first duplicate.
+    /// Addresses eligible as candidates, in input order with only the first occurrence of each address retained.
     static func candidateAddresses(_ endpoints: [IPEndpoint]) -> [IPEndpoint] {
         var seen: Set<IPEndpoint> = []
         return endpoints.compactMap(candidateAddress).filter { seen.insert($0).inserted }

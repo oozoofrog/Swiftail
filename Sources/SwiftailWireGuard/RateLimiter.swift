@@ -13,7 +13,7 @@
 /// Delaying removal of old entries gives the same result. An entry idle for more than 1 second is full of tokens, so it accepts its first message
 /// and leaves 4 messages' worth of burst capacity, just like an entry that was removed and recreated.
 ///
-/// The rate limiter in "mac1, mac2, and cookies" in `docs/protocol-notes/wireguard.md`.
+/// The rate limiter in “mac1, mac2, and cookie” in `docs/protocol-notes/wireguard.md`.
 struct RateLimiter {
     private struct Bucket {
         var tokens: Duration
@@ -26,14 +26,14 @@ struct RateLimiter {
     private static let maxTokens = packetCost * 5
     /// Entries unused for longer than this can be removed (`garbageCollectTime`).
     private static let idleTime: Duration = .seconds(1)
-    /// The maximum number of table entries. See "Sending a cookie reply" in `docs/contracts/SwiftailWireGuard.md` for the rationale.
+    /// The maximum number of table entries. See “Sending cookie replies (2026-11-15)” in `docs/contracts/SwiftailWireGuard.md` for the rationale.
     static let maximumEntries = 4096
 
     private var buckets: [[UInt8]: Bucket] = [:]
 
     /// Returns whether a message from `host` can be processed now and consumes its allowance if so.
     ///
-    /// A new host gets its first message and starts with `maxTokens − packetCost` tokens. For known hosts, replenish tokens based on elapsed time
+    /// A new host's first message is accepted, leaving `maxTokens − packetCost` tokens. For known hosts, replenish tokens based on elapsed time
     /// up to `maxTokens` and accept only when the balance is **greater than** `packetCost` (the same strict comparison as in Go).
     mutating func allow(_ host: [UInt8], at now: ContinuousClock.Instant) -> Bool {
         guard var bucket = buckets[host] else {

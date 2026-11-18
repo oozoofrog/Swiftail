@@ -5,10 +5,10 @@
 /// where it receives them, so it checks whether `threshold` handshake messages have passed mac1 within the latest `window`
 /// instead. Once it detects load, it stays under load for `underLoadAfterTime` (1 second), as in Go.
 ///
-/// See "Sending a cookie reply" in `docs/contracts/SwiftailWireGuard.md` for the threshold rationale.
-/// Origin: wireguard-go `device/device.go` `IsUnderLoad` and "Load detection" in `docs/protocol-notes/wireguard.md`.
+/// See “Sending cookie replies (2026-11-15)” in `docs/contracts/SwiftailWireGuard.md` for the threshold rationale.
+/// Origin: wireguard-go `device/device.go` (`IsUnderLoad`) and “Detecting load” in `docs/protocol-notes/wireguard.md`.
 struct HandshakeLoad {
-    /// The receiver is under load if this many messages arrive within `window`.
+    /// The receiver detects load when this many messages pass mac1 in an interval shorter than `window`.
     static let threshold = 128
     /// The time window for counting toward the threshold.
     static let window: Duration = .seconds(1)
@@ -16,7 +16,7 @@ struct HandshakeLoad {
     /// The timestamps of the last `threshold` messages. When full, `oldest` points to the oldest slot, where overwriting starts.
     private var arrivals: [ContinuousClock.Instant] = []
     private var oldest = 0
-    /// The receiver stays under load until this time. Tests set this value directly to simulate load.
+    /// The receiver stays under load until this time. Tests set this value directly to put the receiver under load.
     var underLoadUntil: ContinuousClock.Instant?
 
     /// Counts a handshake message that passed mac1 and returns whether the receiver is now under load.

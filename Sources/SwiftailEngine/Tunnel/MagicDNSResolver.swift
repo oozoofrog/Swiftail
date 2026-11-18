@@ -9,9 +9,9 @@ import SwiftailControl
 /// A MagicDNS responder that produces one response to a query on UDP port 53 at the service IP (`100.100.100.100`, `fd7a:115c:a1e0::53`).
 ///
 /// Answers A, AAAA, ANY, and PTR using netmap node names (including self) and `ExtraRecords`. Returns NXDOMAIN for unknown names within the responder's
-/// zones (`localZones`) and SERVFAIL for names outside them. Does not forward queries upstream (decision D2).
+/// zones (`localZones`) and SERVFAIL for other unresolved names, subject to the built-in rules below. Does not forward queries upstream (decision D2).
 /// A value with no I/O or clock. The engine creates it each time it applies a netmap, and each query supplies the time.
-/// Looks up node names in the netmap for each query without building a table in advance (plan §5).
+/// Looks up node names in the netmap for each query without building a table in advance (`docs/plan.md` §5).
 ///
 /// Query names are kept out of logs and errors (contract K3).
 ///
@@ -21,7 +21,7 @@ struct MagicDNSResolver: Sendable {
     let netmap: Netmap?
     /// The zones for which the responder is authoritative. Lowercase, sorted by presentation bytes including the trailing dot.
     /// Go also sorts `LocalDomains` by string and uses them in that order (`slices.Sort` in `net/dns/manager.go`).
-    /// The first zone that contains a name becomes the SOA for a negative response.
+    /// The first zone that contains a name supplies the SOA for a negative response.
     let zones: [DNSMessage.Name]
     /// A and AAAA from `ExtraRecords`. Looked up before the node index.
     let hosts: [HostRecord]
@@ -30,7 +30,7 @@ struct MagicDNSResolver: Sendable {
     ///
     /// - Parameters:
     ///   - netmap: The origin of node names and addresses and `DNSConfig` (`Proxied`, `ExtraRecords`). Pass nil if the netmap is missing or the local node key
-    ///     has expired. This leaves node names unknown, and if `localZones` is also empty, every name yields SERVFAIL (behavior D7).
+    ///     has expired. This leaves node names unknown. If `localZones` is also empty, unresolved names yield SERVFAIL unless a built-in rule handles them (behavior D7).
     ///   - localZones: The zones for which the responder is authoritative. These are `localZones` from settings derivation (behavior S5). You can pass `dnsMatchDomains` directly.
     ///     The trailing dot is optional. Strings that cannot be names are dropped.
     init(netmap: Netmap?, localZones: [String]) {
@@ -43,7 +43,7 @@ struct MagicDNSResolver: Sendable {
     /// Response bytes for query bytes. Produces one response for any byte sequence without trapping.
     ///
     /// No case corresponds to the no-response outcome in behavior D. As in Go, even an unparseable query gets FORMERR
-    /// (with a header whose ID is 0 if all 12 header bytes are unavailable).
+    /// (using a header with ID 0 if the message has fewer than 12 header bytes).
     ///
     /// - Parameter now: The current time for the SOA SERIAL.
     func response(to message: [UInt8], at now: Date) -> [UInt8] {
@@ -92,7 +92,7 @@ extension MagicDNSResolver {
         var negativeZone: DNSMessage.Name?
     }
 
-    /// `magicdns.localhost-tailscale-daemon.` is the reverse name of the service IP, and its A and AAAA are the service IP addresses (Go `dnsSymbolicFQDN`).
+    /// `magicdns.localhost-tailscale-daemon.` is the PTR target for the service IPs. Its A and AAAA records contain the service IPs (Go `dnsSymbolicFQDN`).
     static let symbolicName = DNSMessage.Name("magicdns.localhost-tailscale-daemon.")
 
     /// Handles queries other than PTR (notes 4.2.2 3, Go `resolveLocal`). Nil means there is no local answer.
@@ -182,7 +182,7 @@ extension MagicDNSResolver {
 // MARK: - Header and name helpers
 
 extension DNSMessage.Header {
-    /// A local response header (Go `marshalResponse`). Copies the query header and overwrites QR=1, AA=1, RA=1 if RD=1, and RCODE.
+    /// A local response header (Go `marshalResponse`). Copies the query header, sets QR=1 and AA=1, sets RA=1 if RD=1, and replaces RCODE.
     /// Opcode, TC, AD, CD, and RA when RD=0 retain their query values. Z becomes 0 (notes 3.1).
     func localResponse(_ code: DNSMessage.ResponseCode) -> DNSMessage.Header {
         var header = self
@@ -203,7 +203,7 @@ extension DNSMessage.Name {
     }
 
     /// Bonjour service discovery names (`b`, `db`, `r`, `dr`, or `lb` + `._dns-sd._udp.`, RFC 6763 11). Uses lowercase names.
-    /// Go returns NXDOMAIN for these without forwarding upstream (mobile battery, `forwarder.go`).
+    /// Go returns NXDOMAIN for these without forwarding upstream to save battery on mobile devices (`forwarder.go`).
     var isBonjourBrowsingName: Bool {
         labels.count >= 3
             && ["b", "db", "r", "dr", "lb"].contains { labels[0].elementsEqual($0.utf8) }

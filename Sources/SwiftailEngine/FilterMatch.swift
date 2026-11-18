@@ -6,7 +6,7 @@
 import SwiftailBase
 import SwiftailControl
 
-/// A parsed allow rule. Expands strings from the control server's `FilterRule` once at the boundary.
+/// A parsed allow rule. The control server's `FilterRule` strings are parsed once at the boundary.
 ///
 /// The rules form a union of permissions, with no deny rules or precedence. Unparseable address entries are dropped individually, so they can only
 /// narrow the rule (fail closed).
@@ -45,7 +45,7 @@ struct FilterMatch: Sendable {
         containsSource(of: packet) && destinations.contains { $0.addresses.contains(packet.destination) }
     }
 
-    /// For other protocols, checks for a matching protocol and addresses, and a destination with the full 0…65535 port range.
+    /// For other protocols, checks for a matching protocol and source address, and a matching destination whose port range covers all of 0…65535.
     func matchesAllPorts(of packet: IPPacket) -> Bool {
         protocols.contains(packet.protocolNumber)
             && containsSource(of: packet)

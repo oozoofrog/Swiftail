@@ -18,7 +18,7 @@ import SwiftailBase
 ///   UDP or DERP traffic claiming an unknown key cannot trigger computation. Low-order keys for which computation fails are treated as absent. TSMP advertisements only arrive
 ///   from WireGuard-authenticated peers and trigger computation only for a changed key (as in Go `discoInfoForKnownPeerLocked`).
 /// - **Per-peer path state.** Creates new peers, applies netmap values to retained peers, and discards trust and in-flight Pings for peers
-///   whose keys changed (notes 4.4 3). Removes dropped peers and emits `.pathChanged(key, nil)` if a path had been reported.
+/// whose keys changed (notes §4.4, item 3). Removes peers absent from the new list and emits `.pathChanged(key, nil)` if a path had been reported.
 
 extension Magicsock {
     /// Synchronizes netmap peers. The node supplies them in node ID order, which determines peer table and output order.

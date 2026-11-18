@@ -39,7 +39,7 @@ struct PeerPathState: Sendable {
 
     // MARK: Constants (notes §5. These values determine when Go peers downgrade and recover, so they must match Go and cannot change)
 
-    /// The deadline for a Pong to a sent Ping. `pingTimeoutDuration` (`magicsock.go:4119`, `tsconst/ping.go:11`).
+    /// How long to wait for a Pong after sending a Ping. `pingTimeoutDuration` (`magicsock.go:4119`, `tsconst/ping.go:11`).
     static let pingTimeout: Duration = .seconds(5)
     /// The minimum interval before pinging the same candidate again. Receiving CallMeMaybe clears it.
     /// `discoPingInterval`(`magicsock.go:4125`, `tsconst/ping.go:15`).
@@ -76,7 +76,7 @@ struct PeerPathState: Sendable {
     var lastFullPing: ContinuousClock.Instant?
     /// When the next heartbeat runs. Nil means it is stopped.
     var heartbeatDeadline: ContinuousClock.Instant?
-    /// When the last external send (WireGuard datagram) occurred, or nil if none. `Magicsock` uses it to detect idleness and stop ReSTUN.
+    /// When the last external send (WireGuard datagram) occurred, or nil if none. `Magicsock` uses it to determine idleness and decide when to stop ReSTUN.
     private(set) var lastSend: ContinuousClock.Instant?
     /// Why `bestAddr` was last cleared. Used only in diagnostic logs (`Magicsock.downgrade(of:)`).
     private(set) var bestAddrLoss: PathDowngrade?

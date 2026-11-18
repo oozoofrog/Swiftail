@@ -20,15 +20,15 @@
 ///
 /// | Timer | On expiration |
 /// | --- | --- |
-/// | retransmitHandshake | Retry initiation. Give up after more than 18 attempts |
+/// | retransmitHandshake | Retry initiation. Give up when the retry count exceeds 18 |
 /// | sendKeepalive | Send a keepalive if there was nothing to send in reply to received data |
-/// | newHandshake | Start a new handshake if nothing came back after sending |
+/// | newHandshake | Start a new handshake if no authenticated packet arrives after sending data |
 /// | zeroKeyMaterial | Delete all key material |
 ///
 /// Whitepaper §6.2–§6.5, `docs/protocol-notes/wireguard.md` "Timers"
 /// (origin: wireguard-go `device/timers.go`).
 ///
-/// shortcut: There is no session expiration notification (sessionExpired in the fork) or persistentKeepalive. Tailscale disables persistentKeepalive, and session state notifications can be added when the M3 engine needs them.
+/// shortcut: There is no session expiration notification (sessionExpired in the fork) or persistentKeepalive. Tailscale disables persistentKeepalive. Add session state notifications when the M3 engine needs them.
 struct PeerTimers {
     enum Kind: CaseIterable {
         case retransmitHandshake, sendKeepalive, newHandshake, zeroKeyMaterial
@@ -43,7 +43,7 @@ struct PeerTimers {
     var handshakeAttempts = 0
     /// Data arrived again while sendKeepalive was armed. Arm it once more after it expires.
     var needAnotherKeepalive = false
-    /// A rekey initiation was already sent just before expiration (165 seconds).
+    /// The initiator has already sent its pre-expiration rekey initiation, which is triggered at a keypair age greater than 165 seconds.
     var sentLastMinuteHandshake = false
 
     subscript(kind: Kind) -> ContinuousClock.Instant? {
@@ -111,14 +111,14 @@ struct PeerTimers {
         self[.retransmitHandshake] = now + Constants.rekeyTimeout + Self.jitter()
     }
 
-    /// After the initiator processes the response or the responder confirms next.
+    /// After the initiator processes the response or the responder confirms `next`.
     mutating func handshakeComplete() {
         self[.retransmitHandshake] = nil
         handshakeAttempts = 0
         sentLastMinuteHandshake = false
     }
 
-    /// After deriving a new keypair. Erases key material if no new keys arrive in the next 540 seconds.
+    /// After deriving a new keypair. Erases key material if no new keys are derived in the next 540 seconds.
     mutating func sessionDerived(at now: ContinuousClock.Instant) {
         self[.zeroKeyMaterial] = now + Constants.rejectAfterTime * 3
     }

@@ -25,7 +25,7 @@ extension DNSMessage {
             case pointer(Name)
         }
 
-        /// The authority section's SOA. It makes the receiver's cache keep a negative response for only 10 seconds. The remaining fields are placeholders (RFC 2308).
+        /// The authority section's SOA. Its purpose is to limit negative caching by the recipient to 10 seconds. The remaining fields are placeholders (RFC 2308).
         struct StartOfAuthority: Equatable, Sendable {
             /// The responder zone containing the name. Used for the owner, MNAME, and RNAME.
             var zone: Name
@@ -85,7 +85,7 @@ extension DNSMessage {
             return record(owner: authority.zone, type: .soa, ttl: Self.negativeTTL, data: data)
         }
 
-        /// A resource record contains NAME, TYPE, CLASS IN, TTL, RDLENGTH, and RDATA. RDATA cannot exceed two names (≤ 255 bytes each) and 20 bytes.
+        /// A resource record contains NAME, TYPE, CLASS IN, TTL, RDLENGTH, and RDATA. RDATA is at most the combined size of two names (≤ 255 bytes each) plus 20 bytes.
         private func record(owner: Name, type: RecordType, ttl: UInt32, data: [UInt8]) -> [UInt8] {
             owner.wireFormat
                 + DNSMessage.bigEndian(type.rawValue)

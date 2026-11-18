@@ -18,7 +18,7 @@ public struct TunnelNetworkSettings: Sendable, Equatable {
     public var addresses: [IPPrefix]
     /// Routes to send through the tunnel. Sorted peer routes come before service IP routes. Families without a local address have no routes.
     public var routes: [IPPrefix]
-    /// An empty list leaves DNS unconfigured. If present, the IPv4 service IP is first.
+    /// An empty list leaves DNS unconfigured. The IPv4 service IP comes first when present.
     public var dnsServers: [IPAddress]
     /// Lowercase names without trailing dots. Nonempty whenever `dnsServers` is nonempty.
     public var dnsMatchDomains: [String]

@@ -9,20 +9,20 @@
 /// Checks mac1 first for initiation and response. Under load, also checks mac2 and the per-source rate limit (`admitHandshake`).
 /// If mac2 is invalid, sends a cookie reply before doing X25519 and skips processing the message.
 ///
-/// Failure in any path throws and leaves state unchanged. An invalid IP packet inside authenticated transport
+/// Throwing leaves peer and session state unchanged, with the load and rate-limit bookkeeping exceptions below. An invalid IP packet inside authenticated transport
 /// does not invalidate the datagram, so it emits `rejectedIPPacket` without throwing.
 ///
-/// Whitepaper §5.4, §6, `docs/protocol-notes/wireguard.md` "Responder: consuming an initiation", "Initiator: consuming a response",
-/// "mac1, mac2, and cookies", and "Transport data: receiving" (origin: wireguard-go `device/receive.go`, `device/noise-protocol.go`).
+/// Whitepaper §5.4, §6, and `docs/protocol-notes/wireguard.md`, “Responder consumes the initiation,” “Initiator consumes the response,”
+/// “mac1, mac2, and cookie,” and “Receiving transport data” (origin: wireguard-go `device/receive.go`, `device/noise-protocol.go`).
 extension WireGuardDevice {
     /// Processes one datagram received from the network.
     ///
     /// Throwing leaves state unchanged, except for attack accounting in the count of valid mac1 messages for load detection and the rate limit table.
     /// The reference time for the flood check changes only when an initiation is accepted (as in wireguard-go).
     /// If the plaintext of authenticated transport is not a valid IP packet or the source address is outside AllowedIPs, emits
-    /// `rejectedIPPacket` without throwing. The packet was authenticated, so updates session state as for a normal receipt.
+    /// `rejectedIPPacket` without throwing. It still counts as an authenticated receive, so the device updates session state as usual.
     ///
-    /// - Parameter source: The datagram's source. Under load, binds the cookie and tracks the rate limit. Send any `.cookieReply` output
+    /// - Parameter source: The datagram's source. Under load, use it to bind the cookie and track the rate limit. Send any `.cookieReply` output
     ///   back to this source.
     public mutating func receive(_ datagram: [UInt8], from source: Source, at now: ContinuousClock.Instant) throws(WireGuardError) -> [Output] {
         switch try Message(parsing: datagram) {

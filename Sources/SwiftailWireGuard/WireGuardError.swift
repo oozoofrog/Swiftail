@@ -12,7 +12,7 @@ public enum WireGuardError: Error, Sendable, Equatable {
     case unknownPeer
     /// An invalid mac1 or AEAD tag.
     case authenticationFailed
-    /// A handshake timestamp or flood check, an already consumed response, or reuse of a transport counter.
+    /// A failed handshake timestamp or flood check, an already consumed response, or a transport counter that was already received or fell outside the replay window.
     case replayed
     /// No usable keypair (including expiration).
     case noSession

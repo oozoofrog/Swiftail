@@ -5,7 +5,7 @@ import SwiftailBase
 /// Removing this value discards the peer's key material. Transport keys are in CryptoKit `SymmetricKey`,
 /// which clears their memory on deallocation. Swift does not guarantee clearing `[UInt8]` material such as the chaining key on deallocation.
 ///
-/// `docs/protocol-notes/wireguard.md` "Procedure and state machine" (origin: wireguard-go `device/peer.go`).
+/// `docs/protocol-notes/wireguard.md`, “Procedures and state machines” (origin: wireguard-go `device/peer.go`).
 struct Peer {
     let publicKey: PublicKey
     var allowedIPs: [IPPrefix]
@@ -16,9 +16,9 @@ struct Peer {
     /// The initiation we sent that is awaiting a response.
     var pendingHandshake: PendingHandshake?
     var keypairs = Keypairs()
-    /// IP packets intended for sending before the session is established. An empty array is a keepalive.
+    /// IP packets queued for sending before the session is established. An empty packet represents a keepalive.
     var staged: [[UInt8]] = []
-    /// The plaintext IP packet to send ahead of the queue whenever a session is established with this peer. If nil, sends nothing.
+    /// The plaintext IP packet to send ahead of the queue whenever a session is established with this peer. Nil means there is no priority message to send.
     var priorityMessage: [UInt8]?
     var timers = PeerTimers()
 

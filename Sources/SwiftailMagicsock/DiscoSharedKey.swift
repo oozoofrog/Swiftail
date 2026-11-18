@@ -11,7 +11,7 @@ import SwiftailCrypto
 struct DiscoSharedKey: Sendable, CustomReflectable {
     private let key: [UInt8]
 
-    /// - Throws: `invalidKey` if the peer's public key is low-order and the shared key is 0 (Go uses 0 as is, while M4 discards it. Notes 3.2).
+    /// - Throws: `invalidKey` for a low-order peer public key that yields an all-zero X25519 shared secret. Go continues the derivation with that zero value (notes §3.2).
     init(privateKey: Curve25519.KeyAgreement.PrivateKey, peerPublicKey: DiscoPublicKey) throws(DiscoError) {
         do {
             key = try NaClBox.sharedKey(privateKey: Array(privateKey.rawRepresentation), peerPublicKey: peerPublicKey.rawValue)
@@ -36,7 +36,7 @@ struct DiscoSharedKey: Sendable, CustomReflectable {
 
     /// Opens tag ‖ ciphertext and returns plaintext.
     ///
-    /// - Throws: `authenticationFailed` if the key, nonce, tag, or ciphertext does not match. `malformed` if the nonce or box is shorter than specified.
+    /// - Throws: `authenticationFailed` if the key, nonce, tag, or ciphertext does not match. `malformed` if the nonce length is incorrect or the box is too short.
     func open(_ box: ArraySlice<UInt8>, nonce: [UInt8]) throws(DiscoError) -> [UInt8] {
         do {
             return try NaClSecretBox.open(box, nonce: nonce, key: key)

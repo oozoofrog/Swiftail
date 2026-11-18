@@ -9,8 +9,8 @@ import SwiftailBase
 /// Classifying incoming data and receiving disco messages (contract behaviors A and C, notes 4.1~4.3).
 ///
 /// Bytes received over UDP or DERP are untrusted input. Classify them once as a STUN response, disco message, or WireGuard
-/// datagram. Emit `.dropped` without changing state if none matches or a rule is violated.
-/// Apply the cheapest checks first in this order. Source → shape → length → sender disco key (table lookup only) → decryption → path rules.
+/// datagram. Emit `.dropped` if none matches or a rule is violated. Discarded inputs leave state unchanged apart from the DERP activity tracking described below.
+/// Checks, in order of increasing cost, the source, packet signature, length, and sender disco key (table lookup only), then decrypts and applies path rules.
 /// Disco messages with unknown keys are dropped without cryptographic operations. Packets that fail to open are never passed to WireGuard (notes 3.2 6).
 ///
 /// WireGuard datagram contents are opaque. The WireGuard device identifies the peer by receiver index (behavior A3). Pass the incoming path
@@ -20,7 +20,7 @@ extension Magicsock {
     public enum Source: Sendable, Hashable {
         /// UDP with a source address.
         case udp(IPEndpoint)
-        /// DERP with the sender's node key and the receive region.
+        /// DERP with the sender's node key and the region the packet arrived on.
         case derp(NodePublicKey, region: Int64)
     }
 
@@ -81,8 +81,8 @@ extension Magicsock {
 
     /// Equivalent to `receiveDERP(_:from:region:at:)`, drawing random values from `generator`.
     ///
-    /// Handles disco according to behavior C. Otherwise forwards to WireGuard only if the sender is a known peer (behavior A2, notes 4.3). Every received packet
-    /// notifies home selection that this region is alive.
+    /// Handles disco according to behavior C. Otherwise forwards to WireGuard only if the sender is a known peer (behavior A2, notes §4.3). Records every packet as
+    /// evidence that the region is reachable for home selection.
     mutating func receiveDERP(
         _ packet: [UInt8],
         from peer: NodePublicKey,
@@ -102,9 +102,9 @@ extension Magicsock {
 
     /// Whether Go considers a datagram Geneve-encapsulated (notes 4.1 2).
     ///
-    /// True if the header conditions match and the protocol is WireGuard (`0x7A12`), or if it is disco (`0x7A11`) with disco at offset 8.
-    /// Returns false for `0x7A11` without disco after the header or for any other protocol. The next stage will see raw WireGuard (bytes 2–3 are
-    /// not the disco magic, so it cannot be disco).
+    /// Requires a valid header and either WireGuard protocol `0x7A12` or disco protocol `0x7A11` with disco at offset 8.
+    /// Returns false for `0x7A11` without disco after the header or for any other protocol. Classification then checks for bare disco before
+    /// falling back to raw WireGuard. A datagram with `0x7A11` in bytes 2–3 cannot match the bare disco magic.
     static func isGeneveEncapsulated(_ datagram: [UInt8]) -> Bool {
         guard datagram.count >= geneveHeaderLength,
               datagram[0] & 0xC0 == 0, datagram[1] & 0x3F == 0, datagram[7] == 0
@@ -184,10 +184,10 @@ extension Magicsock {
 
     /// Sends a Pong on the path the Ping arrived on (notes 4.2 4).
     ///
-    /// Over UDP, the source becomes a candidate for every peer holding the key (Go `forEachEndpointWithDiscoKey`). Do not answer if any peer has already seen
-    /// the same TxID from the same candidate (a replay). Go iterates in random order and stops at a duplicate, so it may omit the candidate
-    /// for later peers. Here all peers get it (the next Ping makes them the same). Over DERP, add no candidates and reply in the same region
-    /// only if the DERP sender is a known peer.
+    /// Over UDP, every peer holding the key processes the source as a candidate (Go `forEachEndpointWithDiscoKey`), subject to the candidate and replay rules.
+    /// Suppress the reply if any such peer already saw the same TxID from the same candidate. Go iterates in random order and stops at the first duplicate, so it may skip
+    /// later peers. Swift checks them all, and Go can catch up on the next Ping. Over DERP, add no candidates and reply to the sender in the same region
+    /// only if the sender is a known peer.
     private mutating func receivePing(
         _ txID: TransactionID,
         from sender: DiscoPublicKey,

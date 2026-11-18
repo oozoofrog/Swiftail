@@ -10,6 +10,6 @@ enum DiscoError: Error, Sendable, Equatable {
     case unknownType(UInt8)
     /// The secretbox cannot be opened because the key differs or the nonce, tag, or ciphertext changed.
     case authenticationFailed
-    /// The peer's public key is low-order, so the shared key is 0.
+    /// The peer's low-order public key yields an all-zero X25519 shared secret.
     case invalidKey
 }

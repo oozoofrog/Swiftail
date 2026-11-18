@@ -15,8 +15,8 @@ extension Netcheck {
     ///
     /// 1. Finds each region's minimum latency in the last 5 minutes 5 seconds of round history and multiplies it by `score` if positive. Among regions that replied this round,
     ///    the lowest result is the candidate (ties go to the smaller ID).
-    /// 2. If the **previous measured home** (`measuredHome`) would change and is still reachable, keep it when the retention condition below holds. "Reachable" means there is a latency for this
-    ///    round or a DERP packet was received from that region after the round started or within 8 seconds. Retention requires the difference from the new candidate
+    /// 2. If the **previous home selected by measurement** (`measuredHome`) would change and is still reachable, check whether to retain it. Reachability requires a latency measurement from this
+    ///    round or a DERP packet received from that region after the round started or within the last 8 seconds. Retention requires the difference from the new candidate
     ///    to be under 10 ms or the new candidate's latency to be greater than 2/3 of the previous home's latency.
     ///    The current home (`homeRegion`) is not the reference for retention. A fallback home selected without measurements (the lowest region ID) does not qualify,
     ///    so the first round with measurements chooses the fastest region without applying the retention condition. This matches Go, which bases retention on the previous report's

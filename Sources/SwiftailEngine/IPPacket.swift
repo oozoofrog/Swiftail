@@ -12,9 +12,9 @@ import SwiftailBase
 public struct IPPacket: Sendable, Equatable {
     /// The transport-layer protocol. Its number is the IP header's protocol (IPv4) or next-header (IPv6) field.
     public enum TransportProtocol: Sendable, Equatable {
-        /// 6. Has ports. Only the start of a new connection (SYN) consults filter rules.
+        /// 6. Has ports. The filter checks rules only for the start of a new connection (SYN).
         case tcp
-        /// 17. Has ports. Replies to previously sent flows are accepted without rules.
+        /// 17. Has ports. Replies to previously sent flows are accepted without checking the rules.
         case udp
         /// 132. Treated like UDP by the filter.
         case sctp
@@ -156,7 +156,7 @@ public struct IPPacket: Sendable, Equatable {
         let sourceRange: Range<Int>
         let destinationRange: Range<Int>
 
-        /// IPv4 requires at least 20 bytes, IHL at least 5, and IHL ≤ declared length ≤ buffer. MF or an offset indicates a fragment.
+        /// IPv4 requires at least 20 bytes, IHL of at least 5, and a header length in bytes no greater than the declared packet length, which must fit in the buffer. MF or a nonzero fragment offset indicates a fragment.
         init(ipv4 bytes: [UInt8]) throws(ParseError) {
             guard bytes.count >= 20 else { throw .malformed }
             let headerLength = Int(bytes[0] & 0x0F) * 4

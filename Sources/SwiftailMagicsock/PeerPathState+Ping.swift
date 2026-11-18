@@ -10,7 +10,7 @@ import SwiftailBase
 /// - A sent Ping waits `pingTimeout` (5 seconds) for a Pong. Removes it on expiration, and clears `bestAddr` only if the Ping went there
 ///   and trust already expired. One lost Ping does not invalidate the path (notes 4.6 3).
 /// - A Pong received over UDP measures latency for the candidate that was pinged. If that candidate is better than `bestAddr` or trust expired,
-///   it becomes `bestAddr`. A Pong for `bestAddr` extends trust by 6.5 seconds (notes 4.6 4).
+/// it becomes `bestAddr`. A Pong for `bestAddr` renews trust for 6.5 seconds from receipt (notes §4.6, item 4).
 /// - A full Ping Pings every candidate that was not pinged within `pingInterval` (5 seconds) (notes 4.8 1).
 /// - The heartbeat Pings `bestAddr` every 3 seconds while sends continue and runs a full Ping if needed (notes 4.8 3).
 ///
@@ -32,7 +32,7 @@ extension PeerPathState {
     /// The maximum number of Pings awaiting Pongs per peer (contract H).
     static let maxSentPings = 128
 
-    /// Returns true if the Pong answers a Ping from this peer (notes 4.6 4). A nil `source` means it arrived over DERP.
+    /// Returns true if the Pong answers a Ping sent to this peer (notes §4.6, item 4). A nil `source` means it arrived over DERP.
     ///
     /// A Pong for an expired Ping is treated like an unknown TxID (Go's deadline timer would already have removed it). Leave the Ping in
     /// the table for the next `advance` to handle expiration.
@@ -126,7 +126,7 @@ extension PeerPathState {
     }
 
     /// Whether the heartbeat should run a full Ping (Go `wantFullPingLocked`). With a trusted direct path of 5 ms latency or less,
-    /// stops looking. With a slower path, looks for a better path every 1 minute.
+    /// stops looking. With a slower trusted path, looks for a better path once per minute.
     private func wantsFullPing(at now: ContinuousClock.Instant) -> Bool {
         guard let bestAddr, let lastFullPing, isTrusted(at: now) else { return true }
         if bestAddr.latency <= Self.goodEnoughLatency { return false }

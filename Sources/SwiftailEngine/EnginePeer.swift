@@ -9,8 +9,8 @@ import SwiftailControl
 
 /// A netmap peer installed in the data plane.
 ///
-/// M3 does not accept subnet routes or exit nodes (equivalent to Go's `RouteAll=false` and no exit node). A peer can therefore
-/// use only its own addresses as sources, which are single-address prefixes. Unsupported peers are not installed (fail closed).
+/// M3 does not accept subnet routes or exit nodes (equivalent to Go's `RouteAll=false` and no exit node). A peer can therefore use only its own
+/// addresses as sources. These are represented as single-address prefixes. Unsupported peers are excluded from the data plane (fail closed).
 ///
 /// `docs/protocol-notes/netmap-engine.md` 4.1 and 4.3, and `docs/contracts/SwiftailEngine.md` behavior 2.
 public struct EnginePeer: Sendable, Equatable {
@@ -30,8 +30,8 @@ public struct EnginePeer: Sendable, Equatable {
 
     /// Selects peers to install in the data plane from the netmap, in ascending node ID order.
     ///
-    /// Assigns each key and each prefix to only one peer. If multiple nodes claim the same key or prefix,
-    /// the lower node ID owns it. Each prefix must have one owner for "this source address is this peer" to hold
+    /// Assigns each key and each prefix to only one peer. If multiple nodes claim the same key or prefix, the node with the lowest node ID gets it.
+    /// Each prefix must have one owner so a source address identifies a single peer
     /// (wireguard-go AllowedIPs also have one owner per prefix). The local node's addresses are assigned to no peer.
     ///
     /// - Parameter now: The current time (local wall clock) for checking key expiration.

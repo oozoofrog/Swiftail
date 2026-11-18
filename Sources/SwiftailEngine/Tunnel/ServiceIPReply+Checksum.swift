@@ -2,7 +2,7 @@ import SwiftailBase
 
 /// The Internet checksum for reply packets (RFC 1071). The same sum applies to the IPv4 header, UDP, TCP, and ICMPv6 (with pseudo-headers), and ICMPv4.
 ///
-/// `InternetChecksum` in `SwiftailBase` computes the sum and pseudo-header (the same calculation as netstack).
+/// `InternetChecksum` in `SwiftailBase` computes the sum and pseudo-header with the same calculation as netstack.
 ///
 /// Protocols differ only in the checksum field offset, whether the sum includes a pseudo-header, and how a computed 0 is represented. The field
 /// must be 0 before computation.
@@ -39,7 +39,7 @@ struct TransportChecksum: Sendable {
         return sum == 0 && zeroBecomesAllOnes ? 0xFFFF : sum
     }
 
-    /// The Internet checksum of a single byte. `InternetChecksum` in `SwiftailBase` computes the sum.
+    /// The Internet checksum of the supplied bytes. `InternetChecksum` in `SwiftailBase` computes the sum.
     static func internetChecksum(of bytes: [UInt8]) -> UInt16 {
         InternetChecksum.checksum(of: bytes)
     }

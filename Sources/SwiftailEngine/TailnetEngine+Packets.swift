@@ -1,7 +1,7 @@
 import SwiftailBase
 import SwiftailWireGuard
 
-/// Sends down-stack IP packets to peers and delivers incoming WireGuard datagrams up the stack through the filter.
+/// Sends IP packets from the upper layer to peers and filters the IP packets carried by incoming WireGuard datagrams before delivering them up the stack.
 ///
 /// The receive layers follow Go's order. WireGuard authentication and replay protection → source validation against the authenticated peer's AllowedIPs →
 /// TSMP consumption (reports disco key advertisements up the stack) → inbound filtering. The WireGuard session identifies the sending peer. The datagram source (address or DERP sender)
@@ -15,7 +15,7 @@ extension TailnetEngine {
     ///
     /// The engine handles packets destined for the service IP or a local address, and TSMP from the device, without sending them through WireGuard
     /// (`TailnetEngine+LocalDelivery.swift`). Sends all other packets to the peer whose AllowedIPs contain the destination.
-    /// Outgoing packets bypass the ACL (as in Go). Only flow state is recorded for UDP replies.
+    /// Outgoing packets bypass the ACL (as in Go). The filter records only the flow state needed to accept UDP and SCTP replies.
     ///
     /// Local responses come out as `.ipPacket`. Write these packets back to the device.
     public mutating func send(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output] {
@@ -80,7 +80,7 @@ extension TailnetEngine {
         } catch {
             return .dropped(Drop(error))
         }
-        // shortcut: Does not send a pong or rejection for a TSMP ping. TSMP other than disco advertisements is consumed without further action.
+        // shortcut: Sends no TSMP Pong in response to a Ping and sends no TSMP rejection messages. TSMP other than disco advertisements is consumed without further action.
         if packet.transportProtocol == .tsmp {
             if let advertisement = TSMPDiscoKeyAdvertisement(parsing: packet), !advertisement.key.isZero {
                 return .discoKeyAdvertised(advertisement.key, from: peer)

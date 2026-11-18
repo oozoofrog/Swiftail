@@ -1,6 +1,6 @@
 import SwiftailBase
 
-/// Packets read from the device that the engine handles locally without sending through WireGuard include the service IP, TSMP, and local addresses.
+/// The engine handles packets read from the device locally for the service IP, TSMP, and local addresses, without sending them through WireGuard.
 ///
 /// The service IP (`100.100.100.100`, `fd7a:115c:a1e0::53`) belongs to the node itself, with no host outside the tunnel. The MagicDNS responder
 /// answers UDP 53, ICMP echo gets an echo reply, and TCP gets an RST. Discards everything else without replying (as in Go).
@@ -13,7 +13,7 @@ extension TailnetEngine {
     /// Returns the output for a packet that terminates locally, or `nil` if it goes to a peer.
     ///
     /// The order is service IP → TSMP → local address. Go also discards TSMP before checking local addresses (the contract lists local addresses first,
-    /// but TSMP to a local address is not returned).
+    /// but TSMP addressed to a local address is never looped back).
     func deliverLocally(_ packet: IPPacket, at now: ContinuousClock.Instant) -> Output? {
         if ServiceIP.contains(packet.destination) {
             return answerServiceIP(packet, at: now)
@@ -46,7 +46,7 @@ extension TailnetEngine {
 
     private static let dnsPort: UInt16 = 53
 
-    /// The payload indicated by the UDP header's length field. Returns `nil` if the field is below 8 or exceeds the IP packet length.
+    /// The payload indicated by the UDP header's length field. Returns `nil` if the UDP length is below 8 or extends past the end of the IP packet.
     private func udpPayload(of packet: IPPacket) -> [UInt8]? {
         let start = packet.transportOffset
         let length = Int(packet.bytes[start + 4]) << 8 | Int(packet.bytes[start + 5])

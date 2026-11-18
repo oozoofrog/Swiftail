@@ -7,7 +7,7 @@ import SwiftailBase
 /// Deadlines and STUN rounds (contract behaviors D7, E, G1, and G3, notes 4.6 3, 4.8 3, and 4.9 5).
 ///
 /// `Magicsock` combines deadlines from its components, including each peer's Ping deadlines, heartbeat, and trust expiration (`PeerPathState`),
-/// the STUN round's next request, cutoff, and period (`Netcheck`), and the time when each peer becomes idle (behavior G3). The node calls
+/// the next STUN request, round cutoff, next periodic round (`Netcheck`), and the time when each peer becomes idle (behavior G3). The node calls
 /// `advance(to:)` at `nextDeadline`. `advance` runs only due components. At that deadline, `advance` emits
 /// `.pathChanged(.relayed)` for a peer whose trust expired or `.pathChanged(nil)` for a peer that became idle.
 ///
@@ -49,7 +49,7 @@ extension Magicsock {
 
     /// Equivalent to `advance(to:)`, drawing random values from `generator`.
     ///
-    /// Runs peers in `setPeers` order, then runs the STUN round. Leaves components that are not due untouched.
+    /// Advances each due peer in `setPeers` order, then advances the STUN round if due.
     mutating func advance(to now: ContinuousClock.Instant, using generator: inout some RandomNumberGenerator) -> [Output] {
         var outputs: [Output] = []
         for key in peerOrder {
@@ -69,7 +69,7 @@ extension Magicsock {
         return outputs
     }
 
-    /// Whether usage warrants continuing periodic rounds (behavior E5). There must be peers, and some peer must have sent within the last 45 seconds.
+    /// Continues periodic rounds while there is at least one peer and a WireGuard send to any peer occurred at most 45 seconds ago (behavior E5).
     ///
     /// Go checks idle time for sending and receiving on the TUN (stopping when `idleFor > sessionActiveTimeout`). This type uses the WireGuard send time
     /// instead (contract E5).

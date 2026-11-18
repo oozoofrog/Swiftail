@@ -4,7 +4,7 @@
 
 /// A DNS message codec covering what the MagicDNS responder handles (RFC 1035 4.1).
 ///
-/// Queries are untrusted input from any app inside the tunnel. At the boundary, read only the header and first question once,
+/// Any app inside the tunnel can send a query, so treat it as untrusted input. At the boundary, read only the header and first question once,
 /// converting them to a validated value (`Query`), and write responses (`Response`) without name compression. Go's local responses also omit compression,
 /// so the bytes match. There is no I/O.
 ///

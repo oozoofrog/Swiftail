@@ -13,14 +13,14 @@ extension MagicDNSResolver {
         let key: DNSMessage.Name
         /// The name used in PTR answers, with the received casing.
         let name: DNSMessage.Name
-        /// Addresses in receive order. Appends records with the same name.
+        /// Addresses in receive order. Concatenates addresses from records with the same name.
         var addresses: [IPAddress]
     }
 
-    /// A local node attribute that enables answers for peer AAAA even when the node has IPv4 (Go `nodecap.MagicDNSPeerAAAA`).
+    /// A local node attribute that enables AAAA answers for peers that also have IPv4 addresses (Go `nodecap.MagicDNSPeerAAAA`).
     static let peerAAAACapability = "magicdns-aaaa"
 
-    /// Adds only records with `Type` `""`, `A`, or `AAAA` and an IP address value to the host table. Drops entries that cannot be names.
+    /// Adds only records with `Type` `""`, `A`, or `AAAA` and an IP address value to the host table. Drops entries whose names are invalid.
     static func hostRecords(from records: [DNSRecord]) -> [HostRecord] {
         var hosts: [HostRecord] = []
         for record in records where ["", "A", "AAAA"].contains(record.type) {
@@ -63,7 +63,7 @@ extension MagicDNSResolver {
 
     /// The node the name identifies (Go `nodeByFQDNLocked`).
     ///
-    /// Each node has two keys, the lowercase `Name` without a trailing dot and, if it ends in the MagicDNS suffix, the short name without that suffix.
+    /// Each node is indexed by its lowercase `Name` without the trailing dot, and also by its short name if the full name ends in the MagicDNS suffix.
     /// If `Proxied` (MagicDNS) is disabled, skips names without a dot. When multiple nodes share a key, the later peer in the list wins
     /// as in Go's index. A node with an empty `Name` is excluded (Go `addNodeNameLocked`). Including it would cause a query for the root name `.`
     /// to be answered with that node's address.
