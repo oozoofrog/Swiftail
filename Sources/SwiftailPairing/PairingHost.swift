@@ -118,6 +118,9 @@ public actor PairingHost {
     /// 이 `PairingHost`가 사라질 때 끝난다.
     ///
     /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. 흐름을 읽지 않는 앱에서도 그 이상 자라지 않는다.
+    ///
+    /// 소비하던 Task를 취소하면 흐름이 끝나 다시 구독할 수 없다. `run()`을 다시 불러도 흐름은 하나이므로, `run()`마다 구독을
+    /// 새로 걸지 말고 호스트를 만든 곳에서 한 번 구독한다.
     public nonisolated var events: AsyncStream<Event> { eventStream }
 
     // MARK: 제안 (동작 P9)

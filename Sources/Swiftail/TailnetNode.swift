@@ -223,6 +223,8 @@ public actor TailnetNode {
     ///
     /// 읽지 않은 사건은 가장 새 것 64개까지만 쥐고 오래된 것부터 버린다. `statusChanged`는 읽지 않은 것 하나만 맨 뒤에 남고
     /// 이 한도에 세지 않는다(`NodeEvent.statusChanged`).
+    ///
+    /// 소비하던 Task를 취소하면 흐름이 끝나고 다시 구독할 수 없다. 앱의 한 곳에서 한 번 구독한다.
     public nonisolated var events: AsyncStream<NodeEvent> { eventStream }
 
     /// 앱이 OS에 적용할 터널 설정. 바뀐 경우에만 나오고, 읽지 않은 것은 가장 새 것 하나만 남는다(동작 E).

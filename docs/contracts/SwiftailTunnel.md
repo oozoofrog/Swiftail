@@ -218,6 +218,7 @@ public struct TunnelNetworkSettings: Sendable, Equatable {
 - **겹침**: 상태와 lock이 바뀌면 `stateChanged`·`tailnetLockChanged` 뒤에 `statusChanged`도 나온다. 앞의 둘은 전이 자체를 값과 함께 알리고(로그인 URL, 서명 안내), `statusChanged`는 값 없이 "화면에 보일 모습을 다시 읽어라"만 뜻한다. T1의 "같은 사실을 두 길로 알리지 않는다"는 값을 두 사건에 싣지 않는다는 뜻으로 지킨다. 화면만 맞추는 앱은 `statusChanged`만 보면 된다. `networkSettings` 흐름이 낸 설정도 `status.networkSettings`에 들어 있으므로 설정이 바뀌면 `statusChanged`가 함께 나온다.
 - **차례**: 한 갱신(netmap 하나, 상태 전이 하나)에서 `tailnetLockChanged` → `peerPathChanged` → `stateChanged` → `statusChanged`. 어느 사건을 받든 `status`는 이미 그 갱신을 담고 있다.
 - **버퍼**: 읽지 않은 `statusChanged`는 하나만 남는다. 새로 나면 앞의 것을 지우고 맨 뒤에 둔다. 그래서 64개 한도에 세지 않고 다른 사건을 밀어내지 않으며, 앱이 어느 사건을 읽은 뒤에 `status`가 바뀌었으면 그 뒤에 반드시 하나가 있다. `AsyncStream`의 버퍼는 종류를 가려 지우지 못하므로 노드가 버퍼(`NodeEventQueue`)를 쥐고 `AsyncStream(unfolding:)`으로 내준다(`DERPClient.EventQueue`와 같은 모양).
+- **구독**: 소비하던 Task를 취소하면 `events` 흐름이 끝나 다시 구독할 수 없다. 앱의 한 곳에서 한 번 구독한다.
 - 소스 호환: `NodeEvent`에 경우가 늘었으므로 `switch`로 모든 경우를 적은 코드는 `.statusChanged`를 더해야 한다.
 
 ### 공개 API에 나오는 다른 모듈의 타입 (2026-11-18)
