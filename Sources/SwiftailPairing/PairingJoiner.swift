@@ -66,10 +66,11 @@ public enum PairingJoiner {
     /// Joins using an OS socket. An app whose node is in a tunnel extension calls this after the tunnel connects.
     ///
     /// The OS resolves the name (the tunnel's MagicDNS). The library cannot directly observe whether the connection used the tunnel, so it compares
-    /// the local endpoint with the device's tailnet address supplied by the app. It dials only with the same IP version as that address and only through
-    /// interfaces other than Wi-Fi, cellular, wired, or loopback. If the ready connection's local endpoint differs from that address or its remote
-    /// endpoint falls outside the tailnet range, pairing ends with `notOnTailnet` without sending anything (J2). The library cannot identify the
-    /// paired peer on subsequent connections through this path.
+    /// the local endpoint with the device's tailnet address supplied by the app. It dials only with the same IP version as that address. It does not
+    /// restrict interface types, because Network.framework treats a path through the packet tunnel as also using the Wi-Fi or cellular interface
+    /// beneath it. If the ready connection's local endpoint differs from that address or its remote endpoint falls outside the tailnet range,
+    /// pairing ends with `notOnTailnet` before anything is sent (J2). Dial states are logged to subsystem `Swiftail`, category `pairing`.
+    /// The library cannot identify the paired peer on subsequent connections through this path.
     ///
     /// - Parameter localAddress: This device's tailnet address (`100.64.0.1`). The tunnel extension must read it from the node's `status.addresses` and pass
     ///   it to the app. Converts IPv4-mapped IPv6 to IPv4. Guessing the value from the OS interface list defeats
@@ -85,8 +86,8 @@ public enum PairingJoiner {
             awaitingApproval: awaitingApproval)
     }
 
-    /// Joins using an OS socket. Only loopback tests turn off `requiringTunnel` (which is internal). Turning it off skips the range check and
-    /// interface restrictions. The local endpoint must still match `localAddress`.
+    /// Joins using an OS socket. Only loopback tests turn off `requiringTunnel` (which is internal). Turning it off skips the range checks.
+    /// The local endpoint must still match `localAddress`.
     static func pair(
         with offer: PairingOffer, deviceName: String, localAddress suppliedAddress: SwiftailBase.IPAddress,
         requiringTunnel: Bool,
@@ -100,13 +101,13 @@ public enum PairingJoiner {
             guard let port = NWEndpoint.Port(rawValue: offer.port), port.rawValue != 0 else {
                 return .failed(.invalidConfiguration("The port must be nonzero"))
             }
-            let transport = SocketPairingTransport(
-                host: offer.host, port: port, isIPv4: localAddress.isIPv4, tunnelOnly: requiringTunnel)
+            let transport = SocketPairingTransport(host: offer.host, port: port, isIPv4: localAddress.isIPv4)
             guard await transport.open(), let ends = transport.endpoints else {
                 await transport.close()
                 return .unreachable
             }
             let endpoints = PairingEndpoints(joiner: ends.local, host: ends.remote)
+            // This check is what keeps pairing off other networks: `attempt` sends `hello` only after `.connected`.
             guard requiringTunnel ? endpoints.isOnTailnet(localAddress: localAddress) : endpoints.isLocal(localAddress)
             else {
                 await transport.close()

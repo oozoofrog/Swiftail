@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 import Swiftail
 import SwiftailBase
 
@@ -39,6 +40,7 @@ struct TailnetPairingTransport: PairingTransport {
 final class SocketPairingTransport: PairingTransport {
     /// The amount read at a time. Every protocol message is smaller.
     private static let maximumReadLength = 4096
+    private static let log = Logger(subsystem: "Swiftail", category: "pairing")
 
     private let connection: NWConnection
 
@@ -48,21 +50,26 @@ final class SocketPairingTransport: PairingTransport {
 
     /// A plaintext TCP connection dialed to `host:port`. The OS resolves names (MagicDNS when the tunnel is connected).
     ///
-    /// - Parameters:
-    ///   - isIPv4: The IP version to use. Dial only with the same version as this device's tailnet address so the local endpoint can be compared with it.
-    ///   - tunnelOnly: Prevents the connection from using Wi-Fi, cellular, wired, or loopback interfaces. This leaves other interfaces
-    ///     such as the tunnel (utun). With the tunnel off, a connection can still use another allowed interface. Only loopback tests turn this off.
-    convenience init(host: String, port: NWEndpoint.Port, isIPv4: Bool, tunnelOnly: Bool) {
+    /// - Parameter isIPv4: The IP version to use. Dial only with the same version as this device's tailnet address so the local endpoint can be compared with it.
+    convenience init(host: String, port: NWEndpoint.Port, isIPv4: Bool) {
+        self.init(NWConnection(host: NWEndpoint.Host(host), port: port, using: Self.parameters(isIPv4: isIPv4)))
+    }
+
+    /// The dial parameters: TCP without delay, pinned to one IP version (which also filters DNS answers to that version).
+    ///
+    /// Restricts no interface types. Network.framework counts a path through a VPN as using the VPN's underlying interface
+    /// (`nw_path_uses_interface_type`: "routing through a tunnel that goes over a physical interface"), so prohibiting Wi-Fi and cellular
+    /// also prohibits the packet tunnel's path and the connection stays in `waiting` (contract J2, gate 13 status). Requiring `.other` is no restriction
+    /// at all (`nw_parameters_get_required_interface_type` returns `other` when none is set). The joiner instead checks the ready connection's
+    /// endpoints before sending anything (J2).
+    static func parameters(isIPv4: Bool) -> NWParameters {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         let parameters = NWParameters(tls: nil, tcp: tcp)
         if let ip = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
             ip.version = isIPv4 ? .v4 : .v6
         }
-        if tunnelOnly {
-            parameters.prohibitedInterfaceTypes = [.wifi, .cellular, .wiredEthernet, .loopback]
-        }
-        self.init(NWConnection(host: NWEndpoint.Host(host), port: port, using: parameters))
+        return parameters
     }
 
     deinit {
@@ -72,10 +79,12 @@ final class SocketPairingTransport: PairingTransport {
     /// Starts the connection and waits for readiness. Returns true when ready.
     ///
     /// On refusal or name resolution failure, `NWConnection` stays in `waiting` and retries on its own. The caller handles redialing
-    /// (contract behavior J1), so treat this as a failure here.
+    /// (contract behavior J1), so treat this as a failure here. Logs each state change (see `logState(_:path:)`).
     func open() async -> Bool {
         let (states, continuation) = AsyncStream.makeStream(of: Bool.self)
+        let connection = connection
         connection.stateUpdateHandler = { state in
+            Self.logState(state, path: connection.currentPath)
             switch state {
             case .ready: continuation.yield(true)
             case .waiting, .failed, .cancelled: continuation.yield(false)
@@ -123,6 +132,32 @@ final class SocketPairingTransport: PairingTransport {
 
     func close() async {
         connection.cancel()
+    }
+
+    /// Logs a dial state change to subsystem `Swiftail`, category `pairing` (contract J2, "Diagnostics").
+    ///
+    /// Intermediate states go to debug. `ready`, `waiting`, and `failed` go to info with the path: its status, unsatisfied reason, the interface
+    /// types it uses, and the available interfaces. State names, error codes, and interface types and names are public. Addresses stay private.
+    /// No pairing secret exists at this layer.
+    private static func logState(_ state: NWConnection.State, path: NWPath?) {
+        switch state {
+        case .ready, .waiting, .failed:
+            guard let path else {
+                log.info("Pairing socket \(String(describing: state), privacy: .public), no path")
+                return
+            }
+            let types: [NWInterface.InterfaceType] = [.other, .wifi, .cellular, .wiredEthernet, .loopback]
+            let used = types.filter { path.usesInterfaceType($0) }.map { "\($0)" }.joined(separator: ",")
+            let interfaces = path.availableInterfaces.map { "\($0.name)(\($0.type))" }.joined(separator: ",")
+            log.info("""
+                Pairing socket \(String(describing: state), privacy: .public); path \(String(describing: path.status), privacy: .public), \
+                unsatisfied reason \(String(describing: path.unsatisfiedReason), privacy: .public), uses [\(used, privacy: .public)], \
+                interfaces [\(interfaces, privacy: .public)], local \(String(describing: path.localEndpoint), privacy: .private), \
+                remote \(String(describing: path.remoteEndpoint), privacy: .private)
+                """)
+        default:
+            log.debug("Pairing socket \(String(describing: state), privacy: .public)")
+        }
     }
 
     private static func endpoint(_ endpoint: NWEndpoint) -> IPEndpoint? {

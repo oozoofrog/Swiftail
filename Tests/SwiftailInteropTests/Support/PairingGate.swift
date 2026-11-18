@@ -212,7 +212,7 @@ func pairingFailure<T>(_ body: () async throws -> T) async -> PairingError? {
 /// A host state machine attached to a loopback (`127.0.0.1`) listener (gate 11). There is no tailnet or node.
 ///
 /// Verifies that the joiner's OS socket path (`NWConnection`) completes the procedure over real TCP. Because both endpoints have loopback addresses,
-/// a test-only switch disables the joiner's address range check and interface restriction. This path bypasses name resolution and the tunnel.
+/// a test-only switch disables the joiner's address range checks. This path bypasses name resolution and the tunnel.
 actor LoopbackPairingHost {
     /// The result of running one connection.
     struct Served: Sendable {
