@@ -133,4 +133,35 @@ struct NodeDataPlaneMappingTests {
         #expect(tally.line(for: second, path: nil, downgrade: .discoKeyChanged, at: start + .seconds(3))
             == "피어 2 경로: none (disco 키 바뀜, 앞 사건 뒤 2.0초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
     }
+
+    @Test("netmap에서 빠진 피어의 경로 기록을 지우고, 남은 피어의 번호를 유지하며 옛 번호는 다시 쓰지 않는다")
+    func pathEventTallyPrunesRemovedPeers() async throws {
+        let node = try TailnetNode(configuration: NodeTestSupport.unusedConfiguration())
+        let kept = try Self.nodeKey(0x02)
+        let removed = try Self.nodeKey(0x03)
+        let added = try Self.nodeKey(0x04)
+        let start = ContinuousClock.now
+        let peer2 = (id: Int64(2), key: UInt8(0x02), name: "kept.tail0001.ts.net.")
+        let peer3 = (id: Int64(3), key: UInt8(0x03), name: "removed.tail0001.ts.net.")
+        let peer4 = (id: Int64(4), key: UInt8(0x04), name: "added.tail0001.ts.net.")
+        await node.apply(try Self.netmap(peers: [peer2, peer3]))
+        _ = await node.pathEventLine(for: kept, at: start)
+        _ = await node.pathEventLine(for: removed, at: start)
+
+        await node.apply(try Self.netmap(peers: [peer2, peer4]))
+        let keptLine = await node.pathEventLine(for: kept, at: start + .seconds(1))
+        #expect(keptLine.hasPrefix("피어 1 경로: relayed(1) (앞 사건 뒤 1.0초,"))
+        let addedLine = await node.pathEventLine(for: added, at: start + .seconds(1))
+        #expect(addedLine.hasPrefix("피어 3 경로: relayed(1) (첫 사건,"))
+
+        await node.apply(try Self.netmap(peers: [peer2, peer3, peer4]))
+        let returnedLine = await node.pathEventLine(for: removed, at: start + .seconds(2))
+        #expect(returnedLine.hasPrefix("피어 4 경로: relayed(1) (첫 사건,"))
+    }
+}
+
+private extension TailnetNode {
+    func pathEventLine(for peer: NodePublicKey, at now: ContinuousClock.Instant) -> String {
+        pathEventTally.line(for: peer, path: .relayed(derpRegion: 1), downgrade: nil, at: now)
+    }
 }

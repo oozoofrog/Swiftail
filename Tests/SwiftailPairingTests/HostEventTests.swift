@@ -83,12 +83,12 @@ struct HostEventTests {
             defer { running.cancel() }
             // 긴 제안에 맞춰 잠든 타이머가 짧은 새 제안으로 다시 깨어나야 한다.
             _ = try await host.openOffer(lifetime: .seconds(600))
-            _ = try await host.openOffer(lifetime: .seconds(1))
-            let started = ContinuousClock.now
+            let offer = try await host.openOffer(lifetime: .seconds(2))
             #expect(await events.next() == .offerChanged(.opened))
             #expect(await events.next() == .offerChanged(.opened))
             #expect(await events.next() == .offerChanged(.expired))
-            #expect(ContinuousClock.now - started < .seconds(5))
+            let lateness = Date().timeIntervalSince(offer.expires)
+            #expect((0...0.5).contains(lateness))
             // 만료된 제안은 지워졌으니 닫아도 closed가 나오지 않는다.
             await host.closeOffer()
             _ = try await host.openOffer()

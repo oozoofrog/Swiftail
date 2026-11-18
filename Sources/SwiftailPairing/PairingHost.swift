@@ -183,8 +183,9 @@ public actor PairingHost {
             let expiry = machine.openOfferExpiry
             await withTaskGroup(of: Void.self) { group in
                 if let expiry {
-                    let delay = max(0, expiry.timeIntervalSinceNow)
-                    group.addTask { try? await Task.sleep(for: .seconds(delay)) }
+                    let deadline = ContinuousClock.now + .seconds(max(0, expiry.timeIntervalSinceNow))
+                    // 긴 제안의 만료 사건이 시스템의 기본 타이머 허용 오차만큼 늦어지는 것을 줄인다.
+                    group.addTask { try? await Task.sleep(until: deadline, tolerance: .milliseconds(25)) }
                 }
                 group.addTask {
                     for await _ in changes { return }

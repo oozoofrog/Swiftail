@@ -43,6 +43,16 @@ public struct IPAddress: Hashable, Sendable, LosslessStringConvertible {
     /// IPv4 주소인지. IPv4-mapped IPv6(`::ffff:a.b.c.d`)는 16바이트이므로 `false`다.
     public var isIPv4: Bool { bytes.count == 4 }
 
+    /// 엔진과 페어링이 쓰는 Tailscale 주소 범위. ChromeOS VM 대역을 CGNAT 안에서 가려낸다.
+    package var isTailscaleAddress: Bool {
+        if isIPv4 {
+            let inCGNAT = bytes[0] == 100 && bytes[1] & 0xC0 == 64
+            let inChromeOSRange = bytes[0] == 100 && bytes[1] == 115 && bytes[2] & 0xFE == 92
+            return inCGNAT && !inChromeOSRange
+        }
+        return bytes.starts(with: [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0])
+    }
+
     /// IPv4는 점 네 개 십진, IPv6는 Network 프레임워크의 표기(RFC 5952 축약)다.
     public var description: String {
         if isIPv4 {

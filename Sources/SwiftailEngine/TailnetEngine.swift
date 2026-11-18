@@ -67,11 +67,8 @@ public struct TailnetEngine: Sendable {
     var filter = PacketFilter.allowNone
     /// 데이터면에 올린 피어. 키 → 피어.
     var peers: [NodePublicKey: EnginePeer] = [:]
-    /// 피어의 한 주소짜리 `addresses` → 그 피어. 보낼 피어를 고른다.
-    var peerByAddress: [IPAddress: NodePublicKey] = [:]
     /// 데이터면의 주소 → 그 주소의 주인 노드(`EnginePeer.addressOwners`). 피어를 다시 계산할 때마다(netmap 적용, 키 만료)
-    /// 같은 계산에서 함께 바뀐다. 노드의 `whoIs`와 연결의 주인 확인이 읽는다: 따로 계산하면 시각이 달라, 주소가 겹친
-    /// netmap에서 한쪽 키가 만료되는 순간 엔진이 올린 피어와 다른 노드를 가리킬 수 있다.
+    /// 같은 계산에서 함께 바뀐다. 송신, 노드의 `whoIs`, 연결의 주인 확인에서 읽어 AllowedIPs로 정한 주인을 일치시킨다.
     package private(set) var addressOwners: [IPAddress: Node] = [:]
     /// 마지막으로 적용한 netmap. 키 만료 시각에 피어를 다시 계산할 때 쓴다.
     private var netmap: Netmap?
@@ -172,14 +169,9 @@ public struct TailnetEngine: Sendable {
     /// 목적지는 그 첫 주소다(Go `PriorityMessageForPeer`). 만들 수 없으면 보내지 않는다.
     private mutating func configurePeers(in netmap: Netmap, wallNow: Date) {
         var current: [NodePublicKey: EnginePeer] = [:]
-        var addressIndex: [IPAddress: NodePublicKey] = [:]
-        // 키와 접두의 주인은 `eligibleNodes`가 하나로 정해 준다. 송신 색인도 같은 규칙(node ID가 작은 쪽)이다.
         let eligible = EnginePeer.eligibleNodes(in: netmap, at: wallNow)
-        for (node, peer) in eligible {
+        for (_, peer) in eligible {
             current[peer.key] = peer
-            for prefix in node.addresses where EnginePeer.isSingleAddress(prefix) && addressIndex[prefix.address] == nil {
-                addressIndex[prefix.address] = peer.key
-            }
         }
 
         for key in peers.keys where current[key] == nil {
@@ -194,7 +186,6 @@ public struct TailnetEngine: Sendable {
             try? device.setPriorityMessage(advertisement?.bytes, for: PublicKey(peer.key))
         }
         peers = current
-        peerByAddress = addressIndex
         addressOwners = EnginePeer.addressOwners(of: eligible)
     }
 

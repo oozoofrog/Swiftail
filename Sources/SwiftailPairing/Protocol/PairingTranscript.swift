@@ -10,7 +10,7 @@ struct PairingEndpoints: Sendable, Equatable {
     var host: IPEndpoint
 
     /// OS 소켓으로 건 연결이 터널을 거친 것으로 볼 수 있는가(계약 동작 J2): 이쪽 끝이 이 기기의 tailnet 주소
-    /// `localAddress`이고, 상대 끝이 tailnet 대역(`100.64.0.0/10`, `fd7a:115c:a1e0::/48`)이다.
+    /// `localAddress`이고, 상대 끝이 엔진과 같은 tailnet 대역이다.
     ///
     /// OS 소켓으로 들어오는 쪽은 이름 풀이와 경로를 OS에 맡긴다. 대역만 보면, 터널이 꺼진 채 같은 대역을 쓰는 로컬
     /// 네트워크(통신사 NAT, 공유기)로 나간 연결이 통과한다. 그 연결은 WireGuard가 인증한 것이 아니므로 `hello`를 보내지
@@ -25,14 +25,18 @@ struct PairingEndpoints: Sendable, Equatable {
     }
 
     static func isTailnetAddress(_ address: IPAddress) -> Bool {
-        let mapped = address.mapped
-        if mapped.starts(with: IPAddress.mappedPrefix) { return mapped[12] == 100 && mapped[13] & 0xC0 == 64 }
-        return mapped.starts(with: [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0])
+        address.unmappedIPv4.isTailscaleAddress
     }
 }
 
 extension IPAddress {
     fileprivate static let mappedPrefix: [UInt8] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF]
+
+    /// IPv4-mapped IPv6를 IPv4로 바꿔 같은 대역 규칙을 적용할 수 있게 한다.
+    var unmappedIPv4: IPAddress {
+        guard bytes.starts(with: Self.mappedPrefix) else { return self }
+        return IPAddress(bytes: bytes.suffix(4)) ?? self
+    }
 
     /// 16바이트 표기. IPv4는 IPv4-mapped IPv6(`::ffff:a.b.c.d`)다. T에 이 모양으로 넣는다.
     fileprivate var mapped: [UInt8] {

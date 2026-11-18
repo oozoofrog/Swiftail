@@ -75,7 +75,7 @@ public struct EnginePeer: Sendable, Equatable {
         var allowedIPs: [IPPrefix] = []
         for prefix in node.allowedIPs
         where Self.isSingleAddress(prefix) && !Self.isIPv4Mapped(prefix.address) && !allowedIPs.contains(prefix) {
-            if Self.isTailscaleAddress(prefix.address) || node.addresses.contains(prefix) {
+            if prefix.address.isTailscaleAddress || node.addresses.contains(prefix) {
                 allowedIPs.append(prefix)
             }
         }
@@ -116,17 +116,5 @@ public struct EnginePeer: Sendable, Equatable {
     /// IPv4-mapped IPv6 주소(`::ffff:a.b.c.d`).
     static func isIPv4Mapped(_ address: IPAddress) -> Bool {
         address.bytes.count == 16 && address.bytes.starts(with: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF])
-    }
-
-    /// Tailscale 주소 범위: `100.64.0.0/10`(`100.115.92.0/23` 제외)과 `fd7a:115c:a1e0::/48`.
-    static func isTailscaleAddress(_ address: IPAddress) -> Bool {
-        let bytes = address.bytes
-        if address.isIPv4 {
-            let inCGNAT = bytes[0] == 100 && bytes[1] & 0xC0 == 64
-            // ChromeOS VM 대역 100.115.92.0/23은 CGNAT 안에 있지만 tailnet 주소가 아니다.
-            let inChromeOSRange = bytes[0] == 100 && bytes[1] == 115 && bytes[2] & 0xFE == 92
-            return inCGNAT && !inChromeOSRange
-        }
-        return bytes.starts(with: [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0])
     }
 }
