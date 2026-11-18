@@ -87,7 +87,7 @@ Sources are `wireguard-go/device/noise-protocol.go:114`, `wireguard-go/device/no
 Sources are `wireguard-go/device/noise-protocol.go:76` and `wireguard-go/device/send.go:588`.
 
 - A keepalive is a transport message with plaintext length 0 and a total size of 32 bytes (`MessageKeepaliveSize`, `wireguard-go/device/noise-protocol.go:71`).
-- `MessageEncapsulatingTransportSize` = 8 is headroom before the buffer passed to `conn.Bind.Send`. It is excluded from the WireGuard wire bytes (`wireguard-go/device/noise-protocol.go:69`, `wireguard-go/device/peer.go:226`).
+- `MessageEncapsulatingTransportSize` = 8 is headroom at the front of the buffer passed to `conn.Bind.Send`. It is excluded from the WireGuard wire bytes (`wireguard-go/device/noise-protocol.go:69`, `wireguard-go/device/peer.go:226`).
 
 ## Procedures and state machines
 
@@ -102,7 +102,7 @@ Sources are `wireguard-go/device/noise-protocol.go:76` and `wireguard-go/device/
   3. T1 = HMAC(prk, T0 ‖ 0x02)
   4. T2 = HMAC(prk, T1 ‖ 0x03)
 
-  KDF1 returns T0, KDF2 returns (T0, T1), and KDF3 returns (T0, T1, T2). KDF1 overwrites t0 instead of keeping a separate prk and yields the same result (`wireguard-go/device/noise-helpers.go:44`).
+  KDF1 returns T0, KDF2 returns (T0, T1), and KDF3 returns (T0, T1, T2). KDF1 stores prk in t0 and then overwrites it with T0, yielding the same result (`wireguard-go/device/noise-helpers.go:44`).
 - **mixHash(h, d)** = HASH(h ‖ d), **mixKey(ck, d)** = KDF1(ck, d)(`wireguard-go/device/noise-protocol.go:236`).
 - **AEAD** uses ChaCha20-Poly1305 IETF (key 32, nonce 12, tag 16). Every AEAD operation in the handshake uses a 12-byte nonce set to 0 (`ZeroNonce`) and AAD = current hash (`wireguard-go/device/noise-protocol.go:233`, `wireguard-go/device/noise-protocol.go:312`).
 - **DH(sk, pk)** uses X25519. If all 32 result bytes are 0, it fails with `errInvalidPublicKey` (`wireguard-go/device/noise-helpers.go:100`).
@@ -116,12 +116,12 @@ Sources are `wireguard-go/device/noise-protocol.go:76` and `wireguard-go/device/
 - `WGLabelMAC1` = `"mac1----"`
 - `WGLabelCookie` = `"cookie--"`
 
-Source is `wireguard-go/device/noise-protocol.go:51`.
+See `wireguard-go/device/noise-protocol.go:51`.
 
 - `InitialChainKey` = HASH(`NoiseConstruction`)
 - `InitialHash` = HASH(`InitialChainKey` ‖ `WGIdentifier`)
 
-Source is `wireguard-go/device/noise-protocol.go:267`.
+See `wireguard-go/device/noise-protocol.go:267`.
 
 ### Initiator creates an initiation
 
@@ -139,7 +139,7 @@ S_i/S_r are static keys, E_i/E_r are ephemeral keys, ck is the chaining key, and
 
 ### Responder consumes the initiation
 
-Source is `wireguard-go/device/noise-protocol.go:342`.
+See `wireguard-go/device/noise-protocol.go:342`.
 
 1. Drop if type is anything other than 1 (`:348`).
 2. h = HASH(HASH(InitialHash ‖ S_r.pub) ‖ E_i.pub), ck = KDF1(InitialChainKey, E_i.pub)(`:360`).
@@ -166,7 +166,7 @@ Source is `wireguard-go/device/noise-protocol.go:456`.
 
 ### Initiator consumes the response
 
-Source is `wireguard-go/device/noise-protocol.go:524`.
+See `wireguard-go/device/noise-protocol.go:524`.
 
 1. Check that type is 2, then look up the Receiver index in the index table. Drop if there is no handshake entry. If the index already points to a keypair, treat it as a "duplicate" and drop it without logging (`:525`, `:531`, `wireguard-go/device/receive.go:390`).
 2. Drop unless the state is `handshakeInitiationCreated` (`:556`).
@@ -176,11 +176,11 @@ Source is `wireguard-go/device/noise-protocol.go:524`.
 
 ### Transport key derivation (`BeginSymmetricSession`)
 
-Source is `wireguard-go/device/noise-protocol.go:635`.
+See `wireguard-go/device/noise-protocol.go:635`.
 
 - Initiator (`handshakeResponseConsumed`) computes (sendKey, recvKey) = KDF2(ck, empty input) (`:647`).
 - Responder (`handshakeResponseCreated`) computes (recvKey, sendKey) = KDF2(ck, empty input) (`:655`).
-- Other states are errors (`:664`).
+- Return an error in any other state (`:664`).
 - Clear ck, h, and the ephemeral private key, and reset the state to `handshakeZeroed` (`:669`).
 - A new keypair has sendNonce 0, an empty replay filter, `created` = now, and `isInitiator`. Keep the localIndex and remoteIndex values from the handshake (`:683`–`:687`).
 - Replace the index table's handshake entry with a keypair entry at the same index (`:691`, `wireguard-go/device/indextable.go:44`). Thus transport Receiver equals the Sender index sent during the handshake.
@@ -196,7 +196,7 @@ The following describes `BeginSymmetricSession` (`wireguard-go/device/noise-prot
 | Responder | next ← new keypair, delete old next, previous ← nil (delete old previous), keep current | |
 
 - **Responder confirmation.** The responder confirms on receiving the first transport message authenticated with the new keypair. `ReceivedWithKeypair` sets previous ← current, current ← next, next ← nil, and deletes the old previous (`wireguard-go/device/noise-protocol.go:724`, `wireguard-go/device/receive.go:480`).
-- **Responder send wait.** Sending always uses only `current` (`wireguard-go/device/send.go:488`). The responder therefore waits for confirmation before sending with the new keypair.
+- **When the responder can send.** Sending always uses only `current` (`wireguard-go/device/send.go:488`). The responder therefore waits for confirmation before sending with the new keypair.
 - **Responder in its first session.** With no current keypair, the responder attempts an initiation when it has a packet to send. Sending the response updates `lastSentHandshake`, which prevents the initiation for `RekeyTimeout` (`wireguard-go/device/send.go:170`, `wireguard-go/device/send.go:220`). The packet remains staged and is sent on confirmation (`wireguard-go/device/receive.go:484`).
 - **Initiator prompts confirmation.** The initiator calls `SendKeepalive` immediately after processing the response. It sends staged data if available or an empty transport message otherwise, confirming the responder's next keypair. A separate keepalive is not necessarily sent (`wireguard-go/device/receive.go:414`–`:417`, `wireguard-go/device/send.go:85`–`:105`).
 - **Keypair deletion.** Only the index table entry is deleted (`wireguard-go/device/keypair.go:48`). Transport messages arriving for the deleted index cannot find a keypair and are dropped (`wireguard-go/device/receive.go:161`).
@@ -206,7 +206,7 @@ The following describes `BeginSymmetricSession` (`wireguard-go/device/noise-prot
 **Keys** (`wireguard-go/device/cookie.go:44`, `wireguard-go/device/cookie.go:173`)
 
 - The receiver (`CookieChecker`) derives keys from its own public key M. The mac1 key is HASH(`"mac1----"` ‖ M), and the cookie encryption key is HASH(`"cookie--"` ‖ M). Reinitialize when the private key changes (`wireguard-go/device/device.go:433`).
-- The sender (`CookieGenerator`) derives the same keys for each peer using that peer's public key (`wireguard-go/device/peer.go:137`).
+- The sender (`CookieGenerator`) uses the same formulas to derive keys for each peer from that peer's public key (`wireguard-go/device/peer.go:137`).
 
 **Adding MACs** (`AddMacs`, `wireguard-go/device/cookie.go:215`)
 
@@ -218,9 +218,9 @@ The following describes `BeginSymmetricSession` (`wireguard-go/device/noise-prot
 **Validation** (`wireguard-go/device/receive.go:310`)
 
 - Always check mac1 on initiation and response with a constant-time comparison. Drop on mismatch (`:314`, `wireguard-go/device/cookie.go:69`).
-- Perform additional checks only when `IsUnderLoad()` (`:321`).
+- Perform additional checks only when `IsUnderLoad()` returns true (`:321`).
   1. Check mac2. If invalid, send a cookie reply and drop the original message (`:325`).
-  2. If mac2 is valid, it must pass the per-source-IP rate limiter (`:332`).
+  2. If mac2 is valid, the packet must pass the per-source-IP rate limiter (`:332`).
 
 **Cookie value and secret** (`wireguard-go/device/cookie.go:86`, `wireguard-go/device/cookie.go:117`)
 
@@ -234,19 +234,19 @@ The following describes `BeginSymmetricSession` (`wireguard-go/device/noise-prot
 
 - Receiver = Sender at offset 4 of the rejected message, and Nonce = 24 random bytes.
 - Cookie = XChaCha20-Poly1305(key = cookie encryption key, nonce, plaintext = 16-byte cookie, AAD = mac1 of the rejected message).
-- Send directly to the receiving Endpoint.
+- Send the reply directly back through the `Endpoint` from the rejected packet's receive metadata (`wireguard-go/device/send.go:255`–`:270`).
 
 **Consuming a cookie reply** (`wireguard-go/device/receive.go:280`, `wireguard-go/device/cookie.go:194`)
 
 1. Look up the peer by Receiver index. Either a handshake or a keypair entry works. Do not consume the reply if the peer is missing or not running (`wireguard-go/device/receive.go:293`–`:305`).
 2. Fail if the peer has never sent mac1 (`hasLastMAC1` is false).
-3. Open using `lastMAC1` as AAD and store the cookie and receive time.
-4. On failure, only log it. A stored cookie is used in mac2 starting with the next `AddMacs`. Do not immediately resend the same initiation.
+3. Open using `lastMAC1` as AAD and store the cookie and the time it was received.
+4. On failure, log the error as the only action. A stored cookie is used in mac2 starting with the next `AddMacs`. Do not immediately resend the same initiation.
 
 **Detecting load** (`wireguard-go/device/device.go:385`)
 
 - The device is under load when the handshake queue length is at least max(1, `queueHandshakeSize`/8). Record `underLoadUntil` = now + `UnderLoadAfterTime` (1 second).
-- Otherwise, determine whether `underLoadUntil` has yet elapsed.
+- Otherwise, the device remains under load while `underLoadUntil` is still in the future.
 - With the default queue size of 1024, the threshold is 128 (`wireguard-go/device/queueconstants_default.go:16`).
 - Drop handshake packets when the queue is full (`wireguard-go/device/receive.go:223`).
 
@@ -258,7 +258,7 @@ The following describes `BeginSymmetricSession` (`wireguard-go/device/noise-prot
 
 ### TAI64N
 
-Source is `wireguard-go/tai64n/tai64n.go:15`.
+See `wireguard-go/tai64n/tai64n.go:15`.
 
 - 12 bytes = big-endian uint64(`0x400000000000000a` + Unix seconds) ‖ big-endian uint32(nanoseconds & ^`0xFFFFFF`).
 - Clear the low 24 bits of nanoseconds to reduce resolution to about 16.8ms (`whitenerMask`).
@@ -268,7 +268,7 @@ Source is `wireguard-go/tai64n/tai64n.go:15`.
 ### Sending transport data
 
 1. **Nonce assignment.** Atomically increment `sendNonce` by 1 for each packet and use the previous value as the counter. The first counter is 0 (`wireguard-go/device/send.go:501`).
-2. **Nonce limit.** When the counter is at least `RejectAfterMessages`, pin the nonce to that value and put the packet back in staged (`wireguard-go/device/send.go:502`).
+2. **Nonce limit.** When the counter is at least `RejectAfterMessages`, pin the nonce to that value and return the packet to the staged queue (`wireguard-go/device/send.go:502`).
 3. **When sending is blocked.** Leave packets staged and call `SendHandshakeInitiation(false)` in any of the following cases (`wireguard-go/device/send.go:488`).
    - There is no current keypair.
    - The nonce is exhausted.
@@ -282,16 +282,16 @@ Source is `wireguard-go/tai64n/tai64n.go:15`.
    - If TUN cannot supply an MTU, use `DefaultMTU` = 1420 (`wireguard-go/device/tun.go:14`, `wireguard-go/device/device.go:468`).
 7. **Encryption.** The 12-byte AEAD nonce is 0x00000000 ‖ LE uint64(counter), with no AAD (`wireguard-go/device/send.go:599`).
 8. **Size limit.** Plaintext read from TUN must satisfy 1 ≤ size ≤ `MaxContentSize` (= `MaxSegmentSize` − 32 − 8) (`wireguard-go/device/send.go:380`, `wireguard-go/device/constants.go:32`).
-9. **Path selection.** Check the IP version (first nibble 4/6) and minimum header length. Look up the destination address in the AllowedIPs trie. If `PeerByIPPacketFunc` exists, call `LookupPeer` with the resulting public key (`wireguard-go/device/send.go:390`, `wireguard-go/device/allowedips.go:363`).
-10. **Keepalive.** If the staged queue is empty, insert one empty packet and drain staged. Otherwise, send only the packets waiting in the queue (`wireguard-go/device/send.go:85`).
-11. **After sending.** After sending a group, `keepKeyFreshSending` calls for an initiation in any of the following cases (`wireguard-go/device/send.go:275`, `wireguard-go/device/send.go:699`).
+9. **Path selection.** Check the IP version (first nibble 4/6) and minimum header length. If `PeerByIPPacketFunc` is set, pass it the source, destination, and packet, then call `LookupPeer` if it returns a peer key. Otherwise, look up the destination in the AllowedIPs trie (`wireguard-go/device/send.go:390`, `wireguard-go/device/allowedips.go:363`).
+10. **Keepalive.** If the staged queue is empty, insert one empty packet and drain the staged queue. Otherwise, send only the packets waiting in the queue (`wireguard-go/device/send.go:85`).
+11. **After sending.** After sending a group, `keepKeyFreshSending` triggers a handshake initiation in any of the following cases (`wireguard-go/device/send.go:275`, `wireguard-go/device/send.go:699`).
     - `handshakeOnUserSend` is enabled.
     - nonce > `RekeyAfterMessages`.
     - The keypair is an initiator keypair and its age > `RekeyAfterTime` (120 seconds).
 
 ### Receiving transport data
 
-Source is `wireguard-go/device/receive.go`.
+See `wireguard-go/device/receive.go`.
 
 1. **Size and type.** Drop datagrams smaller than `MinMessageSize` (32) without inspecting type (`:135`). Drop any of the 3 handshake message types with an incorrect size, and drop unknown types (`:194`–`:211`).
 2. **Keypair lookup.** For transport, look up the keypair by Receiver index. Drop in either of the following cases (`:158`–`:171`).
@@ -334,7 +334,7 @@ Sending to a peer with no endpoint therefore returns `"no known endpoint for pee
 `SendHandshakeInitiation`(`wireguard-go/device/send.go:164`):
 
 - Reset the attempt count to 0 unless isRetry.
-- Do nothing if `RekeyTimeout` (5 seconds) have not passed since the last handshake message, whether initiation or response, was sent (`wireguard-go/device/send.go:170`).
+- Do nothing if less than `RekeyTimeout` (5 seconds) has elapsed since sending the last initiation or response (`wireguard-go/device/send.go:170`).
 - If initiation creation succeeds, call `timersHandshakeInitiated` even if the UDP send fails. If creation itself fails, return before that call (`wireguard-go/device/send.go:190`–`:213`).
 - A retry creates a fresh initiation rather than resending saved bytes. Call `CreateMessageInitiation` again, start at InitialChainKey and InitialHash, and create a new ephemeral key, timestamp, Sender index, and MACs. The responder rejects retransmission with the same timestamp (`wireguard-go/device/send.go:190`, `wireguard-go/device/noise-protocol.go:282`–`:338`, `:419`).
 - The responder does not retransmit a response periodically. It creates a fresh response when the initiator restarts with a fresh initiation. During rekeying it continues sending with a valid current keypair while waiting for confirmation of next, derived from the fresh response (`wireguard-go/device/receive.go:358`–`:372`, `wireguard-go/device/send.go:218`–`:252`, `wireguard-go/device/noise-protocol.go:714`–`:719`).
@@ -363,7 +363,7 @@ The responder derives a keypair immediately after creating a response and puts i
 - Reset the attempt count and `sentLastMinuteHandshake`
 - Record `lastHandshakeNano`
 
-Two points call this function.
+The function runs at two points in the handshake.
 
 - Initiator, immediately after consuming the response (`wireguard-go/device/receive.go:415`)
 - Responder, when confirming next (`wireguard-go/device/receive.go:482`)
@@ -390,7 +390,7 @@ This section describes only what is in the fork's sources. It does not establish
 
 | Method | Behavior |
 | --- | --- |
-| `Open(port)` | Returns the list of `ReceiveFunc` and the actual port |
+| `Open(port)` | Returns the list of `ReceiveFunc` values and the actual port |
 | `Close` | Causes open receive functions to return `net.ErrClosed` |
 | `SetMark` | Sets the socket mark |
 | `Send(bufs, ep, offset)` | Bind may use the space before `offset` |
@@ -420,7 +420,7 @@ This section describes only what is in the fork's sources. It does not establish
 
 - `connBind.Open` returns three receive functions (IPv4, IPv6, and DERP) in builds with UDP transport, or just DERP in builds without it. It ignores the port argument (`tailscale.com/wgengine/magicsock/magicsock.go:3543`–`:3558`).
 - `SetMark` does nothing (`tailscale.com/wgengine/magicsock/magicsock.go:3565`).
-- `BatchSize` is 128 on linux and 1 elsewhere (`tailscale.com/wgengine/magicsock/magicsock.go:3528`).
+- `BatchSize` is 128 on Linux and 1 elsewhere (`tailscale.com/wgengine/magicsock/magicsock.go:3528`).
 - `ParseEndpoint` takes the **node public key hex string** and returns that peer's `*endpoint` (`tailscale.com/wgengine/magicsock/magicsock.go:3946`). The wireguard-go endpoint is thus a fixed object per peer, and magicsock chooses the actual path.
 - Methods of `*endpoint` (`tailscale.com/wgengine/magicsock/endpoint.go:619`, `tailscale.com/wgengine/magicsock/endpoint.go:568`, `tailscale.com/wgengine/magicsock/magicsock.go:3929`) follow.
   - `DstToString` = public key hex
@@ -471,7 +471,7 @@ This section describes only what is in the fork's sources. It does not establish
 
 **Peer synchronization and cleanup**
 
-- On netmap changes, `SyncDevicePeer` takes effect (`tailscale.com/wgengine/userspace.go:698`).
+- `SyncDevicePeer` runs when the netmap changes (`tailscale.com/wgengine/userspace.go:698`).
   - Remove the peer if it has no configuration.
   - Update PSK and AllowedIPs for an existing peer.
   - Do not create a missing peer.
@@ -495,7 +495,7 @@ This section describes only what is in the fork's sources. It does not establish
 
 - **Tailscale iOS.** Overrides all five values to 64 (staged, outbound, inbound, handshake, and preallocation). The load threshold is therefore 64/8 = 8 (`tailscale.com/wgengine/wgcfg/mem_ios.go:20`).
 - **Tailscale on other platforms.** Changes only inbound and outbound to min(1024, CPU count×4) (`tailscale.com/wgengine/wgcfg/mem_notios.go:37`).
-- **iOS size limit.** `MaxSegmentSize` is 1700. Outbound plaintext read from TUN is checked against `MaxContentSize` = 1700−40 = 1660 bytes (`wireguard-go/device/queueconstants_ios.go:21`, `wireguard-go/device/constants.go:32`, `wireguard-go/device/send.go:380`). The receive loop has no 1700-byte limit check. Receive capacity depends on the slab passed to Bind, which is `MaxContentSize+128` in single-packet mode (1788 on iOS) and 131070 bytes in batch mode. Therefore, do not use 1700 as a wire receive limit (`wireguard-go/device/receive.go:115`–`:152`, `wireguard-go/device/packetbuf.go:25`–`:31`, `wireguard-go/tun/tun.go:30`, `wireguard-go/device/pools.go:96`–`:99`).
+- **iOS size limit.** `MaxSegmentSize` is 1700. Outbound plaintext read from TUN is checked to ensure it is at most `MaxContentSize` = 1700−40 = 1660 bytes (`wireguard-go/device/queueconstants_ios.go:21`, `wireguard-go/device/constants.go:32`, `wireguard-go/device/send.go:380`). The receive loop has no 1700-byte limit check. Receive capacity depends on the slab passed to Bind, which is `MaxContentSize+128` in single-packet mode (1788 on iOS) and 131070 bytes in batch mode. Therefore, do not use 1700 as a wire receive limit (`wireguard-go/device/receive.go:115`–`:152`, `wireguard-go/device/packetbuf.go:25`–`:31`, `wireguard-go/tun/tun.go:30`, `wireguard-go/device/pools.go:96`–`:99`).
 
 ## Constants and timers
 
@@ -537,7 +537,7 @@ For the M1 gate, a Swift peer and a wireguard-go peer handshake over UDP loopbac
 3. **mac1 generation and validation.** The Go receiver always validates it (`wireguard-go/device/receive.go:314`). Leave mac2 at 0 without a cookie.
 4. **Serialization of all 4 message types.** Reserved type bytes set to 0 and LE integers.
 5. **Initiator and responder state machines.** Index table (replace handshake index → keypair index), previous/current/next rotation, responder confirmation of next, and initiator keepalive for confirmation.
-6. **Transport encryption and decryption.** 12-byte nonce = 0⁴ ‖ LE counter, sendNonce limit, replay filter (8128 window), and rejection at a keypair age of 180 seconds.
+6. **Transport encryption and decryption.** 12-byte nonce = 0⁴ ‖ LE counter, sendNonce limit, replay filter (8128 window), and rejection when a receive keypair is older than 180 seconds (see Receiving transport data above).
 7. **Incoming IP processing.** Validate length, remove padding, and check source address AllowedIPs. The Go peer sends with padding.
 8. **Timers and rules needed to sustain rekeying.**
    - `RekeyAfterMessages` (sendNonce > 2^60 independent of role) and `RekeyAfterTime` (when the initiator sends) (`wireguard-go/device/send.go:275`–`:283`)
@@ -569,13 +569,13 @@ For the M1 gate, a Swift peer and a wireguard-go peer handshake over UDP loopbac
 ### Reusable tests
 
 - **KDF test vectors** (`wireguard-go/device/kdf_test.go:30`) provide three (key, input, T0, T1, T2) groups in hex, including empty key and empty input cases. KDF1 and KDF2 use the first part of the same vectors (`:68`, `:78`). These are the only fixed vectors that pin down HMAC-BLAKE2s, so port them directly to Swift unit tests.
-- **Replay tests** (`wireguard-go/replay/replay_test.go:19`) have 34 fixed sequence cases and 6 bulk cases. They cover the window boundary and the `RejectAfterMessages` boundary. Port them directly because inputs and expected values are constants.
+- **Replay tests** (`wireguard-go/replay/replay_test.go:19`) have 34 fixed sequence cases and 6 bulk cases. They cover the window boundary and the `RejectAfterMessages` boundary. They can be ported directly because inputs and expected values are constants.
 - **TAI64N quantization** (`wireguard-go/tai64n/tai64n_test.go:15`–`:28`) covers a specific start time where a 10ms difference is not after and a 20ms difference is after. Do not generalize this to a minimum interval of 10ms for arbitrary times.
 - **Cookie round trip** (`wireguard-go/device/cookie_test.go:12`) tests round-trip properties with random keys. It checks mac1 generation and validation, mac2 failure without a cookie, mac2 success after creating and consuming a cookie reply, and failure when one byte changes or src differs. Port it as a property test because it has no fixed vectors.
 - **Handshake round trip** (`wireguard-go/device/noise_test.go:80`) creates two devices with random keys. It checks whether Seal/Open works both ways after initiation, response, and `BeginSymmetricSession` on both sides, and whether `InitiationAwareEndpoint` is called. With no fixed vectors, use a Swift property test and verify actual interop against a Go peer.
 - **Go test peer components**
   - `NewChannelTUN` (MTU 1420) in `tun/tuntest` and `Ping` for ICMPv4 packet creation (`wireguard-go/tun/tuntest/tuntest.go:92`, `wireguard-go/tun/tuntest/tuntest.go:17`, `wireguard-go/tun/tuntest/tuntest.go:170`)
-  - Standard bind `conn.NewDefaultBind` and `ParseEndpoint` in `ip:port` format (`wireguard-go/conn/bind_std.go:90`)
+  - Standard bind `conn.NewDefaultBind` and `ParseEndpoint` for addresses in `ip:port` format (`wireguard-go/conn/bind_std.go:90`)
   - `device_test.go`'s setup for connecting two devices with UAPI (`wireguard-go/device/device_test.go:68`)
 
 ### M1 cross-implementation tests
@@ -586,7 +586,7 @@ For the M1 gate, a Swift peer and a wireguard-go peer handshake over UDP loopbac
 4. Bidirectional ICMP or arbitrary IP packets. Verify that Swift trims Go padding (based on MTU 1420) using the IP length and does not mistake a keepalive (32 bytes) for data.
 5. Replay and flood boundaries follow.
    - Go drops a retransmission of the same initiation as a replay.
-   - Go drops a second initiation within 20ms as flooding.
+   - Go drops a second initiation within 20ms as part of its flood check.
    - Because of Go's `RekeyTimeout` throttle (5 seconds), Go does not send an initiation within 5 seconds of sending a response.
 6. rekey:
    - Send traffic for more than 120 seconds to verify time-based rekeying on the initiator side.
@@ -595,7 +595,7 @@ For the M1 gate, a Swift peer and a wireguard-go peer handshake over UDP loopbac
    - Verify correct previous/current/next rotation when Swift is the responder.
 7. Counter boundaries. Verify that packets outside the replay window (more than 8128 behind) and duplicate counters are rejected.
 8. Error branches. Verify that Go drops invalid mac1, incorrectly sized handshakes, unknown types, and reserved bytes other than 0. Invalid mac1 and unknown types have verbose logs, so do not expect "no log" (`wireguard-go/device/receive.go:194`–`:211`, `:314`–`:316`). The same inputs must leave Swift handshake and keypair state unchanged.
-9. Loss and delay. Verify recovery after dropping the first response or confirmation transport, fresh values for ephemeral, Sender, and timestamp in retry initiations, and that a delayed response to an old Receiver cannot overwrite a new handshake (`wireguard-go/device/noise-protocol.go:282`–`:338`, `:614`–`:622`, `wireguard-go/device/timers.go:79`–`:106`).
+9. Loss and delay. Verify recovery after dropping the first response or confirmation transport, fresh values for ephemeral, Sender, and timestamp in retry initiations, and that a delayed response with an old Receiver index cannot overwrite a new handshake (`wireguard-go/device/noise-protocol.go:282`–`:338`, `:614`–`:622`, `wireguard-go/device/timers.go:79`–`:106`).
 10. Authentication boundary. Invalid AEAD tags must leave the replay window and next unchanged. An invalid IP packet that passes AEAD and replay checks may count toward next confirmation and authenticated-packet timers but must not be delivered to TUN (`wireguard-go/device/receive.go:469`–`:549`).
 
 ## Unverified items
@@ -606,5 +606,5 @@ For the M1 gate, a Swift peer and a wireguard-go peer handshake over UDP loopbac
 - **Fixed Noise handshake vectors.** None were found in the source tree. Handshake correctness can only be verified by cross-testing with a Go peer.
 - **Roaming check in `tests/netns.sh`.** Whether the endpoint roaming checks (`wireguard-go/tests/netns.sh:196`, `:202`) pass in this fork is unverified.
 - **magicsock keepalive and path maintenance.** Whether magicsock does its own keepalive in place of wireguard-go persistentKeepalive remains in scope for `disco-magicsock.md`. The `lazyEndpoint` selection branch in `receiveIP` was checked (`tailscale.com/wgengine/magicsock/magicsock.go:1905`–`:1939`), but overall path selection, including disco and DERP, was unverified.
-- **Runtime verification.** This verification read and checked the sources and test bodies for the two specified versions. Go noise, cookie, and replay test execution, UDP cross-testing, and real-time timer behavior were unverified. In particular, the `uint16` wrap in the IPv6 length addition is a limitation identified from source and should not be reproduced in Swift (`wireguard-go/device/receive.go:519`–`:525`).
+- **Runtime verification.** Verification consisted of comparing the sources and test bodies for the two specified versions. Go noise, cookie, and replay test execution, UDP cross-testing, and real-time timer behavior were unverified. In particular, the `uint16` wrap in the IPv6 length addition is a limitation identified from source and should not be reproduced in Swift (`wireguard-go/device/receive.go:519`–`:525`).
 - **Swift support.** Whether Apple frameworks provide BLAKE2s and XChaCha20-Poly1305 falls outside the sources for this note and was unverified.

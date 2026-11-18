@@ -5,13 +5,13 @@
 | Reference versions | `tailscale.com` v1.104.6 (CapabilityVersion 148), `wireguard-go` v0.0.0-20261106233718-9e0ab45c16ca — [Reference sources](README.md#reference-sources) |
 | Authoring model | Claude Sonnet 5.5 (`claude-sonnet-5-5`), 2026-11-13 |
 | Verification status | GPT-6.1 Sol completed the source comparison on 2026-11-14. Corrected 10 factual errors (§8.3) and filled gaps in implementation coverage (§4.3, §4.7, §6). Runtime interop was not tested |
-| Milestones using this note | M3 (DERP-only UDP echo, TCP SYN-ACK, and ACL blocking), M5 (iOS tunnel configuration) — `docs/plan.md:193-195` |
+| Milestones using this note | M3 (DERP-only UDP echo, TCP SYN-ACK, and ACL blocking), M5 (iOS tunnel configuration) — `docs/plan.md:200-202` |
 
 Source references use `path:line` relative to the module root. `wireguard-go/` is the root of the fork above, and `gvisor/` is the root of the Go dependency `gvisor.dev/gvisor` v0.0.0-20260915211658-a6f909f08a72 (version in `tailscale.com/go.mod:156`). `Sources/` and `docs/` are relative to the Swiftail repository. The **recommendations, design choices, and test plans** below are distinct from Go's required wire behavior.
 
 ## 1. Scope
 
-M3 implementers follow the packet input in §3, peer and filter conversion in §4.1–4.6, in-process receive boundary in §4.7, and procedure in §6.1. Deriving OS address, route, and DNS settings is grouped under M5 (§4.8 and §6.2, milestone `docs/plan.md:193-195`).
+For M3, follow the packet input rules in §3, peer and filter conversion in §4.1–4.6, in-process receive boundary in §4.7, and procedure in §6.1. Derive OS address, route, and DNS settings in M5 (§4.8 and §6.2, milestone `docs/plan.md:200-202`).
 
 [wireguard.md](wireguard.md) covers Noise and rekeying, [control-map.md](control-map.md) covers map JSON and delta merging, [disco-magicsock.md](disco-magicsock.md) covers direct UDP, disco, and DERP path selection, and [dns-state-node.md](dns-state-node.md) covers MagicDNS responses.
 
@@ -20,7 +20,7 @@ M3 implementers follow the packet input in §3, peer and filter conversion in §
 | Role | Where to verify |
 | --- | --- |
 | netmap → per-peer AllowedIPs | `tailscale.com/net/routemanager/routemanager.go:260-297`, `:408-431`, `:665-687`, `:827-862` |
-| Outbound peer selection and peer configuration supply | `tailscale.com/ipn/ipnlocal/resolve.go:20-52` |
+| Outbound peer selection and provision of peer configuration | `tailscale.com/ipn/ipnlocal/resolve.go:20-52` |
 | Peer configuration synchronization and local packets | `tailscale.com/wgengine/userspace.go:652-750` |
 | Filter rule conversion, matching, and verdicts | `tailscale.com/wgengine/filter/tailcfg.go:30-180`, `tailscale.com/wgengine/filter/match.go:17-107`, `tailscale.com/wgengine/filter/filter.go:443-720` |
 | Filter and netstack wiring after WireGuard | `tailscale.com/net/tstun/wrap.go:1128-1254`, `tailscale.com/wgengine/netstack/netstack.go:465-466` |
@@ -28,7 +28,7 @@ M3 implementers follow the packet input in §3, peer and filter conversion in §
 
 In this version, `wgcfg.Config` has only `PrivateKey` and `Addresses`, with no peer array. `PeerConfig` has only `AllowedIPs` and `PresharedKey`. The old `wgcfg/nmcfg` approach of generating a peer array therefore does not describe this version (`tailscale.com/wgengine/wgcfg/config.go:17-35`).
 
-Swiftail's `Netmap` holds self, peers, the DERP map, filter rules, and `controlTime`. The WireGuard module provides `addPeer`, `removePeer`, and `send` targeting a public key. `ipPacket` output has already passed decryption and AllowedIPs checks. The engine handles the filter and outbound peer selection outside that module (`Sources/SwiftailControl/Netmap/Netmap.swift:7-26`, `Sources/SwiftailWireGuard/WireGuardDevice.swift:19-29`, `:57-78`, `docs/contracts/SwiftailWireGuard.md:70-101`).
+Swiftail's `Netmap` holds self, peers, the DERP map, filter rules, and `controlTime`. The WireGuard module provides `addPeer`, `removePeer`, and `send` targeting a public key. An `ipPacket` is emitted only after decryption and AllowedIPs validation. The engine handles the filter and outbound peer selection outside that module (`Sources/SwiftailControl/Netmap/Netmap.swift:7-26`, `Sources/SwiftailWireGuard/WireGuardDevice.swift:19-29`, `:57-78`, `docs/contracts/SwiftailWireGuard.md:70-101`).
 
 ## 3. Packet input and wire fields
 
@@ -78,7 +78,7 @@ Go's pong swaps addresses, copies 8 bytes of ping data, and uses port 0 when the
 
 ### 4.1 netmap peer → WireGuard configuration
 
-Input is a normalized `Node`. If `AllowedIPs` is omitted or null in JSON, use a copy of `Addresses`. An empty array stays empty, and `UnsignedPeerAPIOnly` is forcibly narrowed to `Addresses`. Swiftail's `Node` performs the same normalization (`tailscale.com/control/controlclient/map.go:266-274`, `Sources/SwiftailControl/Tailcfg/Node.swift:123-124`, `:146-148`).
+Input is a normalized `Node`. If `AllowedIPs` is omitted or null in JSON, use a copy of `Addresses`. An empty array stays empty, and for an `UnsignedPeerAPIOnly` node, `AllowedIPs` is forced to `Addresses`. Swiftail's `Node` performs the same normalization (`tailscale.com/control/controlclient/map.go:266-274`, `Sources/SwiftailControl/Tailcfg/Node.swift:123-124`, `:146-148`).
 
 1. Identify the peer by NodeID and `Key`. `Key` is the WireGuard public key, distinct from `Machine` and `DiscoKey`. magicsock treats NodeID=0 or `Key`=0 as an error and creates no endpoint. **Swiftail recommendation.** Reject the peer at the engine input and remove any previously registered old key. RouteManager itself has no zero-key check, so AllowedIPs alone do not establish that the key is valid (`tailscale.com/tailcfg/tailcfg.go:388-395`, `tailscale.com/wgengine/magicsock/magicsock.go:3237-3251`, `tailscale.com/net/routemanager/routemanager.go:408-431`).
 2. There are no candidate prefixes if `Expired`. There are also none if `DiscoKey`=0, `HomeDERP`=0, and `IsWireGuardOnly=false`. Otherwise, iterate **only `AllowedIPs`** (`tailscale.com/net/routemanager/routemanager.go:408-431`).
@@ -88,7 +88,7 @@ Input is a normalized `Node`. If `AllowedIPs` is omitted or null in JSON, use a 
 
 | Classification | Condition for retaining in AllowedIPs | Source |
 | --- | --- | --- |
-| self | Always by default. IPv4 self is an exception when `DisableIPv4` is true (the current LocalBackend does not set this) | `tailscale.com/net/routemanager/routemanager.go:828-832`, `tailscale.com/ipn/ipnlocal/node_backend.go:954-960` |
+| self | Always retain, except that `DisableIPv4=true` excludes IPv4 self prefixes (the current LocalBackend does not set this) | `tailscale.com/net/routemanager/routemanager.go:828-832`, `tailscale.com/ipn/ipnlocal/node_backend.go:954-960` |
 | Routes exactly `0.0.0.0/0` or `::/0` | Resolved `ExitNodeID != 0` matching that peer ID. `RouteAll` alone does not permit them | `tailscale.com/net/routemanager/routemanager.go:833-837`, `tailscale.com/net/tsaddr/tsaddr.go:270-272` |
 | Other routes | `RouteAll=true` | `tailscale.com/net/routemanager/routemanager.go:837` |
 | Extra AllowedIPs from extension hooks | Add only for peers that already have a valid self/route contribution. Allow on receive without creating an OS route | `tailscale.com/net/routemanager/routemanager.go:681-684`, `:825-839`, `:853-855` |
@@ -105,7 +105,7 @@ Input is a normalized `Node`. If `AllowedIPs` is omitted or null in JSON, use a 
 
 ### 4.2 Outbound peer selection and lazy configuration
 
-Go's outbound selection is (1) exact match against a **single-IP `Addresses`** of self or any peer → (2) LPM on eligible routes → (3) silent drop on failure. The winner for the same prefix has the higher score, with ties going to the lower NodeID. The exact match path does not check AllowedIPs membership, but the subsequent peer configuration lookup filters out expired peers and peers without candidates (`tailscale.com/ipn/ipnlocal/node_backend.go:712-734`, `tailscale.com/ipn/ipnlocal/resolve.go:20-52`, `tailscale.com/net/routemanager/routemanager.go:846-862`, `wireguard-go/device/send.go:388-413`).
+Go's outbound selection is (1) exact match against a **single-IP entry in `Addresses`** for self or any peer → (2) LPM on eligible routes → (3) silent drop on failure. The winner for the same prefix has the higher score, with ties going to the lower NodeID. The exact match path does not check AllowedIPs membership, but the subsequent peer configuration lookup filters out expired peers and peers without candidates (`tailscale.com/ipn/ipnlocal/node_backend.go:712-734`, `tailscale.com/ipn/ipnlocal/resolve.go:20-52`, `tailscale.com/net/routemanager/routemanager.go:846-862`, `wireguard-go/device/send.go:388-413`).
 
 | Event | Go behavior | Source |
 | --- | --- | --- |
@@ -116,7 +116,7 @@ Go's outbound selection is (1) exact match against a **single-IP `Addresses`** o
 | Handshake give-up | Set a 540-second cleanup timer **only if none exists yet**. Do not extend a running timer | `wireguard-go/device/timers.go:80-98` |
 | Cleanup timer expiration | Clear keys and remove the `deleteOnIdle` peer | `wireguard-go/device/timers.go:127-138` |
 
-**M3 design choice.** Lazy creation and idle peer removal are not wire requirements for interop. This follows from creation timing being decided by a local lookup callback in a design that also has a regular `NewPeer`. The recommendation is to `addPeer` every valid peer when applying the netmap and synchronize deletions, expirations, and AllowedIPs changes. Swiftail requires peer registration before receiving, and its 540-second timer only clears keys (`wireguard-go/device/device.go:542-575`, `wireguard-go/device/peer.go:117-170`, `Sources/SwiftailWireGuard/WireGuardDevice.swift:57-78`, `Sources/SwiftailWireGuard/WireGuardDevice+Receiving.swift:35-43`, `Sources/SwiftailWireGuard/WireGuardDevice+Timers.swift:57-59`).
+**M3 design choice.** Lazy creation and idle peer removal are not wire requirements for interop. This follows from creation timing being decided by a local lookup callback in a design that also has a regular `NewPeer`. The recommendation is to `addPeer` every valid peer when applying the netmap and synchronize deletions, expirations, and AllowedIPs changes. Swiftail requires peer registration before receiving, and its 540-second timer clears key material and the staged queue while keeping the peer registered (`wireguard-go/device/device.go:542-575`, `wireguard-go/device/peer.go:117-170`, `Sources/SwiftailWireGuard/WireGuardDevice.swift:57-78`, `Sources/SwiftailWireGuard/WireGuardDevice+Receiving.swift:35-43`, `Sources/SwiftailWireGuard/WireGuardDevice+Timers.swift:51-53`, `Sources/SwiftailWireGuard/Peer.swift:82-87`).
 
 ### 4.3 Engine → DERP/magicsock boundary
 
@@ -138,7 +138,7 @@ Swiftail's `Netmap.packetFilter` is already a list of **raw `FilterRule`** with 
 2. If `IPProto` is nil or an empty array, use `{6,17,1,58}` (TCP, UDP, ICMPv4, ICMPv6). For an explicit array, retain only 0...255. If every entry is out of range, the result is an empty protocol set and does not fall back to the default set (`tailscale.com/wgengine/filter/tailcfg.go:21-26`, `:50-60`).
 3. Parse each string in `SrcIPs` and `DstPorts[].IP` in the order below. The source list is an OR, with no source port condition (`tailscale.com/wgengine/filter/tailcfg.go:62-96`, `:138-180`, `tailscale.com/wgengine/filter/match.go:17-53`).
 4. Pair each destination prefix with the original `Ports.First...Last` to create `Dsts`. Both ends of the range are inclusive, and First>Last matches no ports (`tailscale.com/wgengine/filter/tailcfg.go:88-96`, `tailscale.com/wgengine/filter/filtertype/filtertype.go:21-40`).
-5. `CapGrant` converts `Dsts × (each entry in Caps and CapMap)` into a capability list. Deprecated `Caps` has no values, and `CapMap` has lists of JSON values. This is separate from allowing packets. The schema prohibits `DstPorts` and `CapGrant` from both being non-nil, but the conversion function does not enforce mutual exclusion (`tailscale.com/wgengine/filter/tailcfg.go:75-114`, `tailscale.com/tailcfg/tailcfg.go:1580-1595`, `:1750`, `:1764-1774`).
+5. The converter expands `CapGrant` into a capability list using `Dsts × (each entry in Caps and CapMap)`. Entries from deprecated `Caps` carry no associated values. Entries from `CapMap` carry lists of JSON values. This is separate from allowing packets. The schema prohibits `DstPorts` and `CapGrant` from both being non-nil, but the conversion function does not enforce mutual exclusion (`tailscale.com/wgengine/filter/tailcfg.go:75-114`, `tailscale.com/tailcfg/tailcfg.go:1580-1595`, `:1750`, `:1764-1774`).
 6. Split source and destination prefixes by IPv4 and IPv6. Keep only packet rules where `(Srcs is present or SrcCaps is present) && Dsts is present`. Keep capability rules only when there are **Srcs** for the family and capability entries (`tailscale.com/wgengine/filter/filter.go:267-312`).
 
 | String | Interpretation and errors | Source |
@@ -153,18 +153,18 @@ Address expression errors preserve the other convertible entries. Go normally ke
 
 | Match function | Condition | Source |
 | --- | --- | --- |
-| `match` (TCP SYN, UDP, SCTP) | In the same rule, protocol matches AND (source address∈Srcs OR source node capability∈SrcCaps) AND the address and destination port match a Dst. Allow rules are evaluated as a union, with no deny rules or priorities | `tailscale.com/wgengine/filter/match.go:17-53` |
+| `match` (TCP SYN, UDP, SCTP) | In the same rule, protocol matches AND (source address∈Srcs OR source node capability∈SrcCaps) AND the destination address and port match a Dst. Allow rules are evaluated as a union, with no deny rules or priorities | `tailscale.com/wgengine/filter/match.go:17-53` |
 | `matchIPsOnly` (ICMP) | Ignore protocol and port. Allow if Srcs and Dsts addresses match. A separate SrcCaps path allows a matching capability alone, without rechecking destination | `tailscale.com/wgengine/filter/match.go:62-84` |
 | Other protocols | Protocol, Srcs, and destination address match, and Ports is exactly `0...65535`. **Does not check SrcCaps** | `tailscale.com/wgengine/filter/match.go:89-107` |
 
-SrcCaps lookup uses `Addresses`'s single-IP → node index and treats `UnsignedPeerAPIOnly` as false. Addresses behind a subnet do not inherit the capability. Rules containing only CapGrant do not contribute to packet allows (`tailscale.com/ipn/ipnlocal/node_backend.go:719-734`, `tailscale.com/ipn/ipnlocal/local.go:9318-9334`, `tailscale.com/wgengine/filter/filter.go:267-312`).
+SrcCaps lookup uses the single-IP → node index built from `Addresses` and returns false for `UnsignedPeerAPIOnly` peers. Addresses behind a subnet do not inherit the capability. Rules containing only CapGrant do not allow packets (`tailscale.com/ipn/ipnlocal/node_backend.go:719-734`, `tailscale.com/ipn/ipnlocal/local.go:9318-9334`, `tailscale.com/wgengine/filter/filter.go:267-312`).
 
 Capability lookup `CapsWithValues(src,dst)` matches Srcs and the destination prefix and accumulates JSON value lists for the same capability. Capability lookup does not use SrcCaps, protocol, or port conditions. Node capability lookup checks whether the key exists in `CapMap` (`tailscale.com/wgengine/filter/filter.go:294-312`, `:410-434`, `tailscale.com/tailcfg/tailcfg.go:574-575`).
 
 ### 4.5 Filter installation and state
 
-1. Before netmap, install `NewAllowNone` (no rules or localNets). A nil filter also Drops both inbound and outbound packets (`tailscale.com/ipn/ipnlocal/local.go:3533-3538`, `tailscale.com/wgengine/filter/filter.go:199-201`, `tailscale.com/net/tstun/wrap.go:820-822`, `:1190-1192`).
-2. The recommended M3 design derives `localNets` only from self `Addresses`. Go also includes hosted VIPs, advertised routes, and app connector addresses, which are outside the M3 gate (`tailscale.com/ipn/ipnlocal/local.go:3452-3511`, `docs/plan.md:193`).
+1. Before receiving a netmap, install `NewAllowNone` (no rules or localNets). A nil filter also Drops both inbound and outbound packets (`tailscale.com/ipn/ipnlocal/local.go:3533-3538`, `tailscale.com/wgengine/filter/filter.go:199-201`, `tailscale.com/net/tstun/wrap.go:820-822`, `:1190-1192`).
+2. The recommended M3 design derives `localNets` only from self `Addresses`. Go also includes hosted VIPs, advertised routes, and app connector addresses, which are outside the M3 gate (`tailscale.com/ipn/ipnlocal/local.go:3452-3511`, `docs/plan.md:200`).
 3. If prefs are invalid or ShieldsUp is set, install a shields-up filter with no rules. Otherwise, install the converted rules. Use a separate shields-up filter for jailed peers (`tailscale.com/ipn/ipnlocal/local.go:3446`, `:3541-3555`).
 4. If any packet allow rule (with Dsts) has Srcs intersecting an `UnsignedPeerAPIOnly` peer's AllowedIPs, clear all packet rules. This safeguard does not check SrcCaps (`tailscale.com/ipn/ipnlocal/local.go:3459-3463`, `:3568-3598`).
 5. Regular filter replacement shares prior UDP/SCTP state. A new shields-up filter shares it only if the previous filter was also shields-up. Keep the jailed cache separate from the regular cache (`tailscale.com/wgengine/filter/filter.go:204-234`, `tailscale.com/ipn/ipnlocal/local.go:3553-3555`).
@@ -188,7 +188,7 @@ The common `pre` for `RunIn` and `RunOut` returns the first verdict in the follo
 | 5 | Link-local unicast destination | Drop except for `169.254.169.254` or an extension hook exception — `tailscale.com/wgengine/filter/filter.go:672-684`, `:707-710` |
 | 6 | Internal Fragment marker | Accept. **Before localNets and ACL** — `tailscale.com/wgengine/filter/filter.go:712-716` |
 
-Receive then selects the IP family and first checks whether the destination is in localNets. If outside, the result is noVerdict. If the checks below also yield noVerdict, Go tries IngressAllowHooks before a final Drop. M3 recommends Drop without hooks. An ordinary packet destined outside self is therefore dropped even with an allowing ACL. **Noninitial fragments and TSMP consumed earlier are separate cases** (`tailscale.com/wgengine/filter/filter.go:443-471`, `:502-509`, `:564-570`, `tailscale.com/net/tstun/wrap.go:1133-1157`).
+The inbound path then selects the IP family and first checks whether the destination is in localNets. If outside, the result is noVerdict. If the checks below also yield noVerdict, Go tries IngressAllowHooks before a final Drop. M3 recommends Drop without hooks. An ordinary packet destined outside self is therefore dropped even with an allowing ACL. **Noninitial fragments and TSMP consumed earlier are separate cases** (`tailscale.com/wgengine/filter/filter.go:443-471`, `:502-509`, `:564-570`, `tailscale.com/net/tstun/wrap.go:1133-1157`).
 
 | Protocol | Inbound verdict after localNets check | Source |
 | --- | --- | --- |
@@ -198,9 +198,9 @@ Receive then selects the IP family and first checks whether the destination is i
 | TSMP | Accept if it reaches the filter | `tailscale.com/wgengine/filter/filter.go:551-552`, `:613-614` |
 | Other | Accept under the other-protocol conditions in §4.4 | `tailscale.com/wgengine/filter/filter.go:553-559`, `:615-621` |
 
-ICMP echo uses type/code 8/0 for v4 and 128/0 for v6. Echo reply uses 0/0 for v4 and 129/0 for v6. Go's error type sets are `{3,11,0x12}` for v4 and `{1,2,3,4}` for v6. `0x12` is the source constant verbatim. Standards conformance is left to §8 (`tailscale.com/net/packet/icmp4.go:22-26`, `tailscale.com/net/packet/icmp6.go:22-27`, `tailscale.com/net/packet/packet.go:497-539`).
+ICMP echo requests use type/code 8/0 for v4 and 128/0 for v6. Echo reply uses 0/0 for v4 and 129/0 for v6. Go's error type sets are `{3,11,0x12}` for v4 and `{1,2,3,4}` for v6. `0x12` is the source constant verbatim. Standards conformance is left to §8 (`tailscale.com/net/packet/icmp4.go:22-26`, `tailscale.com/net/packet/icmp6.go:22-27`, `tailscale.com/net/packet/packet.go:497-539`).
 
-**Outbound.** The upstream TUN wrapper first drops host-originated TSMP and its own disco UDP. `RunOut` then Accepts everything that passes `pre` without applying the ACL's SrcIPs and DstPorts in reverse. Record reverse UDP/SCTP state before SNAT. **In-process stack injection skips `RunOut` but must record the same state.** Record outbound traffic to jailed peers in the jailed filter's cache so the same filter allows the response (`tailscale.com/net/tstun/wrap.go:771-788`, `tailscale.com/wgengine/filter/filter.go:476-487`, `:625-650`, `tailscale.com/net/tstun/wrap.go:812-832`, `:932-934`, `:1052-1072`, `:1099`).
+**Outbound.** The TUN wrapper at the start of the outbound path first drops host-originated TSMP and its own disco UDP. `RunOut` then Accepts everything that passes `pre` without applying the ACL's SrcIPs and DstPorts in reverse. Record reverse UDP/SCTP state before SNAT. **In-process stack injection skips `RunOut` but must record the same state.** Record outbound traffic to jailed peers in the jailed filter's cache so the same filter allows the response (`tailscale.com/net/tstun/wrap.go:771-788`, `tailscale.com/wgengine/filter/filter.go:476-487`, `:625-650`, `tailscale.com/net/tstun/wrap.go:812-832`, `:932-934`, `:1052-1072`, `:1099`).
 
 **Rejection response.** Go filter rejection does not generate TCP RST. If `IPv4 && TCP && SYN bit set && !disableTSMPRejected`, send TSMP `!`. This condition includes SYN-ACK and differs from `IsTCPSyn`. A packet with the SYN bit set for a PeerAPI port can be Accepted by an L7 inspection exception after rejection. The M3 recommendation is to keep PeerAPI closed, omit outbound TSMP rejection, and always drop the original packet (`tailscale.com/net/tstun/wrap.go:1195-1236`).
 
@@ -214,18 +214,18 @@ Go netstack is installed at `PostFilterPacketInboundFromWireGuard`. With the def
 
 | Packet received at a self address | Where Go tsnet responds and under what conditions | Implication for the M3 gate and source |
 | --- | --- | --- |
-| UDP | `ListenPacket` registers a gVisor UDP endpoint. The UDP forwarder looks up the tsnet handler for an unregistered flow and closes and consumes it with no listener. There is no automatic echo | The **test app or peer listener** implements UDP echo. The forwarder returns true to avoid sending ICMP port-unreachable for unhandled UDP — `tailscale.com/tsnet/tsnet.go:1305-1310`, `:1392-1420`, `tailscale.com/wgengine/netstack/netstack.go:2000-2010`, `:2054-2067` |
+| UDP | `ListenPacket` registers a gVisor UDP endpoint. The UDP forwarder looks up the tsnet handler for an unregistered flow and closes and consumes the flow if no listener is registered. There is no automatic echo | The **test app or peer listener** implements UDP echo. The forwarder returns true to avoid sending ICMP port-unreachable for unhandled UDP — `tailscale.com/tsnet/tsnet.go:1305-1310`, `:1392-1420`, `tailscale.com/wgengine/netstack/netstack.go:2000-2010`, `:2054-2067` |
 | TCP SYN with a matching listener or handler | Creating a TCP endpoint starts the handshake. After it completes, provide the connection to the handler | Expect SYN-ACK only with a listener on the allowed port — `tailscale.com/tsnet/tsnet.go:1289-1302`, `tailscale.com/wgengine/netstack/netstack.go:1662-1673`, `:1712-1719`, `:1748-1760` |
 | TCP SYN with no listener or fallback | tsnet returns `(nil,true)`, prompting a call to `Complete(true)` → RST | Test **ACL blocking (Drop before the stack)** and **a closed port (stack RST)** separately — `tailscale.com/tsnet/tsnet.go:1289-1300`, `tailscale.com/wgengine/netstack/netstack.go:1748-1753`, `:1607-1611`, `tailscale.com/net/tstun/wrap.go:1206-1236` |
 | ICMP echo request | Tailscale addresses are excluded from subnet ping proxying and reach gVisor. The IPv4 and IPv6 stacks create an echo reply unless another handler or similar consumer takes the packet | Distinguish ACL acceptance from reply generation for ping. **Filter Accept itself does not generate an echo reply** — `tailscale.com/wgengine/netstack/netstack.go:1484-1505`, `:1570-1584`, `gvisor/pkg/tcpip/network/ipv4/icmp.go:346-380`, `gvisor/pkg/tcpip/network/ipv6/icmp.go:655-678` |
 
-**M3 design recommendation.** Do not add a complete TCP/UDP stack to Swiftail. Provide an in-memory packet boundary and verify the gate with UDP echo and TCP listeners on the Go tsnet side. If the gate also includes Swiftail receive responses, attach a test-only UDP echo and TCP SYN responder to the boundary. The actual public listen/dial stack is in M6 (`docs/plan.md:57`, `:193-196`).
+**M3 design recommendation.** Do not add a complete TCP/UDP stack to Swiftail. Provide an in-memory packet boundary and verify the gate with UDP echo and TCP listeners on the Go tsnet side. If the gate also includes Swiftail receive responses, attach a test-only UDP echo and TCP SYN responder to the boundary. The actual public listen/dial stack is in M6 (`docs/plan.md:57`, `:200-203`).
 
 ### 4.8 TUN and router configuration (M5, skipped in M3)
 
-On local outbound TUN, the wrapper injects local replies to ICMP echo for service IPs `100.100.100.100` and `fd7a:115c:a1e0::53`, and netstack absorbs all protocols and ports on those two IPs. On darwin/ios, the engine reflects packets destined for its own tunnel address back to the OS. Netstack's own outbound traffic to self uses a separate loopback queue (`tailscale.com/net/tstun/wrap.go:752-769`, `tailscale.com/wgengine/netstack/netstack.go:866-896`, `:1047-1060`, `tailscale.com/wgengine/userspace.go:652-667`).
+On local outbound TUN, the wrapper injects local replies to ICMP echo for service IPs `100.100.100.100` and `fd7a:115c:a1e0::53`, and netstack absorbs all protocols and ports on those two IPs. On Darwin and iOS, the engine reflects packets destined for its own tunnel address back to the OS. Netstack's own outbound traffic to self uses a separate loopback queue (`tailscale.com/net/tstun/wrap.go:752-769`, `tailscale.com/wgengine/netstack/netstack.go:866-896`, `:1047-1060`, `tailscale.com/wgengine/userspace.go:652-667`).
 
-1. `LocalAddrs` lists self `Addresses` after Unmap. `Routes` sorts the set derived from eligible peer-contributed prefixes by the rules below (`tailscale.com/ipn/ipnlocal/local.go:6710-6716`, `:6800-6810`, `tailscale.com/ipn/ipnlocal/node_backend.go:988-996`).
+1. `LocalAddrs` lists self `Addresses` after Unmap. `Routes` contains the sorted set derived from eligible peer-contributed prefixes by the rules below (`tailscale.com/ipn/ipnlocal/local.go:6710-6716`, `:6800-6810`, `tailscale.com/ipn/ipnlocal/node_backend.go:988-996`).
 2. If self has IPv4, add `100.100.100.100/32`. If it has IPv6, add `fd7a:115c:a1e0::53/128`. Append hosted VIPs when an address of the same family exists (`tailscale.com/ipn/ipnlocal/local.go:6773-6790`).
 3. If an exit node is selected, retain both /0 routes in the OS to blackhole traffic even if no peer is routable. LAN and local route adjustments also exist. The recommended design for M3 and baseline M5 keeps exit node functionality unexposed (`tailscale.com/net/routemanager/routemanager.go:1009-1014`, `tailscale.com/ipn/ipnlocal/local.go:6726-6771`).
 4. Call the router callback only on change. Go's `Config.Equal` compares order as well. Pass CallbackRouter's `InitialMTU` as `NewMTU` only on the first Set, with 0 meaning no change. **Recommendation.** Keep Swiftail's output list order stable too (`tailscale.com/wgengine/router/router.go:123-126`, `:145-152`, `tailscale.com/wgengine/router/callback.go:27-31`, `:45-67`).
@@ -238,7 +238,7 @@ On local outbound TUN, the wrapper injects local replies to ICMP echo for servic
 
 OS aggregation is computed from **peer contributions**. The self address alone does not create a /48 route. Do not use the OS /10 and /48 aggregates for WireGuard AllowedIPs. The CGNAT aggregation check includes the ChromeOS range, which `IsTailscaleIP` excludes when classifying self addresses (`tailscale.com/net/routemanager/routemanager.go:282-296`, `:408-431`, `:874-883`, `:986-1025`, `tailscale.com/net/tsaddr/tsaddr.go:83-90`).
 
-For `OneCGNAT`, control instructions take precedence. It is true on plan9, true on macOS and android when no other CGNAT interface exists, and false elsewhere (including iOS). The **iOS default is therefore individual /32s**. controlknobs parses `one-cgnat?v=true/false` (`tailscale.com/ipn/ipnlocal/local.go:6364-6398`, `tailscale.com/control/controlknobs/controlknobs.go:190-193`, `tailscale.com/tailcfg/nodecap/nodecap.go:148-153`).
+For `OneCGNAT`, control instructions take precedence. It is true on Plan 9, true on macOS and Android when no other CGNAT interface exists, and false elsewhere (including iOS). The **iOS default is therefore individual /32s**. controlknobs parses `one-cgnat?v=true/false` (`tailscale.com/ipn/ipnlocal/local.go:6364-6398`, `tailscale.com/control/controlknobs/controlknobs.go:190-193`, `tailscale.com/tailcfg/nodecap/nodecap.go:148-153`).
 
 ## 5. Constants and timers
 
@@ -257,25 +257,25 @@ Follow the verified table in [wireguard.md](wireguard.md) for WireGuard rekey, h
 
 ### 6.1 Recommended M3 procedure
 
-This is the **proposed engine contract**. Go's ownership structure and callback names do not need to be reproduced (I/O-free WireGuard contract `docs/contracts/SwiftailWireGuard.md:3-13`, gate `docs/plan.md:193`).
+This is the **proposed engine contract**. Go's ownership structure and callback names do not need to be reproduced (I/O-free WireGuard contract `docs/contracts/SwiftailWireGuard.md:3-13`, gate `docs/plan.md:200`).
 
 1. Take `Netmap` and a time, then compute §4.1 eligibility and AllowedIPs, the self destination set, the address → peer/key index, and the §4.4 filter as values. Fix the scope at `RouteAll=false` with no exit node. Explicitly declare WireGuard-only, masquerade, and tailnet lock unsupported (fields `Sources/SwiftailControl/Netmap/Netmap.swift:22-25`, `Sources/SwiftailControl/Tailcfg/Node.swift:69-76`, computation basis §4.1 and §4.3).
 2. Have one engine owner serialize packet processing, calling `removePeer` for deleted, rotated-key, and expired peers, and `addPeer` for valid peers. Updating AllowedIPs for an existing key preserves the session. Prepare relay region and peer information before releasing handshake output (`Sources/SwiftailWireGuard/WireGuardDevice.swift:57-78`, Go ordering `tailscale.com/wgengine/magicsock/magicsock.go:3957-3962`, `tailscale.com/wgengine/userspace.go:886-899`).
 3. Feed WireGuard bytes from DERP into the device. Send only the device's `ipPacket` to the §4.6 receive filter and pass only Accept to the in-memory packet boundary. Use separate regular and jailed filters, and resolve noVerdict to Drop (output contract `Sources/SwiftailWireGuard/WireGuardDevice.swift:18-31`, verdict basis §4.5–4.7).
 4. For local packets, validate structure → handle special destinations locally → apply the §4.6 outbound verdict and record state → select the peer in §4.2 → call `send`. Forward `.datagram(to:)` over the DERP path corresponding to the public key. Apply netmap, expiration, and filter updates under the same owner (device boundary `docs/contracts/SwiftailWireGuard.md:70-101`, Go injection and ordering §4.3 and §4.6).
-5. Use `nextDeadline` to schedule calls to `advance`. Assign TCP SYN-ACK and UDP echo response generation to the receiving device or test peer as in §4.7. Keep the response stack out of the filter (`Sources/SwiftailWireGuard/WireGuardDevice.swift:80-82`, `docs/contracts/SwiftailWireGuard.md:113`, Go basis §4.7).
+5. Use `nextDeadline` to schedule calls to `advance`. Assign TCP SYN-ACK and UDP echo response generation to the receiving device or test peer as in §4.7. Keep the filter from generating those responses (`Sources/SwiftailWireGuard/WireGuardDevice.swift:80-82`, `docs/contracts/SwiftailWireGuard.md:113`, Go basis §4.7).
 
 ### 6.2 Items deferred to M5 or assigned to a separate milestone
 
 | Item | Scope and rationale for omission | Source |
 | --- | --- | --- |
-| Address, OS route, and DNS settings, utun, self-address reflection, and local service IP handling | M5. Derive settings using §4.8 and combine MagicDNS UDP responses with the dns-state-node note | `docs/plan.md:195`, `tailscale.com/net/tstun/wrap.go:752-769`, `tailscale.com/wgengine/netstack/netstack.go:875-896` |
-| Direct UDP candidates and disco discovery | M4. M3 is DERP-only | `docs/plan.md:193-194` |
-| Public TCP/UDP listen and dial and a complete reassembly stack | M6. Verify the M3 gate with an in-memory packet boundary and Go tsnet listeners | `docs/plan.md:57`, `:193-196` |
+| Address, OS route, and DNS settings, utun, self-address reflection, and local service IP handling | M5. Derive settings using §4.8 and combine MagicDNS UDP responses with the dns-state-node note | `docs/plan.md:202`, `tailscale.com/net/tstun/wrap.go:752-769`, `tailscale.com/wgengine/netstack/netstack.go:875-896` |
+| Direct UDP candidates and disco discovery | M4. M3 is DERP-only | `docs/plan.md:200-201` |
+| Public TCP/UDP listen and dial and a complete reassembly stack | M6. Verify the M3 gate with an in-memory packet boundary and Go tsnet listeners | `docs/plan.md:57`, `:200-203` |
 | Accepting and offering subnets and exit nodes, VIP and 4via6, app connectors | Recommended as unsupported in M3 and baseline M5. False prefs and no advertisements make these routes unnecessary | `tailscale.com/net/routemanager/routemanager.go:827-839`, `tailscale.com/ipn/ipnlocal/local.go:3470-3511` |
-| Lazy creation and idle peer removal | Can be omitted in M3 (§4.2). Review again during M5 memory measurements | `wireguard-go/device/device.go:542-575`, `docs/plan.md:199` |
-| TSMP ping/pong, rejection, and advertisement | For diagnostic ping and disco updates. The design allows omitting outbound messages for the UDP/TCP gate. Consume inbound messages separately from app IP input, and implement §3.3 pong if providing ping diagnostics | `tailscale.com/wgengine/userspace.go:1272-1298`, `tailscale.com/net/tstun/wrap.go:1133-1157`, `:1454-1475`, `tailscale.com/wgengine/magicsock/magicsock.go:4631-4677` |
-| Public WhoIs and PeerCaps APIs | M7. Preventing CapGrant from being misinterpreted as packet permission is required starting in M3 | `docs/plan.md:197`, `tailscale.com/wgengine/filter/filter.go:267-312`, `:410-434` |
+| Lazy creation and idle peer removal | Can be omitted in M3 (§4.2). Review again during M5 memory measurements | `wireguard-go/device/device.go:542-575`, `docs/plan.md:202` |
+| TSMP ping/pong, rejection, and advertisement | For diagnostic ping and disco updates. The original M3 gate design allowed omitting outbound TSMP. The engine contract now requires advertisements on session establishment (2026-11-16, [SwiftailEngine contract](../contracts/SwiftailEngine.md#m3-support)). Consume inbound messages separately from app IP input, and implement §3.3 pong if providing ping diagnostics | `tailscale.com/wgengine/userspace.go:1272-1298`, `tailscale.com/net/tstun/wrap.go:1133-1157`, `:1454-1475`, `tailscale.com/wgengine/magicsock/magicsock.go:4631-4677` |
+| Public WhoIs and PeerCaps APIs | M7. Preventing CapGrant from being misinterpreted as packet permission is required starting in M3 | `docs/plan.md:204`, `tailscale.com/wgengine/filter/filter.go:267-312`, `:410-434` |
 | Log rate limiting, flow logs, pendopen, and PeerAPI exceptions | Optional for the M3 gate. This does not justify omitting Drop verdicts or the cache | `tailscale.com/wgengine/filter/filter.go:326-327`, `tailscale.com/net/tstun/wrap.go:1178-1204` |
 
 Go consumes TSMP ping and disco advertisements before the receive filter, but pong can continue after the callback. **Swiftail recommendation.** Consume all TSMP in the engine without passing it to the ordinary app stack. Do not interpret Go as "always consuming all TSMP" (`tailscale.com/net/tstun/wrap.go:1133-1157`, `tailscale.com/wgengine/filter/filter.go:551-552`).
@@ -287,7 +287,7 @@ Go consumes TSMP ping and disco advertisements before the receive filter, but po
 | Peer lifetime | Preregister on each netmap / Go-style lazy creation | Preregister in M3. Apply deletions and expirations immediately. Review after measuring memory in M5 (§4.2) |
 | Gate responder | Go tsnet listener + Swift in-memory input / also add a Swift test responder | Add the test responder for a bidirectional gate. The public TCP stack is M6 (§4.7) |
 | Fragments and IPv6 extension headers | Reproduce Go filter behavior / explicitly Drop unsupported packets | Devices without reassembly in M3 explicitly Drop fragments and extension headers, starting with an unfragmented UDP/TCP gate. Record the difference in the contract (§3.2) |
-| Control packets | Consume TSMP only / also send pong and rejection | Consume in M3, add pong when testing diagnostics, and send rejections and advertisements later (§3.3 and §6.2) |
+| Optional TSMP responses | Consume requests / also send pong and rejection | Consume in M3, add pong when testing diagnostics, and defer rejections. For advertisements, follow the updated contract (§3.3 and §6.2) |
 | Where to check invalid raw CIDRs | control decoding / engine | Check FilterRule strings in the engine. The current Node prefix type has already cleared original host bits, so the lead session decides whether to change the control boundary (§8.1) |
 | Delivering server time samples | Estimate from netmap arrival time / deliver ControlTime and actual receive time separately | Prefer the second option. Avoid recomputing delta from a stale stored ControlTime each time (§8.1) |
 | Recovery after a disco key change | Remove and register the peer again / add a WireGuard API to schedule a fresh handshake | In M3, use removal and re-registration on change as an explicit simplification. Review a Go-style scheduling API in M4 (§8.1) |
@@ -296,11 +296,11 @@ Go consumes TSMP ping and disco advertisements before the receive filter, but po
 
 These **planned tests have not been run yet**. Parentheses give source evidence for the expected results.
 
-1. **DERP-only gate.** Block direct UDP and use only local DERP. Round-trip data to a Go tsnet UDP echo listener, and send SYN to a TCP listener and receive SYN-ACK. Test IPv4 and IPv6 separately and repeat in reverse if attaching a Swift receive device (`docs/plan.md:193`, §4.3 and §4.7).
+1. **DERP-only gate.** Block direct UDP and use only local DERP. Verify a round trip with a Go tsnet UDP echo listener. Send a SYN to a TCP listener and verify its SYN-ACK. Test IPv4 and IPv6 separately and repeat in reverse if attaching a Swift receive device (`docs/plan.md:200`, §4.3 and §4.7).
 2. **ACL and closed ports.** Distinguish SYN-ACK from an allowed TCP listener, silence/Drop on an ACL-blocked port, and RST from an ACL-allowed Go port without a listener. TSMP `!` is an optional diagnostic, so it is not a required expectation (`tailscale.com/net/tstun/wrap.go:1193-1236`, `tailscale.com/wgengine/netstack/netstack.go:1748-1753`, `tailscale.com/tsnet/tsnet.go:1289-1300`).
 3. **Filter conversion.** Test SrcIPs `*`, CIDR, single IP, range, and cap, both port endpoints, empty IPProto, explicit protocols, out-of-range numbers, and invalid CIDR, SrcBits, and DstBits. A rule with only CapGrant must not open UDP/TCP (§4.4).
 4. **UDP response state.** An exact reverse response to UDP that Swift sent first passes even with no allow rules. A different port, address, or protocol fails. Test ordinary send and stack injection. Check the 513th LRU insertion, lookup order, rule replacement, switching to shields-up, and a separate jailed cache (§4.5 and §4.6).
-5. **TCP and ICMP verdicts.** Drop disallowed SYN. SYN-ACK, ACK, and RST for the same self destination pass the filter without TCP state. ICMP echo from a source allowed on only one TCP port also passes via the IP-only rule, and echo replies and errors pass without a cache. Distinguish passage from actual ping reply generation (§4.6 and §4.7).
+5. **TCP and ICMP verdicts.** Drop disallowed SYN. SYN-ACK, ACK, and RST for the same self destination pass the filter without TCP state. ICMP echo from a source allowed on only one TCP port also passes via the IP-only rule, and echo replies and errors pass without a cache. Distinguish filter acceptance from actual ping reply generation (§4.6 and §4.7).
 6. **Source and destination spoofing.** If a peer with a valid session sends a source outside AllowedIPs, reject it before ACL evaluation. Reject a destination outside self addresses even with a broad ACL. Check fragment and TSMP exceptions or Swiftail's explicit Drop policy separately (§3.2 and §4.6).
 7. **Peer updates.** Test expiration boundary `==`, `<`, and `>`, nonexpiring, clock differences of ±60 seconds and beyond, zero node key, no candidates, empty AllowedIPs, deletion, key rotation, and recovery. Verify that `RouteAll=false` does not accept subnets or /0 as sources (§4.1). The old key must not be mistakenly reused as the new key (`tailscale.com/net/routemanager/routemanager.go:626-647`).
 8. **shields-up and jailed.** Drop new SYN and unregistered UDP and accept replies to UDP sent first and non-SYN packets. Do not deliver normal app packets during startup without a filter. Test Go's empty-buffer and noninitial-fragment `pre` exceptions separately (§4.5 and §4.6).
@@ -313,13 +313,13 @@ These **planned tests have not been run yet**. Parentheses give source evidence 
 
 - **Host bits in original Node prefixes.** Go excludes noncanonical AllowedIPs, but Swift `IPPrefix` already masks them at creation. An engine receiving only `Netmap` cannot recover whether the original was noncanonical. This was outside the assigned scope and was not changed. FilterRule IP strings are retained and can be checked by the engine (`tailscale.com/net/routemanager/routemanager.go:665-672`, `Sources/SwiftailBase/IPPrefix.swift:12-28`, `Sources/SwiftailControl/Tailcfg/Node.swift:123-124`, `Sources/SwiftailControl/Tailcfg/FilterRule.swift:13-22`).
 - **Fresh handshake on disco key change.** When a nonzero disco key changes, Go schedules a handshake after the next user transport send. The actual call does not immediately remove the peer or flush keypairs. Swift WireGuard currently has no corresponding public API, so the lead session must decide between re-registration and adding an API (`tailscale.com/ipn/ipnlocal/node_backend.go:899-911`, `tailscale.com/wgengine/userspace.go:719-725`, `wireguard-go/device/device.go:765-782`, `Sources/SwiftailWireGuard/WireGuardDevice.swift:57-82`).
-- **Observation time for ControlTime.** Go computes the delta from local time on receiving a ControlTime event. Swift's current `MapSession` stores only the last ControlTime and emits no netmap when that alone changes. `ControlClient.Event` also has no separate time event. If the engine treats the stored time in a netmap it receives later as "current server time," it can adjust incorrectly. The lead session must decide the boundary for delivering it with the actual receive time (`tailscale.com/ipn/ipnlocal/expiry.go:56-73`, `Sources/SwiftailControl/Netmap/MapSession.swift:43-49`, `:82-88`, `Sources/SwiftailControl/Client/ControlClient.swift:40-49`).
+- **Observation time for ControlTime.** Go computes the delta from local time on receiving a ControlTime event. Swift's current `MapSession` stores only the last ControlTime and emits no netmap when that alone changes. `ControlClient.Event` also has no separate time event. If the engine treats the stored time in a netmap it receives later as "current server time," it can adjust incorrectly. The lead session must decide which boundary delivers it alongside the actual receive time (`tailscale.com/ipn/ipnlocal/expiry.go:56-73`, `Sources/SwiftailControl/Netmap/MapSession.swift:43-49`, `:82-88`, `Sources/SwiftailControl/Client/ControlClient.swift:40-49`).
 
 ### 8.2 Unverified scope
 
 - **Runtime evidence.** This verification compared pinned source versions and checked references. Swift builds, unit tests, Go tsnet interop, and iOS real device tests were not run. §7 is a plan with no reported passes.
 - **Control server policy.** How the server turns subnet and exit node approvals into AllowedIPs was not verified from these client sources alone. Only the conditions under which the client narrows received AllowedIPs were checked (`tailscale.com/tailcfg/tailcfg.go:397-402`, `tailscale.com/net/routemanager/routemanager.go:827-840`).
-- **OS app adapter.** Applying `NEPacketTunnelNetworkSettings`, DNS configuration policy, and recovery from interface changes were not verified in this note. Only the Go callback boundary was checked (`tailscale.com/wgengine/router/callback.go:12-31`, `:45-67`, M5 gate `docs/plan.md:195`).
+- **OS app adapter.** Applying `NEPacketTunnelNetworkSettings`, DNS configuration policy, and recovery from interface changes were not verified in this note. Only the Go callback boundary was checked (`tailscale.com/wgengine/router/callback.go:12-31`, `:45-67`, M5 gate `docs/plan.md:202`).
 - **ICMPv4 ParamProblem.** The Go constant `0x12` was verified. Its difference from the standard value and the policy need separate review (`tailscale.com/net/packet/icmp4.go:26`).
 - **Full login and stop state machine and auxiliary features.** The complete path that shuts down the data plane when the local key expires and the full behavior of PeerAPI/SSH/Serve/app connectors and 4via6 are outside the verification scope. M3 needs a contract with narrower support (related entry points `tailscale.com/ipn/ipnlocal/local.go:6967-6980`, `tailscale.com/wgengine/netstack/netstack.go:1287-1350`).
 

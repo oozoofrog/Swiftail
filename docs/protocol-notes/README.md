@@ -1,6 +1,6 @@
 # Protocol notes
 
-These notes document each protocol to the level needed to implement Swiftail. They record only details verified against the source.
+These notes document each protocol to the level needed to implement Swiftail. Verify each detail against the source before recording it. Do not rely on recollection.
 
 ## Reference sources
 
@@ -10,7 +10,7 @@ These notes document each protocol to the level needed to implement Swiftail. Th
 | `github.com/tailscale/wireguard-go` | v0.0.0-20261106233718-9e0ab45c16ca | MIT |
 | `gvisor.dev/gvisor` (version pinned by `tailscale.com/go.mod`) | v0.0.0-20260915211658-a6f909f08a72 | Apache-2.0 |
 
-`Scripts/fetch-reference-sources.sh` downloads the sources and prints their root paths. The script skips gVisor. Building the test tools with `sh Scripts/build-interop-tools.sh` adds gVisor to the same module cache (`gvisor.dev/gvisor@<version>`). The notes cite paths relative to the module root and line numbers (e.g., `tailscale.com/control/controlbase/handshake.go:120`, `wireguard-go/device/noise-protocol.go:60`).
+`Scripts/fetch-reference-sources.sh` downloads the sources and prints their root paths. The script skips gVisor. Building the test tools with `sh Scripts/build-interop-tools.sh` adds gVisor to the same module cache (`gvisor.dev/gvisor@<version>`). The notes cite source locations as module-relative paths with line numbers (e.g., `tailscale.com/control/controlbase/handshake.go:120`, `wireguard-go/device/noise-protocol.go:60`).
 
 ## Notes and verification status
 
@@ -35,9 +35,9 @@ Verification means checking the notes against the Go sources in a session other 
 2. Scope, including what the note covers and excludes.
 3. Wire format with a byte-level table per message (offset, length, field, encoding and endianness).
 4. Procedures and state machines in numbered steps. Specify the exact inputs and outputs of cryptographic operations.
-5. Constants and timers, with a table of values and origins.
+5. Constants and timers, with a table of values and their sources.
 6. The minimum Swiftail needs and what it can omit, including the rationale for omissions.
 7. What to verify in interop tests.
 8. Unverified details.
 
-Cite the origin of every factual sentence (`path:line`). Avoid transcribing Go code. Quote only constant values and short expressions.
+Cite a source for every factual sentence (`path:line`). Do not transcribe Go code. Quote only constant values and short expressions.
