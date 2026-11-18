@@ -15,18 +15,6 @@ import SwiftailCrypto
 struct ControlClientLockTests {
     private typealias Server = LockFakeControlServer
 
-    /// lock이 켜진 tailnet에 붙어 `.enforcing`이 된 클라이언트로 `body`를 돌린다.
-    private func withEnforcingClient(
-        _ world: LockWorld, extraPeers: [String] = [], _ body: (LockRun, Netmap) async throws -> Void
-    ) async throws {
-        try await withLockClient(world, prepare: { server, _ in
-            server.updateLock { $0.authority = world.authority }
-            server.setMapResponse(try world.map(extraPeers: extraPeers))
-        }) { run in
-            try await body(run, try await run.latest("거른 netmap") { $0.tailnetLock.mode == .enforcing })
-        }
-    }
-
     /// 서버의 서명 권한 상태에 서명 기기를 하나 더한다. 새 머리를 돌려준다.
     private func addSigner(_ added: LockTesting.Signer, to server: Server, signedBy signer: LockTesting.Signer) throws -> (head: AUMHash, aum: AUM) {
         var authority = try #require(server.lock.authority)
@@ -474,8 +462,9 @@ struct ControlClientLockTests {
         }
     }
 
-    // MARK: lock이 꺼질 때
+}
 
+extension LockDisablementTests {
     @Test("끄기: 맞는 비밀이면 상태와 파일을 지우고 거르기를 멈춘다. 부트스트랩 RPC에 로컬 머리를 싣는다")
     func disablementWithValidSecret() async throws {
         let world = try LockWorld()
@@ -610,6 +599,9 @@ struct ControlClientLockTests {
         }
     }
 
+}
+
+extension ControlClientLockTests {
     // MARK: 다시 시작과 다시 잇기
 
     @Test("다시 시작: 저장된 상태로 부트스트랩 없이 같은 머리로 거르고, 그사이 자란 사슬은 동기화로 따라온다")

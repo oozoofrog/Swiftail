@@ -135,7 +135,8 @@ struct HostTests {
 
     @Test("항목 6: 시험용 시계를 2/3 뒤로 옮기면 새 키의 새 인증서, 옛 리스너의 연결은 그대로")
     func item6Renewal() async throws {
-        try await withHostGate { gate in
+        // Pebble v2.10.3은 0에서도 드물게 승인을 재사용한다. 갱신 관문에서는 항상 재사용하도록 고정한다.
+        try await withHostGate(authzReuse: 100) { gate in
             let clock = TestClock()
             let transport = gate.makeTransport()
             let manager = try gate.makeManager(transport: transport, clock: clock)
@@ -164,7 +165,7 @@ struct HostTests {
                 #expect(second.chain[0] != first.chain[0])
                 #expect(try chainVerifies(second.chain, domain: Self.fqdn, anchor: gate.rootDER))
                 #expect(await manager.status.notAfter == second.notAfter)
-                #expect(gate.setDNS.all.count == 2)
+                #expect(gate.setDNS.all.count == 1, "갱신은 첫 발급의 DNS-01 승인을 재사용한다")
 
                 let server = try await MinimalHTTPServer.start(.tls, certificate: second, label: "2", bridge: bridge, sessions: sessions,
                                                                domain: Self.fqdn, ipaSeed: Self.ipaSeed, ipaLength: length)
@@ -201,6 +202,7 @@ struct HostTests {
 
     @Test("항목 7: cert 도메인 없음·MagicDNS 꺼짐은 요청 없이 기다리고, set-dns 거절·틀린 TXT는 R4의 간격")
     func item7Failures() async throws {
+        // 각 시나리오에 새 ACME 서버를 써서 앞 발급의 DNS-01 승인이 결함 주입을 건너뛰게 하지 않는다.
         try await withHostGate { gate in
             // HTTPS 꺼짐(cert 도메인이 빔).
             _ = try await gate.tool.command(.init(cmd: "setCertDomains", domains: []), expecting: "certDomains")
@@ -208,25 +210,28 @@ struct HostTests {
             try await expectConditionWait(gate, failure: .httpsNotEnabled) {
                 _ = try await gate.tool.command(.init(cmd: "setCertDomains", domains: [Self.fqdn]), expecting: "certDomains")
             }
+        }
 
-            // MagicDNS 꺼짐.
-            try gate.removeStoredCertificate()
+        // MagicDNS 꺼짐.
+        try await withHostGate { gate in
             _ = try await gate.tool.command(.init(cmd: "setDNSConfig", enabled: false), expecting: "dnsConfig")
             try await netstackWait("항목 7: MagicDNS가 꺼진 netmap") { gate.facts.latest?.isMagicDNSEnabled == false }
             try await expectConditionWait(gate, failure: .magicDNSDisabled) {
                 _ = try await gate.tool.command(.init(cmd: "setDNSConfig", enabled: true), expecting: "dnsConfig")
             }
+        }
 
-            // set-dns 거절.
-            try gate.removeStoredCertificate()
+        // set-dns 거절.
+        try await withHostGate { gate in
             _ = try await gate.tool.command(.init(cmd: "setDNSFault", count: 1, status: 403), expecting: "setDNSFault")
             let rejected = try await failedAttempt(gate) { $0 == .controlRejected(status: 403) }
             let rejectedDelay = rejected.next.timeIntervalSince(rejected.at)
             #expect(rejectedDelay > 25 && rejectedDelay <= 31, "항목 7: controlRejected의 다음 시도는 30초 뒤(R4)")
             await gate.tool.checkpoint("M7 항목 7: set-dns 403 → controlRejected(403), 다음 시도 \(rejectedDelay)초 뒤")
+        }
 
-            // 틀린 TXT.
-            try gate.removeStoredCertificate()
+        // 틀린 TXT.
+        try await withHostGate { gate in
             _ = try await gate.tool.command(.init(cmd: "setDNSFault", count: 1, wrongTXT: true), expecting: "setDNSFault")
             let invalid = try await failedAttempt(gate) {
                 if case .validationFailed = $0 { return true }
@@ -235,7 +240,6 @@ struct HostTests {
             let invalidDelay = invalid.next.timeIntervalSince(invalid.at)
             #expect(invalidDelay > 15 * 60 - 10 && invalidDelay <= 15 * 60 + 1, "항목 7: validationFailed의 다음 시도는 15분 뒤(R4)")
             await gate.tool.checkpoint("M7 항목 7: 틀린 TXT → \(String(describing: invalid.failure)), 다음 시도 \(invalidDelay)초 뒤")
-            _ = try await gate.tool.command(.init(cmd: "setDNSFault", count: 0), expecting: "setDNSFault")
         }
     }
 
