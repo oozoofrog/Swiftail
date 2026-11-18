@@ -8,13 +8,13 @@ import (
 	"tailscale.com/tka"
 )
 
-// TL-5 대조 시험이 더한 시나리오 가운데 다른 배열의 모양에 맞지 않는 셋이다(계약 5절 "구현하며 정해진 것"의
-// "실행으로 확정하지 않은 것", 그리고 Swiftail 한도(동작 M)의 경계).
+// Three sets of scenarios added by the TL-5 comparison tests that do not fit the other arrays (contract §5, "Unverified by execution" under
+// "Decisions made during implementation," and the boundaries of the Swiftail limits in behavior M).
 //
-//   - limits: 뿌리에서 2,000개가 넘는 사슬. AUM이 수천 개라 sync의 long 묶음(pool)을 앞부분으로 같이 쓰고 번호로 가리킨다.
-//   - padded: Swiftail의 바이트 한도(NKS 8KiB, AUM 512KiB)를 넘기는 입력. 모르는 필드 하나(0으로 채운 바이트열)를
-//     정준 바이트의 맵 끝에 덧붙인 것이라 바이트 대신 만드는 법(base, padKey, padLength)을 싣는다.
-//   - openedStates: Bootstrap·Inform으로는 만들 수 없는 신뢰 상태(Key25519가 아닌 키). 저장소에 직접 넣고 tka.Open으로 연다.
+//   - limits: a chain extending more than 2,000 entries from the root. Because it has thousands of AUMs, reuse sync's long group (pool) as the prefix and reference entries by number.
+//   - padded: inputs exceeding Swiftail's byte limits (NKS 8KiB, AUM 512KiB). These append one unknown field (a zero-filled byte string)
+//       at the end of the canonical byte map, so include the recipe (base, padKey, padLength) instead of the bytes.
+//   - openedStates: trust states that Bootstrap and Inform cannot create (a key other than Key25519). Put them directly in storage and open with tka.Open.
 
 type limitStep struct {
 	Name  string `json:"name"`
@@ -26,7 +26,7 @@ type limitStep struct {
 
 type limitCase struct {
 	Name string `json:"name"`
-	// BaseCount개(pool 번호 0부터)로 시작한다: 첫 것으로 부트스트랩하고 나머지를 한 묶음으로 Inform한다.
+	// Start with BaseCount entries (pool index 0 onward). Bootstrap with the first and pass the rest to Inform as one group.
 	BaseCount int         `json:"baseCount"`
 	BaseHead  string      `json:"baseHead"`
 	Steps     []limitStep `json:"steps"`
@@ -34,20 +34,20 @@ type limitCase struct {
 
 type limitGroup struct {
 	Name string `json:"name"`
-	// Pool은 sync 배열의 묶음 이름이다. 그 pool 뒤에 Extra를 이은 것이 번호의 대상이다.
+	// Pool names the group in the sync array. Indexes refer to that pool followed by Extra.
 	Pool  string      `json:"pool"`
 	Extra []string    `json:"extra"`
 	Cases []limitCase `json:"cases"`
 }
 
-// limitGroups는 Go Inform의 반복 한도(maxScanIterations 2,000)가 어디서 걸리는지 본다(계약 5절 TL-3, 동작 F7).
+// limitGroups checks where Go Inform hits its iteration limit (maxScanIterations 2,000) (contract §5 TL-3, behavior F7).
 //
-// Go InformIdempotent는 묶음이 지금 머리에서 이어지는 사슬이면 상태를 그대로 쓰고(빠른 길), 아니면(갈래, 이미 쥔 AUM)
-// 저장소에 커밋한 뒤 computeActiveChain을 2,000회 한도로 다시 돈다(tka/tka.go:651-664). 그 안의
-// computeChainCandidates는 저장소의 모든 머리에서 뿌리까지 거꾸로 가므로(tka/tka.go:84-118), 뿌리에서 2,000번째 뒤의
-// AUM이 하나라도 있으면 빠른 길이 아닌 Inform은 모두 실패한다. 부모 상태 찾기(computeStateAt)의 한도는 커밋 전에
-// 걸린다. 번호: 0 G, 1 C(체크포인트), 2~2000 NoOp(long 묶음), 2001 E0(2000의 자식), 2002 E1(E0의 자식),
-// 2003~2006 F(k)(k = 1998, 1999, 2000, 2001(E0)의 갈래 자식. NoOp에 Votes를 실어 형제와 다르다).
+// Go InformIdempotent keeps the resulting state if the group extends the current head (fast path). Otherwise (a fork or an AUM already held),
+// it commits to storage and reruns computeActiveChain with a 2,000-iteration limit (tka/tka.go:651-664).
+// Within it, computeChainCandidates walks backward from every stored head to the root (tka/tka.go:84-118). If there is even one AUM beyond the
+// 2,000th from the root, every non-fast-path Inform fails. The limit for finding the parent state (computeStateAt) is reached
+// before the commit. Indexes: 0 G, 1 C (checkpoint), 2–2000 NoOp (long group), 2001 E0 (child of 2000), 2002 E1 (child of E0),
+// 2003–2006 F(k) (fork children of k = 1998, 1999, 2000, 2001 (E0). NoOp carries Votes to distinguish them from siblings).
 func limitGroups() []limitGroup {
 	L := lockKeys
 	pool := longPool()
@@ -82,25 +82,25 @@ func limitGroups() []limitGroup {
 		extra = append(extra, hexOf(raw))
 	}
 	return []limitGroup{{Name: "long-chain", Pool: "long", Extra: extra, Cases: []limitCase{
-		// 빠른 길: 뿌리에서 2,001·2,002번째 AUM도 받는다.
+		// Fast path: accepts even the 2,001st and 2,002nd AUMs from the root.
 		run("linear-past-2000", 2001, []int{2001}, []int{2002}),
-		// 갈래(부모가 머리가 아니다): 새 AUM이 뿌리에서 1,999번째면 받고, 2,000번째면 커밋 뒤의 재계산에서 실패한다.
+		// Fork (the parent is not the head): accepts the new AUM if it is 1,999th from the root. At 2,000th it fails during recomputation after the commit.
 		run("fork-at-depth-1999", 2000, []int{2003}),
 		run("fork-at-depth-2000", 2001, []int{2004}),
-		// 이미 쥔 AUM이 섞여 빠른 길이 아니다. 실패한 묶음의 AUM은 Go 저장소에 남아 다음 묶음도 빠른 길이 아니게 된다.
+		// Including an AUM already held prevents the fast path. AUMs from the failed group remain in Go storage, preventing the fast path for the next group too.
 		run("held-and-new-at-depth-2000", 2000, []int{1999, 2000}, []int{2000}),
-		// 부모 상태 찾기: 체크포인트 C부터 부모까지 2,000개는 찾지만 뿌리에서 2,001번째 머리 때문에 재계산에서 실패한다.
+		// Parent state lookup: finds the 2,000 entries from checkpoint C to the parent, but recomputation fails at the head that is 2,001st from the root.
 		run("fork-parent-path-2000", 2002, []int{2005}),
-		// 부모 상태 찾기: C부터 부모까지 2,001개는 커밋 전에 실패한다.
+		// Parent state lookup: 2,001 entries from C to the parent fail before the commit.
 		run("fork-parent-path-2001", 2003, []int{2006}),
 	}}}
 }
 
 type paddedCase struct {
 	Name string `json:"name"`
-	// Kind: authorize(NKS 판정), resign(ResignNKS의 옛 서명), inform(AUM 들이기), authKey(감싼 인증 키의 credential).
+	// Kind: authorize (NKS verdict), resign (old ResignNKS signature), inform (AUM admission), authKey (wrapped auth key credential).
 	Kind string `json:"kind"`
-	// Base는 맵 머리가 한 바이트인 정준 바이트다. 입력 = 머리 + 1 ‖ Base[1:] ‖ uint(PadKey) ‖ bstr(0 × PadLength).
+	// Base is canonical bytes with a one-byte map header. Input = header + 1 ‖ Base[1:] ‖ uint(PadKey) ‖ bstr(0 × PadLength).
 	Base      string `json:"base"`
 	PadKey    uint64 `json:"padKey"`
 	PadLength int    `json:"padLength"`
@@ -108,7 +108,7 @@ type paddedCase struct {
 	Authority string `json:"authority,omitempty"`
 	NodeKey   string `json:"nodeKey,omitempty"`
 	NLKey     string `json:"nlKey,omitempty"`
-	// authKey의 나머지: 입력 문자열 = ControlValue ‖ "--TL" ‖ RawStd(입력) ‖ "-" ‖ RawStd(PrivateKey).
+	// Rest of authKey: input string = ControlValue ‖ "--TL" ‖ RawStd(input) ‖ "-" ‖ RawStd(PrivateKey).
 	ControlValue string   `json:"controlValue,omitempty"`
 	PrivateKey   string   `json:"privateKey,omitempty"`
 	OK           bool     `json:"ok"`
@@ -118,7 +118,7 @@ type paddedCase struct {
 	Verdict      *verdict `json:"verdict"`
 }
 
-// padTo는 정준 바이트 base의 맵 끝에 (padKey: 0으로 채운 바이트열)을 덧붙여 전체가 total바이트가 되게 한다.
+// padTo appends (padKey: zero-filled byte string) to the map in canonical bytes base to make it total bytes long.
 func padTo(base []byte, padKey uint64, total int) ([]byte, int) {
 	keyLen := len(mustHex(head(0, padKey)))
 	for n := max(total-len(base)-keyLen-9, 0); n <= total; n++ {
@@ -126,7 +126,7 @@ func padTo(base []byte, padKey uint64, total int) ([]byte, int) {
 			return addPairs(base, 1, head(0, padKey)+head(2, uint64(n))+strings.Repeat("00", n)), n
 		}
 	}
-	panic("길이를 맞출 수 없습니다")
+	panic("could not match the length")
 }
 
 func paddedCases(all []namedAuthority) []paddedCase {
@@ -214,9 +214,9 @@ type openedCase struct {
 	verdict
 }
 
-// openedCases는 Key25519가 아닌 키가 든 신뢰 상태에서 State.GetKey의 판정을 본다(계약 5절 TL-4). 그런 체크포인트는
-// 정적 검사에서 떨어지므로 Bootstrap으로는 만들 수 없다. 저장소에 직접 넣고(CommitVerifiedAUMs, SetLastActiveAncestor)
-// tka.Open으로 연다. Open은 저장된 AUM을 다시 검증하지 않는다(tka/tka.go:476-498).
+// openedCases checks the verdict of State.GetKey in a trust state containing a key other than Key25519 (contract §5 TL-4). Such checkpoints fail
+// static validation, so Bootstrap cannot create them. Write them directly to storage (CommitVerifiedAUMs, SetLastActiveAncestor)
+// and open with tka.Open. Open does not reverify stored AUMs (tka/tka.go:476-498).
 func openedCases() []openedCase {
 	L, V, N := lockKeys, disablementValues, nodeKeys
 	other := tka.Key{Kind: 2, Votes: 1, Public: newEdKey("fork", 0).pub()}

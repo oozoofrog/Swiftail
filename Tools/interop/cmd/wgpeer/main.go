@@ -52,7 +52,7 @@ type output struct {
 
 func (o *output) write(e event) { o.mu.Lock(); defer o.mu.Unlock(); _ = o.enc.Encode(e) }
 
-// 기본 bind는 모든 주소에 열리므로 루프백 소켓과 표준 endpoint 파서를 결합한다.
+// The default bind listens on all addresses, so combine a loopback socket with the standard endpoint parser.
 type loopbackBind struct {
 	conn.Bind
 	socket *net.UDPConn
@@ -121,37 +121,37 @@ type peer struct {
 func newPeer(c config) (*peer, error) {
 	key, err := hex.DecodeString(c.PrivateKey)
 	if err != nil || len(key) != 32 {
-		return nil, errors.New("privateKey는 32바이트 16진수여야 합니다")
+		return nil, errors.New("privateKey must be 32 bytes in hexadecimal")
 	}
 	if subtle.ConstantTimeCompare(key, make([]byte, 32)) == 1 {
-		return nil, errors.New("privateKey가 잘못되었습니다")
+		return nil, errors.New("invalid privateKey")
 	}
 	private, err := ecdh.X25519().NewPrivateKey(key)
 	if err != nil {
-		return nil, errors.New("privateKey가 잘못되었습니다")
+		return nil, errors.New("invalid privateKey")
 	}
 	peerKey, err := hex.DecodeString(c.PeerPublicKey)
 	if err != nil || len(peerKey) != 32 {
-		return nil, errors.New("peerPublicKey는 32바이트 16진수여야 합니다")
+		return nil, errors.New("peerPublicKey must be 32 bytes in hexadecimal")
 	}
 	if _, err = private.ECDH(mustPublic(peerKey)); err != nil {
-		return nil, errors.New("peerPublicKey가 잘못되었습니다")
+		return nil, errors.New("invalid peerPublicKey")
 	}
 	endpoint, err := netip.ParseAddrPort(c.PeerEndpoint)
 	if err != nil || endpoint.Addr() != netip.MustParseAddr("127.0.0.1") || endpoint.Port() == 0 {
-		return nil, errors.New("peerEndpoint는 127.0.0.1의 포트여야 합니다")
+		return nil, errors.New("peerEndpoint must be a port on 127.0.0.1")
 	}
 	if c.ListenPort < 0 || c.ListenPort > 65535 {
-		return nil, errors.New("listenPort가 잘못되었습니다")
+		return nil, errors.New("invalid listenPort")
 	}
 	if len(c.AllowedIPs) == 0 {
-		return nil, errors.New("allowedIPs가 비어 있습니다")
+		return nil, errors.New("allowedIPs is empty")
 	}
 	var allowed strings.Builder
 	for _, ip := range c.AllowedIPs {
 		prefix, e := netip.ParsePrefix(ip)
 		if e != nil {
-			return nil, errors.New("allowedIPs가 잘못되었습니다")
+			return nil, errors.New("invalid allowedIPs")
 		}
 		fmt.Fprintf(&allowed, "allowed_ip=%s\n", prefix.String())
 	}
@@ -161,22 +161,22 @@ func newPeer(c config) (*peer, error) {
 	cfg := fmt.Sprintf("private_key=%s\nlisten_port=%d\npublic_key=%s\nendpoint=%s\n%s", hex.EncodeToString(key), c.ListenPort, hex.EncodeToString(peerKey), endpoint, allowed.String())
 	if err = d.IpcSet(cfg); err != nil {
 		d.Close()
-		return nil, errors.New("장치 설정에 실패했습니다")
+		return nil, errors.New("device configuration failed")
 	}
 	if err = d.Up(); err != nil {
 		d.Close()
-		return nil, fmt.Errorf("장치를 열 수 없습니다: %w", err)
+		return nil, fmt.Errorf("could not open device: %w", err)
 	}
 	state, err := d.IpcGet()
 	if err != nil {
 		d.Close()
-		return nil, errors.New("장치 상태를 읽을 수 없습니다")
+		return nil, errors.New("could not read device status")
 	}
 	values := parseState(state)
 	port, err := strconv.ParseUint(values["listen_port"], 10, 16)
 	if err != nil || port == 0 {
 		d.Close()
-		return nil, errors.New("수신 포트를 읽을 수 없습니다")
+		return nil, errors.New("could not read listen port")
 	}
 	return &peer{dev: d, tun: t, port: uint16(port), public: hex.EncodeToString(private.PublicKey().Bytes())}, nil
 }
@@ -213,7 +213,7 @@ func decode(line []byte, dst any) error {
 		return err
 	}
 	if d.Decode(new(any)) != io.EOF {
-		return errors.New("JSON 뒤에 데이터가 있습니다")
+		return errors.New("trailing data after JSON")
 	}
 	return nil
 }
@@ -235,12 +235,12 @@ func run(in io.Reader, out io.Writer) int {
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	if !scanner.Scan() {
-		fail("설정이 없습니다")
+		fail("configuration is missing")
 		return 1
 	}
 	var c config
 	if decode(scanner.Bytes(), &c) != nil {
-		fail("설정 JSON이 잘못되었습니다")
+		fail("invalid configuration JSON")
 		return 1
 	}
 	p, err := newPeer(c)
@@ -268,32 +268,32 @@ func run(in io.Reader, out io.Writer) int {
 	for scanner.Scan() {
 		var cmd command
 		if decode(scanner.Bytes(), &cmd) != nil {
-			fail("명령 JSON이 잘못되었습니다")
+			fail("invalid command JSON")
 			continue
 		}
 		switch cmd.Cmd {
 		case "send":
 			b, e := hex.DecodeString(cmd.Packet)
 			if e != nil || !validPacket(b) || len(b) > device.MaxContentSize {
-				fail("packet이 잘못되었습니다")
+				fail("invalid packet")
 				continue
 			}
 			p.tun.Outbound <- b
 		case "stats":
 			e, err := p.stats()
 			if err != nil {
-				fail("상태를 읽을 수 없습니다")
+				fail("could not read status")
 			} else {
 				o.write(e)
 			}
 		case "quit":
 			return 0
 		default:
-			fail("알 수 없는 명령입니다")
+			fail("unknown command")
 		}
 	}
 	if scanner.Err() != nil {
-		fail("입력을 읽을 수 없습니다")
+		fail("could not read input")
 		return 1
 	}
 	return 0

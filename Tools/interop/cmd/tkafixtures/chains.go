@@ -10,10 +10,10 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
-// stateSnapshot은 Authority의 공개 API로 읽은 상태다. 키는 Keys(), StateID는 StateIDs(), 머리는 Head()다.
-// 끄기 값은 공개 접근자가 없어 저장소(ChonkMem.AUM)에서 머리부터 거꾸로 가 처음 만나는 체크포인트의
-// State.DisablementValues를 읽는다. Go의 applyVerifiedAUM은 체크포인트에서만 상태 전체를 바꾸고 다른 종류는
-// DisablementValues를 건드리지 않으므로(tka/state.go:162-254) 이것이 상태의 값이다.
+// stateSnapshot is state read through Authority's public API. Keys come from Keys(), StateID from StateIDs(), and the head from Head().
+// Disablement values have no public accessor. Walk backward from the head in storage (ChonkMem.AUM) and read
+// State.DisablementValues from the first checkpoint. Go's applyVerifiedAUM replaces the whole state only at checkpoints, and other AUM types
+// leave DisablementValues alone (tka/state.go:162-254), so these are the state's values.
 type stateSnapshot struct {
 	Head              string     `json:"head"`
 	Keys              []keyValue `json:"keys"`
@@ -39,11 +39,11 @@ type chainCase struct {
 	Steps          []chainStep    `json:"steps"`
 }
 
-// authority는 tka.ChonkMem 위의 Go Authority다. 단계마다 바이트를 Unserialize해 Inform에 넣는다.
+// authority is the Go Authority over tka.ChonkMem. Each step calls Unserialize on the bytes and passes them to Inform.
 type authority struct {
 	storage *tka.Mem
 	auth    *tka.Authority
-	aums    [][]byte // 부트스트랩 AUM과 받아들인 묶음의 AUM(받은 순서)
+	aums    [][]byte // Bootstrap AUM and AUMs from accepted groups (in receipt order)
 }
 
 func bootstrapAuthority(genesis []byte) (*authority, error) {
@@ -116,14 +116,14 @@ func (r *authority) snapshot() stateSnapshot {
 		}
 		parent, ok := a.Parent()
 		if !ok {
-			panic("체크포인트 없이 뿌리에 닿았습니다")
+			panic("reached the root without a checkpoint")
 		}
 		cursor = parent
 	}
-	panic("체크포인트를 찾지 못했습니다")
+	panic("could not find a checkpoint")
 }
 
-// chainRun은 chainCase 하나를 만든다.
+// chainRun creates one chainCase.
 type chainRun struct {
 	c chainCase
 	a *authority
@@ -143,7 +143,7 @@ func newChain(name string, genesis []byte) *chainRun {
 	return r
 }
 
-// step은 AUM 묶음 하나를 Inform에 넣고 결과를 적는다. 받아들였는지 돌려준다.
+// step passes one group of AUMs to Inform, records the result, and reports whether it was accepted.
 func (r *chainRun) step(name string, raws ...[]byte) bool {
 	st := chainStep{Name: name, AUMs: []string{}}
 	for _, raw := range raws {
@@ -159,7 +159,7 @@ func (r *chainRun) step(name string, raws ...[]byte) bool {
 	return st.OK
 }
 
-// mustStep은 받아들여져야 하는 단계다(시나리오를 만드는 쪽의 실수를 잡는다).
+// mustStep is a step that must be accepted. It catches mistakes in scenario construction.
 func (r *chainRun) mustStep(name string, raws ...[]byte) {
 	if !r.step(name, raws...) {
 		panic(fmt.Sprintf("%s/%s: %s", r.c.Name, name, r.c.Steps[len(r.c.Steps)-1].Error))
@@ -168,7 +168,7 @@ func (r *chainRun) mustStep(name string, raws ...[]byte) {
 
 func (r *chainRun) head() []byte { return r.a.head() }
 
-// AUM 만들기 도우미. 모두 공개 타입 tka.AUM에 값을 넣고 Serialize한다.
+// AUM construction helpers. All fill in the public tka.AUM type and call Serialize.
 
 func genesisAUM(keys []tka.Key, dis [][]byte, id1, id2 uint64, signers ...edKey) []byte {
 	a := tka.AUM{MessageKind: tka.AUMCheckpoint, State: &tka.State{DisablementValues: dis, Keys: keys, StateID1: id1, StateID2: id2}}
@@ -215,11 +215,11 @@ var disablementValues = func() [][]byte {
 	return out
 }()
 
-// forkKey는 갈래 시나리오에서 AddKey의 내용(해시를 바꾸는 값)으로만 쓰는 키다.
+// forkKey is used only as the contents of AddKey in fork scenarios to change the hash.
 func forkKey(i int) tka.Key { return newEdKey("fork", i).tkaKey(1) }
 
-// pickPair는 i = 0, 1, …로 만든 두 AUM 가운데 cond를 만족하는 첫 쌍을 고른다. 갈래 규칙의 앞 규칙이 해시
-// 비교(규칙 3)와 다른 답을 내도록 해시의 대소를 맞추는 데 쓴다.
+// pickPair selects the first pair of AUMs generated with i = 0, 1, … that satisfies cond. It sets relative hash order
+// so an earlier fork rule gives a different outcome from hash comparison (rule 3).
 func pickPair(make func(i int) (a, b []byte), cond func(a, b []byte) bool) ([]byte, []byte) {
 	for i := range 64 {
 		a, b := make(i)
@@ -227,7 +227,7 @@ func pickPair(make func(i int) (a, b []byte), cond func(a, b []byte) bool) ([]by
 			return a, b
 		}
 	}
-	panic("조건을 만족하는 쌍을 찾지 못했습니다")
+	panic("could not find a pair satisfying the condition")
 }
 
 func hashLess(a, b []byte) bool { return bytes.Compare(aumHash(a), aumHash(b)) < 0 }
@@ -236,7 +236,7 @@ func chainCases() ([]chainCase, []byte) {
 	L, V := lockKeys, disablementValues
 	var out []chainCase
 
-	// 1. 직선 사슬. genesis: lock/0(2표)·lock/1(1표), 끄기 값 0·1, StateID 1·2, lock/0이 서명.
+	// 1. Linear chain. Genesis: lock/0 (2 votes), lock/1 (1 vote), disablement values 0 and 1, StateID 1 and 2, signed by lock/0.
 	linear := newChain("linear", genesisAUM([]tka.Key{L[0].tkaKey(2), L[1].tkaKey(1)}, V[:2], 1, 2, L[0]))
 	linear.mustStep("add-key", addKey(linear.head(), L[2].tkaKey(1), L[0]))
 	linear.mustStep("update-key-votes", updateVotes(linear.head(), L[2].pub(), 3, L[1]))
@@ -254,7 +254,7 @@ func chainCases() ([]chainCase, []byte) {
 	linear.mustStep("batch", b1, b2, b3)
 	out = append(out, linear.c)
 
-	// 2. 부트스트랩.
+	// 2. Bootstrap.
 	later := newChain("bootstrap/later-checkpoint", laterCheckpoint)
 	later.mustStep("add-key", addKey(later.head(), L[5].tkaKey(1), L[0]))
 	out = append(out, later.c)
@@ -270,7 +270,7 @@ func chainCases() ([]chainCase, []byte) {
 	out = append(out, newChain("bootstrap/last-aum-hash", withLast.Serialize()).c)
 	out = append(out, newChain("bootstrap/wrong-signature", corruptSignature(genesisAUM([]tka.Key{L[0].tkaKey(1)}, V[:1], 1, 2, L[0]))).c)
 
-	// 3. 거절. genesis: lock/0·lock/1(각 1표).
+	// 3. Rejections. Genesis: lock/0 and lock/1 (1 vote each).
 	rej := newChain("rejections", genesisAUM([]tka.Key{L[0].tkaKey(1), L[1].tkaKey(1)}, V[:1], 1, 2, L[0]))
 	rej.step("empty-batch")
 	rej.step("unsigned", noop(rej.head()))
@@ -303,7 +303,7 @@ func chainCases() ([]chainCase, []byte) {
 	rej.step("removed-key-signature", noop(rej.head(), L[1]))
 	out = append(out, rej.c)
 
-	// 4. 받아들여지는 이상한 것. genesis: lock/0(1표).
+	// 4. Unusual inputs that are accepted. Genesis: lock/0 (1 vote).
 	odd := newChain("oddities", genesisAUM([]tka.Key{L[0].tkaKey(1)}, V[:1], 1, 2, L[0]))
 	odd.mustStep("kind-0", childAUM(odd.head(), tka.AUM{MessageKind: tka.AUMInvalid}, L[0]))
 	odd.mustStep("kind-9", childAUM(odd.head(), tka.AUM{MessageKind: 9}, L[0]))
@@ -318,28 +318,28 @@ func chainCases() ([]chainCase, []byte) {
 	odd.mustStep("noop-after", noop(odd.head(), L[0]))
 	odd.step("remove-key-31", removeKey(odd.head(), fk[:31], L[0]))
 	odd.step("update-key-33", updateVotes(odd.head(), append(append([]byte{}, fk...), 0), 4, L[0]))
-	// 33바이트 키를 KeyID로 단 서명은 정적 검사(KeyID 32바이트)에서 떨어진다.
+	// A signature with a 33-byte key as KeyID fails static validation (32-byte KeyID).
 	odd.step("signature-by-33-byte-key", signedWith(odd.head(), append(append([]byte{}, fk...), 0), func(m []byte) []byte { return ed25519.Sign(newEdKey("fork", 0).priv, m) }))
 	sid1, sid2 := odd.a.auth.StateIDs()
 	oddState := tka.State{DisablementValues: V[:1], Keys: odd.a.auth.Keys(), StateID1: sid1, StateID2: sid2}
 	odd.step("checkpoint-with-odd-keys", childAUM(odd.head(), tka.AUM{MessageKind: tka.AUMCheckpoint, State: &oddState}, L[0]))
 	canonical := noop(odd.head(), L[0])
-	// 모르는 필드(8: 1)를 덧붙이고 MessageKind를 1바이트 인자(18 03)로 늘렸다. 서명은 정준 바이트의 SigHash 위에 있다.
+	// Append an unknown field (8: 1) and extend MessageKind to a one-byte argument (18 03). The signature covers the SigHash of the canonical bytes.
 	extended := addPairs(canonical, 1, "0801")
 	extended = append([]byte{extended[0], 0x01, 0x18, 0x03}, extended[3:]...)
 	odd.mustStep("unknown-field-and-non-shortest", extended)
 	odd.mustStep("child-of-canonical-hash", noop(aumHash(canonical), L[0]))
 	plain := noop(odd.head(), L[0])
-	// 쌍 순서를 2, 1, 23으로 바꿨다(정준은 1, 2, 23).
+	// Reorder pairs as 2, 1, 23 (canonical order is 1, 2, 23).
 	unsorted := append(append(append([]byte{plain[0]}, plain[3:38]...), plain[1:3]...), plain[38:]...)
 	odd.mustStep("unsorted-keys", unsorted)
 	odd.mustStep("child-after-unsorted", noop(aumHash(plain), L[0]))
-	// 바이트열 자리를 정수 배열로 쓴 것: PrevAUMHash(02 58 20 …)를 정수 32개의 배열로 바꿨다.
+	// An integer array in place of a byte string: replace PrevAUMHash (02 58 20 …) with an array of 32 integers.
 	plain = noop(odd.head(), L[0])
 	asArray := append(append(append([]byte{}, plain[:4]...), mustHex(uintArray(plain[6:38]))...), plain[38:]...)
 	odd.step("prev-as-uint-array", asArray)
 	odd.step("child-after-prev-as-uint-array", noop(aumHash(plain), L[0]))
-	// 서명의 KeyID·Signature를 정수 배열로 바꿨다.
+	// Replace the signature's KeyID and Signature with integer arrays.
 	plain = noop(odd.head(), L[0])
 	var parsed tka.AUM
 	if err := parsed.Unserialize(plain); err != nil {
@@ -349,23 +349,23 @@ func chainCases() ([]chainCase, []byte) {
 	sigArrays = bytes.Replace(sigArrays, mustHex("02"+bstr(parsed.Signatures[0].Signature)), mustHex("02"+uintArray(parsed.Signatures[0].Signature)), 1)
 	odd.step("signature-as-uint-arrays", sigArrays)
 	odd.step("child-after-signature-as-uint-arrays", noop(aumHash(plain), L[0]))
-	// Meta 값의 null: 정준 바이트는 {"a": ""}(07 a1 61 61 60)이고 값 자리를 null(f6)로 바꿨다.
+	// A null Meta value: the canonical bytes encode {"a": ""} (07 a1 61 61 60). Replace the value with null (f6).
 	metaEmpty := childAUM(odd.head(), tka.AUM{MessageKind: tka.AUMUpdateKey, KeyID: L[0].pub(), Meta: map[string]string{"a": ""}}, L[0])
 	odd.step("update-key-meta-null-value", bytes.Replace(metaEmpty, mustHex("07a1616160"), mustHex("07a16161f6"), 1))
 	odd.step("child-after-meta-null-value", noop(aumHash(metaEmpty), L[0]))
 	out = append(out, odd.c)
 
-	// 5. ZIP-215에서만 통과하는 서명과 비정준 공개 키. genesis: lock/0, W(비정준 인코딩의 항등원).
+	// 5. Signature that verifies only under ZIP-215 and a noncanonical public key. Genesis: lock/0, W (noncanonical encoding of the identity).
 	w := tka.Key{Kind: tka.Key25519, Votes: 1, Public: nonCanonicalIdentity}
 	z := newChain("zip215", genesisAUM([]tka.Key{L[0].tkaKey(1), w}, V[:1], 1, 2, L[0]))
 	z.step("torsion-r-signature", signedWith(z.head(), L[0].pub(), func(m []byte) []byte { return zip215OnlySign(L[0], m) }))
 	z.step("non-canonical-identity-key", signedWith(z.head(), nonCanonicalIdentity, identitySign))
-	// R = W 자신(비정준 항등원), S = 0. ZIP-215에서는 [8]([0]B − R − [k]A) = 0이라 통과한다.
+	// R = W itself (noncanonical identity), S = 0. ZIP-215 accepts because [8]([0]B − R − [k]A) = 0.
 	z.step("non-canonical-identity-key-identity-r-zero-s", signedWith(z.head(), nonCanonicalIdentity, func([]byte) []byte { return append(append([]byte{}, nonCanonicalIdentity...), make([]byte, 32)...) }))
 	out = append(out, z.c)
 
-	// 6. 한 묶음 안의 같은 AUM(계약 5절 TL-3. TL-5 대조 시험이 더했다). Go InformIdempotent는 같은 묶음의 두 번째를
-	// 저장소에 아직 없어서 다시 검증·적용한다(tka/tka.go:605-640). genesis: lock/0(1표).
+	// 6. Duplicate AUM in one group (contract §5 TL-3, added by the TL-5 comparison tests). Go InformIdempotent validates and applies the second copy again
+	// because it is not yet in storage (tka/tka.go:605-640). Genesis: lock/0 (1 vote).
 	dup := newChain("batch-duplicates", genesisAUM([]tka.Key{L[0].tkaKey(1)}, V[:1], 1, 2, L[0]))
 	da := noop(dup.head(), L[0])
 	db := noop(aumHash(da), L[0])
@@ -384,7 +384,7 @@ func chainCases() ([]chainCase, []byte) {
 	return out, laterCheckpoint
 }
 
-// signedWith는 서명 함수 sign으로 SigHash에 서명한 NoOp이다(KeyID는 keyID).
+// signedWith is a NoOp whose SigHash is signed with the function sign (KeyID is keyID).
 func signedWith(parent, keyID []byte, sign func(message []byte) []byte) []byte {
 	a := tka.AUM{MessageKind: tka.AUMNoOp, PrevAUMHash: append([]byte{}, parent...)}
 	h := a.SigHash()
@@ -397,7 +397,7 @@ func childAUMNoParent(a tka.AUM, signers ...edKey) []byte {
 	return a.Serialize()
 }
 
-// corruptSignature는 첫 서명의 첫 비트를 뒤집는다.
+// corruptSignature flips the first bit of the first signature.
 func corruptSignature(raw []byte) []byte {
 	var a tka.AUM
 	if err := a.Unserialize(raw); err != nil {
@@ -415,13 +415,13 @@ func mustBase64(s string) []byte {
 	return b
 }
 
-// forkCases는 같은 부모의 자식이 여럿인 사슬이다(pickNextAUM의 규칙 1~3).
+// forkCases contains chains with multiple children of the same parent (pickNextAUM rules 1–3).
 func forkCases() []chainCase {
 	L, V := lockKeys, disablementValues
 	three := []tka.Key{L[0].tkaKey(1), L[1].tkaKey(1), L[2].tkaKey(1)}
 	var out []chainCase
 
-	// 가중치: lock/2가 2표. B(2표)가 해시가 더 큰데도 A(1표)를 이긴다.
+	// Weight: lock/2 has 2 votes. B (2 votes) beats A (1 vote) despite the larger hash.
 	g := genesisAUM([]tka.Key{L[0].tkaKey(1), L[1].tkaKey(1), L[2].tkaKey(2)}, V[:1], 1, 2, L[0])
 	a, b := pickPair(func(i int) ([]byte, []byte) {
 		return addKey(aumHash(g), forkKey(2*i), L[0]), addKey(aumHash(g), forkKey(2*i+1), L[2])
@@ -431,7 +431,7 @@ func forkCases() []chainCase {
 	c.mustStep("b-heavier", b)
 	out = append(out, c.c)
 
-	// 서명 둘(키 둘, 2표)이 하나(1표)를 이긴다. 무거운 쪽의 해시가 더 크다.
+	// Two signatures (two keys, 2 votes) beat one (1 vote). The heavier side has the larger hash.
 	g = genesisAUM(three, V[:1], 1, 2, L[0])
 	a, b = pickPair(func(i int) ([]byte, []byte) {
 		return addKey(aumHash(g), forkKey(2*i), L[2]), addKey(aumHash(g), forkKey(2*i+1), L[0], L[1])
@@ -441,8 +441,8 @@ func forkCases() []chainCase {
 	c.mustStep("b-two-signatures", b)
 	out = append(out, c.c)
 
-	// 같은 키의 서명 둘은 한 번만 센다. A = lock/0 두 번, B = lock/1 한 번. 같은 가중치라 해시가 작은 B가
-	// 이긴다(두 번 세면 A가 이긴다).
+	// Two signatures from the same key count once. A = lock/0 twice, B = lock/1 once. The weights tie, so B wins
+	// with the smaller hash (A would win if counted twice).
 	a, b = pickPair(func(i int) ([]byte, []byte) {
 		return addKey(aumHash(g), forkKey(2*i), L[0], L[0]), addKey(aumHash(g), forkKey(2*i+1), L[1])
 	}, func(a, b []byte) bool { return hashLess(b, a) })
@@ -451,7 +451,7 @@ func forkCases() []chainCase {
 	c.mustStep("b", b)
 	out = append(out, c.c)
 
-	// 같은 가중치면 RemoveKey가 이긴다. AddKey 쪽의 해시가 더 작다.
+	// RemoveKey wins at equal weight. AddKey has the smaller hash.
 	rk := removeKey(aumHash(g), L[2].pub(), L[1])
 	a, _ = pickPair(func(i int) ([]byte, []byte) {
 		return addKey(aumHash(g), forkKey(i), L[0]), rk
@@ -461,13 +461,13 @@ func forkCases() []chainCase {
 	c.mustStep("remove-key", rk)
 	out = append(out, c.c)
 
-	// 같은 가중치·같은 종류면 해시가 작은 쪽.
+	// The smaller hash wins at equal weight and kind.
 	c = newChain("fork/hash-tiebreak", g)
 	c.mustStep("a", noop(aumHash(g), L[0]))
 	c.mustStep("b", noop(aumHash(g), L[1]))
 	out = append(out, c.c)
 
-	// 진 갈래에 자손이 붙어도 머리는 그대로다. lock/1이 2표.
+	// Adding descendants to the losing fork leaves the head unchanged. lock/1 has 2 votes.
 	g2 := genesisAUM([]tka.Key{L[0].tkaKey(1), L[1].tkaKey(2)}, V[:1], 1, 2, L[0])
 	win := addKey(aumHash(g2), forkKey(0), L[1])
 	lose := addKey(aumHash(g2), forkKey(1), L[0])
@@ -480,8 +480,8 @@ func forkCases() []chainCase {
 	c.mustStep("winner-child", noop(aumHash(win), L[0]))
 	out = append(out, c.c)
 
-	// 오래된 지점에서 갈라져 이기는 갈래(복구 AUM): lock/1로 서명된 X1·X2 뒤에, genesis에서 갈라진
-	// MakeRetroactiveRevocation의 체크포인트(lock/1 제거)를 lock/0·lock/2가 서명한다.
+	// A winning fork from an older point (recovery AUM): after X1 and X2 signed by lock/1, lock/0 and lock/2 sign
+	// the MakeRetroactiveRevocation checkpoint forked from genesis (which removes lock/1).
 	c = newChain("fork/retroactive-revocation", g)
 	x1 := noop(aumHash(g), L[1])
 	c.mustStep("x1", x1)
@@ -498,7 +498,7 @@ func forkCases() []chainCase {
 	c.step("old-branch-child", noop(aumHash(x2), L[1]))
 	out = append(out, c.c)
 
-	// 여러 단의 갈래와, 갈래를 만드는 묶음 하나.
+	// Multilevel forks and one group that creates a fork.
 	c = newChain("fork/multi-level", g)
 	fa := addKey(aumHash(g), forkKey(0), L[0], L[1])
 	fb := addKey(aumHash(g), forkKey(1), L[2])

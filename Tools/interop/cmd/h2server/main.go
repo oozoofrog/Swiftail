@@ -25,7 +25,7 @@ const maxBody = 8 << 20
 func number(r *http.Request, name string, limit int) (int, error) {
 	value, err := strconv.Atoi(r.URL.Query().Get(name))
 	if err != nil || value < 0 || value > limit {
-		return 0, fmt.Errorf("%s 범위가 잘못되었습니다", name)
+		return 0, fmt.Errorf("%s is out of range", name)
 	}
 	return value, nil
 }
@@ -39,7 +39,7 @@ func headerValue(size int) string {
 }
 
 func handle(w http.ResponseWriter, r *http.Request) {
-	// Date는 기본 서버가 자동 생성하므로 결정적인 시험에서는 제외한다.
+	// The default server generates Date automatically, so omit it from deterministic tests.
 	w.Header()["Date"] = nil
 	bad := func(err error) { http.Error(w, err.Error(), http.StatusBadRequest) }
 	method := http.MethodGet
@@ -121,7 +121,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if count*(size+64) > 1<<20 {
-			bad(errors.New("헤더 합계가 너무 큽니다"))
+			bad(errors.New("combined headers are too large"))
 			return
 		}
 		for i := range count {
@@ -131,7 +131,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	case "/status":
 		code, err := number(r, "code", 599)
 		if err != nil || code < 200 {
-			bad(errors.New("code는 200...599여야 합니다"))
+			bad(errors.New("code must be 200...599"))
 			return
 		}
 		w.WriteHeader(code)
@@ -156,7 +156,7 @@ func start() (*server, error) {
 		return nil, err
 	}
 	s := &server{listener: listener, base: &http.Server{}, conns: make(map[net.Conn]bool), done: make(chan struct{})}
-	// testcontrol과 같은 ServeConn 경로를 기본 HTTP/2 설정으로 사용한다.
+	// Use the same ServeConn path as testcontrol with the default HTTP/2 configuration.
 	if err := http2.ConfigureServer(s.base, &s.h2); err != nil {
 		listener.Close()
 		return nil, err
@@ -190,7 +190,7 @@ func (s *server) goaway() {
 	s.draining = true
 	s.mu.Unlock()
 	s.listener.Close()
-	// Shutdown은 열린 스트림이 끝날 때까지 기다리므로 명령 처리는 계속한다.
+	// Shutdown waits for open streams to finish, so keep processing commands.
 	go func() { _ = s.base.Shutdown(context.Background()) }()
 }
 func (s *server) close() {
@@ -228,18 +228,18 @@ func run(in io.Reader, out io.Writer) error {
 				continue
 			}
 		}
-		if err := enc.Encode(map[string]string{"event": "error", "message": "명령이 잘못되었습니다"}); err != nil {
+		if err := enc.Encode(map[string]string{"event": "error", "message": "invalid command"}); err != nil {
 			return err
 		}
 	}
 	return scanner.Err()
 }
 func main() {
-	fixtures := flag.String("hpack-fixtures", "", "HPACK 자료 출력 파일")
+	fixtures := flag.String("hpack-fixtures", "", "HPACK fixture output file")
 	flag.Parse()
 	var err error
 	if flag.NArg() != 0 {
-		err = errors.New("위치 인자는 받지 않습니다")
+		err = errors.New("positional arguments are not accepted")
 	} else if *fixtures != "" {
 		err = writeHPACK(*fixtures)
 	} else {

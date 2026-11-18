@@ -52,21 +52,21 @@ func TestExchange(t *testing.T) {
 		select {
 		case peers[i].tun.Outbound <- packet:
 		case <-time.After(5 * time.Second):
-			t.Fatal("송신 시간 초과")
+			t.Fatal("send timed out")
 		}
 		select {
 		case got := <-peers[j].tun.Inbound:
 			if !bytes.Equal(got, packet) {
-				t.Fatal("수신 패킷 불일치")
+				t.Fatal("received packet mismatch")
 			}
 		case <-time.After(10 * time.Second):
-			t.Fatal("수신 시간 초과")
+			t.Fatal("receive timed out")
 		}
 	}
 	for _, p := range peers {
 		e, err := p.stats()
 		if err != nil || *e.LastHandshakeSec == 0 {
-			t.Fatalf("핸드셰이크 상태 오류: %v", err)
+			t.Fatalf("invalid handshake status: %v", err)
 		}
 	}
 }

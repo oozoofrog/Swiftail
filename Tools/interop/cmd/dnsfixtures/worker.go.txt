@@ -1,5 +1,5 @@
-// 응답 생성: tailscale.com v1.104.6 net/dns/resolver (BSD-3-Clause).
-// 노드 색인만 고정 표로 대신하고 DNS 응답은 Query의 원본 바이트를 보존한다.
+// Response generation: tailscale.com v1.104.6 net/dns/resolver (BSD-3-Clause).
+// Substitute a fixed table only for the node index and preserve the original DNS response bytes from Query.
 package main
 
 import (
@@ -30,7 +30,7 @@ const emptyName = "rd-empty-3c4d5e6f." + suffix
 const ipv4Name = "rd-ipv4-4d5e6f70." + suffix
 const ipv6Name = "rd-ipv6-5e6f7081." + suffix
 
-// AnswerAddresses·Aliases는 ipnlocal 색인 대신 넣는 명시적 시험 표다.
+// AnswerAddresses and Aliases are explicit test tables that replace the ipnlocal index.
 type node struct {
 	Name            string   `json:"name"`
 	Self            bool     `json:"self,omitempty"`
@@ -341,7 +341,7 @@ func records(resources []dns.Resource) []record {
 		case *dns.SOAResource:
 			v = map[string]any{"ns": b.NS.String(), "mbox": b.MBox.String(), "serial": b.Serial, "refresh": b.Refresh, "retry": b.Retry, "expire": b.Expire, "minimum": b.MinTTL}
 		default:
-			panic(fmt.Sprintf("예상하지 않은 응답 타입 %T", b))
+			panic(fmt.Sprintf("unexpected response type %T", b))
 		}
 		out = append(out, record{uint16(r.Header.Type), r.Header.Name.String(), uint16(r.Header.Class), r.Header.TTL, v})
 	}
@@ -392,7 +392,7 @@ func run() error {
 			}
 			if int(m.Header.RCode) != st.wantCode {
 				r.Close()
-				return fmt.Errorf("%s/%s: RCODE=%d 기대=%d", s.Name, st.Name, m.Header.RCode, st.wantCode)
+				return fmt.Errorf("%s/%s: RCODE=%d expected=%d", s.Name, st.Name, m.Header.RCode, st.wantCode)
 			}
 			st.Response = hex.EncodeToString(b)
 			st.Decoded = &decoded{m.Header.ID, int(m.Header.RCode), binary.BigEndian.Uint16(b[2:4]), m.Header.Response, m.Header.Authoritative, m.Header.Truncated, m.Header.RecursionDesired, m.Header.RecursionAvailable, questions(m.Questions), records(m.Answers), records(m.Authorities), records(m.Additionals)}
@@ -400,7 +400,7 @@ func run() error {
 				wantTC := st.Name != "EDNS 1232 TC 없음"
 				if len(b) <= 512 || m.Header.Truncated != wantTC {
 					r.Close()
-					return fmt.Errorf("큰 응답 TC·길이 자체 검사 실패: %s", st.Name)
+					return fmt.Errorf("large response TC and length self-check failed: %s", st.Name)
 				}
 			}
 		}

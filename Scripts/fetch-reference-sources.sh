@@ -1,6 +1,6 @@
 #!/bin/sh
-# 프로토콜 노트와 구현이 참고하는 Go 소스를 내려받는다. 저장소에는 넣지 않는다.
-# 출력: 소스 루트 경로(이 아래에 tailscale.com@<버전>, github.com/tailscale/wireguard-go@<버전>).
+# Download the Go sources that the protocol notes and implementation refer to. Keep them out of the repository.
+# Output: the source root path (containing tailscale.com@<version> and github.com/tailscale/wireguard-go@<version>).
 set -eu
 
 TAILSCALE_VERSION=v1.104.6

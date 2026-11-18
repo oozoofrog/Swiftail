@@ -50,7 +50,7 @@ func TestHostTools(t *testing.T) {
 	nonce, reuse := 35, 100
 	started := execute(command{Cmd: "acmeStart", NonceReject: &nonce, AuthzReuse: &reuse})
 	if _, err := n.execute(command{Cmd: "acmeStart"}); err == nil {
-		t.Fatal("ACME 중복 시작을 거절해야 합니다")
+		t.Fatal("duplicate ACME startup must be rejected")
 	}
 	a := execute(command{Cmd: "addPeer", Name: "peer-a"})
 	b := execute(command{Cmd: "addPeer", Name: "peer-b"})
@@ -69,7 +69,7 @@ func TestHostTools(t *testing.T) {
 				return
 			}
 			if time.Now().After(deadline) {
-				t.Fatal("10초 안에 변경된 맵이 도착하지 않았습니다")
+				t.Fatal("updated map did not arrive within 10 seconds")
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -83,7 +83,7 @@ func TestHostTools(t *testing.T) {
 			who := execute(command{Cmd: "peerWhoIs", Name: "peer-b", To: ip.String()})
 			original, e := lc.WhoIs(ctx, ip.String())
 			if e != nil || who["stableID"] != original.Node.StableID || who["nodeName"] != strings.TrimSuffix(original.Node.Name, ".") || who["computedName"] != original.Node.ComputedName || who["loginName"] != original.UserProfile.LoginName {
-				t.Fatal("WhoIs 기준값 불일치")
+				t.Fatal("WhoIs reference value mismatch")
 			}
 		}
 	}
@@ -93,15 +93,15 @@ func TestHostTools(t *testing.T) {
 	enabled := false
 	execute(command{Cmd: "setDNSConfig", Enabled: &enabled})
 	waitStatus(func(s *ipnstate.Status) bool { return !s.CurrentTailnet.MagicDNSEnabled })
-	// 노드별 임의 도메인과 전체 도메인의 우선순위, 빈 배열로 자동 FQDN까지 지우는 것을 확인한다.
+	// Verify the priority of arbitrary per-node and global domains, and that an empty array clears even the automatic FQDN.
 	custom := []string{"rd-mac-1a2b3c4d.tail0001.test"}
 	execute(command{Cmd: "setCertDomains", NodeKey: b["nodeKey"].(string), Domains: &custom})
 	waitStatus(func(s *ipnstate.Status) bool { return slices.Equal(s.CertDomains, custom) })
 	if err := lc.SetDNS(ctx, "_acme-challenge."+custom[0], "custom-value"); err != nil {
-		t.Fatal("노드별 도메인 set-dns 실패")
+		t.Fatal("set-dns for a per-node domain failed")
 	}
 	if err := lc.SetDNS(ctx, "_acme-challenge."+domain, "not-allowed"); err == nil {
-		t.Fatal("설정에 없는 도메인을 허용했습니다")
+		t.Fatal("allowed a domain outside the configuration")
 	}
 	domains := []string{domain}
 	execute(command{Cmd: "setCertDomains", Domains: &domains})
@@ -121,19 +121,19 @@ func TestHostTools(t *testing.T) {
 	} {
 		execute(fault)
 		e := lc.SetDNS(ctx, "_acme-challenge."+domain, "fault-value")
-		// Go는 null과 알 수 없는 객체 필드를 받는다. Swift의 객체·4KiB 제한은 Swift 시험이 확인한다.
+		// Go accepts null and unknown object fields. Swift tests check Swift's object and 4KiB restrictions.
 		wantError := fault.Status != 0 || fault.Body == "array" || fault.Body == "scalar" || fault.Body == "empty"
 		if (e != nil) != wantError {
-			t.Fatalf("set-dns 결함 %q 상태 %d의 결과가 다릅니다", fault.Body, fault.Status)
+			t.Fatalf("unexpected result for set-dns fault %q with status %d", fault.Body, fault.Status)
 		}
 		if e := lc.SetDNS(ctx, "_acme-challenge."+domain, "after-fault"); e != nil {
-			t.Fatal("결함 횟수 소진 뒤 정상화되지 않았습니다")
+			t.Fatal("normal operation did not resume after the fault count was exhausted")
 		}
 	}
 	execute(command{Cmd: "setDNSFault", Count: &one, DelayMs: 500})
 	short, shortCancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	if e := lc.SetDNS(short, "_acme-challenge."+domain, "delay-value"); e == nil {
-		t.Fatal("지연 요청이 기한을 넘지 않았습니다")
+		t.Fatal("delayed request did not exceed the deadline")
 	}
 	shortCancel()
 	execute(command{Cmd: "setDNSFault", Count: &one, WrongTXT: true})
@@ -141,20 +141,20 @@ func TestHostTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := n.host.acme.challenge.GetDNSTXTRecords("_acme-challenge." + domain + "."); !slices.Equal(got, []string{"swiftail-invalid-txt"}) {
-		t.Fatal("틀린 TXT 결함이 DNS에 반영되지 않았습니다")
+		t.Fatal("incorrect TXT fault was not reflected in DNS")
 	}
 	records := execute(command{Cmd: "setDNSLog"})["requests"].([]dnsRecord)
 	if records[len(records)-1].Value != "original-value" || records[len(records)-1].Type != "TXT" || records[len(records)-1].NodeKeySummary == "" {
-		t.Fatal("setDNSLog가 원래 요청을 기록하지 않았습니다")
+		t.Fatal("setDNSLog did not record the original request")
 	}
 	for i := 1; i < len(records); i++ {
 		if records[i].Time.Before(records[i-1].Time) {
-			t.Fatal("요청 로그 순서가 바뀌었습니다")
+			t.Fatal("request log order changed")
 		}
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM([]byte(started["rootPEM"].(string))) {
-		t.Fatal("루트 PEM 오류")
+		t.Fatal("invalid root PEM")
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 	defer transport.CloseIdleConnections()
@@ -188,7 +188,7 @@ func TestHostTools(t *testing.T) {
 				}
 			}
 			if challenge == nil {
-				t.Fatal("dns-01이 없습니다")
+				t.Fatal("dns-01 is missing")
 			}
 			value, e := client.DNS01ChallengeRecord(challenge.Token)
 			if e != nil {
@@ -208,7 +208,7 @@ func TestHostTools(t *testing.T) {
 		if failValidation {
 			var orderError *acme.OrderError
 			if !errors.As(e, &orderError) {
-				t.Fatalf("틀린 TXT 주문이 invalid로 끝나야 합니다: %v", e)
+				t.Fatalf("order with incorrect TXT must end as invalid: %v", e)
 			}
 			return nil, nil
 		}
@@ -249,7 +249,7 @@ func TestHostTools(t *testing.T) {
 	before := len(execute(command{Cmd: "setDNSLog"})["requests"].([]dnsRecord))
 	issue(false)
 	if after := len(execute(command{Cmd: "setDNSLog"})["requests"].([]dnsRecord)); before != after {
-		t.Fatal("authorization 재사용에 새 TXT 요청이 나갔습니다")
+		t.Fatal("authorization reuse sent a new TXT request")
 	}
 	listener, err := n.peers["peer-b"].server.Listen("tcp", ":9443")
 	if err != nil {
@@ -287,7 +287,7 @@ func TestHostTools(t *testing.T) {
 	expected := sha256.New()
 	io.CopyN(expected, newStream(1), 50<<20)
 	if result["status"] != 206 || result["bodyLength"] != int64(50<<20) || result["bodySHA256"] != hex.EncodeToString(expected.Sum(nil)) {
-		t.Fatal("HTTPS Range 본문 불일치")
+		t.Fatal("HTTPS Range body mismatch")
 	}
 	send, seed := uint64(100<<20), uint64(1)
 	result = execute(command{Cmd: "peerHTTP", Name: "peer-a", URL: "https://" + domain + ":9443/upload", Method: "POST", Send: &send, Seed: &seed, TimeoutSec: &timeout})
@@ -295,13 +295,13 @@ func TestHostTools(t *testing.T) {
 	io.CopyN(expected, newStream(1), int64(send))
 	headers := result["headers"].(http.Header)
 	if headers.Get("X-Request-Length") != strconv.FormatInt(int64(send), 10) || headers.Get("X-Request-SHA256") != hex.EncodeToString(expected.Sum(nil)) {
-		t.Fatal("HTTPS 요청 본문 불일치")
+		t.Fatal("HTTPS request body mismatch")
 	}
 	if _, e := n.execute(command{Cmd: "peerHTTP", Name: "peer-a", URL: "https://wrong.tail0001.test:9443/", To: b["addresses"].([]netip.Addr)[0].String()}); e == nil {
-		t.Fatal("TLS 서버 이름 불일치를 거절해야 합니다")
+		t.Fatal("TLS server name mismatches must be rejected")
 	}
 	if _, e := n.execute(command{Cmd: "peerHTTP", Name: "peer-a", URL: "https://" + domain + ":9443/", RootPEM: "invalid"}); e == nil {
-		t.Fatal("잘못된 신뢰 루트를 거절해야 합니다")
+		t.Fatal("an incorrect trust root must be rejected")
 	}
 	plain, err := n.peers["peer-b"].server.Listen("tcp", ":9080")
 	if err != nil {
@@ -316,9 +316,9 @@ func TestHostTools(t *testing.T) {
 	defer func() { plainServer.Close(); <-plainDone }()
 	result = execute(command{Cmd: "peerHTTP", Name: "peer-a", URL: "http://" + domain + ":9080/"})
 	if result["status"] != 302 {
-		t.Fatal("평문 HTTP 또는 리다이렉트 차단 실패")
+		t.Fatal("failed to block cleartext HTTP or redirects")
 	}
-	// 수동 주입 뒤에는 M7 맵 갱신도 개입하지 않아야 기존 injectMapResponse 규약이 유지된다.
+	// M7 map updates must also stay out after manual injection to preserve the existing injectMapResponse contract.
 	injected, err := json.Marshal(&tailcfg.MapResponse{DNSConfig: &tailcfg.DNSConfig{Proxied: true, CertDomains: custom}})
 	if err != nil {
 		t.Fatal(err)
@@ -329,37 +329,37 @@ func TestHostTools(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	st, err := lc.Status(ctx)
 	if err != nil || !slices.Equal(st.CertDomains, custom) {
-		t.Fatal("M7 갱신이 수동 주입 맵을 덮어썼습니다")
+		t.Fatal("M7 update overwrote the manually injected map")
 	}
 	state := execute(command{Cmd: "goState", Name: "peer-a"})
 	directory := state["directory"].(string)
 	if state["stopped"] != false {
-		t.Fatal("피어가 일찍 멈췄습니다")
+		t.Fatal("peer stopped early")
 	}
 	execute(command{Cmd: "peerClose", Name: "peer-a", Stop: true})
 	state = execute(command{Cmd: "goState", Name: "peer-a"})
 	if state["stopped"] != true || state["directory"] != directory {
-		t.Fatal("멈춘 뒤 상태 디렉터리가 바뀌었습니다")
+		t.Fatal("state directory changed after stopping")
 	}
 	if info, e := os.Stat(directory + "/tailscaled.state"); e != nil || info.Size() == 0 {
-		t.Fatal("Go 상태 파일이 없습니다")
+		t.Fatal("Go state file is missing")
 	}
 	restored := &tsnet.Server{Dir: directory, Hostname: "peer-a", ControlURL: n.control.ExplicitBaseURL, UserLogf: func(string, ...any) {}}
 	restarted, e := restored.Up(ctx)
 	if e != nil {
 		restored.Close()
-		t.Fatal("보존한 상태로 재접속하지 못했습니다")
+		t.Fatal("could not reconnect with saved state")
 	}
 	if restarted.Self.PublicKey.String() != a["nodeKey"] || !slices.Equal(restarted.TailscaleIPs, a["addresses"].([]netip.Addr)) || n.control.NumNodes() != 2 {
 		restored.Close()
-		t.Fatal("Go 재접속 뒤 신원이 바뀌었습니다")
+		t.Fatal("Go identity changed after reconnecting")
 	}
 	if e = restored.Close(); e != nil {
 		t.Fatal(e)
 	}
 	execute(command{Cmd: "removePeer", Name: "peer-a"})
 	if _, e := os.Stat(directory); !os.IsNotExist(e) {
-		t.Fatal("removePeer가 상태를 지우지 않았습니다")
+		t.Fatal("removePeer did not delete state")
 	}
 }
 
@@ -380,7 +380,7 @@ func TestHostCommandValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := n.execute(c); err == nil {
-			t.Fatalf("잘못된 명령을 받았습니다: %s", line)
+			t.Fatalf("received an invalid command: %s", line)
 		}
 	}
 	zero := 0
@@ -407,13 +407,13 @@ func TestHostJSON(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(value["event"]) != `"`+event+`"` {
-			t.Fatal("JSON 사건 불일치")
+			t.Fatal("JSON event mismatch")
 		}
 		if event == "certDomains" && (string(value["id"]) != `{"step":1}` || string(value["domains"]) != "[]") {
-			t.Fatal("id 또는 빈 배열 규약 불일치")
+			t.Fatal("id or empty array format mismatch")
 		}
 		if event == "setDNSLog" && string(value["requests"]) != "[]" {
-			t.Fatal("로그 빈 배열 규약 불일치")
+			t.Fatal("empty log array format mismatch")
 		}
 	}
 }
@@ -460,13 +460,13 @@ func TestPeerHTTPConcurrentRemove(t *testing.T) {
 	}
 	send(map[string]any{"id": 1, "cmd": "addPeer", "name": "peer-a"})
 	if read()["event"] != "peer" {
-		t.Fatal("피어 시작 실패")
+		t.Fatal("peer failed to start")
 	}
 	send(map[string]any{"id": 2, "cmd": "peerHTTP", "name": "peer-a", "url": "http://" + state.TailscaleIPs[0].String() + ":9080/", "timeoutSec": 15})
 	select {
 	case <-accepted:
 	case <-ctx.Done():
-		t.Fatal("HTTP 요청이 서버에 도착하지 않았습니다")
+		t.Fatal("HTTP request did not reach the server")
 	}
 	send(map[string]any{"id": 3, "cmd": "removePeer", "name": "peer-a"})
 	events := map[float64]string{}
@@ -475,10 +475,10 @@ func TestPeerHTTPConcurrentRemove(t *testing.T) {
 		events[r["id"].(float64)] = r["event"].(string)
 	}
 	if events[2] != "error" || events[3] != "removed" {
-		t.Fatal("진행 중 HTTP와 피어 제거의 응답이 다릅니다")
+		t.Fatal("unexpected responses for the in-flight HTTP request and peer removal")
 	}
 	send(map[string]any{"id": 4, "cmd": "quit"})
 	if read()["event"] != "quit" {
-		t.Fatal("quit 응답 실패")
+		t.Fatal("quit response failed")
 	}
 }

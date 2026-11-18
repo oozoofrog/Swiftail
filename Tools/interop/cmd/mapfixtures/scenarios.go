@@ -15,7 +15,7 @@ import (
 	"tailscale.com/types/opt"
 )
 
-// 모든 공개 키는 공개된 시험 시드의 SHA-256에서 유도한다. 운영용으로 쓰지 않는다.
+// All public keys are derived with SHA-256 from public test seeds. They are not for production use.
 func publicBytes(label string) []byte {
 	seed := sha256.Sum256([]byte("swiftail-fixtures/" + label))
 	private, err := ecdh.X25519().NewPrivateKey(seed[:])
@@ -101,7 +101,7 @@ func scenarios() []scenario {
 	detailed["KeyExpiry"] = "2027-01-02T03:04:05.120000000+09:00"
 	detailed["CapMap"] = map[string]any{"cap/test": nil, "cap/empty": []any{}, "cap/value": []any{map[string]any{"enabled": true}}}
 	detailed["FutureNodeField"] = map[string]any{"unknown": 42}
-	// 2^53보다 큰 ID도 숫자 문자열을 거치지 않고 보존한다.
+	// Preserve IDs above 2^53 without going through a numeric string.
 	detailed["ID"] = int64(9007199254740993)
 	return []scenario{
 		session("full-keepalive", makeStep("KeepAlive", map[string]any{"KeepAlive": true}), makeStep("빈 응답", map[string]any{})),

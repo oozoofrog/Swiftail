@@ -11,8 +11,8 @@ import (
 	"tailscale.com/types/key"
 )
 
-// authorityCase는 서명·피어 집합·끄기 비밀·재서명 판정에 쓰는 신뢰 상태다. aums의 첫 것으로 부트스트랩하고
-// 나머지를 한 묶음으로 Inform한다.
+// authorityCase is the trust state used for verdicts on signatures, peer sets, disablement secrets, and re-signing. Bootstrap from the first of aums
+// and pass the rest to Inform as one group.
 type authorityCase struct {
 	Name  string        `json:"name"`
 	AUMs  []string      `json:"aums"`
@@ -33,7 +33,7 @@ func viewAuthority(n namedAuthority) authorityCase {
 	return c
 }
 
-// k31은 공개 키가 31바이트인 신뢰 키다(정적 검사는 길이를 보지 않는다).
+// k31 is a trusted key with a 31-byte public key (static validation does not check its length).
 var k31 = newEdKey("fork", 9).pub()[:31]
 
 func authorities() []namedAuthority {
@@ -60,10 +60,10 @@ func findAuthority(all []namedAuthority, name string) *authority {
 	panic(name)
 }
 
-// referenceSecret은 Go 시험이 쓰는 끄기 비밀 0xa5 × 32다(tka/state.go:325, 노트 4.5).
+// referenceSecret is the disablement secret 0xa5 × 32 used by Go's tests (tka/state.go:325, notes §4.5).
 var referenceSecret = []byte(strings.Repeat("\xa5", 32))
 
-// NKS 만들기 도우미. 공개 타입 tka.NodeKeySignature에 값을 넣고 SigHash에 Ed25519로 서명한다.
+// NKS construction helpers. Fill in the public tka.NodeKeySignature type and sign SigHash with Ed25519.
 
 func signNKS(s tka.NodeKeySignature, priv ed25519.PrivateKey) tka.NodeKeySignature {
 	h := s.SigHash()
@@ -103,7 +103,7 @@ func nodePublic(raw []byte) (key.NodePublic, error) {
 	return n, err
 }
 
-// authorize는 Go의 NodeKeyAuthorizedWithDetails 판정이다.
+// authorize is Go's NodeKeyAuthorizedWithDetails verdict.
 func authorize(a *authority, node []byte, nks []byte) verdict {
 	n, err := nodePublic(node)
 	if err != nil {
@@ -181,8 +181,8 @@ func signatureCases(all []namedAuthority) []signatureCase {
 	add("direct-trailing-byte", base, N[0], append(ser(direct), 0))
 	add("direct-unknown-field", base, N[0], addPairs(ser(direct), 1, "0701"))
 
-	// rotation 사슬: direct(lock/0 → node/0, 회전 키 nl/0) 위에 nl/0이 node/k를 서명한 rotation을 k겹 씌운다.
-	// 15겹(CBOR 16단)까지 검증되고 16겹(17단)은 디코딩에서 거절된다.
+	// Rotation chain: wrap direct (lock/0 → node/0, rotation key nl/0) in k rotations, with nl/0 signing node/k.
+	// Verification succeeds through 15 wrappers (16 CBOR levels). Decoding rejects 16 wrappers (17 levels).
 	chain := direct
 	for k := 1; k <= 16; k++ {
 		chain = rotationNKS(NL[0], N[k], chain, nil)
@@ -204,7 +204,7 @@ func signatureCases(all []namedAuthority) []signatureCase {
 	add("rotation-outer-zip215-only-signature", base, N[1], ser(outer))
 	add("rotation-missing-nested", base, N[1], ser(signNKS(tka.NodeKeySignature{SigKind: tka.SigRotation, Pubkey: N[1].binary()}, NL[0].priv)))
 	add("rotation-outer-wrong-signer", base, N[1], ser(rotationNKS(NL[2], N[1], direct, nil)))
-	// TL-5 대조 시험이 더한 것(계약 5절 TL-4): rotation 안쪽 direct의 빈 Pubkey, 가운데 rotation의 빈 Pubkey.
+	// Added by the TL-5 comparison tests (contract §5 TL-4): empty Pubkey in the direct signature inside a rotation and empty Pubkey in the middle rotation.
 	emptyInner := signNKS(tka.NodeKeySignature{SigKind: tka.SigDirect, KeyID: L[0].pub(), WrappingPubkey: NL[0].pub()}, L[0].priv)
 	add("rotation-inner-direct-empty-pubkey", base, N[1], ser(rotationNKS(NL[0], N[1], emptyInner, nil)))
 	emptyMiddle := rotationNKS(NL[0], N[1], direct, nil)
@@ -212,7 +212,7 @@ func signatureCases(all []namedAuthority) []signatureCase {
 	emptyMiddle = signNKS(emptyMiddle, NL[0].priv)
 	add("rotation-middle-rotation-empty-pubkey", base, N[2], ser(rotationNKS(NL[0], N[2], emptyMiddle, nil)))
 
-	// credential → rotation: credential(lock/0, 회전 키 credential/0)을 credential/0이 node/3에 대해 감싼다.
+	// credential → rotation: credential/0 wraps credential (lock/0, rotation key credential/0) for node/3.
 	cred := credentialNKS(L[0], credentials[0].pub())
 	byCred, err := tka.SignByCredential(credentials[0].priv, &cred, N[3].public())
 	if err != nil {
@@ -238,8 +238,8 @@ func mustNKS(b []byte) tka.NodeKeySignature {
 	return s
 }
 
-// resignCase는 tka.ResignNKS(NL 개인 키, 새 node 키, 옛 서명)의 결과와 그것의 판정이다. ResignNKS는 Ed25519로
-// 서명하므로 결과 바이트가 결정적이다.
+// resignCase contains the result of tka.ResignNKS(NL private key, new node key, old signature) and its verdict. ResignNKS signs with Ed25519,
+// so its output bytes are deterministic.
 type resignCase struct {
 	Name      string   `json:"name"`
 	Authority string   `json:"authority"`
@@ -255,7 +255,7 @@ type resignCase struct {
 	Verdict   *verdict `json:"verdict"`
 }
 
-// nksDepth는 맨 바깥부터 Nested를 따라 센 서명의 수다.
+// nksDepth counts signatures from the outside in by following Nested.
 func nksDepth(s tka.NodeKeySignature) int {
 	n := 1
 	for p := s.Nested; p != nil; p = p.Nested {
@@ -299,7 +299,7 @@ func resignCases(all []namedAuthority) []resignCase {
 		panic(err)
 	}
 	add("credential-chain", NL[0], byCred, N[4])
-	// 줄이기의 경계: rotation k겹이면 Pubkey가 k+1개다. 15개까지는 그대로 감싸고 16개부터 줄인다.
+	// Shortening boundary: k rotation wrappers mean k+1 Pubkey values. Wrap them unchanged through 15 and shorten starting at 16.
 	chain := directNKS(L[0], N[0], NL[0].pub())
 	for k := 1; k <= 16; k++ {
 		chain = rotationNKS(NL[0], N[k], chain, nil)
@@ -311,15 +311,15 @@ func resignCases(all []namedAuthority) []resignCase {
 	return out
 }
 
-// withTrailingBits는 패딩 없는 base64의 마지막 글자에서 남는 비트의 가장 아래 것을 켠다(값은 그대로 읽힌다).
+// withTrailingBits sets the lowest unused bit of the last unpadded base64 character (the decoded value stays the same).
 func withTrailingBits(s string) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 	if len(s)%4 == 0 {
-		panic("남는 비트가 없는 길이입니다")
+		panic("input length has no unused bits")
 	}
 	v := strings.IndexByte(alphabet, s[len(s)-1])
 	if v < 0 || v&1 != 0 {
-		panic("마지막 글자의 남는 비트가 이미 켜져 있습니다")
+		panic("unused bits in the last character are already set")
 	}
 	return s[:len(s)-1] + string(alphabet[v|1])
 }
@@ -351,8 +351,8 @@ func disablementCases(all []namedAuthority) []disablementCase {
 	return out
 }
 
-// authKeyCase는 tka.DecodeWrappedAuthkey의 결과와, 감싼 것이면 tka.SignByCredential로 node/8에 대해 만든
-// 서명과 그 판정이다. 입력 문자열에는 시험 전용 개인 키(credential/0 등)가 들어 있다.
+// authKeyCase contains the tka.DecodeWrappedAuthkey result and, for a wrapped key, the signature tka.SignByCredential creates for node/8
+// and its verdict. The input string includes test-only private keys (such as credential/0).
 type authKeyCase struct {
 	Name             string   `json:"name"`
 	Input            string   `json:"input"`
@@ -378,7 +378,7 @@ func authKeyCases(all []namedAuthority) []authKeyCase {
 	wrap := func(a, b string) string { return plain + "--TL" + a + "-" + b }
 	urlPriv := base64.RawURLEncoding.EncodeToString(priv)
 	if urlPriv == raw(priv) {
-		panic("URL 알파벳 변형이 표준 알파벳과 같습니다")
+		panic("URL alphabet variant matches the standard alphabet")
 	}
 	mismatched := append(append([]byte{}, priv[:32]...), credentials[1].pub()...)
 	inputs := []struct{ name, input, authority string }{
@@ -398,7 +398,7 @@ func authKeyCases(all []namedAuthority) []authKeyCase {
 		{"credential-wrapping-other-key", wrap(raw(ser(credentialNKS(L[0], credentials[1].pub()))), raw(priv)), "nks-base"},
 		{"credential-untrusted", wrap(raw(ser(credentialNKS(untrusted, credentials[0].pub()))), raw(priv)), "nks-base"},
 		{"empty-parts", plain + "--TL-", ""},
-		// TL-5 대조 시험이 더한 것(계약 5절 TL-4): RawStdEncoding은 남는 비트를 보지 않고 \r·\n을 건너뛴다.
+		// Added by the TL-5 comparison tests (contract §5 TL-4): RawStdEncoding ignores unused bits and skips \r and \n.
 		{"credential-trailing-bits", wrap(withTrailingBits(raw(cred)), raw(priv)), "nks-base"},
 		{"key-trailing-bits", wrap(raw(cred), withTrailingBits(raw(priv))), "nks-base"},
 		{"credential-lf", wrap(insertAt(raw(cred), 40, "\n"), raw(priv)), "nks-base"},

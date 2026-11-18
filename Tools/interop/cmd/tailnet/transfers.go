@@ -17,7 +17,7 @@ import (
 
 const maxTransferBytes uint64 = 1 << 32
 
-// stream은 공개 시험 씨앗의 LCG64 흐름이다. 낱말 중간의 읽기도 같은 바이트열을 낸다.
+// stream is an LCG64 stream from a public test seed. Reads starting in the middle of a word produce the same byte sequence.
 type stream struct {
 	state  uint64
 	word   [8]byte
@@ -85,7 +85,7 @@ func (t *transfer) finish(err error) {
 	t.status.ElapsedMs = time.Since(t.start).Milliseconds()
 }
 
-// peerTransfers는 피어 제거 때 자신이 시작한 연결과 goroutine만 거둔다.
+// peerTransfers cleans up only the connections and goroutines it started when the peer is removed.
 type peerTransfers struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -137,7 +137,7 @@ func transferTimeout(c command) (time.Duration, error) {
 		seconds = *c.TimeoutSec
 	}
 	if seconds < 1 || seconds > 3600 {
-		return 0, errors.New("timeoutSec는 1…3600이어야 합니다")
+		return 0, errors.New("timeoutSec must be 1…3600")
 	}
 	return time.Duration(seconds) * time.Second, nil
 }
@@ -158,10 +158,10 @@ func (n *network) executeTransfer(c command) (map[string]any, error) {
 	}
 	p := n.peers[c.Name]
 	if p == nil {
-		return nil, errors.New("피어가 없습니다")
+		return nil, errors.New("peer not found")
 	}
 	if c.Port < 1 || c.Port > 65535 {
-		return nil, errors.New("port는 1…65535여야 합니다")
+		return nil, errors.New("port must be 1…65535")
 	}
 	timeout, err := transferTimeout(c)
 	if err != nil {
@@ -172,7 +172,7 @@ func (n *network) executeTransfer(c command) (map[string]any, error) {
 		p.transfers.mu.Lock()
 		defer p.transfers.mu.Unlock()
 		if p.transfers.listeners[c.Port] != nil {
-			return nil, errors.New("이미 듣는 포트입니다")
+			return nil, errors.New("already listening on this port")
 		}
 		listener, err := p.server.Listen("tcp", ":"+strconv.Itoa(c.Port))
 		if err != nil {
@@ -204,7 +204,7 @@ func (n *network) executeTransfer(c command) (map[string]any, error) {
 						count := binary.BigEndian.Uint64(preface[:8])
 						seed := binary.BigEndian.Uint64(preface[8:])
 						if count > maxTransferBytes {
-							err = errors.New("전송 머리의 길이가 4GiB를 넘습니다")
+							err = errors.New("length in transfer header exceeds 4GiB")
 						} else {
 							err = t.exchange(conn, count, seed)
 						}
@@ -220,7 +220,7 @@ func (n *network) executeTransfer(c command) (map[string]any, error) {
 		delete(p.transfers.listeners, c.Port)
 		p.transfers.mu.Unlock()
 		if listener == nil {
-			return nil, errors.New("듣는 포트가 없습니다")
+			return nil, errors.New("no listening port")
 		}
 		if err := listener.Close(); err != nil {
 			return nil, err
@@ -229,13 +229,13 @@ func (n *network) executeTransfer(c command) (map[string]any, error) {
 	case "peerDial":
 		addr, err := netip.ParseAddr(c.To)
 		if err != nil || addr.Zone() != "" {
-			return nil, errors.New("to에는 zone 없는 IP 주소가 필요합니다")
+			return nil, errors.New("to requires an IP address without a zone")
 		}
 		if c.Send == nil || *c.Send > maxTransferBytes {
-			return nil, errors.New("send는 0…4294967296이어야 합니다")
+			return nil, errors.New("send must be 0…4294967296")
 		}
 		if c.Seed == nil {
-			return nil, errors.New("seed에 UInt64가 필요합니다")
+			return nil, errors.New("seed requires a UInt64")
 		}
 		remote := net.JoinHostPort(addr.String(), strconv.Itoa(c.Port))
 		count, seed := *c.Send, *c.Seed
@@ -268,7 +268,7 @@ func (n *network) executeTransfer(c command) (map[string]any, error) {
 		}()
 		return map[string]any{"event": "peerDial", "name": c.Name, "transferID": t.snapshot().ID}, nil
 	}
-	return nil, errors.New("알 수 없는 전송 명령입니다")
+	return nil, errors.New("unknown transfer command")
 }
 
 func writeAll(w io.Writer, p []byte) error {
@@ -288,7 +288,7 @@ func writeAll(w io.Writer, p []byte) error {
 func (t *transfer) exchange(conn net.Conn, count, seed uint64) error {
 	half, ok := conn.(interface{ CloseWrite() error })
 	if !ok {
-		return errors.New("연결이 CloseWrite를 지원하지 않습니다")
+		return errors.New("connection does not support CloseWrite")
 	}
 	t.mu.Lock()
 	t.status.State = "running"
@@ -350,10 +350,10 @@ func (t *transfer) exchange(conn net.Conn, count, seed uint64) error {
 	}
 	writeErr := <-written
 	if writeErr != nil {
-		return fmt.Errorf("쓰기 실패: %w", writeErr)
+		return fmt.Errorf("write failed: %w", writeErr)
 	}
 	if readErr != nil {
-		return fmt.Errorf("읽기 실패: %w", readErr)
+		return fmt.Errorf("read failed: %w", readErr)
 	}
 	return nil
 }

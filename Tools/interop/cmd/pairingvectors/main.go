@@ -1,6 +1,6 @@
-// pairingvectors는 Swiftail 페어링 절차(docs/contracts/SwiftailPairing.md 5절)의 고정 벡터를 Go 표준 라이브러리
-// (crypto/hmac, crypto/sha256)로 뽑아 표준 출력에 JSON으로 쓴다. 계약의 글만 보고 썼고, Swift 구현은 읽거나
-// 호출하지 않는다. 입력은 시험 전용 고정 패턴이다.
+// pairingvectors generates fixed vectors for the Swiftail pairing procedure (docs/contracts/SwiftailPairing.md §5) with the Go standard library
+// (crypto/hmac, crypto/sha256) and writes JSON to standard output. It follows the contract text alone and neither reads
+// nor calls the Swift implementation. The inputs are fixed patterns for testing only.
 package main
 
 import (
@@ -62,7 +62,7 @@ type input struct {
 	hostStableID, hostLabel string
 }
 
-// pattern은 i번째 바이트가 (i·mul + add) mod 256인 바이트열이다.
+// pattern is a byte sequence whose ith byte is (i·mul + add) mod 256.
 func pattern(n, mul, add int) []byte {
 	b := make([]byte, n)
 	for i := range b {
@@ -82,8 +82,8 @@ func tag(secret []byte, label string, parts ...[]byte) []byte {
 	return mac.Sum(nil)
 }
 
-// commitment는 nonce의 약속이다: SHA256(꼬리표 ‖ nonce). 들어오는 쪽은 hello에 commitJ를, 여는 쪽은 challenge에 commitH를
-// 싣는다. 두 꼬리표는 다르다.
+// commitment commits to the nonce as SHA256(label ‖ nonce). The joiner carries commitJ in hello, and the host carries commitH
+// in challenge. The two labels differ.
 func commitment(label string, nonce []byte) []byte {
 	sum := sha256.Sum256(append([]byte(label), nonce...))
 	return sum[:]
@@ -97,8 +97,8 @@ func hostCommitment(in input) []byte {
 	return commitment("swiftail-pairing-3 commit host", in.hostNonce)
 }
 
-// proofTranscript는 P다: commitJ ‖ commitH ‖ nonceJ ‖ SHA256(host) ‖ port ‖ SHA256(기기 이름) ‖ J 주소(16) ‖ J 포트
-// ‖ H 주소(16) ‖ H 포트(198바이트). IPv4 주소는 IPv4-mapped IPv6 16바이트로 넣는다(netip.Addr.As16).
+// proofTranscript is P: commitJ ‖ commitH ‖ nonceJ ‖ SHA256(host) ‖ port ‖ SHA256(device name) ‖ J address (16) ‖ J port
+// ‖ H address (16) ‖ H port (198 bytes). Encode IPv4 addresses as 16-byte IPv4-mapped IPv6 addresses (netip.Addr.As16).
 func proofTranscript(in input) []byte {
 	hostHash := sha256.Sum256([]byte(in.offerHost))
 	nameHash := sha256.Sum256([]byte(in.deviceName))
@@ -109,7 +109,7 @@ func proofTranscript(in input) []byte {
 	}, nil)
 }
 
-// transcript는 T다: P ‖ nonceH(230바이트).
+// transcript is T: P ‖ nonceH (230 bytes).
 func transcript(in input) []byte {
 	return append(proofTranscript(in), in.hostNonce...)
 }
@@ -127,7 +127,7 @@ func evaluate(in input) vector {
 	commitJ, commitH := joinerCommitment(in), hostCommitment(in)
 	hello := bytes.Join([][]byte{[]byte("SWPR"), {0x03}, commitJ, {byte(len(in.deviceName))}, []byte(in.deviceName)}, nil)
 	p, t := proofTranscript(in), transcript(in)
-	// proof는 열어 보인 nonceJ와 P의 HMAC이고, accepted는 열어 보인 nonceH와 T의 HMAC이다.
+	// proof contains the revealed nonceJ and the HMAC of P, and accepted contains the revealed nonceH and the HMAC of T.
 	proof := append(append([]byte{}, in.joinerNonce...), tag(in.secret, "swiftail-pairing-3 joiner", p)...)
 	accepted := append(append([]byte{}, in.hostNonce...), tag(in.secret, "swiftail-pairing-3 host", t)...)
 	approved := bytes.Join([][]byte{{1, byte(len(in.hostStableID))}, []byte(in.hostStableID), {byte(len(in.hostLabel))}, []byte(in.hostLabel)}, nil)
@@ -178,12 +178,12 @@ func inputs() []input {
 		joiner: netip.MustParseAddrPort("100.127.255.254:65535"), host: netip.MustParseAddrPort("100.64.0.1:1"),
 		hostStableID: strings.Repeat("n", 255), hostLabel: strings.Repeat("표", 21) + "b",
 	}
-	// 확인 숫자가 0으로 시작하는 경우: 들어오는 쪽 nonce의 첫 바이트를 바꿔 가며 처음 나오는 것을 쓴다.
+	// For a SAS starting with 0, vary the first byte of the joiner's nonce and take the first match.
 	leadingZero := ipv4
 	leadingZero.label = "확인 숫자가 0으로 시작"
 	for first := 0; ; first++ {
 		if first > 255 {
-			panic("0으로 시작하는 확인 숫자를 찾지 못했다")
+			panic("could not find a SAS starting with 0")
 		}
 		leadingZero.joinerNonce = append([]byte{byte(first)}, pattern(31, 3, 2)...)
 		if strings.HasPrefix(confirmationCode(leadingZero.secret, transcript(leadingZero)), "0") {
@@ -210,7 +210,7 @@ func generate() ([]byte, error) {
 
 func main() {
 	if len(os.Args) != 1 {
-		fmt.Fprintln(os.Stderr, "사용법: pairingvectors > pairing-vectors.json")
+		fmt.Fprintln(os.Stderr, "Usage: pairingvectors > pairing-vectors.json")
 		os.Exit(2)
 	}
 	out, err := generate()

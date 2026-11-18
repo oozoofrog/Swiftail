@@ -44,15 +44,15 @@ func (n *network) startACME(c command) (map[string]any, error) {
 		reuse = *c.AuthzReuse
 	}
 	if nonce < 0 || nonce > 100 || reuse < 0 || reuse > 100 || c.ValidationDelaySec < 0 || c.ValidationDelaySec > 60 {
-		return nil, errors.New("nonceReject·authzReuse는 0…100, validationDelaySec는 0…60입니다")
+		return nil, errors.New("nonceReject and authzReuse must be in 0…100, and validationDelaySec must be in 0…60")
 	}
 	n.mu.Lock()
 	exists := n.host.acme != nil
 	n.mu.Unlock()
 	if exists {
-		return nil, errors.New("ACME 서버는 한 번만 시작합니다")
+		return nil, errors.New("the ACME server can only be started once")
 	}
-	// pebble 생성자가 읽는 설정만 잠시 바꾸고 복원한다. 도구의 명령 처리는 직렬이다.
+	// Temporarily change only the settings the pebble constructor reads, then restore them. The tool handles commands serially.
 	env := map[string]string{"PEBBLE_WFE_NONCEREJECT": strconv.Itoa(nonce), "PEBBLE_AUTHZREUSE": strconv.Itoa(reuse), "PEBBLE_VA_ALWAYS_VALID": "0", "PEBBLE_VA_NOSLEEP": "1", "PEBBLE_VA_SLEEPTIME": strconv.Itoa(c.ValidationDelaySec)}
 	if c.ValidationDelaySec > 0 {
 		env["PEBBLE_VA_NOSLEEP"] = "0"
@@ -69,8 +69,8 @@ func (n *network) startACME(c command) (map[string]any, error) {
 		}()
 	}
 	quiet := log.New(io.Discard, "", 0)
-	// challtestsrv는 미리 연 소켓을 받지 않으므로 TCP·UDP 모두 빈 같은 포트를 골라 시작 후 확인한다. OS가 고른 TCP 포트의
-	// UDP 쪽을 다른 시험(STUN, 노드의 UDP 소켓)이 쓰고 있을 수 있으므로 그때는 다른 포트를 고른다.
+	// challtestsrv does not accept a preopened socket, so pick a port free on both TCP and UDP and verify it after startup. Another test (STUN or the node's UDP socket)
+	// may be using the UDP half of the TCP port selected by the OS. If so, pick a different port.
 	var listener net.Listener
 	var udp net.PacketConn
 	var address string
@@ -118,18 +118,18 @@ func (n *network) startACME(c command) (map[string]any, error) {
 			}
 			select {
 			case <-ctx.Done():
-				return nil, errors.New("challtestsrv DNS 시작 실패")
+				return nil, errors.New("failed to start challtestsrv DNS")
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
 	}
 	challenge.DeleteDNSTXTRecord(probe)
 	store := db.NewMemoryStore()
-	authority := ca.New(quiet, store, "", "rsa", 0, 1, map[string]ca.Profile{"default": {Description: "Swiftail 시험"}})
+	authority := ca.New(quiet, store, "", "rsa", 0, 1, map[string]ca.Profile{"default": {Description: "Swiftail test"}})
 	validator := va.New(quiet, 0, 0, false, address, store)
 	frontend := wfe.New(quiet, store, validator, authority, nil, false, false, 0, 0)
 	root := authority.GetRootCert(0)
-	// 디렉터리 HTTPS와 발급 사슬을 같은 시험 루트로 검증할 수 있게 한다. 키는 메모리에만 둔다.
+	// Use the same test root to verify the directory HTTPS connection and the issuance chain. Keep the key in memory only.
 	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err

@@ -1,10 +1,10 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// 출처: tailscale.com v1.104.6 tstest/integration/testcontrol/testcontrol.go를 옮겨 적었다(라이선스: 같은 디렉터리의 LICENSE).
-// 원본과 다른 곳은 "원본과 다름" 또는 "원본에 없는 보탬" 주석으로 표시한다. 목록은 Tools/interop/README.md의 tailnet 절에 있다.
+// Origin: copied from tailscale.com v1.104.6 tstest/integration/testcontrol/testcontrol.go (license: LICENSE in this directory).
+// Changes are marked "Differs from upstream" or "Added here." See the tailnet section of Tools/interop/README.md for the list.
 
-// 원본과 다름: experiment.reco 대체 구현(reco-experiment.go)을 옮기지 않아 빌드 태그를 지웠다.
+// Differs from upstream: removed the build tag because the experiment.reco alternate implementation (reco-experiment.go) was not copied.
 
 package testcontrol
 
@@ -207,7 +207,7 @@ type Server struct {
 	// It can be used in tests to panic or fail if a node contacts control unexpectedly.
 	onMapRequest func(nodeKey key.NodePublic)
 
-	// 원본에 없는 보탬: Tailnet Lock 관문의 상태(tka.go).
+	// Added here: state for the Tailnet Lock gate (tka.go).
 	lock lockExtras
 }
 
@@ -1105,9 +1105,9 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		}
 		s.nodes[nk] = node
 	}
-	// 원본에 없는 보탬: 등록 요청의 NodeKeySignature와 재서명 요청(tka.go).
+	// Added here: NodeKeySignature in registration requests and re-signing requests (tka.go).
 	resignSignature := s.applyRegisterLockLocked(&req, msg)
-	// 원본에 없는 보탬: 과거의 Expiry는 지금 키의 만료(로그아웃)다(logout.go).
+	// Added here: an Expiry in the past expires the current key (logout) (logout.go).
 	s.applyRegisterExpiryLocked(&req)
 	// Consider a node key expired if allExpired is set or if the nodeKey has
 	// an expiry time in the past. This allows tests to set per-node KeyExpiry
@@ -1137,7 +1137,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		NodeKeyExpired:    nodeKeyExpired,
 		MachineAuthorized: machineAuthorized,
 		AuthURL:           authURL,
-		NodeKeySignature:  resignSignature, // 원본에 없는 보탬
+		NodeKeySignature:  resignSignature, // Added here
 	})
 	if err != nil {
 		go panic(fmt.Sprintf("serveRegister: encode: %v", err))
@@ -1152,7 +1152,7 @@ func (s *Server) serveTKA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 원본에 없는 보탬: 요청 기록(tka.go).
+	// Added here: request logging (tka.go).
 	s.recordLockRequest(r)
 
 	switch r.URL.Path {
@@ -1166,9 +1166,9 @@ func (s *Server) serveTKA(w http.ResponseWriter, r *http.Request) {
 		s.serveTKASyncOffer(w, r)
 	case "/machine/tka/sign":
 		s.serveTKASign(w, r)
-	case "/machine/tka/sync/send": // 원본에 없는 보탬(tka.go)
+	case "/machine/tka/sync/send": // Added here (tka.go)
 		s.serveTKASyncSend(w, r)
-	case "/machine/tka/disable": // 원본에 없는 보탬(tka.go)
+	case "/machine/tka/disable": // Added here (tka.go)
 		s.serveTKADisable(w, r)
 	default:
 		s.serveUnhandled(w, r)
@@ -1186,7 +1186,7 @@ func (s *Server) serveTKAInitBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.tkaStorage = tka.ChonkMem()
 	s.tkaStorage.CommitVerifiedAUMs([]tka.AUM{*genesisAUM})
-	s.lock.disablementSecret = nil // 원본에 없는 보탬: 끈 뒤 다시 켜면 끈 상태를 지운다.
+	s.lock.disablementSecret = nil // Added here: clear disabled state when lock is re-enabled.
 }
 
 func (s *Server) serveTKAInitFinish(w http.ResponseWriter, r *http.Request) {
@@ -1210,14 +1210,14 @@ func (s *Server) serveTKAInitFinish(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// 원본에 없는 보탬: 서명과 TKAInfo가 다음 맵 요청을 기다리지 않고 나가게 모든 노드에 새 맵을 보낸다.
+	// Added here: send a new map to all nodes so signatures and TKAInfo go out before the next map request.
 	s.updateLocked("TKAInitFinish", s.nodeIDsLocked(0))
 }
 
 func (s *Server) serveTKABootstrap(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// 원본에 없는 보탬: 끈 뒤에는 끄기 비밀을 준다(tka.go).
+	// Added here: return the disablement secret after disabling lock (tka.go).
 	if resp, ok := s.lockBootstrapOverrideLocked(); ok {
 		if _, err := tkatest.HandleTKABootstrap(w, r, resp); err != nil {
 			s.logf("HandleTKABootstrap: %v", err)
@@ -1251,13 +1251,13 @@ func (s *Server) serveTKABootstrap(w http.ResponseWriter, r *http.Request) {
 	resp := tailcfg.TKABootstrapResponse{
 		GenesisAUM: genesis.Serialize(),
 	}
-	if s.lock.bootstrapFault { // 원본에 없는 보탬: 깨진 응답(tka.go)
+	if s.lock.bootstrapFault { // Added here: malformed response (tka.go)
 		resp.GenesisAUM = resp.GenesisAUM[:len(resp.GenesisAUM)-1]
 	}
 	_, err = tkatest.HandleTKABootstrap(w, r, resp)
 	if err != nil {
-		// 원본과 다름: 잘못된 요청(예: 다른 capability 버전)에 프로세스를 panic시키지 않는다.
-		// HandleTKABootstrap이 이미 400을 썼다.
+		// Differs from upstream: do not panic the process on an invalid request (for example, a different capability version).
+		// HandleTKABootstrap has already written 400.
 		s.logf("HandleTKABootstrap: %v", err)
 	}
 }
@@ -1266,8 +1266,8 @@ func (s *Server) serveTKASyncOffer(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 원본과 다름: lock을 끈 뒤에도 틀린 끄기 비밀을 받은 노드는 동기화를 잇는다
-	// (ipn/ipnlocal/tailnet-lock.go:399-418). 원본은 nil 저장소를 열다 panic한다.
+	// Differs from upstream: after lock is disabled, a node that received the wrong disablement secret continues syncing
+	// (ipn/ipnlocal/tailnet-lock.go:399-418). Upstream panics when it opens nil storage.
 	if s.tkaStorage == nil {
 		http.Error(w, "tailnet lock is not enabled", 400)
 		return
@@ -1279,7 +1279,7 @@ func (s *Server) serveTKASyncOffer(w http.ResponseWriter, r *http.Request) {
 
 	err = tkatest.HandleTKASyncOffer(w, r, authority, s.tkaStorage)
 	if err != nil {
-		// 원본과 다름: 교차 없음 같은 요청 쪽 실패에 panic하지 않는다. HandleTKASyncOffer가 이미 응답을 썼다.
+		// Differs from upstream: do not panic on request-side failures such as no intersection. HandleTKASyncOffer already wrote a response.
 		s.logf("HandleTKASyncOffer: %v", err)
 	}
 }
@@ -1295,13 +1295,13 @@ func (s *Server) serveTKASign(w http.ResponseWriter, r *http.Request) {
 
 	sig, keyBeingSigned, err := tkatest.HandleTKASign(w, r, authority)
 	if err != nil {
-		// 원본과 다름: 시험이 넣은 잘못된 서명에 panic하지 않는다. HandleTKASign이 이미 400을 썼다.
+		// Differs from upstream: do not panic on a bad signature submitted by a test. HandleTKASign already wrote 400.
 		s.logf("HandleTKASign: %v", err)
 		return
 	}
 	if s.nodes[*keyBeingSigned] == nil {
-		// 원본과 다름: 등록되지 않은 node 키의 서명에 nil 역참조로 panic하지 않는다.
-		// 응답은 이미 200으로 나갔으므로 서명을 버리기만 한다.
+		// Differs from upstream: do not panic from a nil dereference on a signature for an unregistered node key.
+		// The response is already 200, so just discard the signature.
 		s.logf("serveTKASign: unknown node key")
 		return
 	}
@@ -1832,7 +1832,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.applyLockToMapResponseLocked(res) // 원본에 없는 보탬(tka.go)
+	s.applyLockToMapResponseLocked(res) // Added here (tka.go)
 	res.Node.PrimaryRoutes = s.nodeSubnetRoutes[nk]
 	res.Node.AllowedIPs = append(res.Node.Addresses, s.nodeSubnetRoutes[nk]...)
 

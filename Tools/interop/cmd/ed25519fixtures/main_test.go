@@ -21,25 +21,25 @@ func TestFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first, second) {
-		t.Fatal("연속 생성 결과가 다릅니다")
+		t.Fatal("consecutive generations differ")
 	}
 	saved, err := os.ReadFile("../../../../Tests/SwiftailCryptoTests/Vectors/ed25519-verify.json")
 	if err != nil {
-		t.Fatal("저장된 기준 자료를 읽지 못했습니다")
+		t.Fatal("could not read the stored reference fixtures")
 	}
 	if !bytes.Equal(first, saved) {
-		t.Fatal("저장 자료와 재생성 결과가 다릅니다")
+		t.Fatal("stored fixtures differ from regenerated fixtures")
 	}
 	var f fixture
 	if err := json.Unmarshal(first, &f); err != nil {
 		t.Fatal(err)
 	}
 	if f.CaseCount != len(f.Cases) {
-		t.Fatal("caseCount가 사례 수와 다릅니다")
+		t.Fatal("caseCount differs from the number of cases")
 	}
 }
 
-// TestZIP215Cases는 zip215Encodings로 만든 196개가 ed25519consensus의 zip215_test.go와 같은지 본다.
+// TestZIP215Cases checks that the 196 cases built from zip215Encodings match ed25519consensus's zip215_test.go.
 func TestZIP215Cases(t *testing.T) {
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/hdevalence/ed25519consensus").Output()
 	if err != nil {
@@ -51,7 +51,7 @@ func TestZIP215Cases(t *testing.T) {
 	}
 	hexes := regexp.MustCompile(`"([0-9a-f]+)"`).FindAllStringSubmatch(string(source), -1)
 	if len(hexes) != 2*196 {
-		t.Fatalf("zip215_test.go의 문자열 수가 %d입니다", len(hexes))
+		t.Fatalf("zip215_test.go contains %d strings", len(hexes))
 	}
 	data, err := evaluate()
 	if err != nil {
@@ -64,7 +64,7 @@ func TestZIP215Cases(t *testing.T) {
 	for i := range 196 {
 		c := f.Cases[i]
 		if c.Kind != "zip215" || c.Index != i || c.PublicKey != hexes[2*i][1] || c.Signature != hexes[2*i+1][1] || c.Message != "5a63617368" {
-			t.Fatalf("ZIP-215 사례 %d가 원본과 다릅니다", i)
+			t.Fatalf("ZIP-215 case %d differs from the original", i)
 		}
 	}
 }

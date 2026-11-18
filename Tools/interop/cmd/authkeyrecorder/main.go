@@ -1,17 +1,17 @@
-// authkeyrecorder는 인증 키 발급의 상호 운용 관문(계약 docs/contracts/SwiftailPairing.md 7절 7)을 위한 도구다.
+// authkeyrecorder supports the auth key issuance interop gate (contract docs/contracts/SwiftailPairing.md §7, item 7).
 //
 //	authkeyrecorder serve [-reject-basic]
-//	    127.0.0.1의 임의 포트에서 듣는 기록 서버. 표준 출력의 첫 줄에 서버 URL을 쓴다. 토큰·키 요청을 적고
-//	    고정된 가짜 토큰과 키를 돌려준다. -reject-basic이면 Authorization이 있는 토큰 요청을 401로 거절하고
-//	    폼의 client_id·client_secret만 받는다. GET /recorded는 적은 요청을 JSON 배열로 내놓고 비운다. 표준
-//	    입력이 닫히면 끝난다.
-//	authkeyrecorder issue -base <URL> -tags tag:a,tag:b -expiry <초>
-//	    cmd/get-authkey와 같은 흐름(golang.org/x/oauth2/clientcredentials + tailscale.com/client/tailscale의
-//	    CreateKeyWithExpiry)으로 키 하나를 만들고 표준 출력에 쓴다. 클라이언트 ID와 비밀은 get-authkey처럼
-//	    TS_API_CLIENT_ID·TS_API_CLIENT_SECRET에서 읽는다.
+//	    Recording server listening on a random port on 127.0.0.1. Writes the server URL on the first line of standard output. Records token and key requests
+//	    and returns a fixed fake token and key. With -reject-basic, it rejects token requests with Authorization with a 401
+//	    and accepts only client_id and client_secret in the form. GET /recorded returns the recorded requests as a JSON array and clears them. Exits
+//	    when standard input closes.
+//	authkeyrecorder issue -base <URL> -tags tag:a,tag:b -expiry <seconds>
+//	    Creates one key with the same flow as cmd/get-authkey (golang.org/x/oauth2/clientcredentials + tailscale.com/client/tailscale
+//	    CreateKeyWithExpiry) and writes it to standard output. As in get-authkey, it reads the client ID and secret
+//	    from TS_API_CLIENT_ID and TS_API_CLIENT_SECRET.
 //
-// 가짜 값만 다루는 시험 도구다. 실제 관리 API를 부르지 않도록 -base는 루프백 http만 받는다.
-// 사용법은 Tools/interop/README.md의 authkeyrecorder 절.
+// This test tool handles only fake values. To avoid calling the real admin API, -base accepts only loopback http.
+// See the authkeyrecorder section of Tools/interop/README.md for usage.
 package main
 
 import (
@@ -34,16 +34,16 @@ import (
 	"tailscale.com/client/tailscale"
 )
 
-// recorded는 받은 요청 하나다. 본문은 비교하기 쉽게 정규형도 함께 싣는다.
+// recorded is one received request. It also includes a canonical form of the body to simplify comparisons.
 type recorded struct {
 	Method        string `json:"method"`
 	Path          string `json:"path"`
 	Authorization string `json:"authorization"`
 	ContentType   string `json:"contentType"`
 	Body          string `json:"body"`
-	// JSON 본문이면 키를 정렬해 다시 쓴 것, 아니면 "".
+	// The JSON body re-encoded with sorted keys, or "" otherwise.
 	JSON string `json:"json"`
-	// JSON이 아닌 폼 본문이면 url.Values.Encode()로 다시 쓴 것(키 정렬), 아니면 "".
+	// The non-JSON form body re-encoded with url.Values.Encode() (keys sorted), or "" otherwise.
 	Form string `json:"form"`
 }
 
@@ -60,7 +60,7 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		flags := flag.NewFlagSet("serve", flag.ExitOnError)
-		rejectBasic := flags.Bool("reject-basic", false, "Basic 머리의 토큰 요청을 거절한다")
+		rejectBasic := flags.Bool("reject-basic", false, "reject token requests with a Basic header")
 		flags.Parse(os.Args[2:])
 		if flags.NArg() != 0 {
 			usage()
@@ -74,7 +74,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "사용법: authkeyrecorder serve [-reject-basic] | authkeyrecorder issue -base <URL> -tags <태그,…> -expiry <초>")
+	fmt.Fprintln(os.Stderr, "Usage: authkeyrecorder serve [-reject-basic] | authkeyrecorder issue -base <URL> -tags <tag,…> -expiry <seconds>")
 	os.Exit(2)
 }
 
@@ -102,7 +102,7 @@ func serve(rejectBasic bool) {
 		return func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
 			if err != nil {
-				http.Error(w, "본문을 읽지 못했다", http.StatusBadRequest)
+				http.Error(w, "could not read body", http.StatusBadRequest)
 				return
 			}
 			entry := recorded{
@@ -114,7 +114,7 @@ func serve(rejectBasic bool) {
 			}
 			var value any
 			if json.Unmarshal(body, &value) == nil {
-				canonical, _ := json.Marshal(value) // map은 키를 정렬해 쓴다
+				canonical, _ := json.Marshal(value) // map keys are written in sorted order
 				entry.JSON = string(canonical)
 			} else if form, err := url.ParseQuery(string(body)); err == nil {
 				entry.Form = form.Encode()
@@ -144,21 +144,21 @@ func serve(rejectBasic bool) {
 		}
 	}()
 	fmt.Printf("http://%s\n", listener.Addr())
-	// 표준 입력이 닫히면 끝난다.
+	// Exit when standard input closes.
 	io.Copy(io.Discard, bufio.NewReader(os.Stdin))
 	server.Close()
 }
 
 func issue(args []string) {
 	flags := flag.NewFlagSet("issue", flag.ExitOnError)
-	base := flags.String("base", "", "기록 서버 URL(루프백 http)")
-	tags := flags.String("tags", "", "쉼표로 나눈 태그")
-	expiry := flags.Int64("expiry", 0, "키 수명(초)")
+	base := flags.String("base", "", "recording server URL (loopback http)")
+	tags := flags.String("tags", "", "comma-separated tags")
+	expiry := flags.Int64("expiry", 0, "key lifetime (seconds)")
 	flags.Parse(args)
 
 	parsed, err := url.Parse(*base)
 	if err != nil || parsed.Scheme != "http" || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1") {
-		log.Fatal("-base는 루프백 http URL이어야 한다")
+		log.Fatal("-base must be a loopback http URL")
 	}
 	if *tags == "" || *expiry <= 0 {
 		usage()
@@ -166,10 +166,10 @@ func issue(args []string) {
 	clientID := os.Getenv("TS_API_CLIENT_ID")
 	clientSecret := os.Getenv("TS_API_CLIENT_SECRET")
 	if clientID == "" || clientSecret == "" {
-		log.Fatal("TS_API_CLIENT_ID와 TS_API_CLIENT_SECRET이 있어야 한다")
+		log.Fatal("TS_API_CLIENT_ID and TS_API_CLIENT_SECRET are required")
 	}
 
-	// cmd/get-authkey와 같은 짜임. 그것이 쓰는 internal/client/tailscale은 모듈 밖에서 쓸 수 없어 공개 패키지를 쓴다.
+	// Same setup as cmd/get-authkey. Its internal/client/tailscale package cannot be used outside the module, so use the public package.
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 	credentials := clientcredentials.Config{
 		ClientID:     clientID,
@@ -185,7 +185,7 @@ func issue(args []string) {
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
 			Create: tailscale.KeyDeviceCreateCapabilities{
-				// 계약 4절 K3의 고정 값.
+				// Fixed value from contract §4 K3.
 				Reusable:      false,
 				Ephemeral:     false,
 				Preauthorized: true,

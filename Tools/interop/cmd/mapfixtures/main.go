@@ -32,14 +32,14 @@ func actualMaps(input []scenario) ([]byte, error) {
 	cmd := exec.Command("go", "list", "-m", "-json", "tailscale.com")
 	data, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("기준 모듈 조회: %w", err)
+		return nil, fmt.Errorf("look up reference module: %w", err)
 	}
 	var module struct{ Dir, Version string }
 	if err := json.Unmarshal(data, &module); err != nil {
 		return nil, err
 	}
 	if module.Version != "v1.104.6" {
-		return nil, errors.New("기준 tailscale.com 버전이 다릅니다")
+		return nil, errors.New("reference tailscale.com version differs")
 	}
 	build, err := exec.Command("eyebuild", "dir", "interop-tools").Output()
 	if err != nil {
@@ -53,7 +53,7 @@ func actualMaps(input []scenario) ([]byte, error) {
 	bridgePath := filepath.Join(dir, "bridge.go")
 	workerPath := filepath.Join(dir, "main.go")
 	overlayPath := filepath.Join(dir, "overlay.json")
-	// Go는 모듈 캐시 내부 overlay를 금지한다. 원본의 임시 복사본에만 얹는다.
+	// Go forbids overlays inside the module cache. Overlay only a temporary copy of the original.
 	reference := filepath.Join(dir, "tailscale")
 	if err := os.CopyFS(reference, os.DirFS(module.Dir)); err != nil {
 		return nil, err
@@ -98,7 +98,7 @@ func actualMaps(input []scenario) ([]byte, error) {
 	cmd.Stderr = os.Stderr
 	data, err = cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("실제 mapSession 실행: %w", err)
+		return nil, fmt.Errorf("run actual mapSession: %w", err)
 	}
 	return data, nil
 }
@@ -121,7 +121,7 @@ func generate(dir string) error {
 }
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "사용법: mapfixtures <Control Fixtures 폴더>")
+		fmt.Fprintln(os.Stderr, "Usage: mapfixtures <Control Fixtures directory>")
 		os.Exit(1)
 	}
 	if err := generate(os.Args[1]); err != nil {

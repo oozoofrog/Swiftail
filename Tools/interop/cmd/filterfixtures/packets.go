@@ -7,8 +7,8 @@ import (
 	"net/netip"
 )
 
-// 패킷 구성은 net/packet/packet.go:132-408의 필드 위치를 참조한다.
-// 아래는 독립적인 시험 입력 작성기다. 기준 구현의 파서·판정 코드를 복제하지 않는다.
+// Packet construction follows the field offsets in net/packet/packet.go:132-408.
+// The code below writes test inputs independently. It does not duplicate the reference parser or decision code.
 func ipPacket(src, dst string, proto uint8, payload []byte) []byte {
 	source, destination := netip.MustParseAddr(src), netip.MustParseAddr(dst)
 	var b []byte
@@ -28,7 +28,7 @@ func ipPacket(src, dst string, proto uint8, payload []byte) []byte {
 		copy(b[24:40], destination.AsSlice())
 		copy(b[40:], payload)
 	} else {
-		panic("시험 패킷 주소 계열 불일치")
+		panic("test packet address family mismatch")
 	}
 	return b
 }

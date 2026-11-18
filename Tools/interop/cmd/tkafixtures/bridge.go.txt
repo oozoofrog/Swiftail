@@ -1,5 +1,5 @@
-// 호출 대상: tailscale.com v1.104.6 ipn/ipnlocal/tailnet-lock.go (BSD-3-Clause).
-// 거르기 로직(rotationTracker 포함)은 복제하지 않고 실제 tkaFilterNetmapLocked를 부른다.
+// Calls tailscale.com v1.104.6 ipn/ipnlocal/tailnet-lock.go (BSD-3-Clause).
+// Calls the actual tkaFilterNetmapLocked without duplicating the filtering logic (including rotationTracker).
 package ipnlocal
 
 import (
@@ -38,8 +38,8 @@ func swiftailFixtureAUM(h string) (tka.AUM, error) {
 	return a, a.Unserialize(b)
 }
 
-// SwiftailFixturePeerSets는 피어 집합마다 tkaFilterNetmapLocked를 Runs번 돌려, 남긴 피어의 node 키(16진) 목록 가운데
-// 서로 다른 것을 정렬해 돌려준다(rotationTracker가 맵을 돌아 답이 갈릴 수 있다).
+// SwiftailFixturePeerSets runs tkaFilterNetmapLocked Runs times per peer set and returns the distinct lists
+// of retained peers' node keys (hexadecimal) in sorted order (rotationTracker iterates over a map, so outcomes can vary).
 func SwiftailFixturePeerSets(input []byte) ([]byte, error) {
 	var sets []swiftailFixturePeerSet
 	if err := json.Unmarshal(input, &sets); err != nil {

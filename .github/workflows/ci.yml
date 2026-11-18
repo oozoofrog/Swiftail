@@ -1,4 +1,4 @@
-# 빌드(경고 0)와 단위 시험. Go 상호 운용 시험은 도구 경로가 없으면 스스로 건너뛴다.
+# Build (zero warnings) and run unit tests. Go interop tests skip themselves when the tool paths are unavailable.
 name: CI
 
 on:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   test:
-    # Swift 6.3(Xcode 26)은 시험 대상을 컴파일하다 멈춘다. 개발에 쓰는 Swift 6.4(Xcode 27.2)로 돌린다.
+    # Swift 6.3 (Xcode 26) hangs while compiling test targets. Use Swift 6.4 (Xcode 27.2), the version used for development.
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -28,6 +28,6 @@ jobs:
         run: swift build --build-tests -Xswiftc -warnings-as-errors
       - name: Test
         run: swift test --skip-build --skip SwiftailControlTests
-      # 제어 클라이언트 시험에는 1초 안팎의 기한을 재는 시험이 많아, 코어가 적은 러너에서 병렬로 돌리면 기한이 늦게 걸린다.
+      # Many control client tests measure deadlines of about 1 second. Deadlines fire late when tests run in parallel on a runner with few cores.
       - name: Test (control client, serial)
         run: swift test --skip-build --filter SwiftailControlTests --no-parallel

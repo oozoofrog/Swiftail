@@ -1,18 +1,18 @@
-// tsmpvectors는 SwiftailEngine 단위 시험의 TSMP disco 키 광고 벡터를 Go 기준 구현으로 뽑아
-// Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json을 만든다.
+// tsmpvectors generates TSMP disco key advertisement vectors for SwiftailEngine unit tests using the Go reference implementation
+// and produces Tests/SwiftailEngineTests/Fixtures/tsmp-vectors.json.
 //
-// 담는 것: (출발 주소, 목적 주소, disco 키)마다 `packet.TSMPDiscoKeyAdvertisement.Marshal`의 바이트. 도구는 그
-// 바이트를 `packet.Parsed.Decode`와 `AsTSMPDiscoAdvertisement`로 다시 해석해 같은 주소와 키가 나오는지 확인한 뒤에
-// 쓴다. 해석 쪽 경계 사례(짧은 본문, 다른 종류 바이트, IPv6, IPv4·IPv6 조각)는 `Parsed.Decode`와
-// `AsTSMPDiscoAdvertisement`의 결과를 담는다.
+// Contents: the bytes from `packet.TSMPDiscoKeyAdvertisement.Marshal` for each (source address, destination address, disco key) tuple. Before writing the
+// bytes, the tool parses them again with `packet.Parsed.Decode` and `AsTSMPDiscoAdvertisement` to check that the addresses and key match.
+// Parser edge cases (short body, another type byte, IPv6, and IPv4 and IPv6 fragments) include the results of `Parsed.Decode` and
+// `AsTSMPDiscoAdvertisement`.
 //
-// 키는 SHA-256("swiftail-vectors/tsmp/<번호>")를 X25519 개인 키 입력으로 써서 만든 공개 키다(시험용 공개 값, 운영
-// 키가 아니다). 주소는 문서·시험용 tailnet 주소다. 시각·난수·운영 값은 쓰지 않으므로 출력은 결정적이다.
+// Public keys are made using SHA-256("swiftail-vectors/tsmp/<number>") as X25519 private key input (public test values,
+// never production keys). Addresses are tailnet addresses for documentation and tests. With no time, randomness, or production values, output is deterministic.
 //
-// 출처 tailscale.com v1.104.6(`net/packet/tsmp.go`, v1.104.7과 같다), BSD-3-Clause.
+// Origin: tailscale.com v1.104.6 (`net/packet/tsmp.go`, identical to v1.104.7), BSD-3-Clause.
 //
-// 실행: Tools/interop에서 `go run ./cmd/tsmpvectors <출력 파일>`(환경 변수는 README.md의 것).
-// 출력 파일을 주지 않으면 표준 출력에 쓴다.
+// Run `go run ./cmd/tsmpvectors <output file>` in Tools/interop (use the environment variables in README.md).
+// If no output file is supplied, write to standard output.
 package main
 
 import (
@@ -39,7 +39,7 @@ type vectors struct {
 	Parse          []parseCase     `json:"parse"`
 }
 
-// advertisement는 Marshal 한 번의 입력과 출력이다.
+// advertisement is the input and output of one Marshal call.
 type advertisement struct {
 	Name   string `json:"name"`
 	Src    string `json:"src"`
@@ -48,7 +48,7 @@ type advertisement struct {
 	Packet string `json:"packet"`
 }
 
-// parseCase는 손으로 만든 TSMP 패킷 하나를 AsTSMPDiscoAdvertisement에 넣은 결과다. 광고가 아니면 Key가 비어 있다.
+// parseCase is the result of passing a handcrafted TSMP packet to AsTSMPDiscoAdvertisement. Key is empty for non-advertisements.
 type parseCase struct {
 	Name   string `json:"name"`
 	Packet string `json:"packet"`
@@ -75,13 +75,13 @@ func main() {
 		b, err := ad.Marshal()
 		check(err)
 		got, ok := parse(b)
-		require(ok && got.Src == ad.Src && got.Dst == ad.Dst && got.Key == ad.Key, "%s: 다시 해석한 값이 다르다", in.name)
+		require(ok && got.Src == ad.Src && got.Dst == ad.Dst && got.Key == ad.Key, "%s: reparsed value differs", in.name)
 		out.Advertisements = append(out.Advertisements, advertisement{
 			Name: in.name, Src: in.src, Dst: in.dst, Key: hexKey(in.key), Packet: hex.EncodeToString(b),
 		})
 	}
 
-	// 해석 경계: 본문 33바이트(정상), 34바이트(뒤에 남는 바이트), 32바이트(짧음), 종류 'p'(ping).
+	// Parsing boundaries: 33-byte body (valid), 34 bytes (trailing byte), 32 bytes (short), and type 'p' (ping).
 	base := packet.TSMPDiscoKeyAdvertisement{Src: netip.MustParseAddr("100.64.0.2"), Dst: netip.MustParseAddr("100.64.0.1"), Key: k2}
 	full, err := base.Marshal()
 	check(err)
@@ -101,8 +101,8 @@ func main() {
 		packets = append(packets, parseInput{c.name, packet.Generate(packet.IP4Header{IPProto: 99, Src: base.Src, Dst: base.Dst}, c.payload)})
 	}
 
-	// IPv6 광고와 조각. 조각 머리(Next Header 44)는 다음 머리 99, offset(8바이트 단위)·M 비트, ID 1이다.
-	// IPv4 조각은 flags·offset 필드만 바꾸고 머리 체크섬을 다시 계산한다. offset 10은 Go `minFragBlks`다.
+	// IPv6 advertisement and fragments. The fragment header (Next Header 44) contains next header 99, offset (8-byte units) and M bit, and ID 1.
+	// For IPv4 fragments, change only the flags and offset field and recompute the header checksum. Offset 10 is Go's `minFragBlks`.
 	v6Src, v6Dst := netip.MustParseAddr("fd7a:115c:a1e0::2"), netip.MustParseAddr("fd7a:115c:a1e0::1")
 	v6 := func(proto uint8, body []byte) []byte {
 		return packet.Generate(packet.IP6Header{IPProto: ipproto.Proto(proto), Src: v6Src, Dst: v6Dst}, body)
@@ -148,7 +148,7 @@ type parseInput struct {
 	packet []byte
 }
 
-// withIPv4FlagsAndOffset는 IPv4 패킷 b의 flags·fragment offset 필드를 v로 바꾸고 머리 체크섬을 다시 계산한 사본이다.
+// withIPv4FlagsAndOffset copies IPv4 packet b, sets its flags and fragment offset field to v, and recomputes the header checksum.
 func withIPv4FlagsAndOffset(b []byte, v uint16) []byte {
 	out := append([]byte{}, b...)
 	out[6], out[7] = byte(v>>8), byte(v)
@@ -183,25 +183,25 @@ func hexKey(k key.DiscoPublic) string {
 	return hex.EncodeToString(raw[:])
 }
 
-// verifyReference는 replace 없이 기준 버전의 tailscale.com으로 빌드되었는지 확인한다.
+// verifyReference checks that the build used the reference version of tailscale.com without a replace.
 func verifyReference() error {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return fmt.Errorf("빌드 정보가 없다")
+		return fmt.Errorf("build information is missing")
 	}
 	for _, dep := range info.Deps {
 		if dep.Path != "tailscale.com" {
 			continue
 		}
 		if dep.Replace != nil {
-			return fmt.Errorf("tailscale.com이 replace 되었다: %s", dep.Replace.Path)
+			return fmt.Errorf("tailscale.com has a replace: %s", dep.Replace.Path)
 		}
 		if "tailscale.com "+dep.Version != reference {
-			return fmt.Errorf("기준 버전이 아니다: %s", dep.Version)
+			return fmt.Errorf("not the reference version: %s", dep.Version)
 		}
 		return nil
 	}
-	return fmt.Errorf("tailscale.com이 의존에 없다")
+	return fmt.Errorf("tailscale.com is not a dependency")
 }
 
 func check(err error) {

@@ -7,20 +7,20 @@ import (
 	"tailscale.com/net/stun"
 )
 
-// stunPart는 STUN 절이다. STUN 해석(단위 3)의 기준값이다.
+// stunPart is the STUN section. It provides reference values for STUN parsing (unit 3).
 type stunPart struct {
 	Requests []stunRequest `json:"requests"`
 	Parse    []stunCase    `json:"parse"`
 }
 
-// stunRequest는 `stun.Request(txID)`의 바이트다.
+// stunRequest is the bytes from `stun.Request(txID)`.
 type stunRequest struct {
 	TxID   string `json:"txID"`
 	Packet string `json:"packet"`
 }
 
-// stunCase는 패킷 하나를 `stun.Is`(+ 바이트 1이 0x01)와 `stun.ParseResponse`에 넣은 결과다.
-// LooksLikeSTUN은 magicsock의 분류(`packetLooksLike`)와 같은 조건이다.
+// stunCase is the result of passing one packet to `stun.Is` (plus byte 1 must be 0x01) and `stun.ParseResponse`.
+// LooksLikeSTUN uses the same criteria as magicsock's classifier (`packetLooksLike`).
 type stunCase struct {
 	Name          string `json:"name"`
 	Packet        string `json:"packet"`
@@ -39,17 +39,17 @@ func buildSTUN() stunPart {
 	ipv4Other := stun.Response(txID, netip.MustParseAddrPort("192.0.2.77:65535"))
 	ipv6 := stun.Response(txID, netip.MustParseAddrPort("[2001:db8::7]:5060"))
 
-	// 0x8020: XOR-MAPPED-ADDRESS 번호를 comprehension-optional 범위로 잘못 옮긴 서버(stun.go 주석).
+	// 0x8020: a server incorrectly moved the XOR-MAPPED-ADDRESS number into the comprehension-optional range (stun.go comment).
 	alternate := append([]byte(nil), ipv4...)
 	binary.BigEndian.PutUint16(alternate[20:], 0x8020)
 
-	// MAPPED-ADDRESS만 있는 응답.
+	// Response containing only MAPPED-ADDRESS.
 	mapped := response(txID, attribute(0x0001, []byte{0, 1, 0x0b, 0xb8, 192, 0, 2, 5}))
-	// SOFTWARE(패딩이 필요한 5바이트)가 먼저 오고 XOR-MAPPED-ADDRESS가 뒤에 오는 응답.
+	// Response with SOFTWARE first (5 bytes, requiring padding) followed by XOR-MAPPED-ADDRESS.
 	withSoftware := response(txID, append(attribute(0x8022, []byte("hello")), ipv4[20:]...))
-	// 선언 길이 뒤에 붙은 바이트는 버린다.
+	// Discard bytes after the declared length.
 	trailing := append(append([]byte(nil), ipv4...), 0xde, 0xad, 0xbe, 0xef)
-	// XOR-MAPPED-ADDRESS와 MAPPED-ADDRESS가 함께 있으면 앞의 것이 정본이다.
+	// XOR-MAPPED-ADDRESS takes precedence when both XOR-MAPPED-ADDRESS and MAPPED-ADDRESS are present.
 	both := response(txID, append(ipv4[20:], attribute(0x0001, []byte{0, 1, 0x00, 0x50, 10, 0, 0, 1})...))
 
 	cases := []struct {
@@ -99,7 +99,7 @@ func buildSTUN() stunPart {
 	return part
 }
 
-// response는 성공 응답 머리(길이 = 속성 바이트 수)에 속성들을 붙인다.
+// response appends attributes to a success response header (length = number of attribute bytes).
 func response(txID stun.TxID, attributes []byte) []byte {
 	out := []byte{0x01, 0x01, 0, 0, 0x21, 0x12, 0xa4, 0x42}
 	binary.BigEndian.PutUint16(out[2:], uint16(len(attributes)))
@@ -107,7 +107,7 @@ func response(txID stun.TxID, attributes []byte) []byte {
 	return append(out, attributes...)
 }
 
-// attribute는 TLV 하나를 4바이트 경계까지 0으로 채워 만든다.
+// attribute constructs one TLV, zero-padded to a 4-byte boundary.
 func attribute(kind uint16, value []byte) []byte {
 	out := binary.BigEndian.AppendUint16(nil, kind)
 	out = binary.BigEndian.AppendUint16(out, uint16(len(value)))
@@ -118,7 +118,7 @@ func attribute(kind uint16, value []byte) []byte {
 	return out
 }
 
-// mutate는 packet의 복사본에서 offset부터 바이트를 덮어쓴다.
+// mutate overwrites bytes beginning at offset in a copy of packet.
 func mutate(packet []byte, offset int, values ...byte) []byte {
 	out := append([]byte(nil), packet...)
 	copy(out[offset:], values)

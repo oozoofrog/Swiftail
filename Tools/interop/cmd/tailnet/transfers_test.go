@@ -24,7 +24,7 @@ func TestStream(t *testing.T) {
 		}
 	}
 	if hex.EncodeToString(b[:]) != want {
-		t.Fatal("씨앗 1의 바이트열이 규약과 다릅니다")
+		t.Fatal("byte sequence for seed 1 differs from the format")
 	}
 	one := make([]byte, 100003)
 	split := make([]byte, len(one))
@@ -34,7 +34,7 @@ func TestStream(t *testing.T) {
 		s.Read(split[start:min(start+13, len(split))])
 	}
 	if !bytes.Equal(one, split) {
-		t.Fatal("읽기 크기에 따라 흐름이 바뀝니다")
+		t.Fatal("stream varies with read size")
 	}
 }
 
@@ -57,7 +57,7 @@ func TestTransferValidation(t *testing.T) {
 		c := base
 		change(&c)
 		if _, err := n.execute(c); err == nil {
-			t.Fatal("잘못된 전송 명령을 거절해야 합니다")
+			t.Fatal("invalid transfer commands must be rejected")
 		}
 	}
 	for _, line := range []string{
@@ -65,7 +65,7 @@ func TestTransferValidation(t *testing.T) {
 	} {
 		var c command
 		if json.Unmarshal([]byte(line), &c) == nil {
-			t.Fatal("잘못된 숫자를 거절해야 합니다", line)
+			t.Fatal("invalid number must be rejected", line)
 		}
 	}
 	r, err := n.execute(command{Cmd: "transfers"})
@@ -93,7 +93,7 @@ func waitTransfers(t *testing.T, n *network, count int) []transferStatus {
 			return jobs
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("전송이 끝나지 않았습니다: %+v", jobs)
+			t.Fatalf("transfer did not finish: %+v", jobs)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -130,7 +130,7 @@ func TestPeerTransfers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := n.execute(serve); err == nil {
-		t.Fatal("중복 리스너를 거절해야 합니다")
+		t.Fatal("duplicate listener must be rejected")
 	}
 	total := 0
 	for _, size := range []uint64{0, 104857600} {
@@ -142,7 +142,7 @@ func TestPeerTransfers(t *testing.T) {
 			t.Fatal(err)
 		}
 		if time.Since(started) > time.Second {
-			t.Fatal("peerDial이 전송을 기다렸습니다")
+			t.Fatal("peerDial waited for the transfer")
 		}
 		total += 2
 		jobs := waitTransfers(t, n, total)
@@ -150,15 +150,15 @@ func TestPeerTransfers(t *testing.T) {
 		id := response["transferID"].(uint64)
 		for _, job := range jobs[total-2:] {
 			if job.State != "complete" || job.Error != "" || job.Sent != size || job.Received != size || job.SentSHA256 != want || job.ReceivedSHA256 != want || job.Remote == "" {
-				t.Fatalf("전송 불일치: %+v", job)
+				t.Fatalf("transfer mismatch: %+v", job)
 			}
 			if job.Name == "peer-a" && job.ID != id {
-				t.Fatal("peerDial의 transferID가 다릅니다")
+				t.Fatal("peerDial transferID differs")
 			}
 			t.Logf("%s: sent=%d received=%d SHA256=%s elapsedMs=%d", job.Name, job.Sent, job.Received, job.ReceivedSHA256, job.ElapsedMs)
 		}
 	}
-	// 같은 리스너의 IPv6, 동시 연결, 씨앗 0과 UInt64 최댓값도 검증한다.
+	// Also test IPv6 on the same listener, concurrent connections, seed 0, and the maximum UInt64 value.
 	var v6 netip.Addr
 	for _, ip := range status.TailscaleIPs {
 		if ip.Is6() {
@@ -166,7 +166,7 @@ func TestPeerTransfers(t *testing.T) {
 		}
 	}
 	if !v6.IsValid() {
-		t.Fatal("IPv6 주소가 없습니다")
+		t.Fatal("IPv6 address is missing")
 	}
 	size := uint64(1048576)
 	for _, seed := range []uint64{0, ^uint64(0)} {
@@ -179,19 +179,19 @@ func TestPeerTransfers(t *testing.T) {
 	hashes := map[string]int{streamHash(size, 0): 0, streamHash(size, ^uint64(0)): 0}
 	for _, job := range jobs[total-4:] {
 		if job.State != "complete" || job.Sent != size || job.Received != size || job.SentSHA256 != job.ReceivedSHA256 {
-			t.Fatalf("IPv6 동시 전송: %+v", job)
+			t.Fatalf("concurrent IPv6 transfer: %+v", job)
 		}
 		if _, ok := hashes[job.SentSHA256]; !ok {
-			t.Fatal("씨앗과 해시가 다릅니다")
+			t.Fatal("seed and hash differ")
 		}
 		hashes[job.SentSHA256]++
 	}
 	for _, count := range hashes {
 		if count != 2 {
-			t.Fatal("양쪽 전송의 해시가 다릅니다")
+			t.Fatal("the two transfer hashes differ")
 		}
 	}
-	// 거는 쪽이 먼저 FIN을 보내도 반대 방향의 긴 데이터는 끝까지 읽는다.
+	// Read the entire long transfer in the other direction even when the dialer sends FIN first.
 	conn, err := n.peers["peer-a"].server.Dial(t.Context(), "tcp", net.JoinHostPort(status.TailscaleIPs[0].String(), "9100"))
 	if err != nil {
 		t.Fatal(err)
@@ -215,26 +215,26 @@ func TestPeerTransfers(t *testing.T) {
 	jobs = waitTransfers(t, n, total)
 	for _, job := range jobs[total-2:] {
 		if job.State != "complete" {
-			t.Fatalf("반닫힘 실패: %+v", job)
+			t.Fatalf("half-close failed: %+v", job)
 		}
 		if job.Name == "peer-a" {
 			if job.Sent != 3 || job.Received != size || job.SentSHA256 != streamHash(3, 9) || job.ReceivedSHA256 != streamHash(size, 7) {
-				t.Fatal("반닫힘 뒤 수신 또는 머리 제외 규약이 다릅니다")
+				t.Fatal("receiving after half-close or header exclusion differs from the format")
 			}
 		} else if job.Sent != size || job.Received != 3 || job.SentSHA256 != streamHash(size, 7) || job.ReceivedSHA256 != streamHash(3, 9) {
-			t.Fatal("서버의 비대칭 전송 규약이 다릅니다")
+			t.Fatal("server's asymmetric transfer differs from the format")
 		}
 	}
 	if _, err := n.execute(command{Cmd: "peerClose", Name: "peer-b", Port: 9100}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := n.execute(command{Cmd: "peerClose", Name: "peer-b", Port: 9100}); err == nil {
-		t.Fatal("없는 리스너를 닫았습니다")
+		t.Fatal("closed a nonexistent listener")
 	}
 	if _, err := n.execute(serve); err != nil {
-		t.Fatal("포트 다시 열기", err)
+		t.Fatal("reopen port", err)
 	}
-	// 닫힌 포트의 연결 실패도 비동기 전송 기록으로 남긴다.
+	// Record connection failures on closed ports as asynchronous transfers too.
 	seed := uint64(1)
 	if _, err := n.execute(command{Cmd: "peerDial", Name: "peer-a", To: status.TailscaleIPs[0].String(), Port: 9101, Send: &size, Seed: &seed, TimeoutSec: &timeout}); err != nil {
 		t.Fatal(err)
@@ -242,9 +242,9 @@ func TestPeerTransfers(t *testing.T) {
 	total++
 	jobs = waitTransfers(t, n, total)
 	if jobs[total-1].State != "error" || jobs[total-1].Error == "" {
-		t.Fatal("연결 거절을 기록하지 않았습니다")
+		t.Fatal("connection refusal was not recorded")
 	}
-	// 진행 중인 Dial을 남겨 두고 removePeer가 취소·회수하는지도 확인한다.
+	// Leave a Dial in flight and verify removePeer cancels and reaps it.
 	if _, err := n.execute(command{Cmd: "peerDial", Name: "peer-a", To: "100.64.0.99", Port: 9100, Send: &size, Seed: &seed, TimeoutSec: &timeout}); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestPeerTransfers(t *testing.T) {
 	total++
 	jobs = waitTransfers(t, n, total)
 	if jobs[total-1].State != "error" {
-		t.Fatal("피어 제거가 Dial을 취소하지 않았습니다")
+		t.Fatal("peer removal did not cancel Dial")
 	}
 }
 
@@ -287,7 +287,7 @@ func TestTransferMalformedPreface(t *testing.T) {
 		conn.Close()
 		jobs := waitTransfers(t, n, index+1)
 		if jobs[index].State != "error" {
-			t.Fatal("잘못된 전송 머리를 받아들였습니다")
+			t.Fatal("accepted an invalid transfer header")
 		}
 	}
 }
@@ -314,10 +314,10 @@ func TestTransferCommandsJSON(t *testing.T) {
 			t.Fatal(err)
 		}
 		if result.Event != want || result.ID != i {
-			t.Fatal("JSON 사건/id 불일치", result)
+			t.Fatal("JSON event/id mismatch", result)
 		}
 		if want == "transfers" && result.Transfers == nil {
-			t.Fatal("빈 목록은 []여야 합니다")
+			t.Fatal("an empty list must be []")
 		}
 	}
 }

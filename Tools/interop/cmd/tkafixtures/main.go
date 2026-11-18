@@ -1,13 +1,13 @@
-// tkafixtures는 Go tailscale.com/tka 패키지의 판정을 JSON으로 쓴다(Tailnet Lock 계약 7절 "Go 기준값 대조").
-// Swift 소스는 읽거나 실행하지 않는다. 네트워크·현재 시각·외부 난수를 쓰지 않는다. 키는 모두
-// SHA-256("swiftail-fixtures/tka/<역할>/<번호>")에서 나오고 Ed25519 서명은 결정적이라, 다시 뽑아도 같은 바이트가
-// 나온다. 판정은 tka의 공개 API가 내고, 피어 거르기만 ipnlocal의 실제 함수를 overlay로 부른다(peersets.go).
+// tkafixtures writes verdicts from Go's tailscale.com/tka package as JSON (Tailnet Lock contract §7, "Comparison with Go reference values").
+// It neither reads nor executes Swift source. It uses no network, current time, or external randomness. All keys come from
+// SHA-256("swiftail-fixtures/tka/<role>/<number>"), and Ed25519 signatures are deterministic, so regeneration yields the same
+// bytes. tka's public API produces the verdicts, with only peer filtering calling the actual ipnlocal function through an overlay (peersets.go).
 //
-// 사용법(현재 폴더는 Tools/interop):
+// Usage (current directory is Tools/interop):
 //
-//	tkafixtures            JSON을 표준 출력에 쓴다
-//	tkafixtures <폴더>      <폴더>/tka-fixtures.json을 쓴다
-//	tkafixtures verify-nks 표준 입력의 JSON 객체 하나로 NKS를 검증해 JSON 한 줄을 쓴다
+//	tkafixtures            Write JSON to standard output
+//	tkafixtures <directory> Write <directory>/tka-fixtures.json
+//	tkafixtures verify-nks Verify an NKS from a single JSON object on standard input and write one JSON line
 package main
 
 import (
@@ -35,7 +35,7 @@ func buildReference() (reference, error) {
 	r := reference{Go: runtime.Version()}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return r, errors.New("Go 빌드 정보가 없습니다")
+		return r, errors.New("Go build information is missing")
 	}
 	for _, dep := range info.Deps {
 		if dep.Path == "tailscale.com" && dep.Replace == nil {
@@ -43,13 +43,13 @@ func buildReference() (reference, error) {
 		}
 	}
 	if r.Tailscale != tailscaleVersion {
-		return r, errors.New("기준 tailscale 버전이 다릅니다")
+		return r, errors.New("reference tailscale version differs")
 	}
 	return r, nil
 }
 
-// keyCase는 자료에 쓰인 시험 키다. seed는 SHA-256의 입력 문자열, private은 Ed25519 씨앗(32바이트) 또는
-// node 키의 X25519 개인 키 입력이다.
+// keyCase is a test key used in the fixture. seed is the SHA-256 input string, and private is the Ed25519 seed (32 bytes) or
+// the X25519 private key input for the node key.
 type keyCase struct {
 	Role    string `json:"role"`
 	Index   int    `json:"index"`
@@ -89,11 +89,11 @@ func keyCases() []keyCase {
 	return out
 }
 
-// section은 출력 JSON의 최상위 멤버 하나다. 배열은 원소 하나를 한 줄에 쓴다(diff를 읽기 쉽게).
+// section is one top-level member of the output JSON. Each array element gets its own line to make diffs easier to read.
 type section struct {
 	name  string
 	value any
-	cases int // caseCount에 더할 수
+	cases int // Count to add to caseCount
 }
 
 func evaluate() ([]byte, error) {
@@ -189,7 +189,7 @@ func main() {
 		os.Exit(verifyCommand(os.Stdin, os.Stdout))
 	}
 	if os.Getenv("GOCACHE") == "" {
-		fmt.Fprintln(os.Stderr, "GOCACHE를 정하세요(Tools/interop/README.md의 환경)")
+		fmt.Fprintln(os.Stderr, "Set GOCACHE (see the environment in Tools/interop/README.md)")
 		os.Exit(1)
 	}
 	data, err := evaluate()
@@ -206,13 +206,13 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "사용법: tkafixtures [폴더 | verify-nks]")
+		fmt.Fprintln(os.Stderr, "Usage: tkafixtures [directory | verify-nks]")
 		os.Exit(2)
 	}
 }
 
-// verifyInput은 verify-nks의 입력이다. aums의 첫 것으로 부트스트랩하고 나머지를 Inform한 상태에서
-// node 키(32바이트 16진)와 NKS(16진)를 NodeKeyAuthorizedWithDetails로 판정한다.
+// verifyInput is the input to verify-nks. Bootstrap from the first of aums, then call Inform with the rest,
+// and check the node key (32 bytes in hexadecimal) and NKS (hexadecimal) with NodeKeyAuthorizedWithDetails.
 type verifyInput struct {
 	AUMs    []string `json:"aums"`
 	NodeKey string   `json:"nodeKey"`
@@ -237,19 +237,19 @@ func verifyCommand(stdin io.Reader, stdout io.Writer) int {
 	}
 	data, err := io.ReadAll(io.LimitReader(stdin, maxVerifyInput+1))
 	if err != nil || len(data) > maxVerifyInput {
-		return fail("입력을 읽지 못했거나 4MiB를 넘습니다")
+		return fail("could not read input or input exceeds 4MiB")
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var in verifyInput
 	if err := dec.Decode(&in); err != nil {
-		return fail("JSON 객체가 아닙니다: " + err.Error())
+		return fail("expected a JSON object: " + err.Error())
 	}
 	if dec.More() {
-		return fail("JSON 뒤에 남은 값이 있습니다")
+		return fail("trailing value after JSON")
 	}
 	if len(in.AUMs) == 0 {
-		return fail("aums가 비었습니다")
+		return fail("aums is empty")
 	}
 	raws := make([][]byte, len(in.AUMs))
 	for i, h := range in.AUMs {
@@ -259,7 +259,7 @@ func verifyCommand(stdin io.Reader, stdout io.Writer) int {
 	}
 	node, err := decodeHex(in.NodeKey)
 	if err != nil || len(node) != 32 {
-		return fail("nodeKey는 32바이트 16진이어야 합니다")
+		return fail("nodeKey must be 32 bytes in hexadecimal")
 	}
 	nks, err := decodeHex(in.NKS)
 	if err != nil {
@@ -282,10 +282,10 @@ func verifyCommand(stdin io.Reader, stdout io.Writer) int {
 	return 0
 }
 
-// decodeHex는 소문자 16진만 받는다.
+// decodeHex accepts only lowercase hexadecimal.
 func decodeHex(s string) ([]byte, error) {
 	if s != strings.ToLower(s) {
-		return nil, errors.New("16진은 소문자여야 합니다")
+		return nil, errors.New("hexadecimal must be lowercase")
 	}
 	return hex.DecodeString(s)
 }

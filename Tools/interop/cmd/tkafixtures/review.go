@@ -1,9 +1,9 @@
 package main
 
-// TL-11a 검토(SwiftailTKA 보안 검토)가 더한 시나리오. 기존 chains·signatures가 다루지 않은 모양의 입력이다:
-// 서명 목록만 다른 같은 AUM(해시는 서명을 담으므로 서로 다른 형제가 된다), 같은 AUM 집합을 다른 묶음·순서로 들이기,
-// 지운 키를 같은 KeyID로 다시 더하기, Votes·Meta의 경계, 갈래 안의 체크포인트, 부모 해시가 32바이트가 아닌 부트스트랩,
-// 길이가 틀린 NKS 서명. 출력 모양은 chains(chainCase)·signatures(signatureCase)와 같다.
+// Scenarios added by the TL-11a review (SwiftailTKA security review). The existing chains and signatures do not cover these input forms:
+// The same AUM differing only in its signature list (the hash includes signatures, making them distinct siblings), admitting the same AUM set in different groups and orders,
+// re-adding a deleted key under the same KeyID, Votes and Meta boundaries, a checkpoint within a fork, a bootstrap parent hash with a length other than 32 bytes,
+// and an NKS signature of the wrong length. Output uses the same shapes as chains (chainCase) and signatures (signatureCase).
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
-// withSignatures는 raw의 본문(서명을 뺀 것)은 그대로 두고 서명 목록만 바꾼 AUM이다. SigHash는 같고 Hash는 다르다.
+// withSignatures keeps the body of raw unchanged (everything except signatures) and replaces only the AUM's signature list. SigHash matches and Hash differs.
 func withSignatures(raw []byte, edit func([]tkatype.Signature) []tkatype.Signature) []byte {
 	var a tka.AUM
 	if err := a.Unserialize(raw); err != nil {
@@ -24,7 +24,7 @@ func withSignatures(raw []byte, edit func([]tkatype.Signature) []tkatype.Signatu
 	return a.Serialize()
 }
 
-// repeatSignature는 첫 서명을 n번 되풀이한 서명 목록이다.
+// repeatSignature is a signature list that repeats the first signature n times.
 func repeatSignature(raw []byte, n int) []byte {
 	return withSignatures(raw, func(s []tkatype.Signature) []tkatype.Signature {
 		out := make([]tkatype.Signature, n)
@@ -35,14 +35,14 @@ func repeatSignature(raw []byte, n int) []byte {
 	})
 }
 
-// variantBelow·variantAbove는 서명을 2~64번 되풀이한 변종 가운데 해시가 raw보다 작은(큰) 첫 것이다.
+// variantBelow and variantAbove are the first variants that repeat the signature 2–64 times and have a hash lower or higher than raw, respectively.
 func variantBelow(raw []byte) []byte {
 	for n := 2; n <= 64; n++ {
 		if v := repeatSignature(raw, n); hashLess(v, raw) {
 			return v
 		}
 	}
-	panic("해시가 더 작은 변종을 찾지 못했습니다")
+	panic("could not find a variant with a lower hash")
 }
 
 func variantAbove(raw []byte) []byte {
@@ -51,7 +51,7 @@ func variantAbove(raw []byte) []byte {
 			return v
 		}
 	}
-	panic("해시가 더 큰 변종을 찾지 못했습니다")
+	panic("could not find a variant with a higher hash")
 }
 
 func keyWithMeta(k edKey, votes uint, meta map[string]string) tka.Key {
@@ -60,7 +60,7 @@ func keyWithMeta(k edKey, votes uint, meta map[string]string) tka.Key {
 	return key
 }
 
-// metaOfSize는 키·값 길이의 합이 n바이트인 Meta 하나다(키 "k").
+// metaOfSize is one Meta entry (key "k") whose key and value lengths total n bytes.
 func metaOfSize(n int) map[string]string { return map[string]string{"k": strings.Repeat("v", n-1)} }
 
 func reviewChainCases() []chainCase {
@@ -68,8 +68,8 @@ func reviewChainCases() []chainCase {
 	var out []chainCase
 	two := []tka.Key{L[0].tkaKey(1), L[1].tkaKey(1)}
 
-	// 1. 서명을 되풀이한 변종이 원본보다 해시가 작으면 이긴다. 원본에 붙은 자식(lock/1을 지우는 RemoveKey)은
-	//    진 갈래에 남아 적용되지 않고, lock/1이 계속 신뢰된다(서명을 만들 수 없는 제어 서버가 고를 수 있다).
+	// 1. The repeated-signature variant wins if its hash is lower than the original's. The original's child (RemoveKey for lock/1)
+	//       stays on the losing fork and is never applied, so lock/1 stays trusted (a control server that cannot create signatures can choose this outcome).
 	g := genesisAUM(two, V[:1], 1, 2, L[0])
 	x := noop(aumHash(g), L[0])
 	xLow := variantBelow(x)
@@ -80,7 +80,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("removed-key-signs-on-variant", noop(aumHash(xLow), L[1]))
 	out = append(out, c.c)
 
-	// 2. 해시가 큰 변종은 진다. 변종에 붙인 자식도 진 갈래에 남는다.
+	// 2. The variant with the larger hash loses. Its child also remains on the losing fork.
 	xHigh := variantAbove(x)
 	c = newChain("review/duplicate-signature-variant-loses", g)
 	c.mustStep("original", x)
@@ -89,7 +89,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("child-of-variant", noop(aumHash(xHigh), L[0]))
 	out = append(out, c.c)
 
-	// 3. 원본과 변종을 한 묶음으로, 순서를 바꿔서.
+	// 3. Put the original and variant in one group, with the order reversed.
 	c = newChain("review/variant-batch-original-first", g)
 	c.mustStep("both", x, xLow, xHigh)
 	out = append(out, c.c)
@@ -97,7 +97,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("both", xHigh, xLow, x)
 	out = append(out, c.c)
 
-	// 4. 서명 둘의 순서만 바꾼 형제. 가중치·종류가 같아 해시로 갈린다.
+	// 4. Siblings that differ only in the order of two signatures. Weight and kind match, so the hash decides.
 	ab := noop(aumHash(g), L[0], L[1])
 	ba := withSignatures(ab, func(s []tkatype.Signature) []tkatype.Signature { return []tkatype.Signature{s[1], s[0]} })
 	c = newChain("review/signature-order-variant", g)
@@ -105,8 +105,8 @@ func reviewChainCases() []chainCase {
 	c.mustStep("b-then-a", ba)
 	out = append(out, c.c)
 
-	// 5. 받아들인 AUM의 서명 목록에 믿지 않는 키의 서명이나 틀린 서명을 덧붙인 것, 빈 목록, 신뢰 키 서명을 1,024번
-	//    되풀이한 것.
+	// 5. Append a signature from an untrusted key or an invalid signature to an accepted AUM's signature list, use an empty list, or repeat a trusted key's signature
+	//       1,024 times.
 	untrustedSig := noop(aumHash(g), untrusted)
 	c = newChain("review/signature-list-tampering", g)
 	c.step("append-untrusted", withSignatures(x, func(s []tkatype.Signature) []tkatype.Signature {
@@ -129,7 +129,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("repeated-1024", repeatSignature(x, 1024))
 	out = append(out, c.c)
 
-	// 6. 모르는 필드로 부풀린 사본과 원본이 한 묶음에 온다(정준 바이트가 같아 같은 AUM이다). 그 뒤 원본만 다시.
+	// 6. The copy inflated with an unknown field arrives in one group with the original (the canonical bytes match, so it is the same AUM). Then retry just the original.
 	inflated := addPairs(x, 1, "18ff"+"5a"+"00000400"+strings.Repeat("00", 1024))
 	c = newChain("review/inflated-copy-with-original", g)
 	c.mustStep("inflated-then-original", inflated, x)
@@ -137,7 +137,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("child", noop(aumHash(x), L[1]))
 	out = append(out, c.c)
 
-	// 7. 지운 키를 같은 KeyID로 다시 더한다(다른 Votes·Meta). 지운 동안의 서명은 거절, 다시 더한 뒤는 받는다.
+	// 7. Re-add a deleted key under the same KeyID (different Votes and Meta). Reject signatures while the key is absent and accept them after re-adding it.
 	c = newChain("review/remove-then-readd-same-key", genesisAUM([]tka.Key{L[0].tkaKey(2), L[1].tkaKey(1)}, V[:1], 1, 2, L[0]))
 	c.mustStep("remove", removeKey(c.head(), L[1].pub(), L[0]))
 	c.step("removed-key-signs", noop(c.head(), L[1]))
@@ -148,7 +148,7 @@ func reviewChainCases() []chainCase {
 	c.step("remove-last", removeKey(c.head(), L[1].pub(), L[1]))
 	out = append(out, c.c)
 
-	// 8. Votes와 Meta의 경계(AddKey·UpdateKey). Meta는 키·값 길이 합 512바이트까지.
+	// 8. Votes and Meta boundaries (AddKey and UpdateKey). Meta allows a combined key and value length of up to 512 bytes.
 	c = newChain("review/votes-and-meta-bounds", genesisAUM([]tka.Key{L[0].tkaKey(1)}, V[:1], 1, 2, L[0]))
 	c.step("add-votes-0", addKey(c.head(), L[1].tkaKey(0), L[0]))
 	c.step("add-votes-4097", addKey(c.head(), L[1].tkaKey(4097), L[0]))
@@ -156,21 +156,21 @@ func reviewChainCases() []chainCase {
 	c.step("add-meta-513", addKey(c.head(), keyWithMeta(L[2], 1, metaOfSize(513)), L[0]))
 	c.mustStep("add-meta-512", addKey(c.head(), keyWithMeta(L[2], 1, metaOfSize(512)), L[0]))
 	c.step("update-meta-513", childAUM(c.head(), tka.AUM{MessageKind: tka.AUMUpdateKey, KeyID: L[2].pub(), Meta: metaOfSize(513)}, L[0]))
-	// 빈 Meta(`07a0`)만 있는 UpdateKey: Go의 Serialize는 빈 맵을 빼므로 받은 바이트에만 `07a0`이 있다. 받은 값으로는
-	// 정적 검사를 통과하지만, 정준 바이트(서명·해시의 입력)에는 Meta가 없다.
+	// An UpdateKey with only empty Meta (`07a0`): Go's Serialize omits the empty map, so `07a0` appears only in the received bytes. The received value
+	// passes static validation, but the canonical bytes (signature and hash input) omit Meta.
 	c.mustStep("update-meta-empty-wire-only", addPairs(childAUM(c.head(), tka.AUM{MessageKind: tka.AUMUpdateKey, KeyID: L[2].pub()}, L[0]), 1, "07a0"))
 	c.step("update-no-votes-no-meta", childAUM(c.head(), tka.AUM{MessageKind: tka.AUMUpdateKey, KeyID: L[2].pub()}, L[0]))
 	c.mustStep("update-votes-4096-and-meta", childAUM(c.head(), tka.AUM{MessageKind: tka.AUMUpdateKey, KeyID: L[2].pub(), Votes: ptrUint(4096), Meta: metaOfSize(512)}, L[0]))
 	c.step("update-votes-4097-with-valid-meta", childAUM(c.head(), tka.AUM{MessageKind: tka.AUMUpdateKey, KeyID: L[2].pub(), Votes: ptrUint(4097), Meta: map[string]string{"a": "b"}}, L[0]))
 	c.step("update-votes-max-uint", updateVotes(c.head(), L[2].pub(), ^uint(0), L[0]))
-	// 무거운 두 키(4,096표)의 서명 하나와 가벼운 키 서명 하나의 갈래: 무거운 쪽이 이긴다.
+	// A fork between one signature from the two heavier keys (4,096 votes) and one signature from the lighter key. The heavier side wins.
 	heavy := noop(c.head(), L[1], L[2])
 	light := noop(c.head(), L[0])
 	c.mustStep("light", light)
 	c.mustStep("heavy", heavy)
 	out = append(out, c.c)
 
-	// 9. 갈래 안의 체크포인트: 진 갈래의 체크포인트가 키를 바꾸고, 그 아래 AUM은 그 체크포인트의 상태로 검증된다.
+	// 9. Checkpoint within a fork: the losing fork's checkpoint changes the keys, and its descendant AUM is verified against that checkpoint's state.
 	g3 := genesisAUM([]tka.Key{L[0].tkaKey(1), L[1].tkaKey(2)}, V[:1], 1, 2, L[0])
 	win := noop(aumHash(g3), L[1])
 	loseCP := childAUM(aumHash(g3), tka.AUM{MessageKind: tka.AUMCheckpoint, State: &tka.State{DisablementValues: V[1:2], Keys: []tka.Key{L[0].tkaKey(1), L[3].tkaKey(1)}, StateID1: 1, StateID2: 2}}, L[0])
@@ -183,7 +183,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("winner-child", noop(aumHash(win), L[1]))
 	out = append(out, c.c)
 
-	// 10. 같은 AUM 나무를 서로 다른 묶음·순서로 들인다. 머리는 같아야 한다.
+	// 10. Admit the same AUM tree in different groups and orders. The head must match.
 	g4 := genesisAUM([]tka.Key{L[0].tkaKey(1), L[1].tkaKey(1), L[2].tkaKey(1)}, V[:1], 1, 2, L[0])
 	a1 := noop(aumHash(g4), L[0])
 	a2 := addKey(aumHash(a1), L[3].tkaKey(1), L[1])
@@ -213,7 +213,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("a3-a2", a2, a3)
 	out = append(out, c.c)
 
-	// 11. 지울 키가 더 무거우면, 지워진 키가 옛 부모에서 만든 형제가 RemoveKey를 이긴다(갈래 해소는 표로 한다).
+	// 11. If the key to remove is heavier, the sibling the removed key creates from the old parent beats RemoveKey (votes resolve the fork).
 	g5 := genesisAUM([]tka.Key{L[0].tkaKey(1), L[1].tkaKey(2)}, V[:1], 1, 2, L[0])
 	rm := removeKey(aumHash(g5), L[1].pub(), L[0])
 	c = newChain("review/heavier-removed-key-forks-back", g5)
@@ -222,7 +222,7 @@ func reviewChainCases() []chainCase {
 	c.mustStep("child-of-removal", noop(aumHash(rm), L[0]))
 	out = append(out, c.c)
 
-	// 12. 부모 해시가 31·33바이트·빈 값인 체크포인트로 부트스트랩한다(부트스트랩은 부모를 보지 않는다).
+	// 12. Bootstrap from a checkpoint with a 31-byte, 33-byte, or empty parent hash (bootstrap ignores the parent).
 	for _, p := range []struct {
 		name string
 		prev []byte
@@ -236,7 +236,7 @@ func reviewChainCases() []chainCase {
 		out = append(out, c.c)
 	}
 
-	// 13. 부트스트랩 체크포인트의 서명 목록: 자기 상태 밖의 키, 되풀이, 순서.
+	// 13. Bootstrap checkpoint signature lists: keys outside its own state, repetition, and order.
 	gs := tka.AUM{MessageKind: tka.AUMCheckpoint, State: &tka.State{DisablementValues: V[:1], Keys: two, StateID1: 1, StateID2: 2}}
 	signAUM(&gs, L[0], L[1])
 	gsRaw := gs.Serialize()
@@ -289,21 +289,21 @@ func reviewSignatureCases(all []namedAuthority) []signatureCase {
 	add("rotation-signature-63", base, N[1], resized(r1, 63))
 	add("rotation-signature-65", base, N[1], resized(r1, 65))
 	add("rotation-33-byte-rotation-key", base, N[1], ser(rotationNKS(NL[0], N[1], directNKS(L[0], N[0], append(NL[0].pub(), 0)), nil)))
-	// 같은 node 키로의 회전: 자기 키가 이전 키 목록에 든다.
+	// Rotation to the same node key: its own key appears in the previous-key list.
 	add("rotation-to-same-node-key", base, N[0], ser(rotationNKS(NL[0], N[0], direct, nil)))
-	// rotation의 바깥에 KeyID를 넣어도 쓰이지 않는다(허가 키는 안쪽에서 찾는다).
+	// KeyID on the outside of a rotation is ignored (the authorizing key is found inside).
 	withKeyID := signNKS(tka.NodeKeySignature{SigKind: tka.SigRotation, Pubkey: N[1].binary(), KeyID: untrusted.pub(), Nested: &direct}, NL[0].priv)
 	add("rotation-outer-keyid-ignored", base, N[1], ser(withKeyID))
-	// 회전 키로 신뢰 키 자신을 쓰는 사슬, 지워진 키가 만든 credential.
+	// A chain using the trusted key itself as the rotation key, and a credential made by a deleted key.
 	add("rotation-key-is-lock-key", base, N[1], ser(rotationNKS(L[0], N[1], directNKS(L[0], N[0], L[0].pub()), nil)))
 	cred1 := credentialNKS(L[1], credentials[0].pub())
 	add("credential-rotation-removed-key", "nks-removed", N[3], ser(rotationNKS(credentials[0], N[3], cred1, nil)))
 	add("credential-rotation-before-removal", base, N[3], ser(rotationNKS(credentials[0], N[3], cred1, nil)))
-	// 가운데 rotation이 credential을 감싸고 바깥 rotation이 그것을 감싼다(가운데 WrappingPubkey가 회전 키).
+	// The middle rotation wraps the credential and the outer rotation wraps it (the middle WrappingPubkey is the rotation key).
 	mid := rotationNKS(credentials[0], N[3], credentialNKS(L[0], credentials[0].pub()), NL[1].pub())
 	add("rotation-over-credential-rotation-with-wrapping", base, N[4], ser(rotationNKS(NL[1], N[4], mid, nil)))
 	add("rotation-over-credential-rotation-wrong-key", base, N[4], ser(rotationNKS(credentials[0], N[4], mid, nil)))
-	// 잘린 NKS, 비최단 머리로 쓴 NKS.
+	// Truncated NKS and NKS with a non-shortest header.
 	full := ser(direct)
 	add("direct-truncated", base, N[0], full[:len(full)-1])
 	add("direct-non-shortest-kind", base, N[0], append([]byte{full[0], 0x01, 0x18, 0x01}, full[3:]...))

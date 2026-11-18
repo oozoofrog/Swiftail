@@ -1,10 +1,10 @@
-// 원본에 없는 보탬: 이 파일 전체가 tailscale.com v1.104.6 testcontrol에 없다.
-// Tailnet Lock 관문 (가)(docs/contracts/SwiftailTailnetLock.md 7절, 결정 L15)이 쓰는
-// sync/send, disable, 끈 뒤의 bootstrap, 등록 요청의 서명, 재서명 요청, 요청 기록을 더한다.
-// 본보기: tailscale.com v1.104.6 tstest/tkatest/tkatest.go(HandleTKASyncSend 등),
+// Added here: this entire file is absent from tailscale.com v1.104.6 testcontrol.
+// Adds support for Tailnet Lock gate (a) (docs/contracts/SwiftailTailnetLock.md §7, decision L15):
+// sync/send, disable, bootstrap after disablement, signatures on registration requests, re-signing requests, and request logging.
+// References: tailscale.com v1.104.6 tstest/tkatest/tkatest.go (HandleTKASyncSend and others),
 // ipn/ipnlocal/tailnet-lock_test.go(TestTKADisablementFlow, TestTKADisable),
 // ipn/ipnlocal/tailnet-lock.go(tkaDoDisablement, tkaApplyDisablementLocked).
-// 운영 제어 서버의 실제 동작은 소스에 없다. "추측"이라고 적은 곳은 짐작해 쓴 것이다.
+// The actual production control server behavior is absent from the source. Places marked "Assumption" are based on guesses.
 
 package testcontrol
 
@@ -25,50 +25,50 @@ import (
 	"tailscale.com/util/set"
 )
 
-// lockExtras는 원본에 없는 Tailnet Lock 상태다. s.mu 아래에서 읽고 쓴다.
+// lockExtras is Tailnet Lock state absent from upstream. Read and write it under s.mu.
 type lockExtras struct {
-	capability bool // 모든 노드의 CapMap에 tailnet-lock을 싣는다
+	capability bool // Include tailnet-lock in the CapMap of every node
 
-	// disablementSecret은 /machine/tka/disable이 받아들인 끄기 비밀이다.
-	// nil이 아니고 tkaStorage가 nil이면 "lock을 껐다"는 뜻이다.
+	// disablementSecret is the disablement secret accepted by /machine/tka/disable.
+	// A non-nil secret with nil tkaStorage means lock was disabled.
 	disablementSecret []byte
-	wrongSecret       bool // 끈 뒤의 bootstrap이 틀린 비밀을 준다
-	omitInfo          bool // 끈 뒤의 맵 응답에 TKAInfo를 싣지 않는다(아니면 Disabled: true)
-	bootstrapFault    bool // lock이 켜진 동안 bootstrap이 깨진 GenesisAUM을 준다
+	wrongSecret       bool // Bootstrap after disablement returns the wrong secret
+	omitInfo          bool // Omit TKAInfo from map responses after disablement (otherwise Disabled: true)
+	bootstrapFault    bool // Bootstrap returns a malformed GenesisAUM while lock is enabled
 
-	resign        set.Set[key.NodePublic] // 다음 등록에 재서명을 요청할 node 키(한 번)
+	resign        set.Set[key.NodePublic] // Node keys to request re-signing for on their next registration (once)
 	registrations []LockRegistration
 	requests      []LockRequest
 }
 
-// LockRegistration은 testcontrol이 받은 등록 요청 하나의 Tailnet Lock 관련 기록이다.
+// LockRegistration records the Tailnet Lock details of one registration request received by testcontrol.
 type LockRegistration struct {
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
 	NLKey      key.NLPublic
-	// Auth는 요청에 Auth(인증 키)가 실렸는지다. 로그아웃 관문이 Go와 Swift의 요청을 견줄 때 쓴다.
+	// Auth indicates whether the request included Auth (an auth key). The logout gate uses it to compare Go and Swift requests.
 	Auth bool
-	// Expiry는 요청의 Expiry다(0이면 없음). 과거 시각이면 로그아웃이다(logout.go).
+	// Expiry is the request's Expiry (0 means absent). A past timestamp means logout (logout.go).
 	Expiry time.Time
-	// Signature는 요청의 NodeKeySignature에 대한 판정이다:
-	// "none"(없음), "noLock"(lock이 꺼져 있어 보지 않음), "accepted", "rejected".
+	// Signature is the verdict on the request's NodeKeySignature:
+	// "none" (absent), "noLock" (unchecked because lock is disabled), "accepted", or "rejected".
 	Signature      string
 	SignatureError string
-	// ResignRequested는 이 요청의 응답에 RegisterResponse.NodeKeySignature를 실었는지다.
+	// ResignRequested indicates whether the response to this request included RegisterResponse.NodeKeySignature.
 	ResignRequested bool
-	// Body는 해독한 요청 JSON이다. 감싼 인증 키의 흔적을 찾는 데만 쓴다.
+	// Body is the decoded request JSON. It is used only to check for traces of a wrapped auth key.
 	Body []byte
 }
 
-// LockRequest는 testcontrol이 받은 /machine/tka/ 요청 하나다.
+// LockRequest is one /machine/tka/ request received by testcontrol.
 type LockRequest struct {
 	Path    string
 	NodeKey key.NodePublic
 	Head    string
 }
 
-// SetTailnetLockCapability는 맵 응답의 자기 노드 CapMap에 tailnet-lock capability를 싣거나 뺀다.
-// 원본은 DefaultNodeCapabilities로 등록 때의 Capabilities에만 실을 수 있다.
+// SetTailnetLockCapability adds or removes the tailnet-lock capability in the self node's CapMap in map responses.
+// Upstream can include it only in registration-time Capabilities through DefaultNodeCapabilities.
 func (s *Server) SetTailnetLockCapability(enabled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -76,9 +76,9 @@ func (s *Server) SetTailnetLockCapability(enabled bool) {
 	s.updateLocked("SetTailnetLockCapability", s.nodeIDsLocked(0))
 }
 
-// SetLockDisablementBehavior는 lock을 끈 뒤 서버가 무엇을 알리는지 정한다.
-// wrongSecret이면 bootstrap이 받은 비밀 대신 틀린 비밀을 준다.
-// omitInfo면 맵 응답에 TKAInfo를 싣지 않고, 아니면 TKAInfo{Disabled: true}를 싣는다.
+// SetLockDisablementBehavior controls what the server reports after disabling lock.
+// If wrongSecret is set, bootstrap returns the wrong secret in place of the secret it received.
+// If omitInfo is set, omit TKAInfo from map responses. Otherwise include TKAInfo{Disabled: true}.
 func (s *Server) SetLockDisablementBehavior(wrongSecret, omitInfo bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,8 +87,8 @@ func (s *Server) SetLockDisablementBehavior(wrongSecret, omitInfo bool) {
 	s.updateLocked("SetLockDisablementBehavior", s.nodeIDsLocked(0))
 }
 
-// SetLockBootstrapFault가 참이면 lock이 켜진 동안 bootstrap 응답의 GenesisAUM을 한 바이트 잘라 준다.
-// 모든 노드에 새 맵을 보낸다(Go 클라이언트는 netmap을 받을 때만 부트스트랩을 다시 시도한다).
+// SetLockBootstrapFault, when true, removes one byte from the bootstrap response's GenesisAUM while lock is enabled.
+// It sends a new map to all nodes (the Go client retries bootstrap only on receiving a netmap).
 func (s *Server) SetLockBootstrapFault(enabled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,9 +96,9 @@ func (s *Server) SetLockBootstrapFault(enabled bool) {
 	s.updateLocked("SetLockBootstrapFault", s.nodeIDsLocked(0))
 }
 
-// RequestResign은 nodeKey가 다음에 OldNodeKey 없이 등록할 때 그 응답에
-// RegisterResponse.NodeKeySignature(지금의 KeySignature)를 실어 재서명을 요청하게 한다. 한 번만 쓴다.
-// 추측: 운영 서버가 언제 이것을 보내는지는 소스에 없다.
+// RequestResign arranges for the next registration of nodeKey without OldNodeKey to receive
+// RegisterResponse.NodeKeySignature (the current KeySignature) to request re-signing. Used once.
+// Assumption: the source does not show when the production server sends this.
 func (s *Server) RequestResign(nodeKey key.NodePublic) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,7 +110,7 @@ func (s *Server) RequestResign(nodeKey key.NodePublic) bool {
 	return true
 }
 
-// LockRegistrations는 받은 등록 요청의 기록을 받은 순서로 돌려준다.
+// LockRegistrations returns the registration request records in receipt order.
 func (s *Server) LockRegistrations() []LockRegistration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,14 +122,14 @@ func (s *Server) LockRegistrations() []LockRegistration {
 	return out
 }
 
-// LockRequests는 받은 /machine/tka/ 요청을 받은 순서로 돌려준다.
+// LockRequests returns the received /machine/tka/ requests in receipt order.
 func (s *Server) LockRequests() []LockRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.lock.requests)
 }
 
-// LockState는 서버의 lock 상태다: 켜졌으면 머리(base32), 껐으면 disabled.
+// LockState is the server's lock state: the head (base32) if enabled, or disabled otherwise.
 func (s *Server) LockState() (head string, disabled bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -143,7 +143,7 @@ func (s *Server) LockState() (head string, disabled bool, err error) {
 	return a.Head().String(), false, nil
 }
 
-// recordLockRequest는 요청 본문을 읽어 기록하고, 처리기가 다시 읽도록 되돌린다.
+// recordLockRequest reads and records the request body, then restores it for the handler.
 func (s *Server) recordLockRequest(r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, msgLimit))
 	r.Body.Close()
@@ -161,13 +161,13 @@ func (s *Server) recordLockRequest(r *http.Request) {
 	s.mu.Unlock()
 }
 
-// lockBootstrapOverrideLocked는 원본의 genesis 응답 대신 줄 bootstrap 응답을 만든다.
-// s.mu를 쥔 채 부른다.
+// lockBootstrapOverrideLocked builds a bootstrap response to use in place of the upstream genesis response.
+// Call with s.mu held.
 func (s *Server) lockBootstrapOverrideLocked() (tailcfg.TKABootstrapResponse, bool) {
 	if s.tkaStorage == nil && s.lock.disablementSecret != nil {
 		secret := bytes.Clone(s.lock.disablementSecret)
 		if s.lock.wrongSecret {
-			// 본보기: tailnet-lock_test.go TestTKADisablementFlow의 틀린 비밀(0x42 × 32).
+			// Reference: the wrong secret (0x42 × 32) in TestTKADisablementFlow in tailnet-lock_test.go.
 			secret = bytes.Repeat([]byte{0x42}, 32)
 		}
 		return tailcfg.TKABootstrapResponse{DisablementSecret: secret}, true
@@ -175,8 +175,8 @@ func (s *Server) lockBootstrapOverrideLocked() (tailcfg.TKABootstrapResponse, bo
 	return tailcfg.TKABootstrapResponse{}, false
 }
 
-// serveTKASyncSend는 /machine/tka/sync/send를 처리한다. 받은 AUM을 검증해 들이고(Inform) 서버의 머리를 답한다.
-// 머리가 바뀌면 모든 노드에 새 맵을 보낸다.
+// serveTKASyncSend handles /machine/tka/sync/send. It verifies and accepts incoming AUMs (Inform) and returns the server's head.
+// When the head changes, it sends a new map to all nodes.
 func (s *Server) serveTKASyncSend(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -199,9 +199,9 @@ func (s *Server) serveTKASyncSend(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// serveTKADisable는 /machine/tka/disable을 처리한다. 끄기 비밀을 서버의 상태로 검증하고,
-// 맞으면 서버의 lock 상태를 지우고 비밀을 기억한다(뒤의 bootstrap이 그 비밀을 준다).
-// 추측: 운영 서버가 머리 일치나 그 밖의 것을 검사하는지는 소스에 없다. 여기서는 비밀만 본다.
+// serveTKADisable handles /machine/tka/disable. It verifies the disablement secret against the server's state
+// and, if correct, clears the server's lock state and remembers the secret (subsequent bootstrap returns it).
+// Assumption: the source does not show whether the production server checks that the heads match or performs other checks. Here, check only the secret.
 func (s *Server) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 	req := new(tailcfg.TKADisableRequest)
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
@@ -233,8 +233,8 @@ func (s *Server) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 	s.updateLocked("TKADisable", s.nodeIDsLocked(0))
 }
 
-// applyRegisterLockLocked는 등록 요청의 서명과 재서명 요청을 처리하고 기록을 남긴다.
-// node는 nk로 이미 s.nodes에 있다. 재서명 요청이면 응답에 실을 서명을 돌려준다. s.mu를 쥔 채 부른다.
+// applyRegisterLockLocked handles and records registration request signatures and re-signing requests.
+// node is already in s.nodes under nk. For a re-signing request, return the signature to put in the response. Call with s.mu held.
 func (s *Server) applyRegisterLockLocked(req *tailcfg.RegisterRequest, body []byte) (resign []byte) {
 	nk := req.NodeKey
 	rec := LockRegistration{NodeKey: nk, OldNodeKey: req.OldNodeKey, NLKey: req.NLKey, Auth: req.Auth != nil, Expiry: req.Expiry, Signature: "none", Body: bytes.Clone(body)}
@@ -245,7 +245,7 @@ func (s *Server) applyRegisterLockLocked(req *tailcfg.RegisterRequest, body []by
 		} else if authority, err := tka.Open(s.tkaStorage); err != nil {
 			rec.Signature, rec.SignatureError = "rejected", err.Error()
 		} else if err := authority.NodeKeyAuthorized(nk, req.NodeKeySignature); err != nil {
-			// 추측: 검증되지 않는 서명이 든 등록을 운영 서버가 거절하는지는 소스에 없다. 등록은 그대로 하고 서명만 붙이지 않는다.
+			// Assumption: the source does not show whether the production server rejects registrations with unverifiable signatures. Register normally and omit the signature.
 			rec.Signature, rec.SignatureError = "rejected", err.Error()
 		} else {
 			rec.Signature = "accepted"
@@ -258,9 +258,9 @@ func (s *Server) applyRegisterLockLocked(req *tailcfg.RegisterRequest, body []by
 		rec.ResignRequested = true
 	}
 	if !req.OldNodeKey.IsZero() && rec.Signature == "accepted" && req.Followup == "" {
-		// 재서명한 키 교체가 받아들여졌으면 옛 키의 항목을 곧바로 지운다. 원본은 인증 URL을
-		// 마친 뒤(Followup)에만 지우므로, 인증이 없는 교체에서는 같은 노드 ID의 항목이 둘 남는다.
-		// 추측: 운영 서버는 키를 제자리에서 바꾼다고 보았다.
+		// If the re-signed key replacement was accepted, remove the old key's entry immediately. Upstream removes it only after completing
+		// the auth URL flow (Followup), so a replacement without authentication would leave two entries with the same node ID.
+		// Assumption: the production server replaces the key in place.
 		if old := s.nodes[req.OldNodeKey]; old != nil && old.ID == node.ID {
 			delete(s.nodes, req.OldNodeKey)
 			delete(s.users, req.OldNodeKey)
@@ -274,7 +274,7 @@ func (s *Server) applyRegisterLockLocked(req *tailcfg.RegisterRequest, body []by
 	return resign
 }
 
-// applyLockToMapResponseLocked는 맵 응답에 capability와 끈 뒤의 TKAInfo를 싣는다. s.mu를 쥔 채 부른다.
+// applyLockToMapResponseLocked adds the capability and post-disablement TKAInfo to a map response. Call with s.mu held.
 func (s *Server) applyLockToMapResponseLocked(res *tailcfg.MapResponse) {
 	if s.lock.capability {
 		mak.Set(&res.Node.CapMap, nodecap.TailnetLock, []tailcfg.RawMessage{})

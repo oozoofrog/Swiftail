@@ -1,4 +1,4 @@
-// 기준값: tailscale.com v1.104.6 routemanager·ipnlocal·dns.Manager (BSD-3-Clause).
+// Reference values: tailscale.com v1.104.6 routemanager, ipnlocal, and dns.Manager (BSD-3-Clause).
 package main
 
 import (
@@ -227,7 +227,7 @@ func scenarios() []scenario {
 }
 func convert(n node) *tailcfg.Node {
 	p := &tailcfg.Node{ID: tailcfg.NodeID(n.ID), StableID: tailcfg.StableNodeID(fmt.Sprintf("fixture-%d", n.ID)), Name: n.Name, Addresses: n.Addresses, AllowedIPs: n.AllowedIPs, Expired: n.Expired, HomeDERP: tailcfg.DERPRegionID(n.HomeDERP), MachineAuthorized: true}
-	// 시험 공개 식별자만 쓴다. 개인 키를 만들거나 자료에 싣지 않는다.
+	// Use only public test identifiers. Do not create private keys or include them in the fixture.
 	if err := p.Key.UnmarshalText([]byte(fmt.Sprintf("nodekey:%064x", n.ID))); err != nil {
 		panic(err)
 	}
@@ -246,7 +246,7 @@ type osCapture struct{ cfg dns.OSConfig }
 func (o *osCapture) SetDNS(c dns.OSConfig) error { o.cfg = c; return nil }
 func (*osCapture) SupportsSplitDNS() bool        { return true }
 
-// 실제 OS DNS를 읽지 않는다. 1차 모드도 결정적으로 컴파일되게 가짜 기본값을 준다.
+// Do not read actual OS DNS. Provide fake defaults so primary mode also compiles deterministically.
 func (*osCapture) GetBaseConfig() (dns.OSConfig, error) {
 	return dns.OSConfig{Nameservers: []netip.Addr{netip.MustParseAddr("192.0.2.54")}}, nil
 }
@@ -319,7 +319,7 @@ func evaluate(in input, backend *ipnlocal.SwiftailFixtureBackend) (output, *sett
 		return output{}, nil, err
 	}
 	out := output{Addresses: append([]netip.Prefix{}, rcfg.LocalAddrs...), PeerRoutes: peerRoutes, Routes: append([]netip.Prefix{}, rcfg.Routes...), DNS: dnsOut, DNSConfig: dcfg}
-	// 공개 API 경로와 LocalBackend가 쓴 RouteManager의 결과를 서로 검증한다.
+	// Cross-check the public API path against the RouteManager result used by LocalBackend.
 	rawRoutes := slices.Clone(peerRoutes)
 	v4, v6 := false, false
 	for _, p := range in.Self.Addresses {
@@ -333,7 +333,7 @@ func evaluate(in input, backend *ipnlocal.SwiftailFixtureBackend) (output, *sett
 		rawRoutes = append(rawRoutes, netip.PrefixFrom(tsaddr.TailscaleServiceIPv6(), 128))
 	}
 	if !slices.Equal(rawRoutes, out.Routes) {
-		return output{}, nil, fmt.Errorf("공개 RouteManager와 LocalBackend 라우터 경로가 다릅니다")
+		return output{}, nil, fmt.Errorf("router routes differ between the public RouteManager and LocalBackend")
 	}
 	result := &settings{Addresses: []netip.Prefix{}, Routes: []netip.Prefix{}, DNSServers: []netip.Addr{}, DNSMatchDomains: []string{}, MTU: in.MTU}
 	for _, p := range out.Addresses {
@@ -349,7 +349,7 @@ func evaluate(in input, backend *ipnlocal.SwiftailFixtureBackend) (output, *sett
 			result.Routes = append(result.Routes, p)
 		}
 	}
-	// 동작 S5의 좁히기만 수행한다. 로컬 영역은 Go Manager의 실제 resolver.Config에서 가져온다.
+	// Apply only the narrowing in behavior S5. Take the local zones from the Go Manager's actual resolver.Config.
 	if len(dnsOut.LocalDomains) > 0 {
 		if v4 {
 			result.DNSServers = append(result.DNSServers, tsaddr.TailscaleServiceIP())

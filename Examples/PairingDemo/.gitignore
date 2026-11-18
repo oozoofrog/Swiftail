@@ -1,3 +1,3 @@
-# 개발 팀 ID와 번들 ID 앞부분
+# Development team ID and bundle ID prefix
 Config/Signing.local.xcconfig
 /Build/

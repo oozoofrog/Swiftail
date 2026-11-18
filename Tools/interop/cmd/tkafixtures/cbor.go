@@ -11,9 +11,9 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
-// cborCase는 바이트 하나를 Go tka의 디코더에 넣은 판정이다. AUM은 Unserialize → StaticValidate,
-// NKS는 Unserialize만 한다(NKS에는 정적 검사가 없다). 받아들인 것은 Serialize로 다시 인코딩한 바이트와
-// 해시를 싣는다.
+// cborCase is the verdict from passing one byte input to Go's tka decoder. AUM uses Unserialize → StaticValidate,
+// while NKS uses only Unserialize (NKS has no static validation). Accepted cases include the bytes re-encoded with Serialize
+// and the hash.
 type cborCase struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
@@ -67,7 +67,7 @@ func evalCBOR(name, typ string, input []byte) cborCase {
 	return c
 }
 
-// catch는 Go 코드의 panic을 오류로 바꾼다. 판정 자료에는 "panic: …"으로 남는다.
+// catch converts panics from Go code to errors. The verdict fixture records them as "panic: …".
 func catch(f func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -77,7 +77,7 @@ func catch(f func() error) (err error) {
 	return f()
 }
 
-// CBOR 머리를 16진으로 쓴다(가장 짧은 인코딩).
+// Write the CBOR header in hexadecimal (shortest encoding).
 func head(major byte, n uint64) string {
 	m := major << 5
 	switch {
@@ -98,7 +98,7 @@ func head(major byte, n uint64) string {
 	}
 }
 
-// uintArray는 바이트열을 부호 없는 정수의 배열로 쓴다(바이트열 자리에 배열을 넣어 보는 입력).
+// uintArray writes a byte sequence as an array of unsigned integers (an input that substitutes an array for a byte string).
 func uintArray(b []byte) string {
 	var s strings.Builder
 	s.WriteString(head(4, uint64(len(b))))
@@ -115,11 +115,11 @@ func repeat(s string, n int) string {
 	return strings.Repeat(s, n)
 }
 
-// addPairs는 정준 인코딩(쌍 23개 이하, 머리 한 바이트)인 맵 뒤에 쌍을 덧붙인다. 일부러 틀리게 만든 입력을
-// 서명된 정상 AUM·NKS에서 만드는 데 쓴다.
+// addPairs appends pairs to a canonically encoded map (at most 23 pairs, one-byte header). It constructs deliberately malformed inputs
+// from valid signed AUMs and NKSs.
 func addPairs(canonical []byte, count int, pairs string) []byte {
 	if canonical[0] < 0xa0 || canonical[0]+byte(count) > 0xb7 {
-		panic("addPairs: 머리 한 바이트 맵이 아닙니다")
+		panic("addPairs: expected a one-byte map header")
 	}
 	out := append([]byte{canonical[0] + byte(count)}, canonical[1:]...)
 	return append(out, mustHex(pairs)...)
@@ -132,13 +132,13 @@ const (
 
 var zero32 = make([]byte, 32)
 
-// rawAUMCases는 손으로 조립한 AUM 바이트다. 이름의 앞머리는 무엇을 보려는지(accept는 Go가 받아들일 것으로
-// 노트·계약이 적은 것, reject는 거절할 것으로 적은 것, probe는 노트·계약이 Go 판정을 확인하지 않은 것)이고,
-// 실제 판정은 Go가 낸 값을 그대로 싣는다.
+// rawAUMCases contains manually assembled AUM bytes. Name prefixes state what each case probes: accept for cases the notes or contract expect Go
+// to accept, reject for cases they expect it to reject, and probe for cases where they have not established Go's verdict.
+// The fixture includes Go's actual verdict unchanged.
 func rawAUMCases() [][2]string {
 	unknown := func(value string) string { return cmap(kindNoOp, prevNull, "08"+value) }
 	updateKey := func(meta string) string { return cmap("0104", prevNull, "044101", "07"+meta) }
-	nested := func(depth int) string { // 맨 바깥 맵이 1단, 모르는 필드의 값에 배열을 depth−1단 겹친다
+	nested := func(depth int) string { // The outermost map is level 1. Nest depth−1 array levels in the value of an unknown field
 		return unknown(repeat("81", depth-2) + "80")
 	}
 	nestedMaps := func(depth int) string {
@@ -153,7 +153,7 @@ func rawAUMCases() [][2]string {
 		}
 		return unknown(b.String())
 	}
-	topMap := func(n int) string { // 쌍 n개: 1, 2, 그리고 모르는 키 24, 25, …(알려진 키 23을 피한다)
+	topMap := func(n int) string { // n pairs: 1, 2, and unknown keys 24, 25, … (skip known key 23)
 		var b strings.Builder
 		b.WriteString(head(5, uint64(n)) + kindNoOp + prevNull)
 		for i := range n - 2 {
@@ -337,8 +337,8 @@ func rawAUMCases() [][2]string {
 		{"reject/map-1025-in-value", valueMap(1025)},
 		{"probe/top-map-1024", topMap(1024)},
 		{"probe/top-map-1025", topMap(1025)},
-		// TL-5 대조 시험이 더한 것(계약 5절 TL-2의 "실행으로 확정하지 않은 것"): 정수 필드의 단순값, 정수 배열 원소의
-		// 단순값·null·그 밖의 값, 단순값·undefined·false로 쓴 Meta의 키, 구조 맵의 단순값 키, null 키와 빈 키의 중복.
+		// Added by the TL-5 comparison tests (contract §5 TL-2, "Unverified by execution"): simple values in integer fields and
+		// simple values, null, and other integer array elements, simple values, undefined, and false as Meta keys, simple-value keys in struct maps, and a duplicate null and empty key.
 		{"probe/kind-simple-3", cmap("01e3", prevNull)},
 		{"probe/kind-simple-19", cmap("01f3", prevNull)},
 		{"probe/kind-simple-99", cmap("01f863", prevNull)},
@@ -364,8 +364,8 @@ func rawAUMCases() [][2]string {
 	}
 }
 
-// valueAUMCases는 tka.AUM 값을 Serialize로 인코딩한 것이다(정적 검사의 경계). 서명 자리는 길이만 맞춘
-// 가짜 바이트다(정적 검사는 서명을 검증하지 않는다).
+// valueAUMCases contains tka.AUM values encoded with Serialize (static validation boundaries). The signatures contain
+// dummy bytes of the correct length only (static validation does not verify signatures).
 func valueAUMCases() []struct {
 	name string
 	aum  tka.AUM
@@ -379,7 +379,7 @@ func valueAUMCases() []struct {
 		return &tka.Key{Kind: tka.Key25519, Votes: votes, Public: pub, Meta: meta}
 	}
 	votes := func(v uint) *uint { return &v }
-	meta := func(n int) map[string]string { // 키 "k"(1바이트) + 값 n−1바이트 = n바이트
+	meta := func(n int) map[string]string { // key "k" (1 byte) + n−1 value bytes = n bytes
 		return map[string]string{"k": strings.Repeat("v", n-1)}
 	}
 	values := func(n, length int) [][]byte {
@@ -478,14 +478,14 @@ func valueAUMCases() []struct {
 	}
 }
 
-// rawNKSCases는 정상 direct NKS(lock/0이 node/0에 서명, WrappingPubkey는 nl/0)에서 손으로 바꾼 바이트다.
+// rawNKSCases contains bytes modified by hand from a valid direct NKS (lock/0 signs node/0, WrappingPubkey is nl/0).
 func rawNKSCases() [][2]string {
 	base := directNKS(lockKeys[0], nodeKeys[0], nlKeys[0].pub())
 	b := base.Serialize()
 	baseHex := hexOf(b)
-	// 정준 direct NKS의 첫 쌍은 01 01(SigKind=1)이다.
+	// The first pair in a canonical direct NKS is 01 01 (SigKind=1).
 	if !strings.HasPrefix(baseHex[2:], "0101") {
-		panic("direct NKS의 첫 쌍이 예상과 다릅니다")
+		panic("unexpected first pair in direct NKS")
 	}
 	withFirst := func(pair string) string { return baseHex[:2] + pair + baseHex[6:] }
 	noWrapping := directNKS(lockKeys[0], nodeKeys[0], nil)
@@ -512,13 +512,13 @@ func rawNKSCases() [][2]string {
 		{"reject/nks-tag", "c0" + baseHex},
 		{"probe/nks-top-level-null", "f6"},
 		{"probe/nks-pubkey-uint-array", hexOf(addPairs(cb, 1, "02"+uintArray(nodeKeys[0].binary())))},
-		// TL-5 대조 시험이 더한 것: SigKind의 단순값.
+		// Added by the TL-5 comparison tests: a simple value in SigKind.
 		{"probe/nks-sigkind-simple-1", withFirst("01e1")},
 		{"probe/nks-sigkind-simple-200", withFirst("01f8c8")},
 	}
 }
 
-// keyView·stateView는 Key·State 값을 JSON으로 적는 모양이다. 바이트는 16진, nil은 null이다.
+// keyView and stateView are the JSON representations of Key and State. Bytes are in hexadecimal, and nil is null.
 type keyValue struct {
 	Kind   uint8             `json:"kind"`
 	Votes  uint              `json:"votes"`
@@ -563,9 +563,9 @@ func viewState(s tka.State) stateValue {
 	return v
 }
 
-// encodingCase는 Key·State 값 하나의 정준 CBOR이다. tka는 Key·State를 따로 Serialize하지 않으므로 tka가
-// 쓰는 인코더 설정(cbor.CTAP2EncOptions, aum.go:249-260)으로 직접 인코딩한다. AUM·NKS 안에 들어갈 때의
-// 바이트와 같다.
+// encodingCase is the canonical CBOR for one Key or State value. tka does not Serialize Key or State separately, so encode them
+// directly with tka's encoder settings (cbor.CTAP2EncOptions, aum.go:249-260). This yields the same
+// bytes as when they are embedded in an AUM or NKS.
 type encodingCase struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
