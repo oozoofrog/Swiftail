@@ -1,8 +1,8 @@
-// M7 관문 (나) 1·2의 흐름(계약 `docs/contracts/SwiftailHost.md` 7절 "관문 (나)"와 그 아래 "관문 시험의 쓰는 법").
+// Flow for M7 gate (b) 1 and 2 (the `docs/contracts/SwiftailHost.md` contract §7, "Gate (b)" and "How to Run the Gate Tests" below it).
 //
-// 실제 tailnet(운영 제어 서버 + Let's Encrypt 스테이징)과 계정 없는 환경(testcontrol + pebble)이 같은 흐름을 돈다. 흐름은
-// 노드를 띄우고, tailnet lock에 잠겼으면 서명을 기다리고, cert 도메인을 보고, 인증서를 받아, 받은 인증서로 tailnet 쪽 TLS가
-// 되는지 자기 노드에 붙어 본다. 결과는 개수·시간·참거짓·상태 이름만 담는다(FQDN·tailnet 이름·주소·키를 담지 않는다).
+// A real tailnet (production control server + Let's Encrypt staging) and an account-free environment (testcontrol + pebble) run the same flow. The flow
+// starts a node, waits for a signature if tailnet lock has locked it out, checks cert domains, obtains a certificate, and connects to the same node to check
+// tailnet TLS using the certificate. Results contain only counts, times, Booleans, and state names (no FQDN, tailnet name, addresses, or keys).
 
 import Foundation
 import Network
@@ -16,36 +16,36 @@ import Testing
 
 @testable import SwiftailCertificates
 
-/// 흐름의 입력.
+/// The flow's inputs.
 struct HostGateFlowInput: Sendable {
     var configuration: NodeConfiguration
-    /// ACME 디렉터리 URL.
+    /// ACME directory URL.
     var directoryURL: URL
-    /// ACME 디렉터리 HTTPS의 신뢰 앵커(DER). nil이면 시스템 루트다(스테이징 서버의 HTTPS는 공개 인증서다).
+    /// Trust anchor (DER) for ACME directory HTTPS. Uses system roots if nil (the staging server presents a public HTTPS certificate).
     var transportAnchors: [[UInt8]]?
-    /// 받은 사슬을 검증할 시험 앵커(DER). nil이면 발급 단계를 건너뛰고 관문 1만 본다.
+    /// Test anchor (DER) for verifying the received chain. If nil, skips issuance and checks only gate 1.
     var certificateAnchors: [[UInt8]]?
-    /// `.running`까지 기다리는 한도.
+    /// Time limit for reaching `.running`.
     var runningTimeout: Duration
-    /// 잠긴 노드가 풀리기를 기다리는 한도.
+    /// Time limit for the locked node to unlock.
     var signWait: Duration
-    /// 관리자를 띄운 뒤 첫 인증서까지의 한도.
+    /// Time limit for the first certificate after starting the manager.
     var issueTimeout: Duration
-    /// 노드가 잠겨 있으면 한 번 부른다. 돌아오면 흐름이 풀리기를 기다린다.
+    /// Called once if the node is locked. The flow waits for unlocking after it returns.
     var onLocked: @Sendable (HostGateLockedContext) async throws -> Void
 }
 
-/// 잠긴 노드에서 `onLocked`가 받는 것.
+/// What `onLocked` receives from a locked node.
 struct HostGateLockedContext: Sendable {
-    /// 서명 기기에 넘길 두 값(둘 다 공개 키). 출력·로그에 찍지 않는다.
+    /// The two values passed to the signing device (both public keys). They are omitted from output and logs.
     let request: TailnetLockStatus.SigningRequest
     let arrival: CertificateArrival
 
-    /// 관리자가 첫 인증서를 냈는가(발급 단계가 없으면 늘 거짓).
+    /// Whether the manager issued its first certificate (always false if there is no issuance stage).
     var certificateArrived: Bool { arrival.value != nil }
 }
 
-/// 관리자의 첫 인증서와 그 시각.
+/// The manager's first certificate and its timestamp.
 final class CertificateArrival: Sendable {
     private let state = Mutex<(certificate: TailnetCertificate, at: ContinuousClock.Instant)?>(nil)
 
@@ -56,7 +56,7 @@ final class CertificateArrival: Sendable {
     }
 }
 
-/// lock 모습 가운데 보고에 쓰는 것(키·머리는 담지 않는다).
+/// The part of lock state used in the report (excludes keys and head).
 struct LockSnapshot: Sendable, CustomStringConvertible {
     var mode: TailnetLockStatus.Mode
     var isLockedOut: Bool
@@ -68,31 +68,31 @@ struct LockSnapshot: Sendable, CustomStringConvertible {
     }
 
     var description: String {
-        "mode \(mode), 잠김 \(isLockedOut), 거른 피어 \(filteredPeerCount)명, issue \(issue.map { "\($0)" } ?? "없음")"
+        "mode \(mode), locked \(isLockedOut), filtered peers \(filteredPeerCount), issue \(issue.map { "\($0)" } ?? "none")"
     }
 }
 
-/// 흐름의 결과. `failure`가 nil이면 흐름이 끝까지 갔다(각 판정은 시험이 본다).
+/// The flow's result. A nil `failure` means the flow completed (the test checks individual outcomes).
 struct HostGateFlowReport: Sendable {
     var finalState = "starting"
     var runningSeconds: Double?
     var peerCount = 0
     var lockAtRunning: LockSnapshot?
-    // 서명
+    // Signing
     var locked = false
     var unlockSeconds: Double?
-    /// 같은 `run()` 안에서 `signingRequest`가 nil인 `tailnetLockChanged`가 나왔다.
+    /// A `tailnetLockChanged` event with nil `signingRequest` arrived in the same `run()`.
     var unlockedInSameRun = false
     var lockAfterWait: LockSnapshot?
-    /// 잠긴 동안 첫 인증서가 나왔는가. 거짓은 기다리는 한도 내내 잠긴 채 인증서가 오지 않은 것이다. 인증서보다 서명이 먼저
-    /// 왔거나, 잠기지 않았거나, 발급 단계가 없거나, 저장된 인증서로 시작했으면 판정하지 못해 nil.
+    /// Whether the first certificate arrived while locked. False means the node stayed locked and no certificate arrived by the deadline. The outcome is undetermined
+    /// and nil if signing came before issuance, the node was not locked, there was no issuance stage, or the flow started with a stored certificate.
     var issuedWhileLocked: Bool?
-    /// 풀린 때(또는 기다림이 끝난 때) 관리자의 마지막 실패. 잠긴 동안 발급이 막혔는지의 단서다.
+    /// The manager's last failure at unlock (or when the wait ended). It helps determine whether issuance was blocked while locked.
     var failureWhileLocked: String?
-    // 관문 1
+    // Gate 1
     var certDomainCount = 0
     var fqdnInCertDomains = false
-    // 관문 2
+    // Gate 2
     var issuanceSkipped: String?
     var storedCertificateBefore = false
     var issued = false
@@ -104,37 +104,37 @@ struct HostGateFlowReport: Sendable {
     var lifetimeDays: Double?
     var chainCount: Int?
     var chainVerifiesWithAnchors: Bool?
-    /// 저장된 인증서로 시작해 ACME 요청과 `set-dns` 없이 그것을 냈다.
+    /// Started with a stored certificate and presented it without ACME requests or `set-dns`.
     var reusedStored: Bool?
     // TLS
     var tls: TailnetTLSProbe?
-    /// 서버가 다리에서 얻은 상대가 자기 노드(`stableID`가 같다)인가.
+    /// Whether the peer the server obtained from the bridge is its own node (same `stableID`).
     var tlsOriginIsSelf: Bool?
     var tlsSkipped: String?
-    // 끝
+    // Completion
     var failure: String?
     var runFailure: String?
 
     var summary: String {
-        func seconds(_ value: Double?) -> String { value.map { String(format: "%.1f초", $0) } ?? "-" }
+        func seconds(_ value: Double?) -> String { value.map { String(format: "%.1f seconds", $0) } ?? "-" }
         func flag(_ value: Bool?) -> String { value.map { "\($0)" } ?? "-" }
-        let dns = setDNSSeconds.isEmpty ? "없음" : setDNSSeconds.map { String(format: "%.1f초", $0) }.joined(separator: ", ")
-        let tlsLine = tls.map { "핸드셰이크 \($0.handshake), 시험 앵커로 검증 \($0.trustVerified), HTTP \($0.status.map(String.init) ?? "-"), 다리의 상대가 자기 노드 \(flag(tlsOriginIsSelf)), 끝 \($0.end)" }
-            ?? "건너뜀(\(tlsSkipped ?? "앞 단계에서 끝남"))"
+        let dns = setDNSSeconds.isEmpty ? "none" : setDNSSeconds.map { String(format: "%.1f seconds", $0) }.joined(separator: ", ")
+        let tlsLine = tls.map { "handshake \($0.handshake), verified with test anchor \($0.trustVerified), HTTP \($0.status.map(String.init) ?? "-"), bridge peer is own node \(flag(tlsOriginIsSelf)), end \($0.end)" }
+            ?? "skipped (\(tlsSkipped ?? "ended at an earlier stage"))"
         return """
-            호스트 관문 (나) 1·2 요약(개수·시간·참거짓·상태 이름만):
-              노드: 상태 \(finalState), running까지 \(seconds(runningSeconds)), 피어 \(peerCount)명
-              running 때의 tailnet lock: \(lockAtRunning.map(\.description) ?? "-")
-              서명: 잠김 \(locked), 풀림 \(locked ? (unlockSeconds.map { String(format: "%.1f초", $0) } ?? "기한 안에 풀리지 않음") : "-"), 다시 시작 없이 풀림 \(locked ? "\(unlockedInSameRun)" : "-"), 기다린 뒤 lock: \(lockAfterWait.map(\.description) ?? "-")
-              관문 1: cert 도메인 \(certDomainCount)개, 자기 FQDN 있음 \(fqdnInCertDomains)
-              관문 2: \(issuanceSkipped.map { "건너뜀(\($0))" } ?? "저장된 인증서로 시작 \(storedCertificateBefore), 저장된 것을 새 발급 없이 씀 \(flag(reusedStored)), 인증서 받음 \(issued), 관리자 시작부터 첫 인증서까지 \(seconds(issueSeconds)), ACME 요청 \(acmeRequests)개, set-dns \(setDNSSeconds.count)번(왕복 \(dns), 실패 \(setDNSFailures)번), 수명 \(lifetimeDays.map { String(format: "%.2f일", $0) } ?? "-"), 사슬 \(chainCount.map(String.init) ?? "-")장, 시험 앵커로 검증 \(flag(chainVerifiesWithAnchors)), 잠긴 동안 첫 인증서 \(flag(issuedWhileLocked))(그때의 실패 \(failureWhileLocked ?? "없음")), 마지막 실패 \(lastFailure ?? "없음")")
+            Host gate (b) 1 and 2 summary (counts, times, Booleans, and state names only):
+              Node: state \(finalState), time to running \(seconds(runningSeconds)), \(peerCount) peers
+              Tailnet lock at running: \(lockAtRunning.map(\.description) ?? "-")
+              Signing: locked \(locked), unlocked \(locked ? (unlockSeconds.map { String(format: "%.1f seconds", $0) } ?? "did not unlock within the time limit") : "-"), unlocked without restarting \(locked ? "\(unlockedInSameRun)" : "-"), lock after waiting: \(lockAfterWait.map(\.description) ?? "-")
+              Gate 1: \(certDomainCount) cert domains, own FQDN present \(fqdnInCertDomains)
+              Gate 2: \(issuanceSkipped.map { "skipped (\($0))" } ?? "started with stored certificate \(storedCertificateBefore), reused stored certificate without new issuance \(flag(reusedStored)), received certificate \(issued), time from manager start to first certificate \(seconds(issueSeconds)), \(acmeRequests) ACME requests, \(setDNSSeconds.count) set-dns calls (round trips \(dns), \(setDNSFailures) failures), lifetime \(lifetimeDays.map { String(format: "%.2f days", $0) } ?? "-"), chain \(chainCount.map(String.init) ?? "-") certificates, verified with test anchor \(flag(chainVerifiesWithAnchors)), first certificate while locked \(flag(issuedWhileLocked)) (failure at that point \(failureWhileLocked ?? "none"), last failure \(lastFailure ?? "none")")
               tailnet TLS: \(tlsLine)
-              실패: \(failure ?? "없음")\(runFailure.map { ", run(): \($0)" } ?? "")
+              Failure: \(failure ?? "none")\(runFailure.map { ", run(): \($0)" } ?? "")
             """
     }
 }
 
-/// 흐름이 연 것. 성공·실패 모두에서 닫는다.
+/// Resources opened by the flow. Closes them on success and failure.
 private struct HostGateFlowResources {
     var fqdn: String?
     var manager: Task<Void, any Error>?
@@ -152,14 +152,14 @@ private struct HostGateFlowResources {
     }
 }
 
-/// 흐름 하나를 돌린다. 노드를 띄우고 끝에 멈춘다. 실패는 던지지 않고 `failure`에 적는다(앞 단계의 기록을 잃지 않게).
+/// Runs one flow. Starts the node and stops it at the end. Records failures in `failure` without throwing to preserve the records from earlier stages.
 func runHostGateFlow(_ input: HostGateFlowInput) async -> HostGateFlowReport {
     var report = HostGateFlowReport()
     let node: TailnetNode
     do {
         node = try TailnetNode(configuration: input.configuration, device: .inProcess)
     } catch {
-        report.failure = "TailnetNode를 만들지 못함: \(redacted(String(describing: error)))"
+        report.failure = "Could not create TailnetNode: \(redacted(String(describing: error)))"
         return report
     }
     let recorder = NodeRecorder()
@@ -185,15 +185,15 @@ func runHostGateFlow(_ input: HostGateFlowInput) async -> HostGateFlowReport {
 
 private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, recorder: NodeRecorder,
                            report: inout HostGateFlowReport, resources: inout HostGateFlowResources) async throws {
-    // 1. `.running`까지. 로그인 요구는 인증 키가 받아들여지지 않은 것이다(URL은 찍지 않는다).
+    // 1. Wait for `.running`. A login request means the auth key was not accepted (the URL is omitted).
     let started = ContinuousClock.now
     var status = await node.status
     while status.state != .running {
         report.finalState = stateName(status.state)
-        if case .needsLogin = status.state { throw GateFailure("로그인 요구(needsLogin): 인증 키가 받아들여지지 않았다") }
-        if status.state == .needsMachineAuth { throw GateFailure("기기 승인 요구(needsMachineAuth): 관리 콘솔에서 승인해야 한다") }
+        if case .needsLogin = status.state { throw GateFailure("Login required (needsLogin): the auth key was not accepted") }
+        if status.state == .needsMachineAuth { throw GateFailure("Device approval required (needsMachineAuth): approve in the admin console") }
         guard started.duration(to: .now) < input.runningTimeout else {
-            throw GateFailure("\(input.runningTimeout) 안에 running이 되지 않음")
+            throw GateFailure("Did not reach running within \(input.runningTimeout)")
         }
         try await Task.sleep(for: .milliseconds(200))
         status = await node.status
@@ -203,13 +203,13 @@ private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, record
     report.peerCount = status.peerCount
     report.lockAtRunning = LockSnapshot(status.tailnetLock)
 
-    // 관문 1의 판정. 잠김과 무관하므로 먼저 본다(발급은 잠긴 동안에도 시도해 그 결과를 기록한다).
+    // Evaluate gate 1 first because it is independent of lock (issuance is attempted while locked too, and the result is recorded).
     let fqdn = status.fqdn
     resources.fqdn = fqdn
     report.certDomainCount = status.certDomains.count
     report.fqdnInCertDomains = fqdn.map { status.certDomains.contains($0) } ?? false
 
-    // 관문 2의 관리자. 서명을 기다리는 동안에도 돈다.
+    // Gate 2 manager. It also runs while waiting for the signature.
     let arrival = CertificateArrival()
     var issuance: (manager: CertificateManager, transport: CountingTransport, setDNS: SetDNSRecorder, started: ContinuousClock.Instant)?
     if report.fqdnInCertDomains, let fqdn, let anchors = input.certificateAnchors {
@@ -236,12 +236,12 @@ private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, record
             }
         }
     } else if !report.fqdnInCertDomains {
-        report.issuanceSkipped = "관문 1이 통과하지 않음"
+        report.issuanceSkipped = "Gate 1 did not pass"
     } else {
-        report.issuanceSkipped = "시험 앵커가 없음"
+        report.issuanceSkipped = "No test anchor"
     }
 
-    // 2·3. 잠겼으면 서명을 기다린다.
+    // 2 and 3. Wait for a signature if locked.
     if let request = status.tailnetLock.signingRequest {
         report.locked = true
         try await input.onLocked(HostGateLockedContext(request: request, arrival: arrival))
@@ -256,7 +256,7 @@ private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, record
         }
         report.unlockSeconds = unlockedAt.map { waiting.duration(to: $0).netstackSeconds }
         report.lockAfterWait = LockSnapshot(await node.status.tailnetLock)
-        // 흐름은 `run()`을 한 번만 부르므로, 같은 노드에서 풀린 사건이 보였으면 다시 시작 없이 풀린 것이다.
+        // The flow calls `run()` only once, so an unlock event on the same node means it unlocked without a restart.
         let changes = recorder.lockChanges
         if let lockedIndex = changes.firstIndex(where: { $0.signingRequest != nil }) {
             report.unlockedInSameRun = changes[(lockedIndex + 1)...].contains { $0.signingRequest == nil }
@@ -273,11 +273,11 @@ private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, record
     }
 
     guard report.fqdnInCertDomains, let fqdn else {
-        throw GateFailure("관문 1: certDomains에 자기 FQDN이 없다(HTTPS 인증서가 꺼진 tailnet일 수 있다)")
+        throw GateFailure("Gate 1: certDomains lacks the node's own FQDN (HTTPS certificates may be disabled on this tailnet)")
     }
     guard let issuance, let anchors = input.certificateAnchors else { return }
 
-    // 5. 첫 인증서.
+    // 5. First certificate.
     while arrival.value == nil, issuance.started.duration(to: .now) < input.issueTimeout {
         try await Task.sleep(for: .milliseconds(200))
     }
@@ -287,7 +287,7 @@ private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, record
     report.acmeRequests = issuance.transport.count
     guard let (certificate, at) = arrival.value else {
         report.lastFailure = await issuance.manager.status.lastFailure.map { scrubbed("\($0)", fqdn: fqdn) }
-        throw GateFailure("관문 2: \(input.issueTimeout) 안에 인증서를 받지 못함")
+        throw GateFailure("Gate 2: no certificate within \(input.issueTimeout)")
     }
     report.issued = true
     report.issueSeconds = issuance.started.duration(to: at).netstackSeconds
@@ -299,9 +299,9 @@ private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, record
         report.reusedStored = issuance.transport.count == 0 && calls.isEmpty
     }
 
-    // 6. tailnet 443 → 다리 → TLS 리스너. 자기 노드에 붙어 시험 앵커로 검증한다.
+    // 6. Tailnet port 443 → bridge → TLS listener. Connect to the same node and verify using the test anchor.
     guard let address = status.addresses.first(where: \.isIPv4) else {
-        report.tlsSkipped = "자기 IPv4 주소가 없음"
+        report.tlsSkipped = "No IPv4 address for the node"
         return
     }
     let bridge = LoopbackBridge(node: node)
@@ -317,7 +317,7 @@ private func hostGateSteps(_ input: HostGateFlowInput, node: TailnetNode, record
     }
 }
 
-/// 상태 이름(로그인 URL은 담지 않는다).
+/// State names without the login URL.
 func stateName(_ state: NodeState) -> String {
     switch state {
     case .starting: "starting"
@@ -327,7 +327,7 @@ func stateName(_ state: NodeState) -> String {
     }
 }
 
-/// 오류 문자열에서 키·경로·메일(`redacted`)과 자기 FQDN·tailnet 이름을 가린다.
+/// Redacts keys, paths, and emails (`redacted`) along with the node's own FQDN and tailnet name from error strings.
 func scrubbed(_ text: String, fqdn: String?) -> String {
     var result = redacted(text)
     if let fqdn, !fqdn.isEmpty {
@@ -340,11 +340,11 @@ func scrubbed(_ text: String, fqdn: String?) -> String {
     return result
 }
 
-/// 같은 프로세스에서 tailnet의 자기 주소 443으로 TLS 연결을 걸어 본다.
+/// Attempts a TLS connection to port 443 at the node's own tailnet address from the same process.
 ///
-/// `TailnetConnection`은 바이트 흐름이라 OS의 TLS를 바로 얹을 수 없다. 그래서 `127.0.0.1`의 평문 TCP 리스너(이 탐침 안의
-/// 중계)를 두고, 받은 연결마다 `node.connect`로 tailnet에 이어 바이트를 나른다. TLS 클라이언트(`NWConnection`)는 그 중계에
-/// 걸고 서버 이름은 FQDN이다. 서버 인증서는 시험 앵커만으로 검증한다(시스템 루트·네트워크 가져오기 없음).
+/// A `TailnetConnection` is a byte stream, so OS TLS cannot be layered directly over it. This probe uses a plaintext TCP listener on `127.0.0.1` as a
+/// relay. Each accepted connection forwards bytes over the tailnet via `node.connect`. The TLS client (`NWConnection`) connects to that relay
+/// with the FQDN as the server name. Only test anchors are used to verify the server certificate (no system roots or network fetching).
 struct TailnetTLSProbe: Sendable {
     var handshake = false
     var trustVerified = false
@@ -357,7 +357,7 @@ struct TailnetTLSProbe: Sendable {
         do {
             relay = try await LoopbackRelay.start(node: node, host: host)
         } catch {
-            result.withLock { $0.end = "중계를 띄우지 못함: \(redacted(String(describing: error)))" }
+            result.withLock { $0.end = "Could not start the relay: \(redacted(String(describing: error)))" }
             return result.withLock { $0 }
         }
         let queue = DispatchQueue(label: "test.tailnet.tls")
@@ -375,12 +375,12 @@ struct TailnetTLSProbe: Sendable {
         let ready = await waitUntilReady(connection, queue: queue, seconds: 30)
         if let ready {
             let relayFailures = relay.failures
-            result.withLock { $0.end = "준비 전 끝: \(ready)" + (relayFailures.isEmpty ? "" : "; 중계: \(relayFailures.joined(separator: "; "))") }
+            result.withLock { $0.end = "Ended before readiness: \(ready)" + (relayFailures.isEmpty ? "" : "; relay: \(relayFailures.joined(separator: "; "))") }
         } else {
             result.withLock { $0.handshake = true }
             let request = "POST /pair HTTP/1.1\r\nHost: \(domain)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             if let failure = await MinimalHTTPServer.send(connection, Array(request.utf8)) {
-                result.withLock { $0.end = "보내기 실패: \(failure)" }
+                result.withLock { $0.end = "Send failed: \(failure)" }
             } else {
                 var head: [UInt8] = []
                 let deadline = ContinuousClock.now + .seconds(30)
@@ -395,7 +395,7 @@ struct TailnetTLSProbe: Sendable {
                 let status = line.count >= 2 && line[0].hasPrefix("HTTP/") ? Int(line[1]) : nil
                 result.withLock {
                     $0.status = status
-                    if $0.end.isEmpty { $0.end = status == nil ? "응답 머리를 읽지 못함" : "응답 머리 받음" }
+                    if $0.end.isEmpty { $0.end = status == nil ? "Could not read the response header" : "Received the response header" }
                 }
             }
         }
@@ -405,7 +405,7 @@ struct TailnetTLSProbe: Sendable {
     }
 }
 
-/// `127.0.0.1`의 평문 TCP 리스너. 받은 연결마다 tailnet의 `host:443`에 이어 두 방향으로 바이트를 나른다.
+/// Plaintext TCP listener on `127.0.0.1`. Connects each accepted connection to `host:443` on the tailnet and forwards bytes in both directions.
 private final class LoopbackRelay: Sendable {
     let port: UInt16
     private let listener: NWListener
@@ -453,7 +453,7 @@ private final class LoopbackRelay: Sendable {
 
     private func pipe(_ local: NWConnection, node: TailnetNode, host: String) async {
         if let failure = await waitUntilReady(local, queue: DispatchQueue(label: "test.relay.connection"), seconds: 10) {
-            state.withLock { $0.failures.append("루프백 쪽 준비 실패: \(failure)") }
+            state.withLock { $0.failures.append("Loopback setup failed: \(failure)") }
             local.cancel()
             return
         }
@@ -461,7 +461,7 @@ private final class LoopbackRelay: Sendable {
         do {
             remote = try await node.connect(to: host, port: 443)
         } catch {
-            state.withLock { $0.failures.append("자기 주소로의 tailnet 연결 실패: \(error)") }
+            state.withLock { $0.failures.append("Tailnet connection to the node's own address failed: \(error)") }
             local.cancel()
             return
         }
@@ -510,7 +510,7 @@ private final class LoopbackRelay: Sendable {
     }
 }
 
-/// `.ready`까지 기다린다. 실패하거나 기한이 지나면 그 까닭.
+/// Waits for `.ready`. Returns the reason if it fails or times out.
 private func waitUntilReady(_ connection: NWConnection, queue: DispatchQueue, seconds: Int) async -> String? {
     await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
         let once = Mutex<CheckedContinuation<String?, Never>?>(continuation)
@@ -524,17 +524,17 @@ private func waitUntilReady(_ connection: NWConnection, queue: DispatchQueue, se
             }
         }
         connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + .seconds(seconds)) { once.withLock { $0.take() }?.resume(returning: "\(seconds)초 안에 끝나지 않음") }
+        queue.asyncAfter(deadline: .now() + .seconds(seconds)) { once.withLock { $0.take() }?.resume(returning: "Did not finish within \(seconds) seconds") }
     }
 }
 
-/// PEM 파일의 `CERTIFICATE` 블록들의 DER(나온 차례). 다른 블록이 있으면 실패한다.
+/// DER from the PEM file's `CERTIFICATE` blocks, in order. Any other block causes a failure.
 func certificateDERs(fromPEM pem: String) throws -> [[UInt8]] {
     let blocks = pem.components(separatedBy: "-----END CERTIFICATE-----").dropLast()
     let ders = try blocks.map { block -> [UInt8] in
-        guard let begin = block.range(of: "-----BEGIN CERTIFICATE-----") else { throw GateFailure("PEM에 CERTIFICATE 블록이 아닌 것이 있음") }
+        guard let begin = block.range(of: "-----BEGIN CERTIFICATE-----") else { throw GateFailure("PEM contains a block other than CERTIFICATE") }
         return try certificateDER(fromPEM: String(block[begin.lowerBound...]))
     }
-    guard !ders.isEmpty else { throw GateFailure("PEM에 CERTIFICATE 블록이 없음") }
+    guard !ders.isEmpty else { throw GateFailure("PEM contains no CERTIFICATE blocks") }
     return ders
 }

@@ -2,10 +2,10 @@ import SwiftailBase
 import SwiftailDERP
 import Testing
 
-/// 노트 3장의 바이트 표 그대로의 고정 벡터.
-@Suite("DERP 프레임")
+/// Fixed vectors reproduced exactly from the byte tables in chapter 3 of the notes.
+@Suite("DERP frames")
 struct DERPFramingTests {
-    @Test("SendPacket: 타입 0x04, 길이 32 + n, 목적지 키, 패킷")
+    @Test("SendPacket has type 0x04, length 32 + n, the destination key, and the packet")
     func sendPacketBytes() throws {
         var connection = try DERPFixtures.readyConnection()
         try connection.send([0xAA, 0xBB, 0xCC], to: DERPFixtures.nodeKey(0x11))
@@ -13,7 +13,7 @@ struct DERPFramingTests {
         #expect(connection.takeOutboundBytes() == expected)
     }
 
-    @Test("SendPacket은 프레임마다 한 덩어리로 순서대로 쌓인다")
+    @Test("SendPacket frames are queued in order as one contiguous block each")
     func sendPacketsInOrder() throws {
         var connection = try DERPFixtures.readyConnection()
         try connection.send([1], to: DERPFixtures.nodeKey(1))
@@ -23,7 +23,7 @@ struct DERPFramingTests {
         #expect(connection.takeOutboundBytes() == expected)
     }
 
-    @Test("RecvPacket: 앞 32바이트가 보낸 쪽 키, 나머지가 패킷. 키만 있으면 빈 패킷")
+    @Test("The first 32 bytes of RecvPacket are the sender's key and the rest is the packet. A key alone yields an empty packet")
     func recvPacket() throws {
         var connection = try DERPFixtures.readyConnection()
         let peer = try DERPFixtures.nodeKey(0x22)
@@ -31,7 +31,7 @@ struct DERPFramingTests {
         #expect(try connection.receive(DERPFixtures.Server.recvPacket(from: peer, [])) == [.packet([], from: peer)])
     }
 
-    @Test("32바이트 미만의 RecvPacket·PeerGone은 버리고 연결을 유지한다")
+    @Test("RecvPacket and PeerGone shorter than 32 bytes are discarded and the connection stays open")
     func shortBodiesAreDropped() throws {
         var connection = try DERPFixtures.readyConnection()
         let short = [UInt8](repeating: 1, count: 31)
@@ -42,7 +42,7 @@ struct DERPFramingTests {
         #expect(try connection.receive(DERPFixtures.Server.recvPacket(from: peer, [1])) == [.packet([1], from: peer)])
     }
 
-    @Test("PeerGone의 이유 코드: 0 disconnected, 1 notHere, 그 밖은 그대로, 이유 바이트가 없으면 disconnected")
+    @Test("PeerGone reason codes are 0 disconnected, 1 notHere, and any other value as-is. A missing reason byte means disconnected")
     func peerGoneReasons() throws {
         var connection = try DERPFixtures.readyConnection()
         let peer = try DERPFixtures.nodeKey(0x33)
@@ -54,7 +54,7 @@ struct DERPFramingTests {
         }
     }
 
-    @Test("Ping은 같은 8바이트의 Pong이 되어 나간다. 8바이트 미만은 버리고 넘치는 바이트는 자른다")
+    @Test("Ping produces a Pong with the same 8 bytes. Pings shorter than 8 bytes are discarded and excess bytes are truncated")
     func pingPong() throws {
         var connection = try DERPFixtures.readyConnection()
         let value: [UInt8] = [1, 2, 3, 4, 5, 6, 7, 8]
@@ -68,7 +68,7 @@ struct DERPFramingTests {
         #expect(connection.takeOutboundBytes() == [0x13, 0, 0, 0, 8] + value)
     }
 
-    @Test("모르는 프레임·Health·Restarting·KeepAlive·Pong·PeerPresent를 건너뛰고 그 뒤 프레임을 읽는다")
+    @Test("Unknown frames, Health, Restarting, KeepAlive, Pong, and PeerPresent are skipped and the following frame is read")
     func skipsUnhandledFrames() throws {
         var connection = try DERPFixtures.readyConnection()
         let peer = try DERPFixtures.nodeKey(0x44)

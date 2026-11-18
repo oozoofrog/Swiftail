@@ -1,11 +1,11 @@
-// M7 관문 (나) 1·2: 운영 제어 서버 + Let's Encrypt 스테이징으로 실제 인증서를 받는다(계약 `docs/contracts/SwiftailHost.md`
-// 7절 "관문 (나)"와 "관문 시험의 쓰는 법"). 같은 흐름(`runHostGateFlow`)을 계정 없이 testcontrol + pebble에서도 돌린다.
+// M7 gate (b) 1 and 2 obtain a real certificate using the production control server and Let's Encrypt staging (the `docs/contracts/SwiftailHost.md` contract,
+// §7, "Gate (b)" and "How to Run the Gate Tests"). The same flow (`runHostGateFlow`) also runs with testcontrol and pebble without an account.
 //
-// 스테이징 디렉터리 URL의 출처: tailscale.com v1.104.7 `cmd/k8s-operator/sts.go:119`의 `letsEncryptStagingEndpoint`.
+// Origin of the staging directory URL: `letsEncryptStagingEndpoint` in tailscale.com v1.104.7 `cmd/k8s-operator/sts.go:119`.
 // Copyright (c) Tailscale Inc & contributors; SPDX-License-Identifier: BSD-3-Clause.
 //
-// 실제 관문은 인증 키를 파일로 받고(값이 프로세스 목록과 로그에 남지 않게), 출력에는 개수·시간·참거짓·상태 이름만 쓴다.
-// 상태 디렉터리는 지우지 않는다: 두 번째 실행에서 저장된 신원·lock 상태·인증서를 다시 쓰는 것을 본다.
+// The real gate reads the auth key from a file to keep its value out of process listings and logs. It prints only counts, times, Booleans, and state names.
+// Keeps the state directory to verify that the second run reuses the saved identity, lock state, and certificate.
 
 import Foundation
 import Swiftail
@@ -25,32 +25,32 @@ private enum RealHostGateEnvironment {
     static let acmeDirectory = value("SWIFTAIL_REAL_ACME_DIRECTORY")
     static let signWaitSeconds = value("SWIFTAIL_REAL_SIGN_WAIT_SECONDS").flatMap(Int.init) ?? 600
     static let isEnabled = authKeyFile != nil && stateDirectory != nil
-    /// 서명 대기 + 10분.
+    /// Signature wait + 10 minutes.
     static let timeLimitMinutes = (max(signWaitSeconds, 0) + 59) / 60 + 10
 
-    /// Let's Encrypt 스테이징 디렉터리(위 머리말의 출처).
+    /// Let's Encrypt staging directory (see the origin in the file header).
     static let stagingDirectoryURL = URL(string: "https://acme-staging-v02.api.letsencrypt.org/directory")
 }
 
-@Suite("M7 관문 (나) 1·2: 실제 tailnet과 Let's Encrypt 스테이징",
+@Suite("M7 gate (b) 1 and 2: real tailnet and Let's Encrypt staging",
        .enabled(if: RealHostGateEnvironment.isEnabled,
-                "SWIFTAIL_REAL_AUTHKEY_FILE과 SWIFTAIL_REAL_HOST_STATE_DIR이 없어 건너뜁니다"),
+                "Skipping because SWIFTAIL_REAL_AUTHKEY_FILE and SWIFTAIL_REAL_HOST_STATE_DIR are missing"),
        .timeLimit(.minutes(RealHostGateEnvironment.timeLimitMinutes)))
 struct RealTailnetHostGateTests {
-    @Test("등록하면 certDomains에 자기 FQDN이 있고, 실제 set-dns와 스테이징으로 발급한 인증서로 tailnet TLS가 된다")
+    @Test("Registration adds the node's own FQDN to certDomains, and tailnet TLS works with a certificate issued via real set-dns and staging")
     func stagingIssuance() async throws {
         let environment = RealHostGateEnvironment.self
         let keyPath = try #require(environment.authKeyFile)
         let authKey = try String(contentsOfFile: keyPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        try #require(!authKey.isEmpty, "인증 키 파일이 비었다")
+        try #require(!authKey.isEmpty, "The auth key file is empty")
         let state = URL(filePath: try #require(environment.stateDirectory), directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
 
         let directoryURL = try #require(environment.acmeDirectory.map(URL.init(string:)) ?? environment.stagingDirectoryURL,
-                                        "SWIFTAIL_REAL_ACME_DIRECTORY가 URL이 아니다")
-        try #require(directoryURL.scheme == "https", "ACME 디렉터리는 https여야 한다")
+                                        "SWIFTAIL_REAL_ACME_DIRECTORY is not a URL")
+        try #require(directoryURL.scheme == "https", "The ACME directory must use https")
         try #require(directoryURL.host() != CertificateConfiguration.letsEncryptDirectoryURL.host(),
-                     "운영 Let's Encrypt 디렉터리다. 이 관문은 스테이징 전용이다(운영 발급은 횟수 한도가 있어 따로 한다)")
+                     "This is the production Let's Encrypt directory. This gate uses staging only (production issuance has rate limits and runs separately)")
         let anchors = try environment.acmeRoots.map { try certificateDERs(fromPEM: String(contentsOfFile: $0, encoding: .utf8)) }
 
         let signCommand = state.appending(path: "sign-command.txt")
@@ -59,47 +59,47 @@ struct RealTailnetHostGateTests {
             directoryURL: directoryURL, transportAnchors: nil, certificateAnchors: anchors,
             runningTimeout: .seconds(90), signWait: .seconds(environment.signWaitSeconds), issueTimeout: .seconds(300)
         ) { context in
-            // 두 값은 공개 키지만 노드를 가리키므로 표준 출력에 찍지 않고 상태 디렉터리의 파일로만 넘긴다.
+            // Both values are public keys but identify the node, so pass them only through a file in the state directory and keep them off standard output.
             let line = "tailscale lock sign \(context.request.nodeKey) \(context.request.lockKey)\n"
             try Data(line.utf8).write(to: signCommand, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: signCommand.path)
-            print("서명이 필요하다. 명령은 상태 디렉터리의 sign-command.txt에 있다(기다리는 한도 \(environment.signWaitSeconds)초)")
+            print("A signature is required. See sign-command.txt in the state directory (wait limit: \(environment.signWaitSeconds) seconds)")
         }
         let report = await runHostGateFlow(input)
         print(report.summary)
 
-        #expect(report.failure == nil, "흐름이 끝까지 가지 못했다")
-        #expect(report.runFailure == nil, "TailnetNode.run()이 취소 전에 끝났다")
-        #expect(report.fqdnInCertDomains, "관문 1: certDomains에 자기 FQDN이 없다")
+        #expect(report.failure == nil, "The flow did not run to completion")
+        #expect(report.runFailure == nil, "TailnetNode.run() ended before cancellation")
+        #expect(report.fqdnInCertDomains, "Gate 1: certDomains lacks the node's own FQDN")
         if report.locked {
-            #expect(report.unlockSeconds != nil, "기한 안에 서명으로 풀리지 않았다")
+            #expect(report.unlockSeconds != nil, "The signature did not unlock the node within the limit")
         }
         guard anchors != nil else { return }
-        #expect(report.issued, "관문 2: 스테이징 인증서를 받지 못했다")
-        #expect(report.chainVerifiesWithAnchors == true, "관문 2: 사슬이 스테이징 루트로 검증되지 않았다")
+        #expect(report.issued, "Gate 2: no staging certificate was received")
+        #expect(report.chainVerifiesWithAnchors == true, "Gate 2: the chain did not verify with the staging root")
         if report.storedCertificateBefore {
-            #expect(report.reusedStored == true, "두 번째 실행: 저장된 인증서를 새 발급 없이 쓰지 않았다")
+            #expect(report.reusedStored == true, "Second run: failed to reuse the stored certificate without new issuance")
         }
         if report.tlsSkipped == nil {
-            #expect(report.tls?.trustVerified == true, "tailnet TLS: 스테이징 루트로 검증되지 않았다")
+            #expect(report.tls?.trustVerified == true, "tailnet TLS: verification with the staging root failed")
             #expect(report.tls?.status == 200)
             #expect(report.tlsOriginIsSelf == true)
         }
     }
 }
 
-/// 같은 흐름을 계정 없이 돌린다. 상대는 `tailnet` 도구(testcontrol 사본 + DERP + pebble)다.
-@Suite("M7 관문 (나) 1·2의 흐름: 계정 없이", .enabled(if: tailnetBinary != nil, "SWIFTAIL_TAILNET가 없어 건너뜁니다"),
+/// Runs the same flow without an account, using the `tailnet` tool (testcontrol copy + DERP + pebble) as the counterpart.
+@Suite("M7 gate (b) 1 and 2 flow without an account", .enabled(if: tailnetBinary != nil, "Skipping because SWIFTAIL_TAILNET is missing"),
        .serialized, .timeLimit(.minutes(10)))
 struct HostGateFlowTests {
-    @Test("lock 없는 tailnet: 관문 1·2와 tailnet TLS, 두 번째 실행은 저장된 인증서를 새 발급 없이 쓴다")
+    @Test("Tailnet without lock: gates 1 and 2 and tailnet TLS, with no new issuance when the second run uses the stored certificate")
     func unlockedFlowTwice() async throws {
         try await withLockGate(capability: false) { gate in
             let acme = try await gate.command(.init(cmd: "acmeStart"), expecting: "acmeStart")
-            let root = try certificateDER(fromPEM: try requireValue(acme.rootPEM, "acmeStart rootPEM 없음"))
-            let directoryURL = try requireValue(acme.directoryURL.flatMap(URL.init(string:)), "acmeStart directoryURL 없음")
+            let root = try certificateDER(fromPEM: try requireValue(acme.rootPEM, "acmeStart returned no rootPEM"))
+            let directoryURL = try requireValue(acme.directoryURL.flatMap(URL.init(string:)), "acmeStart returned no directoryURL")
             let input = Self.input(gate, directoryURL: directoryURL, root: root) { _ in
-                Issue.record("lock 없는 tailnet에서 잠김")
+                Issue.record("Locked on a tailnet without lock")
             }
 
             let first = await runHostGateFlow(input)
@@ -117,24 +117,24 @@ struct HostGateFlowTests {
             print(second.summary)
             #expect(second.failure == nil && second.runFailure == nil)
             #expect(second.storedCertificateBefore && second.issued)
-            #expect(second.reusedStored == true, "두 번째 실행은 ACME 요청과 set-dns 없이 저장된 인증서를 낸다")
+            #expect(second.reusedStored == true, "The second run presents the stored certificate without ACME requests or set-dns")
             #expect(second.tls?.trustVerified == true && second.tls?.status == 200)
-            await gate.tool.checkpoint("관문 (나) 흐름(계정 없이, lock 없음): 첫 실행 발급 \(first.issueSeconds ?? -1)초, set-dns \(first.setDNSSeconds), 두 번째 실행 ACME 요청 \(second.acmeRequests)개")
+            await gate.tool.checkpoint("Gate (b) flow (no account, no lock): first-run issuance \(first.issueSeconds ?? -1) seconds, set-dns \(first.setDNSSeconds), second-run ACME requests \(second.acmeRequests)")
         }
     }
 
-    @Test("lock 켜진 tailnet: 잠김 → (잠긴 동안 발급을 기다림) → 서명 → 다시 시작 없이 풀림 → 관문 1·2와 tailnet TLS")
+    @Test("Tailnet with lock enabled: locked → wait for issuance while locked → sign → unlock without restarting → gates 1 and 2 and tailnet TLS")
     func lockedFlow() async throws {
         try await withLockGate { gate in
             _ = try await gate.addPeer("go-peer-a")
             let started = try await gate.command(.init(cmd: "lockInit", name: "go-peer-a"), expecting: "lockInit")
             try #require(started.enabled == true && started.nodeKeySigned == true)
             let acme = try await gate.command(.init(cmd: "acmeStart"), expecting: "acmeStart")
-            let root = try certificateDER(fromPEM: try requireValue(acme.rootPEM, "acmeStart rootPEM 없음"))
-            let directoryURL = try requireValue(acme.directoryURL.flatMap(URL.init(string:)), "acmeStart directoryURL 없음")
+            let root = try certificateDER(fromPEM: try requireValue(acme.rootPEM, "acmeStart returned no rootPEM"))
+            let directoryURL = try requireValue(acme.directoryURL.flatMap(URL.init(string:)), "acmeStart returned no directoryURL")
             let input = Self.input(gate, directoryURL: directoryURL, root: root) { context in
-                // 잠긴 동안 발급이 되는지 보려고 서명 전에 첫 인증서를 기다린다(오지 않으면 그대로 서명으로 간다).
-                try? await netstackWait("잠긴 동안의 첫 인증서", seconds: 90) { context.certificateArrived }
+                // Wait for the first certificate before signing to see if issuance works while locked. If none arrives, proceed to signing.
+                try? await netstackWait("first certificate while locked", seconds: 90) { context.certificateArrived }
                 _ = try await gate.command(.init(cmd: "lockSign", name: "go-peer-a", nodeKey: context.request.nodeKey,
                                                  lockKey: context.request.lockKey), expecting: "lockSign")
             }
@@ -144,12 +144,12 @@ struct HostGateFlowTests {
             #expect(report.failure == nil && report.runFailure == nil)
             #expect(report.locked)
             #expect(report.lockAtRunning?.mode == .enforcing && report.lockAtRunning?.isLockedOut == true)
-            #expect(report.unlockSeconds != nil && report.unlockedInSameRun, "서명 뒤 다시 시작 없이 풀린다")
+            #expect(report.unlockSeconds != nil && report.unlockedInSameRun, "Unlocks after signing without restarting")
             #expect(report.lockAfterWait?.isLockedOut == false)
             #expect(report.fqdnInCertDomains && report.issued && report.chainVerifiesWithAnchors == true)
             #expect(report.issuedWhileLocked != nil)
             #expect(report.tls?.trustVerified == true && report.tls?.status == 200 && report.tlsOriginIsSelf == true)
-            await gate.tool.checkpoint("관문 (나) 흐름(계정 없이, lock 켜짐): 잠긴 동안 첫 인증서 \(report.issuedWhileLocked.map { "\($0)" } ?? "-")(testcontrol 사본의 set-dns는 lock을 보지 않는다. 운영 서버의 동작은 아니다), 서명 뒤 \(report.unlockSeconds ?? -1)초에 풀림")
+            await gate.tool.checkpoint("Gate (b) flow (no account, lock enabled): first certificate while locked \(report.issuedWhileLocked.map { "\($0)" } ?? "-") (set-dns in the testcontrol copy does not check lock, unlike the production server), unlocked \(report.unlockSeconds ?? -1) seconds after signing")
         }
     }
 

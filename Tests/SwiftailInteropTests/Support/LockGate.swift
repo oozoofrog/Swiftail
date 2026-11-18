@@ -1,6 +1,6 @@
-// Tailnet Lock 관문 (가)의 하네스(docs/contracts/SwiftailTailnetLock.md 7절): `tailnet` 도구(testcontrol 사본 + DERP + STUN),
-// 서명 기기 노릇을 하는 Go 피어, 메모리 장치의 Swift 노드들. 기존 관문의 `withGate`와 같이 도구와 노드를 시험마다 새로 띄우고
-// 성공·실패·취소에서 모두 회수한다(상태 디렉터리는 TMPDIR 아래).
+// Harness for Tailnet Lock gate (a) (docs/contracts/SwiftailTailnetLock.md §7): the `tailnet` tool (testcontrol copy + DERP + STUN),
+// a Go peer acting as the signing device, and Swift nodes on in-memory devices. Like `withGate` in the existing gate, starts a fresh tool and nodes per test and
+// cleans up on success, failure, or cancellation (the state directory is under TMPDIR).
 
 import Foundation
 import SwiftailBase
@@ -10,12 +10,12 @@ import Testing
 
 @testable import Swiftail
 
-/// 노드의 사건과 받은 패킷을 `run()` 내내 모은다.
+/// Collects node events and received packets throughout `run()`.
 ///
-/// 두 흐름은 구독자가 하나이고, 기다리던 읽기를 기한으로 취소하면 흐름이 끝나 버린다. 그래서 기다리는 쪽은 흐름을 직접 읽지
-/// 않고 이 기록을 폴링한다.
+/// Each stream has one subscriber, and canceling a pending read at a deadline ends the stream. Waiters therefore poll this record instead of
+/// reading the streams directly.
 final class NodeRecorder: Sendable {
-    /// 사건 하나와 그 사건을 받은 직후에 읽은 `status`.
+    /// One event and the `status` read immediately after receiving it.
     struct Entry: Sendable {
         let event: NodeEvent
         let status: NodeStatus
@@ -30,18 +30,18 @@ final class NodeRecorder: Sendable {
     var events: [Entry] { entries.withLock { $0 } }
     var packetCount: Int { received.withLock { $0.count } }
 
-    /// `start` 번째부터 받은 패킷 가운데 `predicate`에 맞는 것이 있는가.
+    /// Checks whether any packet received at or after index `start` matches `predicate`.
     func received(since start: Int, where predicate: (ReceivedPacket) -> Bool) -> Bool {
         received.withLock { $0.dropFirst(start).contains(where: predicate) }
     }
 
-    /// 받은 `tailnetLockChanged`의 값들(받은 순서).
+    /// The received `tailnetLockChanged` values in arrival order.
     var lockChanges: [TailnetLockStatus] {
         events.compactMap { if case let .tailnetLockChanged(lock) = $0.event { lock } else { nil } }
     }
 }
 
-/// 관문의 Swift 노드 하나. 메모리 장치라 UDP·TCP를 패킷으로 주고받는다(기존 관문 3·4와 같은 길).
+/// A Swift node in the gate. Its in-memory device exchanges UDP and TCP as packets (the same path as in existing gates 3 and 4).
 final class LockNode: Sendable {
     let node: TailnetNode
     let directory: URL
@@ -58,7 +58,7 @@ final class LockNode: Sendable {
                 for await event in node.events { recorder.append(event, await node.status) }
             },
             Task {
-                // 이 관문이 보내는 것은 UDP·TCP뿐이다. 다른 패킷(ICMP 등)은 해석하지 못하므로 건너뛴다.
+                // This gate sends only UDP and TCP. Skip other packets (ICMP, for example) because they cannot be parsed.
                 for await bytes in node.inboundPackets { if let packet = try? ReceivedPacket(bytes) { recorder.append(packet) } }
             },
         ]
@@ -68,7 +68,7 @@ final class LockNode: Sendable {
         self.recorder = recorder
     }
 
-    /// `run()`을 끝내고 회수한다. 끝난 까닭이 취소가 아니면 그 설명을 돌려준다.
+    /// Stops and joins `run()`. Returns a description if it ended for a reason other than cancellation.
     @discardableResult
     func stop() async -> String? {
         run.cancel()
@@ -80,10 +80,10 @@ final class LockNode: Sendable {
 
     var status: NodeStatus { get async { await node.status } }
 
-    /// Swift 노드의 netmap(걸러진 것)에 있는 피어의 node 키.
+    /// Node keys of peers in the Swift node's filtered netmap.
     var peerKeys: Set<String> { get async { Set(await node.lastNetmap?.peers.map(\.key.description) ?? []) } }
 
-    /// 자기 node 키. netmap 전에는 nil.
+    /// The node's own node key. Nil before the netmap arrives.
     var selfKey: String? { get async { await node.lastNetmap?.selfNode.key.description } }
 
     var lockFile: URL { directory.appending(path: "tailnet-lock.cbor") }
@@ -93,12 +93,12 @@ final class LockNode: Sendable {
     }
 }
 
-/// 시험 하나의 lock 관문.
+/// The lock gate for one test.
 struct LockGate: Sendable {
-    /// 안 되는 쪽(응답 없음)을 볼 때 기다리는 시간. 되는 쪽은 루프백의 DERP에서 첫 패킷이 보통 1초 안에 오지만(관측값은 각 단계의
-    /// checkpoint에 남긴다), 첫 WireGuard 핸드셰이크와 재송신 간격(0.5초)을 넉넉히 덮는다.
+    /// How long to wait when expecting no response. In the working case, the first packet usually arrives within 1 second via loopback DERP (observations go in
+    /// each stage's checkpoint). This window comfortably covers the initial WireGuard handshake and retransmission interval (0.5 seconds).
     static let silence: Duration = .seconds(6)
-    /// 되는 쪽을 기다리는 한도.
+    /// Time limit for the working case.
     static let reachable: Duration = .seconds(25)
 
     final class Registry: Sendable {
@@ -115,7 +115,7 @@ struct LockGate: Sendable {
     let root: URL
     let registry: Registry
 
-    // MARK: 도구 명령
+    // MARK: Tool commands
 
     func command(_ value: GoTailnet.Command, expecting kind: String) async throws -> GoTailnet.Event {
         try await tool.command(value, expecting: kind)
@@ -135,17 +135,17 @@ struct LockGate: Sendable {
         try #require(await command(.init(cmd: "lockRegistrations"), expecting: "lockRegistrations").registrations)
     }
 
-    /// testcontrol이 받은 `/machine/tka/` 요청.
+    /// The `/machine/tka/` requests received by testcontrol.
     func tkaRequests() async throws -> [GoTailnet.SetDNSRequest] {
         try #require(await command(.init(cmd: "lockRequests"), expecting: "lockRequests").requests)
     }
 
-    /// `nodeKey`가 보낸 `/machine/tka/<kind>` 요청 수.
+    /// Number of `/machine/tka/<kind>` requests sent by `nodeKey`.
     func tkaRequestCount(_ kind: String, from nodeKey: String) async throws -> Int {
         try await tkaRequests().count { $0.path == "/machine/tka/\(kind)" && $0.nodeKey == nodeKey }
     }
 
-    /// testcontrol의 등록 목록에 있는 모든 node 키.
+    /// All node keys in the testcontrol registration list.
     func registeredKeys() async throws -> Set<String> {
         Set(try #require(await command(.init(cmd: "nodes"), expecting: "nodes").nodes).map(\.nodeKey))
     }
@@ -154,17 +154,17 @@ struct LockGate: Sendable {
         _ = try await command(.init(cmd: "setLockBootstrapFault", enabled: enabled), expecting: "lockBootstrapFault")
     }
 
-    // MARK: 이름
+    // MARK: Names
 
-    /// 보고에 키 대신 이름을 쓴다.
+    /// Uses names instead of keys in reports.
     func name(_ key: String, _ name: String) { registry.state.withLock { $0.names[key] = name } }
 
     func names(_ keys: Set<String>) -> String {
-        let names = registry.state.withLock { state in keys.map { state.names[$0] ?? "이름 없는 노드" } }
+        let names = registry.state.withLock { state in keys.map { state.names[$0] ?? "unnamed node" } }
         return "[" + names.sorted().joined(separator: ", ") + "]"
     }
 
-    // MARK: Swift 노드
+    // MARK: Swift nodes
 
     func startNode(_ label: String, hostname: String = "rd-mac-1a2b3c4d", authKey: String? = nil) throws -> LockNode {
         let node = try LockNode(directory: root.appending(path: label), hostname: hostname,
@@ -173,7 +173,7 @@ struct LockGate: Sendable {
         return node
     }
 
-    /// Swift 노드의 `status`가 `predicate`를 만족할 때까지 기다려 그 값을 돌려준다.
+    /// Waits until the Swift node's `status` satisfies `predicate` and returns that value.
     @discardableResult
     func wait(_ node: LockNode, _ stage: String, seconds: Int = 30,
               _ predicate: @Sendable (NodeStatus) -> Bool) async throws -> NodeStatus {
@@ -185,61 +185,61 @@ struct LockGate: Sendable {
                 return predicate(status)
             }
         } catch {
-            throw GateFailure("\(error) — 마지막 상태: \(describe(last))")
+            throw GateFailure("\(error) — last status: \(describe(last))")
         }
         return try #require(last)
     }
 
-    /// `seconds` 동안 `predicate`가 계속 참인지 본다(바뀌지 않아야 하는 것).
+    /// Checks that `predicate` stays true for `seconds` for a condition that should not change.
     func holds(_ node: LockNode, _ stage: String, seconds: Int = 3,
                _ predicate: @Sendable (NodeStatus) -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(seconds)
         while ContinuousClock.now < deadline {
             let status = await node.status
-            guard predicate(status) else { throw GateFailure("\(stage): 바뀌지 않아야 하는데 바뀜 — \(describe(status))") }
+            guard predicate(status) else { throw GateFailure("\(stage): changed when it should have stayed the same — \(describe(status))") }
             try await Task.sleep(for: .milliseconds(100))
         }
     }
 
     func describe(_ status: NodeStatus?) -> String {
-        guard let status else { return "없음" }
+        guard let status else { return "none" }
         let lock = status.tailnetLock
-        return "state \(status.state), mode \(lock.mode), issue \(lock.issue.map { "\($0)" } ?? "없음"), "
-            + "head \(lock.head.map { String($0.prefix(8)) } ?? "없음"), signingRequest \(lock.signingRequest == nil ? "없음" : "있음"), "
+        return "state \(status.state), mode \(lock.mode), issue \(lock.issue.map { "\($0)" } ?? "none"), "
+            + "head \(lock.head.map { String($0.prefix(8)) } ?? "none"), signingRequest \(lock.signingRequest == nil ? "absent" : "present"), "
             + "peerCount \(status.peerCount), filteredPeerCount \(lock.filteredPeerCount)"
     }
 
-    // MARK: 판정 견주기
+    // MARK: Comparing decisions
 
-    /// 같은 시점의 Go 피어 `goName`의 판정과 Swift 노드의 판정이 같아질 때까지 기다린다(계약 7절 관문 (가) 5).
+    /// Waits for Go peer `goName` and the Swift node to agree at the same point in time (contract §7, gate (a) 5).
     ///
-    /// 견주는 것: 머리 텍스트, 보이는 피어(Go의 `visiblePeers`, 서명된 Go 피어 자신 포함)와 Swift netmap의 피어, 거른 피어(Go의
-    /// `filteredPeers`, 서명 없는 Go 피어 자신 포함)와 Swift가 거른 피어(testcontrol의 등록 목록에서 Swift가 남긴 피어와 자기를
-    /// 뺀 것)와 그 수(`filteredPeerCount`), Go가 Swift 노드를 거르는지와 Swift 노드의 자기 잠김(`signingRequest`). Swift 노드 자신은 Go 쪽 두 집합에서 뺀다. 이 서버는 `UnsignedPeerAPIOnly`를 주지 않는다.
-    /// `controlHead`가 있으면(서버의 lock이 켜져 있으면) 머리가 그것과도 같아야 한다.
+    /// Compares head text, visible peers (Go's `visiblePeers`, including the signed Go peer itself) with peers in the Swift netmap, and filtered peers (Go's
+    /// `filteredPeers`, including the unsigned Go peer itself) with peers Swift filtered (the testcontrol registration list minus the peers Swift kept and Swift itself)
+    /// and their count (`filteredPeerCount`). Also compares whether Go filters the Swift node with the Swift node's own lockout (`signingRequest`). The Swift node itself is removed from both Go sets. This server does not supply `UnsignedPeerAPIOnly`.
+    /// If `controlHead` is present (server lock is enabled), the head must match it as well.
     func expectAgreement(_ node: LockNode, with goName: String, _ stage: String, seconds: Int = 30) async throws {
         var detail = ""
         do {
-            try await netstackWait("\(stage): \(goName)와 Swift 노드의 판정", seconds: seconds) {
+            try await netstackWait("\(stage): \(goName) and Swift node decisions", seconds: seconds) {
                 let go = try await lockStatus(goName)
                 let status = await node.status
                 let swiftPeers = await node.peerKeys
                 guard let selfKey = await node.selfKey, let goKey = go.nodeKey else { return false }
                 let registered = try await registeredKeys()
-                // Go 피어 자신은 자기 서명이 검증되면(`nodeKeySigned`) 보이는 쪽, 아니면 거른 쪽에 넣는다.
+                // Include the Go peer itself on the visible side if its own signature verifies (`nodeKeySigned`), and on the filtered side otherwise.
                 let goSigned = go.nodeKeySigned == true
                 let goVisible = Set(go.visiblePeers ?? []).union(goSigned ? [goKey] : []).subtracting([selfKey])
                 let goFiltered = Set(go.filteredPeers ?? []).union(goSigned ? [] : [goKey]).subtracting([selfKey])
-                // 자기 잠김: Go가 Swift 노드를 거르는 것과 Swift 노드가 스스로 잠겼다고 보는 것이 같다.
+                // Self lockout: Go filtering Swift matches the Swift node treating itself as locked.
                 let goFiltersSwift = go.filteredPeers?.contains(selfKey) == true
                 let goSeesSwift = go.visiblePeers?.contains(selfKey) == true
                 let swiftLocked = status.tailnetLock.signingRequest != nil
                 let swiftFiltered = registered.subtracting(swiftPeers).subtracting([selfKey])
                 let controlHead = go.controlHead ?? ""
-                detail = "Go 보임 \(names(goVisible)) / Swift 보임 \(names(swiftPeers)); "
-                    + "Go 거름 \(names(goFiltered)) / Swift 거름 \(names(swiftFiltered)) (filteredPeerCount \(status.tailnetLock.filteredPeerCount)); "
-                    + "Swift 잠김 \(swiftLocked) / Go가 거름 \(goFiltersSwift)·봄 \(goSeesSwift); "
-                    + "머리 일치 Go=\(status.tailnetLock.head == go.head) 서버=\(controlHead.isEmpty ? "서버 lock 꺼짐" : "\(status.tailnetLock.head == controlHead)")"
+                detail = "Go visible \(names(goVisible)) / Swift visible \(names(swiftPeers)); "
+                    + "Go filtered \(names(goFiltered)) / Swift filtered \(names(swiftFiltered)) (filteredPeerCount \(status.tailnetLock.filteredPeerCount)); "
+                    + "Swift locked \(swiftLocked) / Go filters \(goFiltersSwift) and sees \(goSeesSwift); "
+                    + "Head matches Go=\(status.tailnetLock.head == go.head) server=\(controlHead.isEmpty ? "server lock disabled" : "\(status.tailnetLock.head == controlHead)")"
                 return go.enabled == true && status.tailnetLock.mode == .enforcing
                     && status.tailnetLock.head != nil && status.tailnetLock.head == go.head
                     && (controlHead.isEmpty || controlHead == go.head)
@@ -249,13 +249,13 @@ struct LockGate: Sendable {
                     && goFiltersSwift == swiftLocked && goSeesSwift == !swiftLocked
             }
         } catch {
-            Issue.record("\(stage): Go와 Swift의 판정이 다름 — \(detail)")
+            Issue.record("\(stage): Go and Swift decisions differ — \(detail)")
             throw error
         }
-        await tool.checkpoint("\(stage): \(goName)와 같은 판정 — \(detail)")
+        await tool.checkpoint("\(stage): same decision as \(goName) — \(detail)")
     }
 
-    // MARK: 데이터면
+    // MARK: Data plane
 
     private func nextPort() -> UInt16 {
         registry.state.withLock { state in
@@ -264,7 +264,7 @@ struct LockGate: Sendable {
         }
     }
 
-    /// Swift 노드가 `peer`의 UDP 에코(포트 7)를 받기까지의 시간. `within` 안에 오지 않으면 nil.
+    /// Time for the Swift node to receive a UDP echo from `peer` (port 7), or nil if it does not arrive within `within`.
     func udpEcho(from node: LockNode, to peer: GatePeer, within: Duration) async throws -> Duration? {
         let port = nextPort()
         let payload = Array("tl10-\(port)".utf8)
@@ -275,7 +275,7 @@ struct LockGate: Sendable {
         }
     }
 
-    /// Swift 노드가 보낸 SYN에 `peer`의 TCP 포트 7이 SYN-ACK로 답하기까지의 시간. 오지 않으면 nil.
+    /// Time until `peer`'s TCP port 7 answers the Swift node's SYN with SYN-ACK, or nil if no reply arrives.
     func tcpHandshake(from node: LockNode, to peer: GatePeer, within: Duration) async throws -> Duration? {
         let port = nextPort()
         let source = try await node.address(), destination = try peer.address()
@@ -286,15 +286,15 @@ struct LockGate: Sendable {
         }
     }
 
-    /// Go 피어 `goName`이 Swift 노드에 보낸 UDP 데이터그램이나 TCP SYN이 Swift 노드의 장치에 닿기까지의 시간. 닿지 않으면 nil.
+    /// Time until a UDP datagram or TCP SYN from Go peer `goName` reaches the Swift node's device, or nil if it never arrives.
     ///
-    /// 메모리 장치에서는 필터를 통과한 패킷만 `inboundPackets`로 나온다. 닿지 않으면 Swift 노드는 그 패킷에 답할 수도 없다.
+    /// For an in-memory device, only packets that pass the filter appear in `inboundPackets`. If a packet does not arrive, the Swift node cannot answer it.
     func goSend(_ goName: String, to node: LockNode, proto: String, within: Duration) async throws -> Duration? {
         let port = nextPort()
         let payload = Array("tl10-\(port)".utf8)
         let target = try await node.address().description
         return try await exchange(node, within: within, send: {
-            // TCP는 도구가 2초 동안 연결을 시도한다(그사이 Go가 SYN을 재송신한다). 쓰기 결과는 수신을 보장하지 않으므로 보지 않는다.
+            // For TCP, the tool attempts to connect for 2 seconds (Go retransmits SYN during that time). The write result does not guarantee receipt, so ignore it.
             _ = try await command(.init(cmd: "peerSend", name: goName, to: target, port: port, proto: proto, payload: payload.hex),
                                   expecting: "peerSend")
         }) {
@@ -302,7 +302,7 @@ struct LockGate: Sendable {
         }
     }
 
-    /// `send`를 0.5초마다 되풀이하며 기록에서 `predicate`에 맞는 패킷을 찾는다.
+    /// Repeats `send` every 0.5 seconds and looks in the record for a packet matching `predicate`.
     private func exchange(_ node: LockNode, within: Duration, send: () async throws -> Void,
                           matching predicate: (ReceivedPacket) -> Bool) async throws -> Duration? {
         let start = ContinuousClock.now, mark = node.recorder.packetCount
@@ -317,23 +317,23 @@ struct LockGate: Sendable {
         return node.recorder.received(since: mark, where: predicate) ? start.duration(to: .now) : nil
     }
 
-    /// 되는 쪽: `within` 안에 와야 한다. 걸린 시간을 남긴다.
+    /// Reachable case: the packet must arrive within `within`. Records the elapsed time.
     func expectReachable(_ stage: String, _ probe: () async throws -> Duration?) async throws {
-        guard let elapsed = try await probe() else { throw GateFailure("\(stage): \(Self.reachable) 안에 오지 않음") }
+        guard let elapsed = try await probe() else { throw GateFailure("\(stage): did not arrive within \(Self.reachable)") }
         await tool.checkpoint("\(stage): \(elapsed.formatted(.units(allowed: [.milliseconds])))")
     }
 
-    /// 안 되는 쪽: `silence` 동안 오지 않아야 한다.
+    /// Unreachable case: no packet must arrive during `silence`.
     func expectSilent(_ stage: String, _ probe: () async throws -> Duration?) async throws {
         if let elapsed = try await probe() {
-            Issue.record("\(stage): 오지 않아야 하는데 \(elapsed.formatted(.units(allowed: [.milliseconds]))) 만에 옴")
+            Issue.record("\(stage): unexpectedly arrived after \(elapsed.formatted(.units(allowed: [.milliseconds])))")
         } else {
-            await tool.checkpoint("\(stage): \(Self.silence) 동안 오지 않음")
+            await tool.checkpoint("\(stage): did not arrive during \(Self.silence)")
         }
     }
 }
 
-/// lock 관문 하나를 띄우고 회수한다. `capability`면 첫 등록 전에 모든 노드의 CapMap에 `tailnet-lock`을 싣는다.
+/// Starts and cleans up one lock gate. If `capability` is true, includes `tailnet-lock` in every node's CapMap before the first registration.
 func withLockGate(capability: Bool = true, _ body: (LockGate) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-tl10-\(UUID().uuidString)")
     let tool = GoTailnet(temporaryDirectory: directory)
@@ -341,7 +341,7 @@ func withLockGate(capability: Bool = true, _ body: (LockGate) async throws -> Vo
     defer {
         if FileManager.default.fileExists(atPath: directory.path) {
             do { try FileManager.default.removeItem(at: directory) }
-            catch { Issue.record("lock 관문 상태 디렉터리 정리 실패: \(redacted(String(describing: error)))") }
+            catch { Issue.record("Could not clean up the lock gate state directory: \(redacted(String(describing: error)))") }
         }
     }
     func stopNodes() async -> [String] {
@@ -361,7 +361,7 @@ func withLockGate(capability: Bool = true, _ body: (LockGate) async throws -> Vo
         try await body(gate)
         let failures = await stopNodes()
         await tool.stop()
-        if !failures.isEmpty { throw GateFailure("TailnetNode.run이 취소 전에 끝남: \(failures.joined(separator: "; "))") }
+        if !failures.isEmpty { throw GateFailure("TailnetNode.run ended before cancellation: \(failures.joined(separator: "; "))") }
     } catch {
         let failures = await stopNodes()
         await tool.stop()

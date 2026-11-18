@@ -5,9 +5,9 @@ import SwiftailCrypto
 import SwiftailDERP
 import Testing
 
-@Suite("DERP 임의 입력과 비밀")
+@Suite("DERP random input and secrets")
 struct DERPRobustnessTests {
-    /// 어떤 바이트열이 어떤 조각으로 와도 죽지 않는다. 결과는 사건이거나 `DERPError`다.
+    /// No byte sequence or chunking causes a crash. The result is either events or a `DERPError`.
     private func feed(_ connection: inout DERPConnection, _ input: [UInt8], using generator: inout SplitMix64) {
         var rest = input[...]
         while !rest.isEmpty {
@@ -18,7 +18,7 @@ struct DERPRobustnessTests {
         }
     }
 
-    @Test("완전히 임의인 바이트를 처음부터 넣어도 죽지 않는다")
+    @Test("Does not crash when given entirely random bytes from the start")
     func randomBytesFromStart() throws {
         var generator = SplitMix64(state: 1)
         for _ in 0..<200 {
@@ -28,7 +28,7 @@ struct DERPRobustnessTests {
         }
     }
 
-    @Test("올바른 머리와 ServerKey 뒤에 임의 바이트·임의 프레임이 와도 죽지 않는다")
+    @Test("Does not crash when random bytes or frames follow a valid header and ServerKey")
     func randomFramesAfterHandshake() throws {
         var generator = SplitMix64(state: 2)
         let types: [UInt8] = [0x01, 0x03, 0x05, 0x06, 0x08, 0x09, 0x12, 0x13, 0x14, 0x15, 0x00, 0xFF]
@@ -44,7 +44,7 @@ struct DERPRobustnessTests {
         }
     }
 
-    @Test("임의 바이트에서 만든 send와 receive를 섞어도 죽지 않는다")
+    @Test("Does not crash when interleaving send and receive with random bytes")
     func randomSendsAndFailures() throws {
         var generator = SplitMix64(state: 3)
         var connection = try DERPFixtures.readyConnection()
@@ -56,7 +56,7 @@ struct DERPRobustnessTests {
         }
     }
 
-    @Test("dump와 description에 개인 키와 공유 키가 나오지 않는다")
+    @Test("dump and description omit the private key and shared key")
     func secretsAreHidden() throws {
         let privateKey = try DERPFixtures.bytes(DERPFixtures.clientSeed)
         let sharedKey = try NaClBox.sharedKey(privateKey: privateKey, peerPublicKey: DERPFixtures.bytes(DERPFixtures.serverPublic))
@@ -79,7 +79,7 @@ struct DERPRobustnessTests {
         }
     }
 
-    @Test("DERPClient의 dump와 description에도 개인 키가 나오지 않는다")
+    @Test("DERPClient's dump and description also omit the private key")
     func clientSecretsAreHidden() throws {
         let key = try DERPFixtures.privateKey(seed: DERPFixtures.clientSeed)
         let client = DERPClient(servers: [DERPServer(hostName: "derp.example.test")], privateKey: key, isPreferred: true)

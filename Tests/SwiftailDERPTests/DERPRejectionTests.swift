@@ -2,17 +2,17 @@ import SwiftailBase
 import SwiftailDERP
 import Testing
 
-/// 서버가 규격을 어기거나 한도를 넘을 때: 오류의 종류, 받아 둔 바이트 버리기, 실패 뒤 `closed`.
-@Suite("DERP 거절과 한도")
+/// Checks the error type, discarding received bytes, and reaching `closed` after failure when a server violates the spec or exceeds a limit.
+@Suite("DERP rejection and limits")
 struct DERPRejectionTests {
-    /// 실패한 연결은 이후 모든 호출이 `closed`이고 내보낼 바이트도 없다.
+    /// After a connection fails, all subsequent calls return `closed` and there are no outbound bytes.
     private func expectClosed(_ connection: inout DERPConnection, sourceLocation: SourceLocation = #_sourceLocation) throws {
         #expect(throws: DERPError.closed, sourceLocation: sourceLocation) { try connection.receive([0x06, 0, 0, 0, 0]) }
         #expect(throws: DERPError.closed, sourceLocation: sourceLocation) { try connection.send([1], to: DERPFixtures.nodeKey(1)) }
         #expect(connection.takeOutboundBytes().isEmpty, sourceLocation: sourceLocation)
     }
 
-    @Test("101이 아닌 상태는 upgradeRejected다")
+    @Test("A status other than 101 yields upgradeRejected")
     func notSwitchingProtocols() throws {
         for status in [200, 400, 426, 503] {
             var connection = try DERPFixtures.connection()
@@ -22,13 +22,13 @@ struct DERPRejectionTests {
         }
     }
 
-    @Test("101이 아니면 머리가 이상해도 상태가 먼저다")
+    @Test("For a status other than 101, the status takes precedence even if the header is malformed")
     func statusBeforeMalformedHeader() throws {
         var connection = try DERPFixtures.connection()
         #expect(throws: DERPError.upgradeRejected(status: 404)) { try connection.receive(Array("HTTP/1.1 404 No\r\nbad header line\r\n\r\n".utf8)) }
     }
 
-    @Test("응답 머리가 형식에 맞지 않거나 16KiB를 넘으면 malformed다")
+    @Test("A malformed response header or one exceeding 16KiB yields malformed")
     func malformedHead() throws {
         var garbage = try DERPFixtures.connection()
         #expect(throws: DERPError.malformed) { try garbage.receive(Array("not http\r\n\r\n".utf8)) }
@@ -39,7 +39,7 @@ struct DERPRejectionTests {
         try expectClosed(&huge)
     }
 
-    @Test("magic이 틀린 ServerKey는 handshakeFailed다")
+    @Test("ServerKey with incorrect magic yields handshakeFailed")
     func wrongMagic() throws {
         var connection = try DERPFixtures.connection()
         var body = try DERPFixtures.bytes(DERPFixtures.serverPublic)
@@ -48,7 +48,7 @@ struct DERPRejectionTests {
         try expectClosed(&connection)
     }
 
-    @Test("ServerKey 본문이 40바이트 미만이거나 1,024바이트를 넘으면 handshakeFailed다")
+    @Test("A ServerKey body shorter than 40 bytes or longer than 1,024 bytes yields handshakeFailed")
     func serverKeyLengths() throws {
         let valid = try DERPFixtures.Server.magic + DERPFixtures.bytes(DERPFixtures.serverPublic)
         for body in [Array(valid.dropLast()), valid + [UInt8](repeating: 0, count: 1_025 - valid.count)] {
@@ -56,20 +56,20 @@ struct DERPRejectionTests {
             #expect(throws: DERPError.handshakeFailed) { try connection.receive(DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.frame(0x01, body)) }
             try expectClosed(&connection)
         }
-        // 정확히 1,024바이트는 받는다.
+        // Accepts exactly 1,024 bytes.
         var accepted = try DERPFixtures.connection()
         let events = try accepted.receive(DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.frame(0x01, valid + [UInt8](repeating: 0, count: 1_024 - valid.count)))
         #expect(events == [.ready])
     }
 
-    @Test("ServerKey 자리에 다른 프레임이 오면 handshakeFailed다")
+    @Test("A different frame in place of ServerKey yields handshakeFailed")
     func firstFrameIsNotServerKey() throws {
         var connection = try DERPFixtures.connection()
         #expect(throws: DERPError.handshakeFailed) { try connection.receive(DERPFixtures.Server.upgradeResponse + DERPFixtures.Server.frame(0x06, [])) }
         try expectClosed(&connection)
     }
 
-    @Test("열리지 않는 ServerInfo는 handshakeFailed, 열렸지만 JSON이 아니면 malformed다")
+    @Test("ServerInfo that cannot be opened yields handshakeFailed. ServerInfo that opens but is not JSON yields malformed")
     func badServerInfo() throws {
         var tampered = try DERPFixtures.readyConnection()
         var frame = try DERPFixtures.Server.serverInfoFrame()
@@ -85,12 +85,12 @@ struct DERPRejectionTests {
         try expectClosed(&notJSON)
     }
 
-    @Test("프레임 본문은 1MiB까지 받고 1MiB + 1바이트는 머리만 보고 frameTooLarge다")
+    @Test("Frame bodies up to 1MiB are accepted and 1MiB + 1 byte yields frameTooLarge based on the header alone")
     func frameBodyLimit() throws {
         var accepted = try DERPFixtures.readyConnection()
         #expect(try accepted.receive(DERPFixtures.Server.frame(0xEE, [UInt8](repeating: 0, count: 1 << 20))).isEmpty)
 
-        // 본문이 한 바이트도 오기 전에 거절한다. 한도를 넘는 메모리를 쌓지 않는다.
+        // Rejects before even one byte of the body arrives. Memory does not grow beyond the limit.
         var connection = try DERPFixtures.readyConnection()
         let length = UInt32(1 << 20) + 1
         let head: [UInt8] = [0x05, UInt8(length >> 24), UInt8(truncatingIfNeeded: length >> 16), UInt8(truncatingIfNeeded: length >> 8), UInt8(truncatingIfNeeded: length)]
@@ -98,22 +98,22 @@ struct DERPRejectionTests {
         try expectClosed(&connection)
     }
 
-    @Test("답하지 않은 Pong이 64KiB를 넘으면 tooManyPendingReplies, takeOutboundBytes가 비우면 다시 받는다")
+    @Test("More than 64KiB of pending Pong replies yields tooManyPendingReplies. Pings are accepted again after takeOutboundBytes drains the replies")
     func pendingReplyLimit() throws {
         let ping = DERPFixtures.Server.frame(0x12, [UInt8](repeating: 7, count: 8))
-        // Pong 하나는 13바이트이므로 5,041개(65,533바이트)까지는 들어간다.
+        // A Pong is 13 bytes, so up to 5,041 (65,533 bytes) fit.
         let allowed = 65_536 / 13
         var connection = try DERPFixtures.readyConnection()
         #expect(try connection.receive([UInt8]((0..<allowed).map { _ in ping }.joined())).isEmpty)
         #expect(connection.takeOutboundBytes().count == allowed * 13)
         #expect(try connection.receive([UInt8]((0..<allowed).map { _ in ping }.joined())).isEmpty)
 
-        // 꺼내지 않은 채 하나 더 넣으면 넘는다.
+        // Adding one more without draining them exceeds the limit.
         #expect(throws: DERPError.tooManyPendingReplies) { try connection.receive(ping + ping) }
         try expectClosed(&connection)
     }
 
-    @Test("준비 전 send는 notReady이고 연결을 끝내지 않는다")
+    @Test("Calling send before readiness yields notReady and leaves the connection open")
     func sendBeforeReady() throws {
         var connection = try DERPFixtures.connection()
         let peer = try DERPFixtures.nodeKey(1)
@@ -124,7 +124,7 @@ struct DERPRejectionTests {
         try connection.send([1], to: peer)
     }
 
-    @Test("패킷은 65,536바이트까지 보내고 65,537바이트는 packetTooLarge다. 연결은 산다")
+    @Test("Sends packets up to 65,536 bytes. A packet of 65,537 bytes yields packetTooLarge and leaves the connection open")
     func packetSizeLimit() throws {
         var connection = try DERPFixtures.readyConnection()
         let peer = try DERPFixtures.nodeKey(1)
@@ -135,10 +135,10 @@ struct DERPRejectionTests {
         try connection.send([1], to: peer)
     }
 
-    @Test("실패하면 아직 프레임이 되지 못한 받은 바이트도 버린다")
+    @Test("Failure also discards received bytes that have yet to form a frame")
     func failureDropsBufferedBytes() throws {
         var connection = try DERPFixtures.readyConnection()
-        // 1MiB 초과 프레임 머리 뒤에 올바른 프레임이 붙어 와도 처리되지 않는다.
+        // A valid frame following a frame header for more than 1MiB is never processed.
         let peer = try DERPFixtures.nodeKey(1)
         let bad: [UInt8] = [0x05, 0xFF, 0xFF, 0xFF, 0xFF]
         #expect(throws: DERPError.frameTooLarge) { try connection.receive(bad + DERPFixtures.Server.recvPacket(from: peer, [1])) }

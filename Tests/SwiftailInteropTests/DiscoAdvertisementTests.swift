@@ -4,18 +4,18 @@ import SwiftailBase
 import SwiftailMagicsock
 import Testing
 
-// `docs/contracts/SwiftailMagicsock.md` "TSMP disco 키 광고"의 상호 운용 관문. 한쪽의 disco 키를 바꾸고(노드를 다시 띄운다)
-// 다른 쪽에게 가는 netmap 갱신을 막은 채(`injectMapResponse`의 자동 맵 억제) 직접 경로가 서는지 본다. 막힌 쪽이 새
-// disco 키를 알 길은 WireGuard 세션이 설 때 터널 안으로 온 TSMP 광고뿐이다.
+// Interop gate for "TSMP disco Key Advertisement" in `docs/contracts/SwiftailMagicsock.md`. Change one side's disco key by restarting its node,
+// suppress netmap updates to the other side (using `injectMapResponse` to suppress automatic maps), and check whether a direct path is established. The side with updates blocked can learn the new
+// disco key only from the TSMP advertisement sent inside the tunnel when the WireGuard session is established.
 //
-// 걸리는 시간의 대부분은 광고 전의 WireGuard 세션 수립이다. 오래 떠 있는 쪽은 다시 띄우기 전 주소를 마지막 Pong 뒤
-// 6.5초 동안 믿어 핸드셰이크 응답을 그 죽은 주소로만 보내고, 다시 띄운 쪽은 5초마다 다시 시도한다(Go와 같다). 그래서
-// 약 10초에 세션이 서고, 광고를 받은 뒤에는 0.1초 안에 양쪽이 직접이 된다. 제한은 재시도 한 번을 더 허용한 20초다.
+// Most of the time is spent establishing the WireGuard session before the advertisement. The side that has been up longer trusts the pre-restart address for
+// 6.5 seconds after the last Pong and sends handshake responses only to that dead address. The restarted side retries every 5 seconds (like Go), so
+// the session comes up in about 10 seconds and both sides go direct within 0.1 seconds of receiving the advertisement. The 20-second timeout allows one more retry.
 
-@Suite("TSMP disco 키 광고 관문", .enabled(if: tailnetBinary != nil,
-    "SWIFTAIL_TAILNET가 없어 TSMP 광고 관문 시험을 건너뜁니다"), .serialized, .timeLimit(.minutes(4)))
+@Suite("TSMP disco key advertisement gate", .enabled(if: tailnetBinary != nil,
+    "Skipping the TSMP advertisement gate tests because SWIFTAIL_TAILNET is missing"), .serialized, .timeLimit(.minutes(4)))
 struct DiscoAdvertisementTests {
-    @Test("① Swift 노드를 다시 띄우고 Go 피어의 netmap 갱신을 막아도 직접 경로가 선다(Go가 Swiftail의 광고를 쓴다)")
+    @Test("① A direct path is established after restarting the Swift node with the Go peer's netmap updates blocked (Go uses Swiftail's advertisement)")
     func goUsesSwiftAdvertisement() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "swiftail-tsmp-\(UUID().uuidString)")
         let tool = GoTailnet(temporaryDirectory: root)
@@ -37,22 +37,22 @@ struct DiscoAdvertisementTests {
             let localPeer = GatePeer(key: local.nodeKey, addresses: addresses)
             let goName = try #require(nodes.first { $0.nodeKey == goPeer.key }?.name)
             let before = try await directPath(tool, swift: first, local: localPeer, go: goPeer, goName: goName,
-                                              stage: "① 준비: 처음 띄운 Swift와 양쪽 직접", from: .now)
+                                              stage: "① Setup: both sides direct with the original Swift node", from: .now)
 
-            // Go 피어에게 가는 자동 맵을 막는다. 빈 응답은 Go의 netmap을 바꾸지 않는다.
+            // Suppress automatic maps to the Go peer. An empty response does not change Go's netmap.
             try await tool.inject(MapInjection(), into: goPeer.key)
             run?.cancel()
             _ = await run?.result
             run = nil
 
-            // 같은 상태 폴더: node 키는 그대로, disco 키와 UDP 포트는 새것이다. Go는 옛 disco 키만 안다.
+            // Reuse the state directory. The node key stays the same, and the disco key and UDP port are new. Go knows only the old disco key.
             let second = try TailnetNode(configuration: configuration, device: .memory())
             run = Task { try await second.run() }
             #expect(try await running(second) == addresses)
             let restarted = ContinuousClock.now
-            await tool.checkpoint("①: Swift 다시 띄움, Go 맵 억제 중")
+            await tool.checkpoint("① Swift restarted, Go maps suppressed")
             let after = try await directPath(tool, swift: second, local: localPeer, go: goPeer, goName: goName,
-                                             stage: "①: 다시 띄운 Swift와 양쪽 직접(Go 맵 억제)", from: restarted,
+                                             stage: "① Both sides direct with restarted Swift (Go maps suppressed)", from: restarted,
                                              notGoCurAddr: before.goCurAddr)
             #expect(after.goCurAddr != before.goCurAddr)
             run?.cancel()
@@ -66,29 +66,29 @@ struct DiscoAdvertisementTests {
         }
     }
 
-    @Test("② Go 피어를 다시 띄우고 Swift 노드의 netmap 갱신을 막아도 직접 경로가 선다(Swiftail이 Go의 광고를 쓴다)")
+    @Test("② A direct path is established after restarting the Go peer with the Swift node's netmap updates blocked (Swiftail uses Go's advertisement)")
     func swiftUsesGoAdvertisement() async throws {
         try await withGate(direct: false) { gate in
             let nodes = try #require(await gate.tool.command(.init(cmd: "nodes"), expecting: "nodes").nodes)
             let goName = try #require(nodes.first { $0.nodeKey == gate.peer.key }?.name)
             let before = try await directPath(gate.tool, swift: gate.node, local: gate.local, go: gate.peer, goName: goName,
-                                              stage: "② 준비: 양쪽 직접", from: gate.runningAt)
+                                              stage: "② Setup: both sides direct", from: gate.runningAt)
 
-            // Swift 노드에게 가는 자동 맵을 막는다(표식 주소가 보이면 막힌 것이다).
+            // Suppress automatic maps to the Swift node. The marker address confirms suppression.
             try await gate.inject(MapInjection(), marker: 1)
             let event = try await gate.tool.command(.init(cmd: "restartPeer", name: "go-peer-a"), expecting: "peer")
-            #expect(event.nodeKey == gate.peer.key, "다시 띄운 Go 피어의 node 키는 그대로다")
+            #expect(event.nodeKey == gate.peer.key, "The restarted Go peer keeps the same node key")
             let restarted = ContinuousClock.now
-            await gate.tool.checkpoint("②: Go 피어 다시 띄움, Swift 맵 억제 중")
-            // 새 Go 인스턴스는 세션이 없으므로 Go가 먼저 보내 핸드셰이크를 시작하게 한다.
+            await gate.tool.checkpoint("② Go peer restarted, Swift maps suppressed")
+            // The new Go instance has no session, so let Go send first to initiate the handshake.
             let after = try await directPath(gate.tool, swift: gate.node, local: gate.local, go: gate.peer, goName: goName,
-                                             stage: "②: 다시 띄운 Go와 양쪽 직접(Swift 맵 억제)", from: restarted,
+                                             stage: "② Both sides direct with restarted Go (Swift maps suppressed)", from: restarted,
                                              notSwiftPath: before.swiftPath, goSends: true)
             #expect(after.swiftPath != before.swiftPath)
         }
     }
 
-    @Test("Swift ↔ Swift: 한쪽을 다시 띄우고 다른 쪽의 netmap 갱신을 막아도 직접 경로가 선다")
+    @Test("Swift ↔ Swift: a direct path is established after restarting one side with the other side's netmap updates blocked")
     func swiftToSwift() async throws {
         try await withGate(direct: false) { gate in
             let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-tsmp-b-\(UUID().uuidString)")
@@ -106,9 +106,9 @@ struct DiscoAdvertisementTests {
                 let aName = try #require(nodes.first { $0.nodeKey == gate.local.key }?.name)
                 let bName = try #require(nodes.first { Set($0.addresses) == Set(addresses.map(\.description)) }?.name)
                 let before = try await swiftDirect(gate.node, first, a: gate.local, b: b, aName: aName, bName: bName,
-                                                   stage: "Swift ↔ Swift 준비: 양쪽 직접", from: .now)
+                                                   stage: "Swift ↔ Swift setup: both sides direct", from: .now)
 
-                // A(오래 떠 있는 쪽)에게 가는 자동 맵을 막고 B를 다시 띄운다. A는 B의 옛 disco 키·엔드포인트만 안다.
+                // Suppress automatic maps to A (the longer-running side) and restart B. A knows only B's old disco key and endpoints.
                 try await gate.inject(MapInjection(), marker: 2)
                 run?.cancel()
                 _ = await run?.result
@@ -117,9 +117,9 @@ struct DiscoAdvertisementTests {
                 run = Task { try await second.run() }
                 #expect(try await running(second) == addresses)
                 let restarted = ContinuousClock.now
-                await gate.tool.checkpoint("Swift ↔ Swift: B 다시 띄움, A 맵 억제 중")
+                await gate.tool.checkpoint("Swift ↔ Swift: B restarted, A maps suppressed")
                 _ = try await swiftDirect(gate.node, second, a: gate.local, b: b, aName: aName, bName: bName,
-                                          stage: "Swift ↔ Swift: 다시 띄운 B와 양쪽 직접(A 맵 억제)", from: restarted,
+                                          stage: "Swift ↔ Swift: both sides direct with restarted B (A maps suppressed)", from: restarted,
                                           notAPath: before)
                 run?.cancel()
                 _ = await run?.result
@@ -132,20 +132,20 @@ struct DiscoAdvertisementTests {
     }
 }
 
-/// 양쪽이 직접일 때 본 값.
+/// Values observed when both sides are direct.
 private struct DirectSnapshot {
     let swiftPath: PeerPath
     let goCurAddr: String
 }
 
-/// UDP를 보내며 Swift의 경로와 Go의 `curAddr`가 모두 직접이 될 때까지 20초 기다린다. `notSwiftPath`·`notGoCurAddr`
-/// 와 같은 값(다시 띄우기 전의 경로)은 인정하지 않는다.
+/// Sends UDP and waits up to 20 seconds for both Swift's path and Go's `curAddr` to become direct. Values equal to `notSwiftPath` or `notGoCurAddr`
+/// (the paths before restarting) are excluded.
 private func directPath(_ tool: GoTailnet, swift node: TailnetNode, local: GatePeer, go peer: GatePeer, goName: String,
                         stage: String, from start: ContinuousClock.Instant,
                         notSwiftPath: PeerPath? = nil, notGoCurAddr: String? = nil, goSends: Bool = false) async throws -> DirectSnapshot {
     let deadline = start + .seconds(20)
     let probe = Packets.udp(from: try local.address(), port: 43200, to: try peer.address(), payload: [0x54, 0x53])
-    // Swift를 다시 띄운 경우 세션 전 데이터가 몰려 나가며 DERP 큐에서 자신의 TSMP 광고를 밀어낼 수 있다.
+    // If Swift was restarted, a burst of pre-session data can push its own TSMP advertisement out of the DERP queue.
     let swiftSendInterval: Duration = notGoCurAddr == nil ? .milliseconds(200) : .seconds(1)
     var nextSwiftSend = ContinuousClock.now
     var nextGoSend = nextSwiftSend
@@ -169,18 +169,18 @@ private func directPath(_ tool: GoTailnet, swift node: TailnetNode, local: GateP
         try await Task.sleep(for: .milliseconds(200))
     }
     let path = await node.path(toPeerNamed: goName)
-    throw GateFailure("\(stage): 20초 안에 양쪽 직접이 되지 않음(Swift \(path.map { "\($0)" } ?? "nil"), 다시 띄우기 전 경로와 같음: \(path == notSwiftPath))")
+    throw GateFailure("\(stage): both sides did not become direct within 20 seconds (Swift \(path.map { "\($0)" } ?? "nil"), same as pre-restart path: \(path == notSwiftPath))")
 }
 
-/// B가 WireGuard 세션을 시작한 뒤 양쪽이 직접이 될 때까지 총 20초 기다린다. A가 본 B의 새 직접 경로를 돌려준다.
+/// Waits up to 20 seconds total for both sides to go direct after B initiates the WireGuard session. Returns B's new direct path as seen by A.
 ///
-/// 양쪽에서 시작하면 initiation이 서로를 지울 수 있다. B의 UDP가 A에 도착하면 세션이 섰으므로 그때 A도 보낸다.
-/// 새 disco 키를 배운 A는 송신 기록을 지우므로 다시 보내야 직접 경로 탐색을 시작한다.
+/// If both sides initiate, their initiations can cancel each other out. Once B's UDP arrives at A, the session is established and A sends too.
+/// A clears its send history when it learns the new disco key, so it must send again to start direct path discovery.
 private func swiftDirect(_ a: TailnetNode, _ b: TailnetNode, a aPeer: GatePeer, b bPeer: GatePeer, aName: String, bName: String,
                          stage: String, from start: ContinuousClock.Instant, notAPath: PeerPath? = nil) async throws -> PeerPath {
     let deadline = start + .seconds(20)
     let aIP = try aPeer.address(), bIP = try bPeer.address()
-    // A의 수신 흐름에 남은 재시작 전 패킷을 이번 세션의 증거로 세지 않는다.
+    // Do not count pre-restart packets still in A's receive stream as evidence of this session.
     let payload: [UInt8] = notAPath == nil ? [1] : [2]
     let probe = Packets.udp(from: bIP, port: 43211, to: aIP, destinationPort: 43210, payload: payload)
     let received = try await withThrowingTaskGroup(of: Bool.self) { group in
@@ -194,7 +194,7 @@ private func swiftDirect(_ a: TailnetNode, _ b: TailnetNode, a aPeer: GatePeer, 
             return false
         }
         group.addTask {
-            // 세션 전의 데이터를 한꺼번에 내보낼 때 TSMP 광고를 포함한 묶음이 DERP의 32개 송신 큐를 넘지 않게 한다.
+            // When releasing pre-session data at once, keep the batch containing the TSMP advertisement within DERP's 32-entry send queue.
             while ContinuousClock.now <= deadline {
                 await b.send(probe)
                 try await Task.sleep(for: .seconds(1))
@@ -203,7 +203,7 @@ private func swiftDirect(_ a: TailnetNode, _ b: TailnetNode, a aPeer: GatePeer, 
         }
         return try await group.next() ?? false
     }
-    if received { report("\(stage): B의 첫 UDP를 A에서 수신", since: start) }
+    if received { report("\(stage): A received B's first UDP packet", since: start) }
     let reply = Packets.udp(from: aIP, port: 43210, to: bIP, destinationPort: 43211, payload: payload)
     while received, ContinuousClock.now <= deadline {
         await a.send(reply)
@@ -216,7 +216,7 @@ private func swiftDirect(_ a: TailnetNode, _ b: TailnetNode, a aPeer: GatePeer, 
         try await Task.sleep(for: .milliseconds(200))
     }
     let aPath = await a.path(toPeerNamed: bName), bPath = await b.path(toPeerNamed: aName)
-    throw GateFailure("\(stage): 20초 안에 양쪽 직접이 되지 않음(A \(aPath.map { "\($0)" } ?? "nil"), B \(bPath.map { "\($0)" } ?? "nil"), A가 다시 띄우기 전 경로와 같음: \(aPath == notAPath), B의 UDP 수신: \(received))")
+    throw GateFailure("\(stage): both sides did not become direct within 20 seconds (A \(aPath.map { "\($0)" } ?? "nil"), B \(bPath.map { "\($0)" } ?? "nil"), A same as pre-restart path: \(aPath == notAPath), received B's UDP: \(received))")
 }
 
 private func report(_ stage: String, since start: ContinuousClock.Instant) {

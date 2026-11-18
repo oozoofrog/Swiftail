@@ -5,27 +5,27 @@ import SwiftailCrypto
 import SwiftailDERP
 import Testing
 
-/// 시험에 쓰는 고정 값과, 서버 쪽 바이트를 만드는 도우미.
+/// Fixed test values and helpers for generating server-side bytes.
 ///
-/// 키는 공개된 시험용 값이다: 개인 키 입력은 `SHA-256("swiftail-fixtures/derp/<번호>")`(클라이언트 1, 서버 2).
-/// 운영 키가 아니다. nonce는 `00 01 … 17`이다.
+/// The keys are public test values. The private key input is `SHA-256("swiftail-fixtures/derp/<number>")` (client 1, server 2).
+/// These are test-only keys. The nonce is `00 01 … 17`.
 ///
-/// ClientInfo·ServerInfo 본문의 고정 벡터는 Go의 `box.Seal`(`golang.org/x/crypto/nacl/box`, tailscale.com v1.104.6의
-/// `NodePrivate.SealTo`와 같은 호출)로 같은 키·같은 nonce를 넣어 뽑았다. 다시 뽑으려면
-/// `Tools/interop`에서 `go run ./cmd/derpvectors`(환경 변수는 `Tools/interop/README.md`)를 실행한다.
+/// The fixed ClientInfo and ServerInfo body vectors were generated with Go's `box.Seal` (`golang.org/x/crypto/nacl/box`, the same call
+/// as `NodePrivate.SealTo` in tailscale.com v1.104.6) using the same keys and nonce. To regenerate them,
+/// run `go run ./cmd/derpvectors` from `Tools/interop` (see `Tools/interop/README.md` for environment variables).
 enum DERPFixtures {
     static let clientSeed = "b7f801a79c5f48484f7c5bdf69b48d042fa0cc965db569b5df72e3893fe2e5b7"
     static let serverSeed = "ac720aec903565f3baa1fdc3f652959183cf04cb4d79b8b5e59d0c7234ab2bc3"
     static let clientPublic = "01b5e48ad0a98cecf0af5e20b9f7c1018d05eb3907f602a42ff64b872c54537f"
     static let serverPublic = "eec4e62b771c47da8fb0eb2c95f6fe3dd4290559303249239be2e077a54e0d67"
     static let nonce = "000102030405060708090a0b0c0d0e0f1011121314151617"
-    /// Go가 봉한 ClientInfo 평문: `{"version":2,"CanAckPings":true}`.
+    /// ClientInfo plaintext sealed by Go: `{"version":2,"CanAckPings":true}`.
     static let clientInfoBody = "01b5e48ad0a98cecf0af5e20b9f7c1018d05eb3907f602a42ff64b872c54537f000102030405060708090a0b0c0d0e0f10111213141516174cd54de08147b1a40033c0a0e8a25de77ceff26dd8baa3416c70d17e0f231e85c823f65cbc2f1c2bdf0f8f129c77d92b"
-    /// Go가 봉한 ServerInfo 평문: `{"version":2}`.
+    /// ServerInfo plaintext sealed by Go: `{"version":2}`.
     static let serverInfoBody = "000102030405060708090a0b0c0d0e0f1011121314151617adc070ff55d0e4d3be5ea1766a88021e7ceff26dd8baa3416c70d17e5e"
 
     static func bytes(_ hex: String) throws -> [UInt8] {
-        try #require([UInt8](hex: hex), "16진 문자열이 아니다")
+        try #require([UInt8](hex: hex), "Expected a hexadecimal string")
     }
 
     static func privateKey(seed: String) throws -> Curve25519.KeyAgreement.PrivateKey {
@@ -36,14 +36,14 @@ enum DERPFixtures {
         try #require(NodePublicKey(rawValue: [UInt8](repeating: fill, count: 32)))
     }
 
-    /// 클라이언트 쪽 상태 기계. 고정 키와 고정 nonce를 쓴다.
+    /// A client-side state machine using fixed keys and a fixed nonce.
     static func connection(isPreferred: Bool = true, host: String = "127.0.0.1:3340") throws -> DERPConnection {
         try DERPConnection(
             privateKey: privateKey(seed: clientSeed), host: host, isPreferred: isPreferred, clientInfoNonce: bytes(nonce)
         )
     }
 
-    /// 업그레이드 요청을 꺼내고 101과 ServerKey를 넣어 준비된 상태 기계. 내보낸 핸드셰이크 바이트는 버린다.
+    /// A state machine made ready by draining the upgrade request and feeding it a 101 response and ServerKey. Outbound handshake bytes are discarded.
     static func readyConnection(isPreferred: Bool = true) throws -> DERPConnection {
         var connection = try connection(isPreferred: isPreferred)
         _ = connection.takeOutboundBytes()
@@ -53,21 +53,21 @@ enum DERPFixtures {
         return connection
     }
 
-    /// DERP 서버가 보내는 바이트.
+    /// Bytes sent by the DERP server.
     enum Server {
         static let upgradeResponse = Array(
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: DERP\r\nConnection: Upgrade\r\nDerp-Version: 2\r\nDerp-Public-Key: \(serverPublic)\r\n\r\n".utf8
         )
         static let magic: [UInt8] = [0x44, 0x45, 0x52, 0x50, 0xF0, 0x9F, 0x94, 0x91]
 
-        /// 5바이트 머리와 본문.
+        /// The 5-byte header and body.
         static func frame(_ type: UInt8, _ body: [UInt8]) -> [UInt8] {
             let length = UInt32(body.count)
             return [type, UInt8(length >> 24), UInt8(truncatingIfNeeded: length >> 16),
                     UInt8(truncatingIfNeeded: length >> 8), UInt8(truncatingIfNeeded: length)] + body
         }
 
-        /// 서버는 magic과 공개 키 40바이트만 보낸다. `trailing`은 "향후 확장" 자리다.
+        /// The server sends only 40 bytes of magic and public key. `trailing` is for future extensions.
         static func serverKeyFrame(trailing: [UInt8] = []) throws -> [UInt8] {
             try frame(0x01, magic + bytes(serverPublic) + trailing)
         }
@@ -76,7 +76,7 @@ enum DERPFixtures {
             frame(0x05, peer.rawValue + packet)
         }
 
-        /// 서버 개인 키·클라이언트 공개 키로 봉한 ServerInfo 프레임. `plaintext`가 JSON이 아니어도 봉할 수 있다.
+        /// The ServerInfo frame sealed with the server's private key and the client's public key. `plaintext` can be sealed even if it is not JSON.
         static func serverInfoFrame(_ plaintext: [UInt8] = Array(#"{"version":2}"#.utf8)) throws -> [UInt8] {
             let shared = try NaClBox.sharedKey(
                 privateKey: Array(privateKey(seed: serverSeed).rawRepresentation), peerPublicKey: bytes(clientPublic)
@@ -87,7 +87,7 @@ enum DERPFixtures {
     }
 }
 
-/// 재현되는 가짜 난수. 임의 입력 시험이 실패하면 같은 입력으로 다시 돌릴 수 있게 한다.
+/// Reproducible pseudorandom numbers. A failing random-input test can be rerun with the same input.
 struct SplitMix64: RandomNumberGenerator {
     var state: UInt64
     mutating func next() -> UInt64 {

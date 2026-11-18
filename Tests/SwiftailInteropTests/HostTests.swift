@@ -1,7 +1,7 @@
-// M7 관문 (가): 계정 없이(계약 `docs/contracts/SwiftailHost.md` 7절 표의 항목 1~10).
+// M7 gate (a) without an account (items 1–10 in the table in the `docs/contracts/SwiftailHost.md` contract §7).
 //
-// 상대는 `tailnet` 도구다: testcontrol + DERP + STUN + Go tsnet 피어 둘 + pebble(로컬 ACME)·challtestsrv. 실제 인터넷에는
-// 닿지 않는다. 항목 11(Go 상태 가져오기, M7-11)은 구현이 없어 쓰지 않고, 항목 12(전체 시험)는 총괄이 돌린다.
+// The counterpart is the `tailnet` tool: testcontrol + DERP + STUN + two Go tsnet peers + pebble (local ACME) and challtestsrv. It does not reach
+// the real internet. Item 11 (importing Go state, M7-11) is unimplemented and unused. The lead session runs item 12 (the full test).
 
 import CryptoKit
 import Foundation
@@ -13,44 +13,44 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("M7 관문 (가): 계정 없이", .enabled(if: tailnetBinary != nil, "SWIFTAIL_TAILNET가 없어 M7 관문을 건너뜁니다"),
+@Suite("M7 gate (a) without an account", .enabled(if: tailnetBinary != nil, "Skipping the M7 gate because SWIFTAIL_TAILNET is missing"),
        .serialized, .timeLimit(.minutes(30)))
 struct HostTests {
     private static let fqdn = HostGate.fqdn
     private static let ipaSeed: UInt64 = 0x4950_4131
     private static let mebibyte: UInt64 = 1_048_576
 
-    @Test("항목 1: whoIs가 Go 피어 둘·자기 주소에서 peerWhoIs와 같고, netmap에서 뺀 피어는 nil")
+    @Test("Item 1: whoIs matches peerWhoIs for both Go peers and the node's own addresses, and returns nil for a peer removed from the netmap")
     func item1WhoIs() async throws {
         try await withHostGate { gate in
-            for (label, peer) in [("go-peer-a", gate.peerA), ("go-peer-b", gate.peerB), ("Swift 자기", gate.local)] {
+            for (label, peer) in [("go-peer-a", gate.peerA), ("go-peer-b", gate.peerB), ("Swift self", gate.local)] {
                 for address in peer.addresses {
-                    let swift = try #require(await gate.node.whoIs(address), "항목 1: \(label) IPv\(address.isIPv4 ? 4 : 6)의 whoIs가 nil")
+                    let swift = try #require(await gate.node.whoIs(address), "Item 1: whoIs is nil for \(label) IPv\(address.isIPv4 ? 4 : 6)")
                     for viewer in ["go-peer-a", "go-peer-b"] {
                         let go = try await gate.goWhoIs(from: viewer, address)
-                        #expect(swift.stableID == go.stableID, "항목 1: \(label) stableID (\(viewer) 기준)")
-                        #expect(swift.name == go.nodeName, "항목 1: \(label) name (\(viewer) 기준)")
-                        #expect(swift.computedName == go.computedName, "항목 1: \(label) computedName (\(viewer) 기준)")
-                        #expect(swift.loginName == go.loginName, "항목 1: \(label) loginName (\(viewer) 기준)")
+                        #expect(swift.stableID == go.stableID, "Item 1: \(label) stableID as seen by \(viewer)")
+                        #expect(swift.name == go.nodeName, "Item 1: \(label) name as seen by \(viewer)")
+                        #expect(swift.computedName == go.computedName, "Item 1: \(label) computedName as seen by \(viewer)")
+                        #expect(swift.loginName == go.loginName, "Item 1: \(label) loginName as seen by \(viewer)")
                     }
                     #expect(!swift.stableID.isEmpty)
                 }
             }
-            await gate.tool.checkpoint("M7 항목 1: 주소 6개의 신원이 Go 피어 둘의 peerWhoIs와 같음")
+            await gate.tool.checkpoint("M7 item 1: identities for all 6 addresses match peerWhoIs for both Go peers")
 
             _ = try await gate.tool.command(.init(cmd: "removePeer", name: "go-peer-b"), expecting: "removed")
             try await gate.removeFromNetmap(gate.peerB, marker: 1)
             for address in gate.peerB.addresses {
-                #expect(await gate.node.whoIs(address) == nil, "항목 1: netmap에서 뺀 피어의 whoIs는 nil")
+                #expect(await gate.node.whoIs(address) == nil, "Item 1: whoIs returns nil for a peer removed from the netmap")
             }
             for address in gate.peerA.addresses {
-                #expect(await gate.node.whoIs(address) != nil, "항목 1: 남은 피어의 whoIs는 그대로")
+                #expect(await gate.node.whoIs(address) != nil, "Item 1: whoIs still resolves the remaining peer")
             }
-            await gate.tool.checkpoint("M7 항목 1: PeersRemoved 뒤 go-peer-b의 whoIs nil, go-peer-a는 그대로")
+            await gate.tool.checkpoint("M7 item 1: after PeersRemoved, whoIs is nil for go-peer-b and unchanged for go-peer-a")
         }
     }
 
-    @Test("항목 2·3·4: set-dns의 TXT, pebble 발급과 certs/ 파일, 다시 띄우면 요청 없이 저장된 인증서")
+    @Test("Items 2, 3, and 4: set-dns TXT, pebble issuance and certs/ files, and the stored certificate after restart without requests")
     func items2to4IssueAndRestart() async throws {
         try await withHostGate { gate in
             let transport = gate.makeTransport()
@@ -59,24 +59,24 @@ struct HostTests {
             let firstRequests = transport.count
             await stopManager(task)
 
-            // 항목 2: 관리자가 올린 값과 testcontrol이 받은 값.
+            // Item 2: the value the manager published and the value testcontrol received.
             let calls = gate.setDNS.all
             let call = try #require(calls.first)
             #expect(calls.count == 1)
             #expect(call.failure == nil)
             #expect(call.name == "_acme-challenge." + Self.fqdn)
-            #expect(call.value.utf8.count == 43, "항목 2: TXT 값은 채움 없는 base64url SHA-256(43바이트)")
+            #expect(call.value.utf8.count == 43, "Item 2: TXT is unpadded base64url SHA-256 (43 bytes)")
             let log = try #require(await gate.tool.command(.init(cmd: "setDNSLog"), expecting: "setDNSLog").requests)
             #expect(log.count == 1)
             #expect(log.last?.name == call.name)
             #expect(log.last?.type == "TXT")
-            #expect(log.last?.value == call.value, "항목 2: setDNSLog의 값이 Swift가 계산한 TXT와 같다")
-            await gate.tool.checkpoint("M7 항목 2: set-dns 왕복 \(call.seconds)초, setDNSLog의 이름·종류·값 일치")
+            #expect(log.last?.value == call.value, "Item 2: the value in setDNSLog matches the TXT Swift computed")
+            await gate.tool.checkpoint("M7 item 2: set-dns round trip \(call.seconds) seconds, matching name, type, and value in setDNSLog")
 
-            // 항목 3: 사슬·이름·파일.
+            // Item 3: chain, name, and files.
             #expect(certificate.domain == Self.fqdn)
-            #expect(try chainVerifies(certificate.chain, domain: Self.fqdn, anchor: gate.rootDER), "항목 3: 사슬이 pebble 루트로 검증된다")
-            #expect(!certificate.chain.contains(gate.rootDER), "항목 3: chain에 루트가 없다(동작 S6)")
+            #expect(try chainVerifies(certificate.chain, domain: Self.fqdn, anchor: gate.rootDER), "Item 3: the chain verifies with the pebble root")
+            #expect(!certificate.chain.contains(gate.rootDER), "Item 3: chain excludes the root (behavior S6)")
             #expect(certificate.notAfter > certificate.notBefore)
             let status = await manager.status
             #expect(status.notAfter == certificate.notAfter && status.lastFailure == nil && status.domain == Self.fqdn)
@@ -85,36 +85,36 @@ struct HostTests {
             #expect(try files.attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int == 0o700)
             for name in ["\(Self.fqdn).crt", "\(Self.fqdn).key", "acme-account.key.pem"] {
                 let attributes = try files.attributesOfItem(atPath: directory.appending(path: name).path)
-                #expect(attributes[.posixPermissions] as? Int == 0o600, "항목 3: \(name)의 권한은 0600")
+                #expect(attributes[.posixPermissions] as? Int == 0o600, "Item 3: \(name) permissions are 0600")
             }
             let stored = try String(contentsOf: directory.appending(path: "\(Self.fqdn).crt"), encoding: .utf8)
             let blocks = stored.components(separatedBy: "-----BEGIN CERTIFICATE-----").count - 1
             #expect(try files.contentsOfDirectory(atPath: directory.path).sorted()
                     == ["\(Self.fqdn).crt", "\(Self.fqdn).key", "acme-account.key.pem"].sorted())
-            await gate.tool.checkpoint("M7 항목 3: 발급 \(seconds)초(관리자 시작부터 첫 인증서까지), ACME 요청 \(firstRequests)개, chain \(certificate.chain.count)장(파일 \(blocks)장), 유효 \(certificate.notAfter.timeIntervalSince(certificate.notBefore) / 86_400)일, certs/ 0700·파일 0600")
+            await gate.tool.checkpoint("M7 item 3: issuance \(seconds) seconds (manager start to first certificate), \(firstRequests) ACME requests, chain \(certificate.chain.count) certificates (\(blocks) in file), valid \(certificate.notAfter.timeIntervalSince(certificate.notBefore) / 86_400) days, certs/ 0700 and file 0600")
 
-            // 항목 4: 같은 상태 디렉터리로 다시 띄운다.
+            // Item 4: restart with the same state directory.
             let again = gate.makeTransport()
             let restarted = try gate.makeManager(transport: again)
             let (task2, reused, reuseSeconds) = try await runManager(restarted, waitingSeconds: 15)
             try await Task.sleep(for: .seconds(1))
             #expect(reused.chain == certificate.chain)
             #expect(reused.publicKeyBytes == certificate.publicKeyBytes)
-            #expect(again.count == 0, "항목 4: 다시 띄운 관리자는 ACME 요청을 보내지 않는다")
+            #expect(again.count == 0, "Item 4: the restarted manager sends no ACME requests")
             #expect(gate.setDNS.all.count == 1)
             #expect(await restarted.status.lastFailure == nil)
             await stopManager(task2)
-            await gate.tool.checkpoint("M7 항목 4: 다시 띄운 관리자가 \(reuseSeconds)초에 저장된 인증서를 냄, ACME 요청 \(again.count)개")
+            await gate.tool.checkpoint("M7 item 4: the restarted manager presents the stored certificate in \(reuseSeconds) seconds, \(again.count) ACME requests")
         }
     }
 
-    @Test("항목 5: pebble의 nonce 거부(10%)와 authorization 재사용을 켠 채 발급")
+    @Test("Item 5: issuance with pebble nonce rejection (10%) and authorization reuse enabled")
     func item5BadNonceAndAuthorizationReuse() async throws {
         try await withHostGate(nonceReject: 10, authzReuse: 100) { gate in
             var badNonces = 0
             var requests = 0
             var issuances = 0
-            // 첫 발급 뒤 같은 계정으로 다시 발급한다. badNonce가 한 번이라도 보일 때까지(많아야 열 번).
+            // After first issuance, reissue with the same account until badNonce appears at least once (up to ten times).
             while issuances < 2 || (badNonces == 0 && issuances < 10) {
                 if issuances > 0 { try gate.removeStoredCertificate() }
                 let transport = gate.makeTransport()
@@ -125,17 +125,17 @@ struct HostTests {
                 badNonces += transport.badNonceCount
                 requests += transport.count
                 #expect(try chainVerifies(certificate.chain, domain: Self.fqdn, anchor: gate.rootDER))
-                await gate.tool.checkpoint("M7 항목 5: 발급 \(issuances)번째 \(seconds)초, 요청 \(transport.count)개 중 badNonce \(transport.badNonceCount)번")
+                await gate.tool.checkpoint("M7 item 5: issuance \(issuances) took \(seconds) seconds, \(transport.badNonceCount) badNonce responses out of \(transport.count) requests")
             }
-            #expect(badNonces > 0, "항목 5: nonce 거부를 실제로 겪고 다시 서명해 통과했다")
-            #expect(gate.setDNS.all.count == 1, "항목 5: 두 번째 발급부터는 valid authorization을 재사용해 set-dns가 없다")
-            await gate.tool.checkpoint("M7 항목 5: 발급 \(issuances)번 모두 통과, 요청 \(requests)개 중 badNonce \(badNonces)번, set-dns \(gate.setDNS.all.count)번")
+            #expect(badNonces > 0, "Item 5: a nonce rejection actually occurred and re-signing succeeded")
+            #expect(gate.setDNS.all.count == 1, "Item 5: the second and later issuances reuse a valid authorization with no set-dns")
+            await gate.tool.checkpoint("M7 item 5: all \(issuances) issuances passed, \(badNonces) badNonce responses out of \(requests) requests, \(gate.setDNS.all.count) set-dns calls")
         }
     }
 
-    @Test("항목 6: 시험용 시계를 2/3 뒤로 옮기면 새 키의 새 인증서, 옛 리스너의 연결은 그대로")
+    @Test("Item 6: moving the test clock to the 2/3 point yields a new certificate with a new key and preserves connections on the old listener")
     func item6Renewal() async throws {
-        // Pebble v2.10.3은 0에서도 드물게 승인을 재사용한다. 갱신 관문에서는 항상 재사용하도록 고정한다.
+        // Pebble v2.10.3 rarely reuses authorizations even at 0. Pin it to always reuse authorizations in the renewal gate.
         try await withHostGate(authzReuse: 100) { gate in
             let clock = TestClock()
             let transport = gate.makeTransport()
@@ -154,18 +154,18 @@ struct HostTests {
                 #expect(created.status == 200)
                 let token = try #require(sessions.issued.last).token
                 let download = try await gate.startHTTP("go-peer-a", path: "/ipa?token=\(token)", timeout: 300)
-                try await netstackWait("항목 6: 옛 리스너의 IPA 전송이 4MiB에서 멈춤") { hold.isReached }
+                try await netstackWait("Item 6: the old listener's IPA transfer paused at 4MiB") { hold.isReached }
 
                 let renewalPoint = first.notBefore.addingTimeInterval(first.notAfter.timeIntervalSince(first.notBefore) * 2 / 3)
                 let started = ContinuousClock.now
                 clock.advance(by: renewalPoint.timeIntervalSince(clock.now()) + 60)
-                let second = try await nextEvent(manager.certificates, waitingFor: "항목 6: 갱신 인증서", timeout: .seconds(120))
+                let second = try await nextEvent(manager.certificates, waitingFor: "Item 6: renewed certificate", timeout: .seconds(120))
                 let renewalSeconds = started.duration(to: .now).netstackSeconds
-                #expect(second.publicKeyBytes != first.publicKeyBytes, "항목 6: 갱신은 새 키다")
+                #expect(second.publicKeyBytes != first.publicKeyBytes, "Item 6: renewal uses a new key")
                 #expect(second.chain[0] != first.chain[0])
                 #expect(try chainVerifies(second.chain, domain: Self.fqdn, anchor: gate.rootDER))
                 #expect(await manager.status.notAfter == second.notAfter)
-                #expect(gate.setDNS.all.count == 1, "갱신은 첫 발급의 DNS-01 승인을 재사용한다")
+                #expect(gate.setDNS.all.count == 1, "Renewal reuses the first issuance's DNS-01 authorization")
 
                 let server = try await MinimalHTTPServer.start(.tls, certificate: second, label: "2", bridge: bridge, sessions: sessions,
                                                                domain: Self.fqdn, ipaSeed: Self.ipaSeed, ipaLength: length)
@@ -174,17 +174,17 @@ struct HostTests {
                 old.stopAccepting()
                 let pair = try await gate.http("go-peer-b", path: "/pair", method: "POST", body: 32)
                 #expect(pair.status == 200)
-                #expect(pair.headers?["Swiftail-Listener"] == ["2"], "항목 6: 새 연결은 새 인증서의 리스너로 간다")
+                #expect(pair.headers?["Swiftail-Listener"] == ["2"], "Item 6: new connections go to the listener with the new certificate")
 
                 hold.release()
                 let done = try await gate.tool.response(to: download, expecting: "peerHTTP", timeout: .seconds(300))
                 #expect(done.status == 200)
-                #expect(done.headers?["Swiftail-Listener"] == ["1"], "항목 6: 갱신 전에 맺은 연결은 옛 리스너에서 끝까지 간다")
+                #expect(done.headers?["Swiftail-Listener"] == ["1"], "Item 6: a connection established before renewal completes on the old listener")
                 #expect(done.bodyLength == length)
                 #expect(done.bodySHA256 == Self.ipaDigest(offset: 0, length: length))
                 let record = try #require(old.records.first { $0.request == "GET /ipa" })
                 #expect(record.sendError == nil && record.bodyBytesSent == length)
-                await gate.tool.checkpoint("M7 항목 6: 시계를 \(Int(renewalPoint.timeIntervalSince(first.notBefore) / 86_400))일 뒤로 옮긴 뒤 \(renewalSeconds)초에 새 키의 인증서, 옛 리스너의 32MiB 전송이 갱신을 지나 해시 일치")
+                await gate.tool.checkpoint("M7 item 6: after moving the clock ahead \(Int(renewalPoint.timeIntervalSince(first.notBefore) / 86_400)) days, a certificate with a new key arrived in \(renewalSeconds) seconds. The old listener's 32MiB transfer survived renewal and its hash matched")
             } catch {
                 hold.release()
                 await acceptor.close()
@@ -200,37 +200,37 @@ struct HostTests {
         }
     }
 
-    @Test("항목 7: cert 도메인 없음·MagicDNS 꺼짐은 요청 없이 기다리고, set-dns 거절·틀린 TXT는 R4의 간격")
+    @Test("Item 7: no cert domains or disabled MagicDNS waits without requests. Rejected set-dns and incorrect TXT use the R4 intervals")
     func item7Failures() async throws {
-        // 각 시나리오에 새 ACME 서버를 써서 앞 발급의 DNS-01 승인이 결함 주입을 건너뛰게 하지 않는다.
+        // Use a fresh ACME server for each scenario so the previous issuance's DNS-01 authorization does not bypass fault injection.
         try await withHostGate { gate in
-            // HTTPS 꺼짐(cert 도메인이 빔).
+            // HTTPS disabled (empty cert domains).
             _ = try await gate.tool.command(.init(cmd: "setCertDomains", domains: []), expecting: "certDomains")
-            try await netstackWait("항목 7: cert 도메인이 빈 netmap") { gate.facts.latest?.certDomains.isEmpty == true }
+            try await netstackWait("Item 7: netmap with no cert domains") { gate.facts.latest?.certDomains.isEmpty == true }
             try await expectConditionWait(gate, failure: .httpsNotEnabled) {
                 _ = try await gate.tool.command(.init(cmd: "setCertDomains", domains: [Self.fqdn]), expecting: "certDomains")
             }
         }
 
-        // MagicDNS 꺼짐.
+        // MagicDNS disabled.
         try await withHostGate { gate in
             _ = try await gate.tool.command(.init(cmd: "setDNSConfig", enabled: false), expecting: "dnsConfig")
-            try await netstackWait("항목 7: MagicDNS가 꺼진 netmap") { gate.facts.latest?.isMagicDNSEnabled == false }
+            try await netstackWait("Item 7: netmap with MagicDNS disabled") { gate.facts.latest?.isMagicDNSEnabled == false }
             try await expectConditionWait(gate, failure: .magicDNSDisabled) {
                 _ = try await gate.tool.command(.init(cmd: "setDNSConfig", enabled: true), expecting: "dnsConfig")
             }
         }
 
-        // set-dns 거절.
+        // Rejected set-dns.
         try await withHostGate { gate in
             _ = try await gate.tool.command(.init(cmd: "setDNSFault", count: 1, status: 403), expecting: "setDNSFault")
             let rejected = try await failedAttempt(gate) { $0 == .controlRejected(status: 403) }
             let rejectedDelay = rejected.next.timeIntervalSince(rejected.at)
-            #expect(rejectedDelay > 25 && rejectedDelay <= 31, "항목 7: controlRejected의 다음 시도는 30초 뒤(R4)")
-            await gate.tool.checkpoint("M7 항목 7: set-dns 403 → controlRejected(403), 다음 시도 \(rejectedDelay)초 뒤")
+            #expect(rejectedDelay > 25 && rejectedDelay <= 31, "Item 7: the next attempt after controlRejected is in 30 seconds (R4)")
+            await gate.tool.checkpoint("M7 item 7: set-dns 403 → controlRejected(403), next attempt in \(rejectedDelay) seconds")
         }
 
-        // 틀린 TXT.
+        // Incorrect TXT.
         try await withHostGate { gate in
             _ = try await gate.tool.command(.init(cmd: "setDNSFault", count: 1, wrongTXT: true), expecting: "setDNSFault")
             let invalid = try await failedAttempt(gate) {
@@ -238,12 +238,12 @@ struct HostTests {
                 return false
             }
             let invalidDelay = invalid.next.timeIntervalSince(invalid.at)
-            #expect(invalidDelay > 15 * 60 - 10 && invalidDelay <= 15 * 60 + 1, "항목 7: validationFailed의 다음 시도는 15분 뒤(R4)")
-            await gate.tool.checkpoint("M7 항목 7: 틀린 TXT → \(String(describing: invalid.failure)), 다음 시도 \(invalidDelay)초 뒤")
+            #expect(invalidDelay > 15 * 60 - 10 && invalidDelay <= 15 * 60 + 1, "Item 7: the next attempt after validationFailed is in 15 minutes (R4)")
+            await gate.tool.checkpoint("M7 item 7: incorrect TXT → \(String(describing: invalid.failure)), next attempt in \(invalidDelay) seconds")
         }
     }
 
-    /// 조건 실패(사용자가 고칠 것)면 요청이 나가지 않고 `nextAttempt`가 nil이며, `restore`로 netmap을 되돌리면 발급한다.
+    /// When a precondition fails (something the user must fix), no requests are sent and `nextAttempt` is nil. Issuance follows when `restore` restores the netmap.
     private func expectConditionWait(_ gate: HostGate, failure: CertificateFailure,
                                      restore: () async throws -> Void) async throws {
         let transport = gate.makeTransport()
@@ -251,18 +251,18 @@ struct HostTests {
         let dnsCalls = gate.setDNS.all.count
         let task = Task { try await manager.run() }
         do {
-            let status = try await waitForStatus(manager, "항목 7: \(failure)") { $0.lastFailure == failure }
-            #expect(status.nextAttempt == nil, "항목 7: \(failure)면 nextAttempt는 nil")
+            let status = try await waitForStatus(manager, "Item 7: \(failure)") { $0.lastFailure == failure }
+            #expect(status.nextAttempt == nil, "Item 7: \(failure) leaves nextAttempt nil")
             try await Task.sleep(for: .seconds(2))
-            #expect(transport.count == 0, "항목 7: \(failure)면 ACME 요청이 나가지 않는다")
+            #expect(transport.count == 0, "Item 7: \(failure) sends no ACME requests")
             #expect(gate.setDNS.all.count == dnsCalls)
             #expect(await manager.status.nextAttempt == nil)
             let started = ContinuousClock.now
             try await restore()
-            let certificate = try await nextEvent(manager.certificates, waitingFor: "항목 7: \(failure)를 되돌린 뒤 발급", timeout: .seconds(120))
+            let certificate = try await nextEvent(manager.certificates, waitingFor: "Item 7: issuance after reverting \(failure)", timeout: .seconds(120))
             #expect(certificate.domain == Self.fqdn)
             #expect(await manager.status.lastFailure == nil)
-            await gate.tool.checkpoint("M7 항목 7: \(failure) → 요청 0개·nextAttempt nil, 되돌린 뒤 \(started.duration(to: .now).netstackSeconds)초에 발급")
+            await gate.tool.checkpoint("M7 item 7: \(failure) → 0 requests and nil nextAttempt, issued \(started.duration(to: .now).netstackSeconds) seconds after reverting")
         } catch {
             await stopManager(task)
             throw error
@@ -270,13 +270,13 @@ struct HostTests {
         await stopManager(task)
     }
 
-    /// 새 관리자로 한 번 실패시키고 그 실패와 다음 시도 시각을 본다.
+    /// Triggers one failure with a new manager and observes the failure and the time of the next attempt.
     private func failedAttempt(_ gate: HostGate, matching predicate: @escaping @Sendable (CertificateFailure) -> Bool) async throws
         -> (failure: CertificateFailure, at: Date, next: Date) {
         let manager = try gate.makeManager(transport: gate.makeTransport())
         let task = Task { try await manager.run() }
         do {
-            let status = try await waitForStatus(manager, "항목 7: 발급 실패", seconds: 120) {
+            let status = try await waitForStatus(manager, "Item 7: issuance failure", seconds: 120) {
                 guard let failure = $0.lastFailure else { return false }
                 return predicate(failure) && $0.nextAttempt != nil
             }
@@ -289,7 +289,7 @@ struct HostTests {
         }
     }
 
-    @Test("항목 8·9: tailnet → 다리 → TLS 리스너의 페어링·세션·매니페스트·IPA 100MiB, 다른 피어의 토큰은 403, 다리 밖의 접속은 끊김")
+    @Test("Items 8 and 9: pairing, session, manifest, and 100MiB IPA over tailnet → bridge → TLS listener. Another peer's token yields 403, and connections outside the bridge are dropped")
     func items8and9Scenario() async throws {
         try await withHostGate { gate in
             let manager = try gate.makeManager(transport: gate.makeTransport())
@@ -305,26 +305,26 @@ struct HostTests {
                 let stableID = try requireValue(identity.stableID)
                 let computedName = try requireValue(identity.computedName)
 
-                // ① 페어링: 서버가 다리의 Origin.peer로 상대를 안다.
+                // ① Pairing: the server identifies the peer from the bridge's Origin.peer.
                 let pair = try await gate.http("go-peer-a", path: "/pair", method: "POST", body: 32)
                 #expect(pair.status == 200)
                 #expect(pair.bodySHA256 == Self.digest(MinimalHTTPServer.pairBody(stableID: stableID, computedName: computedName)),
-                        "항목 8: ①의 stableID·computedName이 그 Go 피어의 것")
+                        "Item 8: stableID and computedName in ① belong to that Go peer")
                 #expect(server.records.first { $0.request == "POST /pair" }?.stableID == stableID)
 
-                // ② 설치 세션.
+                // ② Install session.
                 let created = try await gate.http("go-peer-a", path: "/sessions", method: "POST")
                 let session = try #require(sessions.issued.last)
                 #expect(created.status == 200)
                 #expect(session.stableID == stableID)
                 #expect(created.bodySHA256 == Self.digest(MinimalHTTPServer.sessionBody(token: session.token)))
 
-                // ③ 매니페스트.
+                // ③ Manifest.
                 let manifest = try await gate.http("go-peer-a", path: "/manifest?token=\(session.token)")
                 #expect(manifest.status == 200)
                 #expect(manifest.bodySHA256 == Self.digest(MinimalHTTPServer.manifestBody(domain: Self.fqdn, token: session.token)))
 
-                // ④ IPA 100MiB를 Range 둘로. 기대 해시는 재기 전에 만든다.
+                // ④ Transfer 100MiB of IPA in two ranges. Compute expected hashes before starting the measurement.
                 let half = length / 2
                 let parts = [(UInt64(0), half), (half, length - half)]
                 let expected = parts.map { Self.ipaDigest(offset: $0.0, length: $0.1) }
@@ -338,35 +338,35 @@ struct HostTests {
                     #expect(part.status == 206)
                     #expect(part.headers?["Content-Range"] == ["bytes \(offset)-\(offset + count - 1)/\(length)"])
                     #expect(part.bodyLength == count)
-                    #expect(part.bodySHA256 == digest, "항목 8: \(range)의 SHA-256")
+                    #expect(part.bodySHA256 == digest, "Item 8: SHA-256 of \(range)")
                     goMilliseconds += part.elapsedMs ?? 0
                 }
                 let seconds = started.duration(to: .now).netstackSeconds
                 let cpu = NetstackResources.sample().cpuSeconds - before.cpuSeconds
                 let peak = await sampler.stop()
-                await gate.tool.checkpoint("M7 항목 8: IPA 100MiB(Range 둘) 해시 일치, 벽시계 \(seconds)초(\(Double(length) / seconds / 1_048_576) MiB/s), Go elapsedMs 합 \(goMilliseconds), 프로세스 CPU \(cpu)초, phys_footprint 시작 \(before.footprint ?? 0)·표본 최고 \(peak)바이트")
+                await gate.tool.checkpoint("M7 item 8: 100MiB IPA (two ranges) hashes match, wall time \(seconds) seconds (\(Double(length) / seconds / 1_048_576) MiB/s), sum of Go elapsedMs \(goMilliseconds), process CPU \(cpu) seconds, phys_footprint initially \(before.footprint ?? 0) and peak sample \(peak) bytes")
 
-                // 다른 Go 피어가 ②의 토큰을 쓰면 거절한다.
+                // Reject another Go peer that uses the token from ②.
                 let stolen = try await gate.http("go-peer-b", path: "/ipa?token=\(session.token)", range: "bytes=0-1023")
-                #expect(stolen.status == 403, "항목 8: 다른 피어가 남의 토큰으로 ④를 요청하면 403")
+                #expect(stolen.status == 403, "Item 8: another peer requesting ④ with someone else's token gets 403")
                 let stolenManifest = try await gate.http("go-peer-b", path: "/manifest?token=\(session.token)")
                 #expect(stolenManifest.status == 403)
-                await gate.tool.checkpoint("M7 항목 8: go-peer-b가 go-peer-a의 토큰으로 요청 → IPA \(stolen.status ?? 0), 매니페스트 \(stolenManifest.status ?? 0)")
+                await gate.tool.checkpoint("M7 item 8: go-peer-b requested with go-peer-a's token → IPA \(stolen.status ?? 0), manifest \(stolenManifest.status ?? 0)")
 
-                // 항목 9: 다리 밖에서 루프백 포트로 직접 TLS.
+                // Item 9: direct TLS to the loopback port outside the bridge.
                 let handled = server.records.filter { $0.request != nil }.count
                 let probe = await DirectTLSProbe.run(port: server.port, domain: Self.fqdn)
-                // 토큰이 없는 연결은 TLS 핸드셰이크에 닿지도 못한다: 서버 쪽 연결은 `.ready`가 되지 못하고 끝난다.
-                try await netstackWait("항목 9: 서버가 토큰 없는 연결을 준비 전에 잃음", seconds: 10) {
+                // A tokenless connection never reaches the TLS handshake. The server-side connection ends without becoming `.ready`.
+                try await netstackWait("Item 9: tokenless connection ends on the server before readiness", seconds: 10) {
                     server.records.contains { $0.stateError != nil && $0.stableID == nil && $0.request == nil }
                 }
-                #expect(!probe.handshake, "항목 9: 다리 밖의 연결은 TLS 핸드셰이크를 끝내지 못한다")
-                #expect(probe.peerCertificates == 0, "항목 9: 서버의 인증서도 받지 못한다")
-                #expect(probe.receivedBytes == 0, "항목 9: 서버가 응답하지 않는다")
-                #expect(!probe.end.contains("끝나지 않음"), "항목 9: 서버가 거절한 연결을 닫아 상대가 끝을 본다(\(probe.end))")
-                #expect(!server.records.contains { $0.rejected }, "항목 9: `.ready`가 된 연결 가운데 신원 없는 것은 없다")
-                #expect(server.records.filter { $0.request != nil }.count == handled, "항목 9: 요청을 읽지 않았다")
-                await gate.tool.checkpoint("M7 항목 9: 직접 TLS 핸드셰이크 \(probe.handshake), ALPN \(probe.negotiatedALPN ?? "없음"), 받은 인증서 \(probe.peerCertificates)장(chain \(certificate.chain.count)장), 받은 바이트 \(probe.receivedBytes), 끝 \(probe.end)")
+                #expect(!probe.handshake, "Item 9: a connection outside the bridge does not finish the TLS handshake")
+                #expect(probe.peerCertificates == 0, "Item 9: no server certificate is received either")
+                #expect(probe.receivedBytes == 0, "Item 9: the server sends no response")
+                #expect(!probe.end.contains("Did not finish"), "Item 9: the server closes the rejected connection so the peer sees it end (\(probe.end))")
+                #expect(!server.records.contains { $0.rejected }, "Item 9: every connection that reached `.ready` has an identity")
+                #expect(server.records.filter { $0.request != nil }.count == handled, "Item 9: no request was read")
+                await gate.tool.checkpoint("M7 item 9: direct TLS handshake \(probe.handshake), ALPN \(probe.negotiatedALPN ?? "none"), \(probe.peerCertificates) certificates received (chain \(certificate.chain.count)), \(probe.receivedBytes) bytes received, end \(probe.end)")
             } catch {
                 await acceptor.close()
                 server.close()
@@ -379,7 +379,7 @@ struct HostTests {
         }
     }
 
-    @Test("항목 10: 큰 전송 중 Go 피어를 netmap에서 빼면 루프백 연결이 오류로 닫히고 origin이 사라진다(TLS·평문)")
+    @Test("Item 10: removing a Go peer from the netmap during a large transfer closes the loopback connection with an error and removes the origin (TLS and plaintext)")
     func item10OwnerChange() async throws {
         try await withHostGate { gate in
             let manager = try gate.makeManager(transport: gate.makeTransport())
@@ -397,44 +397,44 @@ struct HostTests {
             let plainAcceptor = BridgeAcceptor(listener: try await gate.node.listen(port: 8_080), bridge: bridge, port: plain.port)
             do {
                 for (mode, server, hold, peer, name, marker) in [("TLS", tls, tlsHold, gate.peerA, "go-peer-a", UInt8(1)),
-                                                                 ("평문", plain, plainHold, gate.peerB, "go-peer-b", UInt8(2))] {
+                                                                 ("plaintext", plain, plainHold, gate.peerB, "go-peer-b", UInt8(2))] {
                     let scheme = mode == "TLS" ? "https" : "http"
                     let port: UInt16? = mode == "TLS" ? nil : 8_080
                     let created = try await gate.http(name, path: "/sessions", method: "POST", scheme: scheme, port: port)
                     #expect(created.status == 200)
                     let token = try #require(sessions.issued.last).token
                     let download = try await gate.startHTTP(name, path: "/ipa?token=\(token)", scheme: scheme, port: port, timeout: 30)
-                    try await netstackWait("항목 10 \(mode): IPA 전송이 8MiB에서 멈춤") { hold.isReached }
-                    // 서버가 `.ready`에서 얻어 쥔 신원이 그 Go 피어의 것이다.
+                    try await netstackWait("Item 10 \(mode): IPA transfer paused at 8MiB") { hold.isReached }
+                    // The identity the server obtained and retained at `.ready` belongs to that Go peer.
                     let serving = try #require(server.records.first { $0.request == "GET /ipa" })
-                    #expect(serving.stableID == (await gate.node.whoIs(try peer.address()))?.stableID, "항목 10 \(mode): 전송 중인 연결의 신원")
+                    #expect(serving.stableID == (await gate.node.whoIs(try peer.address()))?.stableID, "Item 10 \(mode): identity of the connection transferring data")
                     #expect(serving.stableID != nil)
 
                     let started = ContinuousClock.now
                     try await gate.removeFromNetmap(peer, marker: marker)
                     #expect(await gate.node.whoIs(try peer.address()) == nil)
-                    try await netstackWait("항목 10 \(mode): 서버의 받기가 끝남", seconds: 10) {
+                    try await netstackWait("Item 10 \(mode): server receive ended", seconds: 10) {
                         server.records.first { $0.request == "GET /ipa" }?.receiveEnd != nil
                     }
                     let goneSeconds = started.duration(to: .now).netstackSeconds
                     hold.release()
-                    try await netstackWait("항목 10 \(mode): 서버의 보내기가 끝남", seconds: 10) {
+                    try await netstackWait("Item 10 \(mode): server send ended", seconds: 10) {
                         let record = server.records.first { $0.request == "GET /ipa" }
                         return record?.sendError != nil || record?.bodyBytesSent == length
                     }
                     let record = try #require(server.records.first { $0.request == "GET /ipa" })
-                    #expect(record.receiveEnd?.hasPrefix("error(") == true, "항목 10 \(mode): tailnet 쪽 끊김이 서버에 깨끗한 EOF로 보이지 않는다")
-                    #expect(record.sendError != nil, "항목 10 \(mode): 남은 본문을 보내지 못한다")
+                    #expect(record.receiveEnd?.hasPrefix("error(") == true, "Item 10 \(mode): the tailnet-side disconnect does not appear to the server as a clean EOF")
+                    #expect(record.sendError != nil, "Item 10 \(mode): the rest of the body cannot be sent")
                     #expect(record.bodyBytesSent < length)
-                    var goResult = "응답 없음"
+                    var goResult = "No response"
                     do {
                         let response = try await gate.tool.response(to: download, expecting: "peerHTTP", timeout: .seconds(60))
-                        goResult = "끝까지 받음 \(response.bodyLength ?? 0)바이트"
-                        Issue.record("항목 10 \(mode): Go 피어가 netmap에서 빠진 뒤에도 본문을 끝까지 받았다")
+                        goResult = "Received all \(response.bodyLength ?? 0) bytes"
+                        Issue.record("Item 10 \(mode): the Go peer received the entire body even after removal from the netmap")
                     } catch {
-                        goResult = "오류(\(redacted(String(describing: error)).prefix(120)))"
+                        goResult = "Error (\(redacted(String(describing: error)).prefix(120)))"
                     }
-                    await gate.tool.checkpoint("M7 항목 10 \(mode): PeersRemoved 뒤 \(goneSeconds)초에 루프백 연결이 끊김, 서버 받기 끝 \(record.receiveEnd ?? "-"), 보내기 오류 \(record.sendError ?? "-"), 보낸 본문 \(record.bodyBytesSent)바이트, Go \(goResult)")
+                    await gate.tool.checkpoint("M7 item 10 \(mode): loopback connection dropped \(goneSeconds) seconds after PeersRemoved, server receive end \(record.receiveEnd ?? "-"), send error \(record.sendError ?? "-"), \(record.bodyBytesSent) body bytes sent, Go \(goResult)")
                 }
             } catch {
                 tlsHold.release()
@@ -461,7 +461,7 @@ struct HostTests {
     static func ipaDigest(offset: UInt64, length: UInt64) -> String { ipa.digest(offset: offset, length: length) }
 }
 
-/// 전송 동안 `phys_footprint`의 최고값을 250ms마다 표본으로 잰다.
+/// Measures peak `phys_footprint` by sampling every 250ms during a transfer.
 final class FootprintSampler: Sendable {
     private let peak = Mutex<UInt64>(0)
     private let task = Mutex<Task<Void, Never>?>(nil)
@@ -487,9 +487,9 @@ final class FootprintSampler: Sendable {
     }
 }
 
-@Suite("M7 관문 (가)의 시험 서버 도우미")
+@Suite("M7 gate (a) test server helpers")
 struct HostServerSupportTests {
-    @Test("IPA 바이트열: LCG64 바이트열의 앞 주기를 되풀이하고, 주기 경계를 넘어 꺼내도 같다")
+    @Test("IPA bytes repeat the first period of the LCG64 byte sequence and match when read across a period boundary")
     func ipaContentRepeatsPeriod() {
         var stream = NetstackStream(seed: 7)
         let cycle = stream.bytes(IPAContent.period)
@@ -501,7 +501,7 @@ struct HostServerSupportTests {
         #expect(content.digest(offset: 0, length: 52_428_800) != content.digest(offset: 52_428_800, length: 52_428_800))
     }
 
-    @Test("Range: bytes=a-b와 bytes=a-만 받는다")
+    @Test("Range accepts only bytes=a-b and bytes=a-")
     func ranges() {
         #expect(MinimalHTTPServer.parseRange("bytes=0-99", length: 100).map { [$0.0, $0.1] } == [0, 99])
         #expect(MinimalHTTPServer.parseRange("bytes=50-", length: 100).map { [$0.0, $0.1] } == [50, 99])

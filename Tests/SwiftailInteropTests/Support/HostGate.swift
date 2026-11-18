@@ -1,5 +1,5 @@
-// M7 관문 (가)의 하네스: `tailnet` 도구(testcontrol + DERP + STUN + pebble), Go 피어 둘, `.inProcess` Swift 노드 하나.
-// 기존 관문의 `withGate`와 같은 방식으로 도구와 노드를 격리하고 회수한다(상태 디렉터리는 TMPDIR 아래).
+// Harness for M7 gate (a): the `tailnet` tool (testcontrol + DERP + STUN + pebble), two Go peers, and one `.inProcess` Swift node.
+// Isolates and cleans up the tool and nodes like `withGate` in the existing gate (state directories are under TMPDIR).
 
 import CryptoKit
 import Foundation
@@ -14,7 +14,7 @@ import Testing
 
 @testable import SwiftailCertificates
 
-/// 관문의 한 실행. 도구·노드는 시험마다 새로 띄운다.
+/// One gate run. Starts a fresh tool and nodes for each test.
 struct HostGate: Sendable {
     let tool: GoTailnet
     let node: TailnetNode
@@ -26,12 +26,12 @@ struct HostGate: Sendable {
     let rootDER: [UInt8]
     let facts: FactsRelay
     let setDNS: SetDNSRecorder
-    /// 기존 관문의 주입 도우미(`Gate.inject(_:marker:)`)를 다시 쓰려고 쥔다.
+    /// Retains this to reuse the existing gate's injection helper (`Gate.inject(_:marker:)`).
     let gate: Gate
     static let fqdn = "rd-mac-1a2b3c4d.tail0001.test"
 
-    /// pebble에 붙은 관리자. 노드의 `package` 접점을 그대로 넘기되, 사실은 중계를 거친다(관리자를 다시 띄우려면 흐름이
-    /// 새로 필요하다. 노드의 흐름은 구독자 하나이고 첫 관리자가 멈추면 끝난다).
+    /// A manager connected to pebble. Passes through the node's `package` interface, but it actually goes through a relay (restarting the manager needs
+    /// a new stream. The node's stream has one subscriber and ends when the first manager stops).
     func makeManager(transport: CountingTransport, clock: TestClock? = nil) throws -> CertificateManager {
         let node = self.node
         let recorder = setDNS
@@ -56,7 +56,7 @@ struct HostGate: Sendable {
 
     var certificatesDirectory: URL { node.stateDirectory.appending(path: "certs") }
 
-    /// 저장된 인증서가 있으면 지운다(계정 키는 남긴다). 같은 계정으로 새로 발급하게 한다.
+    /// Deletes any stored certificate but keeps the account key, allowing fresh issuance with the same account.
     func removeStoredCertificate() throws {
         for suffix in ["crt", "key"] {
             let file = certificatesDirectory.appending(path: "\(Self.fqdn).\(suffix)")
@@ -64,7 +64,7 @@ struct HostGate: Sendable {
         }
     }
 
-    /// Go 피어가 tailnet으로 보내는 HTTP 요청. `peerHTTP`는 도구가 뒤에서 처리하므로 기다리지 않고 보낸다.
+    /// An HTTP request sent by a Go peer over the tailnet. The tool handles `peerHTTP` in the background, so send without waiting.
     func startHTTP(_ peer: String, path: String, method: String = "GET", range: String? = nil, body: UInt64? = nil,
                    scheme: String = "https", port: UInt16? = nil, timeout: Int = 60) async throws -> Int {
         let authority = port.map { "\(Self.fqdn):\($0)" } ?? Self.fqdn
@@ -79,19 +79,19 @@ struct HostGate: Sendable {
         return try await tool.response(to: id, expecting: "peerHTTP", timeout: .seconds(timeout + 10))
     }
 
-    /// Go 피어 `name`의 `LocalClient().WhoIs(address)`.
+    /// The Go peer `name`'s `LocalClient().WhoIs(address)`.
     func goWhoIs(from name: String = "go-peer-a", _ address: SwiftailBase.IPAddress) async throws -> GoTailnet.Event {
         try await tool.command(.init(cmd: "peerWhoIs", name: name, to: address.description), expecting: "peerWhoIs")
     }
 
-    /// Swift 노드의 netmap에서 피어를 뺀다(`PeersRemoved`). 도구의 `removePeer`는 testcontrol의 목록을 지우지 않는다.
-    /// 이 주입 뒤로 이 노드의 자동 맵은 억제된다(README `injectMapResponse`). 시험의 마지막 단계에서만 쓴다.
+    /// Removes a peer from the Swift node's netmap (`PeersRemoved`). The tool's `removePeer` leaves the testcontrol list intact.
+    /// This injection suppresses subsequent automatic maps for this node (README `injectMapResponse`). Use it only in the last stage of a test.
     func removeFromNetmap(_ peer: GatePeer, marker: UInt8) async throws {
         try await gate.inject(MapInjection(PeersRemoved: [try peer.mapNode.ID]), marker: marker)
     }
 }
 
-/// 노드의 `certificateFacts`(구독자 하나)를 받아 관리자마다 새 흐름으로 나눈다. 새 구독은 마지막 사실부터 받는다.
+/// Consumes the node's single-subscriber `certificateFacts` stream and creates a fresh stream for each manager. A new subscriber starts with the most recent fact.
 final class FactsRelay: Sendable {
     private struct State {
         var latest: CertificateFacts?
@@ -143,7 +143,7 @@ final class FactsRelay: Sendable {
     }
 }
 
-/// 운영 전송을 감싸 요청을 센다. "요청 없음"(항목 4·7)과 `badNonce` 재시도(항목 5)를 본다.
+/// Wraps the production transport to count requests. Checks "no requests" (items 4 and 7) and `badNonce` retries (item 5).
 final class CountingTransport: ACMETransport {
     struct Exchange: Sendable {
         let method: ACMEHTTPRequest.Method
@@ -177,7 +177,7 @@ final class CountingTransport: ACMETransport {
     }
 }
 
-/// 관리자가 올린 TXT와 `set-dns` 왕복 시간(항목 2).
+/// The TXT value published by the manager and the `set-dns` round-trip time (item 2).
 final class SetDNSRecorder: Sendable {
     struct Call: Sendable {
         let name: String
@@ -203,7 +203,7 @@ final class SetDNSRecorder: Sendable {
     }
 }
 
-/// 벽시계에 시험이 정한 만큼을 더한 시계(항목 6). 기다림은 짧게 나눠 자므로 시계를 옮기면 곧 깬다.
+/// A clock offset from wall time by a test-specified amount (item 6). Waits sleep in short increments, so they wake soon after a clock change.
 final class TestClock: Sendable {
     private let offset = Mutex<TimeInterval>(0)
 
@@ -220,8 +220,8 @@ final class TestClock: Sendable {
     }
 }
 
-/// tailnet 443(또는 다른 포트)에서 받은 연결마다 `bridge.forward(_:toLoopbackPort:)`를 부른다. 포트는 지금 서버의 것이다
-/// (갱신 뒤 새 리스너로 바꾸면 새 연결부터 그쪽으로 간다).
+/// Calls `bridge.forward(_:toLoopbackPort:)` for each connection accepted on tailnet port 443 (or another port). Uses the current server's port
+/// (switching to a new listener after renewal routes new connections there).
 final class BridgeAcceptor: Sendable {
     private let route = Mutex<UInt16>(0)
     private let errors = Mutex<[LoopbackBridgeError]>([])
@@ -257,28 +257,28 @@ final class BridgeAcceptor: Sendable {
     }
 }
 
-/// PEM 인증서 하나의 DER.
+/// DER for one PEM certificate.
 func certificateDER(fromPEM pem: String) throws -> [UInt8] {
     let body = pem.components(separatedBy: "\n").filter { !$0.hasPrefix("-----") }.joined()
-    guard let data = Data(base64Encoded: body) else { throw GateFailure("rootPEM을 해석하지 못함") }
+    guard let data = Data(base64Encoded: body) else { throw GateFailure("Could not decode rootPEM") }
     return Array(data)
 }
 
-/// 사슬이 `anchor`로 `domain`의 TLS 서버 인증서로 검증되는가(SSL 서버 정책, 지금 시각).
+/// Checks whether the chain verifies with `anchor` as a TLS server certificate for `domain` (SSL server policy, current time).
 func chainVerifies(_ chain: [[UInt8]], domain: String, anchor: [UInt8]) throws -> Bool {
     try chainVerifies(chain, domain: domain, anchors: [anchor])
 }
 
-/// 사슬이 `anchors`(이것들만)로 `domain`의 TLS 서버 인증서로 검증되는가.
+/// Checks whether the chain verifies with only `anchors` as a TLS server certificate for `domain`.
 func chainVerifies(_ chain: [[UInt8]], domain: String, anchors: [[UInt8]]) throws -> Bool {
-    let certificates = try chain.map { try requireValue(SecCertificateCreateWithData(nil, Data($0) as CFData), "인증서 해석 실패") }
+    let certificates = try chain.map { try requireValue(SecCertificateCreateWithData(nil, Data($0) as CFData), "Could not decode the certificate") }
     var trust: SecTrust?
     guard SecTrustCreateWithCertificates(certificates as CFArray, SecPolicyCreateSSL(true, domain as CFString), &trust) == errSecSuccess,
           let trust else { return false }
     return trustEvaluates(trust, domain: domain, anchors: anchors)
 }
 
-/// `trust`를 `domain`의 SSL 서버 정책과 `anchors`만으로 지금 시각에 검증한다. 빠진 중간 인증서를 네트워크에서 받지 않는다.
+/// Verifies `trust` at the current time with the SSL server policy for `domain` and only `anchors`. Does not fetch missing intermediates over the network.
 func trustEvaluates(_ trust: SecTrust, domain: String, anchors: [[UInt8]]) -> Bool {
     let roots = anchors.compactMap { SecCertificateCreateWithData(nil, Data($0) as CFData) }
     guard roots.count == anchors.count, !roots.isEmpty,
@@ -289,16 +289,16 @@ func trustEvaluates(_ trust: SecTrust, domain: String, anchors: [[UInt8]]) -> Bo
     return SecTrustEvaluateWithError(trust, nil)
 }
 
-/// 다리 밖에서 루프백 포트로 직접 건 TLS 연결이 본 것(항목 9).
+/// What a direct TLS connection to the loopback port outside the bridge observed (item 9).
 struct DirectTLSProbe: Sendable {
     var handshake = false
-    /// 서버가 보낸 인증서 수(`sec_protocol_metadata_access_peer_certificate_chain`).
+    /// The number of certificates the server sent (`sec_protocol_metadata_access_peer_certificate_chain`).
     var peerCertificates = 0
     var negotiatedALPN: String?
     var receivedBytes = 0
     var end = ""
 
-    /// 신뢰 판단은 하지 않는다(모두 받는다). 이 탐침은 서버가 표에 없는 연결을 끊는지만 본다.
+    /// Accepts every certificate without evaluating trust. The probe only checks whether the server disconnects a connection missing from the table.
     static func run(port: UInt16, domain: String) async -> DirectTLSProbe {
         let result = Mutex(DirectTLSProbe())
         let tls = NWProtocolTLS.Options()
@@ -325,11 +325,11 @@ struct DirectTLSProbe: Sendable {
                 }
             }
             connection.start(queue: queue)
-            // 서버가 거절한 연결을 닫지 않으면 이 연결은 준비 중에 머문다. 기한 없이 기다리면 관문이 멈춘다.
-            queue.asyncAfter(deadline: .now() + 10) { once.withLock { $0.take() }?.resume(returning: "10초 안에 끝나지 않음") }
+            // If the server does not close a rejected connection, this connection stays in setup. Waiting without a deadline would stall the gate.
+            queue.asyncAfter(deadline: .now() + 10) { once.withLock { $0.take() }?.resume(returning: "Did not finish within 10 seconds") }
         }
         if let ready {
-            result.withLock { $0.end = "준비 전 끝: \(ready)" }
+            result.withLock { $0.end = "Ended before readiness: \(ready)" }
             connection.cancel()
             return result.withLock { $0 }
         }
@@ -353,14 +353,14 @@ struct DirectTLSProbe: Sendable {
     }
 }
 
-/// 관문 하나: 도구를 띄우고 pebble을 켠 뒤 Go 피어 둘과 Swift 노드(`.inProcess`)를 붙인다. 성공·실패·취소에서 모두 회수한다.
+/// Runs one gate by starting the tool, enabling pebble, and connecting two Go peers and a Swift node (`.inProcess`). Cleans up on success, failure, or cancellation.
 func withHostGate(nonceReject: Int = 0, authzReuse: Int = 0, _ body: (HostGate) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-m7-\(UUID().uuidString)")
     let tool = GoTailnet(temporaryDirectory: directory)
     defer {
         if FileManager.default.fileExists(atPath: directory.path) {
             do { try FileManager.default.removeItem(at: directory) }
-            catch { Issue.record("M7 상태 디렉터리 정리 실패: \(redacted(String(describing: error)))") }
+            catch { Issue.record("Could not clean up the M7 state directory: \(redacted(String(describing: error)))") }
         }
     }
     var run: Task<Void, any Error>?
@@ -370,8 +370,8 @@ func withHostGate(nonceReject: Int = 0, authzReuse: Int = 0, _ body: (HostGate) 
         try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
         let ready = try await tool.start()
         let acme = try await tool.command(.init(cmd: "acmeStart", nonceReject: nonceReject, authzReuse: authzReuse), expecting: "acmeStart")
-        let rootPEM = try requireValue(acme.rootPEM, "acmeStart rootPEM 없음")
-        let directoryURL = try requireValue(acme.directoryURL.flatMap(URL.init(string:)), "acmeStart directoryURL 없음")
+        let rootPEM = try requireValue(acme.rootPEM, "acmeStart returned no rootPEM")
+        let directoryURL = try requireValue(acme.directoryURL.flatMap(URL.init(string:)), "acmeStart returned no directoryURL")
         let peerA = try GatePeer(await tool.command(.init(cmd: "addPeer", name: "go-peer-a"), expecting: "peer"))
         let peerB = try GatePeer(await tool.command(.init(cmd: "addPeer", name: "go-peer-b"), expecting: "peer"))
         let node = try TailnetNode(configuration: .init(stateDirectory: state, hostname: "rd-mac-1a2b3c4d",
@@ -383,9 +383,9 @@ func withHostGate(nonceReject: Int = 0, authzReuse: Int = 0, _ body: (HostGate) 
         let nodes = try #require(await tool.command(.init(cmd: "nodes"), expecting: "nodes").nodes)
         let local = try #require(nodes.first { Set($0.addresses) == Set(addresses.map(\.description)) })
         let localPeer = GatePeer(key: local.nodeKey, addresses: addresses)
-        try await netstackWait("Swift netmap의 Go 피어 둘") { await node.status.peerCount >= 2 }
+        try await netstackWait("Two Go peers in the Swift netmap") { await node.status.peerCount >= 2 }
         for name in ["go-peer-a", "go-peer-b"] {
-            try await netstackWait("\(name)의 netmap에 Swift 노드") {
+            try await netstackWait("Swift node in the netmap of \(name)") {
                 let status = try await tool.command(.init(cmd: "peerStatus", name: name), expecting: "peerStatus")
                 return status.peers?.contains { $0.nodeKey == local.nodeKey } == true
             }
@@ -411,19 +411,19 @@ func withHostGate(nonceReject: Int = 0, authzReuse: Int = 0, _ body: (HostGate) 
     }
 }
 
-/// 관리자를 돌리고 첫 인증서를 기다린다. 돌려준 Task는 시험이 취소하고 회수한다.
+/// Runs the manager and waits for the first certificate. The test cancels and joins the returned Task.
 func runManager(_ manager: CertificateManager, waitingSeconds: Int = 120) async throws
     -> (task: Task<Void, any Error>, certificate: TailnetCertificate, seconds: Double) {
     let started = ContinuousClock.now
     let task = Task { try await manager.run() }
     do {
-        let certificate = try await nextEvent(manager.certificates, waitingFor: "첫 인증서", timeout: .seconds(waitingSeconds))
+        let certificate = try await nextEvent(manager.certificates, waitingFor: "first certificate", timeout: .seconds(waitingSeconds))
         return (task, certificate, started.duration(to: .now).netstackSeconds)
     } catch {
         let status = await manager.status
         task.cancel()
         _ = await task.result
-        throw GateFailure("첫 인증서를 받지 못함: lastFailure \(String(describing: status.lastFailure)), nextAttempt \(String(describing: status.nextAttempt)); \(error)")
+        throw GateFailure("Did not receive the first certificate: lastFailure \(String(describing: status.lastFailure)), nextAttempt \(String(describing: status.nextAttempt)). \(error)")
     }
 }
 
@@ -432,7 +432,7 @@ func stopManager(_ task: Task<Void, any Error>) async {
     _ = await task.result
 }
 
-/// 관리자의 `status`가 조건을 채울 때까지 기다린다.
+/// Waits until the manager's `status` meets the condition.
 func waitForStatus(_ manager: CertificateManager, _ stage: String, seconds: Int = 60,
                    _ predicate: @escaping @Sendable (CertificateStatus) -> Bool) async throws -> CertificateStatus {
     var last: CertificateStatus?
@@ -443,7 +443,7 @@ func waitForStatus(_ manager: CertificateManager, _ stage: String, seconds: Int 
             return predicate(status)
         }
     } catch {
-        throw GateFailure("\(stage): 마지막 status \(String(describing: last))")
+        throw GateFailure("\(stage): last status \(String(describing: last))")
     }
     return try requireValue(last)
 }

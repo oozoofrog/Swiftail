@@ -3,7 +3,7 @@ import Foundation
 import SwiftailBase
 @testable import SwiftailWireGuard
 
-/// 실제 시각과 UDP 입출력만 맡는다. WireGuard 상태와 훅은 이 actor에서 직렬 처리한다.
+/// Handles only real time and UDP I/O. The actor serializes access to WireGuard state and hooks.
 actor UDPDriver {
     enum OutboundRule: Sendable { case pass, drop, flipBit, duplicate }
     struct Datagram: Sendable {
@@ -28,7 +28,7 @@ actor UDPDriver {
     private var outboundRule = OutboundRule.pass
     private var stopped = false
 
-    /// Go 피어의 루프백 출처 `127.0.0.1:remotePort`. 출처 포트는 늘 remotePort임을 받을 때 확인한다.
+    /// The Go peer's loopback source, `127.0.0.1:remotePort`. Checks on receipt that the source port is always remotePort.
     private var source: WireGuardDevice.Source {
         let port = remotePort ?? 0
         return WireGuardDevice.Source(address: [127, 0, 0, 1, UInt8(port & 0xFF), UInt8(port >> 8)], host: [127, 0, 0, 1])
@@ -41,7 +41,7 @@ actor UDPDriver {
         publicKey = device.publicKey
         self.peer = peer
         device.addPeer(peer, allowedIPs: try ["10.99.0.2/32", "fd00:99::2/128"].map {
-            guard let prefix = IPPrefix($0) else { throw InteropFailure("시험 AllowedIPs 해석 실패") }
+            guard let prefix = IPPrefix($0) else { throw InteropFailure("Could not parse test AllowedIPs") }
             return prefix
         })
     }
@@ -56,13 +56,13 @@ actor UDPDriver {
         }
     }
 
-    /// UDP 수신은 비차단 polling하고 타이머는 nextDeadline보다 늦게 재우지 않는다.
+    /// Polls for UDP input without blocking and never sleeps past nextDeadline for timers.
     private func step() -> Duration {
         guard !stopped else { return .milliseconds(5) }
         do {
             for _ in 0..<64 {
                 guard let datagram = try socket.receive() else { break }
-                guard datagram.port == remotePort else { throw InteropFailure("예상하지 않은 UDP 포트") }
+                guard datagram.port == remotePort else { throw InteropFailure("Unexpected UDP port") }
                 let drop = inboundDrops > 0
                 history.append(Datagram(bytes: datagram.bytes, time: .now, incoming: true, dropped: drop))
                 if drop { inboundDrops -= 1; continue }
@@ -72,7 +72,7 @@ actor UDPDriver {
             if let deadline = device.nextDeadline, deadline <= .now {
                 try deliver(device.advance(to: .now))
             }
-        } catch { failure = InteropFailure("UDP 구동 실패: \(error)") }
+        } catch { failure = InteropFailure("UDP driver failed: \(error)") }
         if let deadline = device.nextDeadline {
             return max(.zero, min(.milliseconds(5), ContinuousClock.now.duration(to: deadline)))
         }
@@ -83,17 +83,17 @@ actor UDPDriver {
         for output in outputs {
             switch output {
             case let .ipPacket(bytes, from: source):
-                guard source == peer else { throw InteropFailure("다른 피어의 IP 출력") }
+                guard source == peer else { throw InteropFailure("IP output from another peer") }
                 packets.append(bytes)
             case let .rejectedIPPacket(reason, from: _):
-                throw InteropFailure("Go가 보낸 IP 패킷을 거절함: \(reason)")
+                throw InteropFailure("Rejected an IP packet sent by Go: \(reason)")
             case let .cookieReply(bytes):
-                // 받은 데이터그램의 출처(Go 피어의 루프백 포트)로 되돌린다.
-                guard let remotePort else { throw InteropFailure("UDP 목적지 없음") }
+                // Send back to the received datagram's source (the Go peer's loopback port).
+                guard let remotePort else { throw InteropFailure("No UDP destination") }
                 history.append(Datagram(bytes: bytes, time: .now, incoming: false, dropped: false))
                 try socket.send(bytes, to: remotePort)
             case let .datagram(bytes, to: destination):
-                guard destination == peer, let remotePort else { throw InteropFailure("UDP 목적지 없음") }
+                guard destination == peer, let remotePort else { throw InteropFailure("No UDP destination") }
                 let rule = bytes.first == 4 && bytes.count > 32 ? outboundRule : .pass
                 if rule != .pass { outboundRule = .pass }
                 history.append(Datagram(bytes: bytes, time: .now, incoming: false, dropped: rule == .drop))
@@ -118,20 +118,20 @@ actor UDPDriver {
     }
 
     func dropIncoming(_ count: Int) { inboundDrops = count }
-    /// 시험 동안 부하 상태로 둔다(실제로 문턱을 넘기는 대신 판정 결과를 정한다).
+    /// Keeps the driver under load during the test by setting the decision result instead of actually crossing the threshold.
     func holdUnderLoad() { device.handshakeLoad.underLoadUntil = .now + .seconds(600) }
     func interceptNextTransport(_ rule: OutboundRule) { outboundRule = rule }
     func datagrams() -> [Datagram] { history }
     func receivedErrors() -> [WireGuardError] { errors }
 
-    /// 캡처한 Go 데이터그램을 네트워크 수신 경로와 같은 공개 API에 다시 넣는다.
+    /// Reinjects a captured Go datagram through the same public API as the network receive path.
     func reinject(_ datagram: [UInt8]) throws {
         try deliver(device.receive(datagram, from: source, at: .now))
     }
 
-    /// 캡처한 Swift 데이터그램을 그대로 다시 보내거나 시험에서 바꾼 바이트를 보낸다.
+    /// Resends a captured Swift datagram unchanged or sends bytes changed by the test.
     func transmit(_ datagram: [UInt8]) throws {
-        guard let remotePort else { throw InteropFailure("UDP 목적지 없음") }
+        guard let remotePort else { throw InteropFailure("No UDP destination") }
         try socket.send(datagram, to: remotePort)
     }
 
@@ -143,14 +143,14 @@ actor UDPDriver {
             if !packets.isEmpty { return packets.removeFirst() }
             try await Task.sleep(for: .milliseconds(10))
         }
-        throw InteropFailure("Swift IP 수신 제한 시간 초과 (\(timeout))")
+        throw InteropFailure("Timed out waiting for Swift IP input (\(timeout))")
     }
 
     func diagnostics() -> String {
         let origin = history.first?.time ?? .now
         return history.map {
-            "\(origin.duration(to: $0.time)) \($0.incoming ? "Go→Swift" : "Swift→Go") type=\($0.bytes.first ?? 0) 길이=\($0.bytes.count)\($0.dropped ? " 버림" : "")"
-        }.joined(separator: "\n") + "\nSwift 수신 오류: \(errors)\n구동 오류: \(failure?.description ?? "없음")"
+            "\(origin.duration(to: $0.time)) \($0.incoming ? "Go→Swift" : "Swift→Go") type=\($0.bytes.first ?? 0) length=\($0.bytes.count)\($0.dropped ? " dropped" : "")"
+        }.joined(separator: "\n") + "\nSwift receive errors: \(errors)\nDriver error: \(failure?.description ?? "none")"
     }
 
     func stop() {

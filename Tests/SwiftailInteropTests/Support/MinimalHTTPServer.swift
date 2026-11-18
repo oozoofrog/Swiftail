@@ -1,7 +1,7 @@
-// 관문 (가) 8~10의 시험 전용 HTTP/1.1 서버(계약 `docs/contracts/SwiftailHost.md` 7절, 동작 B7, 첫 사용처 검토 결과 7·8·11).
+// Test-only HTTP/1.1 server for gate (a) 8–10 (`docs/contracts/SwiftailHost.md` contract §7, behavior B7, first adopter review findings 7, 8, and 11).
 //
-// 첫 사용처의 호스트를 흉내 내는 최소한이다: 페어링, 설치 세션, 매니페스트, IPA. 호스트의 로직(페어링 코드, 세션의
-// 수명, 게시본 검사)은 재현하지 않는다(계약 7절 "RemoteDebug e2e 재현의 범위").
+// Implements the minimum needed to mimic the first adopter's host: pairing, install sessions, manifest, and IPA. It does not reproduce the host's logic for pairing codes,
+// session lifetime, or published build checks (contract §7, "Scope of RemoteDebug E2E Reproduction").
 
 import CryptoKit
 import Foundation
@@ -11,7 +11,7 @@ import SwiftailCertificates
 import SwiftailLoopback
 import Synchronization
 
-/// 설치 세션 표. 리스너가 바뀌어도(갱신) 세션은 남으므로 서버들이 함께 쓴다.
+/// Install session table shared by servers so sessions survive a listener change (renewal).
 final class HostSessions: Sendable {
     struct Session: Sendable {
         let token: String
@@ -20,7 +20,7 @@ final class HostSessions: Sendable {
 
     private let sessions = Mutex<[Session]>([])
 
-    /// 낸 세션들. 시험이 다음 요청의 토큰을 꺼낸다(`peerHTTP`는 응답 본문을 돌려주지 않는다).
+    /// Issued sessions. The test retrieves the token for the next request (`peerHTTP` does not return the response body).
     var issued: [Session] { sessions.withLock { $0 } }
 
     func issue(for stableID: String) -> String {
@@ -30,7 +30,7 @@ final class HostSessions: Sendable {
         return token
     }
 
-    /// 토큰에 묶인 노드. 토큰은 비밀이므로 모든 세션과 상수 시간으로 견준다(AGENTS.md).
+    /// Finds the node bound to the token. The token is secret, so it is compared against every session in constant time (AGENTS.md).
     func stableID(forToken token: String) -> String? {
         let candidate = Array(token.utf8)
         var found: String?
@@ -46,7 +46,7 @@ final class HostSessions: Sendable {
     }
 }
 
-/// IPA를 보내다 정한 바이트에서 멈춰 둔다. 큰 전송이 "도는 중"인 때를 시험이 확실히 잡게 한다(항목 6·10).
+/// Pauses an IPA transfer after a specified number of bytes so the test can reliably catch a large transfer in progress (items 6 and 10).
 final class TransferHold: Sendable {
     private struct State {
         var reached = false
@@ -70,7 +70,7 @@ final class TransferHold: Sendable {
         for waiter in waiters { waiter.resume() }
     }
 
-    /// 보낸 양이 문턱을 넘었으면 풀릴 때까지 기다린다. 한 전송만 멈춘다(처음 넘은 것).
+    /// Waits for release once the sent byte count exceeds the threshold. Pauses only one transfer, the first to cross it.
     func pass(sent: UInt64) async {
         guard sent >= threshold else { return }
         await withCheckedContinuation { continuation in
@@ -85,12 +85,12 @@ final class TransferHold: Sendable {
     }
 }
 
-/// IPA 바이트열: 씨앗의 LCG64 바이트열(`NetstackStream`) 앞 1,048,573바이트(소수)를 되풀이한 것. 100MiB를 메모리에 쥐지
-/// 않고, 디버그 빌드에서도 바이트마다 만들지 않아 처리량이 생성에 묶이지 않는다. 주기가 2의 거듭제곱이 아니어서 MiB 단위로
-/// 어긋난 Range(예: 두 반쪽을 바꿔 보냄)도 해시가 다르다.
+/// IPA byte sequence formed by repeating the first 1,048,573 bytes (a prime) of the seed's LCG64 stream (`NetstackStream`). This avoids holding 100MiB in memory
+/// or generating bytes one at a time even in debug builds, so generation does not limit throughput. The period is not a power of two, so MiB-aligned
+/// shifts in a Range (such as sending the two halves in reverse order) also yield different hashes.
 struct IPAContent: Sendable {
     static let period = 1_048_573
-    /// 한 번에 꺼내는 최대 바이트. 표는 주기 뒤에 이만큼을 더 붙여 꺼낼 때 감싸지 않는다.
+    /// Maximum bytes returned at once. The table extends this far past the period so reads do not have to wrap.
     static let maximumChunk = 65_536
     private let table: [UInt8]
 
@@ -106,7 +106,7 @@ struct IPAContent: Sendable {
         return Array(table[start..<(start + count)])
     }
 
-    /// `offset`부터 `length`바이트의 SHA-256(소문자 hex).
+    /// SHA-256 of `length` bytes starting at `offset` (lowercase hex).
     func digest(offset: UInt64, length: UInt64) -> String {
         var hash = SHA256()
         var done: UInt64 = 0
@@ -119,38 +119,38 @@ struct IPAContent: Sendable {
     }
 }
 
-/// 시험 전용 최소 HTTP/1.1 서버. `127.0.0.1`의 `NWListener`(포트는 시스템이 고른다)이고 연결마다 요청 하나만 받는다.
+/// Minimal test-only HTTP/1.1 server. Uses an `NWListener` on `127.0.0.1` (the system chooses the port) and accepts one request per connection.
 ///
-/// 리스너의 프로토콜 스택 끝(TLS 아래)에 다리가 준 옵션을 넣는다. 다리가 연결의 맨 앞에 보낸 일회용 토큰을 그 framer가
-/// 확인하고, 토큰이 없는 연결은 `.ready`가 되지 못한다. 받은 연결이 `.ready`가 되면 **한 번** `bridge.origin(of:)`를 묻고,
-/// nil이면 끊는다(동작 B7). 평문 모드도 같다.
+/// Installs the bridge's options at the end of the listener's protocol stack (below TLS). The framer validates the one-time token the bridge sent at the start
+/// of the connection. Connections without a token cannot become `.ready`. When an accepted connection is `.ready`, call `bridge.origin(of:)` exactly once
+/// and disconnect if it returns nil (behavior B7). Plaintext mode behaves the same way.
 ///
-/// 경로: `POST /pair`(상대의 `stableID`·`computedName`), `POST /sessions`(그 `stableID`에 묶인 토큰),
-/// `GET /manifest?token=…`, `GET /ipa?token=…`(`Range: bytes=a-b`). 토큰의 노드가 연결의 `Origin.peer.stableID`와 다르면 403.
+/// Routes: `POST /pair` (the peer's `stableID` and `computedName`), `POST /sessions` (a token bound to that `stableID`),
+/// `GET /manifest?token=…`, and `GET /ipa?token=…` (`Range: bytes=a-b`). Returns 403 when the token's node differs from the connection's `Origin.peer.stableID`.
 final class MinimalHTTPServer: Sendable {
     enum Mode: Sendable { case tls, plain }
 
-    /// 연결 하나가 겪은 것. 시험이 서버 쪽에서 본 끊김을 읽는다.
+    /// What happened on one connection. The test reads the disconnect as seen by the server.
     struct ConnectionRecord: Sendable {
         var sourcePort: UInt16 = 0
-        /// 다리가 알려 준 상대. nil이면 신원을 얻지 못한 연결이다.
+        /// The peer reported by the bridge. A nil value means no identity was obtained for the connection.
         var stableID: String?
         var rejected = false
-        /// `GET /ipa` 같은 요청 줄의 앞 두 낱말.
+        /// The first two words of a request line, such as `GET /ipa`.
         var request: String?
         var status: Int?
         var bodyBytesSent: UInt64 = 0
-        /// 응답을 보내다 난 오류(`posix(ECONNRESET)` 꼴).
+        /// An error while sending the response (in the form `posix(ECONNRESET)`).
         var sendError: String?
-        /// 요청을 읽은 뒤 걸어 둔 받기가 어떻게 끝났는가: `eof`(오류 없는 끝), `error(…)`.
+        /// How the receive started after reading the request ended: `eof` (no error) or `error(…)`.
         var receiveEnd: String?
-        /// `.ready` 전에 끝났으면 그 까닭, 뒤에 `.failed`가 오면 그 오류.
+        /// Why the connection ended before `.ready`, or the error if `.failed` arrived afterward.
         var stateError: String?
     }
 
-    /// 요청 머리의 한도.
+    /// Request header limit.
     static let maximumHeadByteCount = 16_384
-    /// 요청 본문의 한도(첫 사용처 검토 결과 11: 시험 서버도 본문 상한을 둔다).
+    /// Request body limit (first adopter review finding 11: the test server also caps the body).
     static let maximumBodyByteCount = 65_536
 
     let port: UInt16
@@ -185,7 +185,7 @@ final class MinimalHTTPServer: Sendable {
         ipa = IPAContent(seed: ipaSeed)
     }
 
-    /// 리스너를 띄운다. TLS 모드는 `certificate`의 사슬과 키로 신원을 만든다(`makeIdentity(_:)`).
+    /// Starts the listener. TLS mode creates an identity from the `certificate` chain and key (`makeIdentity(_:)`).
     static func start(
         _ mode: Mode, certificate: TailnetCertificate?, label: String, bridge: LoopbackBridge, sessions: HostSessions,
         domain: String, ipaSeed: UInt64, ipaLength: UInt64, hold: TransferHold? = nil
@@ -197,13 +197,13 @@ final class MinimalHTTPServer: Sendable {
         case .tls:
             let tls = NWProtocolTLS.Options()
             let options = tls.securityProtocolOptions
-            sec_protocol_options_set_local_identity(options, try makeIdentity(try requireValue(certificate, "TLS 모드에는 인증서가 필요함")))
+            sec_protocol_options_set_local_identity(options, try makeIdentity(try requireValue(certificate, "TLS mode requires a certificate")))
             sec_protocol_options_set_min_tls_protocol_version(options, .TLSv12)
             sec_protocol_options_add_tls_application_protocol(options, "http/1.1")
             parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
         }
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
-        // 반드시 끝에(TLS 아래, TCP 바로 위) 넣는다.
+        // Always install it at the end (below TLS, immediately above TCP).
         parameters.defaultProtocolStack.applicationProtocols.append(bridge.makeListenerProtocolOptions())
         let listener = try NWListener(using: parameters)
         let (accepted, sink) = AsyncStream.makeStream(of: NWConnection.self)
@@ -232,7 +232,7 @@ final class MinimalHTTPServer: Sendable {
         return server
     }
 
-    /// 새 연결만 받지 않는다. 이미 받은 연결은 끝까지 간다(첫 사용처 검토 결과 3: 갱신 뒤의 옛 리스너).
+    /// Stops accepting new connections. Already accepted connections run to completion (first adopter review finding 3: the old listener after renewal).
     func stopAccepting() { listener.cancel() }
 
     func close() {
@@ -244,33 +244,33 @@ final class MinimalHTTPServer: Sendable {
         for connection in connections { connection.cancel() }
     }
 
-    // MARK: - 신원(계약 6절의 조각. 키체인을 쓰지 않는다)
+    // MARK: - Identity (snippet from contract §6, without using the keychain)
 
-    /// `TailnetCertificate` → TLS 신원. 키는 `SecKeyCreateWithData`(키체인 없이 메모리의 키), 신원은 `SecIdentityCreate`,
-    /// 중간 인증서는 `sec_identity_create_with_certificates`로 싣는다. 넘기는 배열은 leaf를 뺀 나머지 사슬이다.
+    /// Converts a `TailnetCertificate` into a TLS identity. Uses `SecKeyCreateWithData` for the in-memory key without the keychain, `SecIdentityCreate` for the identity,
+    /// and `sec_identity_create_with_certificates` to include intermediates. The array contains the rest of the chain with the leaf excluded.
     static func makeIdentity(_ certificate: TailnetCertificate) throws -> sec_identity_t {
         let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom, kSecAttrKeyClass: kSecAttrKeyClassPrivate]
         guard let key = SecKeyCreateWithData(Data(certificate.privateKey.x963Representation) as CFData,
                                              attributes as CFDictionary, nil) else {
-            throw GateFailure("SecKeyCreateWithData가 P-256 개인 키를 만들지 못함")
+            throw GateFailure("SecKeyCreateWithData could not create a P-256 private key")
         }
         let certificates = try certificate.chain.map { der -> SecCertificate in
             guard let value = SecCertificateCreateWithData(nil, Data(der) as CFData) else {
-                throw GateFailure("SecCertificateCreateWithData 실패")
+                throw GateFailure("SecCertificateCreateWithData failed")
             }
             return value
         }
         guard let leaf = certificates.first, let identity = SecIdentityCreate(nil, leaf, key) else {
-            throw GateFailure("SecIdentityCreate가 nil(키와 leaf가 맞지 않음)")
+            throw GateFailure("SecIdentityCreate returned nil (key and leaf do not match)")
         }
-        // 배열에는 leaf 뒤의 사슬만 넣는다. leaf까지 넣으면 서버가 leaf를 두 번 보낸다(관문에서 확인: 사슬 2장에 3장).
+        // Include only the chain after the leaf in the array. Including the leaf makes the server send it twice (verified in the gate: 3 certificates for a 2-certificate chain).
         guard let value = sec_identity_create_with_certificates(identity, Array(certificates.dropFirst()) as CFArray) else {
-            throw GateFailure("sec_identity_create_with_certificates가 nil")
+            throw GateFailure("sec_identity_create_with_certificates returned nil")
         }
         return value
     }
 
-    // MARK: - 응답 본문(시험이 같은 함수로 기대 해시를 만든다)
+    // MARK: - Response bodies (tests use the same functions to compute expected hashes)
 
     static func pairBody(stableID: String, computedName: String) -> [UInt8] {
         Array(#"{"stableID":"\#(stableID)","computedName":"\#(computedName)"}"#.utf8)
@@ -289,7 +289,7 @@ final class MinimalHTTPServer: Sendable {
         """.utf8)
     }
 
-    // MARK: - 연결
+    // MARK: - Connection
 
     private func accept(_ connection: NWConnection) {
         let log = ConnectionLog()
@@ -299,8 +299,8 @@ final class MinimalHTTPServer: Sendable {
         }
         Task {
             await self.serve(connection, log: log)
-            // 끝난 연결은 놓는다. 준비되지 않고 끝난 연결의 소켓은 `cancel()`만으로는 닫히지 않고 `NWConnection`이 풀릴 때
-            // 닫힌다(붙잡고 있으면 토큰 없이 건 상대가 끝을 보지 못하고, 서버의 서술자가 남는다).
+            // Release completed connections. For a connection that ends before readiness, `cancel()` alone does not close its socket. The socket closes when `NWConnection`
+            // is released (retaining it keeps the peer that dialed without a token from seeing the end and leaves the server's descriptor open).
             self.state.withLock { $0.connections.removeAll { $0 === connection } }
         }
     }
@@ -336,7 +336,7 @@ final class MinimalHTTPServer: Sendable {
             return
         }
         log.update { $0.request = "\(request.method) \(request.path)" }
-        // 요청 뒤의 받기: 상대가 어떻게 끝내는지(깨끗한 EOF인지 오류인지)를 적는다(첫 사용처 검토 결과 7).
+        // Receive after the request to record how the peer ends the connection (clean EOF or error), per first adopter review finding 7.
         Task {
             while true {
                 switch await Self.receive(connection) {
@@ -404,7 +404,7 @@ final class MinimalHTTPServer: Sendable {
         await finish(connection, log: log)
     }
 
-    /// 보내다 실패했다. 걸어 둔 받기가 끝을 적을 틈을 잠깐 준 뒤 연결을 버린다.
+    /// Handles a send failure. Briefly gives the pending receive time to record how it ended, then drops the connection.
     private func fail(_ connection: NWConnection, log: ConnectionLog, error: String) async {
         log.update { $0.sendError = error }
         for _ in 0..<40 where log.snapshot.receiveEnd == nil { try? await Task.sleep(for: .milliseconds(50)) }
@@ -420,7 +420,7 @@ final class MinimalHTTPServer: Sendable {
         await finish(connection, log: log)
     }
 
-    /// 쓰기를 닫고(TLS는 close_notify) 상대가 닫기를 5초까지 기다린 뒤 연결을 놓는다.
+    /// Closes the write direction (TLS close_notify), waits up to 5 seconds for the peer to close, then releases the connection.
     private func finish(_ connection: NWConnection, log: ConnectionLog) async {
         if let error = await Self.send(connection, [], final: true) { return await fail(connection, log: log, error: error) }
         for _ in 0..<100 where log.snapshot.receiveEnd == nil { try? await Task.sleep(for: .milliseconds(50)) }
@@ -437,7 +437,7 @@ final class MinimalHTTPServer: Sendable {
         return Array((lines.joined(separator: "\r\n") + "\r\n\r\n").utf8)
     }
 
-    /// `bytes=a-b`, `bytes=a-` 하나만 받는다.
+    /// Accepts only a single `bytes=a-b` or `bytes=a-`.
     static func parseRange(_ value: String, length: UInt64) -> (UInt64, UInt64)? {
         guard value.hasPrefix("bytes=") else { return nil }
         let parts = value.dropFirst(6).split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
@@ -447,13 +447,13 @@ final class MinimalHTTPServer: Sendable {
         return (start, end)
     }
 
-    // MARK: - 요청 읽기
+    // MARK: - Request reading
 
     struct Request: Sendable {
         let method: String
         let path: String
         let query: [String: String]
-        /// 이름은 소문자.
+        /// Names are lowercase.
         let headers: [String: String]
     }
 
@@ -501,11 +501,11 @@ final class MinimalHTTPServer: Sendable {
         return .request(Request(method: String(requestLine[0]), path: components.path, query: query, headers: headers))
     }
 
-    // MARK: - NWConnection의 비동기 감싸개
+    // MARK: - Asynchronous NWConnection wrappers
 
     enum Received: Sendable { case bytes([UInt8]), end, failed(String) }
 
-    /// `.ready`까지 기다린다. 실패하면 그 까닭. 준비된 뒤의 `.failed`도 기록에 남긴다.
+    /// Waits for `.ready`. Returns the reason on failure. Also records `.failed` after readiness.
     private static func ready(_ connection: NWConnection, log: ConnectionLog) async -> String? {
         await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let once = Mutex<CheckedContinuation<String?, Never>?>(continuation)
@@ -535,7 +535,7 @@ final class MinimalHTTPServer: Sendable {
         }
     }
 
-    /// 보내고 네트워크 스택이 받아 갈 때까지 기다린다. 실패하면 그 오류. `final`이면 쓰기 방향을 닫는다.
+    /// Sends and waits for the network stack to accept the bytes. Returns the error on failure. Closes the write direction if `final` is true.
     static func send(_ connection: NWConnection, _ bytes: [UInt8], final: Bool = false) async -> String? {
         await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             connection.send(content: bytes.isEmpty ? nil : Data(bytes), contentContext: final ? .finalMessage : .defaultMessage,
@@ -555,8 +555,8 @@ final class MinimalHTTPServer: Sendable {
     }
 }
 
-/// `#require`는 시험 함수 밖의 동기 도우미에서 쓰기 번거로워, 없는 값을 관문 실패로 바꾸는 작은 도우미를 둔다.
-func requireValue<T>(_ value: T?, _ description: String = "값이 없음") throws -> T {
+/// Converts a missing value into a gate failure so synchronous helpers outside test functions do not have to use `#require`.
+func requireValue<T>(_ value: T?, _ description: String = "Missing value") throws -> T {
     guard let value else { throw GateFailure(description) }
     return value
 }

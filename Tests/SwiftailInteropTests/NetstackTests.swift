@@ -4,12 +4,12 @@ import Swiftail
 import SwiftailBase
 import Testing
 
-@Suite("M6 관문 (가): Swift TCP ↔ Go gVisor", .enabled(if: tailnetBinary != nil,
-    "SWIFTAIL_TAILNET가 없어 M6 관문을 건너뜁니다"), .serialized, .timeLimit(.minutes(60)))
+@Suite("M6 gate (a): Swift TCP ↔ Go gVisor", .enabled(if: tailnetBinary != nil,
+    "Skipping the M6 gate because SWIFTAIL_TAILNET is missing"), .serialized, .timeLimit(.minutes(60)))
 struct NetstackTests {
     private static let large: UInt64 = 104_857_600
 
-    @Test("전송 도우미: 공개 LCG64 벡터와 청크 경계")
+    @Test("Transfer helper covers public LCG64 vectors and chunk boundaries")
     func streamVector() {
         var whole = NetstackStream(seed: 1)
         var split = NetstackStream(seed: 1)
@@ -20,7 +20,7 @@ struct NetstackTests {
         #expect(NetstackStream.header(count: 3, seed: 1) == [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1])
     }
 
-    @Test("항목 1·3: Swift listen, Go dial, IPv4·IPv6 작은 전송과 100MiB 양방향")
+    @Test("Items 1 and 3: Swift listen, Go dial, small IPv4 and IPv6 transfers and 100MiB in both directions")
     func swiftListens() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
@@ -42,7 +42,7 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 2·3: Swift connect, Go listen, IP·FQDN·짧은 이름과 100MiB 양방향")
+    @Test("Items 2 and 3: Swift connect, Go listen, IP, FQDN, short name, and 100MiB in both directions")
     func swiftConnects() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             let fqdn = try await netstackPrepare(gate)
@@ -51,11 +51,11 @@ struct NetstackTests {
             for host in hosts {
                 let sizes: [UInt64] = IPAddress(host)?.isIPv4 == false ? [3, 10_485_760, Self.large] : [3, Self.large]
                 for size in sizes {
-                    let connection = try await netstackDeadline("항목 2·3 connect") {
+                    let connection = try await netstackDeadline("Items 2 and 3 connect") {
                         try await gate.node.connect(to: host, port: 9_100)
                     }
                     let family = connection.remoteEndpoint.address.isIPv4 ? "IPv4" : "IPv6"
-                    let kind = IPAddress(host) == nil ? (host == short ? "짧은 이름" : "FQDN") : family
+                    let kind = IPAddress(host) == nil ? (host == short ? "short name" : "FQDN") : family
                     #expect(connection.remoteEndpoint.port == 9_100)
                     #expect(gate.peer.addresses.contains(connection.remoteEndpoint.address))
                     try await connection.write(NetstackStream.header(count: size, seed: 1))
@@ -66,7 +66,7 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 4: setBlockedUDPPorts로 직접 경로를 막은 DERP 100MiB 양방향")
+    @Test("Item 4: 100MiB in both directions over DERP with direct paths blocked by setBlockedUDPPorts")
     func derpTransfer() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             let fqdn = try await netstackPrepare(gate, relayed: true)
@@ -83,7 +83,7 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 5: 양방향 리스너 없는 포트는 제한 시간 전에 refused")
+    @Test("Item 5: ports without listeners are refused before the timeout in both directions")
     func refusedConnections() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
@@ -99,26 +99,26 @@ struct NetstackTests {
                 guard let transfer, transfer.state == "error" else { return false }
                 #expect(transfer.error.contains("refused"))
                 #expect(transfer.elapsedMs < 10_000)
-                await gate.tool.checkpoint("M6 5 Go 오류: \(redacted(transfer.error.replacingOccurrences(of: transfer.remote, with: "<시험 주소>"))), \(transfer.elapsedMs)ms")
+                await gate.tool.checkpoint("M6 5 Go error: \(redacted(transfer.error.replacingOccurrences(of: transfer.remote, with: "<test address>"))), \(transfer.elapsedMs)ms")
                 return true
             }
-            await gate.tool.checkpoint("M6 5 양방향 refused 완료: \(started.duration(to: .now))")
+            await gate.tool.checkpoint("M6 5 refused in both directions: \(started.duration(to: .now))")
         }
     }
 
-    @Test("항목 6: 먼저 finishWriting한 뒤에도 반대 방향을 EOF까지 읽는다")
+    @Test("Item 6: after calling finishWriting first, still reads the opposite direction to EOF")
     func halfClose() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
             let connection = try await gate.node.connect(to: gate.peer.address().description, port: 9_100)
             try await connection.write(NetstackStream.header(count: 1_048_576, seed: 7))
-            try await netstackExchange(gate, connection: connection, stage: "6 비대칭 반닫힘",
+            try await netstackExchange(gate, connection: connection, stage: "6 asymmetric half-close",
                 sendCount: 3, receiveCount: 1_048_576, sendSeed: 2, receiveSeed: 7, requireReadAfterFIN: true)
             await #expect(throws: ConnectionError.closed) { try await connection.write([1]) }
         }
     }
 
-    @Test("항목 6: Swift abort를 Go가 connection reset으로 읽는다")
+    @Test("Item 6: Go reads Swift abort as connection reset")
     func swiftAbort() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
@@ -126,27 +126,27 @@ struct NetstackTests {
             let id = try await netstackDial(gate, port: listener.port, count: 0)
             let connection = try await netstackAccept(listener)
             _ = try await netstackPreface(connection)
-            // Go의 쓰기가 끝난 뒤 끊어, 도구가 쓰기 실패 대신 읽기의 RST를 보고하게 한다.
+            // Disconnect after Go finishes writing so the tool reports the RST on read instead of a write failure.
             #expect(try await connection.read() == nil)
             await connection.abort()
             await #expect(throws: ConnectionError.closed) { try await connection.read() }
-            try await netstackWait("Go reset 오류") {
+            try await netstackWait("Go reset error") {
                 guard let transfer = try await netstackTransfers(gate.tool).first(where: { $0.transferID == id }),
                       transfer.state == "error" else { return false }
                 #expect(transfer.error.localizedCaseInsensitiveContains("reset"))
-                await gate.tool.checkpoint("M6 6 Swift abort: Go \(redacted(transfer.error.replacingOccurrences(of: transfer.remote, with: "<시험 주소>"))), 송신 \(transfer.sent), 수신 \(transfer.received), \(transfer.elapsedMs)ms")
+                await gate.tool.checkpoint("M6 6 Swift abort: Go \(redacted(transfer.error.replacingOccurrences(of: transfer.remote, with: "<test address>"))), sent \(transfer.sent), received \(transfer.received), \(transfer.elapsedMs)ms")
                 return true
             }
             await listener.close()
         }
     }
 
-    @Test("항목 6: 잘못된 머리 뒤 읽지 않은 데이터를 닫는 Go의 RST")
+    @Test("Item 6: Go sends RST when closing with unread data after an invalid header")
     func goReset() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
             let connection = try await gate.node.connect(to: gate.peer.address().description, port: 9_100)
-            // Go 도구는 4GiB 초과 머리에서 연결을 닫는다. 뒤의 미독 데이터가 gVisor의 RST를 유발한다.
+            // The Go tool closes the connection on a header exceeding 4GiB. The unread data after it triggers gVisor's RST.
             try await connection.write(NetstackStream.header(count: 4_294_967_297, seed: 1) + [UInt8](repeating: 1, count: 32_768))
             await #expect(throws: ConnectionError.reset) {
                 try await netstackDeadline("Go RST", seconds: 10) { try await connection.read() }
@@ -159,7 +159,7 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 7: 32개 동시 연결마다 양방향 4MiB, phys_footprint 표본")
+    @Test("Item 7: 4MiB in both directions on each of 32 concurrent connections, with phys_footprint sampling")
     func concurrentConnections() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
@@ -174,7 +174,7 @@ struct NetstackTests {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 for (index, pair) in connections.enumerated() {
                     group.addTask {
-                        try await netstackExchange(gate, connection: pair.0, stage: "7 동시 연결 \(index + 1)/32",
+                        try await netstackExchange(gate, connection: pair.0, stage: "7 concurrent connection \(index + 1)/32",
                             sendCount: 4_194_304, receiveCount: 4_194_304, transferID: pair.1)
                     }
                 }
@@ -184,7 +184,7 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 8·9·N3: 0%·1%·5% 손실, 20MiB, 30초 수신 무진행 금지")
+    @Test("Items 8, 9, and N3: 0%, 1%, and 5% loss, 20MiB, with no 30-second stall in receive progress")
     func packetLoss() async throws {
         var rates: [Double: Double] = [:]
         for loss in [0.0, 0.01, 0.05] {
@@ -196,26 +196,26 @@ struct NetstackTests {
                     let id = try await netstackDial(gate, port: listener.port, count: 20_971_520, timeout: 1_800)
                     let connection = try await netstackAccept(listener)
                     let preface = try await netstackPreface(connection)
-                    let measurement = try await netstackExchange(gate, connection: connection, stage: "8·9 손실 \(Int(loss * 100))% 씨앗 19766",
+                    let measurement = try await netstackExchange(gate, connection: connection, stage: "8 and 9 loss \(Int(loss * 100))% seed 19766",
                         sendCount: preface.count, receiveCount: 20_971_520, transferID: id, timeoutSeconds: 1_800)
                     rates[loss] = measurement.bytesPerSecond
                     await listener.close()
                 }
             } catch {
-                Issue.record(error, "손실 \(Int(loss * 100))% 씨앗 19766")
+                Issue.record(error, "Loss \(Int(loss * 100))% seed 19766")
             }
         }
         if let baseline = rates[0], let onePercent = rates[0.01] {
             let ratio = onePercent / baseline
-            await lossNote("M6 N3: 0%=\(baseline), 1%=\(onePercent), 5%=\(rates[0.05].map(String.init(describing:)) ?? "미완료")바이트/초, 1%/0%=\(ratio), M6-10 기준(0.1 미만)=\(ratio < 0.1)")
+            await lossNote("M6 N3: 0%=\(baseline), 1%=\(onePercent), 5%=\(rates[0.05].map(String.init(describing:)) ?? "incomplete") bytes/second, 1%/0%=\(ratio), M6-10 criterion (below 0.1)=\(ratio < 0.1)")
         } else {
-            await lossNote("M6 N3: 0% 또는 1% 전송 미완료로 처리량 비율 판정 불가")
+            await lossNote("M6 N3: cannot determine the throughput ratio because a 0% or 1% transfer is incomplete")
         }
     }
 
-    /// 양방향 동시 전송에서는 ACK가 데이터에 실려 gVisor가 중복 ACK로 세지 않는다(netstack 계약 동작 F5). 큰 전송이 한 방향인
-    /// 실제 쓰임에 가까운 값을 따로 남긴다.
-    @Test("항목 8 보충: 한 방향 20MiB의 손실 0%·1% 처리량 기록")
+    /// In simultaneous bidirectional transfers, ACKs travel with data and gVisor does not count them as duplicate ACKs (netstack contract behavior F5). Record a separate value closer
+    /// to real use, where the large transfer goes in one direction.
+    @Test("Item 8 supplement: record one-way 20MiB throughput at 0% and 1% loss")
     func oneWayLoss() async throws {
         let size: UInt64 = 20_971_520
         for (name, sendCount, receiveCount) in [("Swift→Go", size, UInt64(3)), ("Go→Swift", UInt64(3), size)] {
@@ -227,18 +227,18 @@ struct NetstackTests {
                     let connection = try await gate.node.connect(to: gate.peer.address().description, port: 9_100)
                     try await connection.write(NetstackStream.header(count: receiveCount, seed: 7))
                     let measurement = try await netstackExchange(gate, connection: connection,
-                        stage: "8 한 방향 \(name) 손실 \(Int(loss * 100))%",
+                        stage: "8 one-way \(name) loss \(Int(loss * 100))%",
                         sendCount: sendCount, receiveCount: receiveCount, sendSeed: 2, receiveSeed: 7, timeoutSeconds: 1_800)
                     rates[loss] = measurement.bytesPerSecond
                 }
             }
             if let baseline = rates[0], let onePercent = rates[0.01] {
-                await lossNote("M6 한 방향 \(name): 0%=\(baseline), 1%=\(onePercent)바이트/초, 1%/0%=\(onePercent / baseline)")
+                await lossNote("M6 one-way \(name): 0%=\(baseline), 1%=\(onePercent) bytes/second, 1%/0%=\(onePercent / baseline)")
             }
         }
     }
 
-    @Test("리스너 닫기: 대기 흐름 종료·받아 간 연결 유지·미수락 연결 RST")
+    @Test("Closing the listener ends the waiting stream, preserves accepted connections, and resets unaccepted connections")
     func listenerClose() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
@@ -247,15 +247,15 @@ struct NetstackTests {
             let accepted = try await netstackAccept(listener)
             _ = try await netstackPreface(accepted)
             let queued = try await netstackDial(gate, port: listener.port, count: 3)
-            try await netstackWait("미수락 연결의 데이터 송신") {
+            try await netstackWait("Data sent on the unaccepted connection") {
                 try await netstackTransfers(gate.tool).contains { $0.transferID == queued && $0.sent == 3 }
             }
             await listener.close()
             var iterator = listener.makeAsyncIterator()
             #expect(await iterator.next() == nil)
-            try await netstackExchange(gate, connection: accepted, stage: "리스너 close 뒤 받은 연결 유지",
+            try await netstackExchange(gate, connection: accepted, stage: "Accepted connection stays open after listener close",
                 sendCount: 3, receiveCount: 3, transferID: id)
-            try await netstackWait("미수락 연결 RST") {
+            try await netstackWait("RST on unaccepted connection") {
                 guard let transfer = try await netstackTransfers(gate.tool).first(where: { $0.transferID == queued }),
                       transfer.state == "error" else { return false }
                 #expect(transfer.error.localizedCaseInsensitiveContains("reset"))
@@ -271,23 +271,23 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 10: 한 피어의 17번째 미수락 연결은 대기하고 자리가 나면 맺어진다")
+    @Test("Item 10: a peer's 17th unaccepted connection waits and connects when a slot opens")
     func acceptQueueLimit() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             _ = try await netstackPrepare(gate)
             let listener = try await gate.node.listen(port: 9_101)
-            // 리스너의 대기열(32)에서 피어 하나의 몫은 16개다(계약 동작 S "피어 하나의 몫"). 대기열 전체의 상한은 피어가 둘
-            // 있어야 닿으므로 단위 시험(`StackLimitTests`)이 본다.
+            // One peer gets 16 slots in the listener's queue of 32 (contract behavior S, "Per-Peer Share"). Reaching the overall queue limit takes two peers,
+            // so `StackLimitTests` covers it with a unit test.
             for _ in 0..<16 {
                 let id = try await netstackDial(gate, port: listener.port, count: 0)
-                try await netstackWait("accept 대기열 채우기") {
+                try await netstackWait("Filling the accept queue") {
                     try await netstackTransfers(gate.tool).contains { $0.transferID == id && $0.state == "running" }
                 }
             }
             let id = try await netstackDial(gate, port: listener.port, count: 0)
-            try await assertDialWaits(gate, id: id, stage: "17번째 미수락")
+            try await assertDialWaits(gate, id: id, stage: "17th unaccepted connection")
             let first = try await netstackAccept(listener)
-            try await netstackWait("accept 자리 반환 뒤 연결") {
+            try await netstackWait("Connect after an accept slot is freed") {
                 try await netstackTransfers(gate.tool).contains { $0.transferID == id && $0.state == "running" }
             }
             await first.abort()
@@ -295,11 +295,11 @@ struct NetstackTests {
         }
     }
 
-    @Test("항목 10: 한 피어의 65번째 연결은 대기하고 자리가 나면 맺어진다")
+    @Test("Item 10: a peer's 65th connection waits and connects when a slot opens")
     func connectionLimit() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
-            // 상대 주소 하나의 연결은 64개까지다(계약 동작 S "검토에서 고친 것"). 전체 256개 상한은 피어가 넷 넘게 있어야
-            // 닿으므로 단위 시험(`StackLimitTests`)이 본다. 준비 전송의 TIME-WAIT가 끼지 않도록 새 노드에서 바로 채운다.
+            // Connections to one remote address are limited to 64 (contract behavior S, "Changes from Review"). Reaching the overall limit of 256 takes more than four peers,
+            // so `StackLimitTests` covers it with a unit test. Fill the limit immediately on a fresh node to avoid TIME-WAIT from the setup transfer.
             let listener = try await gate.node.listen(port: 9_101)
             var connections: [TailnetConnection] = []
             for _ in 0..<64 {
@@ -307,10 +307,10 @@ struct NetstackTests {
                 connections.append(try await netstackAccept(listener))
             }
             let id = try await netstackDial(gate, port: listener.port, count: 0)
-            try await assertDialWaits(gate, id: id, stage: "65번째 연결")
+            try await assertDialWaits(gate, id: id, stage: "65th connection")
             await connections.removeFirst().abort()
             let next = try await netstackAccept(listener)
-            try await netstackWait("연결 자리 반환 뒤 연결") {
+            try await netstackWait("Connect after a connection slot is freed") {
                 try await netstackTransfers(gate.tool).contains { $0.transferID == id && $0.state == "running" }
             }
             #expect(await gate.node.status.state == .running)
@@ -320,14 +320,14 @@ struct NetstackTests {
         }
     }
 
-    @Test("첫 사용처 6: testcontrol에 Swift .inProcess 노드 둘을 붙여 listen·connect")
+    @Test("First adopter 6: listen and connect with two Swift .inProcess nodes on testcontrol")
     func twoSwiftNodes() async throws {
         try await withGate(direct: false, device: .inProcess) { gate in
             let directory = FileManager.default.temporaryDirectory.appending(path: "swiftail-m6-second-\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: directory) }
             let nodes = try #require(await gate.tool.command(.init(cmd: "nodes"), expecting: "nodes").nodes)
             #expect(nodes.count >= 2)
-            // 기존 시험 서버의 controlURL을 새 계정 없이 재사용한다(README 예제와 같은 공개 API).
+            // Reuse the existing test server's controlURL without a new account (same public API as the README example).
             let controlURL = try #require(gate.controlURL)
             let server = try TailnetNode(configuration: .init(stateDirectory: directory, hostname: "rd-mac-5e6f7a8b",
                 controlURL: controlURL), device: .inProcess)
@@ -336,12 +336,12 @@ struct NetstackTests {
             do {
                 let addresses = try await running(server)
                 let address = try #require(addresses.first { $0.isIPv4 })
-                try await netstackWait("Swift 노드 둘의 상호 netmap 반영") {
+                try await netstackWait("Both Swift nodes appear in each other's netmaps") {
                     let clientStatus = await gate.node.status
                     let serverStatus = await server.status
                     return clientStatus.peerCount >= 2 && serverStatus.peerCount >= 2
                 }
-                let pair = try await netstackDeadline("Swift 노드 둘 교환") {
+                let pair = try await netstackDeadline("Exchange between two Swift nodes") {
                     let accepted = Task { try await netstackAccept(listener) }
                     let client = try await gate.node.connect(to: address.description, port: 9_200)
                     let peer = try await accepted.value
@@ -362,7 +362,7 @@ struct NetstackTests {
                     return true
                 }
                 #expect(pair)
-                await gate.tool.checkpoint("M6 Swift 노드 둘: 3바이트 요청·2바이트 응답, 반닫힘·EOF·remoteEndpoint 일치")
+                await gate.tool.checkpoint("M6 two Swift nodes: 3-byte request, 2-byte response, half-close, EOF, and matching remoteEndpoint")
                 await listener.close()
                 run.cancel()
                 try await run.value
@@ -380,12 +380,12 @@ private func assertDialWaits(_ gate: Gate, id: Int, stage: String) async throws 
     let until = ContinuousClock.now + .seconds(2)
     repeat {
         let transfer = try #require(await netstackTransfers(gate.tool).first { $0.transferID == id })
-        #expect(transfer.state == "dialing", "\(stage): SYN에 응답하지 않아야 한다")
+        #expect(transfer.state == "dialing", "\(stage): must not respond to SYN")
         try await Task.sleep(for: .milliseconds(100))
     } while ContinuousClock.now < until
-    await gate.tool.checkpoint("M6 10 \(stage): 2초 동안 dialing·연결 미성립")
+    await gate.tool.checkpoint("M6 10 \(stage): dialing for 2 seconds without establishing a connection")
 }
 
 private func lossNote(_ message: String) async {
-    try? FileHandle.standardOutput.write(contentsOf: Data("[관문 \(Date().ISO8601Format())] \(message)\n".utf8))
+    try? FileHandle.standardOutput.write(contentsOf: Data("[gate \(Date().ISO8601Format())] \(message)\n".utf8))
 }

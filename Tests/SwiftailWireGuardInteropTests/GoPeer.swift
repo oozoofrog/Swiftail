@@ -9,7 +9,7 @@ struct InteropFailure: Error, CustomStringConvertible {
 
 let wgpeerBinary = ProcessInfo.processInfo.environment["SWIFTAIL_WGPEER"].flatMap { $0.isEmpty ? nil : $0 }
 
-/// wgpeer의 한 줄 JSON 경계. 키는 설정 입력에만 쓰고 진단에는 포함하지 않는다.
+/// A line-delimited JSON boundary for wgpeer. Keys are used only as configuration input and are omitted from diagnostics.
 actor GoPeer {
     struct Configuration: Encodable {
         let privateKey: String
@@ -49,7 +49,7 @@ actor GoPeer {
     private var closed = false
 
     func start(configuration: Configuration) throws {
-        guard let binary = wgpeerBinary else { throw InteropFailure("SWIFTAIL_WGPEER가 없음") }
+        guard let binary = wgpeerBinary else { throw InteropFailure("SWIFTAIL_WGPEER is missing") }
         process.executableURL = URL(fileURLWithPath: binary)
         process.standardInput = input
         process.standardOutput = output
@@ -73,7 +73,7 @@ actor GoPeer {
     }
 
     private func write(_ value: some Encodable) throws {
-        guard process.isRunning else { throw InteropFailure("wgpeer가 종료됨") }
+        guard process.isRunning else { throw InteropFailure("wgpeer exited") }
         var line = try JSONEncoder().encode(value)
         line.append(10)
         try input.fileHandleForWriting.write(contentsOf: line)
@@ -95,32 +95,32 @@ actor GoPeer {
                 return events.remove(at: index)
             }
             if let error = events.first(where: { $0.event == "error" }) {
-                throw InteropFailure("wgpeer: \(error.message ?? "알 수 없는 오류")")
+                throw InteropFailure("wgpeer: \(error.message ?? "unknown error")")
             }
-            guard process.isRunning else { throw InteropFailure("wgpeer가 사건 \(kind) 전에 종료됨") }
+            guard process.isRunning else { throw InteropFailure("wgpeer exited before event \(kind)") }
             try await Task.sleep(for: .milliseconds(10))
         }
-        throw InteropFailure("wgpeer의 \(kind) 제한 시간 초과 (\(timeout))")
+        throw InteropFailure("Timed out waiting for wgpeer \(kind) (\(timeout))")
     }
 
     func packet(timeout: Duration = .seconds(12)) async throws -> [UInt8] {
         let value = try await event("recv", timeout: timeout)
         guard let hex = value.packet, let bytes = [UInt8](hex: hex) else {
-            throw InteropFailure("wgpeer recv의 packet 형식 오류")
+            throw InteropFailure("Invalid packet format in wgpeer recv")
         }
         return bytes
     }
 
-    /// 관측 구간 내 recv가 하나라도 오면 실패한다. 음성 검증도 시간 제한을 갖는다.
+    /// Fails if any recv arrives during the observation window. Negative verification is also time-limited.
     func expectSilence(for duration: Duration) async throws {
         let deadline = ContinuousClock.now + duration
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
             if let failure { throw failure }
             guard !events.contains(where: { $0.event == "recv" || $0.event == "error" }) else {
-                throw InteropFailure("버려야 할 패킷을 Go가 전달했거나 error를 출력함")
+                throw InteropFailure("Go delivered a packet that should have been dropped or printed an error")
             }
-            guard process.isRunning else { throw InteropFailure("음성 검증 중 wgpeer 종료") }
+            guard process.isRunning else { throw InteropFailure("wgpeer exited during negative verification") }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
@@ -131,21 +131,21 @@ actor GoPeer {
             log.append(try readAvailable(errors.fileHandleForReading))
             if log.count > 262_144 { log = log.suffix(262_144) }
             pending.append(try readAvailable(output.fileHandleForReading))
-            guard pending.count <= 1_048_576 else { throw InteropFailure("wgpeer JSON 줄 상한 초과") }
+            guard pending.count <= 1_048_576 else { throw InteropFailure("wgpeer JSON line exceeds the limit") }
             while let newline = pending.firstIndex(of: 10) {
                 let line = pending.prefix(upTo: newline)
                 let decoded = try JSONDecoder().decode(Event.self, from: line)
                 events.append(decoded)
                 pending.removeSubrange(...newline)
             }
-        } catch { failure = InteropFailure("wgpeer 출력 해석 실패: \(error)") }
+        } catch { failure = InteropFailure("Could not parse wgpeer output: \(error)") }
     }
 
     func diagnostics() -> String {
         pump()
-        // wireguard-go가 공개 키의 일부로 만든 peer 식별자도 보고에서 가린다.
+        // Also redact peer identifiers that wireguard-go derives from part of a public key.
         return String(decoding: log, as: UTF8.self).replacingOccurrences(
-            of: #"peer\([^)]*\)"#, with: "peer(시험 피어)", options: .regularExpression
+            of: #"peer\([^)]*\)"#, with: "peer(test peer)", options: .regularExpression
         )
     }
 
