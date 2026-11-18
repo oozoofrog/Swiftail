@@ -1,7 +1,7 @@
-// Go 기준값 대조 시험(`GoComparisonTests`)의 지원 코드: 자료 읽기, hex, DER의 최소 읽기, Go 도구 실행.
+// Support code for Go reference comparisons (`GoComparisonTests`): fixture loading, hex, minimal DER parsing, and running the Go tool.
 //
-// 자료(`Fixtures/acme-fixtures.json`)는 `Tools/interop/cmd/acmefixtures`가 `tailscale.com/tempfork/acme`와 Go 표준
-// 라이브러리로 만든 것이다(`Fixtures/README.md`). 이 파일의 DER 읽기는 시험 전용이며 라이브러리에 넣지 않는다.
+// `Tools/interop/cmd/acmefixtures` generated `Fixtures/acme-fixtures.json` using `tailscale.com/tempfork/acme` and the Go standard
+// library (`Fixtures/README.md`). This file's DER reader is test-only and stays outside the library.
 
 import CryptoKit
 import Darwin
@@ -10,9 +10,9 @@ import Testing
 
 @testable import SwiftailCertificates
 
-// MARK: - 자료
+// MARK: - Fixtures
 
-/// 자료의 키 하나. 개인 키는 공개된 고정 씨앗에서 만든 시험 전용 값이다.
+/// One fixture key. The private key is test-only, derived from a public fixed seed.
 struct OracleKey: Decodable, Sendable {
     struct PublicJWK: Decodable, Sendable, Equatable {
         var crv: String
@@ -29,14 +29,14 @@ struct OracleKey: Decodable, Sendable {
     var sec1PEM: String
     var pkcs8PEM: String
 
-    /// `scalarHex`의 개인 키.
+    /// The private key represented by `scalarHex`.
     func privateKey() throws -> P256.Signing.PrivateKey {
-        let scalar = try #require(GoOracle.bytes(fromHex: scalarHex), "키 \(id): scalarHex가 hex가 아님")
+        let scalar = try #require(GoOracle.bytes(fromHex: scalarHex), "Key \(id): scalarHex is not hex")
         return try P256.Signing.PrivateKey(rawRepresentation: scalar)
     }
 }
 
-/// 키 인가 자료 하나.
+/// One key authorization fixture.
 struct OracleChallenge: Decodable, Sendable {
     var keyID: String
     var token: String
@@ -44,7 +44,7 @@ struct OracleChallenge: Decodable, Sendable {
     var dns01TXT: String
 }
 
-/// JWS 자료 하나. `verifiedExample`은 Go가 서명한 실제 JWS다.
+/// One JWS fixture. `verifiedExample` is an actual JWS signed by Go.
 struct OracleJWS: Decodable, Sendable {
     struct Example: Decodable, Sendable {
         var protected: String
@@ -60,7 +60,7 @@ struct OracleJWS: Decodable, Sendable {
     var verifiedExample: Example
 }
 
-/// CSR 자료 하나.
+/// One CSR fixture.
 struct OracleCSR: Decodable, Sendable {
     var name: String
     var keyID: String
@@ -70,7 +70,7 @@ struct OracleCSR: Decodable, Sendable {
     var cnStringTag: Int
 }
 
-/// 자료 파일 전체. 22개 사례는 `keys`(3) + `challenges`(9) + `jws`(6) + `csrs`(4)다.
+/// The complete fixture file. The 22 cases are `keys` (3) + `challenges` (9) + `jws` (6) + `csrs` (4).
 struct OracleFixtures: Decodable, Sendable {
     var caseCount: Int
     var keys: [OracleKey]
@@ -79,21 +79,21 @@ struct OracleFixtures: Decodable, Sendable {
     var csrs: [OracleCSR]
 
     func key(_ id: String) throws -> OracleKey {
-        try #require(keys.first { $0.id == id }, "자료에 키 \(id)가 없음")
+        try #require(keys.first { $0.id == id }, "Fixture key \(id) is missing")
     }
 }
 
-// MARK: - 도구 실패
+// MARK: - Tool failures
 
-/// 도구 실행이나 자료 읽기가 시험의 전제를 만족하지 못했다.
+/// Running the tool or reading the fixture failed to meet a test prerequisite.
 struct OracleFailure: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
 }
 
-// MARK: - 읽기 전용 DER
+// MARK: - Read-only DER
 
-/// DER의 TLV 하나: 태그, 내용, 그리고 태그부터 내용 끝까지 통째.
+/// A DER TLV: the tag, contents, and complete bytes from the tag through the end of the contents.
 struct OracleTLV {
     var tag: UInt8
     var content: [UInt8]
@@ -101,19 +101,19 @@ struct OracleTLV {
 }
 
 enum GoOracle {
-    // MARK: 자료 읽기
+    // MARK: Fixture loading
 
-    /// 자료 파일을 읽는다. 파일이 없거나 형식이 다르면 던진다(시험이 조용히 통과하지 않는다).
+    /// Loads the fixture file. Throws if the file is missing or its format differs, so the test cannot pass silently.
     static func fixtures() throws -> OracleFixtures {
         let url = try #require(
             Bundle.module.url(forResource: "acme-fixtures", withExtension: "json", subdirectory: "Fixtures"),
-            "기대=acme-fixtures.json 리소스 실제=없음")
+            "Expected=acme-fixtures.json resource Actual=missing")
         return try JSONDecoder().decode(OracleFixtures.self, from: Data(contentsOf: url))
     }
 
     // MARK: hex
 
-    /// 소문자·대문자 hex를 바이트로. 홀수 길이나 hex가 아닌 글자가 있으면 `nil`.
+    /// Decodes lowercase or uppercase hex to bytes. Returns `nil` for odd lengths or non-hex characters.
     static func bytes(fromHex text: String) -> [UInt8]? {
         let digits = Array(text.utf8)
         guard digits.count % 2 == 0 else { return nil }
@@ -134,7 +134,7 @@ enum GoOracle {
         return result
     }
 
-    /// 바이트를 소문자 hex로.
+    /// Encodes bytes as lowercase hex.
     static func hexString(_ bytes: [UInt8]) -> String {
         let digits = Array("0123456789abcdef".utf8)
         var text: [UInt8] = []
@@ -146,10 +146,10 @@ enum GoOracle {
         return String(decoding: text, as: UTF8.self)
     }
 
-    // MARK: DER 읽기(시험 전용)
+    // MARK: DER parsing (test-only)
 
-    /// `bytes`의 맨 앞 TLV 하나를 읽는다. 짧은 형식과 1~4바이트의 긴 형식 길이를 받고, 부정 길이나 잘린 입력은
-    /// `nil`이다. 태그는 한 바이트(번호 31 미만)만 받는다.
+    /// Reads the first TLV in `bytes`. Accepts short-form and 1–4-byte long-form lengths. Returns
+    /// `nil` for indefinite lengths or truncated input. Accepts only single-byte tags (tag numbers below 31).
     static func readTLV(_ bytes: ArraySlice<UInt8>) -> OracleTLV? {
         var index = bytes.startIndex
         guard index < bytes.endIndex else { return nil }
@@ -175,7 +175,7 @@ enum GoOracle {
             encoded: Array(bytes[bytes.startIndex..<index + length]))
     }
 
-    /// 내용을 TLV들로 가른다. 한 바이트도 남지 않아야 한다.
+    /// Splits the content into TLVs. No bytes may remain.
     static func children(of content: [UInt8]) -> [OracleTLV]? {
         var result: [OracleTLV] = []
         var rest = content[...]
@@ -187,12 +187,12 @@ enum GoOracle {
         return result
     }
 
-    /// CSR 전체 DER의 바깥 SEQUENCE 셋: `certificationRequestInfo`, `signatureAlgorithm`, `signature`.
+    /// The three elements of the full CSR DER's outer SEQUENCE: `certificationRequestInfo`, `signatureAlgorithm`, and `signature`.
     struct CSRParts {
         var info: OracleTLV
         var algorithm: OracleTLV
         var signature: OracleTLV
-        /// BIT STRING의 내용에서 "안 쓰는 비트 수"(0)를 뗀 DER ECDSA-Sig-Value.
+        /// The DER ECDSA-Sig-Value after removing the unused-bit count (0) from the BIT STRING contents.
         var signatureDER: [UInt8]
     }
 
@@ -205,7 +205,7 @@ enum GoOracle {
         return CSRParts(info: parts[0], algorithm: parts[1], signature: parts[2], signatureDER: Array(parts[2].content.dropFirst()))
     }
 
-    /// `certificationRequestInfo`의 주체 CN 값의 태그(PrintableString이면 0x13). 구조가 다르면 `nil`.
+    /// The tag of the subject CN in `certificationRequestInfo` (0x13 for PrintableString). Returns `nil` if the structure differs.
     static func commonNameStringTag(info: [UInt8]) -> UInt8? {
         // CertificationRequestInfo ::= SEQUENCE { version, subject, subjectPKInfo, attributes }
         guard let sequence = readTLV(info[...]), let fields = children(of: sequence.content), fields.count == 4,
@@ -218,37 +218,37 @@ enum GoOracle {
 
     // MARK: JWK
 
-    /// 도구 입력의 `jwk` 객체.
+    /// The `jwk` object in the input to the tool.
     static func jwkObject(_ publicKey: P256.Signing.PublicKey) -> [String: String] {
         let jwk = JWK(publicKey)
         return ["crv": "P-256", "kty": "EC", "x": Base64URL.encode(jwk.x), "y": Base64URL.encode(jwk.y)]
     }
 
-    // MARK: Go 도구
+    // MARK: Go tool
 
-    /// 환경 변수 `SWIFTAIL_ACMEFIXTURES`가 가리키는 `acmefixtures` 실행 파일. 없으면 `nil`(상호 운용 묶음을 건너뛴다).
-    /// 만드는 법: `sh Scripts/build-interop-tools.sh acmefixtures`.
+    /// The `acmefixtures` executable pointed to by `SWIFTAIL_ACMEFIXTURES`. Returns `nil` if unavailable, skipping the interop test group.
+    /// Build with `sh Scripts/build-interop-tools.sh acmefixtures`.
     static let toolPath: String? = ProcessInfo.processInfo.environment["SWIFTAIL_ACMEFIXTURES"].flatMap { $0.isEmpty ? nil : $0 }
 
-    /// 도구에 한 번 묻는다: 표준 입력으로 JSON 객체 하나를 주고, 표준 출력의 한 줄(JSON 객체)을 읽는다.
-    /// 종료 코드 0(`ok:true`)과 1(`ok:false`)을 모두 정상 응답으로 본다. 기한 안에 끝나지 않으면 프로세스를
-    /// 죽이고 던진다.
+    /// Queries the tool once: sends one JSON object to standard input and reads one line (a JSON object) from standard output.
+    /// Treats both exit code 0 (`ok:true`) and 1 (`ok:false`) as normal responses. If the deadline passes, kills the process
+    /// and throws.
     static func ask(_ command: String, _ request: [String: Any], timeout: Duration = .seconds(20)) async throws -> [String: Any] {
-        guard let toolPath else { throw OracleFailure("SWIFTAIL_ACMEFIXTURES가 없음") }
+        guard let toolPath else { throw OracleFailure("SWIFTAIL_ACMEFIXTURES is missing") }
         let input = try JSONSerialization.data(withJSONObject: request)
         let output = try await Task.detached {
             try runBlocking(path: toolPath, command: command, input: input, timeout: timeout)
         }.value
         guard output.last == UInt8(ascii: "\n"), !output.dropLast().contains(UInt8(ascii: "\n")) else {
-            throw OracleFailure("\(command): 표준 출력이 JSON 한 줄이 아님(\(output.count)바이트)")
+            throw OracleFailure("\(command): standard output is not a single JSON line (\(output.count) bytes)")
         }
         guard let object = try JSONSerialization.jsonObject(with: output) as? [String: Any], object["ok"] is Bool else {
-            throw OracleFailure("\(command): 응답이 `ok`가 있는 JSON 객체가 아님")
+            throw OracleFailure("\(command): response is not a JSON object with an ok member")
         }
         return object
     }
 
-    /// 프로세스를 띄우고 끝날 때까지 기다린다. 읽기가 막히는 도구는 감시 타이머가 SIGKILL로 끊는다.
+    /// Starts the process and waits for it to exit. A watchdog uses SIGKILL if the tool blocks the read.
     private static func runBlocking(path: String, command: String, input: Data, timeout: Duration) throws -> Data {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
@@ -259,9 +259,9 @@ enum GoOracle {
         process.standardInput = standardInput
         process.standardOutput = standardOutput
         process.standardError = standardError
-        // 도구가 입력을 다 읽기 전에 끝나도 SIGPIPE로 시험 프로세스가 죽지 않게 한다.
+        // Prevents SIGPIPE from killing the test process if the tool exits before reading all its input.
         guard fcntl(standardInput.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
-            throw OracleFailure("표준 입력 F_SETNOSIGPIPE 실패: \(errno)")
+            throw OracleFailure("Standard input F_SETNOSIGPIPE failed: \(errno)")
         }
         try process.run()
         let pid = process.processIdentifier
@@ -276,10 +276,10 @@ enum GoOracle {
         let diagnostics = try standardError.fileHandleForReading.readToEnd() ?? Data()
         process.waitUntilExit()
         if process.terminationReason == .uncaughtSignal {
-            throw OracleFailure("\(command): 도구가 \(Int(seconds))초 안에 끝나지 않아 죽였거나 신호로 끝남(신호 \(process.terminationStatus))")
+            throw OracleFailure("\(command): tool did not finish within \(Int(seconds)) seconds and was killed, or exited on a signal (signal \(process.terminationStatus))")
         }
         guard process.terminationStatus == 0 || process.terminationStatus == 1 else {
-            throw OracleFailure("\(command): 종료 코드 \(process.terminationStatus), 진단 \(diagnostics.count)바이트")
+            throw OracleFailure("\(command): exit code \(process.terminationStatus), \(diagnostics.count) bytes of diagnostics")
         }
         return output
     }

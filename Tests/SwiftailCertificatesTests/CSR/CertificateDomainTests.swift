@@ -1,15 +1,15 @@
-// 계약 동작 C2(이름 검사)와 7절 시험 11의 이름 사례: 처음·끝의 하이픈, 64자 레이블, 253자,
-// `_acme-challenge.`를 붙이면 넘는 238자 이름, 대문자, 경로 문자.
+// Name cases for contract behavior C2 (name validation) and §7 test 11: leading and trailing hyphens, 64-character labels, 253 characters,
+// a 238-character name that exceeds the limit after adding `_acme-challenge.`, uppercase letters, and path characters.
 
 import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("이름 검사")
+@Suite("Name validation")
 struct CertificateDomainTests {
-    @Test("받는 이름", arguments: [
+    @Test("Accepted names", arguments: [
         ("rd-mac-1a2b3c4d.tail0001.ts.net", "rd-mac-1a2b3c4d.tail0001.ts.net"),
-        ("rd-mac-1a2b3c4d.tail0001.ts.net.", "rd-mac-1a2b3c4d.tail0001.ts.net"),  // 끝의 점 하나는 뗀다
+        ("rd-mac-1a2b3c4d.tail0001.ts.net.", "rd-mac-1a2b3c4d.tail0001.ts.net"),  // Removes one trailing dot
         ("a.b", "a.b"),
         ("0.9a", "0.9a"),
         ("a--b.c-d", "a--b.c-d"),
@@ -20,34 +20,34 @@ struct CertificateDomainTests {
         #expect(domain.challengeRecordName == "_acme-challenge." + name)
     }
 
-    @Test("거절하는 이름", arguments: [
-        "", ".", "localhost", "localhost.",          // 레이블 하나
-        "-a.b", "a-.b", "a.-b", "a.b-",               // 처음·끝의 하이픈
-        "a..b", ".a.b", "a.b..",                       // 빈 레이블(끝의 점은 하나만 뗀다)
-        "Rd-mac.tail0001.ts.net", "a.B",               // 대문자
-        "_acme.a.b", "a_b.c", "*.a.b",                 // 밑줄, 와일드카드
+    @Test("Rejected names", arguments: [
+        "", ".", "localhost", "localhost.",          // One label
+        "-a.b", "a-.b", "a.-b", "a.b-",               // Leading or trailing hyphen
+        "a..b", ".a.b", "a.b..",                       // Empty label (removes only one trailing dot)
+        "Rd-mac.tail0001.ts.net", "a.B",               // Uppercase
+        "_acme.a.b", "a_b.c", "*.a.b",                 // Underscores and wildcards
         "a/b.c", "a\\b.c", "a:b.c", "a\u{0}b.c", "../a.b", "a b.c",
-        "é.a.b", "ａ.b",                                // ASCII 밖
-        "100.64.0.1", "a.b.123", "0.9",                // 끝 레이블이 숫자뿐(IP 주소 꼴)
+        "é.a.b", "ａ.b",                                // Non-ASCII
+        "100.64.0.1", "a.b.123", "0.9",                // Digits-only final label (IP address form)
     ])
     func rejected(_ input: String) {
         #expect(CertificateDomain(input) == nil)
     }
 
-    @Test("레이블 63자는 받고 64자는 거절")
+    @Test("Accepts a 63-character label and rejects a 64-character label")
     func labelLength() {
         #expect(CertificateDomain(String(repeating: "a", count: 63) + ".b") != nil)
         #expect(CertificateDomain(String(repeating: "a", count: 64) + ".b") == nil)
     }
 
-    /// 63자 레이블 셋(191자)에 레이블을 더해 길이를 맞춘다.
+    /// Add a label to three 63-character labels (191 characters) to reach the desired length.
     private static func name(length: Int) -> String {
         let base = Array(repeating: String(repeating: "a", count: 63), count: 3).joined(separator: ".")
         let last = String(repeating: "b", count: length - base.count - 1)
         return base + "." + last
     }
 
-    @Test("전체 길이: 237자는 받고, _acme-challenge.를 붙이면 253자를 넘는 238자는 거절")
+    @Test("Total length: accepts 237 characters and rejects 238 characters, which exceed 253 characters after adding _acme-challenge.")
     func totalLength() {
         #expect(CertificateDomain.maximumLength == 237)
         let longest = Self.name(length: 237)

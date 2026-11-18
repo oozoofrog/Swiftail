@@ -1,4 +1,4 @@
-// 계약 7절 시험 4(PEM: 여러 블록, 줄 길이, 모르는 종류)와 동작 X3 ①(입력 전체 검사), S3 ②.
+// Contract §7 test 4 (PEM: multiple blocks, line lengths, and unknown types) and behaviors X3 ① (full input validation), S3 ②.
 
 import Foundation
 import Testing
@@ -18,17 +18,17 @@ struct PEMTests {
         try PEM.decode(Array(text.utf8), maximumByteCount: limit)
     }
 
-    @Test("쓰기: 64열, LF, 같은 라벨의 BEGIN·END (RFC 7468 2절)")
+    @Test("Writing: 64 columns, LF, and matching BEGIN and END labels (RFC 7468 §2)")
     func encodeWrapsAt64Columns() {
         let block = Self.block(.certificate, count: 100, seed: 1)
         let lines = PEM.encode(block).split(separator: "\n", omittingEmptySubsequences: false)
         #expect(lines.first == "-----BEGIN CERTIFICATE-----")
-        #expect(lines.dropFirst().dropLast(2).map(\.count) == [64, 64, 8])  // 100바이트 = base64 136자
+        #expect(lines.dropFirst().dropLast(2).map(\.count) == [64, 64, 8])  // 100 bytes = 136 base64 characters
         #expect(lines.suffix(2) == ["-----END CERTIFICATE-----", ""])
         #expect(PEM.encode(PEMBlock(label: .ecPrivateKey, der: [1, 2, 3])) == "-----BEGIN EC PRIVATE KEY-----\nAQID\n-----END EC PRIVATE KEY-----\n")
     }
 
-    @Test("왕복: 세 라벨, 48바이트(64열에 꼭 맞음)와 여러 크기")
+    @Test("Round trips: three labels, 48 bytes (exactly 64 columns), and several sizes")
     func roundTrip() throws {
         for (index, label) in PEMLabel.allCases.enumerated() {
             for count in [1, 2, 3, 47, 48, 49, 1_000] {
@@ -38,7 +38,7 @@ struct PEMTests {
         }
     }
 
-    @Test("여러 블록과 블록 사이의 공백, CRLF, 줄 끝 공백, 다른 줄 길이")
+    @Test("Multiple blocks with whitespace between them, CRLF, trailing whitespace, and different line lengths")
     func multipleBlocks() throws {
         let first = Self.block(.certificate, count: 70, seed: 2)
         let second = Self.block(.certificate, count: 30, seed: 3)
@@ -50,45 +50,45 @@ struct PEMTests {
         #expect(try Self.decode(" \n\r\n\t") == [])
     }
 
-    @Test("블록 밖의 공백이 아닌 바이트는 전체를 버린다", arguments: [
+    @Test("Non-whitespace bytes outside blocks cause rejection of the entire input", arguments: [
         "앞의 설명\n%@",
         "%@뒤의 쓰레기",
         "%@x\n%@",
         "%@\u{0}",
-        " %@",          // 경계선은 줄의 처음에서 시작한다
+        " %@",          // A boundary starts at the beginning of a line
     ])
     func bytesOutsideBlocks(_ template: String) {
         let pem = PEM.encode(Self.block(.certificate, count: 40, seed: 4))
         #expect(throws: PEMError.malformed) { try Self.decode(template.replacingOccurrences(of: "%@", with: pem)) }
     }
 
-    @Test("모르는 라벨", arguments: ["RSA PRIVATE KEY", "PUBLIC KEY", "CERTIFICATE REQUEST", "certificate", "X509 CRL"])
+    @Test("Unknown label", arguments: ["RSA PRIVATE KEY", "PUBLIC KEY", "CERTIFICATE REQUEST", "certificate", "X509 CRL"])
     func unknownLabel(_ label: String) {
         let text = "-----BEGIN \(label)-----\nAQID\n-----END \(label)-----\n"
         #expect(throws: PEMError.unexpectedLabel) { try Self.decode(text) }
     }
 
-    @Test("잘린 블록과 틀린 경계선·본문", arguments: [
-        "-----BEGIN CERTIFICATE-----\nAQID\n",                                   // END 없음
-        "-----BEGIN CERTIFICATE-----\nAQID",                                     // 줄 중간에서 끝남
-        "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE",               // 잘린 END
-        "-----BEGIN CERTIFICATE-----\nAQID\n-----END PRIVATE KEY-----\n",        // 라벨이 다름
-        "-----BEGIN CERTIFICATE----\nAQID\n-----END CERTIFICATE-----\n",         // 대시 넷
-        "-----BEGIN -----\nAQID\n-----END -----\n",                              // 빈 라벨
-        "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n",              // 빈 본문
-        "-----BEGIN CERTIFICATE-----\nAQ\n-----END CERTIFICATE-----\n",          // 채움 없음
-        "-----BEGIN CERTIFICATE-----\nAQ==AQ==\n-----END CERTIFICATE-----\n",    // 가운데의 =
-        "-----BEGIN CERTIFICATE-----\nAQ-_\n-----END CERTIFICATE-----\n",        // base64url 알파벳
-        "-----BEGIN CERTIFICATE-----\nAQ ID\n-----END CERTIFICATE-----\n",       // 줄 안의 공백
-        "-----BEGIN CERTIFICATE-----\nProc-Type: 4,ENCRYPTED\nAQID\n-----END CERTIFICATE-----\n",  // 머리(RFC 7468 2절)
-        "-----BEGIN CERTIFICATE-----\nAQID\n-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",  // 겹친 BEGIN
-        "-----END CERTIFICATE-----\n",                                            // BEGIN 없는 END
+    @Test("Truncated blocks and malformed boundaries or bodies", arguments: [
+        "-----BEGIN CERTIFICATE-----\nAQID\n",                                   // Missing END
+        "-----BEGIN CERTIFICATE-----\nAQID",                                     // Ends midline
+        "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE",               // Truncated END
+        "-----BEGIN CERTIFICATE-----\nAQID\n-----END PRIVATE KEY-----\n",        // Mismatched labels
+        "-----BEGIN CERTIFICATE----\nAQID\n-----END CERTIFICATE-----\n",         // Four dashes
+        "-----BEGIN -----\nAQID\n-----END -----\n",                              // Empty label
+        "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n",              // Empty body
+        "-----BEGIN CERTIFICATE-----\nAQ\n-----END CERTIFICATE-----\n",          // Missing padding
+        "-----BEGIN CERTIFICATE-----\nAQ==AQ==\n-----END CERTIFICATE-----\n",    // Interior =
+        "-----BEGIN CERTIFICATE-----\nAQ-_\n-----END CERTIFICATE-----\n",        // base64url alphabet
+        "-----BEGIN CERTIFICATE-----\nAQ ID\n-----END CERTIFICATE-----\n",       // Whitespace within a line
+        "-----BEGIN CERTIFICATE-----\nProc-Type: 4,ENCRYPTED\nAQID\n-----END CERTIFICATE-----\n",  // Headers (RFC 7468 §2)
+        "-----BEGIN CERTIFICATE-----\nAQID\n-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",  // Duplicate BEGIN
+        "-----END CERTIFICATE-----\n",                                            // END without BEGIN
     ])
     func malformed(_ text: String) {
         #expect(throws: PEMError.malformed) { try Self.decode(text) }
     }
 
-    @Test("크기 한도는 읽기 전에 본다")
+    @Test("Checks the size limit before parsing")
     func sizeLimit() throws {
         let text = Array(PEM.encode(Self.block(.certificate, count: 300, seed: 5)).utf8)
         #expect(try PEM.decode(text, maximumByteCount: text.count).count == 1)
@@ -96,7 +96,7 @@ struct PEMTests {
         #expect(throws: PEMError.tooLarge) { try PEM.decode(text + [0x20], maximumByteCount: text.count) }
     }
 
-    @Test("인증서 사슬: 순서를 지키고 1~5장만")
+    @Test("Certificate chain: preserves order and accepts only 1–5 certificates")
     func certificateChain() throws {
         let blocks = (0..<6).map { Self.block(.certificate, count: 50 + $0, seed: 10 + UInt64($0)) }
         for count in 1...5 {
@@ -109,7 +109,7 @@ struct PEMTests {
         #expect(throws: PEMError.wrongBlockCount) { try PEM.certificateChain(from: Array(" \n".utf8), maximumByteCount: Self.limit) }
     }
 
-    @Test("사슬에 낀 PRIVATE KEY 블록은 전체를 버린다 (RFC 8555 11.4)", arguments: [PEMLabel.privateKey, .ecPrivateKey])
+    @Test("A PRIVATE KEY block in the chain causes rejection of the entire chain (RFC 8555 11.4)", arguments: [PEMLabel.privateKey, .ecPrivateKey])
     func keyBlockInsideChain(_ label: PEMLabel) {
         let text = PEM.encode(Self.block(.certificate, count: 50, seed: 20))
             + PEM.encode(Self.block(label, count: 50, seed: 21))
@@ -117,7 +117,7 @@ struct PEMTests {
         #expect(throws: PEMError.unexpectedLabel) { try PEM.certificateChain(from: Array(text.utf8), maximumByteCount: Self.limit) }
     }
 
-    @Test("임의 바이트와 망가뜨린 PEM으로 죽지 않는다")
+    @Test("Arbitrary bytes and corrupted PEM do not cause a crash")
     func randomInput() {
         var random = SplitMix64(seed: 0x7065_6d)
         let valid = Array((PEM.encode(Self.block(.certificate, count: 120, seed: 30))
@@ -136,7 +136,7 @@ struct PEMTests {
             _ = try? PEM.decode(mutated, maximumByteCount: Self.limit)
             _ = try? PEM.certificateChain(from: mutated, maximumByteCount: Self.limit)
         }
-        // 잘라 낸 모든 앞부분으로도 죽지 않는다.
+        // No truncated prefix causes a crash.
         for end in 0..<valid.count {
             _ = try? PEM.decode(Array(valid[..<end]), maximumByteCount: Self.limit)
         }

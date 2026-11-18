@@ -1,4 +1,4 @@
-// 계약 동작 R4·X5·C4·C8·K, H16: 발급 실패의 기록과 다음 시도, `retryNow()`, 계정 키, 취소, 비밀.
+// Contract behaviors R4, X5, C4, C8, and K, and H16: recording issuance failures, the next attempt, `retryNow()`, the account key, cancellation, and secrets.
 
 import CryptoKit
 import Foundation
@@ -11,21 +11,21 @@ import SwiftailControl
 
 private typealias H = ManagerHarness
 
-@Suite("인증서 관리자: 실패·다시 시도·취소·비밀", .enabled(if: ManagerScratch.root != nil, "SWIFTAIL_TEST_SCRATCH가 없다"),
+@Suite("Certificate manager: failures, retries, cancellation, and secrets", .enabled(if: ManagerScratch.root != nil, "SWIFTAIL_TEST_SCRATCH is missing"),
        .timeLimit(.minutes(1)))
 struct ManagerFailureTests {
     struct FailureCase: Sendable, CustomTestStringConvertible {
         var testDescription: String
-        /// set-dns가 던질 오류.
+        /// The error set-dns throws.
         var dnsError: ControlError?
-        /// 대본을 만든다.
+        /// Builds the script.
         var script: @Sendable (ManagerHarness) -> [ScriptedTransport.Entry]
         var expected: @Sendable (CertificateFailure) -> Bool
-        /// 다음 시도까지의 간격. nil이면 조건을 기다린다.
+        /// The interval until the next attempt. A nil value waits for the condition.
         var delay: TimeInterval?
     }
 
-    /// newOrder에서 set-dns 직전까지(authorization을 읽는다).
+    /// From newOrder up to set-dns, reading the authorization along the way.
     private static func untilTXT(_ h: ManagerHarness) -> [ScriptedTransport.Entry] {
         (Steps.accountFound + [Steps.newOrder(Body.order("pending")), .post(Fake.authorizationURL(1), 200, Body.authorization("pending"))])
             .map { ScriptedTransport.Entry(exchange: $0) }
@@ -34,15 +34,15 @@ struct ManagerFailureTests {
     static let failureCases: [FailureCase] = [
         .init(testDescription: "set-dns 403", dnsError: .http(status: 403), script: untilTXT,
               expected: { $0 == .controlRejected(status: 403) }, delay: 30),
-        .init(testDescription: "set-dns 연결 실패", dnsError: .connection("기한"), script: untilTXT,
+        .init(testDescription: "set-dns connection failure", dnsError: .connection("deadline"), script: untilTXT,
               expected: { if case .network = $0 { true } else { false } }, delay: 30),
-        .init(testDescription: "set-dns 이름 거절", dnsError: .invalidConfiguration("이름"), script: untilTXT,
+        .init(testDescription: "set-dns name rejection", dnsError: .invalidConfiguration("name"), script: untilTXT,
               expected: { $0 == .domainNotAllowed }, delay: nil),
         .init(testDescription: "ACME 400 badCSR", script: { $0.failingOrder(.post(Fake.newOrderURL, 400, Body.problem(Fake.problem("badCSR")))) },
               expected: { $0 == .acme(status: 400, type: Fake.problem("badCSR")) }, delay: 15 * 60),
         .init(testDescription: "ACME 503", script: { $0.failingOrder(.post(Fake.newOrderURL, 503, [])) },
               expected: { $0 == .acme(status: 503, type: "") }, delay: 30),
-        .init(testDescription: "ACME rateLimited와 Retry-After 2시간",
+        .init(testDescription: "ACME rateLimited with Retry-After of 2 hours",
               script: { $0.failingOrder(.post(Fake.newOrderURL, 429, Body.problem(Fake.problem("rateLimited"), status: 429))
                   .header("Retry-After", "7200")) },
               expected: { $0 == .rateLimited(retryAfter: TestPKI.now + 7200) }, delay: 7200),
@@ -54,13 +54,13 @@ struct ManagerFailureTests {
                   ])),
               ]).map { ScriptedTransport.Entry(exchange: $0) } },
               expected: { if case .validationFailed = $0 { true } else { false } }, delay: 15 * 60),
-        .init(testDescription: "다른 키의 leaf", script: { $0.issuance(leafKey: P256.Signing.PrivateKey().publicKey) },
+        .init(testDescription: "Leaf with a different key", script: { $0.issuance(leafKey: P256.Signing.PrivateKey().publicKey) },
               expected: { $0 == .invalidCertificate }, delay: 6 * 3600),
-        .init(testDescription: "다른 이름의 leaf", script: { $0.issuance(leafName: "rd-mac-9z8y7x6w.tail0001.ts.net") },
+        .init(testDescription: "Leaf with a different name", script: { $0.issuance(leafName: "rd-mac-9z8y7x6w.tail0001.ts.net") },
               expected: { $0 == .invalidCertificate }, delay: 6 * 3600),
     ]
 
-    @Test("실패는 status에 적고, 표의 간격으로 다음 시도를 정하고, 저장하지도 내지도 않는다", arguments: failureCases)
+    @Test("Records a failure in status, schedules the next attempt at the interval from the table, and stores and emits nothing", arguments: failureCases)
     func failure(_ failure: FailureCase) async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
@@ -73,15 +73,15 @@ struct ManagerFailureTests {
         let next = failure.delay.map { TestPKI.now + $0 }
         try await eventually { await h.status().nextAttempt == next && h.clock.deadlines == (next.map { [$0] } ?? []) }
         #expect(await h.status().notAfter == nil)
-        #expect(!h.scratch.exists(H.name + ".crt"), "실패한 시도는 아무것도 저장하지 않는다")
+        #expect(!h.scratch.exists(H.name + ".crt"), "A failed attempt stores nothing")
         #expect(!h.scratch.exists(H.name + ".key"))
 
         run.cancel()
         #expect(await run.value == nil)
-        #expect(await drain(h.manager.certificates).isEmpty, "실패한 시도는 아무것도 내지 않는다")
+        #expect(await drain(h.manager.certificates).isEmpty, "A failed attempt emits nothing")
     }
 
-    @Test("Retry-After 전의 retryNow()는 요청을 보내지 않고, 그 시각이 되면 다시 시도한다")
+    @Test("retryNow() before Retry-After sends no request and retries when that time arrives")
     func retryNowBeforeRetryAfter() async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
@@ -95,7 +95,7 @@ struct ManagerFailureTests {
         h.clock.advance(by: 3600)
         await h.manager.retryNow()
         try await settle()
-        #expect(h.transport.sent.count == sent, "서버가 정한 시각 전에는 retryNow()도 요청하지 않는다")
+        #expect(h.transport.sent.count == sent, "Even retryNow() sends no request before the server's time")
         #expect(await h.status().nextAttempt == retryAt)
 
         h.transport.append(h.issuance(firstAttempt: false))
@@ -108,11 +108,11 @@ struct ManagerFailureTests {
         #expect(await run.value == nil)
     }
 
-    @Test("물러나는 중의 retryNow()는 곧바로 다시 시도한다")
+    @Test("retryNow() retries immediately during backoff")
     func retryNowDuringBackoff() async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
-        h.dns.fail(with: .connection("끊김"))
+        h.dns.fail(with: .connection("disconnected"))
         h.transport.append(Self.untilTXT(h))
         let run = h.start()
 
@@ -121,17 +121,17 @@ struct ManagerFailureTests {
         h.transport.append(h.issuance(firstAttempt: false))
         await h.manager.retryNow()
         try await eventually { await h.status().notAfter != nil }
-        #expect(h.clock.now() == TestPKI.now, "시각을 넘기지 않고 다시 시도했다")
+        #expect(h.clock.now() == TestPKI.now, "Retried without advancing time")
 
         run.cancel()
         #expect(await run.value == nil)
     }
 
-    @Test("사용자가 고칠 실패 뒤: 시간으로는 다시 시도하지 않고 retryNow()에 곧바로 다시 본다")
+    @Test("After a failure the user must fix, waits without retrying on a timer and re-evaluates immediately on retryNow()")
     func retryNowAfterUserFixableFailure() async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
-        h.dns.fail(with: .invalidConfiguration("이름"))
+        h.dns.fail(with: .invalidConfiguration("name"))
         h.transport.append(Self.untilTXT(h))
         let run = h.start()
 
@@ -160,7 +160,7 @@ struct ManagerFailureTests {
                 case .corrupt:
                     return Array("-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n".utf8)
                 case .rsa:
-                    // Go의 옛 RSA 계정 키(PKCS#1 `RSA PRIVATE KEY`).
+                    // Go's old RSA account key (PKCS#1 `RSA PRIVATE KEY`).
                     let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeySizeInBits: 2048]
                     let key = try #require(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
                     let der = try #require(SecKeyCopyExternalRepresentation(key, nil) as Data?)
@@ -171,7 +171,7 @@ struct ManagerFailureTests {
         }
     }
 
-    @Test("계정 키 파일이 깨졌거나 RSA면 run()이 accountKeyUnreadable로 끝나고 파일은 그대로다", arguments: AccountKeyCase.allCases)
+    @Test("A corrupt or RSA account key file makes run() end with accountKeyUnreadable and preserves the file", arguments: AccountKeyCase.allCases)
     func unreadableAccountKey(_ keyCase: AccountKeyCase) async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
@@ -185,7 +185,7 @@ struct ManagerFailureTests {
         #expect(await drain(h.manager.certificates).isEmpty)
     }
 
-    @Test("잠든 중에 취소하면 곧 돌아오고 요청이 더 가지 않는다")
+    @Test("Canceling while asleep returns promptly and sends no more requests")
     func cancelWhileSleeping() async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
@@ -196,13 +196,13 @@ struct ManagerFailureTests {
 
         run.cancel()
         #expect(await run.value == nil)
-        #expect(h.clock.deadlines.isEmpty, "기다림이 취소로 풀렸다")
+        #expect(h.clock.deadlines.isEmpty, "Cancellation released the wait")
         h.clock.advance(by: 100 * H.day)
         try await settle()
         #expect(h.transport.sent.count == sent)
     }
 
-    @Test("발급 중에 취소하면 곧 돌아오고 요청이 더 가지 않는다")
+    @Test("Canceling during issuance returns promptly and sends no more requests")
     func cancelWhileIssuing() async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
@@ -217,10 +217,10 @@ struct ManagerFailureTests {
         #expect(await run.value == nil)
         try await settle()
         #expect(h.transport.sent.count == 4)
-        #expect(await h.status().lastFailure == nil, "취소는 실패로 적지 않는다")
+        #expect(await h.status().lastFailure == nil, "Cancellation is not recorded as a failure")
     }
 
-    @Test("run()은 한 번만, 디렉터리 URL은 https만")
+    @Test("run() can be called once, and the directory URL requires https")
     func invalidConfiguration() async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
@@ -243,7 +243,7 @@ struct ManagerFailureTests {
         }
     }
 
-    @Test("설정의 trustAnchors: 주면 그 루트로 검증해 발급이 끝나고, 주지 않으면 시스템이 믿지 않는 사슬은 저장하지 않는다")
+    @Test("Configured trustAnchors verify with the supplied root and complete issuance. Without them, a chain the system does not trust is not stored")
     func configuredTrustAnchors() async throws {
         let trusted = try ManagerHarness(anchors: .configuration)
         defer { trusted.scratch.remove() }
@@ -265,7 +265,7 @@ struct ManagerFailureTests {
         _ = await systemRun.value
     }
 
-    @Test("빈 trustAnchors는 받지 않는다")
+    @Test("Empty trustAnchors are rejected")
     func emptyTrustAnchors() throws {
         let scratch = try ManagerScratch()
         defer { scratch.remove() }
@@ -278,7 +278,7 @@ struct ManagerFailureTests {
         }
     }
 
-    @Test("description·dump·String(reflecting:)에 키 바이트와 계정 URL이 없다")
+    @Test("description, dump, and String(reflecting:) omit key bytes and the account URL")
     func secrets() async throws {
         let h = try ManagerHarness()
         defer { h.scratch.remove() }
@@ -318,14 +318,14 @@ struct ManagerFailureTests {
     }
 }
 
-@Suite("인증서 관리자: 조건과 실패의 분류")
+@Suite("Certificate manager: classification of conditions and failures")
 struct ManagerMappingTests {
-    @Test("동작 C1·C2: 조건을 차례로 본다")
+    @Test("Behaviors C1 and C2 check conditions in order")
     func eligibility() throws {
         let domain = try #require(CertificateDomain(H.name))
         #expect(CertificateManager.eligibility(of: H.facts()) == .eligible(domain))
         #expect(CertificateManager.eligibility(of: H.facts(fqdn: H.name + ".", certDomains: [H.name + "."])) == .eligible(domain),
-                "끝 점 하나는 떼고 검사한다")
+                "Removes one trailing dot before validation")
         #expect(CertificateManager.eligibility(of: H.facts(running: false)) == .blocked(.nodeNotRunning))
         #expect(CertificateManager.eligibility(of: H.facts(magicDNS: false)) == .blocked(.magicDNSDisabled))
         #expect(CertificateManager.eligibility(of: H.facts(certDomains: [])) == .blocked(.httpsNotEnabled))
@@ -334,20 +334,20 @@ struct ManagerMappingTests {
                 == .blocked(.domainNotAllowed))
     }
 
-    @Test("set-dns의 실패: http → controlRejected, invalidConfiguration → domainNotAllowed, 그 밖 → network")
+    @Test("set-dns failures: http → controlRejected, invalidConfiguration → domainNotAllowed, and all others → network")
     func controlErrors() {
         #expect(CertificateManager.failure(for: .http(status: 500)) == .controlRejected(status: 500))
         #expect(CertificateManager.failure(for: .invalidConfiguration("x")) == .domainNotAllowed)
         for error in [ControlError.connection("x"), .storage("x"), .nodeKeyExpired] {
             guard case .network(let message) = CertificateManager.failure(for: error) else {
-                Issue.record("network가 아니다")
+                Issue.record("Expected network")
                 continue
             }
-            #expect(!message.contains("x"), "연관 문자열은 고정 문구다")
+            #expect(!message.contains("x"), "The associated string is fixed")
         }
     }
 
-    @Test("동작 R4 표: CertificateFailure → RenewalFailure")
+    @Test("Behavior R4 table: CertificateFailure → RenewalFailure")
     func renewalFailures() {
         let date = TestPKI.now
         let table: [(CertificateFailure, RenewalFailure, Date?)] = [

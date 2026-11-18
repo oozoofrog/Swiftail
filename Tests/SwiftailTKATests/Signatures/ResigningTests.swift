@@ -5,19 +5,19 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 재서명(계약 동작 R7, 단위 시험 13, 5절 TL-11b 항목 1). 기준은 Go `ResignNKS`를 실행한 `resign` 10개다.
+/// Resigning (contract behavior R7, unit test 13, §5 TL-11b item 1). Uses 10 `resign` cases from running Go `ResignNKS` as the reference.
 ///
-/// TL-11b 항목 1로 Swiftail은 이미 자기 NL 키로 서명한 사슬만 다시 서명한다. Go가 만들던 "검증되지 않는 서명" 셋은 Swiftail이
-/// 만들지 않는다(`refusedRows`).
-@Suite("재서명")
+/// Under TL-11b item 1, Swiftail resigns only chains already signed with its own NL key. Swiftail omits the three unverifiable signatures that Go
+/// produced (`refusedRows`).
+@Suite("Resigning")
 struct ResigningTests {
-    /// Go는 만들고(받는 쪽에서 검증되지 않는다) Swiftail은 거절하는 줄과 그 까닭.
+    /// Rows Go produces and the recipient cannot verify, with the reasons Swiftail rejects them.
     static let refusedRows: [String: TKAError] = [
         "direct-wrapping-is-other-key": .untrustedSigner, "direct-no-wrapping": .untrustedSigner,
         "credential-chain": .invalidSignature,
     ]
 
-    @Test("resign 10개: 같은 결과의 모양과 판정. 줄이지 않은 것은 SigHash까지 같다. 검증되지 않을 셋은 만들지 않는다")
+    @Test("All 10 resign cases match result shape and outcome. Unshortened chains also match SigHash. The three unverifiable signatures are not produced")
     func goResign() throws {
         let fixtures = try SignatureFixtureFile.load()
         #expect(fixtures.resign.count == 10)
@@ -31,7 +31,7 @@ struct ResigningTests {
                 continue
             }
             if let refusal = Self.refusedRows[item.name] {
-                #expect(item.verdict?.authorized == false, "\(item.name): Go가 만든 것도 인가되지 않는다")
+                #expect(item.verdict?.authorized == false, "\(item.name): The Go result is also unauthorized")
                 #expect(throws: refusal, "\(item.name)") { try made.get() }
                 continue
             }
@@ -41,11 +41,11 @@ struct ResigningTests {
             let goResult = try NodeKeySignature(decoding: ModelTesting.bytes(try #require(item.result)))
             #expect(SignatureTesting.depth(result) == item.depth, "\(item.name)")
             #expect(SignatureTesting.publicKeys(result) == SignatureTesting.publicKeys(goResult), "\(item.name)")
-            // 줄인 사슬은 안쪽 서명을 CryptoKit이 새로 만들어 SigHash가 달라진다.
+            // In a shortened chain, CryptoKit regenerates inner signatures, changing SigHash.
             if goResult.nested == (try? NodeKeySignature(decoding: old)) || item.sameAsOld {
                 #expect(ModelTesting.hex(result.signatureHash) == item.sigHash, "\(item.name)")
             }
-            // Swift가 만든 것과 Go가 만든 것이 Swift의 검증에서 Go의 판정과 같다(검증되지 않는 것은 그대로 검증되지 않는다).
+            // Swift verification of Swift and Go results matches Go's outcomes. Unverifiable signatures still fail verification.
             let state = try fixtures.state(named: item.authority)
             let verdict = try #require(item.verdict, "\(item.name)")
             #expect(SignatureTesting.verdict(state, nodeKey, bytes) == verdict, "\(item.name)")
@@ -53,9 +53,9 @@ struct ResigningTests {
         }
     }
 
-    /// 시험 13의 재서명 항목: 같은 키면 그대로, 회전 키가 NL 키인 direct는 통과, 16번째 키에서 줄어듦. credential 사슬과
-    /// `WrappingPubkey` 없는 direct는 Go가 만들되 검증되지 않고, Swiftail은 만들지 않는다(TL-11b 항목 1).
-    @Test("시험 13의 재서명 항목이 기준 자료에 있다")
+    /// Test 13 resigning cases: the same key stays unchanged, direct with an NL rotation key passes, and the 16th key triggers shortening. Go produces
+    /// a credential chain and a direct signature without `WrappingPubkey`, both unverifiable. Swiftail does not produce them (TL-11b item 1).
+    @Test("The reference fixtures cover test 13 resigning")
     func contractItemsPresent() throws {
         let items = Dictionary(uniqueKeysWithValues: try SignatureFixtureFile.load().resign.map { ($0.name, $0) })
         let expected: [(String, Bool)] = [
@@ -69,7 +69,7 @@ struct ResigningTests {
         }
     }
 
-    @Test("16개째에서 줄인 사슬: 맨 안쪽 direct 위에 가장 최근 14개, 그 위에 새 키. 다시 줄여도 16단을 넘지 않는다")
+    @Test("Chain shortened on the 16th key: the latest 14 above the innermost direct, then the new key. Repeated shortening stays within 16 levels")
     func trimming() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let nlKey = Curve25519.Signing.PrivateKey()
@@ -84,17 +84,17 @@ struct ResigningTests {
             #expect(SignatureTesting.depth(decoded) <= 16)
             let details = try #require(try state.authorize(next, keySignature: signature))
             let previous = Array(nodeKeys.dropLast().reversed())
-            // 키가 15개(바깥 포함 16개)를 넘으면 맨 안쪽 direct의 키와 최근 14개만 남는다.
+            // Beyond 15 keys (16 including the outermost), retains the innermost direct's key and the latest 14.
             let expected = previous.count <= 15 ? previous : Array(previous.prefix(14)) + [nodeKeys[0]]
             #expect(details.previousNodeKeys == expected, "\(nodeKeys.count)")
         }
     }
 
-    @Test("Pubkey가 같으면 옛 바이트를 그대로, 읽히지 않는 옛 서명은 오류")
+    @Test("Same Pubkey returns the old bytes unchanged. An undecodable old signature returns an error")
     func verbatimAndUndecodable() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let nodeKey = SignatureTesting.randomNodeKey()
-        // 모르는 필드가 든 옛 서명: 다시 쓰면 바이트가 달라지므로 그대로 돌려줬는지가 드러난다.
+        // The old signature has an unknown field. Rewriting changes the bytes, so the test can tell whether they were returned unchanged.
         let direct = try SignatureTesting.direct(nodeKey, by: lockKey, wrapping: nil).serialized()
         let withUnknownField = [direct[0] + 1] + direct.dropFirst() + [0x07, 0x00]
         #expect(try NodeKeySignature.resigned(withUnknownField, for: nodeKey, with: lockKey) == withUnknownField)
@@ -102,10 +102,10 @@ struct ResigningTests {
         #expect(throws: TKAError.self) { try NodeKeySignature.resigned([], for: nodeKey, with: lockKey) }
     }
 
-    // MARK: 재서명 전의 검사(TL-11b 항목 1)
+    // MARK: Checks before resigning (TL-11b item 1)
 
-    /// 신뢰 키(`trusted`)가 `nlKey`를 회전 키로 적어 서명한 direct와, 그 위에 rotation `count`겹. 겹마다 `signer(겹 번호)`가
-    /// 서명한다(0이 맨 안쪽 겹). 맨 바깥 겹의 node 키는 `outermost`다.
+    /// Direct signed by a trusted key (`trusted`) that specifies `nlKey` as the rotation key, with `count` rotation layers on top. `signer(layer number)` signs
+    /// each layer (0 is innermost). The outermost layer's node key is `outermost`.
     private static func chain(
         direct nodeKey: NodePublicKey, by trusted: Curve25519.Signing.PrivateKey, wrapping: Curve25519.Signing.PublicKey?,
         layers count: Int, outermost: NodePublicKey? = nil,
@@ -117,7 +117,7 @@ struct ResigningTests {
             if let rotationKey = signer(layer) {
                 signature = try SignatureTesting.rotation(key, nesting: signature, by: rotationKey)
             } else {
-                // 서버가 서명 없이(0으로 채워) 얹은 겹.
+                // A layer added by the server without a signature (filled with zeros).
                 signature = NodeKeySignature(
                     kind: NodeKeySignature.Kind.rotation, publicKey: key.binaryForm,
                     signature: [UInt8](repeating: 0, count: 64), nested: signature
@@ -127,39 +127,39 @@ struct ResigningTests {
         return signature
     }
 
-    @Test("서버가 고른 node 키 15겹을 얹은 사슬은 다시 서명하지 않는다(서명 오라클이 아니다)")
+    @Test("Refuses to resign a chain topped by 15 layers of server-selected node keys. It does not act as a signing oracle")
     func forgedRotationLayers() throws {
         let trusted = Curve25519.Signing.PrivateKey(), nlKey = Curve25519.Signing.PrivateKey()
         let state = SignatureTesting.state(trusting: [trusted])
         let attackerKey = SignatureTesting.randomNodeKey()
-        // 15겹이 디코딩의 한도(direct 위에 rotation 15겹)이고, 15겹이면 재서명이 줄이기를 한다.
+        // The decoding limit is 15 layers (15 rotations over direct), and resigning at 15 layers triggers shortening.
         for count in [1, 14, 15] {
-            // 맨 안쪽은 이 노드의 진짜 direct(회전 키가 이 노드의 NL 키)다.
+            // The innermost is this node's genuine direct signature whose rotation key is this node's NL key.
             let forged = try Self.chain(
                 direct: SignatureTesting.randomNodeKey(), by: trusted, wrapping: nlKey.publicKey, layers: count,
                 outermost: attackerKey, signer: { _ in nil }
             )
-            #expect(throws: TKAError.invalidSignature, "\(count)겹") {
+            #expect(throws: TKAError.invalidSignature, "\(count) layers") {
                 try NodeKeySignature.resigned(forged.serialized(), for: SignatureTesting.randomNodeKey(), with: nlKey)
             }
-            // 다른 키(공격자의 키)가 서명한 겹도 같다.
+            // The same applies to layers signed by another key (the attacker's key).
             let otherKey = Curve25519.Signing.PrivateKey()
             let signedByOther = try Self.chain(
                 direct: SignatureTesting.randomNodeKey(), by: trusted, wrapping: nlKey.publicKey, layers: count,
                 outermost: attackerKey, signer: { _ in otherKey }
             )
-            #expect(throws: TKAError.invalidSignature, "\(count)겹") {
+            #expect(throws: TKAError.invalidSignature, "\(count) layers") {
                 try NodeKeySignature.resigned(signedByOther.serialized(), for: SignatureTesting.randomNodeKey(), with: nlKey)
             }
             #expect(throws: TKAError.unauthorized) { try state.authorize(attackerKey, keySignature: forged.serialized()) }
         }
     }
 
-    @Test("한 겹만 NL 키로 검증되지 않아도 다시 서명하지 않는다(맨 안쪽·가운데·맨 바깥)", arguments: [0, 7, 14])
+    @Test("Refuses to resign if even one layer fails verification with the NL key (innermost, middle, or outermost)", arguments: [0, 7, 14])
     func oneBadLayer(_ bad: Int) throws {
         let trusted = Curve25519.Signing.PrivateKey(), nlKey = Curve25519.Signing.PrivateKey()
         let other = Curve25519.Signing.PrivateKey()
-        // 15겹이라 재서명하면 줄이기가 일어나는 사슬이다.
+        // The chain has 15 layers, so resigning would shorten it.
         let chain = try Self.chain(
             direct: SignatureTesting.randomNodeKey(), by: trusted, wrapping: nlKey.publicKey, layers: 15,
             signer: { $0 == bad ? other : nlKey }
@@ -169,17 +169,17 @@ struct ResigningTests {
         }
     }
 
-    @Test("맨 안쪽 서명의 WrappingPubkey가 이 노드의 NL 키가 아니거나 없으면 다시 서명하지 않는다")
+    @Test("Refuses to resign when the innermost signature's WrappingPubkey differs from this node's NL key or is missing")
     func innermostWrappingKey() throws {
         let trusted = Curve25519.Signing.PrivateKey(), nlKey = Curve25519.Signing.PrivateKey()
         let other = Curve25519.Signing.PrivateKey()
         for wrapping in [other.publicKey, nil] {
-            // rotation 겹이 없는 direct: 안쪽 `WrappingPubkey`만 본다.
+            // For direct with no rotation layers, only check the inner `WrappingPubkey`.
             let direct = try SignatureTesting.direct(SignatureTesting.randomNodeKey(), by: trusted, wrapping: wrapping)
             #expect(throws: TKAError.untrustedSigner) {
                 try NodeKeySignature.resigned(direct.serialized(), for: SignatureTesting.randomNodeKey(), with: nlKey)
             }
-            // 모든 겹을 NL 키로 서명했어도 맨 안쪽이 이 노드의 NL 키를 적지 않았으면 거절한다.
+            // Even if all layers are signed with the NL key, reject when the innermost does not specify this node's NL key.
             let rotated = try Self.chain(
                 direct: SignatureTesting.randomNodeKey(), by: trusted, wrapping: wrapping, layers: 3, signer: { _ in nlKey }
             )
@@ -189,7 +189,7 @@ struct ResigningTests {
         }
     }
 
-    @Test("credential에서 시작하는 사슬(서명된 인증 키로 등록한 노드)은 다시 서명하지 않는다")
+    @Test("Refuses to resign a chain starting with a credential (a node registered with a signed auth key)")
     func credentialRoot() throws {
         let trusted = Curve25519.Signing.PrivateKey(), nlKey = Curve25519.Signing.PrivateKey()
         let wrapped = Curve25519.Signing.PrivateKey()
@@ -198,26 +198,26 @@ struct ResigningTests {
             wrappingPublicKey: Array(wrapped.publicKey.rawRepresentation)
         )
         try credential.sign(with: trusted)
-        // 등록할 때 만든 것: 감싼 키가 서명한 rotation(Go `SignByCredential`).
+        // Created during registration: rotation signed by the wrapped key (Go `SignByCredential`).
         let registered = try SignatureTesting.rotation(SignatureTesting.randomNodeKey(), nesting: credential, by: wrapped)
         #expect(throws: TKAError.invalidSignature) {
             try NodeKeySignature.resigned(registered.serialized(), for: SignatureTesting.randomNodeKey(), with: nlKey)
         }
-        // 겹을 NL 키가 서명했더라도 맨 안쪽 credential의 회전 키는 감싼 키다.
+        // Even if the NL key signs the layer, the innermost credential's rotation key is the wrapped key.
         let relayed = try SignatureTesting.rotation(SignatureTesting.randomNodeKey(), nesting: credential, by: nlKey)
         #expect(throws: TKAError.untrustedSigner) {
             try NodeKeySignature.resigned(relayed.serialized(), for: SignatureTesting.randomNodeKey(), with: nlKey)
         }
-        // credential 하나만.
+        // A single credential.
         #expect(throws: TKAError.untrustedSigner) {
             try NodeKeySignature.resigned(credential.serialized(), for: SignatureTesting.randomNodeKey(), with: nlKey)
         }
     }
 
-    @Test("rotation 아닌 서명으로 끝나지 않는 사슬, 서명이 빈 겹은 다시 서명하지 않는다")
+    @Test("Refuses to resign chains that never reach a non-rotation signature or contain a layer with an empty signature")
     func malformedChains() throws {
         let nlKey = Curve25519.Signing.PrivateKey()
-        // `Nested`가 없는 rotation(NL 키가 서명했다).
+        // Rotation with no `Nested`, signed by the NL key.
         let dangling = try SignatureTesting.rotation(
             SignatureTesting.randomNodeKey(),
             nesting: NodeKeySignature(kind: NodeKeySignature.Kind.rotation, publicKey: SignatureTesting.randomNodeKey().binaryForm),
@@ -231,7 +231,7 @@ struct ResigningTests {
         #expect(throws: TKAError.untrustedSigner) {
             try NodeKeySignature.resigned(bare.serialized(), for: SignatureTesting.randomNodeKey(), with: nlKey)
         }
-        // 서명 필드가 빈 겹.
+        // A layer with an empty signature field.
         let trusted = Curve25519.Signing.PrivateKey()
         let direct = try SignatureTesting.direct(SignatureTesting.randomNodeKey(), by: trusted, wrapping: nlKey.publicKey)
         let unsigned = NodeKeySignature(
@@ -242,7 +242,7 @@ struct ResigningTests {
         }
     }
 
-    @Test("정상 사슬: 1겹·여러 겹·줄이기가 일어나는 15겹 모두 다시 서명되고 그 결과가 인가된다")
+    @Test("Resigns valid chains with 1 layer, multiple layers, or 15 layers that trigger shortening, and authorizes every result")
     func genuineChains() throws {
         let trusted = Curve25519.Signing.PrivateKey(), nlKey = Curve25519.Signing.PrivateKey()
         let state = SignatureTesting.state(trusting: [trusted])
@@ -254,9 +254,9 @@ struct ResigningTests {
             let next = SignatureTesting.randomNodeKey()
             let resigned = try NodeKeySignature.resigned(chain.serialized(), for: next, with: nlKey)
             let details = try state.authorize(next, keySignature: resigned)
-            // 15겹 위에 다시 서명하면 키가 16개라 줄인다: 최근 14개와 맨 안쪽 direct의 키.
-            #expect(details?.previousNodeKeys.count == min(count + 1, 15), "\(count)겹")
-            #expect(SignatureTesting.depth(try NodeKeySignature(decoding: resigned)) <= 16, "\(count)겹")
+            // Resigning over 15 layers gives 16 keys and triggers shortening to the latest 14 and the innermost direct's key.
+            #expect(details?.previousNodeKeys.count == min(count + 1, 15), "\(count) layers")
+            #expect(SignatureTesting.depth(try NodeKeySignature(decoding: resigned)) <= 16, "\(count) layers")
         }
     }
 }

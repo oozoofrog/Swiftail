@@ -1,4 +1,4 @@
-// RFC 8555를 기준으로 만든 메모리 서버. 정상 경로의 상태 전이와 응답 결함 주입을 분리한다.
+// An in-memory server based on RFC 8555. Keeps successful state transitions separate from response fault injection.
 import CryptoKit
 import Foundation
 
@@ -30,7 +30,7 @@ actor FakeACMEServer: ACMETransport {
         var remaining = 1
     }
 
-    /// 정상 시나리오는 기본값만 쓴다. RFC에 어긋나는 서버 응답도 경계 시험을 위해 명시적으로 주입한다.
+    /// Successful scenarios use only defaults. Boundary tests explicitly inject server responses that violate the RFC.
     struct Configuration: Sendable {
         var badNonce: [Endpoint: Int] = [:]
         var responseFault: ResponseFault?
@@ -177,7 +177,7 @@ actor FakeACMEServer: ACMETransport {
         return try? JSONDecoder().decode(FakeACMECrypto.Protected.self, from: bytes)
     }
 
-    /// RFC 8555 6.2~6.5: POST는 상태를 바꾸기 전에 인증한다. Content-Type은 전송 선언이 보장한다.
+    /// RFC 8555 6.2–6.5: Authenticate POSTs before changing state. The transport declaration guarantees Content-Type.
     private func authenticate(_ request: ACMEHTTPRequest) throws -> (FakeACMECrypto.Protected, Data) {
         guard let object = try JSONSerialization.jsonObject(with: Data(request.body)) as? [String: Any],
               Set(object.keys) == ["protected", "payload", "signature"],
@@ -187,7 +187,7 @@ actor FakeACMEServer: ACMETransport {
               let signatureBytes = FakeACMECrypto.decode(envelope.signature),
               let header = try? JSONDecoder().decode(FakeACMECrypto.Protected.self, from: protectedBytes),
               header.b64 == nil, header.crit == nil else { throw Rejection(type: "malformed") }
-        // 한 번 나타난 nonce는 다른 머리나 서명이 틀렸어도 다시 쓰게 하지 않는다(RFC 8555 6.5).
+        // A nonce that has appeared once cannot be reused, even if another header or the signature was invalid (RFC 8555 6.5).
         guard let nonce = header.nonce, FakeACMECrypto.decode(nonce) != nil,
               nonces.remove(nonce) != nil else { throw Rejection(type: "badNonce") }
         guard header.alg == "ES256" else { throw Rejection(type: "badSignatureAlgorithm") }
@@ -278,7 +278,7 @@ actor FakeACMEServer: ACMETransport {
                 guard let index = resourceNumbers(request.url).last, order.authorizations.indices.contains(index),
                       (try JSONSerialization.jsonObject(with: payload)) is [String: Any]
                 else { return problem(400, "malformed") }
-                // RFC 8555 7.5.1은 모르는 응답 필드를 무시하라고 요구한다. 클라이언트의 {}는 시나리오가 검사한다.
+                // RFC 8555 7.5.1 requires ignoring unknown response fields. The scenario checks the client's {}.
                 if order.authorizations[index].challengeStatus == "pending" {
                     order.authorizations[index].challengeStatus = "processing"
                     validateDNS(&order, index)
@@ -431,7 +431,7 @@ actor FakeACMEServer: ACMETransport {
     }
 
     private func json(_ object: [String: Any]) -> [UInt8] {
-        // 이 함수의 호출부는 JSON으로 표현할 수 있는 값만 만든다. 실패하면 서버 자체 시험이 잡도록 빈 본문을 보낸다.
+        // Callers provide only JSON-representable values. On failure, sends an empty body so the server self-test can detect it.
         Array((try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data())
     }
 

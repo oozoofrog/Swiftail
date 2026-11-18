@@ -1,4 +1,4 @@
-// 계약 7절 단위 시험 9(받은 사슬의 검사): 동작 X3·S3 ⑤·S6, C8의 신뢰 앵커.
+// Contract §7 unit test 9 (received chain verification): behaviors X3, S3 ⑤, and S6, and the C8 trust anchors.
 
 import CryptoKit
 import Foundation
@@ -7,13 +7,13 @@ import Testing
 
 @testable import SwiftailCertificates
 
-/// 시험의 시각과 인증 기관. 시각은 고정이다(검증 시각을 `SecTrustSetVerifyDate`로 넘긴다).
+/// Test time and certificate authority. The time is fixed and passed to `SecTrustSetVerifyDate` as the verification date.
 struct TestPKI {
     static let day: TimeInterval = 24 * 3600
     /// 2026-11-15T00:00:00Z.
     static let now = Date(timeIntervalSince1970: 1_794_700_800)
     static let domainName = "rd-mac-1a2b3c4d.tail0001.ts.net"
-    /// 2026-11-01T00:00:00Z부터 90일. 2/3 지점은 2026-12-31T00:00:00Z.
+    /// 90 days from 2026-11-01T00:00:00Z. The 2/3 point is 2026-12-31T00:00:00Z.
     static let leafStart = Date(timeIntervalSince1970: 1_793_491_200)
     static let leafEnd = leafStart.addingTimeInterval(90 * day)
 
@@ -47,7 +47,7 @@ struct TestPKI {
     }
 }
 
-@Suite("받은 사슬의 검사")
+@Suite("Received chain verification")
 struct VerifiedCertificateTests {
     let pki: TestPKI
 
@@ -55,7 +55,7 @@ struct VerifiedCertificateTests {
         pki = try TestPKI()
     }
 
-    @Test("leaf와 중간 인증서: 통과하고 기간은 leaf의 것")
+    @Test("A leaf and intermediate pass, and the validity period comes from the leaf")
     func validChain() throws {
         let leaf = pki.leaf()
         let verified = try pki.verify(pemChain([leaf, pki.intermediate.certificate]))
@@ -65,7 +65,7 @@ struct VerifiedCertificateTests {
         #expect(verified.privateKey.rawRepresentation == pki.key.rawRepresentation)
     }
 
-    @Test("루트를 함께 보낸 사슬: 검증 뒤 chain에서 빠지고 receivedChain에는 남는다(동작 S6)")
+    @Test("A root sent with the chain is omitted from chain after verification and remains in receivedChain (behavior S6)")
     func rootIncluded() throws {
         let received = [pki.leaf(), pki.intermediate.certificate, pki.root.certificate]
         let verified = try pki.verify(pemChain(received))
@@ -73,9 +73,9 @@ struct VerifiedCertificateTests {
         #expect(verified.chain == Array(received.prefix(2)))
     }
 
-    /// 고치기 전에는 주체와 발급자가 같은 인증서를 모두 뗐다. 키를 바꿀 때 쓰는 자기 발급 중간 인증서(이름은 루트와 같고
-    /// 키가 다르다)가 빠져 상대가 사슬을 잇지 못했다.
-    @Test("자기 발급 중간 인증서는 chain에 남고, 평가가 고른 신뢰 앵커만 빠진다")
+    /// Before the fix, all certificates with identical subjects and issuers were removed. The self-issued intermediate used for key rotation (same name as the root
+    /// and a different key) was removed, so the peer could not build the chain.
+    @Test("Keeps the self-issued intermediate in chain and removes only the trust anchor selected by evaluation")
     func selfIssuedIntermediateIsKept() throws {
         let selfIssued = pki.root.intermediate(
             pki.root.commonName, from: TestPKI.now - 365 * TestPKI.day, to: TestPKI.now + 1825 * TestPKI.day)
@@ -84,18 +84,18 @@ struct VerifiedCertificateTests {
         let received = [leaf, selfIssued.certificate, pki.root.certificate]
         let verified = try pki.verify(pemChain(received))
         #expect(verified.chain == [leaf, selfIssued.certificate])
-        // 루트를 보내지 않은 사슬에서는 아무것도 빠지지 않는다.
+        // A chain sent without a root is kept in full.
         #expect(try pki.verify(pemChain([leaf, selfIssued.certificate])).chain == [leaf, selfIssued.certificate])
     }
 
-    @Test("PRIVATE KEY 블록이 낀 응답은 전체를 버린다(RFC 8555 11.4)")
+    @Test("Rejects the entire response if it contains a PRIVATE KEY block (RFC 8555 11.4)")
     func privateKeyBlock() {
         let keyBlock = Array(pki.key.pemRepresentation.utf8)
         let input = pemChain([pki.leaf()]) + keyBlock + pemChain([pki.intermediate.certificate])
         #expect(throws: CertificateVerificationError.malformedChain(.unexpectedLabel)) { try pki.verify(input) }
     }
 
-    @Test("블록 뒤나 사이의 쓰레기 바이트")
+    @Test("Garbage bytes after or between blocks")
     func trailingGarbage() {
         let leaf = pemChain([pki.leaf()])
         let intermediate = pemChain([pki.intermediate.certificate])
@@ -107,7 +107,7 @@ struct VerifiedCertificateTests {
         }
     }
 
-    @Test("해석되지 않는 블록")
+    @Test("Unparseable block")
     func unparsableBlock() {
         let broken = Array("-----BEGIN CERTIFICATE-----\nnot*base64\n-----END CERTIFICATE-----\n".utf8)
         #expect(throws: CertificateVerificationError.malformedChain(.malformed)) { try pki.verify(broken) }
@@ -115,13 +115,13 @@ struct VerifiedCertificateTests {
         #expect(throws: CertificateVerificationError.malformedChain(.malformed)) { try pki.verify(truncated) }
     }
 
-    @Test("X.509가 아닌 DER")
+    @Test("Non-X.509 DER")
     func notX509() {
         let input = Array(PEM.encode(PEMBlock(label: .certificate, der: [0x30, 0x03, 0x02, 0x01, 0x01])).utf8)
         #expect(throws: CertificateVerificationError.unparsableCertificate) { try pki.verify(input) }
     }
 
-    @Test("6장, 0장")
+    @Test("6 certificates, 0 certificates")
     func chainLength() throws {
         let five = [pki.leaf()] + Array(repeating: pki.intermediate.certificate, count: 4)
         _ = try pki.verify(pemChain(five))
@@ -131,7 +131,7 @@ struct VerifiedCertificateTests {
         #expect(throws: CertificateVerificationError.malformedChain(.wrongBlockCount)) { try pki.verify(Array("\n".utf8)) }
     }
 
-    @Test("다른 키의 leaf(동작 X3 ③)")
+    @Test("Leaf with a different key (behavior X3 ③)")
     func otherKey() {
         let other = pki.leaf(key: P256.Signing.PrivateKey().publicKey)
         #expect(throws: CertificateVerificationError.keyMismatch) {
@@ -139,7 +139,7 @@ struct VerifiedCertificateTests {
         }
     }
 
-    @Test("다른 이름의 leaf")
+    @Test("Leaf with a different name")
     func otherName() {
         let other = pki.leaf("rd-mac-5e6f7a8b.tail0001.ts.net")
         #expect(throws: CertificateVerificationError.untrusted(status: Int(errSecHostNameMismatch))) {
@@ -147,19 +147,19 @@ struct VerifiedCertificateTests {
         }
     }
 
-    @Test("만료된 leaf, 아직 유효하지 않은 leaf")
+    @Test("Expired leaf and leaf that is not yet valid")
     func outsideValidity() {
         let chain = pemChain([pki.leaf(), pki.intermediate.certificate])
         #expect(throws: CertificateVerificationError.untrusted(status: Int(errSecCertificateExpired))) {
             try pki.verify(chain, at: TestPKI.leafEnd + 1)
         }
-        // Security는 아직 유효하지 않은 leaf에도 `errSecCertificateExpired`를 낸다(macOS 27에서 본 값).
+        // Security also returns `errSecCertificateExpired` for a leaf that is not yet valid, as observed on macOS 27.
         #expect(throws: CertificateVerificationError.untrusted(status: Int(errSecCertificateExpired))) {
             try pki.verify(chain, at: TestPKI.leafStart - 1)
         }
     }
 
-    @Test("모르는 루트: 다른 루트만 앵커로 주면 받지 않는다")
+    @Test("An unknown root is rejected when only a different root is supplied as an anchor")
     func unknownRoot() {
         let stranger = TestCertificateAuthority.root("Stranger Root", from: TestPKI.now - TestPKI.day, to: TestPKI.now + TestPKI.day)
         let chain = pemChain([pki.leaf(), pki.intermediate.certificate, pki.root.certificate])
@@ -168,7 +168,7 @@ struct VerifiedCertificateTests {
         }
     }
 
-    @Test("시스템 루트만으로는 시험 기관을 믿지 않는다(운영 앵커)")
+    @Test("System roots alone do not trust the test authority (production anchors)")
     func systemAnchors() {
         let chain = pemChain([pki.leaf(), pki.intermediate.certificate, pki.root.certificate])
         #expect(throws: CertificateVerificationError.untrusted(status: Int(errSecNotTrusted))) {
@@ -176,14 +176,14 @@ struct VerifiedCertificateTests {
         }
     }
 
-    @Test("중간 인증서가 빠진 사슬은 네트워크에서 채우지 않고 실패한다")
+    @Test("A chain with a missing intermediate fails without fetching from the network")
     func missingIntermediate() {
         #expect(throws: CertificateVerificationError.untrusted(status: Int(errSecCreateChainFailed))) {
             try pki.verify(pemChain([pki.leaf()]))
         }
     }
 
-    @Test("수명이 1시간보다 짧은 leaf(동작 X3 ⑤)")
+    @Test("Leaf with a lifetime shorter than 1 hour (behavior X3 ⑤)")
     func shortLifetime() throws {
         let start = TestPKI.now - 60
         #expect(throws: CertificateVerificationError.lifetimeTooShort) {
@@ -192,7 +192,7 @@ struct VerifiedCertificateTests {
         _ = try pki.verify(pemChain([pki.leaf(from: start, to: start + 3600), pki.intermediate.certificate]))
     }
 
-    @Test("description과 dump에 키와 이름이 없다(동작 K1)")
+    @Test("description and dump omit the key and name (behavior K1)")
     func redaction() throws {
         let verified = try pki.verify(pemChain([pki.leaf(), pki.intermediate.certificate]))
         var dumped = ""
@@ -205,7 +205,7 @@ struct VerifiedCertificateTests {
         }
     }
 
-    @Test("인증서의 문자열 표현과 덤프에서 tailnet 도메인을 가린다(동작 K2)")
+    @Test("Redacts the tailnet domain in the certificate's string representation and dump (behavior K2)")
     func tailnetCertificateRedactsDomain() throws {
         let verified = try pki.verify(pemChain([pki.leaf(), pki.intermediate.certificate]))
         let certificate = TailnetCertificate(verified)
@@ -218,7 +218,7 @@ struct VerifiedCertificateTests {
         #expect(!dumped.contains(TestPKI.domainName))
     }
 
-    @Test("상태의 문자열 표현과 덤프에서 tailnet 도메인을 가린다(동작 K2). 속성으로는 그대로 읽는다")
+    @Test("Redacts the tailnet domain in the status string representation and dump (behavior K2). The property returns it unchanged")
     func certificateStatusRedactsDomain() {
         let status = CertificateStatus(
             domain: TestPKI.domainName, notAfter: TestPKI.leafEnd, lastFailure: .domainNotAllowed, nextAttempt: TestPKI.now

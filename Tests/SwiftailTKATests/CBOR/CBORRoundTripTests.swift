@@ -2,25 +2,25 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 정준 쓰기의 성질: 쓰고 읽으면 같은 값이고, 정준이 아니게 쓴 것을 읽어 다시 쓰면 정준 바이트가 나온다
-/// (해시는 다시 인코딩한 바이트로 계산한다. 노트 3.1, 계약 동작 E5).
-@Suite("CBOR 왕복")
+/// Canonical encoding properties: writing and reading preserves the value, and reading and rewriting a noncanonical encoding yields canonical bytes
+/// (hashes use re-encoded bytes, note §3.1 and contract behavior E5).
+@Suite("CBOR round trips")
 struct CBORRoundTripTests {
     private static let valueCount = 500
 
-    @Test("임의의 값을 쓰고 읽으면 같고, 다시 쓰면 바이트가 같다")
+    @Test("Writing and reading arbitrary values preserves them, and rewriting preserves the bytes")
     func canonicalRoundTrip() throws {
         var random = CBORTesting.Random(state: 1)
         for index in 0..<Self.valueCount {
             let value = Generator.value(depth: 0, using: &random)
             let bytes = try #require(CBORTesting.canonical(value))
             let decoded = try CBOR.decode(bytes)
-            #expect(decoded == value, "값 \(index)")
-            #expect(CBORTesting.canonical(decoded) == bytes, "값 \(index)")
+            #expect(decoded == value, "Value \(index)")
+            #expect(CBORTesting.canonical(decoded) == bytes, "Value \(index)")
         }
     }
 
-    @Test("비최단 머리와 섞인 키 순서로 쓴 것은 같은 값으로 읽고 정준 바이트로 다시 쓴다")
+    @Test("Non-shortest headers and shuffled keys decode to the same values and rewrite to canonical bytes")
     func nonCanonicalInput() throws {
         var random = CBORTesting.Random(state: 2)
         for index in 0..<Self.valueCount {
@@ -28,11 +28,11 @@ struct CBORRoundTripTests {
             let canonical = try #require(CBORTesting.canonical(value))
             let loose = Generator.looseEncoding(of: value, using: &random)
             let decoded = try CBOR.decode(loose)
-            #expect(CBORTesting.canonical(decoded) == canonical, "값 \(index)")
+            #expect(CBORTesting.canonical(decoded) == canonical, "Value \(index)")
         }
     }
 
-    /// 쓸 수 있는 값(uint·bstr·tstr·null·배열·맵)의 작은 생성기. 맵의 키는 정준 바이트가 서로 다르다.
+    /// A small generator for writable values (uint, bstr, tstr, null, arrays, and maps). Map keys have distinct canonical bytes.
     private enum Generator {
         static let boundaries: [UInt64] = [0, 1, 23, 24, 255, 256, 65_535, 65_536, 0xffff_ffff, 1 << 32, 1 << 63, .max]
 
@@ -55,7 +55,7 @@ struct CBORRoundTripTests {
                 let count = Int.random(in: 0...5, using: &random)
                 return .array((0..<count).map { _ in value(depth: depth + 1, using: &random) })
             default:
-                // 정준 순서로 쥐어야 쓰고 읽은 값과 같다.
+                // Retain canonical order to match the round-tripped value.
                 var pairs: [(key: [UInt8], pair: CBORPair)] = []
                 for _ in 0..<Int.random(in: 0...5, using: &random) {
                     let key = value(depth: depth + 1, using: &random)
@@ -72,7 +72,7 @@ struct CBORRoundTripTests {
             return (0..<count).map { _ in UInt8.random(in: 0...255, using: &random) }
         }
 
-        /// 정준이 아니어도 잘 짜인 인코딩: 머리의 인자 폭을 필요보다 넓게 고르고 맵의 쌍을 섞는다.
+        /// A noncanonical but well-formed encoding: use header arguments wider than necessary and shuffle map pairs.
         static func looseEncoding(of value: CBORValue, using random: inout CBORTesting.Random) -> [UInt8] {
             switch value {
             case .unsigned(let number):
@@ -92,7 +92,7 @@ struct CBORRoundTripTests {
             case .null:
                 return [0xf6]
             case .negative, .simple, .simpleOrFloat:
-                Issue.record("생성기가 쓸 수 없는 값을 만들었다")
+                Issue.record("The generator produced an unwritable value")
                 return []
             }
         }

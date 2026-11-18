@@ -4,7 +4,7 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("독립 ACME 응답·사슬 경계")
+@Suite("Independent ACME response and chain boundaries")
 struct CertificateBoundaryScenarios {
     enum ProblemCase: String, Sendable, CaseIterable {
         case nonJSON, noType, blank, privateURI, longType, unicodeType, fakeBadNonce, serverError, subproblems, redirect
@@ -75,14 +75,14 @@ struct CertificateBoundaryScenarios {
             config.directoryOrderURL = FakeACMEServer.base + "/new%2forder?literal=a%2Bb&other=%26"
             succeeds = true
         case .differentHost:
-            // 디렉터리와 출처가 다른 URL로는 요청하지 않는다(계약 X1. 처음에는 받았으나 검토 뒤 닫았다).
+            // Sends no requests to URLs with an origin different from the directory (contract X1. Initially accepted, then disallowed after review).
             config.directoryOrderURL = "https://other-acme.invalid/new-order"
         }
         let scenario = CertificateScenario(config)
         let result = try await scenario.run()
         let records = await scenario.server.records
         if succeeds {
-            guard case .issued = result else { Issue.record("유효한 nonce를 다시 얻어야 하는 발급이 실패했다"); return }
+            guard case .issued = result else { Issue.record("Issuance that needed to obtain another valid nonce failed"); return }
             if kind == .missingNonce || kind == .invalidNonce {
                 #expect(records.filter { $0.endpoint == .nonce }.count > 3)
             }
@@ -105,7 +105,7 @@ struct CertificateBoundaryScenarios {
         let scenario = CertificateScenario(config)
         let result = try await scenario.run()
         if kind == .tooLarge { expectFailure(result, .unexpectedResponse); return }
-        guard case let .issued(pem, _) = result else { Issue.record("사슬 바이트를 받기 전에 발급이 실패했다"); return }
+        guard case let .issued(pem, _) = result else { Issue.record("Issuance failed before receiving the chain bytes"); return }
         let domain = try #require(CertificateDomain(FakeACMEServer.domain))
         let root = await scenario.server.rootCertificate
         do {
@@ -120,13 +120,13 @@ struct CertificateBoundaryScenarios {
             if kind == .includeRoot { #expect(verified.receivedChain.contains(root)) }
         } catch {
             #expect(kind != .none && kind != .includeRoot)
-            // CertificateVerificationError의 모든 경우가 관리자의 invalidCertificate 경계에 해당한다.
+            // Every CertificateVerificationError case maps to the manager's invalidCertificate boundary.
             switch (kind, error) {
             case (.wrongKey, .keyMismatch), (.wrongName, .untrusted), (.expired, .untrusted), (.unknownRoot, .untrusted),
                  (.privateKey, .malformedChain), (.garbageAfter, .malformedChain), (.garbageBetween, .malformedChain),
                  (.malformed, .unparsableCertificate), (.malformed, .malformedChain), (.sixCertificates, .malformedChain):
                 break
-            default: Issue.record("나쁜 사슬이 예상한 검증 경계에서 거절되지 않았다")
+            default: Issue.record("The invalid chain was not rejected at the expected verification boundary")
             }
         }
     }
@@ -137,7 +137,7 @@ struct CertificateBoundaryScenarios {
         config.chainFault = .includeRoot
         let scenario = CertificateScenario(config)
         let result = try await scenario.run()
-        guard case let .issued(pem, _) = result else { Issue.record("발급이 실패했다"); return }
+        guard case let .issued(pem, _) = result else { Issue.record("Issuance failed"); return }
         let root = await scenario.server.rootCertificate
         let domain = try #require(CertificateDomain(FakeACMEServer.domain))
         let verified = try VerifiedCertificate(

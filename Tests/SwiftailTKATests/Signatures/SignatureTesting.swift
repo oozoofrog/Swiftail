@@ -5,8 +5,8 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// `Fixtures/tka-fixtures.json`(Go `tka`를 실행한 판정, `Tools/interop/README.md`의 `tkafixtures` 절) 가운데 서명 단위(TL-4)가
-/// 견주는 배열. 자료의 키는 공개된 시험 전용 값이다.
+/// The arrays compared by the signature unit (TL-4) from `Fixtures/tka-fixtures.json` (outcomes from running Go `tka`, `tkafixtures` section of
+/// `Tools/interop/README.md`). Fixture keys are public test-only values.
 struct SignatureFixtureFile: Decodable {
     struct Key: Decodable {
         let seed: String
@@ -26,7 +26,7 @@ struct SignatureFixtureFile: Decodable {
         let state: State
     }
 
-    /// `NodeKeyAuthorizedWithDetails`의 판정과 내력.
+    /// `NodeKeyAuthorizedWithDetails` outcome and history.
     struct Verdict: Decodable, Equatable {
         struct Rotation: Decodable, Equatable {
             let prevNodeKeys: [String]
@@ -112,7 +112,7 @@ struct SignatureFixtureFile: Decodable {
         return try JSONDecoder().decode(SignatureFixtureFile.self, from: Data(contentsOf: url))
     }
 
-    /// 이름의 신뢰 상태. 판정에 쓰는 것은 키 목록이다(`authorize`는 상태만 받는다).
+    /// Trust state for the name. The outcome uses the key list (`authorize` takes only state).
     func state(named name: String) throws -> AuthorityState {
         let state = try #require(authorities.first { $0.name == name }, "\(name)").state
         return AuthorityState(
@@ -124,7 +124,7 @@ struct SignatureFixtureFile: Decodable {
         )
     }
 
-    /// `swiftail-fixtures/tka/<역할>/<번호>`의 Ed25519 개인 키.
+    /// The Ed25519 private key for `swiftail-fixtures/tka/<role>/<number>`.
     func signingKey(seed: String) throws -> Curve25519.Signing.PrivateKey {
         let key = try #require(keys.first { $0.seed == seed }, "\(seed)")
         return try Curve25519.Signing.PrivateKey(rawRepresentation: ModelTesting.bytes(key.private))
@@ -140,7 +140,7 @@ enum SignatureTesting {
         NodePublicKey(Curve25519.KeyAgreement.PrivateKey().publicKey)
     }
 
-    /// `authorize`의 판정을 자료의 모양으로 바꾼다.
+    /// Converts the `authorize` outcome to the fixture format.
     static func verdict(_ state: AuthorityState, _ nodeKey: NodePublicKey, _ signature: [UInt8]) -> SignatureFixtureFile.Verdict {
         switch Result(catching: { () throws(TKAError) in try state.authorize(nodeKey, keySignature: signature) }) {
         case .failure:
@@ -159,15 +159,15 @@ enum SignatureTesting {
         }
     }
 
-    /// 중첩의 단수(서명 하나는 1).
+    /// Nesting level count (one signature is 1).
     static func depth(_ signature: NodeKeySignature) -> Int { 1 + (signature.nested.map(depth) ?? 0) }
 
-    /// 바깥부터 모든 단의 `Pubkey`.
+    /// `Pubkey` at every level, starting at the outside.
     static func publicKeys(_ signature: NodeKeySignature) -> [[UInt8]] {
         [signature.publicKey] + (signature.nested.map(publicKeys) ?? [])
     }
 
-    // MARK: 서명 만들기(시험 자리에서 만든 키)
+    // MARK: Creating signatures with keys generated on demand
 
     static func direct(
         _ nodeKey: NodePublicKey, by lockKey: Curve25519.Signing.PrivateKey, wrapping: Curve25519.Signing.PublicKey?
@@ -189,7 +189,7 @@ enum SignatureTesting {
         return signature
     }
 
-    /// `lockKeys`를 이 순서로 믿는 상태.
+    /// A state that trusts `lockKeys` in this order.
     static func state(trusting lockKeys: [Curve25519.Signing.PrivateKey]) -> AuthorityState {
         AuthorityState(
             keys: lockKeys.map { TrustedKey(kind: 1, votes: 1, publicKey: Array($0.publicKey.rawRepresentation)) },
@@ -197,7 +197,7 @@ enum SignatureTesting {
         )
     }
 
-    /// 패딩 없는 표준 base64.
+    /// Standard base64 without padding.
     static func rawBase64(_ bytes: [UInt8]) -> String {
         Data(bytes).base64EncodedString().replacingOccurrences(of: "=", with: "")
     }

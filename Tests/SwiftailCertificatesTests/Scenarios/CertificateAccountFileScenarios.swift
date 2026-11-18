@@ -4,7 +4,7 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("독립 ACME 계정 파일 경계")
+@Suite("Independent ACME account file boundary")
 struct CertificateAccountFileScenarios {
     enum AccountFileCase: String, Sendable, CaseIterable { case rsa, corrupted }
 
@@ -20,7 +20,7 @@ struct CertificateAccountFileScenarios {
         switch kind {
         case .corrupted: bytes = Data("not a private key".utf8)
         case .rsa:
-            // 키는 영구 키체인에 저장하지 않고 시험 중에만 만든다.
+            // Creates keys only during tests and does not store them in the persistent keychain.
             let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeySizeInBits: 2048]
             let key = try #require(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
             let representation = try #require(SecKeyCopyExternalRepresentation(key, nil)) as Data
@@ -30,9 +30,9 @@ struct CertificateAccountFileScenarios {
         try bytes.write(to: accountFile)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: accountFile.path)
         let store = CertificateStore(stateDirectory: directory)
-        do { _ = try store.accountKey(); Issue.record("읽지 못하는 계정 키가 통과했다") }
+        do { _ = try store.accountKey(); Issue.record("An unreadable account key passed") }
         catch { #expect(error == .accountKeyUnreadable) }
-        // 비교 결과만 진단에 넘긴다. 실패해도 파일의 키 바이트가 로그에 나오지 않는다.
+        // Pass only the comparison result to diagnostics. Even on failure, the file's key bytes stay out of the log.
         let reread = Array(try Data(contentsOf: accountFile))
         let original = Array(bytes)
         var difference = reread.count ^ original.count

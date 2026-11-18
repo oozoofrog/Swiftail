@@ -6,24 +6,24 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// Go `tka`의 판정(`Fixtures/tka-fixtures.json`)과 Swift 구현의 판정을 모든 줄에서 견준다(계약 7절 "Go 기준값 대조", TL-5).
+/// Compares Go `tka` outcomes (`Fixtures/tka-fixtures.json`) with Swift implementation outcomes for every row (contract §7, Go reference comparison, TL-5).
 ///
-/// 구현 세션들의 단위 시험과 따로, 계약과 자료와 도구만 보고 썼다. 판정은 뒤 단위(TL-6·TL-7)가 쓸 `package` 표면으로 얻는다:
+/// Written separately from the implementation sessions' unit tests using only the contract, fixtures, and tool. Gets results from the `package` surface used by later units (TL-6 and TL-7):
 /// `AUM(decoding:)`·`validate()`·`serialized()`·`hash`·`signatureHash`, `NodeKeySignature(decoding:)`, `AUMHash(text:)`,
 /// `Authority(bootstrappingWith:)`·`inform`·`syncOffer`·`missingAUMs`·`isValidDisablement`, `AuthorityState.authorize`·`admitted`,
-/// `WrappedAuthKey(parsing:)`·`keySignature(for:)`, `NodeKeySignature.resigned`. 시험 자료를 만드는 데만 내부 선언(멤버별 생성자,
-/// `binaryForm`)을 쓴다.
+/// `WrappedAuthKey(parsing:)`, `keySignature(for:)`, and `NodeKeySignature.resigned`. Internal declarations (memberwise initializers and
+/// `binaryForm`) are used only to prepare test data.
 ///
-/// 줄마다 "같아야 하는 것"은 각 시험의 주석에 적었다. 계약이 정한 의도된 차이는 건너뛰지 않고 그 줄에서 Swift가 내야 하는 답을
-/// 확인한 뒤 번호(동작·결정)로 센다. 배열마다 한 번 "줄, 같음, 의도된 차이(번호별), 어긋남"을 출력한다.
-@Suite("Go 대조: tka-fixtures.json의 모든 줄")
+/// Each test's comments state what must match per row. For intended differences defined by the contract, verify the expected Swift answer for the row
+/// and count it by ID (behavior or decision) without skipping it. Print rows, matches, intended differences by ID, and mismatches once per array.
+@Suite("Go comparison: every row in tka-fixtures.json")
 struct GoComparisonTests {
     typealias G = GoComparison
 
-    // MARK: 목록
+    // MARK: Inventory
 
-    /// 자료의 최상위 배열이 이 시험이 아는 것뿐이고, 줄 수의 합이 `caseCount`다(빠진 배열이 없다).
-    @Test("배열 목록과 caseCount")
+    /// The fixture contains only top-level arrays known to this test, and their row counts sum to `caseCount`. No array is missing from the comparison.
+    @Test("Array inventory and caseCount")
     func inventory() throws {
         let data = try Data(contentsOf: try GoFixture.url)
         let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -33,32 +33,32 @@ struct GoComparisonTests {
         let rows = fixture.countedRows
         #expect(rows.values.reduce(0, +) == fixture.caseCount)
         print(
-            "Go 대조 caseCount \(fixture.caseCount) = "
+            "Go comparison caseCount \(fixture.caseCount) ="
                 + rows.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: " + ")
         )
     }
 
-    // MARK: 입력(keys, authorities)
+    // MARK: Inputs (keys, authorities)
 
-    /// 시험 키: 씨앗 = SHA-256(seed 문자열), Ed25519 공개 키, node 키(X25519) 공개 키와 `nodekey:` 텍스트가 Go와 같다.
-    /// `tlpub:` 텍스트는 이 타깃에 표면이 없다(SwiftailControl, TL-6·TL-7).
-    @Test("keys: 시험 키의 유도")
+    /// Test keys: seed = SHA-256(seed string), Ed25519 public key, node key (X25519) public key, and `nodekey:` text match Go.
+    /// This target has no surface for `tlpub:` text (SwiftailControl, TL-6 and TL-7).
+    @Test("keys: Test key derivation")
     func keys() throws {
         let fixture = try GoFixture.load()
         for key in fixture.keys {
             let seed = Array(SHA256.hash(data: Array(key.seed.utf8)))
             var problems: [String] = []
-            if G.hex(seed) != key.private { problems.append("씨앗") }
+            if G.hex(seed) != key.private { problems.append("seed") }
             switch key.role {
             case "node":
                 let publicKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: seed).publicKey
-                if G.hex(publicKey.rawRepresentation) != key.public { problems.append("공개 키") }
-                if NodePublicKey(publicKey).description != key.text { problems.append("텍스트") }
+                if G.hex(publicKey.rawRepresentation) != key.public { problems.append("public key") }
+                if NodePublicKey(publicKey).description != key.text { problems.append("text") }
             case "disablement":
                 break
             default:
                 let publicKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey
-                if G.hex(publicKey.rawRepresentation) != key.public { problems.append("공개 키") }
+                if G.hex(publicKey.rawRepresentation) != key.public { problems.append("public key") }
             }
             ComparisonTally.record(
                 problems.isEmpty ? .same : .mismatch(problems.joined(separator: ", ")), section: "keys",
@@ -67,15 +67,15 @@ struct GoComparisonTests {
         }
     }
 
-    /// 판정에 쓰는 신뢰 상태: 부트스트랩 + 한 묶음의 들이기 뒤 머리와 상태가 Go와 같다.
-    @Test("authorities: 판정에 쓰는 신뢰 상태")
+    /// Trust state used for decisions: after bootstrap and one admission group, the head and state match Go.
+    @Test("authorities: Trust state used for decisions")
     func authorities() throws {
         let fixture = try GoFixture.load()
         for entry in fixture.authorities {
             let authority = Result { () throws(TKAError) in try G.authority(entry.aums.map { hex throws(TKAError) in try G.aum(hex) }) }
             let comparison: Comparison
             switch authority {
-            case .failure(let error): comparison = .mismatch("Swift가 거절한다: \(error)")
+            case .failure(let error): comparison = .mismatch("Swift rejects: \(error)")
             case .success(let authority):
                 comparison = G.difference(authority, entry.state).map { .mismatch($0) } ?? .same
             }
@@ -85,18 +85,18 @@ struct GoComparisonTests {
 
     // MARK: text
 
-    /// 줄바꿈이 섞인 `AUMHash` 텍스트. Go `UnmarshalText`는 길이를 줄바꿈을 지우기 전의 글자 수로 보고(`DecodedLen(52) = 32`),
-    /// `base32.Decode`는 `\r`·`\n`을 지운 뒤 남은 50·51·48자를 읽어 31·30바이트만 채우고 나머지를 0으로 둔다(`tka/aum.go:33-41`).
-    /// 계약은 이것을 정하지 않았다(5절 TL-2 "Go와 맞출지 대조 뒤에 정한다"). 어긋남으로 남긴다.
+    /// `AUMHash` text with line breaks. Go `UnmarshalText` measures the length before removing line breaks (`DecodedLen(52) = 32`),
+    /// then `base32.Decode` removes `\r` and `\n` and reads the remaining 50, 51, or 48 characters, filling only 31 or 30 bytes and leaving the rest zero (`tka/aum.go:33-41`).
+    /// The contract left this undecided (§5 TL-2, decide whether to match Go after comparison). Leave it as a mismatch.
     static let aumHashLineBreakRows: Set<String> = [
         "aum-hash-50-chars-crlf", "aum-hash-50-chars-lf-lf", "aum-hash-50-chars-cr-cr", "aum-hash-crlf-inside",
         "aum-hash-leading-lf-lf", "aum-hash-48-chars-4-lf", "aum-hash-51-chars-lf", "aum-hash-52-chars-lf",
         "aum-hash-52-chars-lf-inside",
     ]
 
-    /// `AUMHash`의 쓰기·읽기(판정과, 받으면 같은 32바이트), node 키의 텍스트와 이진 형식(`np` ‖ 32바이트).
-    /// `nlpub:`·`tlpub:`·`nlpriv:`는 SwiftailControl의 표면이다(TL-6. `nlpriv`의 뒤 32바이트 검사는 의도된 차이 R1).
-    @Test("text: AUMHash 텍스트와 키 텍스트")
+    /// `AUMHash` writing and reading (outcome and the same 32 bytes if accepted), and node key text and binary format (`np` ‖ 32 bytes).
+    /// `nlpub:`, `tlpub:`, and `nlpriv:` are SwiftailControl surfaces (TL-6. Checking the last 32 bytes of `nlpriv` is intended difference R1).
+    @Test("text: AUMHash text and key text")
     func text() throws {
         let fixture = try GoFixture.load()
         for item in fixture.text where !Self.aumHashLineBreakRows.contains(item.name) {
@@ -104,14 +104,14 @@ struct GoComparisonTests {
         }
     }
 
-    /// Go는 길이를 줄바꿈을 지우기 전의 글자 수로 재고 지운 뒤에 읽어, 31·30바이트만 채운 **원래와 다른 해시**로 받는다
-    /// (`tka/aum.go:33-41`). Swiftail은 52자 알파벳만 받는다(계약 동작 D10).
-    @Test("text: 줄바꿈이 섞인 AUMHash 텍스트는 거절한다(Go는 잘린 해시로 받는다. 의도된 차이 D10)")
+    /// Go measures the character count before removing line breaks and decodes after removing them, filling only 31 or 30 bytes and accepting a **hash different from the original**
+    /// (`tka/aum.go:33-41`). Swiftail accepts only 52 characters from the alphabet (contract behavior D10).
+    @Test("text: Rejects AUMHash text with line breaks (Go accepts a truncated hash, intended difference D10)")
     func aumHashLineBreaks() throws {
         let fixture = try GoFixture.load()
         for item in fixture.text where Self.aumHashLineBreakRows.contains(item.name) {
             let comparison: Comparison = AUMHash(text: item.input) != nil
-                ? .mismatch("Swift가 줄바꿈이 섞인 텍스트를 받았다")
+                ? .mismatch("Swift accepted text with line breaks")
                 : item.ok ? .intended("D10") : .same
             ComparisonTally.record(comparison, section: "text", row: item.name, total: fixture.text.count)
         }
@@ -127,22 +127,22 @@ struct GoComparisonTests {
             let hash = AUMHash(text: item.input)
             return check(
                 (hash != nil) == item.ok && (hash == nil || hash.map { G.hex($0.bytes) } == item.output),
-                "Go \(item.ok ? "받음 \(item.output ?? "")" : "거절"), Swift \(hash.map { "받음 \(G.hex($0.bytes))" } ?? "거절")"
+                "Go \(item.ok ? "accepted \(item.output ?? "")" : "rejected"), Swift \(hash.map { "accepted \(G.hex($0.bytes))" } ?? "rejected")"
             )
         case "nodePublic.encode":
-            return check(NodePublicKey(rawValue: G.bytes(item.input))?.description == item.output, "텍스트")
+            return check(NodePublicKey(rawValue: G.bytes(item.input))?.description == item.output, "text")
         case "nodePublic.binary":
-            return check(NodePublicKey(rawValue: G.bytes(item.input)).map { G.hex($0.binaryForm) } == item.output, "이진 형식")
+            return check(NodePublicKey(rawValue: G.bytes(item.input)).map { G.hex($0.binaryForm) } == item.output, "binary format")
         default:
-            return .noSurface("SwiftailControl의 NL 키(TL-6)")
+            return .noSurface("SwiftailControl NL key (TL-6)")
         }
     }
 
     // MARK: encodings
 
-    /// Key·State 하나의 정준 바이트. Swift는 둘을 따로 쓰는 표면이 없으므로 AUM에 넣어 쓴다(AddKey `a3 0101 02f6 03 <Key>`,
-    /// Checkpoint `a3 0105 02f6 05 <State>`). Go의 nil 배열(`f6`)은 Swiftail이 빈 배열(`80`)로 쓴다(의도된 차이 E6).
-    @Test("encodings: Key·State의 정준 바이트")
+    /// Canonical bytes for a Key or State. Swift has no standalone encoding surface, so encode them within AUMs (AddKey `a3 0101 02f6 03 <Key>`,
+    /// Checkpoint `a3 0105 02f6 05 <State>`). Swiftail writes Go nil arrays (`f6`) as empty arrays (`80`, intended difference E6).
+    @Test("encodings: Canonical Key and State bytes")
     func encodings() throws {
         let fixture = try GoFixture.load()
         for item in fixture.encodings {
@@ -163,7 +163,7 @@ struct GoComparisonTests {
                 let written = G.hex(AUM(messageKind: 5, prevAUMHash: nil, state: state).serialized())
                 let goBytes = "a3010502f605" + item.encoded
                 if value.disablementValues == nil || value.keys == nil {
-                    // E6: State 바이트에서 Go의 nil 배열 자리만 `80`으로 바꾼 것이어야 한다(배열이 null인 State는 원소가 없다).
+                    // E6: State bytes must differ only in replacing Go nil arrays with `80` (a State with a null array has no elements).
                     var expected = item.encoded
                     if value.disablementValues == nil { expected = expected.replacingOccurrences(of: "02f6", with: "0280") }
                     if value.keys == nil { expected = expected.replacingOccurrences(of: "03f6", with: "0380") }
@@ -185,14 +185,14 @@ struct GoComparisonTests {
 
     // MARK: cbor
 
-    /// 체크포인트 `State`의 null이 아닌 `LastAUMHash`: Go는 읽은 뒤 정적 검사에서, Swiftail은 디코딩에서 거절한다(동작 D8).
+    /// Non-null `LastAUMHash` in checkpoint `State`: Go rejects it during static validation after reading it, and Swiftail rejects it during decoding (behavior D8).
     static let decodingD8: Set<String> = ["accept/checkpoint-last-aum-hash-2-bytes", "value/checkpoint-last-aum-hash"]
 
-    /// AUM: Swift의 "디코딩 + 정적 검사 통과"가 Go의 `accepted`와 같다. 디코딩 단계의 판정도 같다(D8만 예외).
-    /// Go가 받아들인 것은 다시 쓴 바이트·`Hash`·`SigHash`가 같다(동작 E5). 둘 다 거절한 것의 다시 쓴 바이트는 견주지 않고, 다르면
-    /// E6으로 센다(계약 7절: 정적 검사를 통과하지 못하는 입력은 판정만). NKS: 디코딩 판정이 같고, 읽힌 것은 다시 쓴 바이트와
-    /// `SigHash`가 같다.
-    @Test("cbor: 디코딩·정적 검사·정준 바이트·해시")
+    /// AUM: Swift decoding and passing static validation matches Go `accepted`. Decode outcomes also match, except for D8.
+    /// Inputs accepted by Go have identical rewritten bytes, `Hash`, and `SigHash` (behavior E5). Rewritten bytes for inputs both reject are not compared. Differences
+    /// count as E6 (contract §7: only compare outcomes for inputs failing static validation). NKS: Decode outcomes match, and decoded inputs have the same rewritten bytes
+    /// and `SigHash`.
+    @Test("cbor: Decoding, static validation, canonical bytes, and hashes")
     func cbor() throws {
         let fixture = try GoFixture.load()
         for item in fixture.cbor {
@@ -206,11 +206,11 @@ struct GoComparisonTests {
             let decoded = Result { () throws(TKAError) in try NodeKeySignature(decoding: input) }
             switch decoded {
             case .failure(let error):
-                return item.decoded ? .mismatch("Go는 읽는다, Swift \(error)") : .same
+                return item.decoded ? .mismatch("Go decodes, Swift \(error)") : .same
             case .success(let signature):
-                guard item.decoded else { return .mismatch("Go는 거절한다(\(item.error ?? "")), Swift는 읽는다") }
+                guard item.decoded else { return .mismatch("Go rejects (\(item.error ?? "")), Swift decodes") }
                 let same = G.hex(signature.serialized()) == item.reencoded && G.hex(signature.signatureHash) == item.sigHash
-                return same ? .same : .mismatch("다시 쓴 바이트 \(G.hex(signature.serialized()))")
+                return same ? .same : .mismatch("Rewritten bytes \(G.hex(signature.serialized()))")
             }
         }
         let decoded = Result { () throws(TKAError) in try AUM(decoding: input) }
@@ -220,17 +220,17 @@ struct GoComparisonTests {
             if decodingD8.contains(item.name), error == .invalidStructure, item.staticValid == false, !item.accepted {
                 return .intended("D8")
             }
-            return .mismatch("Go는 읽는다, Swift \(error)")
+            return .mismatch("Go decodes, Swift \(error)")
         case .success(let aum):
-            guard item.decoded else { return .mismatch("Go는 거절한다(\(item.error ?? "")), Swift는 읽는다") }
+            guard item.decoded else { return .mismatch("Go rejects (\(item.error ?? "")), Swift decodes") }
             let valid = (try? aum.validate()) != nil
             guard valid == item.accepted else {
-                return .mismatch("정적 검사: Go \(item.accepted), Swift \(valid)")
+                return .mismatch("Static validation: Go \(item.accepted), Swift \(valid)")
             }
             let reencoded = G.hex(aum.serialized())
             if item.accepted {
                 let same = reencoded == item.reencoded && G.hex(aum.hash.bytes) == item.hash && G.hex(aum.signatureHash) == item.sigHash
-                return same ? .same : .mismatch("다시 쓴 바이트 \(reencoded)")
+                return same ? .same : .mismatch("Rewritten bytes \(reencoded)")
             }
             return reencoded == item.reencoded ? .same : .intended("E6")
         }
@@ -238,8 +238,8 @@ struct GoComparisonTests {
 
     // MARK: chains
 
-    /// 사슬마다(한 줄): 부트스트랩 판정과 처음 상태, 단계마다 들이기의 판정과 그 뒤의 머리·상태(키·Votes·Meta·끄기 값·StateID).
-    @Test("chains: 부트스트랩과 단계마다의 판정·머리·상태")
+    /// Per chain (one row): bootstrap outcome and initial state, then admission outcome, head, and state at each step (keys, Votes, Meta, disablement values, and StateID).
+    @Test("chains: Bootstrap and per-step outcomes, head, and state")
     func chains() throws {
         let fixture = try GoFixture.load()
         for chain in fixture.chains {
@@ -250,15 +250,15 @@ struct GoComparisonTests {
     static func compareChain(_ chain: GoFixture.Chain) -> Comparison {
         let bootstrapped = Result { () throws(TKAError) in try Authority(bootstrappingWith: G.aum(chain.bootstrap)) }
         guard case .success(var authority) = bootstrapped else {
-            return chain.bootstrapOK ? .mismatch("부트스트랩: Swift \(bootstrapped)") : .same
+            return chain.bootstrapOK ? .mismatch("Bootstrap: Swift \(bootstrapped)") : .same
         }
-        guard chain.bootstrapOK else { return .mismatch("부트스트랩: Go는 거절한다(\(chain.bootstrapError ?? ""))") }
+        guard chain.bootstrapOK else { return .mismatch("Bootstrap: Go rejects (\(chain.bootstrapError ?? ""))") }
         var problems: [String] = []
-        if let initial = chain.initial, let difference = G.difference(authority, initial) { problems.append("처음 \(difference)") }
+        if let initial = chain.initial, let difference = G.difference(authority, initial) { problems.append("Initial \(difference)") }
         for step in chain.steps {
             let result = Result { () throws(TKAError) in try authority.inform(step.aums.map { hex throws(TKAError) in try G.aum(hex) }) }
             let ok = if case .success = result { true } else { false }
-            if ok != step.ok { problems.append("\(step.name) 판정: Go \(step.ok) \(step.error ?? ""), Swift \(result)") }
+            if ok != step.ok { problems.append("\(step.name) outcome: Go \(step.ok) \(step.error ?? ""), Swift \(result)") }
             if let difference = G.difference(authority, step.after) { problems.append("\(step.name) \(difference)") }
         }
         return problems.isEmpty ? .same : .mismatch(problems.joined(separator: "; "))
@@ -269,9 +269,9 @@ struct GoComparisonTests {
     static let syncCaseNames: [String] =
         (try? GoFixture.load()).map { $0.sync.flatMap { group in group.cases.map { "\(group.name)/\($0.name)" } } } ?? []
 
-    /// 사례마다: 양쪽의 제안(머리, 조상 목록, 그 base32 텍스트), 상대 제안에 대한 `MissingAUMs`(성공 여부, 수, 해시 목록과 그 SHA-256),
-    /// 상대의 목록을 들인 판정과 그 뒤의 머리. Go처럼 양쪽의 목록을 먼저 다 계산한 뒤 들인다(동작 Y4·Y5).
-    @Test("sync: 제안·MissingAUMs·들인 뒤의 머리", .timeLimit(.minutes(10)), arguments: syncCaseNames)
+    /// For each case: both offers (head, ancestor list, and base32 text), `MissingAUMs` for the peer's offer (success, count, list of hashes, and their SHA-256),
+    /// the outcome of admitting the peer's list, and the resulting head. As in Go, calculate both lists before admitting either (behaviors Y4 and Y5).
+    @Test("sync: Offers, MissingAUMs, and head after admission", .timeLimit(.minutes(10)), arguments: syncCaseNames)
     func sync(_ name: String) throws {
         let fixture = try GoFixture.load()
         let group = try #require(fixture.sync.first { name.hasPrefix("\($0.name)/") })
@@ -286,7 +286,7 @@ struct GoComparisonTests {
             let same =
                 G.hex(offer.head.bytes) == expected.head && offer.ancestors.map { G.hex($0.bytes) } == expected.ancestors
                 && offer.head.text == expected.headText && offer.ancestors.map(\.text) == expected.ancestorsText
-            if !same { problems.append("\(label) 제안") }
+            if !same { problems.append("\(label) offer") }
         }
         let localSends = Result { () throws(TKAError) in try local.missingAUMs(for: remoteOffer) }
         let remoteSends = Result { () throws(TKAError) in try remote.missingAUMs(for: localOffer) }
@@ -296,7 +296,7 @@ struct GoComparisonTests {
                 if expected.ok { problems.append("\(label) MissingAUMs: Swift \(error)") }
             case .success(let aums):
                 guard expected.ok else {
-                    problems.append("\(label) MissingAUMs: Go는 실패한다(\(expected.error ?? ""))")
+                    problems.append("\(label) MissingAUMs: Go fails (\(expected.error ?? ""))")
                     continue
                 }
                 let hashes = aums.map(\.hash.bytes)
@@ -304,7 +304,7 @@ struct GoComparisonTests {
                 if hashes.count != expected.count || digest != expected.digest
                     || (expected.hashes.map { $0 != hashes.map(G.hex) } ?? false)
                 {
-                    problems.append("\(label) MissingAUMs: Go \(expected.count)개, Swift \(hashes.count)개")
+                    problems.append("\(label) MissingAUMs: Go count \(expected.count), Swift count \(hashes.count)")
                 }
             }
         }
@@ -313,8 +313,8 @@ struct GoComparisonTests {
             if case .success(let aums) = sends, !aums.isEmpty {
                 do { try authority.inform(aums) } catch { ok = false }
             }
-            if ok != expected.informOK { problems.append("\(label) 들이기: Go \(expected.informOK) \(expected.informError ?? "")") }
-            if G.hex(authority.head.bytes) != expected.headAfter { problems.append("\(label) 들인 뒤 머리") }
+            if ok != expected.informOK { problems.append("\(label) admission: Go \(expected.informOK) \(expected.informError ?? "")") }
+            if G.hex(authority.head.bytes) != expected.headAfter { problems.append("\(label) head after admission") }
         }
         receive(remoteSends, into: &local, expected: syncCase.local, "local")
         receive(localSends, into: &remote, expected: syncCase.remote, "remote")
@@ -326,9 +326,9 @@ struct GoComparisonTests {
 
     // MARK: signatures
 
-    /// 줄마다: `authorize`의 판정(인가 여부)과, 통과한 rotation이면 내력(`PrevNodeKeys` 순서, 처음 서명의 종류·`WrappingPubkey`).
-    /// Go가 NKS를 읽었으면 Swift도 읽고 `SigHash`가 같다.
-    @Test("signatures: NKS 판정과 내력")
+    /// Per row: `authorize` outcome and, for accepted rotations, history (`PrevNodeKeys` order, first signature kind, and `WrappingPubkey`).
+    /// If Go decodes an NKS, Swift also decodes it and matches `SigHash`.
+    @Test("signatures: NKS outcomes and history")
     func signatures() throws {
         let fixture = try GoFixture.load()
         var states: [String: AuthorityState] = [:]
@@ -339,11 +339,11 @@ struct GoComparisonTests {
             let nks = G.bytes(item.nks)
             if let goHash = item.sigHash {
                 let swiftHash = (try? NodeKeySignature(decoding: nks)).map { G.hex($0.signatureHash) }
-                if swiftHash != goHash { problems.append("SigHash: Swift \(swiftHash ?? "읽지 못함")") }
+                if swiftHash != goHash { problems.append("SigHash: Swift \(swiftHash ?? "decode failed")") }
             }
             let verdict = G.verdict(authorized: item.authorized, error: item.error, rotation: item.rotation)
             if let difference = G.difference(state, nodeKey: try G.nodeKey(item.nodeKey), nks: nks, expected: verdict) {
-                problems.append("\(difference) (Go: \(item.error ?? "인가"))")
+                problems.append("\(difference) (Go: \(item.error ?? "authorized"))")
             }
             ComparisonTally.record(
                 problems.isEmpty ? .same : .mismatch(problems.joined(separator: "; ")), section: "signatures", row: item.name,
@@ -364,9 +364,9 @@ struct GoComparisonTests {
         zip(peers, state.admitted(peers)).filter(\.1).map { G.hex($0.0.nodeKey.rawValue) }
     }
 
-    /// 줄마다: `admitted`가 남긴 피어의 node 키와 순서가 Go `tkaFilterNetmapLocked`가 남긴 것과 같다. Go는 같은 입력을 `runs`번
-    /// 돌려 늘 같은 답을 냈다(도구가 확인한다).
-    @Test("peerSets: 남는 피어와 순서")
+    /// Per row: node keys and order of peers retained by `admitted` match Go `tkaFilterNetmapLocked`. Go ran the same input `runs` times
+    /// and always gave the same answer, as verified by the tool.
+    @Test("peerSets: Retained peers and order")
     func peerSets() throws {
         let fixture = try GoFixture.load()
         for item in fixture.peerSets {
@@ -376,16 +376,16 @@ struct GoComparisonTests {
         }
     }
 
-    /// Go의 답이 실행마다 갈리는 입력(같은 node 키가 서로 다른 회전 키의 묶음에 든다: `rotationTracker.obsoleteKeys`가 맵을
-    /// 돈다). Swift의 답은 그 가운데 하나여야 한다(계약 5절 TL-4: Swiftail은 묶음이 처음 나온 피어의 순서로 본다).
-    @Test("unorderedPeerSets: Go의 여러 답 가운데 하나")
+    /// Inputs where Go's answer varies by run (the same node key is in groups for different rotation keys, and `rotationTracker.obsoleteKeys` iterates a map).
+    /// Swift must give one of those answers (contract §5 TL-4: Swiftail processes groups in order of first appearance among peers).
+    @Test("unorderedPeerSets: One of several Go outcomes")
     func unorderedPeerSets() throws {
         let fixture = try GoFixture.load()
         for item in fixture.unorderedPeerSets {
             let kept = Self.kept(try G.authority(named: item.authority, in: fixture).state, try Self.peers(item.peers))
             let comparison: Comparison =
                 item.outcomes.contains(kept) ? (item.outcomes.count > 1 ? .oneOfGoOutcomes : .same) : .mismatch("Swift \(kept)")
-            print("Go 대조 unorderedPeerSets/\(item.name): Go \(item.runs)번 실행의 서로 다른 답 \(item.outcomes.count)개, Swift \(kept)")
+            print("Go comparison unorderedPeerSets/\(item.name): \(item.outcomes.count) distinct outcomes from \(item.runs) Go runs, Swift \(kept)")
             ComparisonTally.record(comparison, section: "unorderedPeerSets", row: item.name, total: fixture.unorderedPeerSets.count)
         }
     }
@@ -394,8 +394,8 @@ struct GoComparisonTests {
 
     static let disablementNames: [String] = (try? GoFixture.load())?.disablement.map(\.name) ?? []
 
-    /// 줄마다: 그 상태의 끄기 값에 Go `DisablementKDF` 값이 드는지가 `ValidDisablement`와 같고, Swift `isValidDisablement`가 같은 판정이다.
-    @Test("disablement: 끄기 비밀의 판정", .timeLimit(.minutes(5)), arguments: disablementNames)
+    /// Per row: membership of the Go `DisablementKDF` value among that state's disablement values matches `ValidDisablement`, and Swift `isValidDisablement` agrees.
+    @Test("disablement: Disablement secret outcomes", .timeLimit(.minutes(5)), arguments: disablementNames)
     func disablement(_ name: String) throws {
         let fixture = try GoFixture.load()
         let item = try #require(fixture.disablement.first { $0.name == name })
@@ -410,25 +410,25 @@ struct GoComparisonTests {
 
     // MARK: authKeys
 
-    /// Go가 받아들이지만 Swiftail이 해석에서 거절하는 감싼 인증 키(동작 R3, 결정 L12·L13). 서버로 아무것도 보내지 않고
-    /// `invalidConfiguration`으로 끝난다(가용성만 닫힌 쪽이다. 서명 권한 상태의 판정과는 무관하다).
+    /// Wrapped auth keys Go accepts and Swiftail rejects during decoding (behavior R3, decisions L12 and L13). Swiftail sends nothing to the server and
+    /// ends with `invalidConfiguration` (fails closed only for availability. This is unrelated to signing authority state decisions).
     static let authKeyRejections: [String: String] = [
-        // L12: Go는 원문 전체(개인 키 포함)를 인증 키로 돌려준다.
+        // L12: Go returns the entire original string, including the private key, as an auth key.
         "missing-dash": "L12", "padded-base64": "L12", "url-alphabet-key": "L12", "extra-dash": "L12",
         "credential-not-cbor": "L12", "empty-parts": "L12",
-        // L12(TL-4가 더함): Go `RawStdEncoding`은 남는 비트를 보지 않고 줄바꿈을 건너뛰어 서명까지 만든다. Swiftail은 정규형만 받는다.
+        // L12 (added by TL-4): Go `RawStdEncoding` ignores trailing bits, skips line breaks, and produces a signature. Swiftail accepts only canonical forms.
         "credential-trailing-bits": "L12", "key-trailing-bits": "L12", "credential-lf": "L12", "key-crlf": "L12",
         "key-trailing-lf": "L12",
-        // L13: B가 64바이트가 아니면 Go는 서명에서 panic한다. 뒤 32바이트가 다르면 검증되지 않는 서명을 만든다.
+        // L13: If B is not 64 bytes, Go panics during signing. If the last 32 bytes differ, it produces an unverifiable signature.
         "key-63-bytes": "L13", "key-65-bytes": "L13", "key-32-bytes": "L13", "key-public-half-mismatch": "L13",
-        // R3: credential이 아닌 A, A의 WrappingPubkey와 다른 키.
+        // R3: A that is not a credential, and a key different from A's WrappingPubkey.
         "credential-direct-kind": "R3", "credential-wrapping-other-key": "R3",
     ]
 
-    /// 줄마다: `--TL`이 없으면 평범한 인증 키(nil). Go가 감싼 키로 읽고 서명한 것은 Swift도 읽어 같은 앞부분·같은 credential이고,
-    /// 같은 node 키에 만든 서명이 같은 `SigHash`이며 Go가 그 상태로 낸 판정과 같은 판정이다(CryptoKit 서명은 바이트가 매번 다르다).
-    /// 의도된 차이의 줄은 Swift가 `invalidAuthKey`를 던지는지 본다.
-    @Test("authKeys: 감싼 인증 키의 해석과 서명")
+    /// Per row: input without `--TL` is a plain auth key (nil). When Go decodes a wrapped key and signs, Swift decodes the same prefix and credential,
+    /// produces the same `SigHash` for a signature on the same node key, and matches Go's verification outcome in that state (CryptoKit signature bytes vary).
+    /// Check that Swift throws `invalidAuthKey` on rows with intended differences.
+    @Test("authKeys: Wrapped auth key decoding and signing")
     func authKeys() throws {
         let fixture = try GoFixture.load()
         for item in fixture.authKeys {
@@ -439,16 +439,16 @@ struct GoComparisonTests {
     static func compareAuthKey(_ item: GoFixture.AuthKey, _ fixture: GoFixture) throws -> Comparison {
         let parsed = Result { () throws(TKAError) in try WrappedAuthKey(parsing: item.input) }
         if let code = authKeyRejections[item.name] {
-            guard case .failure(.invalidAuthKey) = parsed else { return .mismatch("Swift가 거절하지 않는다: \(parsed)") }
+            guard case .failure(.invalidAuthKey) = parsed else { return .mismatch("Swift did not reject: \(parsed)") }
             return .intended(code)
         }
         if !item.isWrapped {
-            guard case .success(nil) = parsed, item.authKey == item.input else { return .mismatch("Go는 평범한 인증 키, Swift \(parsed)") }
+            guard case .success(nil) = parsed, item.authKey == item.input else { return .mismatch("Go treats it as a plain auth key, Swift \(parsed)") }
             return .same
         }
-        guard case .success(let key?) = parsed else { return .mismatch("Go는 감싼 키로 읽는다, Swift \(parsed)") }
+        guard case .success(let key?) = parsed else { return .mismatch("Go decodes a wrapped key, Swift \(parsed)") }
         guard item.sign == "ok", key.controlValue == item.authKey, G.hex(key.credential.serialized()) == item.credential else {
-            return .mismatch("앞부분·credential")
+            return .mismatch("prefix and credential")
         }
         let nodeKey = try G.nodeKey(try #require(item.nodeKey))
         let made = try key.keySignature(for: nodeKey)
@@ -463,22 +463,22 @@ struct GoComparisonTests {
 
     // MARK: resign
 
-    /// 줄마다: Go가 만들면 Swift도 만들고, 옛 것을 그대로 썼는지·깊이·안쪽 node 키들이 같으며, 줄이지 않은 것은 `SigHash`까지 같다.
-    /// Swift가 만든 서명은 Go가 자기 결과로 낸 판정과 같은 판정이다. Go가 실패하면 Swift도 던진다.
+    /// Per row: when Go produces a signature, Swift does too, with identical original reuse, depth, and inner node keys, and identical `SigHash` when the chain was not shortened.
+    /// The Swift signature has the same outcome Go gave its own result. Swift throws if Go fails.
     ///
-    /// 의도된 차이(계약 5절 "독립 검토에서 고치는 것: 제어의 절차 (TL-11b)" 항목 1): Swiftail은 이미 자기 NL 키로 서명한 사슬만
-    /// 다시 서명한다. Go는 옛 서명을 검사하지 않고 만든다. 그 줄에서 Swift는 `invalidSignature`(rotation 겹이 NL 키로 검증되지
-    /// 않음)나 `untrustedSigner`(맨 안쪽 `WrappingPubkey`가 NL 키가 아님)를 던지고, Go가 만든 것은 Go의 판정에서도 인가되지 않는다
-    /// (다른 노드가 보는 판정은 같다: 둘 다 잠긴다).
+    /// Intended difference (contract §5, Fixes from independent review: Control flow (TL-11b), item 1): Swiftail resigns only chains already signed using its own NL key.
+    /// Go produces signatures without checking the old signature. For those rows, Swift throws `invalidSignature` (a rotation layer fails verification with the NL key)
+    /// or `untrustedSigner` (the innermost `WrappingPubkey` differs from the NL key). Go's output fails authorization even under Go's verification
+    /// (other nodes see the same outcome: both are locked out).
     static let resignIntended: [String: TKAError] = [
-        // 옛 direct의 회전 키는 nl/0이고 재서명하는 노드의 NL 키는 nl/1이다.
+        // The old direct rotation key is nl/0, and the resigning node's NL key is nl/1.
         "direct-wrapping-is-other-key": .untrustedSigner,
         "direct-no-wrapping": .untrustedSigner,
-        // rotation은 감싼 키(서명된 인증 키)가 서명했다.
+        // The wrapped key (signed auth key) signed the rotation.
         "credential-chain": .invalidSignature,
     ]
 
-    @Test("resign: 재서명")
+    @Test("resign: Resigning")
     func resign() throws {
         let fixture = try GoFixture.load()
         for item in fixture.resign {
@@ -502,7 +502,7 @@ struct GoComparisonTests {
         let old = G.bytes(item.oldNKS)
         let made = Result { () throws(TKAError) in try NodeKeySignature.resigned(old, for: nodeKey, with: lockKey) }
         guard item.ok else {
-            if case .success = made { return .mismatch("Go는 실패한다(\(item.error ?? "")), Swift는 만든다") }
+            if case .success = made { return .mismatch("Go fails (\(item.error ?? "")), Swift produces a signature") }
             return .same
         }
         if let refusal = resignIntended[item.name] {
@@ -516,7 +516,7 @@ struct GoComparisonTests {
         var cursor: NodeKeySignature? = result
         while let s = cursor { depth += 1; cursor = s.nested }
         guard (bytes == old) == item.sameAsOld, depth == item.depth, publicKeys(result) == publicKeys(goResult) else {
-            return .mismatch("모양(그대로·깊이·node 키)")
+            return .mismatch("shape (unchanged, depth, and node keys)")
         }
         if (goResult.nested == (try? NodeKeySignature(decoding: old)) || item.sameAsOld), G.hex(result.signatureHash) != item.sigHash {
             return .mismatch("SigHash")
@@ -532,18 +532,18 @@ struct GoComparisonTests {
 
     static let limitCaseNames: [String] = (try? GoFixture.load())?.limits.flatMap { g in g.cases.map { "\(g.name)/\($0.name)" } } ?? []
 
-    /// 의도된 차이 F7: Go는 빠른 길이 아닌 들이기마다 뿌리부터 2,000회 한도로 다시 계산하고(`computeChainCandidates`,
-    /// `tka/tka.go:84-118`, 커밋한 뒤라 실패한 AUM이 저장소에 남는다), Swiftail은 뿌리부터의 재계산에 한도를 두지 않는다.
-    /// 그 단계에서 Swift는 받아들이고, 머리는 갈래 규칙(가중치·종류가 같아 해시가 작은 쪽)으로 고른 pool 번호의 것이다.
+    /// Intended difference F7: for every admission outside the fast path Go recomputes from the root with a limit of 2,000 iterations (`computeChainCandidates`,
+    /// `tka/tka.go:84-118`, after committing, so the failed AUM remains in storage). Swiftail puts no limit on recomputation from the root.
+    /// At that step, Swift accepts, and the head is the pool entry selected by the fork rule (same weight and kind, so the lower hash wins).
     static let limitF7Heads: [String: [[Int]]] = [
         "long-chain/fork-at-depth-2000": [[2000, 2004]],
         "long-chain/held-and-new-at-depth-2000": [[2000], [2000]],
         "long-chain/fork-parent-path-2000": [[2001, 2005]],
     ]
 
-    /// 사례마다: 같은 바탕(pool의 앞 `baseCount`개)의 머리가 같고, 단계마다 들이기의 판정과 머리가 Go와 같다. F7의 단계는 위 표대로.
-    /// 부모 상태 찾기의 한도(체크포인트부터 2,000개는 되고 2,001개는 실패)는 Go와 Swift 모두 그대로다.
-    @Test("limits: 뿌리에서 2,000개가 넘는 사슬", .timeLimit(.minutes(10)), arguments: limitCaseNames)
+    /// Per case: the same base (first `baseCount` pool entries) yields the same head, and each step matches Go's admission outcome and head. The F7 step follows the table above.
+    /// Go and Swift retain the parent state lookup limit (2,000 from the checkpoint succeeds and 2,001 fails).
+    @Test("limits: Chains of more than 2,000 from the root", .timeLimit(.minutes(10)), arguments: limitCaseNames)
     func limits(_ name: String) throws {
         let fixture = try GoFixture.load()
         let group = try #require(fixture.limits.first { name.hasPrefix("\($0.name)/") })
@@ -553,7 +553,7 @@ struct GoComparisonTests {
         var authority = try G.authority(Array(pool[..<limitCase.baseCount]))
         var problems: [String] = []
         var intended = false
-        if G.hex(authority.head.bytes) != limitCase.baseHead { problems.append("바탕의 머리") }
+        if G.hex(authority.head.bytes) != limitCase.baseHead { problems.append("base head") }
         for (index, step) in limitCase.steps.enumerated() {
             let result = Result { () throws(TKAError) in try authority.inform(step.aums.map { pool[$0] }) }
             let ok = if case .success = result { true } else { false }
@@ -562,8 +562,8 @@ struct GoComparisonTests {
                 if ok, authority.head == expected { intended = true } else { problems.append("\(step.name) F7: Swift \(result)") }
                 continue
             }
-            if ok != step.ok { problems.append("\(step.name) 판정: Go \(step.ok) \(step.error ?? ""), Swift \(result)") }
-            if G.hex(authority.head.bytes) != step.head { problems.append("\(step.name) 머리") }
+            if ok != step.ok { problems.append("\(step.name) outcome: Go \(step.ok) \(step.error ?? ""), Swift \(result)") }
+            if G.hex(authority.head.bytes) != step.head { problems.append("\(step.name) head") }
         }
         let comparison: Comparison = !problems.isEmpty ? .mismatch(problems.joined(separator: "; ")) : intended ? .intended("F7") : .same
         ComparisonTally.record(comparison, section: "limits", row: name, total: Self.limitCaseNames.count)
@@ -571,18 +571,18 @@ struct GoComparisonTests {
 
     // MARK: padded
 
-    /// Swiftail의 바이트 한도(동작 M)를 넘긴 입력. Go에는 이 한도가 없어 모두 받아들인다. 그 줄에서 Swift가 낼 답:
-    /// - NKS 8,193바이트: 인가하지 않는다(그 피어는 빠진다). 닫힌 쪽(가용성).
-    /// - 재서명의 옛 서명 8,193바이트: `limitExceeded`(서명 없이 등록, 동작 R5 ①). 닫힌 쪽(가용성).
-    /// - AUM 524,289바이트: `limitExceeded`(결정 L16). **Go가 받는 것을 거절해 사슬을 따라가지 못하는 쪽**이다. 다만 채운 것은 모르는
-    ///   필드라 해시가 같고, 제어 서버는 AUM을 덧붙이지 않고 아예 주지 않을 수도 있으므로 새로 생기는 공격 능력은 아니다.
-    /// - credential 8,193바이트의 인증 키: `invalidAuthKey`(동작 R3·M). 닫힌 쪽(가용성).
+    /// Inputs exceeding Swiftail's byte limits (behavior M). Go has no such limit and accepts them all. The expected Swift outcomes are:
+    /// - NKS of 8,193 bytes: denies authorization (drops the peer). Fails closed (availability).
+    /// - Old signature of 8,193 bytes for resigning: `limitExceeded` (registers without a signature, behavior R5 ①). Fails closed (availability).
+    /// - AUM of 524,289 bytes: `limitExceeded` (decision L16). **Rejecting inputs Go accepts may prevent following the chain.** The padding is an unknown
+    ///   field, so the hash is the same. The control server could withhold the AUM entirely without appending anything, so this creates no new attack capability.
+    /// - Auth key with a credential of 8,193 bytes: `invalidAuthKey` (behaviors R3 and M). Fails closed (availability).
     static let paddedIntended: [String: String] = [
         "nks-direct-8193-bytes": "M", "resign-old-8193-bytes": "M·R5", "aum-noop-524289-bytes": "M·L16",
         "auth-key-credential-8193-bytes": "M",
     ]
 
-    @Test("padded: Swiftail 바이트 한도의 경계")
+    @Test("padded: Swiftail byte limit boundaries")
     func padded() throws {
         let fixture = try GoFixture.load()
         for item in fixture.padded {
@@ -592,7 +592,7 @@ struct GoComparisonTests {
 
     static func comparePadded(_ item: GoFixture.Padded, _ fixture: GoFixture) throws -> Comparison {
         let input = G.padded(item)
-        guard input.count == item.length else { return .mismatch("만든 입력의 길이 \(input.count)") }
+        guard input.count == item.length else { return .mismatch("Generated input length \(input.count)") }
         let intended = paddedIntended[item.name]
         let authority = try G.authority(named: try #require(item.authority), in: fixture)
         switch item.kind {
@@ -626,16 +626,16 @@ struct GoComparisonTests {
             guard let intended, item.ok, case .failure(.invalidAuthKey) = parsed else { return .mismatch("Swift \(parsed)") }
             return .intended(intended)
         default:
-            return .mismatch("모르는 종류 \(item.kind)")
+            return .mismatch("Unknown kind \(item.kind)")
         }
     }
 
     // MARK: openedStates
 
-    /// `Key25519`가 아닌 키가 든 상태(Go는 `tka.Open`이 다시 검증하지 않아 열린다. Swiftail은 열 때 다시 검증해 이런 상태를 쥐지
-    /// 않는다, 결정 L14). 판정 함수 `AuthorityState.authorize`만 견준다: 체크포인트를 디코딩만 한 상태로 부르면 Go `GetKey`처럼
-    /// 그런 키를 앞에서 만나면 인가하지 않고, 뒤에 있으면 인가한다.
-    @Test("openedStates: Key25519가 아닌 키가 든 상태에서 GetKey")
+    /// State containing a key other than `Key25519` (Go opens it because `tka.Open` skips reverification. Swiftail revalidates on open and never holds such
+    /// a state, decision L14). Compare only the decision function `AuthorityState.authorize`. In a state created by decoding the checkpoint alone, it behaves like Go `GetKey`:
+    /// it denies authorization when the other key appears first, and authorizes when it appears later.
+    @Test("openedStates: GetKey in state containing a key other than Key25519")
     func openedStates() throws {
         let fixture = try GoFixture.load()
         for item in fixture.openedStates {
@@ -643,21 +643,21 @@ struct GoComparisonTests {
             let verdict = G.verdict(authorized: item.authorized, error: item.error, rotation: item.rotation)
             var comparison: Comparison = item.openOK
                 ? G.difference(state, nodeKey: try G.nodeKey(item.nodeKey), nks: G.bytes(item.nks), expected: verdict).map { .mismatch($0) } ?? .same
-                : .mismatch("Go가 열지 못했다(\(item.openError ?? ""))")
-            // Swiftail은 이 체크포인트로 상태를 만들지 않는다(정적 검사에서 떨어진다).
-            if (try? Authority(bootstrappingWith: G.aum(item.checkpoint))) != nil { comparison = .mismatch("Swift가 부트스트랩한다") }
+                : .mismatch("Go could not open it (\(item.openError ?? ""))")
+            // Swiftail does not build state from this checkpoint because it fails static validation.
+            if (try? Authority(bootstrappingWith: G.aum(item.checkpoint))) != nil { comparison = .mismatch("Swift bootstraps") }
             ComparisonTally.record(comparison, section: "openedStates", row: item.name, total: fixture.openedStates.count)
         }
     }
 
-    // MARK: 새로 뽑아 견주기
+    // MARK: Regeneration and comparison
 
-    /// `sh Scripts/build-interop-tools.sh tkafixtures`가 출력한 도구 경로. 도구는 `Tools/interop`에서, README의 환경
-    /// (`GOCACHE`·`GOMODCACHE`·`GOFLAGS`)으로 돌아야 한다(피어 집합의 overlay 빌드가 그 go.mod를 쓴다).
+    /// Tool path printed by `sh Scripts/build-interop-tools.sh tkafixtures`. Run the tool in `Tools/interop` with the environment from the README
+    /// (`GOCACHE`, `GOMODCACHE`, and `GOFLAGS`). The peer set overlay build uses that go.mod.
     static let fixtureTool = ProcessInfo.processInfo.environment["SWIFTAIL_TKAFIXTURES"].flatMap { $0.isEmpty ? nil : $0 }
 
     @Test(
-        "Go 도구로 새로 뽑은 자료가 저장된 자료와 바이트까지 같다(SWIFTAIL_TKAFIXTURES가 없으면 건너뜀)",
+        "Fixtures regenerated with the Go tool match the saved fixtures byte for byte (skipped if SWIFTAIL_TKAFIXTURES is missing)",
         .enabled(if: fixtureTool != nil), .timeLimit(.minutes(5))
     )
     func freshGoFixtures() throws {
@@ -672,6 +672,6 @@ struct GoComparisonTests {
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)
         let stored = try Data(contentsOf: try GoFixture.url)
-        #expect(fresh == stored, "저장된 tka-fixtures.json이 도구 출력과 다르다(\(fresh.count)바이트, 저장 \(stored.count)바이트)")
+        #expect(fresh == stored, "Stored tka-fixtures.json differs from the tool output (\(fresh.count) bytes, stored \(stored.count) bytes)")
     }
 }

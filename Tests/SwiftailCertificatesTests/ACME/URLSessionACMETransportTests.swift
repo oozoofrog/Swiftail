@@ -1,5 +1,5 @@
-// `URLSessionACMETransport`를 루프백의 작은 평문 HTTP/1.1 서버(시험 안의 `NWListener`)로 본다: 요청 머리와 본문의
-// 전달, 응답 머리, 본문 한도, 요청 기한, 리다이렉트를 따르지 않음, 평문 길의 제한. 실제 인터넷에는 나가지 않는다.
+// Tests `URLSessionACMETransport` against a small plaintext HTTP/1.1 loopback server (an in-test `NWListener`) for delivery of request headers
+// and bodies, response headers, body limits, request deadlines, redirects left unfollowed, and restrictions on the plaintext path. The tests never reach the real internet.
 
 import Foundation
 import Network
@@ -8,9 +8,9 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("URLSession ACME 전송", .serialized)
+@Suite("URLSession ACME transport", .serialized)
 struct URLSessionACMETransportTests {
-    @Test("POST의 머리와 본문을 보내고 응답의 상태·머리·본문을 돌려준다")
+    @Test("Sends POST headers and body and returns the response status, headers, and body")
     func postRoundTrip() async throws {
         let server = try await LoopbackHTTPServer { _ in
             LoopbackHTTPServer.response(status: "201 Created", headers: [
@@ -38,7 +38,7 @@ struct URLSessionACMETransportTests {
         #expect(request.body == body)
     }
 
-    @Test("HEAD와 GET은 본문 없이 보낸다")
+    @Test("Sends HEAD and GET without a body")
     func headAndGet() async throws {
         let server = try await LoopbackHTTPServer { _ in
             LoopbackHTTPServer.response(status: "200 OK", headers: [("Replay-Nonce", "abc")], body: [])
@@ -53,7 +53,7 @@ struct URLSessionACMETransportTests {
         #expect(server.requests.allSatisfy { $0.body.isEmpty && $0.header("content-type") == nil })
     }
 
-    @Test("본문 한도까지는 받고 넘으면 responseTooLarge")
+    @Test("Accepts a body up to the limit and returns responseTooLarge above it")
     func bodyLimit() async throws {
         let size = Mutex(1000)
         let server = try await LoopbackHTTPServer { _ in
@@ -70,7 +70,7 @@ struct URLSessionACMETransportTests {
         }
     }
 
-    @Test("기본 본문 한도는 256KiB다")
+    @Test("The default body limit is 256KiB")
     func defaultBodyLimit() async throws {
         let server = try await LoopbackHTTPServer { _ in
             LoopbackHTTPServer.response(status: "200 OK", headers: [], body: [UInt8](repeating: 0x41, count: 256 * 1024 + 1))
@@ -82,7 +82,7 @@ struct URLSessionACMETransportTests {
         }
     }
 
-    @Test("요청 하나의 기한을 넘으면 timedOut")
+    @Test("Returns timedOut if a request exceeds its deadline")
     func requestTimeout() async throws {
         let server = try await LoopbackHTTPServer { _ in nil }
         defer { server.close() }
@@ -94,7 +94,7 @@ struct URLSessionACMETransportTests {
         #expect(ContinuousClock.now - started < .seconds(10))
     }
 
-    @Test("리다이렉트를 따르지 않고 3xx를 그대로 돌려준다")
+    @Test("Returns the original 3xx without following redirects")
     func noRedirect() async throws {
         let target = Mutex("")
         let server = try await LoopbackHTTPServer { _ in
@@ -108,7 +108,7 @@ struct URLSessionACMETransportTests {
         #expect(server.requests.map(\.line) == ["POST /new-order HTTP/1.1"])
     }
 
-    @Test("평문 http는 시험용 길의 루프백 호스트에만 보낸다")
+    @Test("Sends plaintext http only to loopback hosts on the test path")
     func plaintextOnlyOnLoopback() async throws {
         let production = URLSessionACMETransport()
         await #expect(throws: ACMETransportError.invalidURL) {
@@ -122,7 +122,7 @@ struct URLSessionACMETransportTests {
         }
     }
 
-    @Test("듣는 쪽이 없으면 network")
+    @Test("Returns network when nothing is listening")
     func connectionRefused() async throws {
         let port = try await LoopbackHTTPServer.unusedPort()
         let transport = URLSessionACMETransport(trustAnchors: nil, allowsLoopbackHTTP: true)
@@ -132,7 +132,7 @@ struct URLSessionACMETransportTests {
     }
 }
 
-/// 루프백의 최소 HTTP/1.1 서버. 연결마다 요청 하나를 읽고 `respond`가 준 바이트를 보낸 뒤 닫는다. nil이면 답하지 않는다.
+/// A minimal loopback HTTP/1.1 server. Reads one request per connection, sends the bytes from `respond`, and closes. A nil value sends no response.
 private final class LoopbackHTTPServer: Sendable {
     struct Request: Sendable {
         var line: String
@@ -190,7 +190,7 @@ private final class LoopbackHTTPServer: Sendable {
         return Array((head + "\r\n").utf8) + body
     }
 
-    /// 잠깐 열었다 닫은 포트. 그 뒤로 듣는 쪽이 없다.
+    /// A port that was opened briefly and then closed, with nothing listening afterward.
     static func unusedPort() async throws -> UInt16 {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
@@ -218,7 +218,7 @@ private final class LoopbackHTTPServer: Sendable {
         }
     }
 
-    /// 머리 끝(`\r\n\r\n`)과 `Content-Length`만큼의 본문을 읽는다.
+    /// Reads through the end of the headers (`\r\n\r\n`) and reads the body for `Content-Length` bytes.
     private static func read(_ connection: NWConnection, buffer: [UInt8], then handle: @escaping @Sendable (Request) -> Void) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
             var buffer = buffer

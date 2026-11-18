@@ -4,10 +4,10 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// NKS 검증(계약 동작 S, 단위 시험 10, 노트 4.4). 기준은 Go `NodeKeyAuthorizedWithDetails`를 실행한 `signatures` 51개다.
-@Suite("NKS 검증")
+/// NKS verification (contract behavior S, unit test 10, note §4.4). Uses 51 `signatures` cases from running Go `NodeKeyAuthorizedWithDetails` as the reference.
+@Suite("NKS verification")
 struct AuthorizationTests {
-    @Test("signatures 51개: 판정과 내력(PrevNodeKeys 순서, 처음 서명의 종류·WrappingPubkey)이 Go와 같다")
+    @Test("All 51 signatures match Go's outcomes and history (PrevNodeKeys order and first signature's kind and WrappingPubkey)")
     func goVerdicts() throws {
         let fixtures = try SignatureFixtureFile.load()
         #expect(fixtures.signatures.count == 53)
@@ -18,8 +18,8 @@ struct AuthorizationTests {
         }
     }
 
-    /// 계약 7절 시험 10의 항목이 자료에 있고 Go의 판정이 계약과 같다(위 시험이 Swift의 판정을 견준다).
-    @Test("시험 10의 항목이 기준 자료에 있다")
+    /// The fixtures cover contract §7 test 10 and Go's outcomes match the contract. The test above compares Swift's outcomes.
+    @Test("The reference fixtures cover test 10")
     func contractItemsPresent() throws {
         let verdicts = Dictionary(uniqueKeysWithValues: try SignatureFixtureFile.load().signatures.map { ($0.name, $0.authorized) })
         let expected: [String: Bool] = [
@@ -28,7 +28,7 @@ struct AuthorizationTests {
             "rotation-no-rotation-key": false, "direct-other-node-key": false, "direct-untrusted-key": false,
             "direct-key-after-removal": false, "direct-with-nested": false, "direct-31-byte-trusted-key": false,
             "rotation-inner-pubkey-not-np": false, "credential-with-garbage-pubkey": false,
-            // R에 위수 2인 점을 더한 서명: ZIP-215로 보는 direct는 통과, 표준 규칙으로 보는 rotation 바깥은 거절(노트 8.1).
+            // A signature with an order-2 point added to R: direct passes ZIP-215, and the outer rotation fails standard verification (note §8.1).
             "direct-zip215-only-signature": true, "rotation-outer-zip215-only-signature": false,
         ]
         for (name, authorized) in expected {
@@ -36,13 +36,13 @@ struct AuthorizationTests {
         }
     }
 
-    @Test("direct 위에 rotation 15겹은 통과하고 내력은 새것부터, 16겹은 CBOR 중첩 한도로 거절")
+    @Test("15 rotations over direct pass, with newest-first history. 16 layers of rotation fail the CBOR nesting limit")
     func depthLimit() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let rotationKey = Curve25519.Signing.PrivateKey()
         let state = SignatureTesting.state(trusting: [lockKey])
         let nodeKeys = (0...16).map { _ in SignatureTesting.randomNodeKey() }
-        // 중간의 rotation은 `WrappingPubkey`를 생략한다: 회전 키는 맨 안쪽 direct의 것이다.
+        // Intermediate rotations omit `WrappingPubkey`. The rotation key comes from the innermost direct signature.
         var signature = try SignatureTesting.direct(nodeKeys[0], by: lockKey, wrapping: rotationKey.publicKey)
         for level in 1...15 {
             signature = try SignatureTesting.rotation(nodeKeys[level], nesting: signature, by: rotationKey)
@@ -55,7 +55,7 @@ struct AuthorizationTests {
         #expect(throws: TKAError.unauthorized) { try state.authorize(nodeKeys[16], keySignature: deeper.serialized()) }
     }
 
-    @Test("rotation의 바깥 서명은 회전 키가 해야 한다: 신뢰 키나 다른 키의 서명은 거절")
+    @Test("The rotation key must sign the outer rotation. A trusted key or another key is rejected")
     func rotationSigner() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let rotationKey = Curve25519.Signing.PrivateKey()
@@ -68,9 +68,9 @@ struct AuthorizationTests {
         }
     }
 
-    /// Go는 안쪽(credential 아님)의 `Pubkey`를 `NodePublic.UnmarshalBinary`로 읽어 빈 값도 거절한다(`tka/sig.go:283-290`).
-    /// 내력은 빈 `Pubkey`를 건너뛰므로 이 검사만이 잡는다. 자료에 없는 판정이다.
-    @Test("rotation 안쪽 direct의 Pubkey가 비었으면 거절")
+    /// Go decodes an inner non-credential `Pubkey` with `NodePublic.UnmarshalBinary` and rejects an empty value as well (`tka/sig.go:283-290`).
+    /// History skips empty `Pubkey`, so only this check catches it. The fixture omits this outcome.
+    @Test("Rejects an empty Pubkey in direct inside rotation")
     func emptyInnerPublicKey() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let rotationKey = Curve25519.Signing.PrivateKey()
@@ -85,9 +85,9 @@ struct AuthorizationTests {
         #expect(throws: TKAError.unauthorized) { try state.authorize(new, keySignature: empty.serialized()) }
     }
 
-    /// Go `State.GetKey`는 `Key.ID()`가 실패하는 키(`Key25519`가 아님)를 만나면 그 뒤를 보지 않는다(`tka/state.go:56-69`).
-    /// 정적 검사를 거친 상태에는 그런 키가 없어 자료에 없는 판정이다.
-    @Test("신뢰 키 찾기는 Key25519가 아닌 키에서 멈춘다")
+    /// Go `State.GetKey` stops at a key whose `Key.ID()` fails (a key other than `Key25519`, `tka/state.go:56-69`).
+    /// Static validation leaves no such key in state, so this outcome is absent from the fixture.
+    @Test("Trusted key lookup stops at a key other than Key25519")
     func keyLookupStopsAtUnknownKind() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let nodeKey = SignatureTesting.randomNodeKey()
@@ -100,7 +100,7 @@ struct AuthorizationTests {
         #expect(throws: TKAError.unauthorized) { try state.authorize(nodeKey, keySignature: signature) }
     }
 
-    @Test("NKS 하나는 8KiB까지(동작 M): 모르는 필드로 채운 8,192바이트는 통과, 8,193바이트는 거절")
+    @Test("An NKS can be up to 8KiB (behavior M): 8,192 bytes padded with an unknown field pass, and 8,193 bytes fail")
     func byteLimit() throws {
         let fixtures = try SignatureFixtureFile.load()
         let direct = try #require(fixtures.signatures.first { $0.name == "direct" })
@@ -108,7 +108,7 @@ struct AuthorizationTests {
         let nodeKey = try SignatureTesting.nodeKey(direct.nodeKey)
         let original = ModelTesting.bytes(direct.nks)
         #expect(original.first == 0xa5)
-        // a5 → a6, 끝에 {7: bstr}를 더한다. 모르는 필드는 다시 쓴 바이트(SigHash)에 들지 않는다.
+        // a5 → a6, then add {7: bstr} at the end. Rewritten bytes (SigHash) omit unknown fields.
         func padded(to total: Int) -> [UInt8] {
             let count = total - original.count - 4
             return [0xa6] + original.dropFirst() + [0x07, 0x59, UInt8(count >> 8), UInt8(count & 0xff)]
@@ -119,7 +119,7 @@ struct AuthorizationTests {
         #expect(throws: TKAError.unauthorized) { try state.authorize(nodeKey, keySignature: padded(to: 8_193)) }
     }
 
-    @Test("어떤 바이트로도 트랩하지 않는다: 자료의 모든 접두와 임의 바이트")
+    @Test("No bytes cause a trap, including every fixture prefix and arbitrary bytes")
     func untrustedInput() throws {
         let fixtures = try SignatureFixtureFile.load()
         let state = try fixtures.state(named: "nks-base")
@@ -137,7 +137,7 @@ struct AuthorizationTests {
         }
     }
 
-    @Test("text의 node 키 표기: nodekey: 텍스트와 NKS 안의 np 이진 형식")
+    @Test("Node key representations in text: nodekey: text and np binary inside NKS")
     func nodeKeyText() throws {
         let cases = try SignatureFixtureFile.load().text.filter { $0.kind.hasPrefix("nodePublic.") }
         #expect(cases.count == 2)

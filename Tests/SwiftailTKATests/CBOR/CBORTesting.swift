@@ -1,6 +1,6 @@
 @testable import SwiftailTKA
 
-/// CBOR 시험이 함께 쓰는 도구. 같은 시험 타깃의 다른 단위와 이름이 부딪치지 않게 한 이름 아래 둔다.
+/// Shared CBOR test helpers under one name to avoid collisions with other units in the test target.
 enum CBORTesting {
     static func bytes(hex: String) -> [UInt8]? {
         let digits = Array(hex.utf8)
@@ -17,8 +17,8 @@ enum CBORTesting {
         bytes.map { String($0 >> 4, radix: 16) + String($0 & 0xf, radix: 16) }.joined()
     }
 
-    /// `value`의 정준 인코딩을 `CBORWriter`로 쓴다. 맵의 쌍은 인코딩한 키 바이트의 사전순(CTAP2, 노트 3.1)이고
-    /// 같은 키끼리는 받은 순서를 지킨다. 쓰는 길이 없는 항목(음수, 단순값·실수)이 있으면 nil.
+    /// Writes the canonical encoding of `value` with `CBORWriter`. Map pairs use lexicographic order of encoded key bytes (CTAP2, note §3.1),
+    /// preserving received order for equal keys. Returns nil for unwritable items (negative integers, simple values, and floats).
     static func canonical(_ value: CBORValue) -> [UInt8]? {
         var writer = CBORWriter()
         guard write(value, into: &writer) else { return nil }
@@ -57,7 +57,7 @@ enum CBORTesting {
         return true
     }
 
-    /// 결정적 난수(SplitMix64). 실패한 시험을 같은 씨앗으로 다시 돌릴 수 있다.
+    /// Deterministic random numbers (SplitMix64). Rerun a failing test with the same seed.
     struct Random: RandomNumberGenerator {
         var state: UInt64
         mutating func next() -> UInt64 {

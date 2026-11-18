@@ -3,8 +3,8 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// `Fixtures/tka-fixtures.json`(Go `tka`를 실행한 판정, `Tools/interop/README.md`의 `tkafixtures` 절) 가운데 자료 형식에
-/// 해당하는 배열 셋(`text`의 `aumHash.*`, `encodings`, `cbor`). 정식 대조 시험(`GoComparisonTests.swift`)은 따로 쓴다.
+/// The three arrays for data formats (`aumHash.*` in `text`, `encodings`, and `cbor`) from `Fixtures/tka-fixtures.json` (outcomes from running Go `tka`,
+/// the `tkafixtures` section of `Tools/interop/README.md`). The formal comparison tests (`GoComparisonTests.swift`) are separate.
 struct ModelFixtureFile: Decodable {
     struct Text: Decodable {
         let name: String
@@ -77,9 +77,9 @@ struct ModelFixtureFile: Decodable {
     }
 }
 
-@Suite("Go 판정(tka-fixtures.json)과 같은 자료 형식")
+@Suite("Data formats match Go outcomes (tka-fixtures.json)")
 struct ModelFixtureTests {
-    @Test("AUMHash 텍스트: Go의 쓰기와 읽기")
+    @Test("AUMHash text: Go encoding and decoding")
     func aumHashText() throws {
         let cases = try ModelFixtureFile.load().text.filter { $0.kind.hasPrefix("aumHash.") }
         #expect(cases.count == 24)
@@ -88,7 +88,7 @@ struct ModelFixtureTests {
                 #expect(AUMHash(ModelTesting.bytes(item.input))?.text == item.output, "\(item.name)")
             } else {
                 let hash = AUMHash(text: item.input)
-                // 줄바꿈이 섞인 텍스트는 Go가 잘린 해시로 받고 Swiftail은 거절한다(계약 동작 D10).
+                // Go accepts text with line breaks as a truncated hash, and Swiftail rejects it (contract behavior D10).
                 if item.input.contains(where: \.isNewline) {
                     #expect(hash == nil, "\(item.name)")
                     continue
@@ -99,8 +99,8 @@ struct ModelFixtureTests {
         }
     }
 
-    /// `State`의 배열이 Go의 nil(null)인 값은 Swiftail이 빈 배열로 쥐므로 `80`으로 쓴다(동작 E6).
-    @Test("Key·State의 정준 바이트")
+    /// Swiftail stores a Go nil (null) array in `State` as an empty array and writes it as `80` (behavior E6).
+    @Test("Canonical Key and State bytes")
     func encodings() throws {
         let encodings = try ModelFixtureFile.load().encodings
         #expect(encodings.count == 13)
@@ -126,7 +126,7 @@ struct ModelFixtureTests {
         }
     }
 
-    @Test("CBOR 입력마다 Go와 같은 판정, 받아들인 것은 같은 바이트와 해시")
+    @Test("Each CBOR input matches Go's outcome, and accepted inputs match its bytes and hashes")
     func cborCases() throws {
         let cases = try ModelFixtureFile.load().cbor
         #expect(cases.count == 279)
@@ -141,7 +141,7 @@ struct ModelFixtureTests {
                 #expect(accepted == item.accepted, "\(item.name)")
                 guard let aum, item.decoded else { continue }
                 if item.accepted {
-                    // 받아들인 AUM은 바이트·해시·SigHash가 Go와 같아야 한다(동작 E5).
+                    // An accepted AUM must match Go's bytes, hash, and SigHash (behavior E5).
                     #expect(ModelTesting.hex(aum.serialized()) == item.reencoded, "\(item.name)")
                     #expect(ModelTesting.hex(aum.hash.bytes) == item.hash, "\(item.name)")
                     #expect(ModelTesting.hex(aum.signatureHash) == item.sigHash, "\(item.name)")
@@ -156,10 +156,10 @@ struct ModelFixtureTests {
                 #expect(ModelTesting.hex(signature.signatureHash) == item.sigHash, "\(item.name)")
             }
         }
-        // 디코딩 판정이 다른 것은 동작 D8(체크포인트 상태의 null이 아닌 `LastAUMHash`)뿐이다. 둘 다 결국 거절이다.
+        // Only behavior D8 differs in decoding (non-null `LastAUMHash` in checkpoint state). Both ultimately reject it.
         #expect(decodeDifferences == ["accept/checkpoint-last-aum-hash-2-bytes", "value/checkpoint-last-aum-hash"])
-        // 정적 검사를 통과하지 못한 AUM의 다시 쓴 바이트는 Go의 nil(null)과 빈 값의 차이만큼 다르다(동작 E6):
-        // 서명의 KeyID·Signature, `State`의 두 배열.
+        // Rewritten bytes for AUMs that fail static validation differ only in Go nil (null) versus empty values (behavior E6):
+        // signature KeyID and Signature, and the two arrays in `State`.
         #expect(
             bytesDifferences == [
                 "probe/signatures-null-element", "probe/signature-fields-null", "probe/checkpoint-state-arrays-null",

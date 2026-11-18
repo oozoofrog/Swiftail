@@ -1,5 +1,5 @@
-// RFC 8555 6.2·8.1·8.4·11.1의 서버 검사를 위한 독립 구현이다.
-// 라이브러리의 JOSE·CSR·DER 해석기를 쓰지 않아 같은 결함을 공유하지 않는다.
+// Independent implementation of the server checks in RFC 8555 6.2, 8.1, 8.4, and 11.1.
+// Avoids sharing defects by using separate JOSE, CSR, and DER parsers from the library's.
 import CryptoKit
 import Foundation
 
@@ -40,7 +40,7 @@ enum FakeACMECrypto {
         }
 
         var thumbprint: String {
-            // RFC 7638: 필수 멤버만 사전식 순서로 놓는다. 좌표는 32바이트를 보존한다.
+            // RFC 7638: Includes only required members, in lexicographic order. Preserves all 32 bytes of each coordinate.
             let canonical = "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"\(x)\",\"y\":\"\(y)\"}"
             return base64URL(SHA256.hash(data: Data(canonical.utf8)))
         }
@@ -64,7 +64,7 @@ enum FakeACMECrypto {
 
     enum Invalid: Error { case encoding, csr }
 
-    /// 서버 자체 시험의 잘못된 요청도 라이브러리의 서명기를 거치지 않고 만든다.
+    /// The malformed requests in server self-tests also bypass the library signer.
     static func request(
         url: String, key: P256.Signing.PrivateKey, header: Protected, payload: Data,
         signingKey: P256.Signing.PrivateKey? = nil
@@ -81,7 +81,7 @@ enum FakeACMECrypto {
         base64URL(SHA256.hash(data: Data("\(token).\(account.thumbprint)".utf8)))
     }
 
-    /// CSR에 필요한 DER만 읽는다. 길이·경계·비정규 길이·뒤에 남는 바이트를 검사한다.
+    /// Reads only the DER needed for CSR. Checks lengths, bounds, noncanonical lengths, and trailing bytes.
     struct DER {
         let tag: UInt8
         let content: Data

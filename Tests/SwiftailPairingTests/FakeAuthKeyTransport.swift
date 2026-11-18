@@ -4,7 +4,7 @@ import Testing
 
 @testable import SwiftailPairing
 
-/// 받은 요청을 적고 정해 둔 응답을 차례로 돌려주는 가짜 전송.
+/// Records requests and returns preset responses in order.
 final class FakeAuthKeyTransport: AuthKeyTransport {
     private let state: Mutex<(requests: [AuthKeyHTTPRequest], responses: [Result<AuthKeyHTTPResponse, AuthKeyIssueError>])>
 
@@ -24,7 +24,7 @@ final class FakeAuthKeyTransport: AuthKeyTransport {
     }
 }
 
-/// 시험 값. 누가 봐도 가짜인 것만 쓴다.
+/// Test values that are obviously fake.
 enum Example {
     static let clientID = "kEXAMPLE-client"
     static let secret = "tskey-client-EXAMPLE"

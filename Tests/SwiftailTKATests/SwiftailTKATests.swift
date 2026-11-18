@@ -1,1 +1,1 @@
-// 구현 단위 TL-1~TL-5가 이 시험 타깃을 채운다.
+// Implementation units TL-1–TL-5 populate this test target.

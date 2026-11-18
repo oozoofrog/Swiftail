@@ -1,19 +1,19 @@
-// Go 기준값과 Swift의 인증서 인코딩·서명 구현의 대조 시험(M7-8의 시험 부분).
+// Compares Swift certificate encoding and signing with Go reference values (the test portion of M7-8).
 //
-// 자료(`Fixtures/acme-fixtures.json`, 22개 사례)는 `tailscale.com/tempfork/acme`와 Go 표준 라이브러리로 만들었고 Swift
-// 소스를 읽지 않았다. 이 시험은 구현(M7-3)을 쓴 세션과 다른 세션이 썼다. 무엇을 어떻게 견주는지는 노트 7장 1·2와 계약
-// 7절의 "Go 기준값 대조"를 따른다.
+// The 22 cases in `Fixtures/acme-fixtures.json` were generated with `tailscale.com/tempfork/acme` and the Go standard library without reading the Swift
+// sources. A different session from the one that wrote the implementation (M7-3) wrote this test. The compared values and methods follow note chapter 7 items 1 and 2 and
+// the Go reference comparison in contract §7.
 //
-// - 바이트로 견준다: JWK 정규 문자열, 지문, 키 인가, DNS-01 TXT 값, CSR의 `certificationRequestInfo`.
-// - 의미로 견준다: JWS 보호 머리(복호화해 멤버와 값). Swift가 Go와 같은 직렬화를 택했으므로 바이트도 따로 견준다.
-// - 서명은 바이트로 견주지 않는다. Go가 서명한 것을 CryptoKit이 검증하고, Swift가 만든 것을 Go 도구가 검증한다.
+// - Compare byte for byte: canonical JWK strings, thumbprints, key authorization, DNS-01 TXT values, and CSR `certificationRequestInfo`.
+// - Compare semantically: decoded JWS protected header members and values. Swift chose the same serialization as Go, so also compare the bytes separately.
+// - Compare signatures by verification. CryptoKit verifies Go signatures, and the Go tool verifies Swift signatures.
 //
-// 1~4는 자료만으로 돈다. 5(`GoVerifiesSwiftTests`)는 환경 변수 `SWIFTAIL_ACMEFIXTURES`에 `acmefixtures`의 경로가 있을
-// 때만 돈다(`sh Scripts/build-interop-tools.sh acmefixtures`가 경로를 낸다).
+// Sections 1–4 run with the fixtures alone. Section 5 (`GoVerifiesSwiftTests`) runs only with the `acmefixtures` path in `SWIFTAIL_ACMEFIXTURES`
+// (`sh Scripts/build-interop-tools.sh acmefixtures` prints the path).
 //
-// 건너뛰는 사례: `csrs`의 `name-253`은 `CertificateDomain`이 받지 않는 이름(상한 237)이라 Swift가 그 이름으로 CSR을
-// 만들 길이 없다. `nameOf253IsRejected`가 받지 않음을 단언하고, `nameOf253InfoViaDERValue`가 `DERValue`로 같은 구조를
-// 시험 안에서 직접 짜서 긴 길이(`0x82`) 인코딩만 Go 바이트와 견준다. 그 밖의 사례는 모두 쓴다.
+// Skipped case: `name-253` in `csrs` is a name that `CertificateDomain` rejects (limit 237), so Swift cannot build a CSR for it through that path.
+// `nameOf253IsRejected` asserts rejection, and `nameOf253InfoViaDERValue` builds the same structure with `DERValue`
+// in the test to compare only the long-form length (`0x82`) encoding with Go's bytes. All other cases are used.
 
 import CryptoKit
 import Foundation
@@ -21,9 +21,9 @@ import Testing
 
 @testable import SwiftailCertificates
 
-// MARK: - 공통
+// MARK: - Shared support
 
-/// 자료의 고정 nonce와 가짜 URL 값(`Tools/interop/README.md`의 acmefixtures 절).
+/// Fixed nonce and fake URL values from the fixtures (acmefixtures section in `Tools/interop/README.md`).
 private enum Constants {
     static let nonce = "AAECAwQFBgcICQoLDA0ODw"
     static let newAccountURL = "https://acme.invalid/new-account"
@@ -32,7 +32,7 @@ private enum Constants {
 }
 
 private func jsonObject(_ text: String) throws -> NSDictionary {
-    try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? NSDictionary, "JSON 객체가 아님")
+    try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? NSDictionary, "Expected a JSON object")
 }
 
 private func publicJWK(_ key: OracleKey) -> [String: String] {
@@ -43,11 +43,11 @@ private func isValid(rawSignature: [UInt8], for input: [UInt8], publicKey: P256.
     try publicKey.isValidSignature(P256.Signing.ECDSASignature(rawRepresentation: rawSignature), for: input)
 }
 
-// MARK: - 자료의 구성
+// MARK: - Fixture structure
 
-@Suite("Go 기준값: 자료의 구성")
+@Suite("Go reference values: fixture structure")
 struct GoFixtureShapeTests {
-    @Test("22개 사례(키 3, 키 인가 9, JWS 6, CSR 4)이고 모두 자료의 키를 가리킨다")
+    @Test("All 22 cases (3 keys, 9 key authorizations, 6 JWS, and 4 CSRs) refer to fixture keys")
     func caseCounts() throws {
         let fixtures = try GoOracle.fixtures()
         #expect(fixtures.caseCount == 22)
@@ -63,7 +63,7 @@ struct GoFixtureShapeTests {
         for csr in fixtures.csrs { #expect(ids.contains(csr.keyID)) }
     }
 
-    @Test("좌표 앞자리가 0인 키가 정말 그 좌표를 가진다(자료의 전제)")
+    @Test("The leading-zero keys have the stated coordinates (fixture prerequisite)")
     func leadingZeroCoordinates() throws {
         let fixtures = try GoOracle.fixtures()
         let x = try #require(Base64URL.decode(try fixtures.key("leading-zero-x").publicKey.x))
@@ -73,71 +73,71 @@ struct GoFixtureShapeTests {
     }
 }
 
-// MARK: - 1. 키
+// MARK: - 1. Keys
 
-@Suite("Go 기준값: 키(JWK·지문·PEM)")
+@Suite("Go reference values: keys (JWK, thumbprints, and PEM)")
 struct GoKeyComparisonTests {
-    @Test("JWK 정규 문자열은 Go와 바이트까지 같고 지문이 같다")
+    @Test("Canonical JWK strings match Go byte for byte, and thumbprints match")
     func canonicalJSONAndThumbprint() throws {
         for fixture in try GoOracle.fixtures().keys {
             let jwk = JWK(try fixture.privateKey().publicKey)
-            #expect(Array(jwk.canonicalJSON.utf8) == Array(fixture.jwkJSON.utf8), "키 \(fixture.id): canonicalJSON 바이트")
-            #expect(jwk.thumbprint == fixture.thumbprint, "키 \(fixture.id): 지문")
-            #expect(Base64URL.encode(jwk.x) == fixture.publicKey.x && Base64URL.encode(jwk.y) == fixture.publicKey.y, "키 \(fixture.id): 좌표")
-            #expect(jwk.x.count == 32 && jwk.y.count == 32, "키 \(fixture.id): 좌표는 선행 0을 포함해 32바이트")
+            #expect(Array(jwk.canonicalJSON.utf8) == Array(fixture.jwkJSON.utf8), "Key \(fixture.id): canonicalJSON bytes")
+            #expect(jwk.thumbprint == fixture.thumbprint, "Key \(fixture.id): thumbprint")
+            #expect(Base64URL.encode(jwk.x) == fixture.publicKey.x && Base64URL.encode(jwk.y) == fixture.publicKey.y, "Key \(fixture.id): coordinates")
+            #expect(jwk.x.count == 32 && jwk.y.count == 32, "Key \(fixture.id): coordinates are 32 bytes including leading zeros")
         }
     }
 
-    @Test("Go가 쓴 SEC1·PKCS#8 PEM을 Swift가 읽으면 같은 키가 나온다")
+    @Test("Swift reads the same keys from Go-written SEC1 and PKCS#8 PEM")
     func readsGoPEM() throws {
         for fixture in try GoOracle.fixtures().keys {
             let key = try fixture.privateKey()
-            #expect(fixture.sec1PEM.hasPrefix("-----BEGIN EC PRIVATE KEY-----\n"), "키 \(fixture.id): SEC1 라벨")
-            #expect(fixture.pkcs8PEM.hasPrefix("-----BEGIN PRIVATE KEY-----\n"), "키 \(fixture.id): PKCS#8 라벨")
+            #expect(fixture.sec1PEM.hasPrefix("-----BEGIN EC PRIVATE KEY-----\n"), "Key \(fixture.id): SEC1 label")
+            #expect(fixture.pkcs8PEM.hasPrefix("-----BEGIN PRIVATE KEY-----\n"), "Key \(fixture.id): PKCS#8 label")
             for (format, pem) in [("SEC1", fixture.sec1PEM), ("PKCS#8", fixture.pkcs8PEM)] {
                 let read = try P256.Signing.PrivateKey(pemFile: Array(pem.utf8), maximumByteCount: 64 * 1024)
-                #expect(read.publicKey.x963Representation == key.publicKey.x963Representation, "키 \(fixture.id) \(format): 공개 키")
-                #expect(read.rawRepresentation == key.rawRepresentation, "키 \(fixture.id) \(format): 개인 스칼라")
-                #expect(JWK(read.publicKey).canonicalJSON == fixture.jwkJSON, "키 \(fixture.id) \(format): JWK")
+                #expect(read.publicKey.x963Representation == key.publicKey.x963Representation, "Key \(fixture.id) \(format): public key")
+                #expect(read.rawRepresentation == key.rawRepresentation, "Key \(fixture.id) \(format): private scalar")
+                #expect(JWK(read.publicKey).canonicalJSON == fixture.jwkJSON, "Key \(fixture.id) \(format): JWK")
             }
         }
     }
 
-    @Test("Go의 PEM을 읽어 다시 쓰면 같은 바이트다(64열, LF)")
+    @Test("Parsing and rewriting Go PEM preserves the bytes (64 columns, LF)")
     func pemRoundTripMatchesGoText() throws {
         for fixture in try GoOracle.fixtures().keys {
             for pem in [fixture.sec1PEM, fixture.pkcs8PEM] {
                 let blocks = try PEM.decode(Array(pem.utf8), maximumByteCount: 64 * 1024)
                 #expect(blocks.count == 1)
-                #expect(blocks.map(PEM.encode).joined() == pem, "키 \(fixture.id): PEM 글")
+                #expect(blocks.map(PEM.encode).joined() == pem, "Key \(fixture.id): PEM text")
             }
         }
     }
 }
 
-// MARK: - 2. 키 인가
+// MARK: - 2. Key authorization
 
-@Suite("Go 기준값: 키 인가와 DNS-01 TXT")
+@Suite("Go reference values: key authorization and DNS-01 TXT")
 struct GoKeyAuthorizationComparisonTests {
-    @Test("9개 사례의 키 인가와 TXT 값이 Go와 바이트까지 같다")
+    @Test("Key authorization and TXT values match Go byte for byte in all 9 cases")
     func keyAuthorizationAndTXT() throws {
         let fixtures = try GoOracle.fixtures()
         for challenge in fixtures.challenges {
             let jwk = JWK(try fixtures.key(challenge.keyID).privateKey().publicKey)
             let authorization = KeyAuthorization(token: challenge.token, accountKey: jwk)
-            let label = "키 \(challenge.keyID), token \(challenge.token)"
+            let label = "Key \(challenge.keyID), token \(challenge.token)"
             #expect(Array(authorization.value.utf8) == Array(challenge.keyAuthorization.utf8), "\(label): keyAuthorization")
             #expect(Array(authorization.dns01TXTValue.utf8) == Array(challenge.dns01TXT.utf8), "\(label): dns01TXT")
-            #expect(authorization.dns01TXTValue.utf8.count == 43, "\(label): TXT는 43바이트")
+            #expect(authorization.dns01TXTValue.utf8.count == 43, "\(label): TXT is 43 bytes")
         }
     }
 }
 
 // MARK: - 3. JWS
 
-@Suite("Go 기준값: JWS")
+@Suite("Go reference values: JWS")
 struct GoJWSComparisonTests {
-    /// 자료의 보호 머리에서 읽은 요청 입력(nonce, url, jwk/kid)으로 Swift가 JWS를 만든다.
+    /// Swift builds a JWS from the request inputs (nonce, url, jwk/kid) read from the fixture's protected header.
     private struct Rebuilt {
         var fixture: OracleJWS
         var jws: JWS
@@ -151,13 +151,13 @@ struct GoJWSComparisonTests {
         let reference: JWS.KeyReference
         switch fixture.mode {
         case "jwk":
-            #expect(goHeader["kid"] == nil && goHeader["jwk"] != nil, "자료의 jwk 머리")
+            #expect(goHeader["kid"] == nil && goHeader["jwk"] != nil, "Fixture jwk header")
             reference = .publicKey
         case "kid":
-            #expect(goHeader["jwk"] == nil, "자료의 kid 머리")
+            #expect(goHeader["jwk"] == nil, "Fixture kid header")
             reference = .accountURL(try #require(goHeader["kid"] as? String))
         default:
-            throw OracleFailure("알 수 없는 mode \(fixture.mode)")
+            throw OracleFailure("Unknown mode \(fixture.mode)")
         }
         let jws = try JWS(
             payload: Array(fixture.payloadJSON.utf8), url: url, nonce: nonce, keyReference: reference,
@@ -166,31 +166,31 @@ struct GoJWSComparisonTests {
         return Rebuilt(fixture: fixture, jws: jws, header: try jsonObject(String(decoding: headerBytes, as: UTF8.self)))
     }
 
-    private static func label(_ fixture: OracleJWS) -> String { "키 \(fixture.keyID), \(fixture.mode)" }
+    private static func label(_ fixture: OracleJWS) -> String { "Key \(fixture.keyID), \(fixture.mode)" }
 
-    @Test("보호 머리를 풀면 멤버와 값이 Go의 protectedJSON과 같다(의미)")
+    @Test("Decoded protected header members and values match Go protectedJSON semantically")
     func protectedHeaderSemantics() throws {
         let fixtures = try GoOracle.fixtures()
         for fixture in fixtures.jws {
             let rebuilt = try Self.rebuild(fixture, fixtures: fixtures)
             let goHeader = try jsonObject(fixture.protectedJSON)
-            #expect(Set(rebuilt.header.allKeys.compactMap { $0 as? String }) == Set(goHeader.allKeys.compactMap { $0 as? String }), "\(Self.label(fixture)): 멤버 이름")
-            #expect(rebuilt.header.isEqual(goHeader), "\(Self.label(fixture)): 멤버 값")
+            #expect(Set(rebuilt.header.allKeys.compactMap { $0 as? String }) == Set(goHeader.allKeys.compactMap { $0 as? String }), "\(Self.label(fixture)): member names")
+            #expect(rebuilt.header.isEqual(goHeader), "\(Self.label(fixture)): member values")
         }
     }
 
-    @Test("보호 머리 JSON의 바이트가 Go와 같다(같은 직렬화를 택한 결과)")
+    @Test("Protected header JSON bytes match Go because both use the same serialization")
     func protectedHeaderBytes() throws {
         let fixtures = try GoOracle.fixtures()
         for fixture in fixtures.jws {
             let rebuilt = try Self.rebuild(fixture, fixtures: fixtures)
             let swiftBytes = try #require(Base64URL.decode(rebuilt.jws.protected))
-            #expect(swiftBytes == Array(fixture.protectedJSON.utf8), "\(Self.label(fixture)): 보호 머리 JSON 바이트")
-            #expect(rebuilt.jws.protected == fixture.verifiedExample.protected, "\(Self.label(fixture)): base64url(보호 머리)")
+            #expect(swiftBytes == Array(fixture.protectedJSON.utf8), "\(Self.label(fixture)): protected header JSON bytes")
+            #expect(rebuilt.jws.protected == fixture.verifiedExample.protected, "\(Self.label(fixture)): base64url of the protected header")
         }
     }
 
-    @Test("본문과 서명 입력의 바이트가 Go와 같다(POST-as-GET은 빈 문자열)")
+    @Test("Body and signing input bytes match Go (POST-as-GET uses an empty string)")
     func payloadAndSigningInput() throws {
         let fixtures = try GoOracle.fixtures()
         var postAsGet = 0
@@ -199,18 +199,18 @@ struct GoJWSComparisonTests {
             let example = fixture.verifiedExample
             #expect(rebuilt.jws.payload == example.payload, "\(Self.label(fixture)): payload")
             #expect(Array((rebuilt.jws.protected + "." + rebuilt.jws.payload).utf8) == Array(fixture.signingInput.utf8), "\(Self.label(fixture)): signingInput")
-            // 자료 자체의 일관성: 서명 입력은 `protected.payload`이고 POST-as-GET의 본문은 빈 문자열이다.
-            #expect(fixture.signingInput == example.protected + "." + example.payload, "\(Self.label(fixture)): 자료의 signingInput")
+            // Fixture consistency: the signing input is `protected.payload`, and POST-as-GET has an empty body string.
+            #expect(fixture.signingInput == example.protected + "." + example.payload, "\(Self.label(fixture)): fixture signingInput")
             if fixture.payloadJSON.isEmpty {
                 postAsGet += 1
                 #expect(rebuilt.jws.payload.isEmpty && example.payload.isEmpty, "\(Self.label(fixture)): POST-as-GET")
             }
-            #expect(rebuilt.jws.flattenedJSON == Array(#"{"protected":"\#(example.protected)","payload":"\#(example.payload)","signature":"\#(rebuilt.jws.signature)"}"#.utf8), "\(Self.label(fixture)): Flattened JSON의 멤버 순서")
+            #expect(rebuilt.jws.flattenedJSON == Array(#"{"protected":"\#(example.protected)","payload":"\#(example.payload)","signature":"\#(rebuilt.jws.signature)"}"#.utf8), "\(Self.label(fixture)): Flattened JSON member order")
         }
-        #expect(postAsGet == 3, "POST-as-GET 사례는 키마다 하나")
+        #expect(postAsGet == 3, "One POST-as-GET case per key")
     }
 
-    @Test("Swift의 서명은 64바이트이고 자기 공개 키로 검증된다")
+    @Test("Swift signatures are 64 bytes and verify with their public keys")
     func swiftSignatureVerifies() throws {
         let fixtures = try GoOracle.fixtures()
         for fixture in fixtures.jws {
@@ -218,91 +218,91 @@ struct GoJWSComparisonTests {
             let publicKey = try fixtures.key(fixture.keyID).privateKey().publicKey
             let raw = try #require(Base64URL.decode(rebuilt.jws.signature))
             #expect(raw.count == 64, "\(Self.label(fixture)): R ‖ S")
-            #expect(try isValid(rawSignature: raw, for: Array(fixture.signingInput.utf8), publicKey: publicKey), "\(Self.label(fixture)): 서명 검증")
+            #expect(try isValid(rawSignature: raw, for: Array(fixture.signingInput.utf8), publicKey: publicKey), "\(Self.label(fixture)): signature verification")
         }
     }
 
-    @Test("Go가 서명한 JWS를 CryptoKit이 검증한다")
+    @Test("CryptoKit verifies a Go-signed JWS")
     func verifiesGoSignature() throws {
         let fixtures = try GoOracle.fixtures()
         for fixture in fixtures.jws {
             let publicKey = try fixtures.key(fixture.keyID).privateKey().publicKey
             let example = fixture.verifiedExample
             let raw = try #require(Base64URL.decode(example.signature))
-            #expect(raw.count == 64, "\(Self.label(fixture)): Go 서명은 R ‖ S 64바이트")
+            #expect(raw.count == 64, "\(Self.label(fixture)): Go signature is 64 bytes of R ‖ S")
             let input = Array((example.protected + "." + example.payload).utf8)
-            #expect(try isValid(rawSignature: raw, for: input, publicKey: publicKey), "\(Self.label(fixture)): Go 서명")
-            // 검증이 실제로 입력을 본다는 확인.
-            #expect(try !isValid(rawSignature: raw, for: input + [UInt8(ascii: "x")], publicKey: publicKey), "\(Self.label(fixture)): 변조한 입력")
-            // 다른 키로는 통과하지 않는다.
+            #expect(try isValid(rawSignature: raw, for: input, publicKey: publicKey), "\(Self.label(fixture)): Go signature")
+            // Confirm that verification checks the input.
+            #expect(try !isValid(rawSignature: raw, for: input + [UInt8(ascii: "x")], publicKey: publicKey), "\(Self.label(fixture)): tampered input")
+            // Verification fails with another key.
             let otherFixture = try #require(fixtures.keys.first { $0.id != fixture.keyID })
             let other = try otherFixture.privateKey().publicKey
-            #expect(try !isValid(rawSignature: raw, for: input, publicKey: other), "\(Self.label(fixture)): 다른 키")
+            #expect(try !isValid(rawSignature: raw, for: input, publicKey: other), "\(Self.label(fixture)): different key")
         }
     }
 }
 
 // MARK: - 4. CSR
 
-@Suite("Go 기준값: CSR")
+@Suite("Go reference values: CSR")
 struct GoCSRComparisonTests {
-    /// Go의 ecdsa-with-SHA256 AlgorithmIdentifier(매개변수 없음).
+    /// Go ecdsa-with-SHA256 AlgorithmIdentifier (no parameters).
     private static let ecdsaWithSHA256: [UInt8] = [0x30, 0x0A, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
 
-    @Test("Swift가 만든 certificationRequestInfo가 Go와 바이트까지 같다(253자 이름 제외)")
+    @Test("Swift certificationRequestInfo matches Go byte for byte except for the 253-character name")
     func certificationRequestInfoBytes() throws {
         let fixtures = try GoOracle.fixtures()
         var compared = 0
         for csr in fixtures.csrs {
-            guard let domain = CertificateDomain(csr.domain) else { continue }  // 253자 이름: `nameOf253` 시험이 다룬다.
+            guard let domain = CertificateDomain(csr.domain) else { continue }  // The `nameOf253` tests cover the 253-character name.
             let key = try fixtures.key(csr.keyID).privateKey()
             let request = try CertificateSigningRequest(domain: domain, signedWith: key)
             let goInfo = try #require(GoOracle.bytes(fromHex: csr.certificationRequestInfoHex), "\(csr.name): hex")
-            #expect(request.certificationRequestInfo == goInfo, "\(csr.name): certificationRequestInfo 바이트")
-            // 전체 DER에서도 가른 첫 SEQUENCE가 같다. 서명은 실행마다 다르므로 견주지 않는다.
-            let parts = try #require(GoOracle.csrParts(request.der), "\(csr.name): Swift DER의 바깥 구조")
-            #expect(parts.info.encoded == goInfo, "\(csr.name): Swift DER 안의 info")
+            #expect(request.certificationRequestInfo == goInfo, "\(csr.name): certificationRequestInfo bytes")
+            // The first SEQUENCE extracted from the full DER also matches. Signatures vary by run and are excluded from the comparison.
+            let parts = try #require(GoOracle.csrParts(request.der), "\(csr.name): outer structure of Swift DER")
+            #expect(parts.info.encoded == goInfo, "\(csr.name): info in Swift DER")
             #expect(parts.algorithm.encoded == Self.ecdsaWithSHA256, "\(csr.name): signatureAlgorithm")
-            #expect(GoOracle.commonNameStringTag(info: request.certificationRequestInfo) == UInt8(csr.cnStringTag), "\(csr.name): CN 태그")
+            #expect(GoOracle.commonNameStringTag(info: request.certificationRequestInfo) == UInt8(csr.cnStringTag), "\(csr.name): CN tag")
             compared += 1
         }
-        #expect(compared == 3, "받는 이름의 사례 셋을 모두 견줌")
+        #expect(compared == 3, "Compared all three accepted name cases")
     }
 
-    @Test("Go의 CSR 전체 DER에서 서명을 떼어 CryptoKit으로 검증한다")
+    @Test("Extracts the signature from Go's full CSR DER and verifies it with CryptoKit")
     func verifiesGoCSRSignature() throws {
         let fixtures = try GoOracle.fixtures()
         for csr in fixtures.csrs {
             let publicKey = try fixtures.key(csr.keyID).privateKey().publicKey
             let der = try #require(GoOracle.bytes(fromHex: csr.derHex), "\(csr.name): derHex")
             let goInfo = try #require(GoOracle.bytes(fromHex: csr.certificationRequestInfoHex), "\(csr.name): info hex")
-            let parts = try #require(GoOracle.csrParts(der), "\(csr.name): 바깥 SEQUENCE 셋")
-            #expect(parts.info.encoded == goInfo, "\(csr.name): 자료의 info가 derHex 안의 info와 같다")
+            let parts = try #require(GoOracle.csrParts(der), "\(csr.name): three elements of the outer SEQUENCE")
+            #expect(parts.info.encoded == goInfo, "\(csr.name): fixture info matches the info inside derHex")
             #expect(parts.algorithm.encoded == Self.ecdsaWithSHA256, "\(csr.name): signatureAlgorithm")
-            #expect(GoOracle.commonNameStringTag(info: goInfo) == UInt8(csr.cnStringTag) && csr.cnStringTag == 19, "\(csr.name): CN은 PrintableString")
+            #expect(GoOracle.commonNameStringTag(info: goInfo) == UInt8(csr.cnStringTag) && csr.cnStringTag == 19, "\(csr.name): CN is PrintableString")
             let signature = try P256.Signing.ECDSASignature(derRepresentation: parts.signatureDER)
-            #expect(publicKey.isValidSignature(signature, for: goInfo), "\(csr.name): Go 서명")
+            #expect(publicKey.isValidSignature(signature, for: goInfo), "\(csr.name): Go signature")
             var tampered = goInfo
             tampered[tampered.count - 1] ^= 0x01
-            #expect(!publicKey.isValidSignature(signature, for: tampered), "\(csr.name): 변조한 info는 거절")
+            #expect(!publicKey.isValidSignature(signature, for: tampered), "\(csr.name): rejects tampered info")
         }
     }
 
-    @Test("253자 이름은 CertificateDomain이 받지 않는다(상한 237)")
+    @Test("CertificateDomain rejects a 253-character name (limit 237)")
     func nameOf253IsRejected() throws {
         let fixtures = try GoOracle.fixtures()
         let csr = try #require(fixtures.csrs.first { $0.name == "name-253" })
         #expect(csr.domain.utf8.count == 253)
         #expect(CertificateDomain.maximumLength == 237)
         #expect(CertificateDomain(csr.domain) == nil)
-        // 다른 세 이름은 받는다.
+        // The other three names are accepted.
         #expect(fixtures.csrs.filter { CertificateDomain($0.domain) != nil }.count == 3)
     }
 
-    /// 253자 이름의 CSR은 `CertificateSigningRequest`로 만들 길이 없으므로, 같은 구조를 `DERValue`로 시험 안에서 짠다.
-    /// CertificateSigningRequest의 문서 구조(RFC 2986, Go의 `certRequest`)를 그대로 옮긴 것이라 이름 검사 밖에서
-    /// DER의 긴 길이(`0x82`)와 SAN·CN의 큰 문자열 인코딩만 Go 바이트와 견준다.
-    @Test("253자 이름: 같은 구조를 DERValue로 짜서 Go의 info와 바이트로 견준다")
+    /// Since `CertificateSigningRequest` cannot build a CSR for a 253-character name, build the same structure with `DERValue` in the test.
+    /// This copies the documented CertificateSigningRequest structure (RFC 2986, Go `certRequest`). Bypassing name validation lets the test
+    /// compare only DER long-form lengths (`0x82`) and the encoding of long SAN and CN strings with Go's bytes.
+    @Test("253-character name: builds the same structure with DERValue and compares it byte for byte with Go info")
     func nameOf253InfoViaDERValue() throws {
         let fixtures = try GoOracle.fixtures()
         let csr = try #require(fixtures.csrs.first { $0.name == "name-253" })
@@ -325,19 +325,19 @@ struct GoCSRComparisonTests {
             ])),
         ])
         let goInfo = try #require(GoOracle.bytes(fromHex: csr.certificationRequestInfoHex))
-        #expect(info.encoded == goInfo, "name-253: info 바이트")
-        #expect(goInfo.count > 255 && goInfo[1] == 0x82, "자료가 긴 길이 경계를 실제로 밟는다")
+        #expect(info.encoded == goInfo, "name-253: info bytes")
+        #expect(goInfo.count > 255 && goInfo[1] == 0x82, "The fixture actually exercises the long-form length boundary")
     }
 }
 
-// MARK: - 5. Swift가 만든 것을 Go가 검증한다
+// MARK: - 5. Go verifies Swift output
 
 @Suite(
-    "Go 기준값: Swift가 만든 것을 Go 도구가 검증한다",
-    .enabled(if: GoOracle.toolPath != nil, "SWIFTAIL_ACMEFIXTURES가 없어 Go 도구 검증을 건너뜁니다"),
+    "Go reference values: the Go tool verifies Swift output",
+    .enabled(if: GoOracle.toolPath != nil, "SWIFTAIL_ACMEFIXTURES is missing, so Go tool verification is skipped"),
     .timeLimit(.minutes(3)))
 struct GoVerifiesSwiftTests {
-    /// 이름 목록: 짧은 이름, 보통 이름, 63자 레이블, 상한 237자, 레이블이 많은 이름.
+    /// Name list: short name, typical name, 63-character label, 237-character limit, and a name with many labels.
     private static let names: [String] = {
         let label63 = String(repeating: "a", count: 63)
         let longest = [label63, String(repeating: "b", count: 63), String(repeating: "c", count: 63), String(repeating: "d", count: 45)].joined(separator: ".")
@@ -345,22 +345,22 @@ struct GoVerifiesSwiftTests {
     }()
 
     private static func expectOK(_ response: [String: Any], _ label: String) {
-        #expect(response["ok"] as? Bool == true, "\(label): Go가 거절함: \(response["error"] ?? "(오류 없음)")")
+        #expect(response["ok"] as? Bool == true, "\(label): Go rejected it: \(response["error"] ?? "(no error)")")
     }
 
     private static func expectRejected(_ response: [String: Any], _ label: String) {
-        #expect(response["ok"] as? Bool == false, "\(label): Go가 받아들임")
-        #expect((response["error"] as? String)?.isEmpty == false, "\(label): 거절에 설명이 있다")
+        #expect(response["ok"] as? Bool == false, "\(label): Go accepted it")
+        #expect((response["error"] as? String)?.isEmpty == false, "\(label): rejection has an explanation")
     }
 
-    /// 자료의 키 셋과 그 자리에서 만든 키들.
+    /// The fixture key set and keys generated on the spot.
     private static func keys(fresh count: Int) throws -> [P256.Signing.PrivateKey] {
         try GoOracle.fixtures().keys.map { try $0.privateKey() } + (0..<count).map { _ in P256.Signing.PrivateKey() }
     }
 
-    // MARK: 양성 대조(도구 입력 형식이 맞는지)
+    // MARK: Positive control (checks the tool input format)
 
-    @Test("양성 대조: 도구가 자료의 Go 예제를 받아들인다")
+    @Test("Positive control: the tool accepts the fixture's Go examples")
     func toolAcceptsGoFixtures() async throws {
         let fixtures = try GoOracle.fixtures()
         for fixture in fixtures.jws {
@@ -373,18 +373,18 @@ struct GoVerifiesSwiftTests {
             ]
             if fixture.mode == "kid" { request["expectedKID"] = Constants.accountURL }
             let response = try await GoOracle.ask("verify-jws", request)
-            Self.expectOK(response, "verify-jws 자료 \(fixture.keyID) \(fixture.mode)")
+            Self.expectOK(response, "verify-jws fixture \(fixture.keyID) \(fixture.mode)")
             #expect((response["protected"] as? NSDictionary)?.isEqual(try jsonObject(fixture.protectedJSON)) == true)
         }
         for csr in fixtures.csrs {
             let response = try await GoOracle.ask("verify-csr", ["derHex": csr.derHex])
-            Self.expectOK(response, "verify-csr 자료 \(csr.name)")
+            Self.expectOK(response, "verify-csr fixture \(csr.name)")
             #expect(response["cnStringTag"] as? Int == 19)
         }
         for key in fixtures.keys {
             for pem in [key.sec1PEM, key.pkcs8PEM] {
                 let response = try await GoOracle.ask("parse-key", ["pem": pem])
-                Self.expectOK(response, "parse-key 자료 \(key.id)")
+                Self.expectOK(response, "parse-key fixture \(key.id)")
                 #expect(response["publicKey"] as? [String: String] == publicJWK(key))
             }
         }
@@ -406,23 +406,23 @@ struct GoVerifiesSwiftTests {
             name: "jwk newAccount", reference: .publicKey,
             payload: Array(#"{"termsOfServiceAgreed":true,"contact":["mailto:ops@example.invalid"]}"#.utf8),
             nonce: Constants.nonce, url: Constants.newAccountURL, expectedKID: nil),
-        JWSVariant(name: "jwk 본문 {}", reference: .publicKey, payload: Array("{}".utf8), nonce: "n-_0aA", url: Constants.newAccountURL, expectedKID: nil),
+        JWSVariant(name: "jwk body {}", reference: .publicKey, payload: Array("{}".utf8), nonce: "n-_0aA", url: Constants.newAccountURL, expectedKID: nil),
         JWSVariant(
-            name: "kid 본문", reference: .accountURL(Constants.accountURL), payload: Array(#"{"status":"deactivated"}"#.utf8),
+            name: "kid body", reference: .accountURL(Constants.accountURL), payload: Array(#"{"status":"deactivated"}"#.utf8),
             nonce: Constants.nonce, url: Constants.authorizationURL, expectedKID: Constants.accountURL),
         JWSVariant(
             name: "kid POST-as-GET", reference: .accountURL(Constants.accountURL), payload: [],
             nonce: Constants.nonce, url: Constants.authorizationURL, expectedKID: Constants.accountURL),
         JWSVariant(
-            name: "kid POST-as-GET, 이스케이프할 문자가 든 URL", reference: .accountURL(Constants.accountURL), payload: [],
+            name: "kid POST-as-GET with a URL containing characters that need escaping", reference: .accountURL(Constants.accountURL), payload: [],
             nonce: "AA-_", url: "https://acme.invalid/order/7?a=b&c=%3C&d=<>", expectedKID: Constants.accountURL),
     ]
 
-    @Test("Swift가 만든 JWS(jwk·kid·POST-as-GET)를 Go가 검증하고 보호 머리·본문이 넣은 것과 같다")
+    @Test("Go verifies Swift-generated JWS (jwk, kid, and POST-as-GET), with the original protected header and body")
     func goVerifiesSwiftJWS() async throws {
         for (index, key) in try Self.keys(fresh: 5).enumerated() {
             for variant in Self.jwsVariants {
-                let label = "키 \(index), \(variant.name)"
+                let label = "Key \(index), \(variant.name)"
                 let jws = try JWS(payload: variant.payload, url: variant.url, nonce: variant.nonce, keyReference: variant.reference, signedWith: key)
                 var request: [String: Any] = [
                     "jws": ["protected": jws.protected, "payload": jws.payload, "signature": jws.signature],
@@ -434,14 +434,14 @@ struct GoVerifiesSwiftTests {
                 let response = try await GoOracle.ask("verify-jws", request)
                 Self.expectOK(response, label)
                 let sent = try jsonObject(String(decoding: try #require(Base64URL.decode(jws.protected)), as: UTF8.self))
-                #expect((response["protected"] as? NSDictionary)?.isEqual(sent) == true, "\(label): 돌려준 보호 머리")
-                #expect(response["payloadHex"] as? String == GoOracle.hexString(variant.payload), "\(label): 본문")
+                #expect((response["protected"] as? NSDictionary)?.isEqual(sent) == true, "\(label): returned protected header")
+                #expect(response["payloadHex"] as? String == GoOracle.hexString(variant.payload), "\(label): body")
                 #expect(response["signingInput"] as? String == jws.protected + "." + jws.payload, "\(label): signingInput")
             }
         }
     }
 
-    @Test("변조한 JWS는 Go가 거절한다")
+    @Test("Go rejects tampered JWS")
     func goRejectsTamperedJWS() async throws {
         let key = P256.Signing.PrivateKey()
         let other = P256.Signing.PrivateKey()
@@ -459,82 +459,82 @@ struct GoVerifiesSwiftTests {
             ]
         }
 
-        Self.expectOK(try await GoOracle.ask("verify-jws", request()), "변조 전(대조)")
+        Self.expectOK(try await GoOracle.ask("verify-jws", request()), "Before tampering (control)")
         var flipped = try #require(Base64URL.decode(jws.signature))
         flipped[0] ^= 0x01
-        Self.expectRejected(try await GoOracle.ask("verify-jws", request(signature: Base64URL.encode(flipped))), "서명 한 비트")
-        Self.expectRejected(try await GoOracle.ask("verify-jws", request(payload: Base64URL.encode(Array(#"{"status":"valid"}"#.utf8)))), "본문 바꿈")
-        Self.expectRejected(try await GoOracle.ask("verify-jws", request(publicKey: other.publicKey)), "다른 공개 키")
-        Self.expectRejected(try await GoOracle.ask("verify-jws", request(nonce: "AAAA")), "다른 nonce")
-        Self.expectRejected(try await GoOracle.ask("verify-jws", request(url: "https://acme.invalid/authz/2")), "다른 URL")
+        Self.expectRejected(try await GoOracle.ask("verify-jws", request(signature: Base64URL.encode(flipped))), "One signature bit")
+        Self.expectRejected(try await GoOracle.ask("verify-jws", request(payload: Base64URL.encode(Array(#"{"status":"valid"}"#.utf8)))), "Changed body")
+        Self.expectRejected(try await GoOracle.ask("verify-jws", request(publicKey: other.publicKey)), "Different public key")
+        Self.expectRejected(try await GoOracle.ask("verify-jws", request(nonce: "AAAA")), "Different nonce")
+        Self.expectRejected(try await GoOracle.ask("verify-jws", request(url: "https://acme.invalid/authz/2")), "Different URL")
     }
 
     // MARK: CSR
 
-    @Test("Swift가 만든 CSR(여러 이름, 여러 키)을 Go가 검증하고 CN·SAN·공개 키·알고리즘·태그가 맞다")
+    @Test("Go verifies Swift-generated CSRs for multiple names and keys, and CN, SAN, public key, algorithm, and tag match")
     func goVerifiesSwiftCSR() async throws {
         let keys = try Self.keys(fresh: 20)
         for (index, key) in keys.enumerated() {
             let name = Self.names[index % Self.names.count]
-            let label = "키 \(index), 이름 \(name.utf8.count)자"
-            let domain = try #require(CertificateDomain(name), "\(label): 이름 검사")
+            let label = "Key \(index), name of \(name.utf8.count) characters"
+            let domain = try #require(CertificateDomain(name), "\(label): name validation")
             let request = try CertificateSigningRequest(domain: domain, signedWith: key)
             let response = try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(request.der)])
             Self.expectOK(response, label)
             #expect(response["commonName"] as? String == name, "\(label): CN")
             #expect(response["dnsNames"] as? [String] == [name], "\(label): dnsNames")
-            #expect(response["publicKey"] as? [String: String] == GoOracle.jwkObject(key.publicKey), "\(label): 공개 키")
-            #expect(response["signatureAlgorithm"] as? String == "ECDSA-SHA256", "\(label): 서명 알고리즘")
-            #expect(response["cnStringTag"] as? Int == 19, "\(label): CN 태그")
-            #expect(response["certificationRequestInfoHex"] as? String == GoOracle.hexString(request.certificationRequestInfo), "\(label): Go가 읽은 info")
+            #expect(response["publicKey"] as? [String: String] == GoOracle.jwkObject(key.publicKey), "\(label): public key")
+            #expect(response["signatureAlgorithm"] as? String == "ECDSA-SHA256", "\(label): signature algorithm")
+            #expect(response["cnStringTag"] as? Int == 19, "\(label): CN tag")
+            #expect(response["certificationRequestInfoHex"] as? String == GoOracle.hexString(request.certificationRequestInfo), "\(label): info read by Go")
         }
     }
 
-    @Test("변조한 CSR은 Go가 거절한다")
+    @Test("Go rejects tampered CSRs")
     func goRejectsTamperedCSR() async throws {
         let name = "rd-mac-1a2b3c4d.tail0001.ts.net"
         let domain = try #require(CertificateDomain(name))
         let request = try CertificateSigningRequest(domain: domain, signedWith: P256.Signing.PrivateKey())
-        Self.expectOK(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(request.der)]), "변조 전(대조)")
+        Self.expectOK(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(request.der)]), "Before tampering (control)")
 
         var signatureByte = request.der
         signatureByte[signatureByte.count - 1] ^= 0x01
-        Self.expectRejected(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(signatureByte)]), "서명 끝 바이트")
+        Self.expectRejected(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(signatureByte)]), "Final signature byte")
 
-        // 이름의 첫 글자를 한 칸 올린다(`r`→`s`). 문자열은 여전히 올바른 PrintableString이므로 서명 검사가 거절해야 한다.
+        // Increment the first character of the name by one (`r`→`s`). The string remains valid PrintableString, so signature verification must reject it.
         var nameByte = request.der
         let start = try #require(nameByte.firstRange(of: Array(name.utf8))?.lowerBound)
         nameByte[start] += 1
-        Self.expectRejected(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(nameByte)]), "CN의 글자")
+        Self.expectRejected(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(nameByte)]), "CN character")
 
-        Self.expectRejected(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(Array(request.der.dropLast(4)))]), "잘림")
+        Self.expectRejected(try await GoOracle.ask("verify-csr", ["derHex": GoOracle.hexString(Array(request.der.dropLast(4)))]), "Truncated")
     }
 
-    // MARK: 키 PEM
+    // MARK: Key PEM
 
-    @Test("Swift가 쓴 PKCS#8 PEM을 Go가 읽고 공개 키가 같다")
+    @Test("Go reads Swift-written PKCS#8 PEM and obtains the same public key")
     func goParsesSwiftPEM() async throws {
         for (index, key) in try Self.keys(fresh: 20).enumerated() {
             let pem = PEM.encode(PEMBlock(label: .privateKey, der: Array(key.derRepresentation)))
             let response = try await GoOracle.ask("parse-key", ["pem": pem])
-            Self.expectOK(response, "키 \(index)")
-            #expect(response["format"] as? String == "PRIVATE KEY", "키 \(index): 형식")
-            #expect(response["publicKey"] as? [String: String] == GoOracle.jwkObject(key.publicKey), "키 \(index): 공개 키")
+            Self.expectOK(response, "Key \(index)")
+            #expect(response["format"] as? String == "PRIVATE KEY", "Key \(index): format")
+            #expect(response["publicKey"] as? [String: String] == GoOracle.jwkObject(key.publicKey), "Key \(index): public key")
         }
     }
 
-    @Test("깨진 키 PEM은 Go가 거절한다")
+    @Test("Go rejects malformed key PEM")
     func goRejectsBrokenPEM() async throws {
         let key = P256.Signing.PrivateKey()
         let pem = PEM.encode(PEMBlock(label: .privateKey, der: Array(key.derRepresentation)))
-        Self.expectOK(try await GoOracle.ask("parse-key", ["pem": pem]), "깨기 전(대조)")
-        // PKCS#8 본문에 SEC1 라벨을 붙인다.
+        Self.expectOK(try await GoOracle.ask("parse-key", ["pem": pem]), "Before corruption (control)")
+        // Apply the SEC1 label to the PKCS#8 body.
         let wrongLabel = pem.replacingOccurrences(of: "PRIVATE KEY", with: "EC PRIVATE KEY")
-        Self.expectRejected(try await GoOracle.ask("parse-key", ["pem": wrongLabel]), "라벨과 본문이 다름")
-        // 끝 경계선이 없다.
+        Self.expectRejected(try await GoOracle.ask("parse-key", ["pem": wrongLabel]), "Label and body mismatch")
+        // The closing boundary is missing.
         let truncated = String(pem.dropLast("-----END PRIVATE KEY-----\n".count))
-        Self.expectRejected(try await GoOracle.ask("parse-key", ["pem": truncated]), "끝 경계선 없음")
-        // 뒤에 쓰레기가 붙는다.
-        Self.expectRejected(try await GoOracle.ask("parse-key", ["pem": pem + "garbage\n"]), "뒤따르는 글")
+        Self.expectRejected(try await GoOracle.ask("parse-key", ["pem": truncated]), "Missing closing boundary")
+        // Garbage follows the block.
+        Self.expectRejected(try await GoOracle.ask("parse-key", ["pem": pem + "garbage\n"]), "Trailing text")
     }
 }

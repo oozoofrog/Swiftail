@@ -1,6 +1,6 @@
-// 계약 7절 시험 8의 정상 갈래: 노트 4.3의 열두 단계, 계정이 있음·없음·이미 앎, authorization이 이미 valid·둘,
-// challenge가 이미 processing, 주문이 처음부터 ready·valid·processing, processing을 여러 번 거침, finalize 응답의
-// 다섯 상태와 orderNotReady.
+// Successful paths in contract §7 test 8: the twelve steps in note §4.3, an existing, missing, or already known account, an already valid authorization or two authorizations,
+// a challenge already processing, an order initially ready, valid, or processing, repeated processing, and the five finalize response statuses
+// and orderNotReady.
 
 import CryptoKit
 import Foundation
@@ -8,11 +8,11 @@ import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("ACME 주문 절차: 정상 갈래")
+@Suite("ACME order flow: successful paths")
 struct ACMEOrderFlowPathTests {
     private let issued = ACMEIssuanceResult.issued(certificateChainPEM: Fake.chainPEM, accountURL: Fake.accountURL)
 
-    @Test("열두 단계의 기본 길")
+    @Test("The basic twelve-step path")
     func basicPath() throws {
         let script = ACMEScript()
         let run = script.run(Steps.accountFound + [Steps.newOrder(Body.order("pending"))] + Steps.pendingAuthorization() + [
@@ -25,36 +25,36 @@ struct ACMEOrderFlowPathTests {
         #expect(run.result == issued)
         #expect(run.unusedExchanges == 0)
 
-        // 계정 찾기는 onlyReturnExisting(RFC 8555 7.3.1), 주문은 dns 식별자 하나(7.4).
+        // Account lookup uses onlyReturnExisting (RFC 8555 7.3.1), and the order has one dns identifier (7.4).
         #expect(run.requests(to: Fake.newAccountURL).first?.payloadObject?["onlyReturnExisting"] as? Bool == true)
         let identifiers = run.requests(to: Fake.newOrderURL).first?.payloadObject?["identifiers"] as? [[String: String]]
         #expect(identifiers == [["type": "dns", "value": Fake.domainName]])
 
-        // TXT 이름과 값(노트 3.5), 그 뒤의 challenge 응답은 `{}`(RFC 8555 7.5.1).
+        // TXT name and value (note §3.5), then a `{}` challenge response (RFC 8555 7.5.1).
         let value = KeyAuthorization(token: Fake.token(1), accountKey: JWK(script.accountKey.publicKey)).dns01TXTValue
         #expect(run.published.map(\.name) == ["_acme-challenge." + Fake.domainName])
         #expect(run.published.map(\.value) == [value])
         #expect(run.requests(to: Fake.challengeURL(1)).map(\.payload) == [Array("{}".utf8)])
 
-        // POST-as-GET은 빈 payload(RFC 8555 6.3).
+        // POST-as-GET uses an empty payload (RFC 8555 6.3).
         for url in [Fake.authorizationURL(1), Fake.orderURL, Fake.certificateURL] {
             #expect(run.requests(to: url).allSatisfy { $0.payload.isEmpty })
         }
 
-        // finalize의 CSR은 인증서 키의 것이다.
+        // The finalize CSR uses the certificate key.
         let csr = try #require(finalizedCSRs(run).first)
         #expect(csrInfoMatches(csr, key: script.certificateKey))
         #expect(!csrInfoMatches(csr, key: script.accountKey))
 
-        // 내려받기만 Accept를 싣는다(계약 C7).
+        // Only the download carries Accept (contract C7).
         #expect(run.requests(to: Fake.certificateURL).map(\.request.accept) == ["application/pem-certificate-chain"])
         #expect(run.requests.filter { $0.request.url != Fake.certificateURL }.allSatisfy { $0.request.accept == nil })
 
-        // challenge 응답 직후의 첫 읽기는 곧바로, 그 뒤의 다시 읽기는 1초 간격이다.
+        // The first read follows the challenge response immediately. Later reads occur at 1-second intervals.
         #expect(run.waits == [Fake.start.addingTimeInterval(1), Fake.start.addingTimeInterval(2)])
     }
 
-    @Test("계정이 없으면 약관에 동의해 만든다")
+    @Test("If the account is missing, accepts the terms and creates one")
     func createsAccountWhenMissing() {
         let run = ACMEScript().run([
             .get(Fake.directoryURL, 200, Body.directory()),
@@ -69,7 +69,7 @@ struct ACMEOrderFlowPathTests {
         #expect(payloads.last??["onlyReturnExisting"] == nil)
     }
 
-    @Test("만들기가 200(같은 키의 계정이 이미 있음)이어도 그 계정을 쓴다")
+    @Test("Uses the account even if creation returns 200 because an account with the same key already exists")
     func createAccountReturnsExisting() {
         let run = ACMEScript().run([
             .get(Fake.directoryURL, 200, Body.directory()),
@@ -80,7 +80,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.result == issued)
     }
 
-    @Test("계정 URL을 이미 알면 계정 찾기를 건너뛰고 kid로 주문한다")
+    @Test("If the account URL is known, skips lookup and orders with kid")
     func knownAccountSkipsLookup() {
         var script = ACMEScript()
         script.accountURL = Fake.accountURL
@@ -89,7 +89,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.requests(to: Fake.newAccountURL).isEmpty)
     }
 
-    @Test("이미 valid인 authorization은 TXT를 올리지 않는다")
+    @Test("An already valid authorization publishes no TXT record")
     func validAuthorizationIsSkipped() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -103,7 +103,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.requests(to: Fake.challengeURL(1)).isEmpty)
     }
 
-    @Test("authorization 둘(하나는 valid)을 모두 처리한다")
+    @Test("Processes both authorizations, one of which is valid")
     func twoAuthorizations() {
         let authorizations = [Fake.authorizationURL(1), Fake.authorizationURL(2)]
         let run = ACMEScript().run(Steps.accountFound + [
@@ -118,7 +118,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.published.count == 1)
     }
 
-    @Test("challenge가 이미 processing이면 레코드만 올리고 응답은 다시 보내지 않는다")
+    @Test("If the challenge is already processing, publishes the record without sending another response")
     func processingChallenge() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -132,7 +132,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.requests(to: Fake.challengeURL(1)).isEmpty)
     }
 
-    @Test("pending authorization의 challenge가 이미 valid면 건너뛴다")
+    @Test("Skips a pending authorization's challenge if it is already valid")
     func validChallengeIsSkipped() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending")),
@@ -145,14 +145,14 @@ struct ACMEOrderFlowPathTests {
         #expect(run.published.isEmpty)
     }
 
-    @Test("주문이 처음부터 ready면 authorization을 건너뛰고 finalize한다")
+    @Test("If the order is initially ready, skips authorization and finalizes")
     func readyOrder() {
         let run = ACMEScript().run(Steps.accountFound + Steps.readyToIssued)
         #expect(run.result == issued)
         #expect(run.requests(to: Fake.authorizationURL(1)).isEmpty)
     }
 
-    @Test("CSR 전에 valid·processing인 주문은 새 주문으로 한 번 다시 시작한다", arguments: ["valid", "processing"])
+    @Test("An order that is valid or processing before CSR restarts once with a new order", arguments: ["valid", "processing"])
     func orderBeforeCSRRestarts(status: String) {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order(status, certificate: Fake.certificateURL)),
@@ -161,12 +161,12 @@ struct ACMEOrderFlowPathTests {
             Steps.download,
         ])
         #expect(run.result == issued)
-        // 첫 주문의 인증서를 받지 않았다: 대응하는 개인 키가 없다(계약 C5).
+        // The certificate from the first order was not accepted because there is no corresponding private key (contract C5).
         #expect(run.requests(to: Fake.newOrderURL).count == 2)
         #expect(run.requests(to: Fake.certificateURL).count == 1)
     }
 
-    @Test("새 주문도 CSR 전에 valid면 orderFailed")
+    @Test("If the new order is also valid before CSR, returns orderFailed")
     func secondRestartFails() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("valid", certificate: Fake.certificateURL)),
@@ -176,7 +176,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.requests(to: Fake.certificateURL).isEmpty)
     }
 
-    @Test("authorization 뒤 다시 읽기에서 CSR 전 valid면 새 주문")
+    @Test("If a read after authorization returns valid before CSR, starts a new order")
     func pollValidBeforeCSRRestarts() {
         let run = ACMEScript().run(Steps.accountFound + [Steps.newOrder(Body.order("pending"))] + Steps.pendingAuthorization() + [
             Steps.readOrder(Body.order("valid", certificate: Fake.certificateURL)),
@@ -187,7 +187,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.result == issued)
     }
 
-    @Test("finalize 뒤 processing을 여러 번 거친다")
+    @Test("Goes through processing multiple times after finalize")
     func manyProcessing() {
         let processing = Steps.readOrder(Body.order("processing"))
         let run = ACMEScript().run(Steps.accountFound + [
@@ -201,7 +201,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.waits == (1...4).map { Fake.start.addingTimeInterval(TimeInterval($0)) })
     }
 
-    @Test("finalize 응답이 ready면 같은 키·CSR로 한 번 더 finalize한다")
+    @Test("A ready finalize response triggers one more finalize with the same key and CSR")
     func finalizeReadyRepeatsWithSameCSR() throws {
         let script = ACMEScript()
         let run = script.run(Steps.accountFound + [
@@ -216,7 +216,7 @@ struct ACMEOrderFlowPathTests {
         #expect(Set(csrs).count == 1)
     }
 
-    @Test("finalize 응답이 pending이면 authorization을 다시 처리한 뒤 같은 CSR로 finalize한다")
+    @Test("A pending finalize response triggers authorization again, then finalize with the same CSR")
     func finalizePendingReprocessesAuthorizations() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -231,7 +231,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.published.count == 1)
     }
 
-    @Test("finalize가 403 orderNotReady면 주문을 다시 읽어 그 상태로 간다")
+    @Test("A 403 orderNotReady from finalize triggers another order read and proceeds with the returned status")
     func orderNotReadyRereadsOrder() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("ready")),
@@ -244,7 +244,7 @@ struct ACMEOrderFlowPathTests {
         #expect(run.requests(to: Fake.finalizeURL).count == 2)
     }
 
-    @Test("Location이 다른 주문 URL이면 그 URL을 다시 읽는다")
+    @Test("If Location points to another order URL, reads that URL again")
     func usesOrderLocation() {
         let run = ACMEScript().run(Steps.accountFound + [
             Steps.newOrder(Body.order("pending"), location: Fake.secondOrderURL),
@@ -257,12 +257,12 @@ struct ACMEOrderFlowPathTests {
     }
 }
 
-/// finalize 요청의 CSR DER들.
+/// The CSR DER values from finalize requests.
 func finalizedCSRs(_ run: ScriptRun) -> [[UInt8]] {
     run.requests(to: Fake.finalizeURL).compactMap { ($0.payloadObject?["csr"] as? String).flatMap(Base64URL.decode) }
 }
 
-/// CSR의 `certificationRequestInfo`가 그 키·이름의 것인가.
+/// Checks whether the CSR's `certificationRequestInfo` is for that key and name.
 func csrInfoMatches(_ der: [UInt8], key: P256.Signing.PrivateKey) -> Bool {
     let info = CertificateSigningRequest.certificationRequestInfo(domain: Fake.domain, publicKey: key.publicKey).encoded
     guard der.count > 2 else { return false }

@@ -6,12 +6,12 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 서명된 인증 키의 해석과 그것으로 만든 서명(계약 동작 R3·R5②·K·M, 결정 L12·L13, 단위 시험 13·14). 기준은 Go
-/// `DecodeWrappedAuthkey`·`SignByCredential`을 실행한 `authKeys` 16개다.
-@Suite("서명된 인증 키")
+/// Decoding signed auth keys and the signatures they produce (contract behaviors R3, R5②, K, and M, decisions L12 and L13, unit tests 13 and 14).
+/// Uses 16 `authKeys` cases from running Go `DecodeWrappedAuthkey` and `SignByCredential` as the reference.
+@Suite("Signed auth keys")
 struct WrappedAuthKeyTests {
-    /// Go가 원문 전체를 인증 키로 돌려주는 것(결정 L12), 서명에서 panic하는 것(L13), 서명을 거절하는 credential 아닌 A(R3),
-    /// 검증되지 않는 서명을 만드는 어긋난 키(L13·R3)를 Swiftail은 모두 해석에서 거절한다.
+    /// Swiftail rejects at decode time all cases where Go returns the full original string as an auth key (decision L12), panics during signing (L13), refuses to sign because A is not a credential (R3),
+    /// or uses a mismatched key to produce an unverifiable signature (L13 and R3).
     static let intendedRejections: [String: String] = [
         "missing-dash": "L12", "padded-base64": "L12", "url-alphabet-key": "L12", "extra-dash": "L12",
         "credential-not-cbor": "L12", "empty-parts": "L12",
@@ -21,7 +21,7 @@ struct WrappedAuthKeyTests {
         "credential-direct-kind": "R3", "credential-wrapping-other-key": "R3",
     ]
 
-    @Test("authKeys 16개: Go가 받는 것은 같은 부분과 같은 판정, 나머지는 의도된 차이로 거절")
+    @Test("All 16 authKeys cases match parts and outcomes for Go's accepted cases and reject the rest as intended differences")
     func goAuthKeys() throws {
         let fixtures = try SignatureFixtureFile.load()
         #expect(fixtures.authKeys.count == 21)
@@ -36,7 +36,7 @@ struct WrappedAuthKeyTests {
             }
             if Self.intendedRejections[item.name] != nil {
                 #expect(throws: TKAError.invalidAuthKey, "\(item.name)") { try parsed.get() }
-                // Go가 서명을 만든 경우, 그 서명은 Swift의 검증으로도 Go와 같은 판정이다.
+                // When Go produces a signature, Swift verification of that signature matches Go's outcome.
                 if let nks = item.nks, let verdict = item.verdict, let authority = item.authority, let nodeKey = item.nodeKey {
                     let state = try fixtures.state(named: authority)
                     let swiftVerdict = SignatureTesting.verdict(state, try SignatureTesting.nodeKey(nodeKey), ModelTesting.bytes(nks))
@@ -44,7 +44,7 @@ struct WrappedAuthKeyTests {
                 }
                 continue
             }
-            // Go가 감싼 키로 읽고 서명한 것.
+            // Go decoded these as wrapped keys and signed with them.
             #expect(item.isWrapped && item.sign == "ok" && item.privateKeyLength == 64, "\(item.name)")
             let key = try #require(try parsed.get(), "\(item.name)")
             #expect(key.controlValue == item.authKey, "\(item.name)")
@@ -53,7 +53,7 @@ struct WrappedAuthKeyTests {
             let made = try key.keySignature(for: nodeKey)
             let decoded = try NodeKeySignature(decoding: made)
             let goSignature = try NodeKeySignature(decoding: ModelTesting.bytes(try #require(item.nks)))
-            // CryptoKit 서명은 매번 다르므로 서명을 뺀 SigHash와 구조를 견주고, 서명은 검증한다.
+            // CryptoKit signatures vary, so compare the structure and SigHash without the signature and verify the signature itself.
             #expect(decoded.signatureHash == goSignature.signatureHash, "\(item.name)")
             #expect(decoded.kind == NodeKeySignature.Kind.rotation && decoded.nested == key.credential, "\(item.name)")
             #expect(
@@ -72,7 +72,7 @@ struct WrappedAuthKeyTests {
         #expect(compared == 4)
     }
 
-    @Test("만든 서명은 authorize를 통과하고 내력은 credential에서 시작한다")
+    @Test("The generated signature passes authorize and its history starts at the credential")
     func madeSignatureAuthorizes() throws {
         let material = try Material()
         let key = try #require(try WrappedAuthKey(parsing: material.authKey()))
@@ -86,15 +86,15 @@ struct WrappedAuthKeyTests {
         }
     }
 
-    @Test("잘린·틀린 --TL 접미사")
+    @Test("Truncated and invalid --TL suffixes")
     func malformedSuffix() throws {
         let material = try Material()
         let credential = SignatureTesting.rawBase64(material.credential.serialized())
         let privateKey = SignatureTesting.rawBase64(material.privateKey)
         #expect(try WrappedAuthKey(parsing: Material.control) == nil)
         #expect(try WrappedAuthKey(parsing: Material.control + "--T" + credential) == nil)
-        // 남는 비트가 0이 아닌 base64: 64바이트의 마지막 글자는 남는 4비트가 0이라 A·Q·g·w 가운데 하나다. 그 다음 글자로 바꾸면
-        // 같은 바이트로 읽히는 비정규형이다. Go(`RawStdEncoding`)는 남는 비트를 보지 않는다(동작 R3).
+        // Base64 with nonzero trailing bits: the last character for 64 bytes is A, Q, g, or w because the 4 trailing bits are zero. Replacing it with the next character
+        // gives a noncanonical form that decodes to the same bytes. Go (`RawStdEncoding`) ignores the trailing bits (behavior R3).
         let lastCharacter = try #require(privateKey.last)
         let nextCharacter = try #require(["A": "B", "Q": "R", "g": "h", "w": "x"][lastCharacter])
         let nonCanonical = String(privateKey.dropLast()) + nextCharacter
@@ -110,12 +110,12 @@ struct WrappedAuthKeyTests {
                 try WrappedAuthKey(parsing: Material.control + "--TL" + suffix)
             }
         }
-        // 첫 `--TL`에서 자르므로 뒤의 `--TL`은 A의 일부가 되어 base64가 아니다.
+        // Splitting at the first `--TL` makes the later `--TL` part of A, which is then invalid base64.
         #expect(throws: TKAError.invalidAuthKey) { try WrappedAuthKey(parsing: Material.control + "--TL--TL" + credential + "-" + privateKey) }
         #expect(try WrappedAuthKey(parsing: material.authKey()) != nil)
     }
 
-    @Test("인증 키 문자열은 16KiB까지, 그 안의 credential은 8KiB까지(동작 M)")
+    @Test("An auth key string can be up to 16KiB, and its credential up to 8KiB (behavior M)")
     func limits() throws {
         let material = try Material()
         let suffix = String(material.authKey().dropFirst(Material.control.count))
@@ -126,7 +126,7 @@ struct WrappedAuthKeyTests {
         #expect(try WrappedAuthKey(parsing: authKey(totalByteCount: 16_384)) != nil)
         #expect(throws: TKAError.invalidAuthKey) { try WrappedAuthKey(parsing: authKey(totalByteCount: 16_385)) }
 
-        // credential에 모르는 필드 {7: bstr}를 더해 바이트를 맞춘다. 다시 쓴 credential(서명에 들어가는 것)에서는 빠진다.
+        // Add unknown field {7: bstr} to the credential to reach the byte count. The rewritten credential used in the signature omits it.
         let original = material.credential.serialized()
         func credential(byteCount: Int) -> [UInt8] {
             let count = byteCount - original.count - 4
@@ -140,7 +140,7 @@ struct WrappedAuthKeyTests {
         }
     }
 
-    @Test("감싼 개인 키의 검사: 64바이트, 시드의 공개 키 = 뒤 32바이트 = WrappingPubkey(결정 L13)")
+    @Test("Wrapped private key checks: 64 bytes, seed's public key = last 32 bytes = WrappingPubkey (decision L13)")
     func wrappedKeyChecks() throws {
         let material = try Material()
         let other = Array(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation)
@@ -159,12 +159,12 @@ struct WrappedAuthKeyTests {
                 try WrappedAuthKey(parsing: material.authKey(credential: credential, privateKey: privateKey))
             }
         }
-        // credential의 `WrappingPubkey`가 다른 키(감싼 키는 자기 자신과 맞음).
+        // The credential's `WrappingPubkey` differs, and the wrapped key is internally consistent.
         let mismatched = try Material(wrappingPublicKey: other)
         #expect(throws: TKAError.invalidAuthKey) { try WrappedAuthKey(parsing: mismatched.authKey()) }
     }
 
-    @Test("description·dump·String(reflecting:)에 인증 키와 감싼 키가 어떤 표기로도 없다(동작 K2)")
+    @Test("description, dump, and String(reflecting:) omit the auth key and wrapped key in every representation (behavior K2)")
     func secretsHidden() throws {
         let material = try Material()
         let key = try #require(try WrappedAuthKey(parsing: material.authKey()))
@@ -184,7 +184,7 @@ struct WrappedAuthKeyTests {
         }
     }
 
-    @Test("어떤 문자열로도 트랩하지 않는다")
+    @Test("No string causes a trap")
     func untrustedInput() throws {
         let material = try Material()
         let valid = material.authKey()
@@ -200,13 +200,13 @@ struct WrappedAuthKeyTests {
     }
 }
 
-/// 시험 자리에서 만든 신뢰 키·credential·감싼 키.
+/// Trusted key, credential, and wrapped key generated in the test.
 private struct Material {
     static let control = "tskey-auth-ktest0001CNTRL-test0000"
 
     let state: AuthorityState
     let credential: NodeKeySignature
-    /// 시드 32 ‖ 공개 32.
+    /// 32-byte seed ‖ 32-byte public key.
     let privateKey: [UInt8]
 
     init(wrappingPublicKey: [UInt8]? = nil) throws {

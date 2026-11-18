@@ -2,11 +2,11 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 계약 7절 시험 1: 정준 쓰기(동작 E1, E4의 기준 바이트).
-@Suite("CBOR 쓰기")
+/// Contract §7 test 1: canonical writing (reference bytes for behaviors E1 and E4).
+@Suite("CBOR writing")
 struct CBORWriterTests {
     @Test(
-        "정수는 가장 짧은 머리로 쓴다",
+        "Writes integers with the shortest header",
         arguments: [
             (UInt64(0), "00"), (23, "17"), (24, "1818"), (255, "18ff"), (256, "190100"), (65_535, "19ffff"),
             (65_536, "1a00010000"), (4_294_967_295, "1affffffff"), (4_294_967_296, "1b0000000100000000"),
@@ -20,11 +20,11 @@ struct CBORWriterTests {
     }
 
     @Test(
-        "길이도 가장 짧은 머리로 쓴다(bstr·tstr·배열·맵)",
+        "Also writes lengths with the shortest header (bstr, tstr, arrays, and maps)",
         arguments: [(0, "00"), (23, "17"), (24, "1818"), (255, "18ff"), (256, "190100"), (65_535, "19ffff"), (65_536, "1a00010000")]
     )
     func shortestLengths(count: Int, argument: String) throws {
-        // 머리 바이트의 주 타입 비트만 다르고 인자의 꼴은 정수와 같다.
+        // Only the major type bits of the header byte differ. The argument has the same form as for integers.
         let first = try #require(UInt8(argument.prefix(2), radix: 16))
         func expected(_ major: UInt8) -> String {
             CBORTesting.hex([major << 5 | first]) + argument.dropFirst(2)
@@ -48,7 +48,7 @@ struct CBORWriterTests {
         #expect(CBORTesting.hex(map.bytes) == expected(5))
     }
 
-    @Test("4바이트를 넘는 배열·맵 머리는 8바이트 인자다")
+    @Test("Array and map headers for lengths beyond 4 bytes use 8-byte arguments")
     func largeHeaders() {
         var writer = CBORWriter()
         writer.arrayHeader(count: 1 << 32)
@@ -56,17 +56,17 @@ struct CBORWriterTests {
         #expect(CBORTesting.hex(writer.bytes) == "9b0000000100000000" + "baffffffff")
     }
 
-    @Test("null은 f6이다")
+    @Test("null is f6")
     func null() {
         var writer = CBORWriter()
         writer.null()
         #expect(writer.bytes == [0xf6])
     }
 
-    /// 동작 E4의 기준 바이트(노트 8.1의 Go 실행). 구조의 필드를 정해진 순서로 쓰면 이 바이트가 나와야 한다.
-    @Test("동작 E4의 기준 바이트")
+    /// Reference bytes for behavior E4 (Go run in note §8.1). Writing the structure fields in the prescribed order must yield these bytes.
+    @Test("Reference bytes for behavior E4")
     func referenceBytes() {
-        // UpdateKey{KeyID:[1], Votes:&0, Meta:{}}: 빈 Meta는 빠지고 0인 Votes는 남는다.
+        // UpdateKey{KeyID:[1], Votes:&0, Meta:{}}: omits empty Meta and retains Votes of 0.
         var updateKey = CBORWriter()
         updateKey.mapHeader(count: 4)
         updateKey.unsigned(1)
@@ -79,7 +79,7 @@ struct CBORWriterTests {
         updateKey.unsigned(0)
         #expect(CBORTesting.hex(updateKey.bytes) == "a4010402f60441010600")
 
-        // NoOp{PrevAUMHash: []byte{}}: 길이 0인 bstr은 null이 아니다.
+        // NoOp{PrevAUMHash: []byte{}}: a zero-length bstr is distinct from null.
         var noOp = CBORWriter()
         noOp.mapHeader(count: 2)
         noOp.unsigned(1)
@@ -88,16 +88,16 @@ struct CBORWriterTests {
         noOp.byteString([])
         #expect(CBORTesting.hex(noOp.bytes) == "a201030240")
 
-        // State의 StateID1=2^40 쌍.
+        // The State pair for StateID1=2^40.
         var stateID = CBORWriter()
         stateID.unsigned(4)
         stateID.unsigned(1 << 40)
         #expect(CBORTesting.hex(stateID.bytes) == "041b0000010000000000")
     }
 
-    @Test("텍스트는 받은 바이트를 그대로 쓴다")
+    @Test("Writes text bytes as received")
     func textBytesVerbatim() {
-        // U+00E9를 한 글자(c3a9)로 쓴 것과 e + U+0301(65cc81)로 쓴 것은 String으로는 같지만 바이트가 다르다(동작 E3).
+        // U+00E9 as one character (c3a9) and e + U+0301 (65cc81) are equal as String values and differ in bytes (behavior E3).
         var composed = CBORWriter()
         composed.textString(utf8: [0xc3, 0xa9])
         var decomposed = CBORWriter()

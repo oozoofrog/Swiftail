@@ -4,12 +4,12 @@ import SwiftailBase
 import Testing
 @testable import SwiftailPairing
 
-/// 절차 전체의 고정 벡터(계약 7절 시험 2).
+/// Fixed vectors for the entire flow (contract §7 test 2).
 ///
-/// 기대값은 다른 구현이 냈다: Go `crypto/hmac`·`crypto/sha256`으로 쓴 `Tools/interop/cmd/pairingvectors`의 출력을
-/// `Fixtures/pairing-vectors.json`에 넣었다. 여기서는 코덱과 계산을 하나씩 견주고, 두 상태 기계를 맞물려 선 위로 나가는
-/// 바이트가 벡터와 같은지 본다.
-@Suite("절차의 고정 벡터(Go 구현과 일치)")
+/// An independent implementation produced the expected values. The output of `Tools/interop/cmd/pairingvectors`, written using Go `crypto/hmac` and `crypto/sha256`,
+/// is in `Fixtures/pairing-vectors.json`. These tests compare each codec and calculation, then connect the two state machines
+/// and verify that the bytes on the wire match the vectors.
+@Suite("Fixed flow vectors match the Go implementation")
 struct ProtocolVectorTests {
     struct Vector: Decodable, Sendable, CustomTestStringConvertible {
         struct Decision: Decodable, Sendable {
@@ -81,19 +81,19 @@ struct ProtocolVectorTests {
         return file.vectors
     }()
 
-    @Test("벡터 파일에 네 경우가 있다")
+    @Test("The vector file contains four cases")
     func loadsVectors() {
         #expect(Self.vectors.count == 4)
     }
 
-    @Test("두 nonce의 약속, hello와 challenge의 바이트", arguments: vectors)
+    @Test("Both nonce commitments and the hello and challenge bytes", arguments: vectors)
     func messages(vector: Vector) throws {
         let commitment = PairingTranscript.commitment(toJoinerNonce: try #require([UInt8](hex: vector.joinerNonce)))
         #expect(commitment.hex == vector.joinerCommitment)
         let hello = PairingMessage.Hello(commitment: commitment, deviceName: try Sample.deviceName(vector.deviceName))
         #expect(hello.encoded.hex == vector.hello)
         guard case .complete(let parsed, let length) = PairingMessage.Hello.parse(hello.encoded) else {
-            Issue.record("hello를 읽지 못했다")
+            Issue.record("Could not read hello")
             return
         }
         #expect(parsed == hello && length == hello.encoded.count)
@@ -105,7 +105,7 @@ struct ProtocolVectorTests {
             PairingMessage.Challenge(status: .noOffer, commitment: hostCommitment).encoded.hex == vector.challengeNoOffer)
     }
 
-    @Test("P, T, proof, accepted, 확인 숫자, decision", arguments: vectors)
+    @Test("P, T, proof, accepted, SAS, and decision", arguments: vectors)
     func transcript(vector: Vector) throws {
         let secret = try #require([UInt8](hex: vector.secret))
         let joinerNonce = try #require([UInt8](hex: vector.joinerNonce))
@@ -137,7 +137,7 @@ struct ProtocolVectorTests {
         }
     }
 
-    @Test("두 상태 기계를 맞물리면 선 위의 바이트가 벡터와 같다", arguments: vectors)
+    @Test("With the two state machines connected, the bytes on the wire match the vectors", arguments: vectors)
     func wholeProcedure(vector: Vector) throws {
         let offer = try vector.offer
         var machine = PairingHostMachine()
@@ -159,7 +159,7 @@ struct ProtocolVectorTests {
         let accepted = machine.receive(proof.sentBytes, on: 1, wallClock: Sample.wallClock, now: now)
         #expect(accepted.sentBytes.hex == vector.accepted)
         guard case .requestDecision(let request)? = accepted.last else {
-            Issue.record("결정 요청이 나오지 않았다")
+            Issue.record("No decision request was issued")
             return
         }
         #expect(request.confirmationCode == vector.confirmationCode)

@@ -2,11 +2,11 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 자료 형식 시험이 함께 쓰는 도구. 같은 시험 타깃의 다른 단위와 이름이 부딪치지 않게 한 이름 아래 둔다.
+/// Shared data format test helpers under one name to avoid collisions with other units in the test target.
 enum ModelTesting {
     static func bytes(_ hex: String) -> [UInt8] {
         guard let bytes = CBORTesting.bytes(hex: hex) else {
-            Issue.record("16진이 아니다: \(hex)")
+            Issue.record("Invalid hex: \(hex)")
             return []
         }
         return bytes
@@ -14,7 +14,7 @@ enum ModelTesting {
 
     static func hex(_ bytes: [UInt8]) -> String { CBORTesting.hex(bytes) }
 
-    /// `AUM(decoding:)`의 판정. 받아들이면 값, 아니면 오류.
+    /// The `AUM(decoding:)` outcome: the value if accepted, otherwise the error.
     static func decodeAUM(_ hex: String) -> Result<AUM, TKAError> {
         Result { () throws(TKAError) in try AUM(decoding: bytes(hex)) }
     }
@@ -23,10 +23,10 @@ enum ModelTesting {
         Result { () throws(TKAError) in try NodeKeySignature(decoding: bytes(hex)) }
     }
 
-    // MARK: 생성기
+    // MARK: Generators
 
-    /// 정준 쓰기의 성질 시험에 쓰는 임의의 값. 쓰고 읽으면 같은 값이 되는 모양만 만든다:
-    /// 인코딩에서 빠지는 빈 값(`keyID`·`meta`의 빈 배열)은 nil로, `State.lastAUMHash`는 nil로(동작 D8) 둔다.
+    /// Random values for canonical encoding property tests. Generates only values that round-trip unchanged:
+    /// sets empty values omitted by encoding (empty `keyID` and `meta` collections) to nil and sets `State.lastAUMHash` to nil (behavior D8).
     struct Generator {
         var random: CBORTesting.Random
 
@@ -45,7 +45,7 @@ enum ModelTesting {
         mutating func meta() -> [MetaEntry] {
             var entries: [MetaEntry] = []
             for _ in 0..<Int.random(in: 0...4, using: &random) {
-                // 올바른 UTF-8: 한 바이트 글자와 두 바이트 글자(é)를 섞는다.
+                // Valid UTF-8: mix single-byte characters and a two-byte character (é).
                 let key = (0..<Int.random(in: 0...3, using: &random)).flatMap { _ in
                     Bool.random(using: &random) ? [UInt8.random(in: 0x61...0x7a, using: &random)] : [0xc3, 0xa9]
                 }
@@ -102,8 +102,8 @@ enum ModelTesting {
             )
         }
 
-        /// 정준이 아니어도 Go가 받아들이는 인코딩: 머리의 인자 폭을 필요보다 넓게 고르고, 맵의 쌍을 섞고,
-        /// 구조 맵에는 모르는 필드를 하나 더한다(키 8~11은 어느 구조에도 없다).
+        /// Noncanonical encoding that Go still accepts: use wider header arguments than necessary, shuffle map pairs, and
+        /// add one unknown field to structure maps (keys 8–11 are absent from every structure).
         mutating func looseEncoding(of value: CBORValue, isStructure: Bool = true) -> [UInt8] {
             switch value {
             case .unsigned(let number):
@@ -117,7 +117,7 @@ enum ModelTesting {
                     $0 + looseEncoding(of: $1)
                 }
             case .map(let pairs):
-                // 텍스트 키의 맵은 `Meta`다. 모르는 필드를 더하지 않는다.
+                // A text-keyed map is `Meta`. Do not add unknown fields.
                 let isMeta = pairs.contains { if case .text = $0.key { true } else { false } }
                 var encodedPairs = pairs.map { looseEncoding(of: $0.key) + looseEncoding(of: $0.value) }
                 if isStructure, !isMeta, Bool.random(using: &random) {
@@ -128,7 +128,7 @@ enum ModelTesting {
             case .null:
                 return [0xf6]
             case .negative, .simple, .simpleOrFloat:
-                Issue.record("정준 바이트에는 없는 항목이다")
+                Issue.record("Item absent from the canonical bytes")
                 return []
             }
         }

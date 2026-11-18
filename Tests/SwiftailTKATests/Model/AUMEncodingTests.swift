@@ -1,5 +1,5 @@
-// 기준 바이트와 해시의 일부는 Go 시험에서 옮겼다:
-//   tailscale.com v1.104.7 `tka/aum_test.go`의 `TestSerialization`, `tka/state_test.go`의 `TestApplyUpdatesChain`.
+// Some reference bytes and hashes come from Go tests:
+//   `TestSerialization` in `tka/aum_test.go` and `TestApplyUpdatesChain` in `tka/state_test.go` from tailscale.com v1.104.7.
 //   Copyright (c) Tailscale Inc & contributors, SPDX-License-Identifier: BSD-3-Clause.
 
 import SwiftailCrypto
@@ -7,10 +7,10 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// AUM의 정준 쓰기와 해시(계약 동작 E2~E6, 7절 시험 3, 노트 3.1·3.7·7.1·8.1).
-@Suite("AUM 쓰기와 해시")
+/// Canonical AUM encoding and hashing (contract behaviors E2–E6, §7 test 3, note §§3.1, 3.7, 7.1, and 8.1).
+@Suite("AUM encoding and hashing")
 struct AUMEncodingTests {
-    @Test("동작 E4의 기준 바이트(노트 8.1)")
+    @Test("Reference bytes for behavior E4 (note §8.1)")
     func baselineBytes() {
         let updateKey = AUM(messageKind: 4, prevAUMHash: nil, keyID: [1], votes: 0, meta: [])
         #expect(ModelTesting.hex(updateKey.serialized()) == "a4010402f60441010600")
@@ -21,7 +21,7 @@ struct AUMEncodingTests {
         #expect(ModelTesting.hex(writer.bytes) == "a401f6028003800" + "41b0000010000000000")
     }
 
-    @Test("Meta는 인코딩한 키 바이트의 사전순으로 쓴다: a, c, bb")
+    @Test("Meta uses lexicographic order of encoded key bytes: a, c, bb")
     func metaOrder() {
         let meta = ["bb", "a", "c"].map { MetaEntry(key: Array($0.utf8), value: []) }
         let aum = AUM(messageKind: 4, prevAUMHash: nil, keyID: [1], meta: meta)
@@ -29,7 +29,7 @@ struct AUMEncodingTests {
     }
 
     /// Go `TestSerialization`(`tka/aum_test.go:17-159`).
-    @Test("Go TestSerialization의 AddKey·RemoveKey·UpdateKey와 같은 바이트")
+    @Test("Same bytes as AddKey, RemoveKey, and UpdateKey in Go TestSerialization")
     func goSerialization() throws {
         let cases: [(AUM, String)] = [
             (AUM(messageKind: 1, prevAUMHash: nil, key: TrustedKey(kind: 0, votes: 0, publicKey: nil)), "a3010102f603a301000200 03f6"),
@@ -46,15 +46,15 @@ struct AUMEncodingTests {
         }
     }
 
-    /// Go `TestSerialization`의 Checkpoint·Signature는 Go의 nil을 null로 쓴다(`DisablementValues`, `Signature`).
-    /// Swiftail은 그 둘의 nil과 빈 값을 가리지 않으므로(동작 E6) 다시 쓴 바이트가 다르다. 둘 다 정적 검사에서 떨어진다.
-    @Test("Go TestSerialization의 Checkpoint·Signature: 읽히고, 정적 검사에서 떨어진다")
+    /// Go `TestSerialization` Checkpoint and Signature encode Go nil as null (`DisablementValues` and `Signature`).
+    /// Swiftail treats nil and empty values alike for both fields (behavior E6), so it rewrites different bytes. Both examples fail static validation.
+    @Test("Checkpoint and Signature from Go TestSerialization decode and fail static validation")
     func goSerializationNilFields() throws {
         let checkpoint = "a3010502420102" + "05a3015820" + String(repeating: "00", count: 32) + "02f6038" + "1a3010102000342 0506"
         let signature = "a3010102f61781a20141010 2f6"
         for hex in [checkpoint, signature] {
             let input = ModelTesting.bytes(hex.replacingOccurrences(of: " ", with: ""))
-            // 체크포인트는 `LastAUMHash`가 있어 동작 D8로 디코딩에서 거절한다.
+            // The checkpoint has `LastAUMHash`, so behavior D8 rejects it during decoding.
             let result = Result { () throws(TKAError) in try AUM(decoding: input) }
             switch result {
             case .success(let aum):
@@ -66,9 +66,9 @@ struct AUMEncodingTests {
         }
     }
 
-    /// Go `TestApplyUpdatesChain`(`tka/state_test.go:96-164`)이 적은 AUM 해시. 체크포인트(`57343671…`)는 Go의 nil
-    /// `DisablementValues`(null)가 들어 있어 옮기지 않았다(동작 E6).
-    @Test("Go TestApplyUpdatesChain의 AUM 해시")
+    /// AUM hashes recorded by Go `TestApplyUpdatesChain` (`tka/state_test.go:96-164`). The checkpoint (`57343671…`) has Go nil
+    /// `DisablementValues` (null), so it was omitted (behavior E6).
+    @Test("AUM hashes from Go TestApplyUpdatesChain")
     func goChainHashes() {
         let addKey1234 = AUM(messageKind: 1, prevAUMHash: nil, key: TrustedKey(kind: 1, votes: 0, publicKey: [1, 2, 3, 4]))
         let parent = ModelTesting.bytes("53898e4311d0b6087fcbb871563868a16c629d9267df851fcfa7b52b31d2bd03")
@@ -95,7 +95,7 @@ struct AUMEncodingTests {
         }
     }
 
-    @Test("genesis 체크포인트(노트 7.1·8.1): 다시 쓰면 같은 558바이트, 해시와 SigHash가 Go와 같고 서명이 검증된다")
+    @Test("Genesis checkpoint (note §§7.1 and 8.1): rewrites to the same 558 bytes, matches Go hash and SigHash, and verifies the signature")
     func genesis() throws {
         let input = try #require(CBORVectorFile.load().vectors.first { $0.name == "genesis 체크포인트" }).input()
         #expect(input.count == 558)
@@ -118,7 +118,7 @@ struct AUMEncodingTests {
         )
     }
 
-    @Test("정준이 아닌 입력: 받아들이되 해시는 다시 쓴 바이트의 것이다")
+    @Test("Accepts noncanonical input and hashes the rewritten bytes")
     func nonCanonicalHash() throws {
         let file = try CBORVectorFile.load()
         var nonCanonicalCount = 0
@@ -136,7 +136,7 @@ struct AUMEncodingTests {
         #expect(nonCanonicalCount >= 20)
     }
 
-    @Test("SigHash는 서명만 빼고, 해시는 서명을 넣는다")
+    @Test("SigHash omits only signatures, and the hash includes them")
     func signatureHashExcludesSignatures() {
         var aum = AUM(messageKind: 3, prevAUMHash: nil)
         let unsignedHash = aum.hash.bytes
@@ -147,21 +147,21 @@ struct AUMEncodingTests {
         #expect(aum.signatureHash == unsignedHash)
     }
 
-    @Test("임의의 값: 쓰고 읽으면 같고, 다시 쓰면 같은 바이트, 비정준 인코딩도 같은 정준 바이트가 된다")
+    @Test("Arbitrary values round-trip, rewrite to the same bytes, and canonicalize to the same bytes from noncanonical encodings")
     func roundTripProperty() throws {
         var generator = ModelTesting.Generator(random: CBORTesting.Random(state: 0x2a2a))
         for index in 0..<400 {
             let aum = generator.aum()
             let canonical = aum.serialized()
             let decoded = try AUM(decoding: canonical)
-            #expect(decoded == aum, "값 \(index)")
-            #expect(decoded.serialized() == canonical, "값 \(index)")
+            #expect(decoded == aum, "Value \(index)")
+            #expect(decoded.serialized() == canonical, "Value \(index)")
 
             let loose = generator.looseEncoding(of: try CBOR.decode(canonical))
             let looselyDecoded = try AUM(decoding: loose)
-            #expect(looselyDecoded == aum, "값 \(index)")
-            #expect(looselyDecoded.serialized() == canonical, "값 \(index)")
-            #expect(looselyDecoded.hash == aum.hash, "값 \(index)")
+            #expect(looselyDecoded == aum, "Value \(index)")
+            #expect(looselyDecoded.serialized() == canonical, "Value \(index)")
+            #expect(looselyDecoded.hash == aum.hash, "Value \(index)")
         }
     }
 }

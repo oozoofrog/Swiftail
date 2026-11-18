@@ -1,16 +1,16 @@
-// 메시지 해석의 경계: Retry-After의 두 형식(RFC 7231 7.1.3, 날짜 세 형식 7.1.1.1), 문제 문서의 종류(RFC 8555 6.7),
-// nonce·token·URL의 규칙, 임의 바이트를 넣어도 죽지 않음.
+// Message parsing boundaries: two Retry-After forms (RFC 7231 7.1.3, three date formats in 7.1.1.1), problem document types (RFC 8555 6.7),
+// nonce, token, and URL rules, and no crash on arbitrary bytes.
 
 import Foundation
 import Testing
 
 @testable import SwiftailCertificates
 
-@Suite("ACME 메시지")
+@Suite("ACME messages")
 struct ACMEMessageTests {
     private let received = Date(timeIntervalSince1970: 784_111_777)  // Sun, 06 Nov 1994 08:49:37 GMT
 
-    @Test("Retry-After: 초")
+    @Test("Retry-After: seconds")
     func retryAfterSeconds() {
         #expect(RetryAfter.date(from: "120", receivedAt: received) == received.addingTimeInterval(120))
         #expect(RetryAfter.date(from: " 0 ", receivedAt: received) == received)
@@ -20,9 +20,9 @@ struct ACMEMessageTests {
         }
     }
 
-    @Test("Retry-After: HTTP 날짜 세 형식(RFC 7231 7.1.1.1의 예)")
+    @Test("Retry-After: three HTTP date formats (examples from RFC 7231 7.1.1.1)")
     func retryAfterDates() {
-        let later = received.addingTimeInterval(-60)  // 날짜가 받은 시각보다 뒤가 되도록 기준을 앞당긴다
+        let later = received.addingTimeInterval(-60)  // Move the reference time earlier so the date follows the receipt time
         for value in ["Sun, 06 Nov 1994 08:49:37 GMT", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"] {
             #expect(RetryAfter.date(from: value, receivedAt: later) == received, "\(value)")
         }
@@ -39,16 +39,16 @@ struct ACMEMessageTests {
         }
     }
 
-    @Test("Retry-After: RFC 850의 두 자리 해는 50년 규칙으로 읽는다")
+    @Test("Retry-After: parses RFC 850 two-digit years using the 50-year rule")
     func rfc850Years() {
-        let now = Date(timeIntervalSince1970: 1_800_000_000)  // 2027년
-        // 2070년은 43년 뒤이므로 2070년이다. 7일로 묶인다.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)  // Year 2027
+        // 2070 is 43 years ahead, so the year is 2070. The delay is capped at 7 days.
         #expect(RetryAfter.date(from: "Monday, 06-Jan-70 00:00:00 GMT", receivedAt: now) == now.addingTimeInterval(7 * 86_400))
-        // 2080년은 53년 뒤이므로 1980년이다(지난 시각).
+        // 2080 is 53 years ahead, so the year is 1980 (in the past).
         #expect(RetryAfter.date(from: "Sunday, 06-Jan-80 00:00:00 GMT", receivedAt: now) == Date(timeIntervalSince1970: 315_964_800))
     }
 
-    @Test("문제 문서의 종류는 ACME URN과 정확히 같을 때만")
+    @Test("Recognizes a problem document type only when it exactly matches the ACME URN")
     func problemKinds() {
         #expect(ProblemDocument(type: Fake.problem("badNonce")).kind == .badNonce)
         #expect(ProblemDocument(type: Fake.problem("rateLimited")).kind == .rateLimited)
@@ -59,7 +59,7 @@ struct ACMEMessageTests {
         #expect(ProblemDocument(responseBody: Array(#""urn:ietf:params:acme:error:badNonce""#.utf8)).type == "")
     }
 
-    @Test("nonce와 token은 base64url 1~512바이트")
+    @Test("Nonces and tokens are 1–512 bytes of base64url")
     func nonceAndTokenRules() {
         #expect(ACMEInputRules.isAcceptableNonce("oFvnlFP1wIhRlYS2jTaXbA"))
         #expect(ACMEInputRules.isAcceptableNonce(String(repeating: "_", count: 512)))
@@ -69,20 +69,20 @@ struct ACMEMessageTests {
         }
     }
 
-    @Test("URL은 https, 호스트 있음, 2,048바이트 이하")
+    @Test("URLs require https and a host and are at most 2,048 bytes")
     func urlRules() {
         #expect(ACMEInputRules.isAcceptableURL("https://acme.invalid/x"))
         #expect(ACMEInputRules.isAcceptableURL("HTTPS://acme.invalid/x"))
         for invalid in ["http://acme.invalid/x", "ftp://acme.invalid", "https://", "//acme.invalid/x", "not a url",
                         "https://acme.invalid/" + String(repeating: "a", count: 2028),
-                        // 다시 인코딩되어 서명한 url과 실제 요청이 달라지는 문자열, userinfo.
+                        // Strings whose re-encoding makes the signed url differ from the actual request, and userinfo.
                         "https://acme.invalid/a b", "https://acme.invalid/%zz", "https://user@acme.invalid/x",
                         "https://user:secret@acme.invalid/x"] {
             #expect(!ACMEInputRules.isAcceptableURL(invalid), "\(invalid)")
         }
     }
 
-    @Test("같은 출처: 스킴·호스트·포트가 같아야 한다(대소문자 무시)")
+    @Test("Same origin requires matching schemes, hosts, and ports (case-insensitive)")
     func sameOrigin() {
         let directory = "https://acme.invalid:14000/dir"
         #expect(ACMEInputRules.hasSameOrigin("https://acme.invalid:14000/order/1", as: directory))
@@ -93,7 +93,7 @@ struct ACMEMessageTests {
         }
     }
 
-    @Test("challenge는 쓰는 것만 검사하므로 다른 종류의 모양이 authorization을 버리지 않는다")
+    @Test("Validates only the challenge it uses, so a malformed challenge of another type does not discard the authorization")
     func lenientChallenges() throws {
         let body = Body.authorization("pending", challenges: [
             ["type": "http-01"], ["type": "tls-alpn-01", "url": "http://acme.invalid"], Body.challenge(),
@@ -102,14 +102,14 @@ struct ACMEMessageTests {
         #expect(authorization.dns01Challenge?.validated?.token == Fake.token(1))
     }
 
-    @Test("임의 바이트와 깨진 JSON을 넣어도 죽지 않는다")
+    @Test("Arbitrary bytes and malformed JSON do not cause a crash")
     func fuzz() {
         var random = SplitMix64(seed: 0xACE4)
         let seeds = [Body.directory(), Body.order("pending"), Body.authorization("pending"), Body.account(), Body.problem("x")]
         for _ in 0..<2000 {
             var bytes: [UInt8]
             if Bool.random(using: &random), let seed = seeds.randomElement(using: &random) {
-                // 올바른 본문의 바이트 몇 개를 바꾼다.
+                // Change a few bytes in a valid body.
                 bytes = seed
                 for _ in 0..<Int.random(in: 1...8, using: &random) {
                     bytes[Int.random(in: 0..<bytes.count, using: &random)] = UInt8.random(in: .min ... .max, using: &random)
@@ -124,7 +124,7 @@ struct ACMEMessageTests {
             _ = ProblemDocument(responseBody: bytes)
             _ = RetryAfter.date(from: String(decoding: bytes.prefix(40), as: UTF8.self), receivedAt: received)
         }
-        // 깊이 중첩된 JSON.
+        // Deeply nested JSON.
         let nested = Array((String(repeating: "[", count: 10_000) + String(repeating: "]", count: 10_000)).utf8)
         #expect(ACMEOrder(body: nested) == nil)
         #expect(ProblemDocument(responseBody: nested).type == "")

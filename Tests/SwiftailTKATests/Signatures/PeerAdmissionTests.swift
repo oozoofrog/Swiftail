@@ -4,10 +4,10 @@ import Testing
 
 @testable import SwiftailTKA
 
-/// 피어 집합의 판정(계약 동작 P1~P5, 단위 시험 11, 노트 4.9). 기준은 실제 Go `tkaFilterNetmapLocked`의 결과 `peerSets` 8개다.
-@Suite("피어 집합")
+/// Peer set outcomes (contract behaviors P1–P5, unit test 11, note §4.9). Uses 8 `peerSets` from the actual Go `tkaFilterNetmapLocked` as the reference.
+@Suite("Peer sets")
 struct PeerAdmissionTests {
-    @Test("peerSets 8개: 남는 피어와 그 순서가 Go와 같다")
+    @Test("All 8 peer sets match Go's retained peers and order")
     func goPeerSets() throws {
         let fixtures = try SignatureFixtureFile.load()
         #expect(fixtures.peerSets.count == 10)
@@ -25,8 +25,8 @@ struct PeerAdmissionTests {
         }
     }
 
-    /// 시험 11의 항목: 서명 없음, 낡은 키, 같은 회전 키 묶음에서 내력이 긴 것만, 같으면 모두, credential 사슬은 묶지 않음.
-    @Test("시험 11의 항목이 기준 자료에 있다")
+    /// Test 11 cases: missing signatures, stale keys, only the longest history within a rotation key group, all ties, and no grouping of credential chains.
+    @Test("The reference fixtures cover test 11")
     func contractItemsPresent() throws {
         let names = Set(try SignatureFixtureFile.load().peerSets.map(\.name))
         for name in [
@@ -37,8 +37,8 @@ struct PeerAdmissionTests {
         }
     }
 
-    /// Go는 낡은 키 검사를 모든 피어에 한다(`ipn/ipnlocal/tailnet-lock.go:225-231`). 자료에 없는 판정이다.
-    @Test("UnsignedPeerAPIOnly 피어도 회전으로 낡은 키면 빠진다")
+    /// Go checks all peers for stale keys (`ipn/ipnlocal/tailnet-lock.go:225-231`). The fixtures omit this outcome.
+    @Test("An UnsignedPeerAPIOnly peer is also removed when rotation makes its key stale")
     func apiOnlyPeerWithObsoleteKey() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let rotationKey = Curve25519.Signing.PrivateKey()
@@ -54,13 +54,13 @@ struct PeerAdmissionTests {
         #expect(admitted == [false, true, true])
     }
 
-    @Test("셋이 한 묶음이면 가장 긴 내력 하나만 남는다(정렬에 기대지 않는다)")
+    @Test("Of three peers in one group, only the longest history remains, independently of sorting")
     func longestOfThree() throws {
         let lockKey = Curve25519.Signing.PrivateKey()
         let rotationKey = Curve25519.Signing.PrivateKey()
         let state = SignatureTesting.state(trusting: [lockKey])
         let keys = (0..<6).map { _ in SignatureTesting.randomNodeKey() }
-        // 같은 direct(같은 회전 키)에서 갈라진 사슬 셋: 내력 1, 3, 2.
+        // Three chains branching from the same direct signature (same rotation key), with history lengths 1, 3, and 2.
         let direct = try SignatureTesting.direct(keys[0], by: lockKey, wrapping: rotationKey.publicKey)
         let one = try SignatureTesting.rotation(keys[1], nesting: direct, by: rotationKey)
         var three = try SignatureTesting.rotation(keys[2], nesting: direct, by: rotationKey)

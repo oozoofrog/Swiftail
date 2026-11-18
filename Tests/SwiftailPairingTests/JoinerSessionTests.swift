@@ -4,21 +4,21 @@ import SwiftailBase
 import Testing
 @testable import SwiftailPairing
 
-/// 들어오는 쪽 상태 기계(계약 동작 J2~J5. 7절 시험 4).
-@Suite("들어오는 쪽 상태 기계")
+/// Tests the joiner state machine (contract behaviors J2–J5, §7 test 4).
+@Suite("Joiner state machine")
 struct JoinerSessionTests {
     private typealias Rehearsal = PairingRehearsal
     private typealias Approval = PairingJoinerSession.Approval
 
-    /// 여는 쪽이 `Sample`의 값으로 만들 T.
+    /// The T that the host builds using `Sample` values.
     private static func transcript() throws -> PairingTranscript {
         try Sample.transcript()
     }
 
-    /// 여는 쪽이 보낼 `challenge`(계속).
+    /// The `challenge` that the host sends to continue.
     private static let challenge = [0] + Sample.hostCommitment
 
-    /// 본문에 맞는 HMAC을 붙인 `decision`.
+    /// A `decision` with an HMAC matching its body.
     private static func signed(_ body: [UInt8]) throws -> [UInt8] {
         body + (try transcript()).decisionCode(for: body, secret: Sample.secret)
     }
@@ -27,7 +27,7 @@ struct JoinerSessionTests {
         [1, UInt8(truncatingIfNeeded: stableID.count)] + stableID + [UInt8(truncatingIfNeeded: name.count)] + name
     }
 
-    /// `accepted`까지 맞아 결정을 기다리는 연결.
+    /// A connection waiting for a decision after a valid `accepted`.
     private static func waitingJoiner(at now: ContinuousClock.Instant = .now) throws -> PairingJoinerSession {
         var joiner = PairingJoinerSession(
             offer: Sample.offer(), deviceName: try Sample.deviceName(), nonce: Sample.joinerNonce,
@@ -41,7 +41,7 @@ struct JoinerSessionTests {
 
     // MARK: challenge (J3)
 
-    @Test("challenge의 상태 1이면 rejected, 모르는 상태나 남는 바이트는 위반이다")
+    @Test("Status 1 in challenge returns rejected. An unknown status or extra bytes is a violation")
     func readsChallenge() throws {
         var refused = try Rehearsal().joiner
         #expect(refused.receive([1] + Sample.hostCommitment, at: .now) == [.finish(.failure(.rejected))])
@@ -53,28 +53,28 @@ struct JoinerSessionTests {
         #expect(overlong.receive(Self.challenge + [0], at: .now) == [.finish(.failure(.protocolViolation))])
 
         var partial = try Rehearsal().joiner
-        #expect(partial.receive(Array(Self.challenge.dropLast()), at: .now).isEmpty, "다 올 때까지 기다린다")
+        #expect(partial.receive(Array(Self.challenge.dropLast()), at: .now).isEmpty, "Waits until all bytes arrive")
         #expect(partial.receive([Self.challenge[32]], at: .now).sentBytes.count == 64)
     }
 
-    @Test("hello에는 nonce가 아니라 그 약속이 실린다. nonce는 challenge를 받은 뒤 proof에서 연다")
+    @Test("hello carries the nonce commitment. The nonce is opened in proof after receiving challenge")
     func commitsToNonceBeforeChallenge() throws {
         var joiner = try Rehearsal().joiner
         let commitment = PairingTranscript.commitment(toJoinerNonce: Sample.joinerNonce)
         #expect(joiner.hello == Array("SWPR".utf8) + [3] + commitment + [17] + Array("rd-phone-5e6f7a8b".utf8))
         #expect(commitment != Sample.joinerNonce)
-        // 두 약속의 꼬리표가 달라, 같은 nonce의 약속도 쪽마다 다르다(상대의 약속을 되비춰 낼 수 없다).
+        // The commitments have different labels, so each party commits differently even with the same nonce. A party cannot reflect the peer's commitment back.
         #expect(commitment != PairingTranscript.commitment(toHostNonce: Sample.joinerNonce))
 
         let proof = joiner.receive(Self.challenge, at: .now).sentBytes
         #expect(Array(proof.prefix(32)) == Sample.joinerNonce)
     }
 
-    @Test("연결이 끝난 때에 따라: challenge 전은 unreachable, proof 뒤는 rejected, 결정 대기 중은 위반")
+    @Test("The result depends on when the connection ends: unreachable before challenge, rejected after proof, and a violation while awaiting a decision")
     func classifiesConnectionEnd() throws {
         var early = try Rehearsal().joiner
         #expect(early.connectionEnded() == [.finish(.failure(.unreachable))])
-        #expect(early.connectionEnded().isEmpty && early.deadline == nil, "끝난 뒤의 사건은 버린다")
+        #expect(early.connectionEnded().isEmpty && early.deadline == nil, "Discards events after completion")
 
         var proved = try Rehearsal().joiner
         _ = proved.receive(Self.challenge, at: .now)
@@ -86,7 +86,7 @@ struct JoinerSessionTests {
 
     // MARK: accepted (J4)
 
-    @Test("틀린 accepted면 hostNotVerified이고 확인 숫자를 내지 않는다")
+    @Test("An invalid accepted returns hostNotVerified and produces no SAS")
     func rejectsWrongAccepted() throws {
         var accepted = try Sample.accepted()
         accepted[63] ^= 1
@@ -94,15 +94,15 @@ struct JoinerSessionTests {
         _ = joiner.receive(Self.challenge, at: .now)
         #expect(joiner.receive(accepted, at: .now) == [.finish(.failure(.hostNotVerified))])
 
-        // 다른 꼬리표의 값(proof)을 되돌려 보내도 맞지 않는다.
+        // Sending back a value with a different label (proof) also fails.
         var echoed = try Rehearsal().joiner
         let proof = echoed.receive(Self.challenge, at: .now).sentBytes
         #expect(echoed.receive(Sample.hostNonce + proof.suffix(32), at: .now) == [.finish(.failure(.hostNotVerified))])
     }
 
-    @Test("accepted의 nonceH가 challenge의 약속과 다르면, 그 nonce로 만든 HMAC이 맞아도 hostNotVerified다")
+    @Test("A nonceH in accepted that differs from the challenge commitment returns hostNotVerified even with a valid HMAC for that nonce")
     func rejectsHostNonceThatBreaksCommitment() throws {
-        // 비밀을 아는 여는 쪽이 nonceJ를 본 뒤에 nonce를 갈아 확인 숫자를 고르려 한다. HMAC은 그 nonce로 제대로 만든다.
+        // The host knows the secret and tries changing the nonce after seeing nonceJ to choose the SAS. It computes a valid HMAC using that nonce.
         var other = Sample.hostNonce
         other[0] ^= 1
         let forged = try Sample.proofTranscript().bytes + other
@@ -112,7 +112,7 @@ struct JoinerSessionTests {
         _ = joiner.receive(Self.challenge, at: .now)
         #expect(joiner.receive(other + Array(code), at: .now) == [.finish(.failure(.hostNotVerified))])
 
-        // 같은 방법으로 만든 것이라도 약속한 nonce면 받는다(위의 거절은 HMAC이 아니라 약속 때문이다).
+        // The same construction is accepted with the committed nonce. The earlier rejection was due to the commitment.
         let honest = try Sample.proofTranscript().bytes + Sample.hostNonce
         let honestCode = HMAC<SHA256>.authenticationCode(
             for: Array("swiftail-pairing-3 host".utf8) + honest, using: SymmetricKey(data: Sample.secret))
@@ -121,7 +121,7 @@ struct JoinerSessionTests {
         #expect(second.receive(Sample.hostNonce + Array(honestCode), at: .now).confirmationCode != nil)
     }
 
-    @Test("확인 숫자는 accepted를 확인한 뒤에야 나온다. accepted가 한 바이트씩 와도 같다")
+    @Test("The SAS is produced only after validating accepted, even if accepted arrives one byte at a time")
     func confirmationCodeFollowsAccepted() throws {
         var joiner = try Rehearsal().joiner
         _ = joiner.receive(Self.challenge, at: .now)
@@ -133,7 +133,7 @@ struct JoinerSessionTests {
         #expect(joiner.receive([accepted[63]], at: .now) == [.awaitingApproval(confirmationCode: code)])
     }
 
-    @Test("accepted와 decision이 한 덩어리로 와도 차례대로 읽는다")
+    @Test("Reads accepted and decision in order even if they arrive together")
     func readsCoalescedMessages() throws {
         var joiner = try Rehearsal().joiner
         _ = joiner.receive(Self.challenge, at: .now)
@@ -148,7 +148,7 @@ struct JoinerSessionTests {
 
     // MARK: decision (J5)
 
-    @Test("승인, 거절, 시간 초과")
+    @Test("Approval, rejection, and timeout")
     func readsDecisions() throws {
         var approved = try Self.waitingJoiner()
         let body = Self.approvedBody(stableID: Array("nEXAMPLEHOST".utf8), name: Array("거실 Mac".utf8))
@@ -166,47 +166,47 @@ struct JoinerSessionTests {
         #expect(timedOut.receive(try Self.signed([3]), at: .now) == [.finish(.failure(.timedOut))])
     }
 
-    @Test("decision의 HMAC이 틀리면 hostNotVerified다. 본문만 바꿔도 걸린다")
+    @Test("An invalid decision HMAC returns hostNotVerified, even when only the body changes")
     func rejectsWrongDecisionCode() throws {
         var flipped = try Self.signed([2])
         flipped[32] ^= 0x80
         var joiner = try Self.waitingJoiner()
         #expect(joiner.receive(flipped, at: .now) == [.finish(.failure(.hostNotVerified))])
 
-        // 거절(2)의 HMAC을 시간 초과(3)에 붙인다.
+        // Attach the HMAC for rejection (2) to timeout (3).
         var swapped = try Self.signed([2])
         swapped[0] = 3
         var second = try Self.waitingJoiner()
         #expect(second.receive(swapped, at: .now) == [.finish(.failure(.hostNotVerified))])
 
-        // 승인의 StableID 한 글자를 바꾼다.
+        // Change one character in the approval StableID.
         var renamed = try Self.signed(Self.approvedBody(stableID: Array("nEXAMPLEHOST".utf8), name: Array("mac".utf8)))
         renamed[2] = UInt8(ascii: "m")
         var third = try Self.waitingJoiner()
         #expect(third.receive(renamed, at: .now) == [.finish(.failure(.hostNotVerified))])
 
-        // 다른 비밀로 만든 HMAC.
+        // An HMAC generated with a different secret.
         let foreign = [2] + (try Self.transcript()).decisionCode(for: [2], secret: [UInt8](repeating: 0x5B, count: 32))
         var fourth = try Self.waitingJoiner()
         #expect(fourth.receive(foreign, at: .now) == [.finish(.failure(.hostNotVerified))])
     }
 
-    @Test("모르는 상태는 위반이다", arguments: [UInt8(0), 4, 0xFF])
+    @Test("An unknown status is a violation", arguments: [UInt8(0), 4, 0xFF])
     func rejectsUnknownStatus(status: UInt8) throws {
         var joiner = try Self.waitingJoiner()
         #expect(joiner.receive([status], at: .now) == [.finish(.failure(.protocolViolation))])
     }
 
     @Test(
-        "HMAC이 맞아도 내용이 규격과 다르면 위반이다",
+        "Nonconforming content is a violation even with a valid HMAC",
         arguments: [
-            JoinerSessionTests.approvedBody(stableID: [], name: Array("mac".utf8)),                         // StableID 길이 0
-            JoinerSessionTests.approvedBody(stableID: Array("n\u{7F}".utf8), name: []),                     // 인쇄할 수 없는 ASCII
+            JoinerSessionTests.approvedBody(stableID: [], name: Array("mac".utf8)),                         // StableID length 0
+            JoinerSessionTests.approvedBody(stableID: Array("n\u{7F}".utf8), name: []),                     // Nonprintable ASCII
             JoinerSessionTests.approvedBody(stableID: Array("n\n".utf8), name: []),
-            JoinerSessionTests.approvedBody(stableID: Array("né".utf8), name: []),                          // ASCII가 아니다
-            JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: [UInt8](repeating: 0x61, count: 65)),   // 이름 65바이트
-            JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: [0xFF]),                       // UTF-8이 아니다
-            JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: [0xED, 0xA0, 0x80]),           // 대리 부호
+            JoinerSessionTests.approvedBody(stableID: Array("né".utf8), name: []),                          // Non-ASCII
+            JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: [UInt8](repeating: 0x61, count: 65)),   // 65-byte name
+            JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: [0xFF]),                       // Invalid UTF-8
+            JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: [0xED, 0xA0, 0x80]),           // Surrogate code point
             JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: Array("a\u{202E}b".utf8)),     // Cf
             JoinerSessionTests.approvedBody(stableID: Array("n".utf8), name: Array("a\u{1B}[2J".utf8)),     // Cc
         ])
@@ -215,13 +215,13 @@ struct JoinerSessionTests {
         #expect(joiner.receive(try Self.signed(body), at: .now) == [.finish(.failure(.protocolViolation))])
     }
 
-    @Test("decision 뒤에 바이트가 더 오면 위반이다")
+    @Test("Extra bytes after decision are a violation")
     func rejectsTrailingBytes() throws {
         var joiner = try Self.waitingJoiner()
         #expect(joiner.receive(try Self.signed([2]) + [0], at: .now) == [.finish(.failure(.protocolViolation))])
     }
 
-    @Test("StableID의 경계: 255바이트")
+    @Test("StableID boundary: 255 bytes")
     func acceptsLongestStableID() throws {
         let stableID = [UInt8](repeating: UInt8(ascii: "n"), count: 255)
         let name = Array(String(repeating: "a", count: 64).utf8)
@@ -235,9 +235,9 @@ struct JoinerSessionTests {
         #expect(result == .success(Approval(stableID: String(repeating: "n", count: 255), name: String(repeating: "a", count: 64))))
     }
 
-    // MARK: 기한 (J1, J4)
+    // MARK: Deadlines (J1, J4)
 
-    @Test("challenge 전의 기한은 받은 그대로이고 넘으면 unreachable이다")
+    @Test("The deadline before challenge is used as supplied, and passing it returns unreachable")
     func timesOutBeforeChallenge() throws {
         var rehearsal = try Rehearsal()
         #expect(rehearsal.joiner.deadline == rehearsal.start + .seconds(60))
@@ -245,22 +245,22 @@ struct JoinerSessionTests {
         #expect(rehearsal.joiner.advance(to: rehearsal.start + .seconds(60)) == [.finish(.failure(.unreachable))])
     }
 
-    @Test("proof를 보낸 때부터 130초 안에 decision이 없으면 timedOut이다")
+    @Test("If no decision arrives within 130 seconds of sending proof, returns timedOut")
     func timesOutWaitingForDecision() throws {
         let start = ContinuousClock.now
         var joiner = try Self.waitingJoiner(at: start + .seconds(5))
         #expect(joiner.deadline == start + .seconds(135))
-        #expect(joiner.advance(to: start + .seconds(60)).isEmpty, "challenge의 기한은 이제 없다")
+        #expect(joiner.advance(to: start + .seconds(60)).isEmpty, "The challenge deadline no longer applies")
         #expect(joiner.advance(to: start + .milliseconds(134_999)).isEmpty)
         #expect(joiner.advance(to: start + .seconds(135)) == [.finish(.failure(.timedOut))])
-        #expect(joiner.receive(try Self.signed([2]), at: start + .seconds(136)).isEmpty, "끝난 뒤의 바이트는 버린다")
+        #expect(joiner.receive(try Self.signed([2]), at: start + .seconds(136)).isEmpty, "Discards bytes after completion")
     }
 
-    // MARK: 연결의 두 끝 (5절, J2)
+    // MARK: Connection endpoints (§5, J2)
 
-    @Test("중간에 낀 노드가 바이트를 넘겨주면 두 쪽이 본 끝이 달라 증명이 맞지 않는다")
+    @Test("If an intermediary forwards the bytes, the parties see different endpoints and the proof fails")
     func relayedProofDoesNotVerify() throws {
-        // 들어오는 쪽은 중계 노드(100.64.0.9)를 여는 쪽으로 보고, 여는 쪽은 중계 노드를 들어오는 쪽으로 본다.
+        // The joiner sees the relay node (100.64.0.9) as the host, and the host sees the relay node as the joiner.
         var rehearsal = try Rehearsal(
             hostSees: try Sample.endpoints(joiner: "100.64.0.9:50000", host: "100.64.0.1:4747"),
             joinerSees: try Sample.endpoints(joiner: "100.64.0.2:49152", host: "100.64.0.9:4747"))
@@ -270,7 +270,7 @@ struct JoinerSessionTests {
         #expect(rehearsal.machine.hasOpenOffer)
     }
 
-    @Test("끝 하나만 달라도 P·T와 네 값이 모두 달라진다", arguments: [
+    @Test("Changing just one endpoint changes P, T, and all four values", arguments: [
         ("100.64.0.3:49152", "100.64.0.1:4747"), ("100.64.0.2:49153", "100.64.0.1:4747"),
         ("100.64.0.2:49152", "100.64.0.4:4747"), ("100.64.0.2:49152", "100.64.0.1:4748"),
         ("[fd7a:115c:a1e0::2]:49152", "100.64.0.1:4747"),
@@ -287,7 +287,7 @@ struct JoinerSessionTests {
         #expect(other.decisionCode(for: [2], secret: Sample.secret) != base.decisionCode(for: [2], secret: Sample.secret))
         #expect(other.confirmationCode(secret: Sample.secret) != base.confirmationCode(secret: Sample.secret))
 
-        // 들어오는 쪽이 다른 끝을 보았으면 여는 쪽의 accepted도 받아들이지 않는다.
+        // If the joiner sees a different endpoint, it also rejects the host's accepted.
         var session = PairingJoinerSession(
             offer: Sample.offer(), deviceName: try Sample.deviceName(), nonce: Sample.joinerNonce,
             endpoints: endpoints, challengeDeadline: .now + .seconds(60))
@@ -295,7 +295,7 @@ struct JoinerSessionTests {
         #expect(session.receive(try Sample.accepted(), at: .now) == [.finish(.failure(.hostNotVerified))])
     }
 
-    @Test("IPv4와 그 IPv4-mapped IPv6는 T에서 같은 16바이트다")
+    @Test("IPv4 and its IPv4-mapped IPv6 form use the same 16 bytes in T")
     func mapsIPv4() throws {
         let mapped = try Sample.transcript(
             endpoints: try Sample.endpoints(joiner: "[::ffff:100.64.0.2]:49152", host: "[::ffff:100.64.0.1]:4747"))
@@ -303,7 +303,7 @@ struct JoinerSessionTests {
     }
 
     @Test(
-        "tailnet 주소인가(J2)",
+        "Is this a tailnet address? (J2)",
         arguments: [
             ("100.64.0.1", true), ("100.127.255.255", true), ("100.100.100.100", true), ("::ffff:100.64.0.1", true),
             ("fd7a:115c:a1e0::1", true), ("fd7a:115c:a1e0:ab12:4843:cd96:6264:1", true),
@@ -315,7 +315,7 @@ struct JoinerSessionTests {
         #expect(PairingEndpoints.isTailnetAddress(try #require(IPAddress(address))) == expected)
     }
 
-    @Test("로컬 끝이 이 기기의 tailnet 주소이고 원격 끝이 tailnet 대역일 때만 터널을 거친 연결로 본다(J2)")
+    @Test("A connection counts as using the tunnel only if the local endpoint is this device's tailnet address and the remote endpoint is in the tailnet range (J2)")
     func requiresLocalAddressAndTailnetPeer() throws {
         let local = try #require(IPAddress("100.64.0.2"))
         let local6 = try #require(IPAddress("fd7a:115c:a1e0::2"))
@@ -325,7 +325,7 @@ struct JoinerSessionTests {
             try Sample.endpoints(joiner: "[fd7a:115c:a1e0::2]:49152", host: "[fd7a:115c:a1e0::1]:4747")
                 .isOnTailnet(localAddress: local6))
 
-        // 터널이 꺼진 채 같은 대역을 쓰는 로컬 네트워크: 두 끝이 모두 100.64.0.0/10이지만 로컬 끝이 이 기기의 주소가 아니다.
+        // A local network uses the same range with the tunnel off. Both endpoints are in 100.64.0.0/10, but the local endpoint is not this device's address.
         #expect(try !Sample.endpoints(joiner: "100.64.0.77:49152").isOnTailnet(localAddress: local))
         #expect(try !Sample.endpoints(joiner: "[fd7a:115c:a1e0::2]:49152").isOnTailnet(localAddress: local))
         #expect(try !Sample.endpoints(joiner: "192.168.0.7:49152").isOnTailnet(localAddress: local))
@@ -333,14 +333,14 @@ struct JoinerSessionTests {
         #expect(try !Sample.endpoints(host: "192.168.0.1:4747").isOnTailnet(localAddress: local))
     }
 
-    @Test("localAddress가 tailnet 대역 밖이면 걸지 않고 invalidConfiguration이다", arguments: ["192.168.0.7", "127.0.0.1", "100.128.0.1", "fe80::1"])
+    @Test("A localAddress outside the tailnet range prevents dialing and returns invalidConfiguration", arguments: ["192.168.0.7", "127.0.0.1", "100.128.0.1", "fe80::1"])
     func rejectsLocalAddressOutsideTailnet(address: String) async throws {
         let localAddress = try #require(IPAddress(address))
         let error = await pairingError {
             try await PairingJoiner.pair(with: Sample.offer(), deviceName: "rd-phone-5e6f7a8b", localAddress: localAddress)
         }
         guard case .invalidConfiguration = error else {
-            Issue.record("invalidConfiguration이어야 한다: \(String(describing: error))")
+            Issue.record("Expected invalidConfiguration: \(String(describing: error))")
             return
         }
     }

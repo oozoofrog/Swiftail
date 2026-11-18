@@ -1,7 +1,7 @@
-// `PairingHost.events`: 짝 목록과 제안의 변화. 비밀 없이 짝·StableID·제안의 상태만 싣는다.
+// `PairingHost.events` reports paired peer list and offer changes. Events carry only the paired peer, StableID, or offer state and contain no secrets.
 //
-// 제안을 열려면 노드에 자기 FQDN이 있어야 하므로 netmap을 직접 적용한다. 짝이 되는 흐름은 노드 하나가 자기 주소로
-// 들어오는 쪽과 여는 쪽을 함께 맡는다(`Tests/SwiftailLoopbackTests/BridgeTestSupport.swift`와 같은 방식).
+// Apply the netmap directly because a node needs its own FQDN to open an offer. To pair, a single node uses its own address
+// and acts as both joiner and host, as in `Tests/SwiftailLoopbackTests/BridgeTestSupport.swift`.
 
 import CryptoKit
 import Foundation
@@ -12,9 +12,9 @@ import Testing
 @testable import Swiftail
 @testable import SwiftailPairing
 
-@Suite("여는 쪽의 사건", .timeLimit(.minutes(1)))
+@Suite("Host events", .timeLimit(.minutes(1)))
 struct HostEventTests {
-    /// 자기 노드(`rd-mac-1a2b3c4d`, `100.64.0.1`)만 있는 netmap. 사용자 프로필이 있어 `whoIs`가 자기 신원을 준다.
+    /// A netmap with only the local node (`rd-mac-1a2b3c4d`, `100.64.0.1`). The user profile lets `whoIs` return the node's own identity.
     private static func netmap() throws -> Netmap {
         let key = "nodekey:" + [UInt8](repeating: 0x11, count: 32).hex
         let selfNode = #"{"ID":1,"StableID":"nStableSelf","Name":"\#(Sample.host).","User":101,"#
@@ -32,7 +32,7 @@ struct HostEventTests {
             controlURL: try #require(URL(string: "http://127.0.0.1:9")))
     }
 
-    /// 빈 임시 디렉터리를 만들어 넘기고, 끝나면 지운다.
+    /// Creates and passes an empty temporary directory, then removes it when done.
     private static func withDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
         let directory = Sample.temporaryDirectory()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -40,7 +40,7 @@ struct HostEventTests {
         return try await body(directory)
     }
 
-    /// `run()` 없이 netmap만 적용한 `.inProcess` 노드 위의 여는 쪽. 제안을 열 수 있고 `run()`이 듣기를 시작할 수 있다.
+    /// A host on an `.inProcess` node with the netmap applied and no `run()` call. The host can open offers, and `run()` can start listening.
     private static func host(in directory: URL, decide: @escaping @Sendable (PairingRequest) async -> Bool = { _ in false })
         async throws -> PairingHost
     {
@@ -49,16 +49,16 @@ struct HostEventTests {
         return try await PairingHost(node: node, port: Sample.port, storeDirectory: directory.appending(path: "store"), decide: decide)
     }
 
-    /// 흐름이 끝날 때까지 읽는다.
+    /// Reads the stream until it ends.
     private static func drain(_ events: AsyncStream<PairingHost.Event>) async -> [PairingHost.Event] {
         var seen: [PairingHost.Event] = []
         for await event in events { seen.append(event) }
         return seen
     }
 
-    // MARK: 제안
+    // MARK: Offers
 
-    @Test("제안을 열고 닫으면 opened·closed가 나온다. 열린 제안이 없을 때 닫으면 아무것도 나오지 않는다")
+    @Test("Opening and closing an offer emits opened and closed. Closing without an open offer emits nothing")
     func openAndClose() async throws {
         try await Self.withDirectory { directory in
             let host = try await Self.host(in: directory)
@@ -74,14 +74,14 @@ struct HostEventTests {
         }
     }
 
-    @Test("run() 동안 쓰이지 않은 제안은 만료 시각에 expired가 나온다. 새 제안을 열면 그 만료 시각을 따른다")
+    @Test("During run(), an unused offer emits expired at expiration. A new offer uses its own expiration time")
     func expires() async throws {
         try await Self.withDirectory { directory in
             let host = try await Self.host(in: directory)
             var events = host.events.makeAsyncIterator()
             let running = Task { try await host.run() }
             defer { running.cancel() }
-            // 긴 제안에 맞춰 잠든 타이머가 짧은 새 제안으로 다시 깨어나야 한다.
+            // The timer sleeping for the long-lived offer must wake again for the new short-lived offer.
             _ = try await host.openOffer(lifetime: .seconds(600))
             let offer = try await host.openOffer(lifetime: .seconds(2))
             #expect(await events.next() == .offerChanged(.opened))
@@ -89,15 +89,15 @@ struct HostEventTests {
             #expect(await events.next() == .offerChanged(.expired))
             let lateness = Date().timeIntervalSince(offer.expires)
             #expect((0...0.5).contains(lateness))
-            // 만료된 제안은 지워졌으니 닫아도 closed가 나오지 않는다.
+            // Expiration removes the offer, so closing emits no closed event.
             await host.closeOffer()
             _ = try await host.openOffer()
             #expect(await events.next() == .offerChanged(.opened))
         }
     }
 
-    /// `run()`이 도는 `.inProcess` 노드에 netmap을 적용해 `body`에 넘긴다. 자기 주소로 건 연결을 같은 노드가 받으니 노드 하나로
-    /// 짝 맺기를 끝까지 돌릴 수 있다.
+    /// Applies the netmap to a running `.inProcess` node and passes it to `body`. The same node receives connections to its own address, so one node
+    /// can complete the entire pairing flow.
     private static func withRunningNode<T>(_ directory: URL, _ body: (TailnetNode) async throws -> T) async throws -> T {
         let node = try TailnetNode(configuration: try configuration(directory), device: .inProcess)
         let stopping = Mutex(false)
@@ -105,7 +105,7 @@ struct HostEventTests {
             do throws(NodeError) {
                 try await node.run()
             } catch {
-                if !stopping.withLock({ $0 }) { Issue.record("시험 중에 run()이 끝났다: \(error)") }
+                if !stopping.withLock({ $0 }) { Issue.record("run() ended during the test: \(error)") }
             }
         }
         defer {
@@ -117,18 +117,18 @@ struct HostEventTests {
         return try await body(node)
     }
 
-    @Test("제안이 쓰였다는 used는 그 연결의 decide가 불렸을 때 이미 흐름에 닿아 있다")
+    @Test("The used event is already in the stream when decide is called for that connection")
     func usedPrecedesDecide() async throws {
         try await Self.withDirectory { directory in
             try await Self.withRunningNode(directory) { node in
-                // decide가 호스트의 흐름을 읽어야 하는데 호스트는 decide를 받아 만들어진다. 만든 뒤에 흐름을 건넨다.
+                // The decide closure needs to read the host's stream, and the host takes decide at initialization. Pass the stream after initialization.
                 let stream = Mutex<AsyncStream<PairingHost.Event>?>(nil)
                 let seenInDecide = Mutex<[PairingHost.Event]?>(nil)
                 let host = try await PairingHost(
                     node: node, port: Sample.port, storeDirectory: directory.appending(path: "store")
                 ) { _ in
                     guard let events = stream.withLock({ $0 }) else { return false }
-                    // decide가 돌아가기 전에 `.used`를 읽는지 확인한다. 끝없이 기다리지 않도록 5초 뒤 읽기를 취소한다.
+                    // Check that `.used` is read before decide returns. Cancel the read after 5 seconds to bound the wait.
                     let reader = Task {
                         var seen: [PairingHost.Event] = []
                         for await event in events {
@@ -157,7 +157,7 @@ struct HostEventTests {
         }
     }
 
-    @Test("들어오는 쪽이 제안을 쓰면 used, 승인해 저장하면 pairedPeerAdded가 차례로 나온다")
+    @Test("The joiner using the offer emits used, then approval and storage emit pairedPeerAdded")
     func pairs() async throws {
         try await Self.withDirectory { directory in
             try await Self.withRunningNode(directory) { node in
@@ -173,7 +173,7 @@ struct HostEventTests {
                 #expect(await events.next() == .offerChanged(.opened))
                 #expect(await events.next() == .offerChanged(.used))
                 guard case .pairedPeerAdded(let peer) = await events.next() else {
-                    Issue.record("pairedPeerAdded가 아니다")
+                    Issue.record("Expected pairedPeerAdded")
                     return
                 }
                 #expect(peer.peer.stableID == "nStableSelf")
@@ -183,9 +183,9 @@ struct HostEventTests {
         }
     }
 
-    // MARK: 짝 목록
+    // MARK: Paired peer list
 
-    @Test("짝을 지우면 pairedPeerRemoved가 나온다. 없는 짝을 지우면 나오지 않는다")
+    @Test("Removing a paired peer emits pairedPeerRemoved. Removing a missing paired peer emits nothing")
     func removes() async throws {
         try await Self.withDirectory { directory in
             let store = directory.appending(path: "store")
@@ -207,9 +207,9 @@ struct HostEventTests {
         }
     }
 
-    // MARK: 구독
+    // MARK: Subscription
 
-    @Test("소비하던 Task를 취소하면 흐름이 끝난다. 다시 구독해도 사건을 받지 못한다")
+    @Test("Canceling the consuming Task ends the stream. Subscribing again yields no events")
     func cancellingTheConsumerEndsTheStream() async throws {
         try await Self.withDirectory { directory in
             let host = try await Self.host(in: directory)
@@ -221,16 +221,16 @@ struct HostEventTests {
             consumer.cancel()
             #expect(await consumer.value.isEmpty)
 
-            // 끝난 흐름에는 사건이 닿지 않고, 새로 구독해도 같은 흐름이라 곧바로 끝난다.
+            // Events cannot reach the ended stream. A new subscription uses the same stream and ends immediately.
             _ = try await host.openOffer()
             var again = host.events.makeAsyncIterator()
             #expect(await again.next() == nil)
         }
     }
 
-    // MARK: 버퍼
+    // MARK: Buffer
 
-    @Test("읽지 않은 사건은 가장 새 것 64개만 남고, 여는 쪽이 사라지면 흐름이 끝난다")
+    @Test("Only the 64 newest unread events remain, and the stream ends when the host goes away")
     func bufferLimit() async throws {
         try await Self.withDirectory { directory in
             var host: PairingHost? = try await Self.host(in: directory)
@@ -247,8 +247,8 @@ struct HostEventTests {
 }
 
 private extension TailnetNode {
-    /// 등록을 거치지 않고 엔진을 만들고 netmap을 적용한 뒤 상태를 `.running`으로 만든다. 자기 주소로 건 연결은 엔진이
-    /// 되돌려 같은 노드가 받는다.
+    /// Creates the engine without registering, applies the netmap, and sets the state to `.running`. The engine loops connections to its own address back
+    /// to the same node.
     func prepareForPairingTesting(_ netmap: Netmap) {
         engine = TailnetEngine(nodeKey: Curve25519.KeyAgreement.PrivateKey(), discoKey: .zero, now: .now, wallClock: Date())
         apply(netmap)
