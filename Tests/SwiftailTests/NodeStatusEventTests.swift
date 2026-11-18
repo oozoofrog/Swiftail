@@ -1,24 +1,24 @@
-// `NodeEvent.statusChanged`: `status`가 실제로 바뀔 때만 나오고, 한 갱신의 맨 뒤에 오고, 사건 버퍼에서 다른 사건을
-// 밀어내지 않는다.
+// `NodeEvent.statusChanged` is emitted only when `status` actually changes. It comes last in an update and does not evict other events
+// from the event buffer.
 
 import Foundation
 import Testing
 @testable import Swiftail
 
-@Suite("노드: status 바뀜 사건", .timeLimit(.minutes(1)))
+@Suite("Node status change events", .timeLimit(.minutes(1)))
 struct NodeStatusEventTests {
     private static func node() throws -> TailnetNode {
         try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
     }
 
-    /// 끝낸 흐름에 남은 사건을 모두 읽는다.
+    /// Reads all remaining events from a finished stream.
     private static func remaining(_ events: inout AsyncStream<NodeEvent>.Iterator) async -> [NodeEvent] {
         var rest: [NodeEvent] = []
         while let event = await events.next() { rest.append(event) }
         return rest
     }
 
-    @Test("첫 netmap은 stateChanged 뒤에 statusChanged를 낸다. 그때 status는 이미 netmap을 담고 있다")
+    @Test("The first netmap emits statusChanged after stateChanged, with the netmap already reflected in status")
     func firstNetmap() async throws {
         let node = try Self.node()
         await node.markHomeConnectedForStatusTesting()
@@ -31,7 +31,7 @@ struct NodeStatusEventTests {
         #expect(status.addresses.map(\.description) == ["100.64.0.1"])
     }
 
-    @Test("같은 netmap이 다시 오면 아무것도 내지 않는다")
+    @Test("An identical netmap emits nothing when it arrives again")
     func sameNetmap() async throws {
         let node = try Self.node()
         var events = node.events.makeAsyncIterator()
@@ -45,7 +45,7 @@ struct NodeStatusEventTests {
         #expect(await Self.remaining(&events) == [])
     }
 
-    @Test("상태가 그대로여도 피어 수나 자기 주소가 바뀌면 statusChanged만 낸다")
+    @Test("A change in peer count or local addresses emits only statusChanged if the state is unchanged")
     func netmapContentChanges() async throws {
         let node = try Self.node()
         var events = node.events.makeAsyncIterator()
@@ -64,7 +64,7 @@ struct NodeStatusEventTests {
         #expect(await node.status.addresses.map(\.description) == ["100.64.0.9"])
     }
 
-    @Test("netmap 전의 상태 전이(로그인 필요)도 stateChanged 뒤에 statusChanged를 낸다")
+    @Test("A state transition before the netmap arrives (login required) also emits statusChanged after stateChanged")
     func loginRequired() async throws {
         let node = try Self.node()
         let url = try #require(URL(string: "https://login.example.com/a/0000"))
@@ -73,9 +73,9 @@ struct NodeStatusEventTests {
         #expect(await NodeTestSupport.drain(node.events) == [.stateChanged(.needsLogin(url)), .statusChanged])
     }
 
-    // MARK: 버퍼
+    // MARK: Buffer
 
-    @Test("읽지 않은 statusChanged는 하나만, 맨 뒤에 남는다")
+    @Test("Keeps only one unread statusChanged at the back")
     func coalescesToEnd() async {
         let queue = NodeEventQueue()
         queue.push(.statusChanged)
@@ -93,7 +93,7 @@ struct NodeStatusEventTests {
         ])
     }
 
-    @Test("버퍼가 차도 statusChanged는 다른 사건을 밀어내지 않고, 다른 사건은 가장 새 것 64개가 남는다")
+    @Test("Even when the buffer fills, statusChanged does not evict other events, and the 64 newest other events remain")
     func bufferLimit() async {
         let queue = NodeEventQueue()
         let limit = TailnetNode.eventBufferLimit
@@ -116,7 +116,7 @@ struct NodeStatusEventTests {
         #expect(seen == [.statusChanged] + (5..<(limit + 5)).map(path))
     }
 
-    @Test("기다리던 소비자는 넣는 즉시 받고, 소비자의 Task가 취소되면 nil을 받는다")
+    @Test("A waiting consumer receives an event as soon as it is inserted and receives nil if its Task is canceled")
     func waitingConsumer() async {
         let queue = NodeEventQueue()
         let waiting = Task { await queue.next() }
@@ -131,7 +131,7 @@ struct NodeStatusEventTests {
 }
 
 extension NodeStatusEventTests {
-    @Test("둘째 소비자가 와도 첫째의 흐름이 끝나지 않는다. 끝낼 때는 기다리던 소비자가 모두 nil을 받는다")
+    @Test("A second consumer does not end the first one's stream. When the stream ends, all waiting consumers receive nil")
     func secondConsumerDoesNotEndTheFirst() async {
         let queue = NodeEventQueue()
         let first = Task { await queue.next() }
@@ -154,11 +154,11 @@ extension NodeStatusEventTests {
 }
 
 extension NodeStatusEventTests {
-    @Test("기다리던 소비자의 Task를 취소하면 그 소비자는 nil을 받고, 취소된 자리가 뒤의 사건을 가로채지 않는다")
+    @Test("Canceling a waiting consumer's Task yields nil for that consumer, and the canceled slot does not intercept later events")
     func cancelledWaiterDoesNotSwallowEvents() async {
         let queue = NodeEventQueue()
         let cancelled = Task { await queue.next() }
-        // 소비자가 기다리기 시작했는지는 밖에서 알 수 없다. 시작 전에 취소돼도, 기다리다 취소돼도 결과는 같아야 한다.
+        // An external observer cannot tell when a consumer begins waiting. The outcome must be the same whether cancellation occurs before the wait starts or during it.
         await Task.yield()
         cancelled.cancel()
         #expect(await cancelled.value == nil)
@@ -167,7 +167,7 @@ extension NodeStatusEventTests {
         #expect(await queue.next() == .statusChanged)
     }
 
-    @Test("소비하던 Task를 취소하면 events 흐름이 끝나고, 다시 구독해도 사건을 받지 못한다")
+    @Test("Canceling the consuming Task ends the events stream, and resubscribing yields no events")
     func cancellingTheConsumerEndsEvents() async throws {
         let node = try Self.node()
         let consumer = Task {
@@ -186,12 +186,12 @@ extension NodeStatusEventTests {
 }
 
 private extension TailnetNode {
-    /// 홈 DERP 연결이 선 것처럼 상태 기계에 넣는다(netmap 뒤면 `.running`).
+    /// Updates the state machine as if the home DERP connection came up (`.running` after the netmap).
     func markHomeConnectedForStatusTesting() {
         announce(stateMachine.connected())
     }
 
-    /// 제어 서버가 로그인 URL을 준 것처럼 상태 기계에 넣는다.
+    /// Updates the state machine as if the control server supplied a login URL.
     func requireLoginForStatusTesting(_ url: URL) {
         announce(stateMachine.loginRequired(url))
     }

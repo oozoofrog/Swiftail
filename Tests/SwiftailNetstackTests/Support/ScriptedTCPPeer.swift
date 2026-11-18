@@ -2,7 +2,7 @@ import SwiftailBase
 import SwiftailNetstack
 import Testing
 
-/// 상대 구현을 쓰지 않고 RFC 머리를 직접 만드는 시험용 피어다. 기대 번호는 ISS에서 계산한다.
+/// A test peer that constructs RFC headers directly without using a peer implementation. Expected sequence numbers are calculated from ISS.
 struct ScriptedTCPPeer {
     var connection: TCPConnection
     let origin: ContinuousClock.Instant

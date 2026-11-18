@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 연결 종료 통계(계약 "연결 종료 통계 로그"): 손실 없는 전송, RTO 한 번, fast retransmit 한 번, 받은 SACK 옵션의 수,
-/// 스택의 `.closed`에 실리는 값.
-@Suite("연결 종료 통계")
+/// Connection close statistics (contract "Connection Close Statistics Log"): a lossless transfer, one RTO, one fast retransmit, the count of received SACK options,
+/// and the values carried by the stack's `.closed`.
+@Suite("Connection close statistics")
 struct ConnectionStatisticsTests {
-    /// 맞붙인 연결의 첫 데이터 세그먼트(번호 1001)만 한 번 잃게 한다.
+    /// Drops only the first data segment (sequence number 1001) of the connected pair once.
     private func dropFirstDataSegment(_ pair: inout ConnectionPair) {
         var dropped = false
         pair.drop = { side, segment in
@@ -17,7 +17,7 @@ struct ConnectionStatisticsTests {
         }
     }
 
-    @Test("손실 없는 전송: 보낸 바이트만 세고 다시 보낸 것·손실 신호는 0이다")
+    @Test("Lossless transfer: counts only sent bytes, with zero retransmissions and loss signals")
     func lossless() throws {
         var pair = try ConnectionPair.established()
         let data = patternBytes(count: 100 * 1_024)
@@ -34,18 +34,18 @@ struct ConnectionStatisticsTests {
         #expect(statistics.slowStartThresholdReductions == 0)
         #expect(statistics.sackPermitted)
         #expect(statistics.maximumCongestionWindow > NewRenoCongestionControl.initialWindow(maximumSegmentSize: 1_240))
-        // 받기만 한 쪽은 보낸 것이 없다.
+        // The receive-only side sent nothing.
         #expect(pair.server.statistics.sentBytes == 0)
         #expect(pair.server.statistics.maximumCongestionWindow
             == NewRenoCongestionControl.initialWindow(maximumSegmentSize: 1_240))
     }
 
-    @Test("RTO 한 번: SACK 실린 ACK 둘 뒤 만료, 한 세그먼트를 다시 보낸다")
+    @Test("One RTO: expiration after two ACKs carrying SACK, with one segment retransmitted")
     func retransmissionTimeout() throws {
         var pair = try ConnectionPair.established()
         dropFirstDataSegment(&pair)
-        // 뒤따르는 세그먼트가 둘이라 SACK 실린 ACK도 둘이다(fast retransmit에 못 미친다). 그 가운데 첫째는 직전에 받은
-        // ACK(SYN-ACK, 창 확장 전의 창 필드)와 창이 달라 중복 ACK가 아니다(RFC 5681 2). 그래서 중복 ACK는 하나다.
+        // Two segments follow, so there are two ACKs carrying SACK (too few for fast retransmit). The first has a different window from the immediately preceding
+        // ACK (SYN-ACK, unscaled window field), so it is not a duplicate ACK (RFC 5681 2). That leaves one duplicate ACK.
         let data = patternBytes(count: 3 * 1_240)
         _ = pair.write(data, from: .client)
         try pair.run(for: .seconds(1))
@@ -60,7 +60,7 @@ struct ConnectionStatisticsTests {
         #expect(statistics.slowStartThresholdReductions == 1)
     }
 
-    @Test("fast retransmit 한 번: SACK 실린 ACK 일곱, 중복 ACK 여섯(첫째는 창이 달라 빠진다), RTO 없음")
+    @Test("One fast retransmit: seven ACKs carrying SACK, six duplicate ACKs (the first is excluded because its window differs), and no RTO")
     func fastRetransmit() throws {
         var pair = try ConnectionPair.established()
         pair.batched = false
@@ -80,7 +80,7 @@ struct ConnectionStatisticsTests {
         #expect(statistics.slowStartThresholdReductions == 1)
     }
 
-    @Test("SACK 옵션이 실린 ACK를 센다. SACK을 협상하지 않았어도 온 것은 센다")
+    @Test("Counts ACKs carrying a SACK option, even when SACK was not negotiated")
     func receivedSACKOptions() throws {
         var peer = try ManualPeer.established()
         #expect(!peer.connection.statistics.sackPermitted)
@@ -98,7 +98,7 @@ struct ConnectionStatisticsTests {
         #expect(peer.connection.statistics.fastRetransmits == 1)
     }
 
-    @Test("스택의 .closed는 끝날 때의 통계를 싣는다")
+    @Test("The stack's .closed carries statistics at the time the connection ends")
     func stackReportsStatistics() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
@@ -107,7 +107,7 @@ struct ConnectionStatisticsTests {
         try pair.deliver()
         let events = pair.client.abort(ids.client, at: pair.now).events
         guard case .closed(ids.client, .aborted, let statistics) = events.last else {
-            Issue.record("끝난 사건이 없다: \(events)")
+            Issue.record("No close event: \(events)")
             return
         }
         #expect(statistics.sentBytes == 5_000)

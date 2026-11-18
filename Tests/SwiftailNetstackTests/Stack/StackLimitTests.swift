@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 상한: 리스너 16, 맺는 중 64·주소당 16, accept 대기열 32, 연결 256, TIME-WAIT 기록 1,024(주소별 연결·기록 64개는
+/// Limits: 16 listeners, 64 opening connections and 16 per address, 32 in the accept queue, 256 connections, and 1,024 TIME-WAIT records (for 64 connections and records per address, see
 /// `StackPeerShareTests`).
-/// 넘친 SYN은 응답 없이 버리고 `limitReached`로 알린다. 자리가 나면 다시 받는다.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S3~S6, X7, M과 시험 11.
-@Suite("스택: 상한")
+/// Excess SYNs are dropped without a response and reported as `limitReached`. The stack accepts SYNs again once space frees up.
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors S3~S6, X7, M, and test 11.
+@Suite("Stack limits")
 struct StackLimitTests {
     static let server = IPEndpoint(address: WireHosts.v4b, port: 443)
 
@@ -15,7 +15,7 @@ struct StackLimitTests {
         StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: .now)
     }
 
-    @Test("리스너는 포트 하나에 하나, 16개까지. 닫으면 그 포트를 다시 열 수 있고 옛 ID는 새 리스너를 건드리지 않는다")
+    @Test("Allows one listener per port and up to 16 listeners. Closing frees that port for reopening, and the old ID leaves the new listener alone")
     func listeners() throws {
         var stack = makeServer()
         var ids: [TCPStack.ListenerID] = []
@@ -31,7 +31,7 @@ struct StackLimitTests {
         #expect(stack.listenersByPort[3] == reopened)
     }
 
-    @Test("상대 주소 하나의 맺는 중인 연결은 16개까지다. 17번째 SYN은 답 없이 버린다")
+    @Test("Allows up to 16 opening connections for one remote address and drops the 17th SYN without a response")
     func halfOpenPerAddress() throws {
         var stack = makeServer()
         _ = try stack.listen(on: 443)
@@ -42,14 +42,14 @@ struct StackLimitTests {
         }
         let extra = peerSegment(from: IPEndpoint(address: address, port: 1_016), to: Self.server, flags: [.syn])
         #expect(stack.receive(extra.packet, at: .now) == [.dropped(.limitReached(.halfOpenConnectionsPerAddress))])
-        // 다른 주소는 받는다.
+        // Accepts a different address.
         let other = peerSegment(from: IPEndpoint(address: StackHosts.peer(2), port: 1_000), to: Self.server, flags: [.syn])
         #expect(stack.receive(other.packet, at: .now).segments.count == 1)
         #expect(stack.halfOpenCountByAddress[address] == 16)
         expectStackInvariants(stack)
     }
 
-    @Test("맺는 중인 연결은 스택 전체 64개까지다. 247초 안에 사라지면 다시 받는다")
+    @Test("Allows up to 64 opening connections stack-wide. Accepts more once they disappear within 247 seconds")
     func halfOpenTotal() throws {
         var stack = makeServer()
         let start = ContinuousClock.now
@@ -67,7 +67,7 @@ struct StackLimitTests {
         #expect(stack.receive(extra.packet, at: start) == [.dropped(.limitReached(.halfOpenConnections))])
         expectStackInvariants(stack)
 
-        // SYN-ACK 재전송 7번 뒤 247초에 사라진다(계약 동작 R4, X7). 그 전에는 남는다.
+        // Disappears at 247 seconds after 7 SYN-ACK retransmissions (contract behaviors R4, X7). Stays until then.
         _ = advance(&stack, to: start + .seconds(246))
         #expect(stack.halfOpenCount == 64)
         let late = advance(&stack, to: start + .seconds(248))
@@ -78,7 +78,7 @@ struct StackLimitTests {
         expectStackInvariants(stack)
     }
 
-    /// 노드처럼 `nextDeadline`마다 `advance`를 부르며 `limit`까지 간다.
+    /// Advances to `limit`, calling `advance` at every `nextDeadline` as a node does.
     func advance(_ stack: inout TCPStack, to limit: ContinuousClock.Instant) -> [TCPStack.Output] {
         var outputs: [TCPStack.Output] = []
         while let deadline = stack.nextDeadline, deadline <= limit {
@@ -87,7 +87,7 @@ struct StackLimitTests {
         return outputs + stack.advance(to: limit)
     }
 
-    /// `stack`에 상대 `peer`의 핸드셰이크를 끝까지 한다. 리스너 대기열에 들어가면 그 사건을 돌려준다.
+    /// Completes the handshake from remote `peer` into `stack`. Returns the event if the connection enters the listener queue.
     func handshake(_ stack: inout TCPStack, from peer: IPEndpoint) -> [TCPStack.Output] {
         let syn = peerSegment(from: peer, to: Self.server, sequence: 1_000, flags: [.syn])
         guard let synAck = stack.receive(syn.packet, at: .now).segments.first else { return [] }
@@ -97,11 +97,11 @@ struct StackLimitTests {
         return stack.receive(ack.packet, at: .now)
     }
 
-    @Test("accept 대기열은 32개까지다. 차면 SYN을 답 없이 버리고, 꺼내면 다시 받는다")
+    @Test("The accept queue holds up to 32. If full, drops SYNs without a response. Dequeuing allows SYNs again")
     func acceptQueue() throws {
         var stack = makeServer()
         let listener = try stack.listen(on: 443)
-        // 대기열에서 피어 하나의 몫은 16개라 두 주소로 채운다(`StackPeerGroupTests`).
+        // Each peer has 16 slots in the queue, so fill it with two addresses (`StackPeerGroupTests`).
         for port in UInt16(1_000)..<1_032 {
             let address = StackHosts.peer(port < 1_016 ? 1 : 2)
             #expect(handshake(&stack, from: IPEndpoint(address: address, port: port)) == [.event(.acceptable(listener))])
@@ -118,7 +118,7 @@ struct StackLimitTests {
         expectStackInvariants(stack)
     }
 
-    @Test("맺는 중인 연결도 리스너의 대기열 자리를 쓴다(대기열이 32개를 넘지 않는다)")
+    @Test("An opening connection takes a slot in the listener's queue too (the queue stays within 32)")
     func acceptQueueCountsHalfOpen() throws {
         var stack = makeServer()
         let listener = try stack.listen(on: 443)
@@ -136,11 +136,11 @@ struct StackLimitTests {
         expectStackInvariants(stack)
     }
 
-    @Test("연결은 256개까지다. 넘으면 connect는 limitReached, SYN은 답 없이 버린다. 하나를 끊으면 다시 된다")
+    @Test("Allows up to 256 connections. Above the limit, connect yields limitReached and SYNs are dropped without a response. Aborting one makes room again")
     func connections() throws {
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: .now)
         _ = try stack.listen(on: 9_000)
-        // 상대 주소 하나에는 64개까지라 네 주소로 나눈다(M6 검토 A).
+        // Each remote address allows up to 64 connections, so use four addresses (M6 review A).
         let remotes = [WireHosts.v4b, StackHosts.peer(1), StackHosts.peer(2), StackHosts.peer(3)].map {
             IPEndpoint(address: $0, port: 443)
         }
@@ -163,14 +163,14 @@ struct StackLimitTests {
         expectStackInvariants(stack)
     }
 
-    @Test("TIME-WAIT 기록은 1,024개까지이고 기한 전에 버리지 않는다. 차 있는 동안 connect·SYN을 받지 않는다")
+    @Test("Allows up to 1,024 TIME-WAIT records and keeps them until the deadline. Rejects connect and SYN while full")
     func timeWaitRecords() throws {
         let start = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: start)
         let listener = try stack.listen(on: 443)
         let kept = try stack.acceptHandmade(
             from: IPEndpoint(address: StackHosts.peer(100), port: 1_000), to: Self.server, listener: listener, at: start)
-        // 상대 주소 하나에는 기록 64개까지라 열여섯 주소로 채운다(M6 검토 A).
+        // Each remote address allows up to 64 records, so fill the limit with sixteen addresses (M6 review A).
         for index in 0..<1_024 {
             let peer = IPEndpoint(address: StackHosts.peer(UInt8(1 + index / 64)), port: UInt16(2_000 + index % 64))
             let id = try stack.acceptHandmade(from: peer, to: Self.server, listener: listener, at: start)
@@ -185,14 +185,14 @@ struct StackLimitTests {
         let syn = peerSegment(from: IPEndpoint(address: StackHosts.peer(102), port: 5_000), to: Self.server, flags: [.syn])
         #expect(stack.receive(syn.packet, at: start) == [.dropped(.limitReached(.timeWaitRecords))])
 
-        // 기록이 찬 뒤 TIME-WAIT에 든 연결은 기록이 되지 않고 연결로 남아 TIME-WAIT를 마친다.
+        // Once the records are full, a connection entering TIME-WAIT stays a connection and completes TIME-WAIT without becoming a record.
         try stack.closeIntoTimeWait(kept, at: start)
         #expect(stack.timeWaitRecords.count == 1_024)
         #expect(stack.connections.count == 1)
         #expect(stack.connections.values.first?.connection.state == .timeWait)
         expectStackInvariants(stack)
 
-        // 그 기록의 4-튜플로 온 FIN 재전송에는 ACK한다.
+        // Acknowledge a retransmitted FIN for that record's 4-tuple.
         let (tuple, record) = try #require(stack.timeWaitRecords.first)
         let reply = stack.retransmitFin(to: tuple, at: start)
         #expect(reply.map(\.flags) == [[.ack]])

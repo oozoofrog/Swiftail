@@ -3,15 +3,15 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 한 피어가 다른 피어의 몫을 고갈시키지 못한다(M6 검토 A): 상대 주소 하나의 연결 64개, TIME-WAIT 기록 64개,
-/// 기록의 수명 240초. 계약 동작 S의 "검토에서 고친 것", M.
-@Suite("스택: 피어 하나의 몫")
+/// One peer cannot exhaust another peer's quota (M6 review A): 64 connections and 64 TIME-WAIT records per remote address,
+/// and a record lifetime of 240 seconds. Contract behavior S, "Changes from the Review," M.
+@Suite("Stack per-peer quota")
 struct StackPeerShareTests {
     static let server = IPEndpoint(address: WireHosts.v4b, port: 443)
 
-    // MARK: 연결
+    // MARK: Connections
 
-    @Test("상대 주소 하나의 연결은 64개까지다. 응용이 놓았지만 닫는 중인 것도 센다. 다른 주소는 영향받지 않는다")
+    @Test("Allows up to 64 connections per remote address, including connections released by the application but still closing. Other addresses are unaffected")
     func connectionsPerAddress() throws {
         let now = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: now)
@@ -29,24 +29,24 @@ struct StackPeerShareTests {
         #expect(throws: TCPStack.ConnectError.limitReached) {
             try stack.connect(to: IPEndpoint(address: address, port: 80), at: now)
         }
-        // 다른 주소는 받고 건다.
+        // Accepts connections from and connects to a different address.
         let other = peerSegment(from: IPEndpoint(address: StackHosts.peer(2), port: 1_000), to: Self.server, flags: [.syn])
         #expect(stack.receive(other.packet, at: now).segments.map(\.flags) == [[.syn, .ack]])
         _ = try stack.connect(to: IPEndpoint(address: StackHosts.peer(3), port: 80), at: now)
 
-        // close로 놓은 연결은 FIN을 주고받는 동안 자리를 쥔다.
+        // A connection released with close keeps its slot while exchanging FINs.
         _ = stack.close(ids[0], at: now)
         #expect(stack.connections[ids[0]]?.role == .released)
         #expect(stack.receive(extra.packet, at: now) == [.dropped(.limitReached(.connectionsPerAddress))])
-        // abort한 연결은 자리를 놓는다. 그 뒤 65번째 SYN을 받는다.
+        // A connection ended with abort releases its slot. The 65th SYN is accepted afterward.
         _ = stack.abort(ids[1], at: now)
         #expect(stack.receive(extra.packet, at: now).segments.map(\.flags) == [[.syn, .ack]])
         expectStackInvariants(stack)
     }
 
-    // MARK: TIME-WAIT 기록
+    // MARK: TIME-WAIT records
 
-    @Test("기록은 상대 주소 하나에 64개까지다. 65번째가 생기면 그 주소의 가장 오래된 기록을 지운다. 다른 주소의 기록은 그대로다")
+    @Test("Allows up to 64 records per remote address. The 65th evicts that address's oldest record. Records for other addresses stay intact")
     func timeWaitRecordsPerAddress() throws {
         let start = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: start)
@@ -73,7 +73,7 @@ struct StackPeerShareTests {
         expectStackInvariants(stack)
     }
 
-    @Test("기록의 수명은 만든 때부터 240초를 넘지 않는다. FIN 재전송마다 60초를 다시 재되 그 끝을 넘겨 늘리지 않는다")
+    @Test("Record lifetime is at most 240 seconds from creation. Each FIN retransmission restarts the 60-second timer without extending it beyond that limit")
     func timeWaitRecordLifetime() throws {
         let created = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: created)
@@ -91,7 +91,7 @@ struct StackPeerShareTests {
         #expect(stack.timeWaitRecords[tuple]?.deadline == created + .seconds(240))
         #expect(stack.nextDeadline == created + .seconds(240))
 
-        // 직전: 남아서 FIN에 답하고 기한은 그대로다. 그 시각이 되면 사라진다.
+        // Just before the deadline, the record remains, answers FIN, and keeps its deadline. It disappears at the deadline.
         let justBefore = created + .seconds(240) - .milliseconds(1)
         _ = stack.advance(to: justBefore)
         #expect(stack.retransmitFin(to: tuple, at: justBefore).map(\.flags) == [[.ack]])
@@ -102,7 +102,7 @@ struct StackPeerShareTests {
         expectStackInvariants(stack)
     }
 
-    @Test("한 주소가 기록 1,024개를 만들고 59초마다 FIN을 다시 보내도 기록을 쥐지 못한다. 다른 피어의 SYN과 connect는 된다")
+    @Test("An address cannot keep its records even by creating 1,024 and resending FIN every 59 seconds. SYNs and connect still work for other peers")
     func timeWaitRecordsCannotBeHeld() throws {
         let start = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.serverAddresses, now: start)

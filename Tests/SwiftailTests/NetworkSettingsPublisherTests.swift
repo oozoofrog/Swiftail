@@ -4,14 +4,14 @@ import SwiftailEngine
 import Testing
 @testable import Swiftail
 
-/// 터널 설정을 내는 규칙. 계약 `docs/contracts/SwiftailTunnel.md` 동작 E, 시험 목록 6.
-@Suite("터널 설정 내기")
+/// Tests when tunnel settings are published. Contract `docs/contracts/SwiftailTunnel.md` behavior E, test list 6.
+@Suite("Publishing tunnel settings")
 struct NetworkSettingsPublisherTests {
     private static func settings(_ addresses: [String] = ["100.64.0.1/32"]) throws -> TunnelNetworkSettings {
         try #require(TunnelNetworkSettings(netmap: try NodeTestSupport.netmap(addresses: addresses), mtu: 1280, at: Date()))
     }
 
-    @Test("자기 주소가 없으면(산출 nil) 내지 않는다")
+    @Test("Publishes nothing without a local address (nil result)")
     func noAddresses() throws {
         var publisher = NetworkSettingsPublisher()
         #expect(TunnelNetworkSettings(netmap: try NodeTestSupport.netmap(addresses: []), mtu: 1280, at: Date()) == nil)
@@ -19,7 +19,7 @@ struct NetworkSettingsPublisherTests {
         #expect(publisher.published == nil)
     }
 
-    @Test("같은 값은 내지 않고, 주소 없는 netmap이 와도 마지막 값을 지우지 않는다")
+    @Test("Skips identical values and retains the last value if an addressless netmap arrives")
     func sameValue() throws {
         var publisher = NetworkSettingsPublisher()
         let first = try Self.settings()
@@ -29,14 +29,14 @@ struct NetworkSettingsPublisherTests {
         #expect(publisher.published == first)
     }
 
-    @Test("DNS 서버만, match 도메인만 바뀌어도 낸다")
+    @Test("Publishes when only the DNS servers or only the match domains change")
     func dnsOnlyChanges() throws {
         var publisher = NetworkSettingsPublisher()
         let base = try Self.settings()
         _ = publisher.publish(base)
 
         var servers = base
-        // DNS 서버 목록만 바꾼다(있으면 비우고, 없으면 하나 넣는다).
+        // Change only the DNS server list (clear it if populated, add one server if empty).
         servers.dnsServers = base.dnsServers.isEmpty ? [try #require(IPAddress("100.100.100.100"))] : []
         #expect(publisher.publish(servers) == servers)
 
@@ -46,12 +46,12 @@ struct NetworkSettingsPublisherTests {
         #expect(publisher.published == domains)
     }
 
-    @Test("읽지 않은 설정은 새 것이 대신해 흐름에서 하나만 나오고, status에 마지막 값이 남는다")
+    @Test("A new value replaces unread settings so the stream yields only one value, and status retains the latest value")
     func newestReplacesUnread() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try NodeTestSupport.netmap(addresses: ["100.64.0.1/32"]))
         await node.apply(try NodeTestSupport.netmap(addresses: ["100.64.0.7/32"]))
-        // 주소 없는 netmap은 빈 설정을 내지 않는다.
+        // An addressless netmap does not publish empty settings.
         await node.apply(try NodeTestSupport.netmap(addresses: []))
         await node.settingsContinuation.finish()
 

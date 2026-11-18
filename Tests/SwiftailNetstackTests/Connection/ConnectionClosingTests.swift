@@ -3,10 +3,10 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 닫기의 모든 순서, RST, TIME-WAIT, FIN-WAIT-2 linger, keep-alive. 계약 동작 T6·T7·T8과 시험 3.
-@Suite("닫기")
+/// All closing orders, RST, TIME-WAIT, FIN-WAIT-2 linger, and keep-alive. Contract behaviors T6·T7·T8 and test 3.
+@Suite("Closing")
 struct ConnectionClosingTests {
-    @Test("한쪽이 먼저 닫음: FIN-WAIT-1 → FIN-WAIT-2 → TIME-WAIT 60초, 상대는 CLOSE-WAIT → LAST-ACK → 끝")
+    @Test("One side closes first: FIN-WAIT-1 → FIN-WAIT-2 → TIME-WAIT for 60 seconds, while the peer goes through CLOSE-WAIT → LAST-ACK → closed")
     func activeCloseFirst() throws {
         var pair = try ConnectionPair.established()
         pair.finishWriting(.client)
@@ -27,7 +27,7 @@ struct ConnectionClosingTests {
         #expect(pair.clientEvents.last == .closed(.finished))
     }
 
-    @Test("동시에 닫음: 양쪽이 CLOSING을 거쳐 TIME-WAIT")
+    @Test("Simultaneous close: both sides pass through CLOSING into TIME-WAIT")
     func simultaneousClose() throws {
         var pair = try ConnectionPair.established()
         pair.finishWriting(.client)
@@ -40,7 +40,7 @@ struct ConnectionClosingTests {
         #expect(pair.server.state == .closed)
     }
 
-    @Test("반닫힘 뒤에도 반대 방향 데이터는 끝까지 간다")
+    @Test("Data in the opposite direction continues to completion after a half-close")
     func halfCloseThenReverseData() throws {
         var pair = try ConnectionPair.established()
         pair.finishWriting(.client)
@@ -55,7 +55,7 @@ struct ConnectionClosingTests {
         #expect(pair.client.state == .timeWait)
     }
 
-    @Test("FIN 앞의 데이터는 모두 읽을 수 있고, 읽은 뒤에 끝을 안다")
+    @Test("All data before FIN is readable, and EOF is detected after reading it")
     func dataBeforeFIN() throws {
         var pair = try ConnectionPair.established()
         _ = pair.write(patternBytes(count: 3_000), from: .client)
@@ -66,7 +66,7 @@ struct ConnectionClosingTests {
         #expect(pair.serverEvents == [.established, .readable, .endOfStream])
     }
 
-    @Test("앞에 빈 곳이 있는 FIN은 곧바로 ACK하되 소비하지 않고, 빈 곳이 메워지면 재전송 없이 소비한다")
+    @Test("A FIN preceded by a gap is acknowledged immediately but not consumed. Filling the gap consumes it without retransmission")
     func finAfterGapIsConsumedWhenGapFills() throws {
         var peer = try ManualPeer.established()
         let base = peer.peerNext
@@ -77,7 +77,7 @@ struct ConnectionClosingTests {
         #expect(outputs.segments.first?.acknowledgmentNumber == base)
         #expect(peer.connection.state == .established)
         #expect(!peer.connection.hasReceivedEndOfStream)
-        // 빈 곳을 메우면 적어 둔 FIN까지 이어진다(RFC 9293 3.10.7.4 SHLD-31). FIN의 번호는 base + 150이다.
+        // Filling the gap continues through the recorded FIN (RFC 9293 3.10.7.4 SHLD-31). The FIN sequence number is base + 150.
         let filled = peer.receive(peer.segment(sequence: base, flags: [.ack], payload: patternBytes(count: 100)))
         #expect(filled.events.contains(.endOfStream))
         #expect(peer.connection.hasReceivedEndOfStream)
@@ -86,7 +86,7 @@ struct ConnectionClosingTests {
         #expect(filled.segments.last?.acknowledgmentNumber == base.advanced(by: 151))
     }
 
-    @Test("close에 읽지 않은 데이터가 있으면 곧바로 RST, 상대는 .reset")
+    @Test("close with unread data immediately sends RST, and the peer gets .reset")
     func closeWithUnreadData() throws {
         var pair = try ConnectionPair.established()
         _ = pair.write(patternBytes(count: 100), from: .server)
@@ -101,7 +101,7 @@ struct ConnectionClosingTests {
         #expect(pair.serverEvents.last == .closed(.reset))
     }
 
-    @Test("close 뒤에 데이터가 오면 RST로 끝낸다(SHLD-3). finishWriting만 했으면 받는다")
+    @Test("Data arriving after close ends the connection with RST (SHLD-3). It is accepted after finishWriting alone")
     func dataAfterClose() throws {
         var pair = try ConnectionPair.established()
         pair.close(.client)
@@ -120,7 +120,7 @@ struct ConnectionClosingTests {
         #expect(halfClosed.read(.client) == patternBytes(count: 10))
     }
 
-    @Test("abort: <SEQ=SND.NXT><CTL=RST>, 상대는 .reset으로 끝나고 버퍼를 비운다")
+    @Test("abort: <SEQ=SND.NXT><CTL=RST>, the peer ends with .reset and clears its buffers")
     func abort() throws {
         var pair = try ConnectionPair.established()
         _ = pair.write(patternBytes(count: 100), from: .client)
@@ -136,12 +136,12 @@ struct ConnectionClosingTests {
         #expect(pair.serverEvents.last == .closed(.reset))
         #expect(pair.server.readableByteCount == 0)
         #expect(pair.server.nextDeadline == nil)
-        // 끝난 연결은 아무것도 내지 않는다.
+        // A closed connection emits nothing.
         #expect(pair.client.abort().isEmpty)
         #expect(pair.client.write(patternBytes(count: 1)[...], at: pair.now).accepted == 0)
     }
 
-    @Test("TIME-WAIT에서 FIN의 재전송에 ACK하고 60초를 다시 잰다")
+    @Test("Acknowledges a retransmitted FIN in TIME-WAIT and restarts the 60-second timer")
     func timeWaitRestartsOnRetransmittedFIN() throws {
         var pair = try ConnectionPair.established()
         pair.finishWriting(.client)
@@ -162,7 +162,7 @@ struct ConnectionClosingTests {
         #expect(pair.client.state == .closed)
     }
 
-    @Test("TIME-WAIT는 FIN 재전송이 다시 재어도 든 때부터 240초를 넘지 않는다(2MSL)")
+    @Test("TIME-WAIT is capped at 240 seconds from entry (2MSL), even when a retransmitted FIN restarts the timer")
     func timeWaitLifetimeCap() throws {
         var pair = try ConnectionPair.established()
         pair.finishWriting(.client)
@@ -184,7 +184,7 @@ struct ConnectionClosingTests {
         #expect(pair.client.state == .closed)
     }
 
-    @Test("TIME-WAIT의 RST가 RCV.NXT면 끝난다, 창 밖 데이터에는 ACK")
+    @Test("An RST at RCV.NXT ends TIME-WAIT, and out-of-window data gets an ACK")
     func timeWaitOtherSegments() throws {
         var pair = try ConnectionPair.established()
         pair.finishWriting(.client)
@@ -203,7 +203,7 @@ struct ConnectionClosingTests {
         #expect(pair.client.receive(reset, at: pair.now) == [.event(.closed(.reset))])
     }
 
-    @Test("close한 연결은 FIN-WAIT-2에서 60초 안에 FIN이 오지 않으면 .timedOut. finishWriting만 했으면 기한이 없다")
+    @Test("A connection closed with close yields .timedOut if no FIN arrives in FIN-WAIT-2 within 60 seconds. With only finishWriting, there is no deadline")
     func finWait2Linger() throws {
         var closing = try ConnectionPair.established()
         closing.close(.client)
@@ -222,25 +222,25 @@ struct ConnectionClosingTests {
         #expect(halfClosed.client.nextDeadline == halfClosed.now - .seconds(120) + .seconds(7_200))
     }
 
-    @Test("keep-alive: 2시간 뒤 <SEQ=SND.NXT−1>, 답이 오면 다시 2시간, 9번 답이 없으면 .timedOut")
+    @Test("Keep-alive: <SEQ=SND.NXT−1> after 2 hours, another 2 hours after a reply, and .timedOut after 9 unanswered probes")
     func keepalive() throws {
         var pair = try ConnectionPair.established()
         let start = pair.now
         try pair.run(for: .seconds(7_200) - .milliseconds(1))
         #expect(pair.clientSent.count == 2)
         try pair.run(for: .milliseconds(1))
-        // 같은 시각에 상대의 탐침도 오므로(그 답은 SEQ=SND.NXT의 ACK다) 이 시각의 첫 세그먼트가 탐침이다.
+        // The peer's probe also arrives at the same time (its reply is an ACK with SEQ=SND.NXT), so the first segment at this time is the probe.
         let probe = try #require(pair.clientSent.first { $0.at == start + .seconds(7_200) }?.segment)
         #expect(probe.flags == [.ack])
         #expect(probe.payload.isEmpty)
         #expect(probe.sequenceNumber == pair.client.sendNext.advanced(by: .max))
         #expect(pair.client.state == .established)
 
-        // 답하는 상대: 연결이 그대로다.
+        // A responding peer leaves the connection intact.
         try pair.run(for: .seconds(3_600))
         #expect(pair.client.state == .established)
 
-        // 답하지 않는 상대.
+        // A peer that does not respond.
         var silent = try ConnectionPair.established()
         silent.drop = { side, _ in side == .server }
         let silentStart = silent.now

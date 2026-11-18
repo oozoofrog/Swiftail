@@ -3,14 +3,14 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// ISN(RFC 6528 3)과 나가는 연결의 주소·포트 고르기.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S7·S8, K1과 시험 11.
-@Suite("스택: ISN과 포트")
+/// Tests ISN (RFC 6528 3) and address and port selection for outbound connections.
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors S7·S8, K1, and test 11.
+@Suite("Stack ISN and ports")
 struct StackOpeningTests {
     static let local = IPEndpoint(address: WireHosts.v4a, port: 49_152)
     static let remote = IPEndpoint(address: WireHosts.v4b, port: 443)
 
-    @Test("같은 4-튜플의 ISN은 4µs마다 1씩 는다")
+    @Test("The ISN for the same 4-tuple increments by 1 every 4µs")
     func clockComponent() {
         let start = ContinuousClock.now
         let generator = InitialSequenceNumberGenerator(secret: StackHosts.secret, origin: start)
@@ -21,12 +21,12 @@ struct StackOpeningTests {
         #expect(oneSecond.distance(from: first) == 250_000)
         #expect(fourMicroseconds.distance(from: first) == 1)
         #expect(generator.clockComponent(at: start + .microseconds(3)) == 0)
-        // 4.7시간쯤 뒤 2³²에서 돈다. 넘치지 않는다.
+        // Wraps at 2³² after roughly 4.7 hours without overflowing.
         #expect(generator.clockComponent(at: start + .seconds(17_180)) == UInt32(truncatingIfNeeded: UInt64(17_180) * 250_000))
         _ = generator.clockComponent(at: start - .seconds(1))
     }
 
-    @Test("다른 4-튜플, 다른 비밀의 ISN은 서로 다르다")
+    @Test("Different 4-tuples and different secrets produce distinct ISNs")
     func secretFunction() {
         let start = ContinuousClock.now
         let generator = InitialSequenceNumberGenerator(secret: StackHosts.secret, origin: start)
@@ -46,7 +46,7 @@ struct StackOpeningTests {
         #expect(other.initialSequenceNumber(local: Self.local, remote: Self.remote, at: start) != base)
     }
 
-    @Test("connect의 SYN과 리스너의 SYN-ACK는 생성기의 ISN을 쓴다")
+    @Test("The SYN from connect and the listener's SYN-ACK use the generator's ISN")
     func stackUsesGenerator() throws {
         let start = ContinuousClock.now
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: start)
@@ -63,7 +63,7 @@ struct StackOpeningTests {
         #expect(synAck?.sequenceNumber == generator.initialSequenceNumber(local: listening, remote: peer, at: at))
     }
 
-    @Test("ISN의 비밀은 description과 dump에 나오지 않는다")
+    @Test("The ISN secret does not appear in description or dump")
     func secretIsHidden() {
         let secret = [UInt8](repeating: 0xC3, count: 32)
         let stack = TCPStack(isnSecret: secret, now: .now)
@@ -76,7 +76,7 @@ struct StackOpeningTests {
         #expect(described.contains("비밀 숨김"))
     }
 
-    @Test("나가는 포트는 49152부터 차례로 고르고, 65535 다음은 49152다")
+    @Test("Outbound ports are selected in order starting at 49152, and 49152 follows 65535")
     func sequentialPorts() throws {
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: .now)
         let first = try stack.connect(to: Self.remote, at: .now).connection
@@ -89,7 +89,7 @@ struct StackOpeningTests {
         #expect(stack.nextEphemeralPort == 49_152)
     }
 
-    @Test("연결이나 TIME-WAIT 기록이 쓰는 4-튜플은 건너뛴다. 상대가 다르면 같은 포트를 쓴다")
+    @Test("Skips a 4-tuple used by a connection or TIME-WAIT record, and reuses the port for a different peer")
     func skipsUsedTuples() throws {
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: .now)
         _ = try stack.connect(to: Self.remote, at: .now)  // 49152
@@ -109,7 +109,7 @@ struct StackOpeningTests {
         expectStackInvariants(stack)
     }
 
-    @Test("출발 주소는 목적지와 같은 계열의 자기 주소다. 없으면 noLocalAddress")
+    @Test("The source address is a local address of the same family as the destination. If absent, yields noLocalAddress")
     func sourceAddressFamily() throws {
         var stack = StackHosts.makeStack(addresses: StackHosts.clientAddresses, now: .now)
         let remote6 = IPEndpoint(address: WireHosts.v6b, port: 443)
@@ -122,7 +122,7 @@ struct StackOpeningTests {
         #expect(throws: TCPStack.ConnectError.noLocalAddress) { try none.connect(to: Self.remote, at: .now) }
     }
 
-    @Test("거절된 connect는 .closed(id, .refused)로 끝나고 지워진다")
+    @Test("A refused connect ends with .closed(id, .refused) and is removed")
     func refused() throws {
         var pair = StackPair()
         let (id, outputs) = try pair.client.connect(to: IPEndpoint(address: WireHosts.v4b, port: 80), at: pair.now)

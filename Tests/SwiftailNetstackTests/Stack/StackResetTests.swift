@@ -3,9 +3,9 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 연결 없는 곳의 RST와 LISTEN의 규칙(RFC 9293 3.10.7.1·3.10.7.2).
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S2·S3, X8·X9와 시험 11.
-@Suite("스택: RST와 LISTEN")
+/// RST without a connection and the LISTEN rules (RFC 9293 3.10.7.1·3.10.7.2).
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors S2·S3, X8·X9, and test 11.
+@Suite("Stack RST and LISTEN")
 struct StackResetTests {
     static let peer = IPEndpoint(address: WireHosts.v4a, port: 40_000)
     static let closedPort = IPEndpoint(address: WireHosts.v4b, port: 80)
@@ -17,7 +17,7 @@ struct StackResetTests {
         return stack
     }
 
-    @Test("연결 없는 곳의 ACK 없는 세그먼트: <SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>")
+    @Test("A segment without ACK where there is no connection: <SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>")
     func resetWithoutAcknowledgment() throws {
         var stack = try makeStack()
         let syn = peerSegment(from: Self.peer, to: Self.closedPort, sequence: 1_000, flags: [.syn])
@@ -30,13 +30,13 @@ struct StackResetTests {
         #expect(reply.first?.destination == Self.peer)
         #expect(reply.first?.payload.isEmpty == true)
 
-        // SEG.LEN은 데이터와 FIN을 센다.
+        // SEG.LEN counts data and FIN.
         let finWithData = peerSegment(from: Self.peer, to: Self.closedPort, sequence: 7, flags: [.fin], payload: [1, 2, 3, 4, 5])
         #expect(stack.receive(finWithData.packet, at: .now).segments.first?.acknowledgmentNumber == SequenceNumber(13))
         #expect(stack.connections.isEmpty)
     }
 
-    @Test("연결 없는 곳의 ACK 있는 세그먼트: <SEQ=SEG.ACK><CTL=RST>, IPv6도 같다")
+    @Test("A segment with ACK where there is no connection: <SEQ=SEG.ACK><CTL=RST>, including IPv6")
     func resetWithAcknowledgment() throws {
         var stack = try makeStack()
         let data = peerSegment(
@@ -56,7 +56,7 @@ struct StackResetTests {
         #expect(reply6.first?.destination.address == WireHosts.v6a)
     }
 
-    @Test("RST에는 답하지 않는다(연결 없는 곳, 리스너)")
+    @Test("Does not respond to RST (no connection or a listener)")
     func noReplyToReset() throws {
         var stack = try makeStack()
         for destination in [Self.closedPort, Self.listening] {
@@ -68,7 +68,7 @@ struct StackResetTests {
         #expect(stack.connections.isEmpty)
     }
 
-    @Test("리스너에 온 ACK에는 <SEQ=SEG.ACK><CTL=RST>, SYN도 ACK도 RST도 없으면 듣지 않는 포트처럼 <RST,ACK>로 답한다")
+    @Test("An ACK to a listener gets <SEQ=SEG.ACK><CTL=RST>. With no SYN, ACK, or RST, the listener responds with <RST,ACK> as a non-listening port would")
     func listenerRules() throws {
         var stack = try makeStack()
         let ack = peerSegment(from: Self.peer, to: Self.listening, acknowledgment: SequenceNumber(4_321), flags: [.ack])
@@ -80,7 +80,7 @@ struct StackResetTests {
         let synAck = peerSegment(from: Self.peer, to: Self.listening, acknowledgment: SequenceNumber(10), flags: [.syn, .ack])
         #expect(stack.receive(synAck.packet, at: .now).segments.map(\.flags) == [[.rst]])
 
-        // 듣지 않는 포트와 같은 답이어야 한다(`StackListenProbeTests`).
+        // The reply must match the non-listening port (`StackListenProbeTests`).
         for flags: TCPSegment.Flags in [[], [.fin], [.psh]] {
             let stray = peerSegment(from: Self.peer, to: Self.listening, flags: flags, payload: [1])
             #expect(stack.receive(stray.packet, at: .now).segments.map(\.flags) == [[.rst, .ack]])
@@ -88,7 +88,7 @@ struct StackResetTests {
         #expect(stack.connections.isEmpty)
     }
 
-    @Test("리스너에 온 SYN은 SYN-ACK로 답하고 맺는 중인 연결이 된다")
+    @Test("A SYN to a listener gets a SYN-ACK and becomes an opening connection")
     func listenerAcceptsSynchronize() throws {
         var stack = try makeStack()
         let syn = peerSegment(from: Self.peer, to: Self.listening, sequence: 1_000, flags: [.syn])
@@ -101,7 +101,7 @@ struct StackResetTests {
         expectStackInvariants(stack)
     }
 
-    @Test("상대 MSS가 64보다 작은 SYN에는 RST로 답하고 연결을 만들지 않는다")
+    @Test("A SYN with a peer MSS below 64 gets RST and creates no connection")
     func tinySegmentSize() throws {
         var stack = try makeStack()
         let syn = peerSegment(from: Self.peer, to: Self.listening, sequence: 1_000, flags: [.syn], maximumSegmentSize: 40)

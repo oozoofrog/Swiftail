@@ -7,10 +7,10 @@ import Testing
 @testable import Swiftail
 @testable import SwiftailLoopback
 
-/// 루프백 다리(계약 `docs/contracts/SwiftailHost.md` 동작 B, 단위 시험 13).
+/// Tests the loopback bridge (contract `docs/contracts/SwiftailHost.md` behavior B, unit test 13).
 ///
-/// tailnet 쪽은 노드 하나의 자기 연결이고, 루프백 쪽은 다리의 프로토콜을 넣은 시험 안의 평문 `NWListener`다.
-@Suite("루프백 다리: 나르기와 끊김", .timeLimit(.minutes(2)))
+/// The tailnet side is one node's connection to itself, and the loopback side is a plaintext `NWListener` in the test with the bridge's protocol installed.
+@Suite("Loopback bridge: forwarding and disconnection", .timeLimit(.minutes(2)))
 struct LoopbackBridgeTests {
     private typealias Support = BridgeTestSupport
 
@@ -26,9 +26,9 @@ struct LoopbackBridgeTests {
         }
     }
 
-    // MARK: 나르기(동작 B3·B4)
+    // MARK: Forwarding (behaviors B3·B4)
 
-    @Test("바이트가 양방향으로 온전히 간다(4MiB씩, 해시 비교)")
+    @Test("Delivers bytes intact in both directions (4MiB each, compared by hash)")
     func bytesFlowBothWays() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -46,7 +46,7 @@ struct LoopbackBridgeTests {
             try await sent
             #expect(Support.digest(try await clientReceived) == Support.digest(downstream))
             guard case .end(let received) = await peerReceived else {
-                Issue.record("루프백 서버의 읽기가 깨끗한 EOF로 끝나지 않았다")
+                Issue.record("The loopback server's read did not end with a clean EOF")
                 return
             }
             #expect(Support.digest(received) == Support.digest(upstream))
@@ -54,7 +54,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("tailnet 쪽이 쓰기를 닫으면 루프백 서버가 EOF를 보고, 그 뒤의 응답이 tailnet으로 간다")
+    @Test("When the tailnet side closes its write direction, the loopback server sees EOF, and a subsequent response reaches the tailnet side")
     func tailnetHalfClose() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -70,7 +70,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("루프백 쪽이 쓰기를 닫으면 tailnet 쪽이 EOF를 보고, 그 뒤의 요청이 루프백으로 간다")
+    @Test("When the loopback side closes its write direction, the tailnet side sees EOF, and a subsequent request reaches the loopback side")
     func loopbackHalfClose() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -85,8 +85,8 @@ struct LoopbackBridgeTests {
         }
     }
 
-    /// 다리가 덩어리를 받아 갈 때까지 기다리지 않으면(역압 없이 읽으면) 거는 쪽이 멈추지 않고 모두 들어간다.
-    @Test("루프백 서버가 읽지 않으면 tailnet 쪽 쓰기가 멈추고, 다시 읽으면 모두 온전히 온다")
+    /// If the write does not wait for the bridge to take the chunk (reads lack backpressure), the caller never blocks and everything is accepted.
+    @Test("If the loopback server does not read, writes on the tailnet side block. Once it resumes reading, everything arrives intact")
     func slowLoopbackStopsTailnet() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -104,11 +104,11 @@ struct LoopbackBridgeTests {
                 try await link.client.finishWriting()
             }
             let accepted = try await BackpressureProbe.stalled { written.withLock { $0 } }
-            #expect(accepted < BackpressureProbe.bound, "\(accepted)바이트가 들어갔다")
+            #expect(accepted < BackpressureProbe.bound, "Accepted \(accepted) bytes")
 
             let ended = await link.peer.readToEnd()
             guard case .end(let received) = ended else {
-                Issue.record("루프백 서버의 읽기가 깨끗한 EOF로 끝나지 않았다: \(ended), 포트 \(link.peer.remotePort), 멈춘 양 \(accepted)")
+                Issue.record("The loopback server's read did not end with a clean EOF: \(ended), port \(link.peer.remotePort), amount accepted before blocking \(accepted)")
                 writer.cancel()
                 await link.client.abort()
                 return
@@ -123,7 +123,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("tailnet 쪽이 읽지 않으면 루프백 서버의 쓰기가 멈추고, 다시 읽으면 모두 온전히 온다")
+    @Test("If the tailnet side does not read, writes on the loopback server block. Once it resumes reading, everything arrives intact")
     func slowTailnetStopsLoopback() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -140,7 +140,7 @@ struct LoopbackBridgeTests {
                 }
             }
             let accepted = try await BackpressureProbe.stalled { written.withLock { $0 } }
-            #expect(accepted < BackpressureProbe.bound, "\(accepted)바이트가 들어갔다")
+            #expect(accepted < BackpressureProbe.bound, "Accepted \(accepted) bytes")
 
             let received = try await Support.readToEnd(link.client)
             #expect(received.count == total)
@@ -151,9 +151,9 @@ struct LoopbackBridgeTests {
         }
     }
 
-    // MARK: 끊김(동작 B5, 첫 사용처 검토 결과 7)
+    // MARK: Disconnection (behavior B5, first adopter review result 7)
 
-    @Test("tailnet 쪽이 RST로 끊기면 루프백 서버의 읽기가 깨끗한 EOF가 아니라 오류로 끝난다")
+    @Test("If the tailnet side resets, the loopback server's read ends with an error instead of a clean EOF")
     func tailnetResetResetsLoopback() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -165,7 +165,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("주소의 주인이 바뀌어 연결이 peerRemoved로 끝나면 다리가 루프백을 RST로 끊는다")
+    @Test("If the address owner changes and the connection ends with peerRemoved, the bridge resets the loopback connection")
     func peerRemovedResetsLoopback() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -180,7 +180,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("노드가 멈추면 루프백을 오류로 끊고 돌아온다")
+    @Test("When the node stops, the bridge ends the loopback connection with an error and returns")
     func nodeStopResetsLoopback() async throws {
         try await Self.withBridge { node, bridge, server, stop in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -192,7 +192,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("루프백 서버가 정상으로 닫으면 tailnet 쪽이 응답 뒤 EOF를 보고, 닫으면 다리가 돌아온다")
+    @Test("If the loopback server closes normally, the tailnet side sees EOF after the response. The bridge returns when the tailnet side closes")
     func loopbackCloseFinishesTailnet() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -204,7 +204,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("루프백 서버가 RST로 끊으면 tailnet 쪽이 reset으로 끊긴다")
+    @Test("If the loopback server resets, the tailnet side disconnects with reset")
     func loopbackResetResetsTailnet() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -216,8 +216,8 @@ struct LoopbackBridgeTests {
         }
     }
 
-    /// 읽는 방향(루프백 → tailnet)이 FIN으로 이미 끝난 뒤 루프백이 끊기는 경우다. 쓰기 결과로만 알 수 있다.
-    @Test("루프백 서버가 다 닫은 뒤 tailnet 쪽이 계속 쓰면 tailnet 쪽이 reset으로 끊긴다")
+    /// The loopback connection breaks after FIN has already ended the read direction (loopback → tailnet). Only the write result can reveal it.
+    @Test("If the tailnet side keeps writing after the loopback server fully closes, the tailnet side disconnects with reset")
     func writesAfterLoopbackClosedResetTailnet() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -236,7 +236,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("forward를 부른 Task가 취소되면 두 연결을 RST로 끊고 cancelled를 던진다")
+    @Test("Canceling the Task that called forward resets both connections and throws cancelled")
     func cancellingForwardResetsBoth() async throws {
         try await Self.withBridge { node, bridge, server, _ in
             let link = try await Support.bridge(node, bridge, to: server)
@@ -249,9 +249,9 @@ struct LoopbackBridgeTests {
         }
     }
 
-    // MARK: 잇기 전의 실패(동작 B1)
+    // MARK: Failure before connecting (behavior B1)
 
-    @Test("듣는 쪽이 없는 포트와 포트 0은 loopbackUnavailable이고 tailnet 연결은 RST로 끊긴다")
+    @Test("A port with no listener and port 0 yield loopbackUnavailable and reset the tailnet connection")
     func noListener() async throws {
         try await Self.withBridge { node, bridge, _, _ in
             let closedPort = try await PlainLoopbackServer.unusedPort()
@@ -259,7 +259,7 @@ struct LoopbackBridgeTests {
                 let pair = try await Support.connectedPair(node, port: 9_000 + UInt16(index))
                 let forwarding = Support.forward(pair.server, with: bridge, toLoopbackPort: port)
                 guard case .loopbackUnavailable = await forwarding.value else {
-                    Issue.record("loopbackUnavailable이 아니다: 포트 \(port)")
+                    Issue.record("Expected loopbackUnavailable for port \(port)")
                     continue
                 }
                 #expect(await Support.error { try await pair.client.read() } == .reset)
@@ -267,7 +267,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("신원을 찾지 못하면 unknownPeer이고 루프백으로 걸지 않으며 tailnet 연결은 RST로 끊긴다")
+    @Test("A missing identity yields unknownPeer, skips the loopback connection, and resets the tailnet connection")
     func unknownPeer() async throws {
         try await Self.withBridge(try Support.netmap(withProfile: false)) { node, bridge, server, _ in
             let pair = try await Support.connectedPair(node)
@@ -279,7 +279,7 @@ struct LoopbackBridgeTests {
         }
     }
 
-    @Test("잇는 연결이 상한이면 limitReached이고 tailnet 연결은 RST로 끊긴다. 하나가 끝나면 다시 받는다")
+    @Test("When forwarded connections are at the limit, yields limitReached and resets the tailnet connection. Accepts more when one ends")
     func limitReached() async throws {
         #expect(LoopbackBridge(node: try TailnetNode(configuration: Self.unusedConfiguration())).connectionLimit == 256)
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
@@ -304,11 +304,11 @@ struct LoopbackBridgeTests {
         }
     }
 
-    // MARK: 도우미
+    // MARK: Helpers
 
     private static func expectReset(_ received: PeerConnection.Received, sourceLocation: SourceLocation = #_sourceLocation) {
         guard case .failed(_, let error) = received else {
-            Issue.record("루프백 서버의 읽기가 오류로 끝나지 않았다: \(received)", sourceLocation: sourceLocation)
+            Issue.record("The loopback server's read did not end with an error: \(received)", sourceLocation: sourceLocation)
             return
         }
         #expect(error.contains("Connection reset"), "\(error)", sourceLocation: sourceLocation)
@@ -321,18 +321,18 @@ struct LoopbackBridgeTests {
     }
 }
 
-/// 역압 시험의 기준.
+/// Criteria for backpressure tests.
 ///
-/// 다리가 쥐는 것은 방향당 64KiB이고, 그 밖에 들어갈 수 있는 곳은 tailnet 연결의 보내는 버퍼와 받는 창(256KiB씩),
-/// `NWConnection`과 커널 루프백 TCP의 버퍼다. 역압이 없으면 보낸 것이 모두 들어간다. 2026-11 macOS에서 멈춘 양은
-/// 1.2~1.7MiB였다.
+/// The bridge holds 64KiB per direction. Further data can fit in the tailnet connection's send buffer and receive window (256KiB each),
+/// and in `NWConnection`'s buffers and the kernel's loopback TCP buffers. Without backpressure, all the data sent is accepted. On macOS in 2026-11, the amount accepted before blocking was
+/// 1.2~1.7MiB.
 enum BackpressureProbe {
-    /// 보내려는 양. 멈추지 않으면 모두 들어간다.
+    /// The amount to send. All of it is accepted if writing never blocks.
     static let attempt = 16 << 20
-    /// 멈췄을 때 들어간 양의 위쪽 끝.
+    /// The upper bound on the amount accepted when writing blocks.
     static let bound = 8 << 20
 
-    /// `progress`가 300ms 동안 그대로이면 그 값을 돌려준다(쓰기가 멈췄다). 20초 안에 멈추지 않으면 그때의 값이다.
+    /// Returns `progress` once it stays unchanged for 300ms (writing has blocked). If it does not block within 20 seconds, returns the value at that point.
     static func stalled(_ progress: () -> Int) async throws -> Int {
         var last = -1
         var stableSince = ContinuousClock.now

@@ -3,30 +3,30 @@ import SwiftailBase
 import Testing
 @testable import Swiftail
 
-/// 연결·리스너의 경계: 거절, 닫기·끊기가 기다리던 호출을 깨우는 모양, 잘못된 길이, 시작 검사에서 끝난 `run()`, 손실 아래의
-/// 전송(계약 `docs/contracts/SwiftailNetstack.md` 동작 A·N).
+/// Connection and listener edge cases: rejection, how close and abort wake waiting calls, invalid lengths, `run()` ending at startup validation, and
+/// transfer under loss (contract `docs/contracts/SwiftailNetstack.md` behaviors A·N).
 ///
-/// 모두 노드 하나가 자기 주소로 건 연결이다. 멈추면 모음의 시간 제한이 시험을 실패로 끝낸다.
-@Suite("노드의 TCP: 경계", .timeLimit(.minutes(1)))
+/// Every connection is from one node to its own address. If a test stalls, the suite's time limit fails it.
+@Suite("Node TCP edge cases", .timeLimit(.minutes(1)))
 struct NetstackBoundaryTests {
     private typealias Support = NetstackTestSupport
 
-    @Test("듣지 않는 자기 포트로 건 연결은 refused다")
+    @Test("Connecting to a local port without a listener yields refused")
     func connectToClosedPortIsRefused() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             #expect(await Support.error { try await node.connect(to: "100.64.0.1", port: 9_001) } == .refused)
-            #expect(await node.trackedConnectionCount == 0, "거절된 시도는 기록을 남기지 않는다")
+            #expect(await node.trackedConnectionCount == 0, "A rejected attempt leaves no record")
         }
     }
 
-    @Test("close는 기다리던 read와 write를 closed로 깨운다")
+    @Test("close wakes a waiting read and write with closed")
     func closeWakesWaiters() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
-            // 같은 연결의 읽기와 쓰기는 동시에 기다릴 수 있다. server는 보내지 않으므로 client의 read는 끝까지 기다린다.
+            // Reads and writes on the same connection can wait concurrently. The server sends nothing, so the client's read waits until the end.
             let reader = Task { () async throws -> [UInt8]? in try await pair.client.read() }
             let writer = Task { () async throws in try await pair.client.write(Support.pattern(1 << 20)) }
-            try await Support.waitUntil("read와 write가 기다림") {
+            try await Support.waitUntil("read and write are waiting") {
                 let reading = await node.isReading(pair.client), writing = await node.isWriting(pair.client)
                 return reading && writing
             }
@@ -37,14 +37,14 @@ struct NetstackBoundaryTests {
         }
     }
 
-    @Test("상대의 abort는 기다리던 read와 write를 reset으로 끝내고, 그 뒤의 finishWriting도 reset이다")
+    @Test("A peer abort ends a waiting read and write with reset, and a subsequent finishWriting also yields reset")
     func peerAbortEndsWaiters() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
             let reader = Task { () async throws -> [UInt8]? in try await pair.client.read() }
-            // server는 읽지 않으므로 받는 버퍼와 보내는 버퍼가 차서 write가 멈춘다.
+            // The server does not read, so the receive and send buffers fill and write blocks.
             let writer = Task { () async throws in try await pair.client.write(Support.pattern(1 << 20)) }
-            try await Support.waitUntil("read와 write가 기다림") {
+            try await Support.waitUntil("read and write are waiting") {
                 let reading = await node.isReading(pair.client), writing = await node.isWriting(pair.client)
                 return reading && writing
             }
@@ -57,7 +57,7 @@ struct NetstackBoundaryTests {
         }
     }
 
-    @Test("읽을 길이가 0 이하면 invalidConfiguration이고 연결은 그대로다")
+    @Test("A read length of 0 or less yields invalidConfiguration and leaves the connection intact")
     func readRejectsNonPositiveLength() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
@@ -73,7 +73,7 @@ struct NetstackBoundaryTests {
         }
     }
 
-    @Test("run()이 시작 검사에서 끝나면 run() 전에 연 리스너의 흐름이 끝나고 그 뒤의 listen은 notRunning이다")
+    @Test("If run() ends at startup validation, the stream of a listener opened before run() ends, and subsequent listen calls yield notRunning")
     func listenerEndsWhenRunFailsAtStart() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let claim = try #require(StateDirectoryClaims.shared.claim(directory))
@@ -85,14 +85,14 @@ struct NetstackBoundaryTests {
                 var connections = listener.makeAsyncIterator()
                 return await connections.next()
             }
-            try await Support.waitUntil("흐름이 기다림") { await node.isAccepting(listener) }
+            try await Support.waitUntil("The stream is waiting") { await node.isAccepting(listener) }
 
             do throws(NodeError) {
                 try await node.run()
-                Issue.record("run()이 던지지 않았다")
+                Issue.record("run() did not throw")
             } catch {
                 guard case .stateDirectoryInUse = error else {
-                    Issue.record("기대 stateDirectoryInUse, 실제 \(error)")
+                    Issue.record("Expected stateDirectoryInUse, got \(error)")
                     return
                 }
             }
@@ -103,7 +103,7 @@ struct NetstackBoundaryTests {
         }
     }
 
-    @Test("손실 2%에서도 256KiB가 바이트까지 일치해 도착한다")
+    @Test("All 256KiB arrive byte for byte even with 2% loss")
     func transferSurvivesPacketLoss() async throws {
         let length = 256 * 1_024
         try await Support.withRunningNode(try Support.netmap()) { node in
@@ -120,19 +120,19 @@ struct NetstackBoundaryTests {
         }
     }
 
-    @Test("기다리던 write 중의 finishWriting은 write를 closed로 깨우고, 이미 들어간 것은 FIN 앞에 나간다")
+    @Test("Calling finishWriting during a waiting write wakes it with closed, and data already accepted is sent before FIN")
     func finishWritingWakesWaitingWrite() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node in
             let pair = try await Support.connectedPair(node)
             let upload = Support.pattern(1 << 20, seed: 9)
             let writer = Task { () async throws in try await pair.client.write(upload) }
-            try await Support.waitUntil("write가 기다림") { await node.isWriting(pair.client) }
+            try await Support.waitUntil("write is waiting") { await node.isWriting(pair.client) }
             try await pair.client.finishWriting()
             #expect(await Support.error { try await writer.value } == .closed)
 
             let received = try await Support.read(upload.count + 1, from: pair.server)
             #expect(!received.isEmpty && received.count < upload.count)
-            #expect(received == Array(upload.prefix(received.count)), "FIN 앞에는 들어간 만큼만, 순서대로 나간다")
+            #expect(received == Array(upload.prefix(received.count)), "Only data already accepted goes out before FIN, in order")
             #expect(try await pair.server.read() == nil)
             await pair.client.close()
             await pair.server.close()

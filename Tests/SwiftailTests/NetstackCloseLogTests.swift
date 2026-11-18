@@ -3,8 +3,8 @@ import SwiftailNetstack
 import Testing
 @testable import Swiftail
 
-/// `연결이 끝남` 로그 한 줄의 모양(계약 `docs/contracts/SwiftailNetstack.md` "연결 종료 통계 로그").
-@Suite("노드의 TCP: 연결 종료 로그")
+/// The format of a single `Connection ended` log line (contract `docs/contracts/SwiftailNetstack.md`, "Connection Close Statistics Log").
+@Suite("Node TCP connection close log")
 struct NetstackCloseLogTests {
     private static func statistics(openedAt: ContinuousClock.Instant) -> TCPConnection.Statistics {
         var statistics = TCPConnection.Statistics(openedAt: openedAt)
@@ -16,7 +16,7 @@ struct NetstackCloseLogTests {
         return statistics
     }
 
-    @Test("응용이 쥔 연결의 줄에는 덧붙이는 말이 없고, 놓은 뒤 끝난 연결의 줄은 `, 놓은 뒤 끝남`으로 끝난다")
+    @Test("The line for an application-held connection has no suffix. The line for a connection that ended after release ends with `, ended after release`")
     func releasedSuffix() {
         let openedAt = ContinuousClock.now
         let statistics = Self.statistics(openedAt: openedAt)

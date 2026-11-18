@@ -6,18 +6,18 @@ import Testing
 @testable import Swiftail
 @testable import SwiftailLoopback
 
-/// 독립 검토(M7-9b)에서 짚은 경우의 시험(계약 `docs/contracts/SwiftailHost.md` 동작 B "독립 검토에서 고친 것").
-@Suite("루프백 다리: 검토 재현(M7-9b)", .timeLimit(.minutes(1)))
+/// Tests the cases identified by the independent review (M7-9b, contract `docs/contracts/SwiftailHost.md`, behavior B, "Changes from the Independent Review").
+@Suite("Loopback bridge: review reproductions (M7-9b)", .timeLimit(.minutes(1)))
 struct LoopbackAdmissionReviewTests {
     private typealias Support = BridgeTestSupport
 
     private static let origin = LoopbackBridge.Origin(
         remoteEndpoint: IPEndpoint(address: IPAddress("100.64.0.2")!, port: 41_641), peer: Support.selfIdentity)
 
-    /// TLS 리스너에서 framer는 핸드셰이크 전에 허가를 적는다. 핸드셰이크가 끝나지 않으면 서버는 `.ready`를 보지 못해 계약대로
-    /// 묻지 않고, 허가는 밀려날 때까지 남는다(지우면 늦게 온 조회가 같은 열쇠의 새 허가를 얻을 수 있어 지우지 않는다). 남은
-    /// 열쇠로는 `expect`가 거절한다. 고치기 전에는 다리가 같은 출발 포트를 다시 뽑은 연결이 `loopbackUnavailable`로 끊겼다.
-    @Test("TLS 핸드셰이크 전에 끝난 다리 연결의 허가는 끝났다는 표시와 함께 남고, 그 열쇠는 다시 적히지 않는다")
+    /// On a TLS listener, the framer records admission before the handshake. If the handshake does not finish, the server never sees `.ready`, so it does not
+    /// look up admission, as the contract specifies. The admission stays until eviction (deleting it could let a late lookup obtain a new admission for the same key). With the retained
+    /// key, `expect` rejects the connection. Before the fix, a bridge connection that picked the same source port again ended with `loopbackUnavailable`.
+    @Test("Admission for a bridge connection that ends before the TLS handshake stays marked as ended, and the key cannot be recorded again")
     func admissionOfUnfinishedHandshakeIsLeftAsEnded() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let bridge = LoopbackBridge(node: node)
@@ -28,11 +28,11 @@ struct LoopbackAdmissionReviewTests {
             let forwarding = Support.forward(pair.server, with: bridge, toLoopbackPort: server.port)
             let accepted = try #require(await server.nextConnection())
             let outcome = Task { await PeerConnection.start(accepted) }
-            try await Support.waitUntil("토큰이 소비됨") { bridge.admission.snapshot.admitted.count == 1 }
-            // tailnet 쪽이 ClientHello를 보내지 않고 끊는다.
+            try await Support.waitUntil("Token consumed") { bridge.admission.snapshot.admitted.count == 1 }
+            // The tailnet side disconnects without sending ClientHello.
             await pair.client.abort()
             guard case .failed = await outcome.value else {
-                Issue.record("핸드셰이크 없이 준비되었다")
+                Issue.record("Became ready without a handshake")
                 return
             }
             server.discard(accepted)
@@ -42,10 +42,10 @@ struct LoopbackAdmissionReviewTests {
         }
     }
 
-    @Test("뽑힌 출발 포트의 열쇠에 허가가 남아 있으면 다리가 다른 포트로 다시 걸어 잇는다")
+    @Test("If admission remains for the key of the chosen source port, the bridge retries on another port and connects")
     func bridgeRedialsWhenKeyHasLeftoverAdmission() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
-            // 다리가 처음 뽑은 열쇠에, 앞선 연결이 남긴 것 같은 허가를 넣는다.
+            // Add admission under the first key the bridge picks, as if left by an earlier connection.
             let leftover = Mutex<LoopbackAdmissionTable.Key?>(nil)
             let bridge = LoopbackBridge(node: node, connectionLimit: 256, willExpect: { key, table in
                 guard leftover.withLock({ $0 == nil }) else { return }
@@ -59,7 +59,7 @@ struct LoopbackAdmissionReviewTests {
             let forwarding = Support.forward(pair.server, with: bridge, toLoopbackPort: server.port)
             try await pair.client.write(Array("ping".utf8))
 
-            // 리스너는 연결 둘을 받는다: 다리가 토큰을 보내지 않고 끊은 것과 다시 건 것.
+            // The listener gets two connections, the one the bridge dropped without sending a token and the retry.
             var ready: PeerConnection?
             for _ in 0..<2 where ready == nil {
                 if case .ready(let peer) = await server.nextOutcome() { ready = peer }
@@ -69,14 +69,14 @@ struct LoopbackAdmissionReviewTests {
             #expect(peer.remotePort != leftoverKey.sourcePort)
             #expect(bridge.origin(of: peer.connection)?.peer == Support.selfIdentity)
             #expect(await peer.read() == .bytes(Array("ping".utf8)))
-            #expect(bridge.admission.snapshot.admitted == [leftoverKey], "남아 있던 허가는 그대로다")
+            #expect(bridge.admission.snapshot.admitted == [leftoverKey], "The retained admission is still present")
 
             await pair.client.abort()
             #expect(await forwarding.value == nil)
         }
     }
 
-    @Test("허가가 남은 열쇠만 뽑히면 세 번 걸고 그만둔다")
+    @Test("If only keys with retained admissions are picked, tries three connections and gives up")
     func bridgeGivesUpAfterThreeRefusedKeys() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let refused = Mutex<[LoopbackAdmissionTable.Key]>([])
@@ -93,17 +93,17 @@ struct LoopbackAdmissionReviewTests {
             #expect(await forwarding.value == .loopbackUnavailable("토큰을 표에 적지 못했다"))
             let keys = refused.withLock { $0 }
             #expect(keys.count == 3)
-            #expect(Set(keys.map(\.sourcePort)).count == 3, "쥐고 있는 동안에는 같은 출발 포트가 다시 뽑히지 않는다")
-            // 다리가 건 셋은 토큰 없이 끊겨 준비되지 않는다.
+            #expect(Set(keys.map(\.sourcePort)).count == 3, "The same source port is not picked again while held")
+            // The three connections dialed by the bridge end without a token and never become ready.
             for _ in 0..<3 {
-                if case .ready = await server.nextOutcome() { Issue.record("토큰 없이 준비되었다") }
+                if case .ready = await server.nextOutcome() { Issue.record("Became ready without a token") }
             }
         }
     }
 
-    /// 위의 허가가 쌓이면 상한(256)이 가장 오래된 허가를 버린다. 핸드셰이크 중인 정당한 연결의 허가도 그 대상이다. tailnet의
-    /// 상대 하나가 잇자마자 끊기를 되풀이하면, 다른 상대가 핸드셰이크를 끝내기 전에 그 허가를 밀어낸다.
-    @Test("잇자마자 끊는 다리 연결이 쌓여도 핸드셰이크 중인 다른 연결의 허가가 밀려나지 않는다")
+    /// When the admissions above accumulate, the limit (256) evicts the oldest. This can evict admission for a legitimate connection in the middle of its handshake. If one tailnet
+    /// peer repeatedly connects and immediately disconnects, it evicts another peer's admission before that peer can finish the handshake.
+    @Test("Accumulating bridge connections that disconnect immediately does not evict admission for another connection in its handshake")
     func unfinishedHandshakesDoNotEvictPendingAdmission() async throws {
         try await Support.withRunningNode(try Support.netmap()) { node, _ in
             let bridge = LoopbackBridge(node: node)
@@ -111,19 +111,19 @@ struct LoopbackAdmissionReviewTests {
                 admittingFor: bridge, tls: try SelfSignedIdentity.serverOptions(try SelfSignedIdentity.make()))
             defer { server.close() }
 
-            // 정당한 연결: 다리가 토큰을 보내 허가가 적혔고, 상대는 아직 ClientHello를 보내지 않았다.
+            // Legitimate connection: the bridge has sent a token and admission is recorded, but the peer has yet to send ClientHello.
             let pending = try await Support.connectedPair(node, port: 9_000)
             let pendingForwarding = Support.forward(pending.server, with: bridge, toLoopbackPort: server.port)
             let pendingAccepted = try #require(await server.nextConnection())
             let pendingOutcome = Task { await PeerConnection.start(pendingAccepted) }
-            try await Support.waitUntil("정당한 연결의 토큰이 소비됨") { bridge.admission.snapshot.admitted.count == 1 }
+            try await Support.waitUntil("The legitimate connection's token was consumed") { bridge.admission.snapshot.admitted.count == 1 }
             guard case .hostPort(_, let pendingPort) = pendingAccepted.endpoint else {
-                Issue.record("끝점이 없다")
+                Issue.record("No endpoint")
                 return
             }
             let pendingKey = LoopbackAdmissionTable.Key(sourcePort: pendingPort.rawValue, listenerPort: server.port)
 
-            // 다른 상대가 잇자마자 끊기를 256번 한다.
+            // Another peer connects and immediately disconnects 256 times.
             let flood = try await node.listen(port: 9_001)
             var floodConnections = flood.makeAsyncIterator()
             for round in 0..<LoopbackAdmissionTable.admittedLimit {
@@ -132,13 +132,13 @@ struct LoopbackAdmissionReviewTests {
                 let forwarding = Support.forward(inbound, with: bridge, toLoopbackPort: server.port)
                 let accepted = try #require(await server.nextConnection())
                 let outcome = Task { await PeerConnection.start(accepted) }
-                try await Support.waitUntil("\(round)번째 토큰이 소비됨") { bridge.admission.snapshot.admitted.count >= min(round + 2, 256) }
+                try await Support.waitUntil("Token consumed in round \(round)") { bridge.admission.snapshot.admitted.count >= min(round + 2, 256) }
                 await client.abort()
                 _ = await outcome.value
                 server.discard(accepted)
                 _ = await forwarding.value
             }
-            #expect(bridge.admission.snapshot.admitted.contains(pendingKey), "핸드셰이크 중인 연결의 허가가 밀려났다")
+            #expect(bridge.admission.snapshot.admitted.contains(pendingKey), "Admission for the connection in its handshake was evicted")
             pendingOutcome.cancel()
             _ = await pendingOutcome.value
             await pending.client.abort()
@@ -146,7 +146,7 @@ struct LoopbackAdmissionReviewTests {
         }
     }
 
-    @Test("토큰이 두 조각으로 나뉘어 와도 허가된다")
+    @Test("Admits a token split across two chunks")
     func splitTokenIsAdmitted() async throws {
         let bridge = try Self.idleBridge()
         let server = try await PlainLoopbackServer.start(admittingFor: bridge)
@@ -164,7 +164,7 @@ struct LoopbackAdmissionReviewTests {
         #expect(await peer.readToEnd() == .end([7]))
     }
 
-    @Test("토큰 바로 뒤의 FIN이 서버에 끝으로 간다")
+    @Test("A FIN immediately after the token reaches the server as EOF")
     func finRightAfterTokenReachesServer() async throws {
         let bridge = try Self.idleBridge()
         let server = try await PlainLoopbackServer.start(admittingFor: bridge)
@@ -181,7 +181,7 @@ struct LoopbackAdmissionReviewTests {
         peer.connection.cancel()
     }
 
-    @Test("다리와 표의 dump·description에 토큰이 나오지 않는다")
+    @Test("The bridge and table omit tokens from dump and description")
     func tokenNotInReflection() throws {
         let bridge = try Self.idleBridge()
         let token = [UInt8](repeating: 0xA5, count: LoopbackAdmissionTable.tokenLength)

@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 연결 맺기: 능동·수동 열기, MSS와 창 확장의 협상, 거절, SYN·SYN-ACK의 재전송.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 T3·T4·T5, F2, R3·R4, X9와 시험 3·4.
-@Suite("연결 맺기")
+/// Connection establishment: active and passive opens, MSS and window scaling negotiation, refusal, and SYN and SYN-ACK retransmission.
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors T3·T4·T5, F2, R3·R4, X9, and tests 3·4.
+@Suite("Connection establishment")
 struct ConnectionOpeningTests {
-    @Test("능동 열기의 SYN: MSS 1240, Window Scale 3, 확장하지 않은 창, ISS")
+    @Test("Active open SYN: MSS 1240, Window Scale 3, unscaled window, ISS")
     func activeSynchronize() throws {
         let (connection, outputs) = TCPConnection.connect(
             from: ConnectionHosts.client, to: ConnectionHosts.server, initialSequenceNumber: SequenceNumber(77),
@@ -23,7 +23,7 @@ struct ConnectionOpeningTests {
         #expect(try syn.roundTripped() == syn)
     }
 
-    @Test("IPv6의 MSS는 1220이다(1280 − 40 − 20)")
+    @Test("IPv6 MSS is 1220 (1280 − 40 − 20)")
     func ipv6SegmentSize() throws {
         var pair = try ConnectionPair.established(client: ConnectionHosts.client6, server: ConnectionHosts.server6)
         #expect(pair.clientSent[0].segment.maximumSegmentSize == 1_220)
@@ -36,7 +36,7 @@ struct ConnectionOpeningTests {
         #expect(pair.read(.server) == data)
     }
 
-    @Test("수동·능동 열기가 맺어지고 양쪽에 .established가 한 번씩 나온다")
+    @Test("Passive and active opens establish and each side emits .established once")
     func handshake() throws {
         let pair = try ConnectionPair.established()
         #expect(pair.clientEvents == [.established])
@@ -47,7 +47,7 @@ struct ConnectionOpeningTests {
         #expect(synAck.sequenceNumber == SequenceNumber(900_000))
         #expect(synAck.windowScale == 3)
         #expect(synAck.maximumSegmentSize == 1_240)
-        // 마지막 ACK는 순수 ACK 하나다.
+        // The final ACK is one pure ACK.
         let finalACK = pair.clientSent[1].segment
         #expect(finalACK.flags == [.ack])
         #expect(finalACK.sequenceNumber == SequenceNumber(1_001))
@@ -56,20 +56,20 @@ struct ConnectionOpeningTests {
         #expect(pair.serverSent.count == 1)
     }
 
-    @Test("상대의 SYN에 Window Scale이 없으면 SYN-ACK에도 싣지 않고 양쪽 shift가 0이다")
+    @Test("If the peer SYN has no Window Scale, omits it from SYN-ACK and uses a shift of 0 on both sides")
     func windowScaleRequiresBothSides() throws {
         var peer = try ManualPeer.established(windowScale: nil, ackWindow: 40_000)
         #expect(peer.connection.offersWindowScale == false)
         #expect(peer.connection.receiveWindowShift == 0)
         #expect(peer.connection.sendWindow == 40_000)
-        // 광고하는 창은 65,535를 넘지 못한다(버퍼는 256KiB, shift 0).
+        // The advertised window cannot exceed 65,535 (256KiB buffer, shift 0).
         let outputs = peer.send(flags: [.ack, .psh], payload: patternBytes(count: 3_000))
         let ack = try #require(outputs.segments.last)
         #expect(ack.acknowledgmentNumber == peer.peerNext)
         #expect(ack.window == 65_535)
     }
 
-    @Test("SYN의 창 필드는 확장하지 않고, 그 뒤의 창은 상대의 shift로 읽는다. shift는 14까지")
+    @Test("The SYN window field is unscaled. Subsequent windows are read with the peer shift, which is capped at 14")
     func windowScaleApplication() throws {
         let peer = try ManualPeer.established(windowScale: 7, synWindow: 1_000, ackWindow: 2)
         #expect(peer.connection.sendWindow == 2 << 7)
@@ -90,7 +90,7 @@ struct ConnectionOpeningTests {
         #expect(connection.sendWindow == 1 << 14)
     }
 
-    @Test("광고하는 창: 맺어진 뒤 버퍼 256KiB를 shift 3으로 내려 싣는다")
+    @Test("Advertised window: after establishment, shifts the 256KiB buffer down by 3 for the window field")
     func advertisedScaledWindow() throws {
         var pair = try ConnectionPair.established()
         _ = pair.write(patternBytes(count: 100), from: .client)
@@ -99,7 +99,7 @@ struct ConnectionOpeningTests {
         #expect(segment.window == 32_768)
     }
 
-    @Test("상대 MSS가 64보다 작으면 수동 열기는 그 SYN에 RST,ACK로 답하고 연결을 만들지 않는다")
+    @Test("If the peer MSS is below 64, a passive open replies to the SYN with RST,ACK and creates no connection")
     func passiveRejectsSmallSegmentSize() throws {
         let syn = TCPSegment(
             source: ConnectionHosts.client, destination: ConnectionHosts.server, sequenceNumber: SequenceNumber(500),
@@ -111,7 +111,7 @@ struct ConnectionOpeningTests {
             _ = try TCPConnection.accept(syn, initialSequenceNumber: SequenceNumber(1), at: .now)
         } catch {
             guard case .unacceptableMaximumSegmentSize(let reset) = error else {
-                Issue.record("다른 오류: \(error)")
+                Issue.record("Unexpected error: \(error)")
                 return
             }
             #expect(reset.flags == [.rst, .ack])
@@ -126,7 +126,7 @@ struct ConnectionOpeningTests {
         #expect(connection.sendMaximumSegmentSize == 64)
     }
 
-    @Test("ACK·RST가 있는 세그먼트는 수동 열기에 쓸 수 없다")
+    @Test("Segments with ACK or RST cannot be used for a passive open")
     func acceptRequiresInitialSynchronize() {
         let synAck = TCPSegment(
             source: ConnectionHosts.client, destination: ConnectionHosts.server, sequenceNumber: SequenceNumber(5),
@@ -136,13 +136,13 @@ struct ConnectionOpeningTests {
         }
     }
 
-    @Test("MSS 옵션이 없으면 IPv4 536으로 본다")
+    @Test("Uses the IPv4 default of 536 when the MSS option is absent")
     func defaultPeerSegmentSize() throws {
         let peer = try ManualPeer.established(maximumSegmentSize: nil)
         #expect(peer.connection.sendMaximumSegmentSize == 536)
     }
 
-    @Test("능동 열기: SYN-ACK의 MSS가 64보다 작으면 RST를 보내고 .refused")
+    @Test("Active open: a SYN-ACK with MSS below 64 triggers RST and .refused")
     func activeRejectsSmallSegmentSize() throws {
         let start = ContinuousClock.now
         var (client, _) = TCPConnection.connect(
@@ -162,7 +162,7 @@ struct ConnectionOpeningTests {
         #expect(client.nextDeadline == nil)
     }
 
-    @Test("거절: SYN을 확인하는 RST에 .refused, ACK 없는 RST는 버린다")
+    @Test("Refusal: an RST acknowledging SYN yields .refused. Drops RST without ACK")
     func refused() {
         let start = ContinuousClock.now
         var (client, _) = TCPConnection.connect(
@@ -180,7 +180,7 @@ struct ConnectionOpeningTests {
         #expect(client.state == .closed)
     }
 
-    @Test("SYN-SENT: 틀린 ACK에는 <SEQ=SEG.ACK><CTL=RST>, ACK 없는 SYN(동시 열기)은 버린다")
+    @Test("SYN-SENT: an invalid ACK gets <SEQ=SEG.ACK><CTL=RST>, and a SYN without ACK (simultaneous open) is dropped")
     func synSentBadAcknowledgment() {
         let start = ContinuousClock.now
         var (client, _) = TCPConnection.connect(
@@ -199,7 +199,7 @@ struct ConnectionOpeningTests {
         #expect(client.state == .synSent)
     }
 
-    @Test("SYN-RECEIVED: 틀린 ACK에는 <SEQ=SEG.ACK><CTL=RST>")
+    @Test("SYN-RECEIVED: an invalid ACK gets <SEQ=SEG.ACK><CTL=RST>")
     func synReceivedBadAcknowledgment() throws {
         let start = ContinuousClock.now
         let syn = TCPSegment(
@@ -217,7 +217,7 @@ struct ConnectionOpeningTests {
         }
     }
 
-    @Test("SYN-RECEIVED: RST가 RCV.NXT면 조용히 끝나고(.reset), 창 안의 다른 값이면 challenge ACK")
+    @Test("SYN-RECEIVED: an RST at RCV.NXT ends silently (.reset), and another in-window value gets a challenge ACK")
     func synReceivedReset() throws {
         let start = ContinuousClock.now
         let syn = TCPSegment(
@@ -236,7 +236,7 @@ struct ConnectionOpeningTests {
         #expect(outputs == [.event(.closed(.reset))])
     }
 
-    @Test("SYN은 1·3·7·15·31·63·127초에 다시 보내고 247초에 .timedOut")
+    @Test("Retransmits SYN at 1·3·7·15·31·63·127 seconds and yields .timedOut at 247 seconds")
     func synchronizeRetransmissions() throws {
         let start = ContinuousClock.now
         var (client, outputs) = TCPConnection.connect(
@@ -257,7 +257,7 @@ struct ConnectionOpeningTests {
         #expect(closedAt == .seconds(247))
     }
 
-    @Test("SYN-ACK도 7번 다시 보내고 247초에 끝난다")
+    @Test("Also retransmits SYN-ACK 7 times and ends at 247 seconds")
     func synchronizeAcknowledgmentRetransmissions() throws {
         let start = ContinuousClock.now
         let syn = TCPSegment(
@@ -278,7 +278,7 @@ struct ConnectionOpeningTests {
         #expect(closedAt == .seconds(247))
     }
 
-    @Test("SYN을 다시 보낸 연결은 맺어진 뒤 RTO가 3초다(RFC 6298 5.7). 다시 보내지 않았으면 핸드셰이크 RTT가 표본이다")
+    @Test("After establishment, a connection that retransmitted SYN uses a 3-second RTO (RFC 6298 5.7). Without retransmission, the handshake RTT is the sample")
     func timeoutAfterSynchronizeRetransmission() throws {
         let start = ContinuousClock.now
         var (client, _) = TCPConnection.connect(
@@ -291,7 +291,7 @@ struct ConnectionOpeningTests {
         _ = client.receive(try #require(synAck.segments.first), at: arrival + .milliseconds(5))
         #expect(client.state == .established)
         #expect(client.retransmissionTimeout == .seconds(3))
-        // 서버는 SYN-ACK를 다시 보내지 않았다. 10ms 왕복의 표본으로 RTO = 10 + 4·5 = 30ms → 하한 200ms.
+        // The server did not retransmit SYN-ACK. The 10ms round-trip sample gives RTO = 10 + 4·5 = 30ms → 200ms floor.
         var acceptedServer = server
         _ = acceptedServer.receive(
             TCPSegment(
@@ -302,7 +302,7 @@ struct ConnectionOpeningTests {
         #expect(acceptedServer.retransmissionTimeout == .milliseconds(200))
     }
 
-    @Test("SYN-SENT에서 abort·close는 아무것도 보내지 않는다")
+    @Test("abort and close in SYN-SENT send nothing")
     func abortWhileConnecting() {
         var (client, _) = TCPConnection.connect(
             from: ConnectionHosts.client, to: ConnectionHosts.server, initialSequenceNumber: SequenceNumber(100),
@@ -315,7 +315,7 @@ struct ConnectionOpeningTests {
         #expect(other.close(at: .now) == [.event(.closed(.aborted))])
     }
 
-    @Test("맺어지기 전에 쓴 데이터는 맺어진 뒤에 나간다")
+    @Test("Data written before establishment goes out after establishment")
     func writeBeforeEstablished() throws {
         var pair = try ConnectionPair.opened()
         #expect(pair.write(patternBytes(count: 10), from: .client) == 10)

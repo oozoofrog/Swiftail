@@ -4,12 +4,12 @@ import SwiftailControl
 import Testing
 @testable import Swiftail
 
-/// `connect(to:port:)`의 이름 해석(계약 `docs/contracts/SwiftailNetstack.md` 동작 A2, 단위 시험 13).
-@Suite("노드의 TCP: 이름 해석", .timeLimit(.minutes(1)))
+/// Tests name resolution in `connect(to:port:)` (contract `docs/contracts/SwiftailNetstack.md` behavior A2, unit test 13).
+@Suite("Node TCP name resolution", .timeLimit(.minutes(1)))
 struct NetstackHostResolutionTests {
     private static func netmap() throws -> Netmap {
         try NetstackTestSupport.netmap(peers: [
-            // IPv6 주소가 앞에 있어도 IPv4를 고른다.
+            // Select IPv4 even when the IPv6 address is listed first.
             .init(id: 2, key: 0x22, name: "rd-phone-1a2b3c4d.tail0001.ts.net.", addresses: ["fd7a:115c:a1e0::2/128", "100.64.0.2/32"]),
             .init(id: 3, key: 0x33, name: "rd-pad-1a2b3c4d.tail0001.ts.net.", addresses: ["fd7a:115c:a1e0::3/128"]),
             .init(id: 4, key: 0x44, name: "", addresses: ["100.64.0.4/32"]),
@@ -20,14 +20,14 @@ struct NetstackHostResolutionTests {
         try #require(IPAddress(text))
     }
 
-    @Test("IP 주소는 netmap과 무관하게 그대로다")
+    @Test("IP addresses pass through regardless of the netmap")
     func ipLiteral() throws {
         let netmap = try Self.netmap()
         #expect(netmap.address(ofHost: "100.64.0.77") == (try Self.address("100.64.0.77")))
         #expect(netmap.address(ofHost: "fd7a:115c:a1e0::2") == (try Self.address("fd7a:115c:a1e0::2")))
     }
 
-    @Test("FQDN은 대소문자와 끝의 점 하나를 가리지 않고, 그 노드의 IPv4를 먼저 고른다")
+    @Test("FQDN matching ignores case and one trailing dot, and selects the node's IPv4 address first")
     func fullyQualifiedName() throws {
         let netmap = try Self.netmap()
         let phone = try Self.address("100.64.0.2")
@@ -37,22 +37,22 @@ struct NetstackHostResolutionTests {
         #expect(netmap.address(ofHost: "rd-phone-1a2b3c4d.tail0001.ts.net..") == nil)
     }
 
-    @Test("MagicDNS 접미사를 뗀 짧은 이름도 찾는다. IPv4가 없는 노드는 IPv6이다")
+    @Test("Resolves short names with the MagicDNS suffix removed. A node without IPv4 resolves to IPv6")
     func shortName() throws {
         let netmap = try Self.netmap()
         #expect(netmap.address(ofHost: "rd-phone-1a2b3c4d") == (try Self.address("100.64.0.2")))
         #expect(netmap.address(ofHost: "RD-PAD-1A2B3C4D.") == (try Self.address("fd7a:115c:a1e0::3")))
-        #expect(netmap.address(ofHost: "rd-phone-1a2b3c4d.tail0001") == nil, "접미사의 일부만 뗀 이름은 없다")
+        #expect(netmap.address(ofHost: "rd-phone-1a2b3c4d.tail0001") == nil, "A name with only part of the suffix removed does not resolve")
     }
 
-    @Test("자기 이름도 찾는다")
+    @Test("Also resolves the node's own name")
     func selfName() throws {
         let netmap = try Self.netmap()
         #expect(netmap.address(ofHost: "rd-mac-1a2b3c4d.tail0001.ts.net") == (try Self.address("100.64.0.1")))
         #expect(netmap.address(ofHost: "rd-mac-1a2b3c4d") == (try Self.address("100.64.0.1")))
     }
 
-    @Test("모르는 이름, 빈 이름, 이름 없는 노드는 찾지 못한다")
+    @Test("Unknown names, empty names, and nodes without names do not resolve")
     func unknownNames() throws {
         let netmap = try Self.netmap()
         #expect(netmap.address(ofHost: "rd-tv-1a2b3c4d") == nil)
@@ -62,7 +62,7 @@ struct NetstackHostResolutionTests {
         #expect(netmap.address(ofHost: "tail0001.ts.net") == nil)
     }
 
-    @Test("같은 이름이 둘이면 Go의 표처럼 node ID가 큰 쪽(나중에 넣은 것)이다")
+    @Test("When two nodes share a name, the higher node ID (inserted later) wins, as in Go's table")
     func duplicateNames() throws {
         let netmap = try NetstackTestSupport.netmap(peers: [
             .init(id: 7, key: 0x77, name: "dup.tail0001.ts.net.", addresses: ["100.64.0.7/32"]),
@@ -71,7 +71,7 @@ struct NetstackHostResolutionTests {
         #expect(netmap.address(ofHost: "dup") == (try Self.address("100.64.0.7")))
     }
 
-    @Test("노드: 피어도 자기도 아닌 주소, 모르는 이름은 unknownHost. 빈 호스트와 포트 0은 invalidConfiguration")
+    @Test("The node returns unknownHost for an address belonging to neither a peer nor itself, or for an unknown name. An empty host or port 0 yields invalidConfiguration")
     func nodeRejectsUnknownHosts() async throws {
         try await NetstackTestSupport.withRunningNode(try Self.netmap()) { node in
             #expect(await NetstackTestSupport.error { try await node.connect(to: "100.64.0.77", port: 80) } == .unknownHost)
@@ -80,13 +80,13 @@ struct NetstackHostResolutionTests {
                 == .invalidConfiguration("포트는 0이 아니어야 한다"))
             if case .invalidConfiguration = await NetstackTestSupport.error({ try await node.connect(to: "", port: 80) }) {
             } else {
-                Issue.record("빈 호스트는 invalidConfiguration이어야 한다")
+                Issue.record("An empty host should yield invalidConfiguration")
             }
             #expect(await node.trackedConnectionCount == 0)
         }
     }
 
-    @Test("노드: 자기 짧은 이름으로 건 연결이 자기 리스너에 닿는다")
+    @Test("A connection to the node's own short name reaches its listener")
     func nodeConnectsBySelfName() async throws {
         try await NetstackTestSupport.withRunningNode(try Self.netmap()) { node in
             let pair = try await NetstackTestSupport.connectedPair(node, host: "rd-mac-1a2b3c4d")

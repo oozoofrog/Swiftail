@@ -6,11 +6,11 @@ import SwiftailMagicsock
 import Testing
 @testable import Swiftail
 
-/// DERPMap에서 `Magicsock`의 홈 후보 지역 뽑기와 `DERPNode` → `DERPServer` 변환.
-/// 계약 엔진 "M4에서 바뀌는 것" N3, magicsock 계약 동작 E3, 노트 derp-stun 4.1·4.8.
-@Suite("DERPMap 변환")
+/// Tests selection of `Magicsock` home candidate regions from a DERPMap and conversion from `DERPNode` to `DERPServer`.
+/// Engine contract "Changes in M4" N3, magicsock contract behavior E3, derp-stun notes 4.1·4.8.
+@Suite("DERPMap conversion")
 struct DERPMapConversionTests {
-    /// DERP 노드 JSON. 기본값은 쓸 수 있는 서버 하나다.
+    /// DERP node JSON. The defaults describe one usable server.
     private static func node(
         hostName: String = "derp.example.com",
         certName: String = "",
@@ -44,15 +44,15 @@ struct DERPMapConversionTests {
         try #require(IPEndpoint(text))
     }
 
-    // MARK: 홈 후보 지역
+    // MARK: Home candidate regions
 
-    @Test("쓸 수 있는 지역을 ID 오름차순으로 뽑는다")
+    @Test("Selects usable regions in ascending ID order")
     func candidatesInOrder() throws {
         let map = try Self.derpMap(#""9":{"RegionID":9,"Nodes":[\#(Self.node())]},"2":{"RegionID":2,"Nodes":[\#(Self.node())]},"10":{"RegionID":10,"Nodes":[\#(Self.node())]}"#)
         #expect(Magicsock.Region.homeCandidates(in: map).map(\.id) == [2, 9, 10])
     }
 
-    @Test("noMeasureNoHome 지역과 연결할 서버가 없는 지역은 뺀다. DERPMap이 없으면 빈 목록이다")
+    @Test("Excludes noMeasureNoHome regions and regions without a server to connect to. An absent DERPMap gives an empty list")
     func skipsUnusableRegions() throws {
         let stunOnly = Self.node(stunOnly: true)
         let map = try Self.derpMap(
@@ -64,7 +64,7 @@ struct DERPMapConversionTests {
         #expect(Magicsock.Region.homeCandidates(in: try Self.derpMap("")).isEmpty)
     }
 
-    @Test("STUN 주소는 지역의 노드를 순서대로 모으고 stunOnly 노드도 넣는다. 점수는 regionScore에서, 없으면 0")
+    @Test("Collects STUN addresses from the region's nodes in order, including stunOnly nodes. Uses the score from regionScore, or 0 if absent")
     func stunServersAndScore() throws {
         let first = Self.node(ipv4: "127.0.0.1", stunPort: 3479)
         let stunOnly = Self.node(ipv4: "127.0.0.2", stunOnly: true)
@@ -79,7 +79,7 @@ struct DERPMapConversionTests {
         ])
     }
 
-    @Test("STUN 주소: stunTestIP가 앞서고, IPv4 리터럴만 쓰며, 포트 0은 3478, 음수와 범위 밖은 쓰지 않는다")
+    @Test("STUN addresses prefer stunTestIP, use only IPv4 literals, use 3478 for port 0, and skip negative and out-of-range ports")
     func stunServerRules() throws {
         #expect(try Self.stun(Self.node(ipv4: "127.0.0.1", stunTestIP: "127.0.0.9")) == (try Self.endpoint("127.0.0.9:3478")))
         #expect(try Self.stun(Self.node(stunTestIP: "::1")) == nil)
@@ -92,9 +92,9 @@ struct DERPMapConversionTests {
         #expect(try Self.stun(Self.node(stunPort: 65536)) == nil)
     }
 
-    // MARK: DERPServer 변환
+    // MARK: DERPServer conversion
 
-    @Test("시험 서버의 노드: IPv4 주소, 지정 포트, 검증 끔")
+    @Test("Test server node: IPv4 address, specified port, verification disabled")
     func testServerNode() throws {
         let server = try #require(try Self.server(Self.node(hostName: "127.0.0.1", insecureForTests: true)))
         #expect(server.hostName == "127.0.0.1")
@@ -103,13 +103,13 @@ struct DERPMapConversionTests {
         #expect(server.verification == .noneForTests)
     }
 
-    /// Go `shouldDialProto`: 빈 칸은 `HostName`, 그 칸의 체계의 IP 리터럴은 그 주소, 그 밖의 값은 그 체계를 걸지 않는다.
-    /// 두 칸이 모두 걸지 않으면 그 노드는 쓰지 않는다(`dialNode`의 "both IPv4 and IPv6 are explicitly disabled").
-    @Test("걸 대상: IPv4·IPv6 칸의 {빈 값, 맞는 체계의 리터럴, none, 다른 체계의 리터럴, 쓰레기} 모든 조합이 Go 규칙과 같다")
+    /// Go `shouldDialProto` uses `HostName` for an empty field and the address for a matching-family IP literal. Any other value disables dialing that family.
+    /// If both fields disable dialing, the node is unused (`dialNode`'s "both IPv4 and IPv6 are explicitly disabled").
+    @Test("All combinations of IPv4 and IPv6 field values {empty, matching-family literal, none, other-family literal, garbage} produce dial targets that match Go's rules")
     func dialTargetsFollowGo() throws {
         let v4 = try #require(IPAddress("192.0.2.1"))
         let v6 = try #require(IPAddress("2001:db8::1"))
-        // 칸에 넣는 값과, 그 칸이 뜻하는 대상(nil이면 그 체계로 걸지 않는다).
+        // The value in the field and the target it represents (nil means do not dial that family).
         let ipv4Cells: [(text: String, target: DERPServer.Target?)] = [
             ("", .hostName), ("192.0.2.1", .address(v4)), ("none", nil), ("2001:db8::1", nil), ("derp", nil),
         ]
@@ -129,7 +129,7 @@ struct DERPMapConversionTests {
         }
     }
 
-    @Test("걸 대상의 대표 경우: 두 리터럴은 IPv4·IPv6 순서, 두 칸이 비면 이름 하나, 한 칸만 비면 이름과 다른 칸의 리터럴")
+    @Test("Representative dial targets: two literals in IPv4 then IPv6 order, one hostname when both fields are empty, and the hostname plus the other field's literal when only one is empty")
     func dialTargetExamples() throws {
         let v4 = try #require(IPAddress("192.0.2.1"))
         let v6 = try #require(IPAddress("2001:db8::1"))
@@ -141,36 +141,36 @@ struct DERPMapConversionTests {
         #expect(try Self.server(Self.node(ipv4: "")).map(\.verification) == .system)
     }
 
-    @Test("derpPort가 0이면 443, 범위 밖이면 건너뛴다")
+    @Test("Uses 443 when derpPort is 0 and skips an out-of-range port")
     func ports() throws {
         #expect(try Self.server(Self.node(derpPort: 0))?.port == 443)
         #expect(try Self.server(Self.node(derpPort: -1)) == nil)
         #expect(try Self.server(Self.node(derpPort: 65536)) == nil)
     }
 
-    @Test("stunOnly 노드와 빈 hostName은 건너뛴다")
+    @Test("Skips stunOnly nodes and empty hostName values")
     func unusableNodes() throws {
         #expect(try Self.server(Self.node(stunOnly: true)) == nil)
         #expect(try Self.server(Self.node(hostName: "")) == nil)
     }
 
-    @Test("인증서 확인: sha256-raw:는 나머지 그대로 고정, hostName과 다른 certName은 그 이름, 그 밖은 insecureForTests로 가른다",
+    @Test("Certificate verification pins the exact suffix of sha256-raw:, uses a certName distinct from hostName as the name, and otherwise follows insecureForTests",
           arguments: [false, true])
     func verification(insecureForTests: Bool) throws {
         func verification(_ certName: String) throws -> DERPServer.Verification? {
             try Self.server(Self.node(certName: certName, insecureForTests: insecureForTests))?.verification
         }
         let hash = String(repeating: "0f", count: 32)
-        // 1·2는 insecureForTests보다 앞선다(Go `tlsClient`가 CertName이 있으면 검증 훅을 다시 건다).
+        // 1·2 take precedence over insecureForTests (Go `tlsClient` reinstalls the verification hook when CertName is present).
         #expect(try verification("sha256-raw:\(hash)") == .pinned(sha256Hex: hash))
         #expect(try verification("other.example.com") == .named("other.example.com"))
-        // 대문자·짧은 값·빈 값도 고치거나 건너뛰지 않는다. Go에서도 어떤 인증서와도 맞지 않아 연결이 실패한다.
+        // Uppercase, short, and empty values are used as is. In Go too, they match no certificate and the connection fails.
         #expect(try verification("sha256-raw:\(hash.uppercased())") == .pinned(sha256Hex: hash.uppercased()))
         #expect(try verification("sha256-raw:00ff") == .pinned(sha256Hex: "00ff"))
         #expect(try verification("sha256-raw:") == .pinned(sha256Hex: ""))
-        // 머리는 대소문자를 가린다(Go `strings.CutPrefix`). 다른 머리는 이름이다.
+        // The prefix is case-sensitive (Go `strings.CutPrefix`). A different prefix is a name.
         #expect(try verification("SHA256-RAW:\(hash)") == .named("SHA256-RAW:\(hash)"))
-        // 3: 비었거나 hostName과 같으면 지금처럼.
+        // 3: If empty or equal to hostName, keep the current behavior.
         let plain: DERPServer.Verification = insecureForTests ? .noneForTests : .system
         #expect(try verification("") == plain)
         #expect(try verification("derp.example.com") == plain)

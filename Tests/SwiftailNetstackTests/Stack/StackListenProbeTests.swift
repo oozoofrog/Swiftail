@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 듣는 포트는 SYN이 아닌 세그먼트에 듣지 않는 포트와 똑같이 답한다. 수신 필터는 SYN만 ACL에 견주므로(계약 동작 X), 답이
-/// 다르면 ACL이 막은 피어가 FIN만 든 세그먼트로 듣는 포트를 가려낸다. 계약 `docs/contracts/SwiftailNetstack.md` 동작 S3.
-@Suite("스택: 듣는 포트와 듣지 않는 포트의 답")
+/// A listening port answers non-SYN segments exactly as a non-listening port does. The inbound filter checks only SYN against the ACL (contract behavior X), so if replies
+/// differ, a peer blocked by the ACL can identify listening ports using FIN-only segments. Contract `docs/contracts/SwiftailNetstack.md` behavior S3.
+@Suite("Stack replies on listening and non-listening ports")
 struct StackListenProbeTests {
-    /// 포트를 뺀 답의 모습.
+    /// The reply without its ports.
     struct Reply: Equatable {
         var flags: TCPSegment.Flags
         var sequenceNumber: SequenceNumber
@@ -16,7 +16,7 @@ struct StackListenProbeTests {
         var payloadCount: Int
     }
 
-    /// 같은 세그먼트를 듣는 포트(443)와 듣지 않는 포트(444)에 넣었을 때의 답.
+    /// The replies to the same segment delivered to a listening port (443) and a non-listening port (444).
     func replies(
         flags: TCPSegment.Flags, payload: [UInt8]
     ) throws -> (listening: [Reply], closed: [Reply], listeningPorts: [UInt16]) {
@@ -43,7 +43,7 @@ struct StackListenProbeTests {
     }
 
     @Test(
-        "SYN·ACK·RST가 없는 세그먼트에 듣는 포트도 RST로 답하고, 그 답은 듣지 않는 포트의 것과 플래그·번호까지 같다",
+        "A listening port also replies with RST to a segment without SYN, ACK, or RST, and the reply matches the non-listening port's flags and numbers",
         arguments: [TCPSegment.Flags.fin, [], [.fin, .psh], [.psh]], [0, 5])
     func bareSegments(flags: TCPSegment.Flags, payloadCount: Int) throws {
         let payload = [UInt8](repeating: 0x41, count: payloadCount)
@@ -59,7 +59,7 @@ struct StackListenProbeTests {
         #expect(result.listeningPorts == [443])
     }
 
-    @Test("ACK가 있는 세그먼트와 RST에도 두 포트의 답이 같다", arguments: [TCPSegment.Flags.ack, [.fin, .ack], [.rst], [.rst, .ack]])
+    @Test("Both ports also give the same replies to segments with ACK and to RST", arguments: [TCPSegment.Flags.ack, [.fin, .ack], [.rst], [.rst, .ack]])
     func acknowledgedAndResetSegments(flags: TCPSegment.Flags) throws {
         let result = try replies(flags: flags, payload: [])
         #expect(result.listening == result.closed)

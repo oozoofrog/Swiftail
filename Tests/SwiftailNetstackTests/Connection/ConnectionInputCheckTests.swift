@@ -3,11 +3,11 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// 시퀀스 검사와 RFC 5961의 세 검사, challenge ACK 속도 제한, 임의 세그먼트.
-/// 계약 동작 T2, X1~X4와 시험 4·5.
-@Suite("받는 세그먼트 검사")
+/// Sequence checks, the three RFC 5961 checks, challenge ACK rate limiting, and arbitrary segments.
+/// Contract behaviors T2, X1~X4, and tests 4·5.
+@Suite("Incoming segment checks")
 struct ConnectionInputCheckTests {
-    /// 연결이 보낸 순수 ACK: `<SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>`.
+    /// A pure ACK sent by the connection: `<SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>`.
     private func isAcknowledgment(_ segment: TCPSegment?, of peer: ManualPeer) -> Bool {
         guard let segment else { return false }
         return segment.flags == [.ack] && segment.payload.isEmpty
@@ -15,15 +15,15 @@ struct ConnectionInputCheckTests {
             && segment.acknowledgmentNumber == peer.connection.receiveNext
     }
 
-    @Test("받아들일 조건 표의 네 칸(창 0과 창 > 0, 길이 0과 > 0)")
+    @Test("Four cells of the acceptability table (window 0 and window > 0, length 0 and > 0)")
     func acceptabilityTable() throws {
         var peer = try ManualPeer.established()
         let next = peer.peerNext
-        // 길이 0, 창 > 0: RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND면 받는다(답 없음).
+        // Length 0, window > 0: accept if RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND (no response).
         #expect(peer.receive(peer.segment(sequence: next.advanced(by: 10), flags: [.ack])).isEmpty)
-        // 창 앞이면 받지 않고 ACK.
+        // Before the window, reject and send an ACK.
         #expect(isAcknowledgment(peer.receive(peer.segment(sequence: next.advanced(by: .max), flags: [.ack])).segments.first, of: peer))
-        // 길이 > 0, 창 > 0: 마지막 바이트가 창 안이면 받는다(앞부분을 잘라 낸다).
+        // Length > 0, window > 0: accept if the last byte is inside the window (trim the leading portion).
         let straddling = peer.segment(
             sequence: next.advanced(by: UInt32.max - 4), flags: [.ack], payload: patternBytes(count: 10))
         _ = peer.receive(straddling)
@@ -31,32 +31,32 @@ struct ConnectionInputCheckTests {
         #expect(peer.connection.read(upTo: .max, at: peer.now).bytes == Array(patternBytes(count: 10)[5...]))
         peer.peerNext = next.advanced(by: 5)
 
-        // 창 0: 받는 버퍼 256KiB를 채운다(상대 SYN에 Window Scale이 있어 shift 3으로 버퍼 전체를 광고한다).
+        // Zero window: fill the 256KiB receive buffer (the peer's SYN has Window Scale, so shift 3 advertises the entire buffer).
         var zero = try ManualPeer.established(windowScale: 7)
         for _ in 0..<(256 * 1024 / 1_024) {
             zero.send(flags: [.ack], payload: patternBytes(count: 1_024))
         }
         #expect(zero.connection.readableByteCount == 256 * 1024)
-        // 길이 0, 창 0: SEG.SEQ = RCV.NXT만 받는다.
+        // Length 0, window 0: accept only SEG.SEQ = RCV.NXT.
         #expect(zero.receive(zero.segment(flags: [.ack])).isEmpty)
         #expect(zero.receive(zero.segment(sequence: zero.peerNext.advanced(by: 1), flags: [.ack])).segments.count == 1)
-        // 길이 > 0, 창 0: 받지 않는다. RCV.NXT에서 시작하면 데이터를 버리고 ACK를 보며 답한다.
+        // Length > 0, window 0: reject. If it starts at RCV.NXT, discard the data, inspect the ACK, and reply.
         let probe = zero.receive(zero.segment(flags: [.ack], payload: [9]))
         #expect(probe.segments.first?.window == 0)
         #expect(probe.segments.first?.acknowledgmentNumber == zero.peerNext)
         #expect(zero.connection.readableByteCount == 256 * 1024)
     }
 
-    @Test("광고한 오른쪽 끝을 넘는 바이트는 잘라 버린다")
+    @Test("Trims bytes beyond the advertised right edge")
     func trimsBeyondAdvertisedWindow() throws {
         var peer = try ManualPeer.established()
-        // 상대 SYN에 Window Scale이 없으니 광고한 창은 65,535다.
+        // The peer's SYN has no Window Scale, so the advertised window is 65,535.
         let large = patternBytes(count: 70_000)
         peer.send(flags: [.ack], payload: large)
         #expect(peer.connection.readableByteCount == 65_535)
     }
 
-    @Test("RST: 창 밖이면 조용히 버리고, RCV.NXT면 끊고, 창 안의 다른 값이면 challenge ACK")
+    @Test("RST: silently drops one outside the window, aborts at RCV.NXT, and sends a challenge ACK for other values inside the window")
     func resetChecks() throws {
         var peer = try ManualPeer.established()
         let next = peer.peerNext
@@ -69,7 +69,7 @@ struct ConnectionInputCheckTests {
         #expect(peer.receive(peer.segment(sequence: next, flags: [.rst])) == [.event(.closed(.reset))])
     }
 
-    @Test("동기화된 상태의 SYN에는 번호와 상관없이 challenge ACK를 보내고 버린다")
+    @Test("In a synchronized state, sends a challenge ACK for SYN regardless of its sequence number and drops it")
     func synchronizeInSynchronizedState() throws {
         var peer = try ManualPeer.established()
         for offset: UInt32 in [0, 100, 5_000_000] {
@@ -81,7 +81,7 @@ struct ConnectionInputCheckTests {
         }
     }
 
-    @Test("ACK가 SND.UNA − MAX.SND.WND .. SND.NXT 밖이면 버리고 ACK로 답한다. 안이면 오래된 ACK여도 데이터를 받는다")
+    @Test("Drops an ACK outside SND.UNA − MAX.SND.WND .. SND.NXT and replies with an ACK. Inside that range, accepts data even with an old ACK")
     func acknowledgmentRange() throws {
         var peer = try ManualPeer.established(ackWindow: 1_000)
         let sendNext = peer.connection.sendNext
@@ -90,7 +90,7 @@ struct ConnectionInputCheckTests {
         let outputs = peer.receive(ahead)
         #expect(outputs.segments.count == 1)
         #expect(peer.connection.readableByteCount == 0)
-        // MAX.SND.WND는 65,535(SYN의 창)다.
+        // MAX.SND.WND is 65,535 (the SYN window).
         let tooOld = peer.segment(
             acknowledgment: sendNext.advanced(by: UInt32.max - 65_535), flags: [.ack], payload: patternBytes(count: 10))
         #expect(peer.receive(tooOld).segments.count == 1)
@@ -102,7 +102,7 @@ struct ConnectionInputCheckTests {
         #expect(peer.connection.sendWindow == 1_000)
     }
 
-    @Test("challenge ACK는 5초에 10개까지다. 데이터 없는 창 밖 세그먼트의 ACK도 같은 제한을 받는다")
+    @Test("Allows up to 10 challenge ACKs per 5 seconds. ACKs for data-free, out-of-window segments share the limit")
     func challengeRateLimit() throws {
         var peer = try ManualPeer.established()
         let next = peer.peerNext
@@ -112,14 +112,14 @@ struct ConnectionInputCheckTests {
         }
         #expect(acknowledgments == 10)
         #expect(peer.receive(peer.segment(sequence: next.advanced(by: 9_999_999), flags: [.ack])).segments.isEmpty)
-        // 데이터가 있는 창 밖 세그먼트에는 늘 답한다.
+        // Always reply to an out-of-window segment carrying data.
         let withData = peer.segment(sequence: next.advanced(by: 9_999_999), flags: [.ack], payload: [1])
         #expect(peer.receive(withData).segments.count == 1)
         _ = peer.advance(by: .seconds(5))
         #expect(peer.receive(peer.segment(sequence: next.advanced(by: 7), flags: [.syn])).segments.count == 1)
     }
 
-    @Test("SEG.ACK > SND.NXT인 순수 ACK는 버리고 ACK한다(데이터 쪽 SND.UNA는 그대로)")
+    @Test("Drops and acknowledges a pure ACK with SEG.ACK > SND.NXT (SND.UNA on the data side stays unchanged)")
     func acknowledgmentBeyondSendNext() throws {
         var peer = try ManualPeer.established()
         _ = peer.connection.write(patternBytes(count: 100)[...], at: peer.now)
@@ -130,7 +130,7 @@ struct ConnectionInputCheckTests {
         #expect(peer.connection.sendUnacknowledged == unacknowledged)
     }
 
-    @Test("임의의 세그먼트 2만 개를 넣어도 죽지 않고, advance 뒤의 기한은 지금보다 뒤다")
+    @Test("Accepts 20,000 arbitrary segments without crashing, and after advance the deadline is later than now")
     func randomSegments() throws {
         var generator = SplitMix(seed: 0x5EED_CAFE)
         for round in 0..<20 {
@@ -173,7 +173,7 @@ struct ConnectionInputCheckTests {
     }
 }
 
-/// 씨앗에서 결정적으로 도는 난수(SplitMix64).
+/// Deterministic random numbers from a seed (SplitMix64).
 struct SplitMix: RandomNumberGenerator {
     var state: UInt64
 

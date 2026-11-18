@@ -7,13 +7,13 @@ import SwiftailWireGuard
 import Testing
 @testable import Swiftail
 
-/// 노드가 받은 길을 엔진에 넘기고, 부하 상태의 WireGuard가 낸 cookie reply를 그 길로 되돌린다.
-/// `Magicsock` → `engine.receive` → `.cookieReply` → 받은 길의 `Magicsock` 출력까지를 노드와 같은 순서로 잇는다.
-@Suite("노드의 cookie reply 되돌리기")
+/// The node passes the inbound path to the engine and returns the cookie reply from WireGuard under load via that path.
+/// Connects `Magicsock` → `engine.receive` → `.cookieReply` → `Magicsock` output for the inbound path in the same order as the node.
+@Suite("Returning the node's cookie reply")
 struct NodeCookieReplyTests {
     private static let start = ContinuousClock.now
 
-    /// 피어가 없는 엔진(bob)과, bob을 피어로 둔 WireGuard 장치(alice)가 만든 initiation 하나.
+    /// An engine without peers (bob) and one initiation from a WireGuard device (alice) that has bob as a peer.
     private static func bobAndInitiation() throws -> (bob: TailnetEngine, alice: WireGuardDevice, initiation: [UInt8], aliceKey: NodePublicKey) {
         let bobKey = Curve25519.KeyAgreement.PrivateKey()
         let bob = TailnetEngine(nodeKey: bobKey, discoKey: .zero, now: start, wallClock: Date())
@@ -28,7 +28,7 @@ struct NodeCookieReplyTests {
         return (bob, alice, initiation, aliceKey)
     }
 
-    /// 같은 initiation을 부하 문턱(1초 안에 128개)까지 넣는다. 문턱 전에는 피어가 없어 버리고, 문턱에서 cookie reply가 나온다.
+    /// Feed the same initiation up to the load threshold (128 in 1 second). Below the threshold, it is dropped for lack of a peer. At the threshold, a cookie reply is emitted.
     private static func overload(_ bob: inout TailnetEngine, with initiation: [UInt8], from source: Magicsock.Source) throws -> [UInt8] {
         for _ in 1..<128 {
             #expect(bob.receive(initiation, from: source.engineSource, at: start) == [.dropped(.wireGuard(.unknownPeer))])
@@ -39,7 +39,7 @@ struct NodeCookieReplyTests {
         return reply
     }
 
-    @Test("UDP로 온 initiation의 cookie reply는 그 주소로 되돌아가고 보낸 쪽이 연다")
+    @Test("A cookie reply for an initiation received via UDP returns to that address and the sender opens it")
     func udp() throws {
         var (bob, alice, initiation, _) = try Self.bobAndInitiation()
         let aliceAddress = try #require(IPEndpoint("192.0.2.7:41641"))
@@ -52,7 +52,7 @@ struct NodeCookieReplyTests {
         #expect(try alice.receive(reply, from: WireGuardDevice.Source(address: [], host: []), at: Self.start).isEmpty)
     }
 
-    @Test("DERP로 온 initiation의 cookie reply는 같은 지역으로 보낸 피어에게 되돌아간다")
+    @Test("A cookie reply for an initiation received via DERP returns to the sending peer through the same region")
     func derp() throws {
         var (bob, alice, initiation, aliceKey) = try Self.bobAndInitiation()
         var sock = Magicsock(discoKey: .init(), nodeKey: .zero, localPort: 41641, localAddresses: [], loopbackAddresses: [], now: Self.start)
@@ -65,7 +65,7 @@ struct NodeCookieReplyTests {
         #expect(try alice.receive(reply, from: WireGuardDevice.Source(address: [], host: []), at: Self.start).isEmpty)
     }
 
-    @Test("WireGuard 출처: UDP는 주소 ‖ 포트(LE)와 주소, DERP는 지역과 무관하게 피어 키다")
+    @Test("WireGuard source: UDP uses address ‖ port (LE) and the address, and DERP uses the peer key regardless of region")
     func engineSource() throws {
         let udp = Magicsock.Source.udp(try #require(IPEndpoint("192.0.2.7:41641"))).engineSource
         #expect(udp.address == [192, 0, 2, 7, 0xA9, 0xA2] && udp.host == [192, 0, 2, 7])

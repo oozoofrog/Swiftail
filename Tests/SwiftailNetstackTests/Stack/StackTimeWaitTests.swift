@@ -3,22 +3,22 @@ import Testing
 
 @testable import SwiftailNetstack
 
-/// TIME-WAIT 기록: FIN 재전송에 ACK하고 기한을 다시 잼, RST 무시, SYN에 challenge ACK, 기한 전에 남음.
-/// 계약 `docs/contracts/SwiftailNetstack.md` 동작 S6, T6과 시험 11.
-@Suite("스택: TIME-WAIT 기록")
+/// TIME-WAIT records: ACK and restart the timer for retransmitted FIN, ignore RST, send a challenge ACK for SYN, and retain the record until its deadline.
+/// Contract `docs/contracts/SwiftailNetstack.md` behaviors S6, T6, and test 11.
+@Suite("Stack TIME-WAIT records")
 struct StackTimeWaitTests {
-    /// 클라이언트가 먼저 닫아 TIME-WAIT 기록 하나가 남은 쌍과 그 기록.
+    /// Returns a pair in which the client closed first and left one TIME-WAIT record, and the record itself.
     func pairWithRecord() throws -> (pair: StackPair, tuple: FourTuple, record: TimeWaitRecord) {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)
         try pair.closeFromClient(try pair.open(listener: listener))
         guard pair.client.timeWaitRecords.count == 1, pair.client.connections.isEmpty,
             let (tuple, record) = pair.client.timeWaitRecords.first
-        else { throw HarnessError(description: "TIME-WAIT 기록이 하나가 아니다") }
+        else { throw HarnessError(description: "Expected exactly one TIME-WAIT record") }
         return (pair, tuple, record)
     }
 
-    @Test("기록은 연결의 마지막 번호와 60초 뒤의 기한을 담는다. 기한 전에 남고 기한에 사라진다")
+    @Test("The record contains the connection's final numbers and a deadline 60 seconds away. It stays until the deadline and disappears then")
     func recordLifetime() throws {
         var (pair, tuple, record) = try pairWithRecord()
         let lastClientSegment = try #require(pair.clientSent.last)
@@ -33,7 +33,7 @@ struct StackTimeWaitTests {
         #expect(pair.client.timeWaitRecords.isEmpty)
     }
 
-    @Test("상대 FIN의 재전송에 ACK하고 기한을 60초 뒤로 다시 잰다")
+    @Test("Acknowledges the peer's retransmitted FIN and resets the deadline to 60 seconds later")
     func finRetransmission() throws {
         var (pair, tuple, record) = try pairWithRecord()
         let later = pair.now + .seconds(30)
@@ -49,7 +49,7 @@ struct StackTimeWaitTests {
         #expect(pair.client.timeWaitRecords[tuple]?.deadline == later + .seconds(60))
     }
 
-    @Test("RST는 무시하고 기록을 지우지 않는다. 데이터 없는 ACK에는 답하지 않는다")
+    @Test("Ignores RST without deleting the record. Does not respond to a data-free ACK")
     func resetAndPureAcknowledgment() throws {
         var (pair, tuple, record) = try pairWithRecord()
         let reset = peerSegment(
@@ -62,7 +62,7 @@ struct StackTimeWaitTests {
         #expect(pair.client.timeWaitRecords[tuple] == record)
     }
 
-    @Test("같은 4-튜플의 SYN은 새 연결이 되지 않고 ACK로 답한다(리스너가 있어도)")
+    @Test("A SYN for the same 4-tuple gets an ACK and does not become a new connection (even with a listener)")
     func synchronizeOnRecord() throws {
         var (pair, tuple, record) = try pairWithRecord()
         _ = try pair.client.listen(on: tuple.local.port)
@@ -72,7 +72,7 @@ struct StackTimeWaitTests {
         #expect(reply.first?.acknowledgmentNumber == record.receiveNext)
         #expect(pair.client.connections.isEmpty)
         #expect(pair.client.halfOpenCount == 0)
-        // 데이터가 실린 세그먼트에도 ACK로 답한다.
+        // Responds with ACK to a segment carrying data as well.
         let data = peerSegment(
             from: tuple.remote, to: tuple.local, sequence: record.receiveNext.rawValue, acknowledgment: record.sendNext,
             flags: [.ack], payload: [1, 2])
@@ -80,7 +80,7 @@ struct StackTimeWaitTests {
         #expect(pair.client.timeWaitRecords[tuple] == record)
     }
 
-    @Test("응용이 쓰기만 끝내고 읽지 않은 데이터는 TIME-WAIT 뒤에도 읽히고, close로 놓을 때 사라진다")
+    @Test("Data the application left unread after only finishing its writes remains readable after TIME-WAIT and disappears when close releases the connection")
     func leftoverDataAfterTimeWait() throws {
         var pair = StackPair()
         let listener = try pair.server.listen(on: 443)

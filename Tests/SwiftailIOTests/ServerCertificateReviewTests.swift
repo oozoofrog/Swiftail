@@ -3,18 +3,18 @@ import Testing
 
 @testable import SwiftailIO
 
-/// M8 ③(DERP 인증서의 이름 지정 검증과 `sha256-raw:` 고정)의 독립 검토가 남긴 재현 시험.
+/// Reproduction tests from the independent review of M8 ③ (named DERP certificate verification and `sha256-raw:` pinning).
 ///
-/// 기준은 Go 클라이언트의 판정이다(tailscale.com v1.104.6 `net/tlsdial/tlsdial.go`의 `SetConfigExpectedCertHash`·
-/// `SetConfigExpectedCert`, Go 1.27.3 `crypto/tls`의 `hostnameInSNI`, `crypto/x509`의 `VerifyHostname`). 각 시험의 Go 쪽
-/// 값은 그 코드를 실제로 돌려 얻었다. 지금 Go와 갈리는 것은 `withKnownIssue`로 감쌌다. 고치면 그 감싼 것이 실패로
-/// 바뀌어 알려 준다.
-@Suite("서버 인증서 판정: 검토")
+/// The reference is the Go client's verification behavior (tailscale.com v1.104.6 `SetConfigExpectedCertHash` and
+/// `SetConfigExpectedCert` in `net/tlsdial/tlsdial.go`, Go 1.27.3 `hostnameInSNI` in `crypto/tls`, and `VerifyHostname` in `crypto/x509`). Each test's Go
+/// values came from running that code. Current differences from Go are wrapped in `withKnownIssue`. Once fixed, the wrapper becomes a failure
+/// to flag the change.
+@Suite("Server certificate verification review")
 struct ServerCertificateReviewTests {
     private typealias Fixture = ServerCertificateFixtures
     private typealias Review = ServerCertificateReviewFixtures
 
-    /// 고정 인증서들의 유효 기간(2026-01-01T00:00:00Z ... 2027-01-01T00:00:00Z) 안.
+    /// Within the validity period of the certificate fixtures (2026-01-01T00:00:00Z ... 2027-01-01T00:00:00Z).
     private static let now = Date(timeIntervalSince1970: 1_780_272_000) // 2026-06-01T00:00:00Z
     private static let notBefore = Date(timeIntervalSince1970: 1_767_225_600) // 2026-01-01T00:00:00Z
     private static let notAfter = Date(timeIntervalSince1970: 1_798_761_600) // 2027-01-01T00:00:00Z
@@ -45,44 +45,44 @@ struct ServerCertificateReviewTests {
         if case .untrusted = failure { true } else { false }
     }
 
-    // MARK: 받으면 안 되는 것
+    // MARK: Cases to reject
 
-    /// TLS 핸드셰이크가 증명하는 것은 첫 인증서의 키뿐이다. 망 위의 공격자가 자기 키로 만든 CN `derpkey…` 인증서를 첫
-    /// 자리에 내고, 누구나 받아 볼 수 있는 고정 인증서를 뒤에 붙이면 "meta가 아닌 것이 정확히 하나, 해시가 맞음"을
-    /// 채운다. Go는 받는다(`SetConfigExpectedCertHash`가 자리를 보지 않는다. 그 목록을 내는 TLS 서버에 Go 클라이언트가
-    /// 붙는 것을 실행으로 확인했다. 고치기 전의 Swiftail도 붙었다). Swiftail은 Go와 달리 거절한다. 실제 derper는 서버 인증서를 첫 자리에, meta
-    /// 인증서를 그 뒤에 낸다(`derpserver.ModifyTLSConfigToAddMetaCert`). meta 인증서의 개인 키는 만들 때 버려지므로
-    /// meta 인증서가 첫 자리에 오는 정상 서버는 없다.
-    @Test("고정: 고정한 인증서가 첫 자리(서버가 키를 증명한 자리)가 아니면 받지 않아야 한다")
+    /// The TLS handshake proves possession of the key for the first certificate only. An attacker on the network can present a CN `derpkey…` certificate made with their own key
+    /// first and append the publicly obtainable pinned certificate, satisfying "exactly one non-meta certificate, matching hash."
+    /// Go accepts this (`SetConfigExpectedCertHash` ignores position. Running the Go client confirmed that it connects to a TLS server presenting
+    /// that list. Swiftail also connected before the fix). Swiftail rejects this where Go accepts it. A real derper presents the server certificate first, followed by the meta
+    /// certificate (`derpserver.ModifyTLSConfigToAddMetaCert`). The meta certificate's private key is discarded at creation, so
+    /// no normal server presents the meta certificate first.
+    @Test("Pinning requires the pinned certificate to be first (the position whose key the server proved it holds)")
     func pinnedCertificateMustBeTheHandshakeLeaf() {
         #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf]) == .candidateNotLeaf)
         #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf, Fixture.meta]) == .candidateNotLeaf)
         #expect(Self.pinned([Fixture.ipLeaf, Fixture.meta]) == nil)
     }
 
-    /// Go의 x509는 주체 CN이 VisibleString이면 CommonName을 비운다. 그래서 Go에서는 meta가 아닌 인증서이고, 목록은
-    /// 거절된다(첫 자리면 해시 불일치, 뒤면 "multiple certs"). `SecCertificateCopyCommonName`은 그 CN을 읽는다.
+    /// Go's x509 leaves CommonName empty when the subject CN is a VisibleString. Go therefore treats it as a non-meta certificate and
+    /// rejects the list (hash mismatch if first, "multiple certs" if later). `SecCertificateCopyCommonName` reads that CN.
     ///
-    /// 첫 자리면 Swiftail도 거절한다(첫 자리가 meta 모양). 뒤에 붙은 경우만 갈린다: Swiftail은 meta로 보고 받는다. 그때도
-    /// 첫 자리의 고정 인증서는 TLS가 키를 증명했으므로 서버를 잘못 알아보는 것은 아니다. 그대로 둔다.
-    @Test("고정: Go가 meta로 보지 않는 CN(VisibleString)의 인증서")
+    /// Swiftail also rejects it if first (the first certificate looks like a meta certificate). Only the appended case differs: Swiftail treats it as meta and accepts it. Even then,
+    /// TLS proves possession of the key for the pinned certificate in the first position, so Swiftail identifies the server correctly. Leave this behavior as is.
+    @Test("Pinning with a certificate whose CN (VisibleString) Go does not recognize as meta")
     func visibleStringCommonNameIsNotMeta() {
         #expect(Self.pinned([Review.visibleStringMeta, Fixture.ipLeaf]) == .candidateNotLeaf)
-        withKnownIssue("Security 프레임워크가 Go보다 많은 문자열 형을 CN으로 읽어, Go가 세는 뒤쪽 인증서를 세지 않는다(무해)") {
+        withKnownIssue("The Security framework reads more string types as CN than Go, so it skips a trailing certificate that Go counts (harmless)") {
             #expect(Self.pinned([Fixture.ipLeaf, Review.visibleStringMeta]) == .multipleCandidates)
         }
     }
 
-    /// Go: `hostnameInSNI("100.064.0.1")`은 그 문자열 그대로다(`net.ParseIP`가 앞자리 0을 받지 않는다). 이름으로 견주므로
-    /// IP SAN만 있는 인증서는 맞지 않는다. `SecPolicyCreateSSL`은 같은 문자열을 `100.64.0.1`로 읽어 IP SAN과 맞춘다.
-    @Test("고정: Go가 IP로 읽지 않는 서버 이름을 IP SAN과 맞추면 안 된다")
+    /// In Go, `hostnameInSNI("100.064.0.1")` returns the string unchanged (`net.ParseIP` rejects leading zeros). Go compares it as a name, so
+    /// a certificate with only an IP SAN does not match. `SecPolicyCreateSSL` reads the same string as `100.64.0.1` and matches the IP SAN.
+    @Test("Pinning must not match a server name against an IP SAN when Go does not parse that name as an IP")
     func leadingZeroServerNameIsNotAnIPAddress() {
-        withKnownIssue("SSL 정책이 앞자리 0이 붙은 점 십진을 IP로 읽는다") {
+        withKnownIssue("The SSL policy parses dotted decimal with leading zeros as an IP address") {
             #expect(Self.isUntrusted(Self.pinned([Fixture.ipLeaf], serverName: "100.064.0.1")))
         }
     }
 
-    @Test("고정: 고정 값은 글자 그대로 견준다. 공백·머리·잘린 값은 맞지 않는다")
+    @Test("Compares the pin verbatim. Whitespace, a prefix, or a truncated value prevents a match")
     func pinnedHashShape() {
         let hash = Fixture.ipLeafSHA256
         for wrong in [" \(hash)", "\(hash) ", "\(hash)\n", "sha256-raw:\(hash)", String(hash.dropLast()), "\(hash)0", "0x\(hash)"] {
@@ -90,27 +90,27 @@ struct ServerCertificateReviewTests {
         }
     }
 
-    // MARK: 받아야 하는 것
+    // MARK: Cases to accept
 
-    /// Go의 고정 판정은 해시, 이름(`VerifyHostname`), 유효 기간만 본다. `SecTrust`의 SSL 서버 정책은 더 본다. derper의
-    /// 수동 인증서 모드(`cmd/derper/cert.go`의 `NewManualCertManager`)는 운영자가 둔 인증서를 그대로 쓰므로, 아래 모양의
-    /// 자체 서명 인증서를 `sha256-raw:`로 고정한 DERP에 Go 클라이언트는 붙고 Swiftail은 붙지 못한다.
-    @Test("고정: Go가 받는 자체 서명 인증서의 모양", arguments: [
-        ("유효 기간 10년", Review.longValidityLeaf, Review.longValidityLeafSHA256),
-        ("EKU 없음", Review.noEKULeaf, Review.noEKULeafSHA256),
-        ("Ed25519 키", Review.ed25519Leaf, Review.ed25519LeafSHA256),
+    /// Go pinning checks only the hash, name (`VerifyHostname`), and validity period. The `SecTrust` SSL server policy checks more. derper's
+    /// manual certificate mode (`NewManualCertManager` in `cmd/derper/cert.go`) uses the operator-provided certificate as is, so for a
+    /// DERP server pinned with `sha256-raw:` to any of the self-signed certificate forms below, the Go client connects and Swiftail cannot.
+    @Test("Self-signed certificate forms accepted by Go pinning", arguments: [
+        ("10-year validity period", Review.longValidityLeaf, Review.longValidityLeafSHA256),
+        ("No EKU", Review.noEKULeaf, Review.noEKULeafSHA256),
+        ("Ed25519 key", Review.ed25519Leaf, Review.ed25519LeafSHA256),
     ])
     func pinnedShapesGoAccepts(shape: String, certificate: [UInt8], hash: String) {
-        withKnownIssue("SecTrust의 SSL 서버 정책이 Go보다 엄격하다: \(shape)") {
+        withKnownIssue("SecTrust's SSL server policy is stricter than Go's: \(shape)") {
             #expect(Self.pinned([certificate], hash: hash, serverName: "derp1a.example.test") == nil)
         }
-        // IP로 붙는 DERP(고정의 흔한 쓰임)에서는 이름을 보지 않으므로 SSL 서버 정책을 쓰지 않는다. Go처럼 기간만 본다.
-        #expect(Self.pinned([certificate], hash: hash, serverName: "100.64.0.1") == nil, "IP 서버 이름: \(shape)")
+        // When connecting to DERP by IP (a common use of pinning), the name is skipped, so the SSL server policy is unused. Only the validity period is checked, as in Go.
+        #expect(Self.pinned([certificate], hash: hash, serverName: "100.64.0.1") == nil, "IP server name: \(shape)")
         #expect(Self.isUntrusted(Self.pinned([certificate], hash: hash, serverName: "100.64.0.1", at: Self.notBefore - 1)))
     }
 
-    /// Go: `now.After(cert.NotAfter)`와 `now.Before(cert.NotBefore)`만 거절하므로 두 끝의 시각은 유효하다.
-    @Test("고정: 유효 기간의 두 끝은 안이고, 1초 밖은 밖이다")
+    /// Go rejects only `now.After(cert.NotAfter)` and `now.Before(cert.NotBefore)`, so both endpoints are valid.
+    @Test("Pinning includes both endpoints of the validity period and excludes times 1 second outside it")
     func pinnedValidityBoundaries() {
         #expect(Self.pinned([Fixture.ipLeaf], at: Self.notBefore) == nil)
         #expect(Self.pinned([Fixture.ipLeaf], at: Self.notAfter) == nil)
@@ -118,33 +118,33 @@ struct ServerCertificateReviewTests {
         #expect(Self.isUntrusted(Self.pinned([Fixture.ipLeaf], at: Self.notAfter + 1)))
     }
 
-    /// Go는 SNI로 나가는 이름이 없으면(`hostnameInSNI`가 빈 문자열) 이름을 아예 보지 않는다. IP SAN이 없는 인증서도 통과한다.
-    @Test("고정: 서버 이름이 IP 리터럴이면 IP SAN이 없는 인증서도 받는다", arguments: [
+    /// Go skips name verification entirely when there is no name to send in SNI (`hostnameInSNI` returns an empty string). A certificate without an IP SAN also passes.
+    @Test("Pinning accepts a certificate without an IP SAN when the server name is an IP literal", arguments: [
         "100.64.0.1", "fd7a:115c:a1e0::1", "[fd7a:115c:a1e0::1]", "fe80::1%en0", "::ffff:100.64.0.1",
     ])
     func pinnedIPLiteralIgnoresSubjectAlternativeNames(serverName: String) {
         #expect(Self.pinned([Fixture.dnsLeaf], hash: Fixture.dnsLeafSHA256, serverName: serverName) == nil)
     }
 
-    // MARK: 이름 지정
+    // MARK: Named verification
 
-    @Test("이름: 기한이 지났거나 아직 아니면 실패한다")
+    @Test("Named verification fails for expired or not-yet-valid certificates")
     func namedValidity() {
         #expect(Self.named([Fixture.namedLeaf], at: Self.notAfter - 1) == nil)
         #expect(Self.isUntrusted(Self.named([Fixture.namedLeaf], at: Self.notAfter + 1)))
         #expect(Self.isUntrusted(Self.named([Fixture.namedLeaf], at: Self.notBefore - 1)))
     }
 
-    /// Go `SetConfigExpectedCert`는 `certs[0]`만 leaf로 본다.
-    @Test("이름: 첫 인증서만 leaf다. 맞는 인증서가 뒤에 있어도 받지 않는다")
+    /// Go `SetConfigExpectedCert` treats only `certs[0]` as the leaf.
+    @Test("Named verification treats only the first certificate as the leaf, so a matching certificate later in the list is rejected")
     func namedLeafIsFirst() {
         #expect(Self.isUntrusted(Self.named([Fixture.meta, Fixture.namedLeaf])))
         #expect(Self.isUntrusted(Self.named([Fixture.dnsLeaf, Fixture.namedLeaf])))
         #expect(Self.isUntrusted(Self.named([Fixture.root, Fixture.namedLeaf])))
     }
 
-    /// Go `VerifyHostname`은 견줄 이름의 대소문자와 끝의 점을 가리지 않는다.
-    @Test("이름: 대소문자와 끝의 점은 가리지 않고, 루트나 같은 인증서가 목록에 더 있어도 된다")
+    /// Go `VerifyHostname` ignores case and a trailing dot in the name being compared.
+    @Test("Named verification ignores case and a trailing dot, and permits an additional root or a duplicate certificate in the list")
     func namedAccepts() {
         #expect(Self.named([Fixture.namedLeaf], name: "DERP-Cert.Example.Test") == nil)
         #expect(Self.named([Fixture.namedLeaf], name: "derp-cert.example.test.") == nil)
@@ -152,10 +152,10 @@ struct ServerCertificateReviewTests {
         #expect(Self.named([Fixture.namedLeaf, Fixture.namedLeaf]) == nil)
     }
 
-    // MARK: SNI 이름
+    // MARK: SNI name
 
-    /// Go 1.27.3 `crypto/tls/handshake_client.go`의 `hostnameInSNI`를 그대로 돌려 얻은 (입력, 출력)이다. 빈 출력은 SNI가
-    /// 없다는 뜻이고, 고정 판정은 그때 이름을 보지 않는다.
+    /// These (input, output) pairs came from running Go 1.27.3 `hostnameInSNI` in `crypto/tls/handshake_client.go` verbatim. An empty output means there is
+    /// no SNI, and pinning skips name verification in that case.
     private static let goServerNames: [(String, String)] = [
         ("", ""),
         (".", ""),
@@ -237,27 +237,27 @@ struct ServerCertificateReviewTests {
         ("[\u{301}::1]", "[\u{301}::1]"),
     ]
 
-    /// Go와 갈리는 입력. 앞의 둘은 `IPAddress`가 `net.ParseIP`와 달리 다섯 자리 묶음의 IPv6를 받아서다: Swiftail은 IP
-    /// 리터럴로 보아 이름 검사를 건너뛰고, Go는 이름으로 견준다. 마지막은 `%`에 결합 문자가 붙은 경우로, Go는 바이트로
-    /// 잘라 IP로 보고 Swiftail은 글자 단위로 보아 이름으로 견준다(Swiftail이 더 엄격하다).
+    /// Inputs where the results differ from Go. The first two differ because `IPAddress` accepts IPv6 groups with five digits, unlike `net.ParseIP`. Swiftail
+    /// treats them as IP literals and skips name verification, while Go compares them as names. In the last case, a combining character follows `%`. Go splits by
+    /// byte and sees an IP, while Swiftail works by character and compares it as a name (Swiftail is stricter).
     private static let knownServerNameDifferences: Set<String> = ["::1%\u{301}"]
 
     private static func sniHostNameMatchesGo(_ input: String, _ expected: String) {
-        #expect(ServerCertificate.sniHostName(input) == (expected.isEmpty ? nil : expected), "입력 \(input.debugDescription)")
+        #expect(ServerCertificate.sniHostName(input) == (expected.isEmpty ? nil : expected), "Input \(input.debugDescription)")
     }
 
-    @Test("SNI 이름은 Go hostnameInSNI와 같은 값을 낸다")
+    @Test("The SNI name matches Go hostnameInSNI")
     func sniHostNameMatchesGo() {
         for (input, expected) in Self.goServerNames where !Self.knownServerNameDifferences.contains(input) {
             Self.sniHostNameMatchesGo(input, expected)
         }
     }
 
-    /// zone 자리에 결합 문자가 붙은 `%`는 Swift에서 한 글자가 아니라 zone으로 떼지 않는다. Go는 떼고 IP로 본다. Swiftail은
-    /// 이름으로 보아 이름 검사를 하므로 더 엄격한 쪽이다. 그대로 둔다.
-    @Test("SNI 이름: Go와 갈리는 입력(더 엄격한 쪽)")
+    /// Swift does not split off the zone because a `%` followed by a combining character in the zone position is not a character on its own. Go splits it off and treats the result as an IP. Swiftail
+    /// treats it as a name and verifies it, which is stricter. Leave this behavior as is.
+    @Test("SNI name inputs that differ from Go (stricter)")
     func sniHostNameDifferences() {
-        withKnownIssue("zone의 `%`에 결합 문자가 붙으면 Go와 달리 이름으로 본다(더 엄격)") {
+        withKnownIssue("A combining character after the zone's `%` yields a name in Swiftail, unlike in Go (stricter)") {
             for (input, expected) in Self.goServerNames where Self.knownServerNameDifferences.contains(input) {
                 Self.sniHostNameMatchesGo(input, expected)
             }
@@ -265,20 +265,20 @@ struct ServerCertificateReviewTests {
     }
 }
 
-/// `ServerCertificateReviewTests`의 고정 인증서. `tailnet certificate-fixtures`(`Tools/interop/cmd/tailnet/derpcert.go`의
-/// `reviewFixtures`)가 만든 것을 그대로 옮겼다. 모두 `derp1a.example.test`의 자체 서명 인증서(P-256, 서버 인증 EKU,
-/// 2026-01-01T00:00:00Z ..< 2027-01-01T00:00:00Z)이고 적은 것만 다르다. Go의 고정 판정은 넷 다 읽는다.
+/// Fixed certificates for `ServerCertificateReviewTests`. Copied verbatim from the output of `tailnet certificate-fixtures` (`reviewFixtures` in
+/// `Tools/interop/cmd/tailnet/derpcert.go`). All are self-signed certificates for `derp1a.example.test` (P-256, server authentication EKU,
+/// 2026-01-01T00:00:00Z ..< 2027-01-01T00:00:00Z), with only the noted differences. Go pinning reads all four.
 enum ServerCertificateReviewFixtures {
-    /// 유효 기간이 10년(2026-01-01 ..< 2036-01-01)인 것만 다르다.
+    /// The only difference is a 10-year validity period (2026-01-01 ..< 2036-01-01).
     static let longValidityLeaf = der("MIIBjzCCATagAwIBAgIRAOFFbb/j6J2vgIDZNZvRO40wCgYIKoZIzj0EAwIwHjEcMBoGA1UEAxMTZGVycDFhLmV4YW1wbGUudGVzdDAeFw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAwMDBaMB4xHDAaBgNVBAMTE2RlcnAxYS5leGFtcGxlLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATH2STO/rQ/aTsBAg8m0I+PiQoI6MdqUxPRYH0mf4YvmSzMw0QMioyhpaTVVhOK1KUfjG4l2vawc6QHXb10iUJBo1UwUzAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAeBgNVHREEFzAVghNkZXJwMWEuZXhhbXBsZS50ZXN0MAoGCCqGSM49BAMCA0cAMEQCIFQSforo1haJvhAV+ACItlWZk+r9hp0JcUS6//e1FbvOAiB0/D54STV+HKEKhZb22GxycCbGXrHt9jIRrKFDcLKJ1Q==")
     static let longValidityLeafSHA256 = "04be93f33a34909781e021be60a728fe7fc31cd4d7566eaf0230b904ea8bc91e"
-    /// 확장 키 용도(EKU)가 없는 것만 다르다.
+    /// The only difference is the absence of an extended key usage (EKU).
     static let noEKULeaf = der("MIIBfDCCASGgAwIBAgIRAKN2TC/OpFGn+1DsgWTWxQUwCgYIKoZIzj0EAwIwHjEcMBoGA1UEAxMTZGVycDFhLmV4YW1wbGUudGVzdDAeFw0yNjAxMDEwMDAwMDBaFw0yNzAxMDEwMDAwMDBaMB4xHDAaBgNVBAMTE2RlcnAxYS5leGFtcGxlLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQS2RaxVXO4UbeFxsjs5MMU6NCvspOoUA04rpik/+BNh7lSkLddcl00m2J0wRbFB5idtZ52Xkat2nDcCT6KcGiRo0AwPjAOBgNVHQ8BAf8EBAMCBaAwDAYDVR0TAQH/BAIwADAeBgNVHREEFzAVghNkZXJwMWEuZXhhbXBsZS50ZXN0MAoGCCqGSM49BAMCA0kAMEYCIQCVVEsAe3LF73KM0NUT6db5WrOgFVMTFs4Bw6QkYRMiYwIhANPpHykCY1tj3+bGvUm41oDCqM1ZG55M4AfpMaz1hiBi")
     static let noEKULeafSHA256 = "21a30850b6d41f14f30f33ed65623c0cddb74ee8afa15f933ea3e58507b4fbac"
-    /// 키가 Ed25519인 것만 다르다(키 용도는 디지털 서명).
+    /// The only difference is an Ed25519 key (digital signature key usage).
     static let ed25519Leaf = der("MIIBUDCCAQKgAwIBAgIRAMM5JyrMoelVY1biBi4GBwgwBQYDK2VwMB4xHDAaBgNVBAMTE2RlcnAxYS5leGFtcGxlLnRlc3QwHhcNMjYwMTAxMDAwMDAwWhcNMjcwMTAxMDAwMDAwWjAeMRwwGgYDVQQDExNkZXJwMWEuZXhhbXBsZS50ZXN0MCowBQYDK2VwAyEAGrwtrGxcTuFBC94Z0+4HMInOYIMrureUKmx33u+Ng1yjVTBTMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMB4GA1UdEQQXMBWCE2RlcnAxYS5leGFtcGxlLnRlc3QwBQYDK2VwA0EAMx9VXMFbLvBI5ROHsPQeyYUmm8WBllplsQYsCcQDSdnlml+MRay6ymrh0oOaeUj2s+4DEDYQ3GmyBFAKAQ3TBg==")
     static let ed25519LeafSHA256 = "f0f10a676b31c2799429a8c1e37d2161432dd1d53fb15227c4cc56bd30a6b9c2"
-    /// 주체 CN이 VisibleString(태그 26)으로 쓴 `derpkey00`이다. Go의 x509는 이 형을 CN으로 읽지 않는다(CommonName이 빈다).
+    /// The subject CN is `derpkey00` encoded as VisibleString (tag 26). Go's x509 does not read this type as a CN (CommonName is empty).
     static let visibleStringMeta = der("MIIBfDCCASKgAwIBAgIRAIZYWnlcVZ9yVlv6sjK2WmkwCgYIKoZIzj0EAwIwFDESMBAGA1UEAxoJZGVycGtleTAwMB4XDTI2MDEwMTAwMDAwMFoXDTI3MDEwMTAwMDAwMFowFDESMBAGA1UEAxoJZGVycGtleTAwMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6YdGd29edaWB0Ana83eZ+kw7ji90b150nC7mT4Jqryvn7j4tYDfYyBsczrKlsNGXo7VfmM+YhXsz2UIySck3naNVMFMwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwHgYDVR0RBBcwFYITZGVycDFhLmV4YW1wbGUudGVzdDAKBggqhkjOPQQDAgNIADBFAiBjyG4qTalvoGB87iV7REwl2s0Pk/B9ka0sLW870VFwogIhAOOTPaCV6xtlzJ3n3whWjvGWef6Q9mJl/pJkVS5JGVrL")
 
     private static func der(_ base64: String) -> [UInt8] {

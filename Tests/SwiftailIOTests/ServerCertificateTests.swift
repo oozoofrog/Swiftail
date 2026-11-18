@@ -3,12 +3,12 @@ import Testing
 
 @testable import SwiftailIO
 
-/// DERP 인증서 고정·이름 판정(계약 `docs/contracts/SwiftailDERP.md` "M8 ③" 동작 V 2·4). 연결 없이 고정 인증서로 본다.
-@Suite("서버 인증서 판정")
+/// Tests DERP certificate pinning and name verification (contract `docs/contracts/SwiftailDERP.md` "M8 ③", behavior V 2·4). Uses fixed certificates without connecting.
+@Suite("Server certificate verification")
 struct ServerCertificateTests {
     private typealias Fixture = ServerCertificateFixtures
 
-    /// 고정 인증서들의 유효 기간 안.
+    /// Within the validity period of the certificate fixtures.
     private static let now = Date(timeIntervalSince1970: 1_780_272_000) // 2026-06-01T00:00:00Z
 
     private static func pinned(
@@ -37,17 +37,17 @@ struct ServerCertificateTests {
         if case .untrusted = failure { true } else { false }
     }
 
-    // MARK: 고정
+    // MARK: Pinning
 
-    @Test("고정: derper의 IP 자체 서명 인증서가 해시로 맞고, meta 인증서는 어느 자리에 있어도 세지 않는다")
+    @Test("Pinning matches derper's self-signed IP certificate by hash and excludes the meta certificate from the count in every position")
     func pinnedMatches() {
         #expect(Self.pinned([Fixture.ipLeaf]) == nil)
         #expect(Self.pinned([Fixture.ipLeaf, Fixture.meta]) == nil)
-        // Go는 받는다. 첫 자리(TLS가 키를 증명한 자리)가 meta 모양이면 고정이 키 소유를 증명하지 못하므로 받지 않는다.
+        // Go accepts this. If the first certificate (whose key TLS proved) looks like a meta certificate, pinning fails to prove key ownership, so reject it.
         #expect(Self.pinned([Fixture.meta, Fixture.ipLeaf]) == .candidateNotLeaf)
     }
 
-    @Test("고정: 해시가 다르면 실패한다. 대문자로 쓴 같은 해시도, 서버가 함께 낸 meta 인증서의 해시도 맞지 않는다")
+    @Test("Pinning fails for a different hash, the same hash in uppercase, and the hash of the meta certificate the server also presents")
     func pinnedHashMismatch() {
         #expect(Self.pinned([Fixture.otherIPLeaf]) == .hashMismatch)
         #expect(Self.pinned([Fixture.ipLeaf], hash: Fixture.ipLeafSHA256.uppercased()) == .hashMismatch)
@@ -55,7 +55,7 @@ struct ServerCertificateTests {
         #expect(Self.pinned([Fixture.ipLeaf], hash: "") == .hashMismatch)
     }
 
-    @Test("고정: meta가 아닌 인증서가 둘이면(같은 것 둘 포함) 실패하고, 하나도 없으면 실패한다")
+    @Test("Pinning fails with two non-meta certificates (including duplicates) or no non-meta certificate")
     func pinnedCount() {
         #expect(Self.pinned([Fixture.ipLeaf, Fixture.otherIPLeaf]) == .multipleCandidates)
         #expect(Self.pinned([Fixture.ipLeaf, Fixture.meta, Fixture.otherIPLeaf]) == .multipleCandidates)
@@ -65,13 +65,13 @@ struct ServerCertificateTests {
         #expect(Self.pinned([Fixture.ipLeaf, [0x30, 0x03, 0x02, 0x01, 0x00]]) == .unparsable)
     }
 
-    @Test("고정: 유효 기간 밖(지남, 아직 아님)이면 실패한다")
+    @Test("Pinning fails outside the validity period (expired or not yet valid)")
     func pinnedValidity() {
         #expect(Self.isUntrusted(Self.pinned([Fixture.ipLeaf], at: Date(timeIntervalSince1970: 1_801_440_000)))) // 2027-02-01
         #expect(Self.isUntrusted(Self.pinned([Fixture.ipLeaf], at: Date(timeIntervalSince1970: 1_764_547_200)))) // 2025-12-01
     }
 
-    @Test("고정: SNI로 나가는 이름이면 인증서가 그 이름에 유효해야 한다. 끝의 점은 뗀다")
+    @Test("Pinning requires the certificate to be valid for the name sent in SNI and strips a trailing dot")
     func pinnedHostName() {
         let hash = Fixture.dnsLeafSHA256
         #expect(Self.pinned([Fixture.dnsLeaf], hash: hash, serverName: "derp1a.example.test") == nil)
@@ -79,22 +79,22 @@ struct ServerCertificateTests {
         #expect(Self.isUntrusted(Self.pinned([Fixture.dnsLeaf], hash: hash, serverName: "derp1b.example.test")))
     }
 
-    /// Go는 IP 리터럴에 SNI를 보내지 않고(`hostnameInSNI`), 고정 판정은 SNI 이름이 비면 이름을 보지 않는다.
-    @Test("고정: hostName이 IP 리터럴이면 이름을 보지 않는다(Go와 같다)")
+    /// Go omits SNI for IP literals (`hostnameInSNI`), and pinning skips name verification when the SNI name is empty.
+    @Test("Pinning skips name verification when hostName is an IP literal (as Go does)")
     func pinnedIPLiteralSkipsName() {
         #expect(Self.pinned([Fixture.ipLeaf], serverName: "127.0.0.1") == nil)
         #expect(Self.pinned([Fixture.ipLeaf], serverName: "::1") == nil)
     }
 
-    // MARK: 이름
+    // MARK: Named verification
 
-    @Test("이름: 시험 앵커로 사슬을 검증하고 certName으로 이름을 본다. meta 인증서가 섞여도 된다")
+    @Test("Named verification validates the chain against the test anchor and checks the name against certName, even if a meta certificate is present")
     func namedMatches() {
         #expect(Self.named([Fixture.namedLeaf]) == nil)
         #expect(Self.named([Fixture.namedLeaf, Fixture.meta]) == nil)
     }
 
-    @Test("이름: 이름이 다르거나, 앵커가 없거나(시스템 저장소에 시험 루트가 없다), 자체 서명이면 실패한다")
+    @Test("Named verification fails for a different name, a missing anchor (the system store lacks the test root), or a self-signed certificate")
     func namedRejects() {
         #expect(Self.isUntrusted(Self.named([Fixture.namedLeaf], name: "derp1a.example.test")))
         #expect(Self.isUntrusted(Self.named([Fixture.namedLeaf], anchors: nil)))
@@ -102,9 +102,9 @@ struct ServerCertificateTests {
         #expect(Self.named([]) == .unparsable)
     }
 
-    // MARK: SNI 이름
+    // MARK: SNI name
 
-    @Test("SNI 이름은 Go hostnameInSNI와 같다: IP 리터럴(괄호·범위 포함)은 없고 끝의 점은 뗀다")
+    @Test("The SNI name follows Go hostnameInSNI: it is absent for IP literals (including brackets and zones) and has trailing dots stripped")
     func sniHostName() {
         #expect(ServerCertificate.sniHostName("100.64.0.1") == nil)
         #expect(ServerCertificate.sniHostName("fd7a:115c:a1e0::1") == nil)

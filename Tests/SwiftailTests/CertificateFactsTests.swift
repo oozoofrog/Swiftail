@@ -1,5 +1,5 @@
-// 노드의 인증서 접점: `certificateFacts`, `setDNS`, `stateDirectory`.
-// 계약 `docs/contracts/SwiftailHost.md` 8절 머리의 `package` 선언, 동작 C1·D4.
+// The node's certificate interfaces: `certificateFacts`, `setDNS`, and `stateDirectory`.
+// The `package` declarations at the start of contract `docs/contracts/SwiftailHost.md` §8, behaviors C1·D4.
 
 import Foundation
 import SwiftailBase
@@ -7,11 +7,11 @@ import SwiftailControl
 import Testing
 @testable import Swiftail
 
-@Suite("노드: 인증서 접점", .timeLimit(.minutes(1)))
+@Suite("Node certificate interfaces", .timeLimit(.minutes(1)))
 struct CertificateFactsTests {
     static let fqdn = "rd-mac-1a2b3c4d.tail0001.ts.net"
 
-    /// 자기 노드 이름, cert 도메인, MagicDNS 켬을 정한 netmap.
+    /// A netmap that specifies the local node name, cert domains, and whether MagicDNS is enabled.
     static func netmap(name: String = fqdn + ".", certDomains: [String] = [fqdn], proxied: Bool = true) throws -> Netmap {
         let domains = certDomains.map { "\"\($0)\"" }.joined(separator: ",")
         let json = #"{"Node":{"ID":1,"StableID":"nStable1","Name":"\#(name)","User":101,"Key":"\#(NodeTestSupport.nodeKey(0x11))","#
@@ -42,14 +42,14 @@ struct CertificateFactsTests {
 
     // MARK: certificateFacts
 
-    @Test("구독하면 지금 값부터 나온다: netmap 전에는 서지 않음, 이름·cert 도메인 없음, MagicDNS 꺼짐")
+    @Test("A subscription yields the current value first: before a netmap, the node is not up, has no name or cert domains, and MagicDNS is off")
     func initialValue() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         var facts = node.certificateFacts.makeAsyncIterator()
         #expect(await facts.next() == Self.facts(running: false, fqdn: nil, certDomains: [], magicDNS: false))
     }
 
-    @Test("netmap을 받은 뒤 구독해도 지금 값(가장 새 것)이 먼저 나온다")
+    @Test("A subscription after the netmap arrives still yields the current (latest) value first")
     func subscribeAfterChanges() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try Self.netmap())
@@ -57,7 +57,7 @@ struct CertificateFactsTests {
         #expect(await facts.next() == Self.facts(running: false, fqdn: Self.fqdn, certDomains: [Self.fqdn], magicDNS: true))
     }
 
-    @Test("상태·이름·cert 도메인·MagicDNS가 바뀔 때마다 새 값이 나오고, 그대로면 나오지 않는다")
+    @Test("Yields a new value whenever the state, name, cert domains, or MagicDNS changes, and yields nothing if they stay the same")
     func changes() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         var facts = node.certificateFacts.makeAsyncIterator()
@@ -79,16 +79,16 @@ struct CertificateFactsTests {
         await node.apply(try Self.netmap(name: renamed + ".", certDomains: [], proxied: false))
         #expect(await facts.next() == Self.facts(running: true, fqdn: renamed, certDomains: [], magicDNS: false))
 
-        // 같은 사실이 되는 netmap(다시 받음)과 같은 상태(다시 연결)는 내지 않는다.
+        // Do not emit for a netmap with the same facts (received again) or the same state (reconnected).
         await node.apply(try Self.netmap(name: renamed + ".", certDomains: [], proxied: false))
         await node.markConnectedForTesting()
         node.certificateFactsPublisher.finish()
         #expect(await facts.next() == nil)
     }
 
-    /// 고치기 전에는 흐름이 노드에 하나뿐이라, 관리자를 멈추고(읽던 Task의 취소로 흐름이 끝난다) 같은 노드에 새 관리자를
-    /// 두면 곧바로 끝난 흐름을 받아 영영 "노드가 돌지 않는다"로 남았다.
-    @Test("다시 구독하면 지금 값부터 새로 받고, 앞선 구독은 끝난다")
+    /// Before the fix, the node had only one stream. Stopping the manager (canceling the reading Task ends the stream) and installing a new manager
+    /// on the same node handed it a stream that ended immediately, leaving it at "the node is not running" indefinitely.
+    @Test("Resubscribing starts again with the current value and ends the previous subscription")
     func resubscribing() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         var first = node.certificateFacts.makeAsyncIterator()
@@ -101,19 +101,19 @@ struct CertificateFactsTests {
         #expect(await second.next() == current)
         await node.apply(try Self.netmap(proxied: false))
         #expect(await second.next() == Self.facts(running: true, fqdn: Self.fqdn, certDomains: [Self.fqdn], magicDNS: false))
-        // 앞선 구독은 읽지 않은 것 하나를 낸 뒤 끝난다.
+        // The previous subscription yields one unread value before ending.
         var rest: [CertificateFacts] = []
         while let facts = await first.next() { rest.append(facts) }
         #expect(rest.count <= 1)
     }
 
-    @Test("netmap의 다른 부분만 바뀌면 내지 않는다")
+    @Test("Changes elsewhere in the netmap yield nothing")
     func unrelatedNetmapChange() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try Self.netmap())
         var facts = node.certificateFacts.makeAsyncIterator()
         _ = await facts.next()
-        // 피어가 생기고 주소가 바뀐 netmap: 네 사실은 같다.
+        // A netmap with a new peer and changed addresses: the four facts stay the same.
         await node.apply(try NodeTestSupport.netmap(
             addresses: ["100.64.0.9/32"], dnsConfig: #"{"Proxied":true,"CertDomains":["\#(Self.fqdn)"]}"#, peerAddress: "100.64.0.2/32"
         ))
@@ -121,7 +121,7 @@ struct CertificateFactsTests {
         #expect(await facts.next() == nil)
     }
 
-    @Test("소비가 느리면 가장 새 것 하나만 남는다")
+    @Test("A slow consumer retains only the latest value")
     func slowConsumer() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try Self.netmap())
@@ -133,7 +133,7 @@ struct CertificateFactsTests {
         #expect(seen == [Self.facts(running: true, fqdn: Self.fqdn, certDomains: [Self.fqdn], magicDNS: false)])
     }
 
-    @Test("run()이 끝나면 흐름도 끝난다")
+    @Test("The stream ends when run() ends")
     func endsWithRun() async throws {
         try await NodeTestSupport.withTemporaryDirectory { directory in
             let node = try TailnetNode(configuration: try NodeTestSupport.configuration(stateDirectory: directory))
@@ -147,18 +147,18 @@ struct CertificateFactsTests {
 
     // MARK: setDNS
 
-    @Test("노드가 running이 아니면 setDNS는 connection으로 거절한다")
+    @Test("setDNS rejects with connection when the node is not running")
     func setDNSBeforeRunning() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try Self.netmap())
         guard case .connection? = await setDNSError(node, name: "_acme-challenge." + Self.fqdn) else {
-            Issue.record("running 전의 setDNS가 connection으로 끝나지 않았다")
+            Issue.record("setDNS before running did not end with connection")
             return
         }
     }
 
     @Test(
-        "자기 cert 도메인의 _acme-challenge. 레코드가 아닌 이름은 invalidConfiguration이다",
+        "A name other than an _acme-challenge. record for a local cert domain yields invalidConfiguration",
         arguments: [
             "rd-mac-1a2b3c4d.tail0001.ts.net",
             "_acme-challenge.rd-phone-1a2b3c4d.tail0001.ts.net",
@@ -172,37 +172,37 @@ struct CertificateFactsTests {
         await node.apply(try Self.netmap())
         await node.markConnectedForTesting()
         guard case .invalidConfiguration(let message)? = await setDNSError(node, name: name) else {
-            Issue.record("다른 이름을 받아들였다")
+            Issue.record("Accepted a different name")
             return
         }
-        #expect(!message.contains("tail0001"), "오류 문자열에 이름이 남았다")
+        #expect(!message.contains("tail0001"), "The error string still contains the name")
     }
 
-    @Test("자기 이름이 cert 도메인에 없으면 그 이름의 레코드도 invalidConfiguration이다")
+    @Test("If the node's own name is absent from the cert domains, its record also yields invalidConfiguration")
     func setDNSRequiresCertDomain() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try Self.netmap(certDomains: ["rd-phone-1a2b3c4d.tail0001.ts.net"]))
         await node.markConnectedForTesting()
         guard case .invalidConfiguration? = await setDNSError(node, name: "_acme-challenge." + Self.fqdn) else {
-            Issue.record("cert 도메인에 없는 이름을 받아들였다")
+            Issue.record("Accepted a name absent from the cert domains")
             return
         }
     }
 
-    @Test("이름이 맞아도 run() 밖이면(제어 클라이언트 없음) connection이다")
+    @Test("A matching name still yields connection outside run() (no control client)")
     func setDNSOutsideRun() async throws {
         let node = try TailnetNode(configuration: try NodeTestSupport.unusedConfiguration())
         await node.apply(try Self.netmap())
         await node.markConnectedForTesting()
         guard case .connection? = await setDNSError(node, name: "_acme-challenge." + Self.fqdn) else {
-            Issue.record("제어 클라이언트 없이 connection으로 끝나지 않았다")
+            Issue.record("Did not end with connection when the control client was absent")
             return
         }
     }
 
     // MARK: stateDirectory
 
-    @Test("stateDirectory는 설정의 상태 디렉터리다")
+    @Test("stateDirectory is the configured state directory")
     func stateDirectory() throws {
         let configuration = try NodeTestSupport.unusedConfiguration()
         let node = try TailnetNode(configuration: configuration)
@@ -211,7 +211,7 @@ struct CertificateFactsTests {
 }
 
 private extension TailnetNode {
-    /// 홈 DERP 연결이 선 것처럼 상태 기계에 넣는다(netmap 뒤면 `.running`).
+    /// Updates the state machine as if the home DERP connection came up (`.running` after the netmap).
     func markConnectedForTesting() {
         announce(stateMachine.connected())
     }

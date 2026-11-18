@@ -6,9 +6,9 @@ import SwiftailMagicsock
 import Testing
 @testable import Swiftail
 
-/// 노드가 상태 기계 사이에서 옮기는 값: 자기 엔드포인트 → `LocalStatus`(N4), 피어 키 ↔ 이름(N6).
-/// 계약 `docs/contracts/SwiftailEngine.md` "M4에서 바뀌는 것".
-@Suite("노드의 데이터면 값 옮기기")
+/// Values the node moves between state machines: local endpoints → `LocalStatus` (N4), peer key ↔ name (N6).
+/// Contract `docs/contracts/SwiftailEngine.md`, "Changes in M4."
+@Suite("Mapping the node's data plane values")
 struct NodeDataPlaneMappingTests {
     private static func endpoint(_ text: String) throws -> IPEndpoint {
         try #require(IPEndpoint(text))
@@ -18,7 +18,7 @@ struct NodeDataPlaneMappingTests {
         "nodekey:" + [UInt8](repeating: byte, count: 32).hex
     }
 
-    /// 자기 노드(ID 1)와 `peers`(ID, 키 바이트, 이름)의 netmap. 피어는 홈 DERP 1에 있다.
+    /// A netmap with the local node (ID 1) and `peers` (ID, key bytes, name). Peers have home DERP 1.
     private static func netmap(peers: [(id: Int64, key: UInt8, name: String)]) throws -> Netmap {
         let peerJSON = peers.map { peer in
             #"{"ID":\#(peer.id),"Name":"\#(peer.name)","User":101,"Key":"\#(key(peer.key))","#
@@ -40,10 +40,10 @@ struct NodeDataPlaneMappingTests {
         try #require(NodePublicKey(rawValue: [UInt8](repeating: byte, count: 32)))
     }
 
-    /// 고치기 전에는 이름을 netmap에서 키로 다시 찾아, 같은 키를 가진 노드 가운데 자격과 무관하게 ID가 가장 작은 노드의 이름이 붙었다.
-    @Test("같은 키를 가진 노드가 둘이면 데이터면에 오른 노드의 이름을 쓴다")
+    /// Before the fix, the node looked up the name in the netmap by key again, so it used the name of the lowest-ID node with that key regardless of eligibility.
+    @Test("When two nodes share a key, uses the name of the node admitted to the data plane")
     func nameComesFromChosenNode() throws {
-        // ID 3은 tailnet 주소가 없어 데이터면에 오르지 않고, 같은 키의 ID 5가 오른다.
+        // ID 3 has no tailnet address and stays out of the data plane, while ID 5 with the same key is admitted.
         let json = #"{"Node":{"ID":1,"Name":"self.tail0001.ts.net.","User":101,"Key":"\#(Self.key(0x01))","Addresses":["100.64.0.1/32"]},"#
             + #""Peers":[{"ID":3,"Name":"ineligible.tail0001.ts.net.","User":101,"Key":"\#(Self.key(0x07))","AllowedIPs":["10.0.0.0/8"],"HomeDERP":1},"#
             + #"{"ID":5,"Name":"onplane.tail0001.ts.net.","User":101,"Key":"\#(Self.key(0x07))","Addresses":["100.64.0.5/32"],"AllowedIPs":["100.64.0.5/32"],"HomeDERP":1}]}"#
@@ -58,7 +58,7 @@ struct NodeDataPlaneMappingTests {
 
     // MARK: N4
 
-    @Test("엔드포인트를 같은 순서의 주소와 종류(local 1, stun 2)로 옮기고 disco 키와 홈 지역은 그대로 둔다")
+    @Test("Maps endpoints to addresses and types (local 1, stun 2) in the same order and leaves the disco key and home region unchanged")
     func endpointsToLocalStatus() throws {
         var status = ControlClient.LocalStatus(discoKey: try #require(DiscoPublicKey(rawValue: [UInt8](repeating: 0xD1, count: 32))))
         status.netInfo = NetInfo(preferredDERP: 1)
@@ -77,7 +77,7 @@ struct NodeDataPlaneMappingTests {
 
     // MARK: N6
 
-    @Test("이름은 끝의 점 하나를 떼어 담고, 찾을 때는 끝의 점과 ASCII 대소문자를 무시한다")
+    @Test("Stores names with one trailing dot removed and ignores the trailing dot and ASCII case at lookup")
     func nameComparison() throws {
         let directory = try Self.directory([(2, 0x02, "rd-mac-1a2b3c4d.tail0001.ts.net.")])
         let key = try Self.nodeKey(0x02)
@@ -90,14 +90,14 @@ struct NodeDataPlaneMappingTests {
         #expect(directory.key(named: "") == nil)
     }
 
-    @Test("ASCII가 아닌 글자는 대소문자를 바꾸지 않는다")
+    @Test("Leaves the case of non-ASCII characters unchanged")
     func nonASCIINames() throws {
         let directory = try Self.directory([(2, 0x02, "ÄBC.tail0001.ts.net.")])
         #expect(directory.key(named: "Äbc.tail0001.ts.net") == (try Self.nodeKey(0x02)))
         #expect(directory.key(named: "äbc.tail0001.ts.net") == nil)
     }
 
-    @Test("같은 이름이 둘이면 node ID가 작은 쪽이고, 이름이 빈 피어는 이름이 없다")
+    @Test("When two nodes share a name, the lower node ID wins. A peer with an empty name has no name")
     func duplicateAndEmptyNames() throws {
         let directory = try Self.directory([(5, 0x05, "dup.tail0001.ts.net."), (3, 0x03, "DUP.tail0001.ts.net."), (4, 0x04, "")])
         #expect(directory.key(named: "dup.tail0001.ts.net") == (try Self.nodeKey(0x03)))
@@ -105,7 +105,7 @@ struct NodeDataPlaneMappingTests {
         #expect(directory.name(of: try Self.nodeKey(0x09)) == nil)
     }
 
-    @Test("빠지는 피어의 사건에 쓸 옛 이름을 새 표 뒤에 덧붙인다. 새 표의 이름이 앞선다")
+    @Test("Appends old names after the new table for events from peers being removed. Names in the new table take precedence")
     func keepingOldNames() throws {
         let old = try Self.directory([(2, 0x02, "old.tail0001.ts.net."), (3, 0x03, "gone.tail0001.ts.net.")])
         let new = try Self.directory([(2, 0x02, "renamed.tail0001.ts.net.")])
@@ -115,7 +115,7 @@ struct NodeDataPlaneMappingTests {
         #expect(new.name(of: try Self.nodeKey(0x03)) == nil)
     }
 
-    @Test("경로 사건 로그 줄은 피어를 첫 사건 순서의 번호로 가르고, 나빠진 까닭과 같은 피어의 앞 사건 뒤 시간(0.1초 단위), 버린 disco를 종류별로 적는다")
+    @Test("Path event log lines identify peers by number in first-event order and record the reason for degradation, time since the same peer's previous event (in 0.1-second units), and discarded disco messages by type")
     func pathEventLine() throws {
         let start = ContinuousClock.now
         let first = try Self.nodeKey(0x02), second = try Self.nodeKey(0x03)
@@ -127,14 +127,14 @@ struct NodeDataPlaneMappingTests {
         }
         #expect(tally.line(for: second, path: .relayed(derpRegion: 20), downgrade: nil, at: start + .seconds(1))
             == "피어 2 경로: relayed(20) (첫 사건, 버린 disco: 모르는 키 2, 열리지 않음 1, 경로 규칙 1)")
-        // "앞 사건 뒤"는 같은 피어의 앞 사건부터다. 그사이 다른 피어의 사건이 있어도 그렇다. 버린 disco는 앞 사건(어느 피어든) 뒤부터 센다.
+        // "Since previous event" measures from the previous event for the same peer, even if another peer had an event in between. Discarded disco messages are counted since the previous event for any peer.
         #expect(tally.line(for: first, path: .relayed(derpRegion: 7), downgrade: .trustExpired, at: start + .milliseconds(96_570))
             == "피어 1 경로: relayed(7) (신뢰 만료, 앞 사건 뒤 96.5초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
         #expect(tally.line(for: second, path: nil, downgrade: .discoKeyChanged, at: start + .seconds(3))
             == "피어 2 경로: none (disco 키 바뀜, 앞 사건 뒤 2.0초, 버린 disco: 모르는 키 0, 열리지 않음 0, 경로 규칙 0)")
     }
 
-    @Test("netmap에서 빠진 피어의 경로 기록을 지우고, 남은 피어의 번호를 유지하며 옛 번호는 다시 쓰지 않는다")
+    @Test("Deletes path records for peers removed from the netmap, retains the remaining peers' numbers, and never reuses old numbers")
     func pathEventTallyPrunesRemovedPeers() async throws {
         let node = try TailnetNode(configuration: NodeTestSupport.unusedConfiguration())
         let kept = try Self.nodeKey(0x02)
