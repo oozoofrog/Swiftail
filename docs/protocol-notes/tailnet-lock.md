@@ -8,9 +8,9 @@
 | Dependency modules | `github.com/fxamacker/cbor/v2` v2.9.3, `github.com/hdevalence/ed25519consensus` v0.2.0, `golang.org/x/crypto` v0.58.0 (`tailscale.com/go.mod:51`, `:80`, `:139`). The Go standard library is Go 1.27.3's `src/` |
 | Applicable milestone | M8 ① Tailnet Lock (`docs/plan.md` §3, milestone table M8) |
 | Authoring model | Claude Opus 5.5 (`claude-opus-5-5`), 2026-11-15 |
-| Verification | Verified (2026-11-15, Claude Opus 5.5 `claude-opus-5-5`, in a separate session from authoring). Checked against `tailscale.com` v1.104.7 sources (ran v1.104.6 and reconfirmed the 8 differing files), `fxamacker/cbor/v2` v2.9.3, `ed25519consensus` v0.2.0, `golang.org/x/crypto` v0.58.0, and Go 1.27.3 `src/`. Factual statements assessed: 256 correct, 11 incorrect (9 in substance, 2 in origin line numbers), and 4 unverifiable. Made 11 corrections and added 12 missing paths. See the "Verification session" table in §8.1 for execution records |
+| Verification | Verified (2026-11-15, Claude Opus 5.5 `claude-opus-5-5`, in a separate session from authoring). Checked against `tailscale.com` v1.104.7 sources (ran v1.104.6 and reconfirmed the 8 differing files), `fxamacker/cbor/v2` v2.9.3, `ed25519consensus` v0.2.0, `golang.org/x/crypto` v0.58.0, and Go 1.27.3 `src/`. Factual statements assessed: 256 correct, 11 incorrect (9 in substance, 2 in source line numbers), and 4 unverifiable. Made 11 corrections and added 12 missing paths. See the "Verification session" table in §8.1 for execution records |
 
-Origins use `path:line` relative to the module root. Module prefixes are abbreviated as `tailscale.com/`, `cbor/` (= `fxamacker/cbor/v2@v2.9.3/`), `ed25519consensus/`, `x/crypto/` (= `golang.org/x/crypto@v0.58.0/`), and `go/src/` (Go 1.27.3). Swiftail repository paths use `Sources/...`. §8.1 records the commands used to verify behavior by execution. Example values are fictitious or come from Go test files.
+Origins use `path:line` relative to the module root. Module prefixes are abbreviated as `tailscale.com/`, `cbor/` (= `fxamacker/cbor/v2@v2.9.3/`), `ed25519consensus/`, `x/crypto/` (= `golang.org/x/crypto@v0.58.0/`), and `go/src/` (Go 1.27.3). Swiftail repository paths use `Sources/...`. §8.1 records what was verified by execution and the commands used. Example values are fictitious or come from Go test files.
 
 ## 2. Scope
 
@@ -59,14 +59,14 @@ Struct fields use the `cbor:"N,keyasint"` tag to form an **integer-keyed map**. 
 | Text keys | Discarded as unknown fields if the UTF-8 is valid. `keyasint` fields are looked up only by integer key, so `"1"`, `"MessageKind"`, and `"messagekind"` also fail to match | `cbor/decode.go:2767-2804`, `cbor/decode_map_utils.go:36-63`, `cbor/cache.go:136-158`, Go run in §8.1 |
 | **Keys other than integer or text** | **Rejected.** A bstr, float, true/false/null/undefined, array, or map key in a struct map (AUM, Key, State, Signature, NKS) causes a decoding error. Invalid UTF-8 text keys and positive integer keys of 2^63 or greater are also rejected. Negative integer keys down to −2^63 and positive integer keys up to 2^63−1 are discarded as unknown fields | `cbor/decode.go:2760-2780`, `:2806-2834`, `:2862-2897`, Go run in §8.1 (verification session) |
 | `Meta` map | Keys and values must both be text. bstr and integer keys and bstr values are rejected | Go run in §8.1 (verification session) |
-| Non-shortest integers and unsorted keys | **Accepted** (canonical form is optional) | Go run in §8.1 |
+| Non-shortest integers and unsorted keys | **Accepted** (the decoder does not enforce canonical form) | Go run in §8.1 |
 | Type mismatch in known fields | Rejected (negative numbers, floats, or text in `uint8` or `[]byte`, or integers in `Meta` values) | Go run in §8.1 |
 | Out of range | `MessageKind` 256 is rejected due to `uint8` overflow | Go run in §8.1 |
 | null | null in a known integer field becomes 0 (e.g., `MessageKind` null → 0) | Go run in §8.1 |
 | Known text | Invalid UTF-8 is rejected (`UTF8RejectInvalid` is the default) | `cbor/decode.go:456-459`, `cbor/decode.go:2317-2318`, Go run in §8.1 |
 | Outermost item other than a map | Rejected | Go run in §8.1 |
 
-**Compute hashes over the bytes obtained by re-encoding the decoded value.** `AUM.Hash`, `SigHash`, and `NodeKeySignature.SigHash` all call `Serialize` on the struct and then apply BLAKE2s (`tailscale.com/tka/aum.go:274-288`, `tailscale.com/tka/sig.go:208-212`). Inputs with unknown fields, non-shortest integers, or unsorted keys are therefore accepted, and the hash covers the canonical encoding that normalizes them (Go run in §8.1: canonical input gives `hash == blake2s(original)`, other input differs). Signature verification also uses the hash of the re-encoded bytes, leaving unknown fields outside signature protection.
+**Compute hashes over the bytes obtained by re-encoding the decoded value. The received bytes are never hashed directly.** `AUM.Hash`, `SigHash`, and `NodeKeySignature.SigHash` all call `Serialize` on the struct and then apply BLAKE2s (`tailscale.com/tka/aum.go:274-288`, `tailscale.com/tka/sig.go:208-212`). Inputs with unknown fields, non-shortest integers, or unsorted keys are therefore accepted, and the hash covers the canonical encoding that normalizes them (Go run in §8.1: canonical input gives `hash == blake2s(original)`, other input differs). Signature verification also uses the hash of the re-encoded bytes, leaving unknown fields outside signature protection.
 
 ### 3.2 `Key`
 
@@ -97,7 +97,7 @@ Origin: `tailscale.com/types/tkatype/tkatype.go:35-40`, `tailscale.com/tka/aum.g
 | CBOR key | Field | Type | Notes |
 | ---: | --- | --- | --- |
 | 1 | `MessageKind` | uint (`AUMKind`, uint8) | No omitempty |
-| 2 | `PrevAUMHash` | bstr or null | No omitempty. No parent (genesis) requires **nil=null**. `StaticValidate` rejects a zero-length bstr (`tailscale.com/tka/aum.go:165-167`). `StaticValidate` does not check length. `Parent()` copies from the start into a 32-byte slot (`tailscale.com/tka/aum.go:292-298`). State application compares the 32 bytes of `LastAUMHash` with all bytes of `PrevAUMHash` and fails if the lengths differ (`tailscale.com/tka/state.go:150-155`) |
+| 2 | `PrevAUMHash` | bstr or null | No omitempty. No parent (genesis) requires **nil=null**. `StaticValidate` rejects a zero-length bstr (`tailscale.com/tka/aum.go:165-167`). `StaticValidate` does not check the length of a nonempty hash. `Parent()` copies from the start into a 32-byte slot (`tailscale.com/tka/aum.go:292-298`). State application compares the 32 bytes of `LastAUMHash` with all bytes of `PrevAUMHash` and fails if the lengths differ (`tailscale.com/tka/state.go:150-155`) |
 | 3 | `Key` | `Key` map, omitempty | AddKey |
 | 4 | `KeyID` | bstr, omitempty | RemoveKey and UpdateKey. No length check |
 | 5 | `State` | `State` map, omitempty | Checkpoint |
@@ -123,7 +123,7 @@ Regardless of kind, `StaticValidate` calls `Key.StaticValidate` when a `Key` is 
 
 | CBOR key | Field | Type | Notes |
 | ---: | --- | --- | --- |
-| 1 | `LastAUMHash` | bstr(32) or null | No omitempty. State within a checkpoint requires null (`tailscale.com/tka/state.go:259-261`) |
+| 1 | `LastAUMHash` | bstr(32) or null | No omitempty. This field must be null in checkpoint state (`tailscale.com/tka/state.go:259-261`) |
 | 2 | `DisablementValues` | array of bstr or null | No omitempty |
 | 3 | `Keys` | array of `Key` or null | No omitempty |
 | 4 | `StateID1` | uint64, omitempty | First 8 bytes of a 16-byte random value (little-endian) generated when lock is enabled. Fixed for its lifetime |
@@ -144,7 +144,7 @@ This is an integer-keyed map (`tailscale.com/tka/sig.go:74-104`). It is the byte
 | 3 | `KeyID` | bstr, omitempty | Direct and credential only. KeyID of the trusted key |
 | 4 | `Signature` | bstr, omitempty | 64-byte Ed25519 signature |
 | 5 | `Nested` | NKS map, omitempty | Rotation only |
-| 6 | `WrappingPubkey` | bstr, omitempty | Ed25519 public key (32 bytes) for signing the signature that wraps this one. Intermediate levels in a multilevel rotation may omit it, in which case the inner one is used |
+| 6 | `WrappingPubkey` | bstr, omitempty | Ed25519 public key (32 bytes) whose corresponding private key is used to produce the signature that wraps this one. Intermediate levels in a multilevel rotation may omit it, in which case the inner one is used |
 
 `SigKind`(`tailscale.com/tka/sig.go:26-55`):
 
@@ -171,7 +171,7 @@ Ed25519 **verification functions differ by case**. AUM signatures and direct and
 
 | Representation | Format | Origin |
 | --- | --- | --- |
-| `AUMHash` text | RFC 4648 base32 **standard alphabet (uppercase), no padding**, 32 bytes → 52 characters. Lowercase and lengths other than 52 are rejected. The remaining 4 bits of the last character are unchecked (Go run in §8.1: final `A`, `B`, and `P` give the same hash). Compare the decoded 32 bytes of two heads to match Go | `tailscale.com/tka/aum.go:24-51`, Go run in §8.1 |
+| `AUMHash` text | RFC 4648 base32 **standard alphabet (uppercase), no padding**, 32 bytes → 52 characters. Lowercase and lengths other than 52 are rejected. The remaining 4 bits of the last character are unchecked (Go run in §8.1: final `A`, `B`, and `P` give the same hash). To match Go, compare heads as decoded 32-byte hashes and disregard differences in their text representations | `tailscale.com/tka/aum.go:24-51`, Go run in §8.1 |
 | `nlpub:` | Lowercase hex for the 32-byte NL public key. Decoding accepts both `nlpub:` and the CLI form `tlpub:` | `tailscale.com/types/key/nl.go:15-30`, `:133-157`, `tailscale.com/types/key/util.go:56-85` |
 | `nlpriv:` | Hex for the **64-byte** NL private key (Go `ed25519.PrivateKey` = 32-byte seed ‖ 32-byte public key) | `tailscale.com/types/key/nl.go:34-37`, `:59-67` |
 | `nodekey:` | Hex for the 32-byte node public key (JSON). An NKS uses the `np` binary form in §3.6 | `tailscale.com/types/key/node.go:40`, `:350-369` |
@@ -234,7 +234,7 @@ All of the following must hold for the parent `state` (`tailscale.com/tka/tka.go
 4. The KeyID of **every** signature must identify a trusted key in `state`. `ed25519consensus.Verify` over `SigHash` must pass with that key's `Public` from state, without deriving it from KeyID (`tailscale.com/tka/verify.go:17-36`). A single signature from an unknown key causes rejection.
 5. Reject RemoveKey when it would delete the only key in state.
 
-**There is no `Votes` threshold.** A signature from one trusted key suffices. `Votes` only weights fork resolution (`tailscale.com/tka/aum.go:316-361`, `tailscale.com/tka/tka.go:142-167`). The `MakeRetroactiveRevocation` comment calls for signatures outweighing the sum of compromised key votes. That rule is for signing devices to win fork resolution and is unenforced by `aumVerify` (`tailscale.com/tka/tka.go:804-805`).
+**There is no `Votes` threshold.** A signature from one trusted key suffices. `Votes` is used only to weight signatures during fork resolution (`tailscale.com/tka/aum.go:316-361`, `tailscale.com/tka/tka.go:142-167`). The `MakeRetroactiveRevocation` comment calls for signatures outweighing the sum of compromised key votes. That rule is for signing devices to win fork resolution and is unenforced by `aumVerify` (`tailscale.com/tka/tka.go:804-805`).
 
 ### 4.2 Applying State (`applyVerifiedAUM`)
 
@@ -245,7 +245,7 @@ Apply the verified AUM to the parent state (`tailscale.com/tka/state.go:157-254`
 | NoOp | Leave state as is |
 | Checkpoint | `State.StateID1/2` must match the parent's. Replace the entire state with the checkpoint's |
 | AddKey | Reject if KeyID already exists. Append the key. **This path does not enforce the 512-key limit** (only `UpdateBuilder.AddKey` and checkpoint validation do, `tailscale.com/tka/builder.go:73-75`) |
-| UpdateKey | Reject if the key is missing. Change `Votes` and `Meta` and require `Key.StaticValidate` to pass again |
+| UpdateKey | Reject if the key is missing. Update `Votes` and `Meta` when their respective fields are present, then require `Key.StaticValidate` to pass again (`tailscale.com/tka/state.go:198-209`) |
 | RemoveKey | Reject if the key is missing. Delete it, preserving order |
 | Other | Leave state as is (future kinds). 0 `AUMInvalid` also takes this path and is accepted (Go run in §8.1: a signed kind 0 AUM advances the head). It is rejected only at genesis (below) |
 
@@ -263,7 +263,7 @@ Genesis (an AUM without a parent) allows only NoOp, AddKey, and Checkpoint (`tai
 
 ### 4.4 `NodeKeySignature` Verification (`NodeKeyAuthorizedWithDetails`)
 
-Inputs are the node's public node key and the NKS bytes (`tailscale.com/tka/tka.go:685-711`).
+Inputs are the node's public key and the NKS bytes (`tailscale.com/tka/tka.go:685-711`).
 
 1. Decode using §3.1. Reject on failure.
 2. Reject an outermost credential ("credential signatures cannot authorize nodes on their own").
@@ -315,9 +315,9 @@ The same fail-open occurs **when storage cannot be opened**, and in this case it
 
 ### 4.8 Synchronization (`tkaSyncLocked`)
 
-1. Build a local `SyncOffer`: `Head` = local head. `Ancestors` = **checkpoint AUM hashes** encountered walking backward from the head (at most 1000, newest first, excluding the oldest ancestor), followed by the oldest ancestor's hash (`oldestAncestor`) (`tailscale.com/tka/sync.go:65-111`).
+1. Build a local `SyncOffer`: `Head` = local head. `Ancestors` = **checkpoint AUM hashes** encountered in up to 1000 backward steps from the head (newest first, excluding the oldest ancestor), followed by the oldest ancestor's hash (`oldestAncestor`) (`tailscale.com/tka/sync.go:65-111`).
 2. Send it to `/machine/tka/sync/offer`.
-3. Decode the server's `Head` and `Ancestors`. If the server head equals the local head, **stop here** without sending a send request (`tailnet-lock.go:456-464`).
+3. Decode the server's `Head` and `Ancestors`. If the server head equals the local head, **stop here** without calling `/machine/tka/sync/send` (`tailnet-lock.go:456-464`).
 4. **First** compute `MissingAUMs` (local AUMs unknown to the server) for the server offer (`tailnet-lock.go:466-472`). Intersection computation (`computeSyncIntersection`, `tailscale.com/tka/sync.go:129-212`): equal heads are up to date. If the server head is present locally, walk backward from the local head (at most 1000) to find it as the head intersection. Otherwise, check the server's `Ancestors` in order and choose the first whose state can fast-forward to the local head as the tail intersection (iteration limit 2000). If none qualifies, return `ErrNoIntersection`. The list to send consists of AUMs encountered by fast-forwarding from just after the intersection AUM (`tailscale.com/tka/sync.go:214-261`). For a tail intersection, skip to the next ancestor if the server ancestor is absent locally (`os.ErrNotExist`). Other errors (failure to read a parent, exceeding the 2000 iteration limit, etc.) return immediately (`sync.go:188-202`). **Failure here ends the entire synchronization**, skipping `Inform` in step 5 and the send in step 6 (`tailnet-lock.go:469-472`).
 5. If the response includes `MissingAUMs`, decode them all (any failure is an error) and call `Inform` (§4.3).
 6. Send the local head and the list from step 4 to `/machine/tka/sync/send` (`Interactive=false`).
@@ -393,7 +393,7 @@ Origin: `tailnet-lock.go:189-197`, `:363-365`.
 | BLAKE2s-256 (unkeyed) | AUM hash and SigHash, NKS SigHash | Absent | Present (`Sources/SwiftailCrypto/BLAKE2s.swift:3-4`, `:32`) | None |
 | Ed25519 signing | `ResignNKS` (NL key), `SignByCredential` (wrapped key) | `Curve25519.Signing.PrivateKey.signature(for:)` (`CryptoKit.swiftinterface:35-37`). The private key is a 32-byte seed (`rawRepresentation`) | Absent | NL key storage. The first 32 bytes of the 64-byte Go-format wrapped key are the seed (`ed25519.PrivateKey` format) |
 | Ed25519 verification (standard rules) | Outer rotation NKS signature | `Curve25519.Signing.PublicKey.isValidSignature` (`CryptoKit.swiftinterface:31-33`). Its rules **differ** from Go's standard rules: it rejects noncanonical A (run in §8.1) | Absent | See below |
-| Ed25519 verification (ZIP-215) | AUM signatures and direct and credential NKSs | Absent (CryptoKit's verification rules were unverified in public documentation) | Absent | See below |
+| Ed25519 verification (ZIP-215) | AUM signatures and direct and credential NKSs | Absent (the public documentation did not establish CryptoKit's verification rules) | Absent | See below |
 | Argon2i + BLAKE2b | Disablement secret | Absent | Absent (including BLAKE2b) | BLAKE2b (RFC 7693) and Argon2i (RFC 9106). Argon2 uses BLAKE2b-512 (H0, `x/crypto/argon2/argon2.go:130-159`) and variable-length H' (`x/crypto/argon2/blake2b.go:16-53`) |
 | Constant-time comparison | Disablement value comparison | — | Present (`Sources/SwiftailCrypto/CryptoError.swift:12`) | None |
 
@@ -404,13 +404,13 @@ Measured differences (§8.1). Of 196 ZIP-215 vectors (`ed25519consensus/zip215_t
 - (a) Use CryptoKit for all verification. 0 lines of implementation. CryptoKit differs from Go both on the ZIP-215 path and on the standard path (outer rotation). CryptoKit was always stricter in the measured cases. The effects differ by path. For NKS, this only excludes additional peers that Go accepts. **For AUMs, protection can weaken**. If a trusted key holder adds an AUM signed with a signature that only ZIP-215 accepts, Go nodes accept it and Swiftail rejects the entire group containing it (`Inform` stores nothing if any entry fails, §4.3). Every later AUM extending it is rejected because its parent is unknown, leaving Swiftail state stuck before it. If an administrator then appends a RemoveKey for that key to the same chain, Go nodes stop trusting it and Swiftail continues to trust it and accept peers signed by it. Whether CryptoKit accepts any signatures that ZIP-215 rejects is unverified (presumably none, since the equation without the cofactor implies the equation with it. None appeared in the 197 measured inputs).
 - (b) Implement both ZIP-215 and the standard rules with pure Swift edwards25519 (field arithmetic, point decoding, double scalar multiplication). Estimated 800~1200 lines plus test vectors (ZIP-215 vectors in `ed25519consensus/zip215_test.go`).
 
-Option (b) achieves identical verdicts but is large. Because of the AUM path above, option (a) can weaken protection. At least AUM signatures need ZIP-215 verification to maintain the same state as Go. Adding the standard rule (the equation without the cofactor and the R byte comparison) to the same edwards25519 code is a small addition. Ask the owner to decide before implementation.
+Option (b) is the right choice if identical verdicts are the goal, although it requires a substantial implementation. Because of the AUM path above, option (a) can weaken protection. At least AUM signatures need ZIP-215 verification to maintain the same state as Go. Adding the standard rule (the equation without the cofactor and the R byte comparison) to the same edwards25519 code is a small addition. Ask the owner to decide before implementation.
 
-**Argon2i test vectors.** RFC 9106 §5.2 (Argon2i, t=3, m=32 KiB, p=4, K and X present), its transcription in `x/crypto/argon2/argon2_test.go:70`, and the Go execution value in these notes (§4.5, no K or X, exact TKA parameters). The TKA parameters fill 16 MiB of memory once, so verification runs only on a disablement event. Size estimate: about 120 lines for BLAKE2b and about 200~250 for Argon2i (parallelism p=4 is an input to H0, divides memory into 4 lanes, and participates in indexing to select reference blocks (`x/crypto/argon2/argon2.go:161-166`, `:183-186`, `:262-282`). Processing the 4 lanes sequentially within each slice yields the same result as parallel computation, so threads are unnecessary).
+**Argon2i test vectors.** RFC 9106 §5.2 (Argon2i, t=3, m=32 KiB, p=4, K and X present), its transcription in `x/crypto/argon2/argon2_test.go:70`, and the Go execution value in these notes (§4.5, no K or X, exact TKA parameters). A TKA disablement check uses 16 MiB of memory and makes four passes over it (`x/crypto/argon2/argon2.go:183-237`). Because of this cost, the check runs only on a disablement event. Size estimate: about 120 lines for BLAKE2b and about 200~250 for Argon2i (parallelism p=4 is an input to H0, divides memory into 4 lanes, and participates in indexing to select reference blocks (`x/crypto/argon2/argon2.go:161-166`, `:183-186`, `:262-282`). Processing the 4 lanes sequentially within each slice yields the same result as parallel computation, so threads are unnecessary).
 
 ### 6.2 CBOR Subset
 
-- **Encoding**. Only major types 0 (uint, shortest of 1~8 bytes), 2 (bstr), 3 (tstr, `Meta` only), 4 (array), 5 (map, one-byte integer keys 1~23, `Meta` string keys ordered lexicographically by encoded bytes), and null (`0xf6`) from major type 7. Only definite lengths. Follow each field's nil, empty, and omitempty rules exactly (§3.1~3.6) to match hashes.
+- **Encoding**. Only major types 0 (uint, shortest encoding, with any argument bytes taking 1, 2, 4, or 8 bytes), 2 (bstr), 3 (tstr, `Meta` only), 4 (array), 5 (map, one-byte integer keys 1~23, `Meta` string keys ordered lexicographically by encoded bytes), and null (`0xf6`) from major type 7. Only definite lengths. Follow each field's nil, empty, and omitempty rules exactly (§3.1~3.6) to match hashes.
 - **Decoding**. Accept only the types above for known fields. To match Go, struct map keys must be integers (−2^63~2^63−1) or valid UTF-8 text, and other keys must be rejected (§3.1). To match Go, skip any well-formed **value** of an unknown field, including major type 1 negative integers, major type 7 16-, 32-, and 64-bit floats and simple values, and text whose contents are unchecked. Restrictions on tags, indefinite lengths, and nesting also apply inside skipped values (Go run in §8.1: a bignum tag and indefinite-length bstr in unknown values were rejected). Reject tags, indefinite lengths, duplicate keys (at struct and `Meta` levels), and trailing bytes. Limit nesting to 16, arrays to 4096, and maps to 1024. Accept non-shortest integers and unsorted keys. Hash and verify signatures using **the canonical encoding of the decoded value** in place of received bytes (§3.1).
 - Value ranges. `MessageKind`, `SigKind`, and `KeyKind` are 0~255 (reject larger). Read `Votes` as 0~2^64−1 (`uint`, 64-bit platform) and validate 1~4096. `StateID` uses the full uint64 range.
 - Size estimate. A general CBOR value decoder (including skipping), mapping for the five structures, and a canonical encoder total 300~450 lines.
@@ -419,9 +419,9 @@ Option (b) achieves identical verdicts but is large. Because of the AUM path abo
 
 | Feature | Classification | Rationale |
 | --- | --- | --- |
-| NL key generation and persistence, `RegisterRequest.NLKey` | Required | Signing devices use it as the rotation key, and it is used in re-signing after node key replacement (§4.6). Swiftail currently sends a zero key (`Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:38`, no NL key in `Sources/SwiftailControl/Client/NodeIdentity.swift:13-15`) |
+| NL key generation and persistence, `RegisterRequest.NLKey` | Required | Signing devices use it as the rotation key, and it is used in re-signing after node key replacement (§4.6). At the time these notes were written, Swiftail sent a zero key (`Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:38`, no NL key in `Sources/SwiftailControl/Client/NodeIdentity.swift:13-15`) |
 | Signed auth key → `SignByCredential` | Required | Preauthorized registration path (M8 ①) |
-| `RegisterResponse.NodeKeySignature` → `ResignNKS` (including chain trimming) | Required | Currently ends with `tailnetLockEnabled` (`Sources/SwiftailControl/Client/ControlClient+Registration.swift:76-79`). Go also sends a signature that fails verification without an error for credential chains and direct signatures without a rotation key (§4.6 step 4). |
+| `RegisterResponse.NodeKeySignature` → `ResignNKS` (including chain trimming) | Required | At the time these notes were written, Swiftail threw `tailnetLockEnabled` (`Sources/SwiftailControl/Client/ControlClient+Registration.swift:76-79`). Go also sends a signature that fails verification without an error for credential chains and direct signatures without a rotation key (§4.6 step 4). |
 | `MapRequest.TKAHead` | Required | Lets the server know the node's head (§4.7) |
 | Bootstrap (TOFU checkpoint verification), synchronization offer + `Inform` | Required | Receive and verify signing authority state |
 | Fork resolution, ancestor selection among multiple chains | Required | Recovery AUMs create forks (`tailscale.com/tka/tka.go:798-860`). Omitting this can select a different head from Go |
@@ -431,7 +431,7 @@ Option (b) achieves identical verdicts but is large. Because of the AUM path abo
 | Disablement secret verification (Argon2i) | Required (cannot omit) | Without it, either all new peers are excluded after disablement, or trusting `Disabled` alone hands protection over to the server |
 | Local node lockout notification | Required (public API) | The user needs the node key and tlpub to run `tailscale lock sign <nodekey> <tlpub>` (`tailscale.com/cmd/tailscale/cli/tailnet-lock.go:245-257`) |
 | Local storage | Required (any format) | See below |
-| Compaction | Optional (a limit is required) | No effect on verdicts. Some way to bound storage is needed |
+| Compaction | Optional (a limit is required) | The effect on verdicts is unverified (§8.2). Some way to bound storage is needed |
 | `DisallowedTKAStateIDs` | Omit | List used by `TailnetLockForceLocalDisable` (`tailnet-lock.go:811-835`). It is always empty if Swiftail lacks forced local disablement |
 | `UnsignedPeerAPIOnly` handling | Keep existing difference | Go keeps these peers in the netmap and restricts their privileges. The Swiftail engine omits them entirely (`Sources/SwiftailEngine/EnginePeer.swift:94-103`) |
 | All signing-device features (§2) | Omit | Outside M8 scope (`docs/plan.md` §3) |
@@ -457,7 +457,7 @@ Option (b) achieves identical verdicts but is large. Because of the AUM path abo
 | Argon2i KAT | RFC 9106 5.2, `x/crypto/argon2/argon2_test.go:70` |
 | ZIP-215 signature vectors | `ed25519consensus/zip215_test.go` |
 
-### 7.2 Reference Value Tool for `Tools/interop`
+### 7.2 Possible Reference Value Tool for `Tools/interop`
 
 `tailscale.com/tka` exposes public APIs for external use (`Create`, `Bootstrap`, `Open`, `NewUpdater`, `Inform`, `SyncOffer`, `MissingAUMs`, `NodeKeyAuthorizedWithDetails`, `DisablementKDF`, `ResignNKS`, `SignByCredential`, `DecodeWrappedAuthkey`, `ChonkMem`) (`tailscale.com/tka/tka.go:476-711`, `tailscale.com/tka/sync.go:30-261`, `tailscale.com/tka/sig.go:350-498`, `tailscale.com/tka/state.go:124`, `tailscale.com/tka/tailchonk.go:112`). As in the runs for these notes (§8.1), `Tools/interop` (currently using `tailscale.com v1.104.6`) can use them directly. Tool outputs:
 
@@ -476,7 +476,7 @@ Gaps and injection points:
 
 | Missing | Result | Alternative |
 | --- | --- | --- |
-| `sync/send` handler | If a node with a different head sends a send request, `serveUnhandled` calls `go panic` (`testcontrol.go:413`, `:430-434`). Only a genesis-only lock can be tested (no additional AUMs such as `lock add`) | Port testcontrol to `Tools/interop` and connect `tkatest.HandleTKASyncSend`, or verify chain synchronization in Swift unit tests using §7.2 reference values |
+| `sync/send` handler | If a node with a different head sends a send request, `serveUnhandled` panics in a goroutine (`testcontrol.go:413`, `:430-434`). Only a genesis-only lock can be tested (no additional AUMs such as `lock add`) | Port testcontrol to `Tools/interop` and connect `tkatest.HandleTKASyncSend`, or verify chain synchronization in Swift unit tests using §7.2 reference values |
 | Bootstrap returning `DisablementSecret`, `/machine/tka/disable` | Disablement flow unavailable (bootstrap response includes only `GenesisAUM`, `testcontrol.go:1223-1225`) | Same as above. Alternatively, inject `TKAInfo{Disabled: true}` with `AddRawMapResponse`, though this cannot change the bootstrap response |
 | Storage of registration request `NodeKeySignature` | Registration with a signed auth key leaves the node unsigned (testcontrol has no `NodeKeySignature` handling) | Verify Swift's NKS with a Go verdict (§7.2 step 3), then use `UpdateNode` to set `KeySignature` and test map propagation (`testcontrol.go:1315-1320`) |
 | `TKAInfo.Disabled`, a different head | — | Inject with `AddRawMapResponse` (`testcontrol.go:337-339`) |
@@ -533,9 +533,9 @@ Output was stored in `$(eyebuild dir tka-note)/run1.txt`~`run4.txt` and later de
 - **Production control server behavior** (source unavailable). Which nodes receive the `tailnet-lock` node cap (whether it is all nodes in a locked tailnet), whether bootstrap always gives genesis or can give a later checkpoint (the `Bootstrap` comment allows both, `tailscale.com/tka/tka.go:532`), when it sends `RegisterResponse.NodeKeySignature`, how it stores and distributes signatures for nodes registered with signed auth keys, whether it accepts unsigned node registration and what response it gives, whether it accepts registration with a zero `NLKey` (also unverified in `control-map.md` §4.6), whether admin console signing uses the registration request's `NLKey` as the rotation key, when it grants `UnsignedPeerAPIOnly`, how it checks sync/send requests with `Interactive=false`, whether it uses 429, 503, or Retry-After for TKA RPCs, and the actual response size distribution.
 - **CryptoKit Ed25519**. The complete verification rules were unverified in documentation. The `swiftinterface` has declarations only (`CryptoKit.swiftinterface:31-37`). Measurements cover only §8.1 (196 ZIP-215 vectors and one order-2 signature, all at least as strict as standard Go) and nondeterministic signing. Whether CryptoKit accepts any input that standard Go or ZIP-215 rejects is unverified.
 - **Difference in cited versions**. Source read was v1.104.7 and execution used v1.104.6 (Go 1.27.3 could not build v1.104.7). `diff -rq` confirmed the cited files match, and there are no run results from v1.104.7 itself.
-- **Go tests were unrun**. The `tka`, `ipnlocal`, and integration tests (`TestTailnetLock`) were read only. Hashes in §7.1 are the expected values written in the test files.
+- **Go tests were reviewed from source only.** This applies to the `tka`, `ipnlocal`, and integration tests (`TestTailnetLock`). Hashes in §7.1 are the expected values written in the test files.
 - The comment in `ipnlocal/tailnet-lock_test.go:164-165` says offer/send are called even when up to date, but the code (`tailnet-lock.go:461-464`) skips send when heads match. These notes follow the code.
 - `Compact` details (`markAncestorIntersectionAUMs`, `markDescendantAUMs`) received only a cursory read (`tailscale.com/tka/tailchonk.go:871-1005`). Thus the claim in §6.3 that compaction has no effect on verdicts remained unverified in the verification session (compaction changes `LastActiveAncestor` and may affect ancestor selection when several chains exist, §4.3).
 - `computeActiveAncestor` overwrites `chainsThroughActive` in a map for each ancestor and does not mark a chain whose head is itself `LastActiveAncestor` (length 1) (`tailscale.com/tka/tka.go:95-118`, `:342-369`). Whether chains with the same ancestor can be marked differently and whether Go's result would then be deterministic (map iteration and `sort.Slice`) are unverified. It has no effect in the normal flow (one ancestor).
 - The full set of inputs accepted by the CBOR decoder was not enumerated. The tables in §3.1 and §8.1 cover tested inputs.
-- Whether Go actually skips peer filtering after bootstrap failure in production (§4.7), meaning cases in which the server indicates `TKAEnabled` but bootstrap fails, is unknown.
+- Whether the fail-open case in §4.7 occurs in production is unverified. It requires `TKAEnabled` to be true and bootstrap to fail.

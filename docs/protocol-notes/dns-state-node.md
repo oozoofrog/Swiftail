@@ -9,7 +9,7 @@
 | Authoring model | Claude Sonnet 5.5 (`claude-sonnet-5-5`) |
 | Verification | Claude Opus 5.5, 2026-11-15. Corrected 16 facts (§8.3) and 12 origin line references, and expanded the M5 procedures (§§4.1.4, 4.2, and 4.3) and decision table (§6.4) |
 
-Section tags `[M5]`, `[M6]`, and `[M7]` indicate the milestone that needs the section. M5 implementers need only §§3.1, 4.1~4.6, 6.1, and 6.4 (§3.2 is for M7 migration). TUN address and route derivation follows [netmap-engine.md](netmap-engine.md) §4.8, and magicsock rebinding after link changes follows [disco-magicsock.md](disco-magicsock.md) §4.11. Those details are covered there. Origins use `path:line` relative to the module root. Requirements for the first adopter (RemoteDebug) use paths at that repository's HEAD. Example values are fictitious (`rd-mac-1a2b3c4d.tail0001.ts.net`, `100.64.0.1`).
+Section tags `[M5]`, `[M6]`, and `[M7]` indicate the milestone that needs the section. M5 implementers need only §§3.1, 4.1~4.6, 6.1, and 6.4 (§3.2 is for M7 migration). TUN address and route derivation follows [netmap-engine.md](netmap-engine.md) §4.8, and magicsock rebinding after link changes follows [disco-magicsock.md](disco-magicsock.md) §4.11. Those details are covered there. Origins use `path:line` relative to the module root. Requirements for the first adopter (RemoteDebug) cite paths at commit `286c214` in that repository. Example values are fictitious (`rd-mac-1a2b3c4d.tail0001.ts.net`, `100.64.0.1`).
 
 ## 2. Scope
 
@@ -34,7 +34,7 @@ Header (12 bytes, big-endian. Layout in RFC 1035 4.1.1, AD and CD bits in RFC 40
 | Offset | Length | Field | Response value (Go local response) |
 | --- | --- | --- | --- |
 | 0 | 2 | ID | Query value |
-| 2 | 2 | QR·Opcode(4)·AA·TC·RD·RA·Z·AD·CD·RCODE(4) | Copy the query header as is, then overwrite QR=1, AA=1, and RA=1 if RD=1. Other bits (Opcode, TC, AD, CD, and RA when RD=0) retain their query values. Opcode is unchecked (`tsdns.go:1009-1011`, `:1203-1208`) |
+| 2 | 2 | QR·Opcode(4)·AA·TC·RD·RA·Z·AD·CD·RCODE(4) | Copy the query header as is, then set QR and AA to 1. Set RA to 1 when RD is 1. Other bits (Opcode, TC, AD, CD, and RA when RD=0) retain their query values. Opcode is unchecked (`tsdns.go:1009-1011`, `:1203-1208`) |
 | 4 | 2 | QDCOUNT | 1 (if including the question) or 0 |
 | 6 | 2 | ANCOUNT | 0 or 1 |
 | 8 | 2 | NSCOUNT | 1 if an SOA is attached to a negative response |
@@ -124,7 +124,7 @@ Fields are defined in `tailscale.com/tailcfg/tailcfg.go:1788-1872`. The Swiftail
 | Field | Go usage | M5 |
 | --- | --- | --- |
 | `Proxied` | If true, add MagicDNS root zones (§4.1.2 step 6) as routes for which the built-in resolver is authoritative. As the comment says, this means MagicDNS is enabled (`tailscale.com/ipn/ipnlocal/node_backend.go:1539-1551`). If false, skip short names without dots (`node_backend.go:1276-1278`) | Required |
-| `Routes` | Empty list = zone answered by the built-in resolver (`LocalDomains`, match domain). List with resolvers = split DNS forwarded to those resolvers (`tailscale.com/net/dns/manager.go:341-353`) | Keys with empty lists are required. Resolver-bearing routes are decision D2 |
+| `Routes` | Empty list = zone answered by the built-in resolver (`LocalDomains`, match domain). List with resolvers = split DNS forwarded to those resolvers (`tailscale.com/net/dns/manager.go:341-353`) | Keys with empty lists are required. Decision D2 covers routes with resolvers |
 | `ExtraRecords` | Add only entries with `Type` of `""`, `A`, or `AAAA` and an IP value to the built-in resolver's host table. If no route covers the name, add the name itself as an empty route (`node_backend.go:1497-1521`, `:1592-1606`) | Required |
 | `Resolvers` | Default resolvers if nonempty. Then quad-100 becomes the primary resolver for all names even on iOS (§4.1.3 table row 3) | Decision D2 |
 | `Domains` | Search domains. A comment says the Apple extension installs them only in primary resolver mode (`manager.go:361-366`) | Decision D3 |
@@ -143,7 +143,7 @@ Fields are defined in `tailscale.com/tailcfg/tailcfg.go:1788-1872`. The Swiftail
 4. `ExtraRecords` → `Hosts` (append addresses with the same name) (`:1497-1521`).
 5. If prefs `CorpDNS` is false, stop here. With no routes, there are no OS settings (`:1523-1525`, §4.1.3 row 1).
 6. `Domains` → search domains (discard entries that cannot convert to FQDNs) (`:1527-1538`). If `Proxied`, add empty routes for the MagicDNS suffix (trim leading and trailing dots from the local node's `Name` and remove the first label), `0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.`, and the 64 zones from `64.100.in-addr.arpa.` through `127.100.in-addr.arpa.` (`:1539-1542`, `tailscale.com/ipn/ipnlocal/local.go:6665-6687`, `tailscale.com/types/netmap/netmap.go:256-270`). If false, set `MagicDNSHostsUnrouted = SelfNode.Valid()` (`:1543-1551`).
-7. `Resolvers` → default resolvers (`:1640-1641`). Duplicate `Routes` with each suffix converted to an FQDN (create entries even for empty lists) (`:1557-1568`, `:1649`). Add `ExtraRecords` names not covered by any route as empty routes (`:1592-1606`, `:1651`).
+7. `Resolvers` → default resolvers (`:1640-1641`). Copy the routes, converting each suffix to an FQDN (create entries even for empty lists) (`:1557-1568`, `:1649`). Add `ExtraRecords` names not covered by any route as empty routes (`:1592-1606`, `:1651`).
 
 #### 4.1.3 `compileConfig`: `dns.Config` → (Resolver Settings, `OSConfig`), `goos == "ios"`
 
@@ -167,7 +167,7 @@ iOS procedure (first match in order)
 
 - `scopeApple` = iOS without the control server's `disable-split-dns-when-no-custom-resolvers` capability **and** no routes with resolvers (ignore `ts.net` as an exception) **and** no hosts outside the routes (false if MagicDNS is off and `MagicDNSHostsUnrouted` is set) **and** all reverse names for addresses in `Hosts` covered by routes (`manager.go:446-449`, `:557-559`, `tailscale.com/net/dns/resolver/tsdns.go:209-226`, `config.go:137-189`, `nodecap.go:227`).
 - iOS takes neither the branch delegating split DNS directly to the OS (`:421-429`) nor the branch that finishes without base configuration (`:453-455`). If `GetBaseConfig` returns `ErrGetBaseConfigNotSupported` and scoping is possible, finish at row 4 without `"."` (`:473-484`).
-- Rows 4 and 5 assume `OSConfigurator.SupportsSplitDNS()` is true. The iOS `OSConfigurator` is app code outside the reference sources (`tailscale.com/wgengine/userspace.go:330-337`). The first adopter returns true and returns a dummy resolver from `GetBaseConfig` meaning no upstream resolver (RemoteDebug `core/internal/tunnel/settings.go:227-251`).
+- Rows 4 and 5 apply when `OSConfigurator.SupportsSplitDNS()` returns true. The iOS `OSConfigurator` is app code outside the reference sources (`tailscale.com/wgengine/userspace.go:330-337`). The first adopter returns true and returns a dummy resolver from `GetBaseConfig` meaning no upstream resolver (RemoteDebug `core/internal/tunnel/settings.go:227-251`).
 - With MagicDNS enabled and no global name servers or custom split DNS in the tailnet, Go on iOS produces `dnsServers = serviceIPs`, `matchDomains = [MagicDNS suffix, ip6.arpa zone, 64 in-addr.arpa zones, ExtraRecords names…]` (row 4). Otherwise quad-100 is the primary resolver for all names and needs upstream forwarding (rows 3 and 5).
 
 #### 4.1.4 Swiftail M5 Derivation Procedure (Recommended)
@@ -190,7 +190,7 @@ v1.104.6 obtains node records from the netmap index at query time without pushin
 
 - Name index (`nodeByName`). Insert the local node followed by all peers (later entries overwrite earlier ones), keyed by lowercase `Name` with no trailing dot. If it ends with the MagicDNS suffix, also key by the short name without that suffix. Skip empty `Name` (`node_backend.go:778-787`, `:805-821`).
 - Forward lookup (`LookupHost`). Lowercase the query name and remove its trailing dot. It is unknown if `Proxied` is false and it contains no dot, if it is missing from the index, or if the node has **no addresses at all** (`node_backend.go:1198-1220`, `:1266-1282`).
-- Returned addresses (`magicDNSAddrs`, `node_backend.go:1299-1325`). If the local node is IPv6-only, use only target IPv6 addresses. Otherwise use all target addresses, omitting IPv6 if the target has IPv4 and the `magicdns-aaaa` capability is absent. Preserve target `Addresses` order. For example, an AAAA query for a dual-stack peer defaults to an empty NOERROR answer + SOA.
+- Returned addresses (`magicDNSAddrs`, `node_backend.go:1299-1325`). If the local node is IPv6-only, use only target IPv6 addresses. Otherwise use all target addresses, omitting IPv6 if the target has IPv4 and the local node lacks the `magicdns-aaaa` capability. Preserve target `Addresses` order. For example, an AAAA query for a dual-stack peer defaults to an empty NOERROR answer + SOA.
 - Reverse lookup (`LookupPTR`). A node's own addresses (excluding subnet routes) → FQDN of the node's `Name` (`node_backend.go:119-121`, `:1214-1233`).
 - `ExtraRecords`. Consult the resolver's host table before the node index and build the reverse table from the same host table (`tsdns.go:347-372`, `:756-759`, `:943-946`).
 - Subdomains. If absent from the host table and index, walk up parent names one at a time. If a parent is a node with `dns-subdomain-resolve`, answer with its addresses (`tsdns.go:760-771`, `node_backend.go:1246-1264`). M5 can omit it (§6.1).
@@ -218,7 +218,7 @@ v1.104.6 obtains node records from the netmap index at query time without pushin
 
 #### 4.2.4 UDP Size, Truncation, and EDNS
 
-- UDP check for local responses (`forwarder.go:220-261`). Set only TC if the reply exceeds the size advertised by a valid OPT at the end of the query, or 512 bytes if absent. Leave the response intact. Skip TCP queries.
+- UDP check for local responses (`forwarder.go:220-261`). Use the buffer size advertised by a valid OPT at the end of the query, defaulting to 512 bytes. If the response exceeds that limit, set TC and leave the response length unchanged. Apply this check only to UDP queries.
 - OPT recognition (`forwarder.go:148-191`). ARCOUNT must be nonzero and the **last 11 bytes** must be a record with NAME 0, TYPE 41, version 0 (offset 6), and RDLEN 0. An OPT with options is not recognized as EDNS (the 512 rule applies).
 - By §3.1's calculation, local responses in tailnet zones stay within 512 bytes, so TC is practically never set. The check is only a few lines, so keeping Go's behavior is recommended. A response IP packet fits the TUN MTU because 1,066 + 48 < 1280.
 - Upstream responses (unused in M5). Cap the query's advertised OPT size at 4095, receive into a 4096-byte buffer, and truncate and set TC on overflow (`forwarder.go:193-210`, `:868-941`, `tsdns.go:50`).
@@ -232,7 +232,7 @@ Go accepts TCP 53 on the service IP in netstack and uses §3.1 TCP framing (`tai
 Packets sent by the OS to TUN (read from utun) pass through `filterPacketOutboundToWireGuard` before WireGuard (`tailscale.com/net/tstun/wrap.go:752-830`, `:920`).
 
 1. For an ICMP echo request to `100.100.100.100` or `fd7a:115c:a1e0::53`, the tstun wrapper rewrites the header for a reply (swaps addresses, echo reply), injects the packet with its original payload toward the OS, and drops the original packet (`wrap.go:752-769`).
-2. Drop TSMP and local disco packets (`wrap.go:773-789`).
+2. Drop TSMP and disco packets originating from the local node (`wrap.go:773-789`).
 3. netstack interception. Consume packets to either service IP in netstack regardless of protocol or port and skip WireGuard (`wrap.go:790-796`, `netstack.go:866-897`).
    - UDP 53 → `handleMagicDNSUDP`. Receive queries on the same flow in a loop with a 150ms read deadline, pass each to `Manager.Query(…, "udp", source)`, and reply on the same flow. No reply on `Query` error (e.g., above 256 concurrent queries) (`netstack.go:2036-2041`, `:2080-2113`, `manager.go:652-676`).
    - Other UDP ports. Close the endpoint without replying. No ICMP port unreachable is sent (`netstack.go:2000-2011`, `:2042-2051`).
@@ -254,7 +254,7 @@ Swiftail M5 recommendations (per-packet processing, no TCP stack)
 
 1. Read `_current-profile` (`profiles.go:898-910`). Read `_profiles` into a map, empty if absent (`:912-926`).
 2. If the key exists, look up its profile. If both key and profile are absent, try migrating from `_daemon` (`ipn-go-bridge` on iOS). If still absent, use a new unsaved profile with `NewPrefs()`, `LoggedOut=true`, and `WantRunning=false` (`profiles.go:860-866`, `:952-977`).
-3. Read the profile key's value over `NewPrefs()`. If absent or empty, use the default prefs from step 2. Clear a stored `ControlURL` that is a synonym for the default control server (`profiles.go:669-720`).
+3. Decode the value stored under the profile key into the preferences initialized by `NewPrefs()`. If absent or empty, use the default prefs from step 2. Clear a stored `ControlURL` that is a synonym for the default control server (`profiles.go:669-720`).
 4. `Start` sets state to `NoState` (`local.go:3151`) and reads `_machinekey` if `WantRunning`. Generate and write a new key only if absent. Stop with an error if present but unparseable or zero (`local.go:3207-3211`, `:4619-4651`).
 
 #### 4.4.2 When State Is Written
@@ -270,14 +270,14 @@ Swiftail M5 recommendations (per-packet processing, no TCP stack)
 | --- | --- | --- |
 | Node private key | Required. Registration uses it to refer to the same node. Generate a new one if absent | `direct.go:704-713` |
 | Machine private key | Required (retain). Generate a new one if absent. How the server handles a changed machine key is unverified (§8) | `local.go:4619-4651` |
-| Previous node key, NetworkLock key | For key replacement and tailnet lock. Swiftail sends zero `NLKey` in registration requests | `direct.go:714-723`, `Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:38` |
+| Previous node key, NetworkLock key | For key replacement and tailnet lock. At the time these notes were written, Swiftail sent a zero `NLKey` in registration requests | `direct.go:714-723`, `Sources/SwiftailControl/Tailcfg/RegisterRequest.swift:38` |
 | `NodeID`, `UserProfile`, profile | For Go profile management. Unused in re-registration | `profiles.go:350-356` |
 | disco key | Not persisted. Generate anew on each start | `tailscale.com/wgengine/magicsock/magicsock.go:580` |
 | On-disk netmap cache | Optional feature | `tailscale.com/ipn/ipnlocal/diskcache.go:32-65` |
 
 Swiftail's `identity.json` (machine key + node key) is this minimum set. M5 adds location and protection. The first adopter puts state under the App Group container with file protection `completeUntilFirstUserAuthentication` and excludes it from backup (on a locked device, unreadable after reboot until first unlock). A second start with the same state directory is rejected (RemoteDebug `Apps/iOSTunnel/Shared/TunnelStorage.swift:5-56`, `core/internal/api/api.go:75-90`). See Apple's `FileProtectionType.completeUntilFirstUserAuthentication` documentation for the protection class.
 
-Relevant `ipn.Prefs` fields for a node (`ipn/prefs.go:59-320`) are `ControlURL` (`https://controlplane.tailscale.com` if empty, `:42`), `Hostname`, `WantRunning`, `LoggedOut`, `CorpDNS`, `RouteAll`, `AdvertiseTags`, `ShieldsUp`, and `Persist`. `NewPrefs()` defaults to `CorpDNS=true`, `WantRunning=false`, `NoStatefulFiltering=true`, `NetfilterMode=on`, and `AutoUpdate.Check=true`. `RouteAll` is true on windows, android, and **ios**, true on sandboxed macOS, and false elsewhere (`prefs.go:734-757`, `:787-799`). The first adopter overrides iOS with `RouteAll=false`, `CorpDNS=true`, and `WantRunning=true` (RemoteDebug `core/internal/tunnel/tunnel.go:155-160`). Swiftail M5 accepts no subnet routes ([netmap-engine.md](netmap-engine.md) §6.1 item 1).
+Relevant `ipn.Prefs` fields for a node (`ipn/prefs.go:59-320`) are `ControlURL` (`https://controlplane.tailscale.com` if empty, `:42`), `Hostname`, `WantRunning`, `LoggedOut`, `CorpDNS`, `RouteAll`, `AdvertiseTags`, `ShieldsUp`, and `Persist`. `NewPrefs()` defaults to `CorpDNS=true`, `WantRunning=false`, `NoStatefulFiltering=true`, `NetfilterMode=on`, and `AutoUpdate.Check=true`. `RouteAll` is true on windows, android, and **ios**, true on sandboxed macOS, and false elsewhere (`prefs.go:734-757`, `:787-799`). The first adopter overrides these defaults on iOS with `RouteAll=false`, `CorpDNS=true`, and `WantRunning=true` (RemoteDebug `core/internal/tunnel/tunnel.go:155-160`). Swiftail M5 accepts no subnet routes ([SwiftailTunnel.md](../contracts/SwiftailTunnel.md#exclusions-recorded-as-shortcut-comments)).
 
 ### 4.5 [M5] Node State Machine
 
@@ -308,16 +308,16 @@ Mapping plan §6 `NodeState` and first adopter events (recommended)
 | `NeedsLogin` | `NeedsLogin` (+ authURL, https only) | `.needsLogin` + `authURL` |
 | `NeedsMachineAuth` | As is | `.needsMachineAuth` |
 | `Starting`, `Running`, `Stopped` | As is | Same names |
-| `InUseOtherUser`, backend error message (outside Running), engine exit due to TUN read error | `Error` + message. Engine exit persists until stop | `.failed` + `errorMessage` |
+| `InUseOtherUser`, backend error message (outside Running), engine exit due to TUN read error | `Error` + message. The error from an engine exit remains latched until stop | `.failed` + `errorMessage` |
 
-Origin: RemoteDebug `core/internal/node/node.go:409-484`, `:577-627`, `:876-878`, `Apps/iOSTunnel/Shared/TunnelStateMapping.swift:45-88`. If `NeedsLogin` with neither URL nor auth key, the first adopter requests interactive login again every 30 seconds (`node.go:54`, `:752-778`).
+Origin: RemoteDebug `core/internal/node/node.go:409-484`, `:577-627`, `:876-878`, `Apps/iOS/Adapters/TunnelStateMapping.swift:45-88`. If `NeedsLogin` with neither URL nor auth key, the first adopter requests interactive login again every 30 seconds (`node.go:54`, `:752-778`).
 
 ### 4.6 [M5] Network Switching (Wi-Fi ↔ Cellular)
 
 #### 4.6.1 Default Interface
 
-- The iOS app passes the interface name of a satisfied path from `NWPathMonitor` to `UpdateLastKnownDefaultRouteInterface(name)`. Ignore an empty name. Use the interface as the default route only if it exists, is up, and has at least one address. Otherwise look in the routing table (`tailscale.com/net/netmon/defaultroute_darwin.go:16-112`). NetworkExtension selects the delegated interface only once at tunnel creation (comment at `:38-48`).
-- Changing the name alone does nothing. Call `netmon.InjectEvent()` to recompute immediately. `InjectEvent` forces notification even if state is equal, and `Poll` notifies only on state change (`tailscale.com/net/netmon/netmon.go:544-570`, `:640-648`). The first adopter calls both in order when the name changes and announces the utun name via `SetTailscaleInterfaceProps` before start (it cannot detect it itself on GOOS=ios) (RemoteDebug `core/internal/tunnel/tunnel.go:85-91`, `:211-229`). Name validation allows at most 15 characters, alphanumeric and `_.-` (`docs/tunnel.md:130`).
+- The iOS app passes the interface name of a satisfied path from `NWPathMonitor` to `UpdateLastKnownDefaultRouteInterface(name)`. Ignore an empty name. Use the interface as the default route only if it exists, is up, and has at least one address. Otherwise look in the routing table (`tailscale.com/net/netmon/defaultroute_darwin.go:16-112`). This override is needed because NetworkExtension selects the delegated interface only once, when the tunnel is created (comment at `:38-48`).
+- Changing the name alone does nothing. Call `netmon.InjectEvent()` to recompute immediately. `InjectEvent` forces notification even if state is equal, and `Poll` notifies only on state change (`tailscale.com/net/netmon/netmon.go:544-570`, `:640-648`). When the name changes, the first adopter calls `UpdateLastKnownDefaultRouteInterface(name)` and then `netmon.InjectEvent()`. Before startup, it tells Go the utun name via `SetTailscaleInterfaceProps` because Go cannot discover it on GOOS=ios (RemoteDebug `core/internal/tunnel/tunnel.go:85-91`, `:211-229`). Name validation allows at most 15 characters, alphanumeric and `_.-` (`docs/tunnel.md:130`).
 - In darwin builds (including iOS), `netmon` reads the `AF_ROUTE` socket and discards messages for uninteresting interfaces (prefixes `llw`, `awdl`, `ipsec`, `gif`, `XHC`, `anpi`, `lo`, `utun`). The minimum check interval is 1 second (`netmon_darwin.go:19-46`, `:110-178`, `netmon.go:583-630`). The polling implementation is only for platforms other than darwin (`polling.go:4`).
 
 #### 4.6.2 Detecting Changes (`ChangeDelta`)
@@ -326,10 +326,10 @@ Origin: RemoteDebug `core/internal/node/node.go:409-484`, `:577-627`, `:876-878`
 
 #### 4.6.3 Notification Recipients and Actions
 
-1. Engine (`wgengine/userspace.go:1155-1225`). If no interfaces are up, clear the DNS cache and tell magicsock the network is down, closing all DERP connections (`magicsock.go:2755-2773`). If `RebindLikelyRequired` and an interface is up, clear the DNS cache, reapply the last DNS settings on iOS, and emit VPN settings again if needed. If up, start the home DERP connection, call `Rebind` if `RebindLikelyRequired`, then always `ReSTUN` (rediscover endpoints and update control).
+1. Engine (`wgengine/userspace.go:1155-1225`). If no interfaces are up, clear the DNS cache and tell magicsock the network is down, closing all DERP connections (`magicsock.go:2755-2773`). If `RebindLikelyRequired` and an interface is up, clear the DNS cache, reapply the last DNS settings on iOS, and emit VPN settings again if needed. If up, start the home DERP connection, call `Rebind` if `RebindLikelyRequired`, then always `ReSTUN` (rediscover endpoints and update the control server).
 2. `Rebind`. Rebind UDP sockets to the same port. Close DERP connections without the default interface address as their local address, reconnecting the home connection. Check the rest with a 3-second ping and clear path state for all peers. See [disco-magicsock.md](disco-magicsock.md) §4.11 for details (`magicsock.go:3880-3916`, `derp.go:908-938`).
 3. Backend (`local.go:1128-1164`, `:1215-1250`). Pause the control client if no interface is up and resume otherwise. Recompute the packet filter.
-4. System connections (`tailscale.com/net/tsdial/tsdial.go:301-355`). TCP connections opened by `SystemDial` (control and others) close for the upper layer to reconnect if the state is no longer initial and the default interface, PAC, or proxy changes, if the default interface name is empty, or if the connection's local IP disappears.
+4. System connections (`tailscale.com/net/tsdial/tsdial.go:301-355`). TCP connections opened by `SystemDial` (control and others) are left alone on the initial notification. After that, close them so the upper layer can reconnect if the default interface changes, the PAC or proxy configuration changes, the default interface name is empty (except on Plan 9), or the connection's local IP disappears.
 
 #### 4.6.4 Socket Binding
 
@@ -337,7 +337,7 @@ Origin: RemoteDebug `core/internal/node/node.go:409-484`, `:577-627`, `:876-878`
 - Index selection. Prefer the interface from `UpdateLastKnownDefaultRouteInterface`, falling back to the `netmon` cache. Reject a selected Tailscale `utun` (`netns_darwin.go:57-145`).
 - Bind once at socket creation. On interface change, Rebind, DERP reconnection, and system connection closure from §4.6.3 let new sockets obtain the new index.
 
-M5 requirements (recommended). `setDefaultInterface(name)` → validate name → if changed, update the default interface and handle link change (engine step 1 order: close and reconnect DERP, rebind UDP, ReSTUN, reconnect control, and re-emit DNS settings). This is the link change detection, Rebind, ReSTUN, DERP recheck, and iOS binding that `disco-magicsock.md` deferred to M5. Swiftail has no `AF_ROUTE` monitor, so the app's `setDefaultInterface` call is the sole notification source (decision D6).
+M5 requirements (recommended). `setDefaultInterface(name)` → validate name → if changed, update the default interface and handle link change (proposed sequence: close and reconnect DERP, rebind UDP, ReSTUN, reconnect to the control server, and re-emit DNS settings, adapting §4.6.3 item 1). This is the link change detection, Rebind, ReSTUN, DERP recheck, and iOS binding that `disco-magicsock.md` deferred to M5. Swiftail has no `AF_ROUTE` monitor, so calls from the app to `setDefaultInterface` are the sole source of link-change notifications (decision D6).
 
 ### 4.7 [M6] tsnet Listeners and Dialing
 
@@ -347,17 +347,17 @@ Fake TUN (`Tun == nil`) path (`tsnet.go:922-934`).
 
 1. Decrypted packets reach netstack after the packet filter (`netstack.go:465`, `:1472-1480`). Netstack handles packets to local addresses if `ProcessLocalIPs` is set (`netstack.go:1352-1354`).
 2. In-progress TCP connection limits: global 1024 on mobile, 8192 on Linux, 2048 elsewhere, and 2/3 of that per remote IP. Ignore retransmitted SYNs with the same 4-tuple (`netstack.go:76-120`, `:539-627`).
-3. `acceptTCP`: service IP handling → `TCPHandlerForDst` (quad-100 port 80 and Drive, VIP services, 22, web client, PeerAPI, serve. These take precedence over tsnet listeners. PeerAPI wins a listener port collision with PeerAPI) → tsnet `getTCPHandlerForFlow` (`netstack.go:1736-1762`, `ipnlocal/netstack.go:21-72`).
+3. `acceptTCP`: service IP handling → `TCPHandlerForDst` (quad-100 port 80 and Drive, VIP services, 22, web client, PeerAPI, serve. These take precedence over tsnet listeners. If a tsnet listener and PeerAPI use the same port, PeerAPI takes precedence) → tsnet `getTCPHandlerForFlow` (`netstack.go:1736-1762`, `ipnlocal/netstack.go:21-72`).
 4. Listener lookup: (`tcp4`/`tcp6`, destination IP, port) → (`tcp`, IP, port) → (`tcp4`/`tcp6`, no host, port) → (`tcp`, no host, port). Hostless listeners apply only when the destination is the local node address. If none is found, send RST (`tsnet.go:1238-1266`, `:1289-1303`).
-5. `CreateEndpoint` **only starts** the handshake and immediately hands a keepalive-enabled `gonet.TCPConn` to the listener. The connection returned by `Accept` may still be handshaking (reads and writes block until it completes), and address lookups are empty before completion (`netstack.go:1666-1673`, `:1702`, `:1712-1720`). Delivery uses an unbuffered channel and closes the connection if `Accept` does not take it within 1 second (`tsnet.go:2406-2417`).
+5. `CreateEndpoint` **only starts** the handshake. netstack then enables keepalive on the `gonet.TCPConn` and immediately hands it to the listener. The connection returned by `Accept` may still be handshaking (reads and writes block until it completes), and address lookups are empty before completion (`netstack.go:1666-1673`, `:1702`, `:1712-1720`). Delivery uses an unbuffered channel and closes the connection if `Accept` does not take it within 1 second (`tsnet.go:2406-2417`).
 
-`Listen` (`tsnet.go:1321-1323`, `:2090-2094`, `:2115-2271`). Normalize `0.0.0.0` and `::` to no host. Port 0 cycles through 10002~19999 starting from `nextEphemeralPort`. Reopening the same key gives `listener already open`. With `Server.Tun`, rewrite `tcp` and the empty value to `tcp4`/`tcp6`. No host uses dual-stack tcp6 (`tsnet.go:2160-2180`).
+`Listen` (`tsnet.go:1321-1323`, `:2090-2094`, `:2115-2271`). Normalize `0.0.0.0` and `::` to no host. Port 0 cycles through 10002~19999 starting from `nextEphemeralPort`. Reopening the same key gives `listener already open`. With `Server.Tun`, rewrite both `tcp` and an empty `network` to `tcp4` or `tcp6`. An empty host uses dual-stack `tcp6` (`tsnet.go:2160-2180`).
 
 #### 4.7.2 Dialing
 
 1. Resolve non-IP addresses through the MagicDNS callback (node FQDNs, short names, and `ExtraRecords` with empty `Type`). Prefer IPv4 for `tcp`. Bypass quad-100, falling back to the system resolver if unresolved (`tsdial.go:401-489`, `ipnlocal/resolve.go:60-77`, `:115-146`, `node_backend.go:823-836`).
 2. Race multiple addresses at 300ms intervals (`tsdial.go:640-656`).
-3. If `PeerForIP` succeeds (a peer with the tailnet address or route), dial through netstack, otherwise through OS networking (`tsnet.go:935-939`, `tsdial.go:608-638`, `ipnlocal/resolve.go:166-198`). The source is the local tailnet IP of the same family (`tsnet.go:940-951`).
+3. If `PeerForIP` succeeds (a peer with the tailnet address or route), dial through netstack. On a miss, the dialer may still use the peer dialer for a Tailscale route. See [tcp-netstack.md](tcp-netstack.md) §6.3 for the peer and OS fallback paths (`tsnet.go:935-939`, `tsdial.go:608-638`, `ipnlocal/resolve.go:166-198`). The source is the local tailnet IP of the same family (`tsnet.go:940-951`).
 4. tsnet `Dial` waits until `Running` (`NeedsLogin` and `Starting` wait, other states give an error) (`tsnet.go:382-419`).
 
 #### 4.7.3 Netstack Configuration (Swift TCP Reference)
@@ -383,7 +383,7 @@ iOS keeps the buffer maximum at the gVisor default (4MiB) to avoid adding pressu
 3. If absent (and the build includes netstack), fail for port 0. Otherwise map (proto, ip:port) to the real remote IP with `ProxyMapper` and look up again. With empty `proto`, try tcp then udp (`local.go:1773-1797`). The remote address of a connection accepted by a tsnet listener is already the peer address.
 4. Fail without a netmap. Look up the user profile by the node's `User` and fail if absent (`local.go:1799-1805`).
 
-Local API `GET /localapi/v0/whois?addr=` response (`ip`, `ip:port`, `nodekey:…`, plus `proto`, `svc_name`, `dst_ip`) (`tailscale.com/ipn/localapi/localapi.go:516-629`, `tailscale.com/client/tailscale/apitype/apitype.go:35-42`):
+The local API `GET /localapi/v0/whois?addr=` accepts `ip`, `ip:port`, or `nodekey:…` as `addr`, plus `proto`, `svc_name`, and `dst_ip` as separate query parameters. Its response fields are listed below (`tailscale.com/ipn/localapi/localapi.go:516-629`, `tailscale.com/client/tailscale/apitype/apitype.go:35-42`).
 
 | Key | Contents |
 | --- | --- |
@@ -410,10 +410,10 @@ Status codes: no read permission 403, absent or invalid `addr` 400, missing peer
    1. Remove the trailing dot and validate the name (requires a dot, prohibits `..`, `:`, `/`, `\`, and NUL, permits `*` only in an initial `*.`) (`:96-100`, `:662-678`).
    2. Requires a netmap. Only exact names in `CertDomains` (except BYO Funnel domains). `*.<domain>` requires `dns-subdomain-resolve` (`:689-728`).
    3. Read the stored pair and validate the chain using `DNSName` and current time (system roots → bundled Let's Encrypt roots) (`certstore.go:135-154`, `:411-474`).
-   4. Renewal decision. With nonzero `min_validity`, renew synchronously when remaining lifetime is shorter. For 0, once a random time in the suggested ARI window has passed (2/3 of lifetime if the 5-second ARI lookup fails), renew asynchronously once per domain and return the current certificate (`:138-251`, `:306-340`).
+   4. Renewal decision. With nonzero `min_validity`, renew synchronously when remaining lifetime is shorter. For 0, once a random time in the suggested ARI window has passed (2/3 of lifetime if the 5-second ARI lookup fails), start at most one asynchronous renewal at a time per domain and return the current certificate (`:138-251`, `:306-340`).
    5. Account key (generate and save P-256 if absent), default directory `https://acme-v02.api.letsencrypt.org/directory` (override with `TS_DEBUG_ACME_DIRECTORY_URL`), HTTP uses `http.DefaultClient` (`certstore.go:361-404`, `tempfork/acme/acme.go:47`, `tempfork/acme/http.go:264-269`). `GetReg` → `Register` if absent → check `valid` (`cert.go:386-392`, `:451-473`).
    6. Order (ARI `replaces` if a previous certificate exists) → DNS-01 for each authorization (TLS-ALPN-01 only for :443 Funnel + previous certificate, or BYO Funnel) (`:253-275`, `:394-446`, `:515-536`).
-   7. DNS-01. TXT value = `base64url(SHA-256(token + "." + JWK thumbprint))` (no padding), name = `_acme-challenge.<domain>`. Check whether it already exists via the system resolver within 500ms. If absent, send `POST /machine/set-dns` on the Noise channel to the control server with JSON `SetDNSRequest{Version, NodeKey, Name, Type: "TXT", Value}` (Version is `CurrentCapabilityVersion`). A non-200 is an error, and 200 decodes `{}` (`:615-654`, `tempfork/acme/acme.go:591-598`, `local.go:7809-7839`, `direct.go:1758-1781`, `tailcfg.go:2595-2621`). Then call `Accept`.
+   7. DNS-01. TXT value = `base64url(SHA-256(token + "." + JWK thumbprint))` (no padding), name = `_acme-challenge.<domain>`. Check whether it already exists via the system resolver within 500ms. If absent, send `POST /machine/set-dns` on the Noise channel to the control server with JSON `SetDNSRequest{Version, NodeKey, Name, Type: "TXT", Value}` (Version is `CurrentCapabilityVersion`). Treat any status other than 200 as an error. On 200, decode `{}` (`:615-654`, `tempfork/acme/acme.go:591-598`, `local.go:7809-7839`, `direct.go:1758-1781`, `tailcfg.go:2595-2621`). Then call `Accept`.
    8. `WaitOrder` → new P-256 key and CSR (`CN` and SAN = domain) → `CreateOrderCert(bundle=true)` → save key file, then certificate file (`:563-613`, `certstore.go:164-169`, `:305-330`).
 5. Background renewal loop (1 hour, first run immediately). Runs only in `Running` with a Web entry or `TerminateTLS` in serve settings. Using only `Listen`, `ListenTLS`, or `ListenFunnel` leaves it off. `ListenService` (HTTP mode or `TerminateTLS`) enables it. `TS_CERT_SHARE_MODE=ro` disables issuance and renewal (`feature/acme/refresh.go:21-76`, `:134-155`, `tsnet.go:2007-2039`, `cert.go:123-125`).
 
@@ -446,7 +446,7 @@ Status codes: no read permission 403, absent or invalid `addr` 400, missing peer
 | [M5] Large clock jump (unmonitored on iOS) | 10 minutes | `netmon.go:42`, `:726` |
 | [M5] DERP ping after Rebind | 3 seconds | `derp.go:923` |
 | [M5] Login URL reuse | 6 days and 23 hours | `local.go:4822` |
-| [M5] Retry on empty base configuration (non-Apple) | Double from 1 second, 6 attempts | `manager.go:54-55` |
+| [M5] Retry on empty base configuration (non-Apple) | 6 attempts with a delay that starts at 1 second and doubles | `manager.go:54-55` |
 | [M6] In-progress connection limit | Mobile 1024, Linux 8192, others 2048, 2/3 per remote IP | `netstack.go:85-120` |
 | [M6] `Accept` delivery wait | 1 second | `tsnet.go:2412` |
 | [M6] Ephemeral ports | 10002~19999 | `tsnet.go:2110-2113` |
@@ -481,7 +481,7 @@ The minimum implementation includes the §4.7.1 inbound path (receive after filt
 
 Optional parts are `ListenPacket`, `ListenTLS`/Funnel/Service, subnets, PeerAPI, SSH, and web client (`TCPHandlerForDst`), and `ProxyMapper`.
 
-### 6.3 M7 — Verification of Replacement at the First Adopter
+### 6.3 M7 — Verification of the Switch to Swiftail at the First Adopter
 
 Minimum implementation
 - `whoIs`. §4.8 steps 1, 2, and 4, returning `Node` and `UserProfile`. The first adopter reads `StableID`, `Name` (or `ComputedName`), and `LoginName`.
@@ -497,16 +497,16 @@ Optional parts are ARI and `replaces`, wildcards, TLS-ALPN-01, the background lo
 | D1 | How to provide DNS to the OS | (a) Match domains only (Go row 4, first adopter) / (b) Follow Go including primary resolver mode | (a). (b) requires upstream forwarding and a way to read OS default resolvers inside NE. The latter is unverified (§8) |
 | D2 | Incoming `DNSConfig.Resolvers` (global name servers) and `Routes` with resolvers (custom split DNS) | (a) Ignore and match local zones only (first adopter) / (b) Include those suffixes in the match list and return SERVFAIL / (c) Implement forwarding | (a). Record the lack of support in the contract and state. Those names go to OS default DNS |
 | D3 | Search domains (`Domains`) and `matchDomainsNoSearch` | (a) Omit, app sets `matchDomainsNoSearch = true` (first adopter. Short names do not resolve) / (b) Add a search domains field to `TunnelNetworkSettings` | (a). Go comments say Apple scoped mode uses match domains as the search list, which would include all 65 reverse zones (§8) |
-| D4 | Service IP TCP (including 53) | (a) Drop silently / (b) Generate and send RST / (c) Connect M6 TCP stack | (b). Go also sends RST for ports other than 53. Use (c) for 53 after M6 |
+| D4 | Service IP TCP (including 53) | (a) Drop silently / (b) Generate and send RST / (c) Connect M6 TCP stack | (b). Go also sends RST for ports it does not serve (see §4.3 item 3 for the exceptions). Use (c) for 53 after M6 |
 | D5 | Service IP ICMP echo | Reply / Drop | Reply (matches Go and supports diagnostics) |
-| D6 | Link-change notification source | (a) `setDefaultInterface` only / (b) `NWPathMonitor` inside Swiftail | (a). The library leaves NetworkExtension and Network framework policy to the app (plan §6). Reevaluate when called again even with the same name (like Go `InjectEvent`) |
+| D6 | Link-change notification source | (a) `setDefaultInterface` only / (b) `NWPathMonitor` inside Swiftail | (a). The library leaves NetworkExtension and Network framework policy to the app (plan §6). Reevaluate when the app calls it again, even with the same interface name (like Go `InjectEvent`) |
 | D7 | Peer AAAA | Go rules (no AAAA if IPv4 exists unless `magicdns-aaaa` permits it) / Always AAAA | Go rules |
 | D8 | State directory | Same directory as the first adopter's Go state file / Separate | Separate directory. Migration is an M7 decision (§6.3) |
 | D9 | `Running` determination | Go rules (peer with completed handshake or DERP connection) / Receipt of netmap alone | Go rules. DERP permits `Running` even in a tailnet without peers |
 
 ## 7. Interop Test Checks
 
-These plans were unexecuted.
+The following tests are planned and have yet to run.
 
 M5 DNS (in-memory TUN, compared with a Go node)
 1. Settings derivation. MagicDNS on and off, `ExtraRecords` covered and uncovered by routes, empty routes, routes with resolvers, global `Resolvers`, IPv4-only and IPv6-only nodes, and `force-register-magicdns-ipv4-only`. Record Go `dns.NewManager(goos "ios")`'s `OSConfig` alongside §4.1.4 results (same approach as the first adopter's test in `docs/tunnel.md:175-176`).
@@ -522,17 +522,17 @@ M5 state and switching
 M6·M7
 8. RST on ports without a listener, 1 second for `Accept`, limit per remote IP, and state at Accept (§6.2).
 9. `whoIs` returns the same `Node.StableID` and `LoginName` as Go `LocalClient.WhoIs`.
-10. Issue through the Let's Encrypt staging directory and check whether control receives `set-dns` (testcontrol `tstest/integration/testcontrol/testcontrol.go:605`) and the renewal decision.
+10. Issue through the Let's Encrypt staging directory and check whether the control server receives `set-dns` (testcontrol `tstest/integration/testcontrol/testcontrol.go:605`) and the renewal decision.
 11. Verify that a node migrated from Go `tailscaled.state` starts with the same IP.
 
 ## 8. Unverified Items
 
 ### 8.1 Unverified Facts
 
-- iOS app code outside Go. The reference sources omit the Tailscale iOS app's `OSConfigurator` (`SupportsSplitDNS`, `GetBaseConfig`) and `OSConfig` → `NEDNSSettings` conversion. The claims in comments at `manager.go:361-366`, `:436-445` (the Apple extension installs search domains only in primary mode and uses match domains as the search list in scoped mode, and configd clears `NEDNSSettings.searchDomains`) were verified only as comments.
+- iOS app code outside Go. The reference sources omit the Tailscale iOS app's `OSConfigurator` (`SupportsSplitDNS`, `GetBaseConfig`) and `OSConfig` → `NEDNSSettings` conversion. The claims in comments at `manager.go:361-366`, `:436-445` (the Apple extension installs search domains only in primary mode and uses match domains as the search list in scoped mode, and configd clears `NEDNSSettings.searchDomains`) were found in comments only and were unverified in the implementation.
 - OS behavior of `NEDNSSettings.matchDomains` (names outside the match list do not go to tunnel DNS, `matchDomainsNoSearch`) should be based on Apple's documentation, which this review did not check. How to read OS default resolvers inside the NE extension is also unverified (D1).
 - With `selfExpired`, settings are empty but resolver lookups in the node index are independent of settings (`tsdns.go:756-759`). Removing OS routes and DNS (§4.5) appears to prevent packets from reaching quad-100. This was unverified by execution.
-- How the control server handles a node with a changed machine key and the effect of sending zero `NLKey` (covered by the control notes).
+- How the control server handles a node with a changed machine key and the effect of sending zero `NLKey` (for the control notes to address).
 - When the production control server grants `force-register-magicdns-ipv4-only` and `disable-split-dns-when-no-custom-resolvers`.
 - Whether the `AF_ROUTE` socket (`netmon_darwin.go`) actually opens in the iOS extension sandbox. Go relies on the build rule that `GOOS=ios` also matches the `darwin` build tag.
 - Exact conditions for populating `ProxyMapper` and the path to `InUseOtherUser` (appears Windows-only).
