@@ -1,5 +1,5 @@
-// 계약 동작 6: 필터 규칙 변환과 판정. 노트(netmap-engine.md) 7절 3~6의 항목.
-// 자기 주소는 100.64.0.1과 fd7a:115c:a1e0::1, 피어는 100.64.0.2와 fd7a:115c:a1e0::2다.
+// Contract behavior 6. Filter rule conversion and verdicts. Items 3–6 in §7 of the notes (netmap-engine.md).
+// The local addresses are 100.64.0.1 and fd7a:115c:a1e0::1. The peer addresses are 100.64.0.2 and fd7a:115c:a1e0::2.
 
 import Testing
 
@@ -7,18 +7,18 @@ import SwiftailBase
 import SwiftailControl
 import SwiftailEngine
 
-@Suite("패킷 필터")
+@Suite("Packet filter")
 struct PacketFilterTests {
     static let local = ["100.64.0.1", "fd7a:115c:a1e0::1"]
     static let peer4 = "100.64.0.2"
     static let peer6 = "fd7a:115c:a1e0::2"
 
-    /// 규칙 JSON과 자기 주소로 만든 필터.
+    /// Builds a filter from rule JSON and local addresses.
     private func filter(_ rulesJSON: String) throws -> PacketFilter {
         PacketFilter(rules: try decodeFilterRules(rulesJSON), localAddresses: Self.local.compactMap(IPAddress.init))
     }
 
-    /// 한 출발지에서 한 목적지 포트로 열어 주는 규칙.
+    /// Builds a rule that allows one source to reach one destination port.
     private func rule(src: String, dst: String = "*", ports: String = #"{"First":0,"Last":65535}"#, proto: String = "") -> String {
         #"{"SrcIPs":["\#(src)"],"DstPorts":[{"IP":"\#(dst)","Ports":\#(ports)}]\#(proto)}"#
     }
@@ -35,9 +35,9 @@ struct PacketFilterTests {
         TestPacket.tcp(from: source, 50000, to: destination, port, flags: 0x02)
     }
 
-    // MARK: - 주소 표현
+    // MARK: - Address expressions
 
-    @Test("`*`는 IPv4와 IPv6의 모든 출발지")
+    @Test("`*` matches all IPv4 and IPv6 sources")
     func wildcard() throws {
         var filter = try filter("[\(rule(src: "*"))]")
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .accept)
@@ -45,23 +45,23 @@ struct PacketFilterTests {
         #expect(try verdict(&filter, udp(from: Self.peer6, to: "fd7a:115c:a1e0::1")) == .accept)
     }
 
-    @Test("CIDR 출발지는 그 안의 주소만")
+    @Test("A CIDR source matches only addresses within it")
     func cidrSource() throws {
         var filter = try filter("[\(rule(src: "100.64.0.0/30"))]")
         #expect(try verdict(&filter, udp(from: "100.64.0.3")) == .accept)
         #expect(try verdict(&filter, udp(from: "100.64.0.4")) == .drop(.noRuleMatched))
-        // IPv4 규칙은 IPv6 패킷에 맞지 않는다.
+        // An IPv4 rule does not match IPv6 packets.
         #expect(try verdict(&filter, udp(from: Self.peer6, to: "fd7a:115c:a1e0::1")) == .drop(.noRuleMatched))
     }
 
-    @Test("단일 주소 출발지")
+    @Test("Single-address source")
     func singleAddressSource() throws {
         var filter = try filter("[\(rule(src: Self.peer6))]")
         #expect(try verdict(&filter, udp(from: Self.peer6, to: "fd7a:115c:a1e0::1")) == .accept)
         #expect(try verdict(&filter, udp(from: "fd7a:115c:a1e0::3", to: "fd7a:115c:a1e0::1")) == .drop(.noRuleMatched))
     }
 
-    @Test("a-b 범위는 양 끝을 포함한다")
+    @Test("The a-b range includes both endpoints")
     func rangeSource() throws {
         var filter = try filter("[\(rule(src: "100.64.0.2-100.64.0.5")),\(rule(src: "fd7a:115c:a1e0::2-fd7a:115c:a1e0::ff"))]")
         for (source, expected) in [("100.64.0.1", false), ("100.64.0.2", true), ("100.64.0.5", true), ("100.64.0.6", false)] {
@@ -71,14 +71,14 @@ struct PacketFilterTests {
         #expect(try verdict(&filter, udp(from: "fd7a:115c:a1e0::100", to: "fd7a:115c:a1e0::1")) == .drop(.noRuleMatched))
     }
 
-    @Test("아주 넓은 범위도 풀지 않고 그대로 견준다")
+    @Test("Compare even very wide ranges without expanding them")
     func hugeRanges() throws {
         var filter = try filter("[\(rule(src: "0.0.0.1-255.255.255.254")),\(rule(src: "::1-ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe"))]")
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .accept)
         #expect(try verdict(&filter, udp(from: Self.peer6, to: "fd7a:115c:a1e0::1")) == .accept)
     }
 
-    @Test("목적지 표현도 같은 규칙으로 해석한다. 자기 주소가 아닌 목적지는 넓은 규칙이 있어도 버린다")
+    @Test("Parse destination expressions by the same rules. Drop nonlocal destinations even if a broad rule matches")
     func destinations() throws {
         var filter = try filter("[\(rule(src: "*", dst: "100.64.0.1"))]")
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .accept)
@@ -89,14 +89,14 @@ struct PacketFilterTests {
         #expect(try verdict(&wide, udp(from: Self.peer6, to: "fd7a:115c:a1e0::9")) == .drop(.notForUs))
     }
 
-    @Test("multicast·link-local 목적지는 먼저 버린다", arguments: ["224.0.0.1", "239.255.255.250", "169.254.169.254", "ff02::1", "fe80::1"])
+    @Test("Drop multicast and link-local destinations first", arguments: ["224.0.0.1", "239.255.255.250", "169.254.169.254", "ff02::1", "fe80::1"])
     func multicastAndLinkLocal(destination: String) throws {
         var filter = PacketFilter(rules: try decodeFilterRules("[\(rule(src: "*"))]"), localAddresses: [IPAddress(destination)].compactMap { $0 })
         let source = destination.contains(":") ? Self.peer6 : Self.peer4
         #expect(try verdict(&filter, udp(from: source, to: destination)) == .drop(.multicastOrLinkLocal))
     }
 
-    @Test("cap: 출발지는 지원하지 않으므로 그 항목만 버린다")
+    @Test("Drop only the unsupported cap: source entry")
     func capabilitySource() throws {
         var capOnly = try filter("[\(rule(src: "cap:tailscale.com/cap/ssh"))]")
         #expect(try verdict(&capOnly, udp(from: Self.peer4)) == .drop(.noRuleMatched))
@@ -105,9 +105,9 @@ struct PacketFilterTests {
         #expect(try verdict(&mixed, udp(from: Self.peer4)) == .accept)
     }
 
-    @Test("잘못된 주소 표현은 그 항목만 버리고 나머지는 남긴다")
+    @Test("Drop only the invalid address expression and keep the rest")
     func invalidEntries() throws {
-        // 호스트 비트가 남은 CIDR, 역순 범위, 계열이 섞인 범위, 범위 표기의 '-' 둘, 주소가 아닌 문자열.
+        // CIDR with host bits set, reversed range, mixed-family range, two '-' characters in a range, and a string that is not an address.
         let sources = ["100.64.0.2/24", "100.64.0.9-100.64.0.3", "100.64.0.1-fd7a:115c:a1e0::1", "1-2-3", "peer", "", "100.64.0.2%en0"]
         let quoted = (sources + ["100.64.0.7"]).map { "\"\($0)\"" }.joined(separator: ",")
         var filter = try filter(#"[{"SrcIPs":[\#(quoted)],"DstPorts":[{"IP":"*","Ports":{"First":0,"Last":65535}}]}]"#)
@@ -117,7 +117,7 @@ struct PacketFilterTests {
         }
     }
 
-    @Test("어떤 규칙 문자열로도 죽지 않는다")
+    @Test("No rule string causes a crash")
     func hostileStrings() throws {
         let texts = [
             "*", "**", "-", "--", "/", "//", "cap:", "cap", "0.0.0.0-255.255.255.255", "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
@@ -132,9 +132,9 @@ struct PacketFilterTests {
         }
     }
 
-    // MARK: - 포트와 프로토콜
+    // MARK: - Ports and protocols
 
-    @Test("포트 범위는 양 끝을 포함한다. First > Last면 어떤 포트도 맞지 않는다")
+    @Test("Port ranges include both endpoints. If First > Last, no port matches")
     func portBounds() throws {
         var filter = try filter("[\(rule(src: Self.peer4, ports: #"{"First":7,"Last":9}"#))]")
         for (port, expected) in [(UInt16(6), false), (7, true), (9, true), (10, false)] {
@@ -144,7 +144,7 @@ struct PacketFilterTests {
         #expect(try verdict(&inverted, udp(from: Self.peer4, to: "100.64.0.1", 8)) == .drop(.noRuleMatched))
     }
 
-    @Test("빈 IPProto는 TCP·UDP·ICMP만")
+    @Test("Empty IPProto matches only TCP, UDP, and ICMP")
     func defaultProtocols() throws {
         var filter = try filter("[\(rule(src: Self.peer4))]")
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .accept)
@@ -154,21 +154,21 @@ struct PacketFilterTests {
         #expect(try verdict(&filter, gre) == .drop(.noRuleMatched))
     }
 
-    @Test("명시한 프로토콜만 연다")
+    @Test("Allow only explicitly specified protocols")
     func explicitProtocols() throws {
         var filter = try filter("[\(rule(src: Self.peer4, proto: #","IPProto":[17]"#))]")
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .accept)
         #expect(try verdict(&filter, syn(from: Self.peer4)) == .drop(.noRuleMatched))
     }
 
-    @Test("범위 밖 프로토콜 번호만 있으면 빈 집합이다(기본 집합으로 돌아가지 않는다)")
+    @Test("Only out-of-range protocol numbers yield an empty set (no fallback to the default set)")
     func outOfRangeProtocols() throws {
         var filter = try filter("[\(rule(src: Self.peer4, proto: #","IPProto":[-1,256,9223372036854775807]"#))]")
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .drop(.noRuleMatched))
         #expect(try verdict(&filter, syn(from: Self.peer4)) == .drop(.noRuleMatched))
     }
 
-    @Test("그 밖의 프로토콜은 그 번호와 포트 전체를 연 규칙이 있을 때만")
+    @Test("Other protocols need a rule that allows their number and the entire port range")
     func otherProtocols() throws {
         let gre = TestPacket.ipv4(from: Self.peer4, to: "100.64.0.1", protocolNumber: 47, transport: [])
         var allPorts = try filter("[\(rule(src: Self.peer4, proto: #","IPProto":[47]"#))]")
@@ -177,45 +177,45 @@ struct PacketFilterTests {
         #expect(try verdict(&somePorts, gre) == .drop(.noRuleMatched))
     }
 
-    @Test("SCTP는 UDP와 같다: 규칙의 목적 포트를 보고, 먼저 보낸 것의 응답은 규칙 없이 받는다")
+    @Test("SCTP follows UDP behavior. Check the rule's destination port and accept replies to outbound traffic without a rule")
     func sctp() throws {
         let toPort9 = TestPacket.sctp(from: Self.peer4, 40000, to: "100.64.0.1", 9)
         var filter = try filter("[\(rule(src: Self.peer4, ports: #"{"First":9,"Last":9}"#, proto: #","IPProto":[132]"#))]")
         #expect(try verdict(&filter, toPort9) == .accept)
         #expect(try verdict(&filter, TestPacket.sctp(from: Self.peer4, 40000, to: "100.64.0.1", 10)) == .drop(.noRuleMatched))
-        // 기본 프로토콜 집합에는 SCTP가 없다.
+        // The default protocol set excludes SCTP.
         var defaults = try self.filter("[\(rule(src: Self.peer4))]")
         #expect(try verdict(&defaults, toPort9) == .drop(.noRuleMatched))
 
         var none = try self.filter("[]")
         none.recordOutbound(try IPPacket(parsing: TestPacket.sctp(from: "fd7a:115c:a1e0::1", 5000, to: Self.peer6, 9)))
         #expect(try verdict(&none, TestPacket.sctp(from: Self.peer6, 9, to: "fd7a:115c:a1e0::1", 5000)) == .accept)
-        // 같은 주소·포트의 UDP는 SCTP 흐름 기록에 맞지 않는다.
+        // UDP with the same addresses and ports does not match the SCTP flow record.
         #expect(try verdict(&none, TestPacket.udp(from: Self.peer6, 9, to: "fd7a:115c:a1e0::1", 5000)) == .drop(.noRuleMatched))
     }
 
-    // MARK: - 옛 형식과 CapGrant
+    // MARK: - Legacy formats and CapGrant
 
-    @Test("SrcBits가 있으면 필터 전체에 규칙이 없다")
+    @Test("SrcBits anywhere leaves the entire filter without rules")
     func srcBits() throws {
         var filter = try filter(#"[\#(rule(src: "*")),{"SrcIPs":["100.64.0.2"],"SrcBits":[32],"DstPorts":[{"IP":"*","Ports":{"First":0,"Last":65535}}]}]"#)
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .drop(.noRuleMatched))
     }
 
-    @Test("DstPorts의 Bits가 있으면 필터 전체에 규칙이 없다")
+    @Test("A Bits field in DstPorts leaves the entire filter without rules")
     func dstBits() throws {
         var filter = try filter(#"[\#(rule(src: "*")),{"SrcIPs":["*"],"DstPorts":[{"IP":"100.64.0.1","Bits":32,"Ports":{"First":0,"Last":65535}}]}]"#)
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .drop(.noRuleMatched))
     }
 
-    @Test("규칙이 없어도 먼저 보낸 UDP의 응답은 받는다(옛 형식으로 비운 필터 포함)")
+    @Test("Accept replies to outbound UDP even without rules, including when a legacy format empties the filter")
     func emptyRulesStillTrackFlows() throws {
         var filter = try filter(#"[{"SrcIPs":["*"],"SrcBits":[0],"DstPorts":[]}]"#)
         filter.recordOutbound(try IPPacket(parsing: udp(from: "100.64.0.1", 7, to: Self.peer4, 40000)))
         #expect(try verdict(&filter, udp(from: Self.peer4, 40000, to: "100.64.0.1", 7)) == .accept)
     }
 
-    @Test("CapGrant만 있는 규칙은 패킷을 열지 않는다")
+    @Test("A rule with only CapGrant allows no packets")
     func capGrantOnly() throws {
         var filter = try filter(#"[{"SrcIPs":["*"],"CapGrant":[{"Dsts":["100.64.0.1/32"],"CapMap":{"tailscale.com/cap/x":[{}]}}]}]"#)
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .drop(.noRuleMatched))
@@ -223,15 +223,15 @@ struct PacketFilterTests {
         #expect(try verdict(&filter, TestPacket.icmp(from: Self.peer4, to: "100.64.0.1", type: 8)) == .drop(.noRuleMatched))
     }
 
-    @Test("netmap 전의 allowNone은 모든 새 흐름을 버린다")
+    @Test("Before the netmap, allowNone drops all new flows")
     func allowNone() throws {
         var filter = PacketFilter.allowNone
         #expect(try verdict(&filter, udp(from: Self.peer4)) == .drop(.notForUs))
     }
 
-    // MARK: - TCP와 ICMP
+    // MARK: - TCP and ICMP
 
-    @Test("TCP: SYN만 규칙을 본다. SYN-ACK·ACK·RST는 규칙 없이 받는다")
+    @Test("TCP checks rules only for SYN. Accept SYN-ACK, ACK, and RST without a rule")
     func tcp() throws {
         var filter = try filter("[\(rule(src: Self.peer4, ports: #"{"First":22,"Last":22}"#))]")
         #expect(try verdict(&filter, syn(from: Self.peer4, 22)) == .accept)
@@ -242,15 +242,15 @@ struct PacketFilterTests {
         }
     }
 
-    @Test("ICMP: 포트를 보지 않고 출발·목적 주소가 맞는 규칙이면 받는다")
+    @Test("Accept ICMP when a rule matches the source and destination addresses, regardless of ports")
     func icmpAddressesOnly() throws {
-        // TCP 22만 연 규칙이어도 같은 출발지의 echo request는 받는다.
+        // A rule allowing only TCP 22 also accepts an echo request from the same source.
         var filter = try filter("[\(rule(src: Self.peer4, dst: "100.64.0.1", ports: #"{"First":22,"Last":22}"#, proto: #","IPProto":[6]"#))]")
         #expect(try verdict(&filter, TestPacket.icmp(from: Self.peer4, to: "100.64.0.1", type: 8)) == .accept)
         #expect(try verdict(&filter, TestPacket.icmp(from: "100.64.0.3", to: "100.64.0.1", type: 8)) == .drop(.noRuleMatched))
     }
 
-    @Test("ICMP echo reply와 오류는 규칙 없이 받는다")
+    @Test("Accept ICMP echo replies and errors without a rule")
     func icmpRepliesAndErrors() throws {
         var filter = try filter("[]")
         for type: UInt8 in [0, 3, 11, 12] {
@@ -259,16 +259,16 @@ struct PacketFilterTests {
         for type: UInt8 in [129, 1, 2, 3, 4] {
             #expect(try verdict(&filter, TestPacket.icmp(from: "fd7a:115c:a1e0::9", to: "fd7a:115c:a1e0::1", type: type)) == .accept, "v6 type \(type)")
         }
-        // echo request, code가 0이 아닌 echo reply, Go의 0x12(18)는 규칙이 있어야 한다.
+        // Echo requests, echo replies with a nonzero code, and Go's 0x12 (18) require a rule.
         #expect(try verdict(&filter, TestPacket.icmp(from: "100.64.0.9", to: "100.64.0.1", type: 8)) == .drop(.noRuleMatched))
         #expect(try verdict(&filter, TestPacket.icmp(from: "100.64.0.9", to: "100.64.0.1", type: 0, code: 1)) == .drop(.noRuleMatched))
         #expect(try verdict(&filter, TestPacket.icmp(from: "100.64.0.9", to: "100.64.0.1", type: 18)) == .drop(.noRuleMatched))
         #expect(try verdict(&filter, TestPacket.icmp(from: "fd7a:115c:a1e0::9", to: "fd7a:115c:a1e0::1", type: 128)) == .drop(.noRuleMatched))
     }
 
-    // MARK: - UDP 흐름 기록
+    // MARK: - UDP flow tracking
 
-    @Test("먼저 보낸 UDP의 응답은 규칙 없이 받는다. 튜플이 하나라도 다르면 받지 않는다")
+    @Test("Accept replies to outbound UDP without a rule. Every tuple element must match")
     func udpReplies() throws {
         var filter = try filter("[]")
         filter.recordOutbound(try IPPacket(parsing: udp(from: "100.64.0.1", 5000, to: Self.peer4, 7)))
@@ -276,7 +276,7 @@ struct PacketFilterTests {
         #expect(try verdict(&filter, udp(from: Self.peer4, 8, to: "100.64.0.1", 5000)) == .drop(.noRuleMatched))
         #expect(try verdict(&filter, udp(from: Self.peer4, 7, to: "100.64.0.1", 5001)) == .drop(.noRuleMatched))
         #expect(try verdict(&filter, udp(from: "100.64.0.3", 7, to: "100.64.0.1", 5000)) == .drop(.noRuleMatched))
-        // 프로토콜이 다르면(TCP SYN) 흐름 기록과 무관하다.
+        // A different protocol (TCP SYN) does not use the flow record.
         let tcp = TestPacket.tcp(from: Self.peer4, 7, to: "100.64.0.1", 5000, flags: 0x02)
         #expect(try verdict(&filter, tcp) == .drop(.noRuleMatched))
 
@@ -284,16 +284,16 @@ struct PacketFilterTests {
         #expect(try verdict(&filter, udp(from: Self.peer6, 7, to: "fd7a:115c:a1e0::1", 5000)) == .accept)
     }
 
-    @Test("받은 UDP와 UDP가 아닌 송신은 기록을 만들지 않는다")
+    @Test("Inbound UDP and outbound non-UDP traffic create no flow records")
     func onlyOutboundUDPIsRecorded() throws {
         var filter = try filter("[\(rule(src: Self.peer4, ports: #"{"First":7,"Last":7}"#))]")
         #expect(try verdict(&filter, udp(from: Self.peer4, 40000, to: "100.64.0.1", 7)) == .accept)
-        // 위 수신이 기록을 만들었다면 이 역방향(우리가 보낸 것처럼 보이는) 패킷이 받아졌을 것이다.
+        // If the inbound packet above had created a record, this reverse packet (which looks like one we sent) would have been accepted.
         filter.recordOutbound(try IPPacket(parsing: TestPacket.tcp(from: "100.64.0.1", 5000, to: Self.peer4, 8, flags: 0x02)))
         #expect(try verdict(&filter, udp(from: Self.peer4, 8, to: "100.64.0.1", 5000)) == .drop(.noRuleMatched))
     }
 
-    @Test("흐름 기록은 512개 LRU다. 513번째가 가장 오래 쓰지 않은 것을 내보낸다")
+    @Test("Flow tracking uses a 512-entry LRU cache. The 513th entry evicts the least recently used one")
     func lruCapacity() throws {
         var filter = try filter("[]")
         for port in UInt16(1)...513 {
@@ -304,23 +304,23 @@ struct PacketFilterTests {
         #expect(try verdict(&filter, udp(from: Self.peer4, 7, to: "100.64.0.1", 513)) == .accept)
     }
 
-    @Test("조회도 최근 사용 순서를 갱신한다")
+    @Test("Lookups also update the order of most recent use")
     func lookupRefreshesRecency() throws {
         var filter = try filter("[]")
         for port in UInt16(1)...512 {
             filter.recordOutbound(try IPPacket(parsing: udp(from: "100.64.0.1", port, to: Self.peer4, 7)))
         }
-        // 1번을 조회하면 가장 오래 쓰지 않은 것은 2번이 된다.
+        // Looking up entry 1 makes entry 2 the least recently used.
         #expect(try verdict(&filter, udp(from: Self.peer4, 7, to: "100.64.0.1", 1)) == .accept)
         filter.recordOutbound(try IPPacket(parsing: udp(from: "100.64.0.1", 600, to: Self.peer4, 7)))
         #expect(try verdict(&filter, udp(from: Self.peer4, 7, to: "100.64.0.1", 1)) == .accept)
         #expect(try verdict(&filter, udp(from: Self.peer4, 7, to: "100.64.0.1", 2)) == .drop(.noRuleMatched))
-        // 이미 있는 흐름을 다시 기록해도 다른 것을 내보내지 않는다.
+        // Recording an existing flow again does not evict another entry.
         filter.recordOutbound(try IPPacket(parsing: udp(from: "100.64.0.1", 600, to: Self.peer4, 7)))
         #expect(try verdict(&filter, udp(from: Self.peer4, 7, to: "100.64.0.1", 3)) == .accept)
     }
 
-    @Test("규칙을 바꿔도 흐름 기록은 이어 간다")
+    @Test("Keep flow records when the rules change")
     func replaceRulesKeepsFlows() throws {
         var filter = try filter("[\(rule(src: "*"))]")
         filter.recordOutbound(try IPPacket(parsing: udp(from: "100.64.0.1", 5000, to: Self.peer4, 7)))

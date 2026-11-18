@@ -1,5 +1,5 @@
-// 시험 공용 도우미: IP 패킷 만들기, JSON에서 netmap·필터 규칙 만들기, 재현 가능한 의사 난수.
-// tailcfg 값의 필드는 바깥에서 쓸 수 없으므로 제어 서버가 보내는 것과 같은 JSON을 해독해 만든다.
+// Shared test helpers for building IP packets and creating netmaps and filter rules from JSON, plus reproducible pseudorandom numbers.
+// tailcfg fields cannot be set from outside their module, so decode the same JSON the control server sends.
 
 import Foundation
 import Testing
@@ -8,16 +8,16 @@ import SwiftailBase
 import SwiftailControl
 import SwiftailEngine
 
-/// 시험의 기준 단조 시각. 실제 시간은 기다리지 않고 여기에 Duration을 더해 넘긴다.
+/// The monotonic reference time for tests. Pass this time plus a Duration instead of waiting for wall-clock time to elapse.
 let clockStart = ContinuousClock.now
-/// clockStart 시점의 벽시계: 2027-01-15T08:00:00Z.
+/// The wall-clock time at clockStart is 2027-01-15T08:00:00Z.
 let wallClockStart = Date(timeIntervalSince1970: 1_800_000_000)
 
-// MARK: - IP 패킷
+// MARK: - IP packets
 
-/// 시험용 IP 패킷. 체크섬은 0이다(엔진은 보지 않는다).
+/// IP packets for tests. Checksums are 0 because the engine ignores them.
 enum TestPacket {
-    /// IPv4 머리 + transport. options는 4바이트 배수여야 한다.
+    /// Builds an IPv4 header followed by transport bytes. The length of options must be a multiple of 4 bytes.
     static func ipv4(
         from source: String, to destination: String, protocolNumber: UInt8, transport: [UInt8],
         flagsAndOffset: UInt16 = 0, options: [UInt8] = []
@@ -29,13 +29,13 @@ enum TestPacket {
             + address(source) + address(destination) + options + transport
     }
 
-    /// IPv6 머리 + transport.
+    /// Builds an IPv6 header followed by transport bytes.
     static func ipv6(from source: String, to destination: String, nextHeader: UInt8, transport: [UInt8]) -> [UInt8] {
         [0x60, 0, 0, 0, UInt8(transport.count >> 8), UInt8(transport.count & 0xFF), nextHeader, 64]
             + address(source) + address(destination) + transport
     }
 
-    /// 주소 종류에 맞는 IP 머리를 붙인다.
+    /// Prepends an IP header for the address family.
     static func ip(from source: String, to destination: String, protocolNumber: UInt8, transport: [UInt8]) -> [UInt8] {
         source.contains(":")
             ? ipv6(from: source, to: destination, nextHeader: protocolNumber, transport: transport)
@@ -48,18 +48,18 @@ enum TestPacket {
         return ip(from: source, to: destination, protocolNumber: 17, transport: header + payload)
     }
 
-    /// SCTP 공통 머리 12바이트(verification tag와 checksum은 0).
+    /// Builds a 12-byte SCTP common header with a verification tag and checksum of 0.
     static func sctp(from source: String, _ sourcePort: UInt16, to destination: String, _ destinationPort: UInt16) -> [UInt8] {
         ip(from: source, to: destination, protocolNumber: 132, transport: bigEndian(sourcePort) + bigEndian(destinationPort) + [UInt8](repeating: 0, count: 8))
     }
 
-    /// TCP 머리 20바이트(data offset 5). flags는 13번째 바이트(SYN 0x02, ACK 0x10, RST 0x04).
+    /// Builds a 20-byte TCP header (data offset 5). flags is the 13th byte (SYN 0x02, ACK 0x10, RST 0x04).
     static func tcp(from source: String, _ sourcePort: UInt16, to destination: String, _ destinationPort: UInt16, flags: UInt8) -> [UInt8] {
         let header = bigEndian(sourcePort) + bigEndian(destinationPort) + [0, 0, 0, 1, 0, 0, 0, 0, 0x50, flags, 0xFF, 0xFF, 0, 0, 0, 0]
         return ip(from: source, to: destination, protocolNumber: 6, transport: header)
     }
 
-    /// ICMP 머리 8바이트. 주소 종류에 따라 ICMPv4(1) 또는 ICMPv6(58).
+    /// Builds an 8-byte ICMP header. The address family determines whether it is ICMPv4 (1) or ICMPv6 (58).
     static func icmp(from source: String, to destination: String, type: UInt8, code: UInt8 = 0) -> [UInt8] {
         ip(from: source, to: destination, protocolNumber: source.contains(":") ? 58 : 1, transport: [type, code, 0, 0, 0, 1, 0, 1])
     }
@@ -75,16 +75,16 @@ enum TestPacket {
 
 // MARK: - tailcfg JSON
 
-/// 필터 규칙 JSON 배열을 해독한다.
+/// Decodes a JSON array of filter rules.
 func decodeFilterRules(_ json: String) throws -> [FilterRule] {
     try JSONDecoder().decode([FilterRule].self, from: Data(json.utf8))
 }
 
-/// 맵 응답 하나로 시작한 세션의 netmap.
+/// Returns the netmap from a session initialized with one map response.
 /// - Parameters:
-///   - selfNode: self 노드 JSON.
-///   - peers: 피어 노드 JSON들.
-///   - packetFilter: `PacketFilter` 필드의 JSON 배열.
+///   - selfNode: The self node's JSON.
+///   - peers: The peer nodes' JSON.
+///   - packetFilter: The JSON array for the `PacketFilter` field.
 func makeNetmap(selfNode: String, peers: [String], packetFilter: String = "[]") throws -> Netmap {
     let json = #"{"Node":\#(selfNode),"Peers":[\#(peers.joined(separator: ","))],"PacketFilter":\#(packetFilter)}"#
     let response = try JSONDecoder().decode(MapResponse.self, from: Data(json.utf8))
@@ -92,23 +92,23 @@ func makeNetmap(selfNode: String, peers: [String], packetFilter: String = "[]") 
     return try #require(try session.apply(response, receivedAt: wallClockStart).netmap)
 }
 
-/// 노드 JSON. extra는 `,"HomeDERP":1`처럼 쉼표로 시작한다.
+/// Returns node JSON. extra starts with a comma, as in `,"HomeDERP":1`.
 func makeNodeJSON(id: Int64, key: NodePublicKey, addresses: [String], extra: String = "") -> String {
     let addressList = addresses.map { "\"\($0)\"" }.joined(separator: ",")
     return #"{"ID":\#(id),"Name":"node\#(id).tail0001.ts.net.","User":\#(100 + id),"Key":"\#(key)","Addresses":[\#(addressList)]\#(extra)}"#
 }
 
-/// 0이 아닌 disco 키 텍스트.
+/// A nonzero disco key in text form.
 let discoKeyText = "discokey:" + [UInt8](repeating: 0xD1, count: 32).hex
 
-/// 같은 바이트 32개로 만든 node 공개 키.
+/// Creates a node public key from 32 identical bytes.
 func makeNodeKey(byte: UInt8) -> NodePublicKey {
     NodePublicKey(rawValue: [UInt8](repeating: byte, count: 32)) ?? .zero
 }
 
-// MARK: - 의사 난수
+// MARK: - Pseudorandom numbers
 
-/// 재현할 수 있는 의사 난수(SplitMix64). 퍼즈 입력용이다.
+/// A reproducible pseudorandom number generator (SplitMix64) for fuzz input.
 struct FuzzRandom: RandomNumberGenerator {
     private var state: UInt64
 

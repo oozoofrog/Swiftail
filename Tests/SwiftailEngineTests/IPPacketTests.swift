@@ -1,13 +1,13 @@
-// 계약 동작 1: IP 패킷 해석. 고정 패킷, 선언 길이로 자르기, 짧은 머리, IHL 4, 조각, 확장 헤더, 임의 입력.
+// Contract behavior 1. IP packet parsing. Fixed packets, trimming to the declared length, short headers, IHL 4, fragments, extension headers, and random input.
 
 import Testing
 
 import SwiftailBase
 import SwiftailEngine
 
-@Suite("IP 패킷 해석")
+@Suite("IP packet parsing")
 struct IPPacketTests {
-    @Test("IPv4 UDP: 주소·포트를 읽는다")
+    @Test("Read IPv4 UDP addresses and ports")
     func ipv4UDP() throws {
         let packet = try IPPacket(parsing: TestPacket.udp(from: "100.64.0.2", 40000, to: "100.64.0.1", 7))
         #expect(packet.source == IPAddress("100.64.0.2"))
@@ -18,7 +18,7 @@ struct IPPacketTests {
         #expect(!packet.isTCPSYN)
     }
 
-    @Test("IPv6 UDP: 주소·포트를 읽는다")
+    @Test("Read IPv6 UDP addresses and ports")
     func ipv6UDP() throws {
         let packet = try IPPacket(parsing: TestPacket.udp(from: "fd7a:115c:a1e0::2", 1, to: "fd7a:115c:a1e0::1", 65535))
         #expect(packet.source == IPAddress("fd7a:115c:a1e0::2"))
@@ -28,7 +28,7 @@ struct IPPacketTests {
         #expect(packet.destinationPort == 65535)
     }
 
-    @Test("TCP: SYN만 켜진 것이 새 연결이다", arguments: ["100.64.0.2", "fd7a:115c:a1e0::2"])
+    @Test("A TCP segment with only SYN set is a new connection", arguments: ["100.64.0.2", "fd7a:115c:a1e0::2"])
     func tcpFlags(source: String) throws {
         let destination = source.contains(":") ? "fd7a:115c:a1e0::1" : "100.64.0.1"
         let flags: [(UInt8, Bool)] = [(0x02, true), (0x12, false), (0x10, false), (0x04, false), (0x03, true), (0x00, false)]
@@ -41,7 +41,7 @@ struct IPPacketTests {
         }
     }
 
-    @Test("ICMP: 계열에 맞는 번호만 ICMP로 본다. 포트는 0")
+    @Test("Treat only the number for the IP family as ICMP. Ports are 0")
     func icmp() throws {
         let v4 = try IPPacket(parsing: TestPacket.icmp(from: "100.64.0.2", to: "100.64.0.1", type: 8))
         #expect(v4.transportProtocol == .icmpv4)
@@ -49,14 +49,14 @@ struct IPPacketTests {
         let v6 = try IPPacket(parsing: TestPacket.icmp(from: "fd7a:115c:a1e0::2", to: "fd7a:115c:a1e0::1", type: 128))
         #expect(v6.transportProtocol == .icmpv6)
 
-        // IPv4 안의 58, IPv6 안의 1은 ICMP가 아니다(Go와 같다).
+        // Go also treats 58 in IPv4 and 1 in IPv6 as protocols other than ICMP.
         let crossed4 = TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 58, transport: [128, 0, 0, 0])
         #expect(try IPPacket(parsing: crossed4).transportProtocol == .other(58))
         let crossed6 = TestPacket.ipv6(from: "fd7a:115c:a1e0::2", to: "fd7a:115c:a1e0::1", nextHeader: 1, transport: [8, 0, 0, 0])
         #expect(try IPPacket(parsing: crossed6).transportProtocol == .other(1))
     }
 
-    @Test("SCTP: UDP와 같은 자리에서 포트를 읽는다")
+    @Test("Read SCTP ports at the same offsets as UDP ports")
     func sctp() throws {
         let v4 = try IPPacket(parsing: TestPacket.sctp(from: "100.64.0.2", 40000, to: "100.64.0.1", 9))
         #expect(v4.transportProtocol == .sctp)
@@ -66,7 +66,7 @@ struct IPPacketTests {
         #expect(v6.destinationPort == 2)
     }
 
-    @Test("TSMP와 그 밖의 프로토콜")
+    @Test("TSMP and other protocols")
     func otherProtocols() throws {
         let tsmp = TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 99, transport: Array("p12345678".utf8))
         #expect(try IPPacket(parsing: tsmp).transportProtocol == .tsmp)
@@ -76,7 +76,7 @@ struct IPPacketTests {
         #expect(parsed.sourcePort == 0)
     }
 
-    @Test("IPv4 옵션이 있어도 전송 머리를 옵션 뒤에서 읽는다")
+    @Test("Read the transport header after any IPv4 options")
     func ipv4Options() throws {
         let udp = [0x9C, 0x40, 0x00, 0x07, 0x00, 0x08, 0x00, 0x00] as [UInt8]
         let bytes = TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 17, transport: udp, options: [1, 1, 1, 0])
@@ -85,7 +85,7 @@ struct IPPacketTests {
         #expect(packet.destinationPort == 7)
     }
 
-    @Test("선언 길이 뒤의 바이트는 잘라 낸다")
+    @Test("Trim bytes after the declared length")
     func truncatesToDeclaredLength() throws {
         let v4 = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 2)
         #expect(try IPPacket(parsing: v4 + [0, 0, 0, 0]).bytes == v4)
@@ -93,7 +93,7 @@ struct IPPacketTests {
         #expect(try IPPacket(parsing: v6 + [9, 9]).bytes == v6)
     }
 
-    @Test("짧거나 길이가 맞지 않으면 malformed")
+    @Test("Packets that are too short or have an inconsistent length are malformed")
     func malformed() {
         let udp = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 2)
         let tcp = TestPacket.tcp(from: "100.64.0.2", 1, to: "100.64.0.1", 2, flags: 0x02)
@@ -120,19 +120,19 @@ struct IPPacketTests {
             [0x45],
             Array(udp.prefix(19)),
             Array(udp6.prefix(39)),
-            [0x50] + Array(udp.dropFirst()),  // 버전 5
+            [0x50] + Array(udp.dropFirst()),  // Version 5
             ihl4,
             longerThanBuffer,
             shorterThanHeader,
             ihlBeyondTotal,
             payloadBeyondBuffer6,
-            // 전송 머리가 최소 길이보다 짧다.
+            // The transport header is shorter than the minimum length.
             TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 17, transport: [0, 1, 0, 2, 0, 7, 0]),
             TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 6, transport: [UInt8](repeating: 0, count: 19)),
             TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 1, transport: [0, 0, 0, 0, 0, 0, 0]),
             TestPacket.ipv6(from: "fd7a:115c:a1e0::2", to: "fd7a:115c:a1e0::1", nextHeader: 58, transport: [129, 0, 0, 0]),
             TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 132, transport: [UInt8](repeating: 0, count: 11)),
-            // 프로토콜 번호 0과 255는 Go가 Unknown으로 버린다.
+            // Go drops protocol numbers 0 and 255 as Unknown.
             TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 0, transport: [0, 0, 0, 0]),
             TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 255, transport: [0, 0, 0, 0]),
             TestPacket.ipv6(from: "fd7a:115c:a1e0::2", to: "fd7a:115c:a1e0::1", nextHeader: 255, transport: [0, 0, 0, 0]),
@@ -140,37 +140,37 @@ struct IPPacketTests {
             tcpDataOffsetBeyondPacket,
         ]
         for bytes in cases {
-            #expect(throws: IPPacket.ParseError.malformed, "\(bytes.count)바이트") { try IPPacket(parsing: bytes) }
+            #expect(throws: IPPacket.ParseError.malformed, "\(bytes.count) bytes") { try IPPacket(parsing: bytes) }
         }
     }
 
-    @Test("조각: IPv4 MF·오프셋, IPv6 next-header 44", arguments: [UInt16(0x2000), 0x0001, 0x2001, 0x1FFF])
+    @Test("Fragments with IPv4 MF or offset, or IPv6 next-header 44", arguments: [UInt16(0x2000), 0x0001, 0x2001, 0x1FFF])
     func fragments(flagsAndOffset: UInt16) {
         let udp = [0, 1, 0, 2, 0, 8, 0, 0] as [UInt8]
         let bytes = TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 17, transport: udp, flagsAndOffset: flagsAndOffset)
         #expect(throws: IPPacket.ParseError.fragment) { try IPPacket(parsing: bytes) }
     }
 
-    @Test("DF 비트만 켜진 IPv4는 조각이 아니다")
+    @Test("IPv4 with only the DF bit set is unfragmented")
     func dontFragment() throws {
         let udp = [0, 1, 0, 2, 0, 8, 0, 0] as [UInt8]
         let bytes = TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 17, transport: udp, flagsAndOffset: 0x4000)
         #expect(try IPPacket(parsing: bytes).transportProtocol == .udp)
     }
 
-    @Test("IPv6 조각 헤더(44)는 fragment")
+    @Test("An IPv6 fragment header (44) yields fragment")
     func ipv6Fragment() {
         let bytes = TestPacket.ipv6(from: "fd7a:115c:a1e0::2", to: "fd7a:115c:a1e0::1", nextHeader: 44, transport: [17, 0, 0, 0, 0, 0, 0, 1])
         #expect(throws: IPPacket.ParseError.fragment) { try IPPacket(parsing: bytes) }
     }
 
-    @Test("IPv6 확장 헤더는 extensionHeader", arguments: [UInt8(0), 43, 50, 51, 60, 135, 139, 140])
+    @Test("IPv6 extension headers yield extensionHeader", arguments: [UInt8(0), 43, 50, 51, 60, 135, 139, 140])
     func extensionHeaders(nextHeader: UInt8) {
         let bytes = TestPacket.ipv6(from: "fd7a:115c:a1e0::2", to: "fd7a:115c:a1e0::1", nextHeader: nextHeader, transport: [17, 0, 0, 0, 0, 0, 0, 0])
         #expect(throws: IPPacket.ParseError.extensionHeader) { try IPPacket(parsing: bytes) }
     }
 
-    @Test("임의 바이트열과 잘린·변조한 패킷으로 죽지 않는다")
+    @Test("Random byte sequences and truncated or modified packets do not crash the parser")
     func fuzz() {
         var random = FuzzRandom(seed: 0x5EED)
         let seeds = [

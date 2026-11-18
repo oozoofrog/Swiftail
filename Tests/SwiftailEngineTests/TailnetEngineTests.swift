@@ -1,6 +1,6 @@
-// 계약 동작 3~5·7과 M-E1·M-E2: 엔진 둘을 메모리에서 맞물려(한쪽의 `.datagram`을 다른 쪽 `receive`에) 시험한다.
-// 엔진은 경로를 모르므로 망은 데이터그램을 받는 쪽 엔진에 그대로 넘긴다(노드에서는 `Magicsock`이 그 자리에 있다).
-// alice는 100.64.0.1·fd7a:115c:a1e0::1, bob은 100.64.0.2·fd7a:115c:a1e0::2이고 둘 다 홈 DERP 지역 1에 있다.
+// Test contract behaviors 3–5 and 7 and M-E1 and M-E2 with two engines connected in memory (one side's `.datagram` goes to the other's `receive`).
+// The engine is unaware of routes, so the network passes datagrams directly to the receiving engine (`Magicsock` fills that role in a node).
+// alice uses 100.64.0.1 and fd7a:115c:a1e0::1, bob uses 100.64.0.2 and fd7a:115c:a1e0::2, and both are in home DERP region 1.
 
 import CryptoKit
 import Foundation
@@ -11,7 +11,7 @@ import SwiftailControl
 @testable import SwiftailEngine
 @testable import SwiftailWireGuard
 
-/// 메모리에서 이어진 엔진 둘.
+/// Two engines connected in memory.
 private struct EnginePair {
     enum Side {
         case alice, bob
@@ -20,24 +20,24 @@ private struct EnginePair {
         var address4: String { self == .alice ? "100.64.0.1" : "100.64.0.2" }
         var address6: String { self == .alice ? "fd7a:115c:a1e0::1" : "fd7a:115c:a1e0::2" }
         var id: Int64 { self == .alice ? 1 : 2 }
-        /// 이 쪽이 보낸 데이터그램이 상대에게 도착할 때의 출처(UDP `192.0.2.x:41641`).
+        /// The source seen by the peer when a datagram from this side arrives (UDP `192.0.2.x:41641`).
         var source: TailnetEngine.Source {
             let host: [UInt8] = [192, 0, 2, self == .alice ? 1 : 2]
             return TailnetEngine.Source(address: host + [0x29, 0xA2], host: host)
         }
     }
 
-    /// 한 번 오간 결과: 각 쪽이 위로 올린 패킷, 버린 것, 받은 TSMP disco 키 광고(받은 순서).
+    /// The results of one exchange, including packets each side passes up, drops, and TSMP disco key advertisements in receipt order.
     struct Delivery {
         var packets: [Side: [[UInt8]]] = [:]
         var drops: [Side: [TailnetEngine.Drop]] = [:]
         var advertisements: [Side: [DiscoPublicKey]] = [:]
-        /// 받은 쪽마다 위로 낸 것의 순서: 광고는 `"advert"`, 패킷은 `"packet"`.
+        /// The order in which each receiving side passes results up. Advertisements are `"advert"` and packets are `"packet"`.
         var arrivals: [Side: [String]] = [:]
     }
 
     static let homeDERP: Int64 = 1
-    /// alice가 받는 규칙: 어디서든 UDP 7과 TCP 22.
+    /// alice's inbound rules allow UDP 7 and TCP 22 from anywhere.
     static let aliceRules = #"[{"SrcIPs":["*"],"DstPorts":[{"IP":"*","Ports":{"First":7,"Last":7}}],"IPProto":[17]},{"SrcIPs":["*"],"DstPorts":[{"IP":"*","Ports":{"First":22,"Last":22}}],"IPProto":[6]}]"#
 
     var alice: TailnetEngine
@@ -45,8 +45,8 @@ private struct EnginePair {
     var aliceKey = Curve25519.KeyAgreement.PrivateKey()
     var bobKey = Curve25519.KeyAgreement.PrivateKey()
 
-    /// alice는 `aliceRules`, bob은 규칙 없음(먼저 보낸 UDP의 응답만 받는다). disco 키가 0이 아니면 그 쪽은 세션이 설
-    /// 때마다 TSMP disco 키 광고를 보낸다.
+    /// alice uses `aliceRules` and bob has no rules (bob only accepts replies to outbound UDP). If a side has a nonzero disco key,
+    /// it sends a TSMP disco key advertisement each time a session is established.
     init(aliceDisco: DiscoPublicKey = .zero, bobDisco: DiscoPublicKey = .zero) throws {
         alice = TailnetEngine(nodeKey: aliceKey, discoKey: aliceDisco, now: clockStart, wallClock: wallClockStart)
         bob = TailnetEngine(nodeKey: bobKey, discoKey: bobDisco, now: clockStart, wallClock: wallClockStart)
@@ -65,7 +65,7 @@ private struct EnginePair {
         NodePublicKey((side == .alice ? aliceKey : bobKey).publicKey)
     }
 
-    /// side의 자기 노드 JSON.
+    /// The local node's JSON for side.
     func nodeJSON(_ side: Side, extra: String = "") -> String {
         makeNodeJSON(
             id: side.id, key: publicKey(side), addresses: ["\(side.address4)/32", "\(side.address6)/128"],
@@ -73,7 +73,7 @@ private struct EnginePair {
         )
     }
 
-    /// side가 받는 netmap. 상대 피어 하나가 있다.
+    /// The netmap received by side. It contains one peer, the other side.
     func netmap(for side: Side, peerExtra: String = "", peers: [String]? = nil) throws -> Netmap {
         try makeNetmap(
             selfNode: nodeJSON(side),
@@ -82,7 +82,7 @@ private struct EnginePair {
         )
     }
 
-    /// side의 출력을 상대에게 넘기고, 그 응답을 다시 넘기기를 조용해질 때까지 반복한다.
+    /// Passes output from side to the peer and passes replies back and forth until neither sends anything.
     mutating func deliver(_ outputs: [TailnetEngine.Output], from side: Side, at now: ContinuousClock.Instant = clockStart) -> Delivery {
         var delivery = Delivery()
         var queue = outputs.map { (from: side, output: $0) }
@@ -94,7 +94,7 @@ private struct EnginePair {
                 let replies = self[sender.other].receive(bytes, from: sender.source, at: now)
                 queue += replies.map { (from: sender.other, output: $0) }
             case let .cookieReply(bytes):
-                // 받은 데이터그램의 출처, 곧 방금 보낸 상대에게 되돌아간다.
+                // Return to the received datagram's source, the peer that just sent it.
                 let replies = self[sender.other].receive(bytes, from: sender.source, at: now)
                 queue += replies.map { (from: sender.other, output: $0) }
             case let .ipPacket(bytes):
@@ -111,7 +111,7 @@ private struct EnginePair {
         return delivery
     }
 
-    /// side가 IP 패킷 하나를 보내고 끝까지 주고받는다.
+    /// Sends one IP packet from side and runs the exchange to completion.
     mutating func send(_ packet: [UInt8], from side: Side, at now: ContinuousClock.Instant = clockStart) -> Delivery {
         deliver(self[side].send(packet, at: now), from: side, at: now)
     }
@@ -119,7 +119,7 @@ private struct EnginePair {
 
 @Suite("TailnetEngine")
 struct TailnetEngineTests {
-    @Test("UDP 패킷이 왕복한다. bob은 규칙이 없어도 먼저 보낸 것의 응답을 받는다", arguments: [false, true])
+    @Test("UDP packets make a round trip. bob accepts replies to outbound packets even without rules", arguments: [false, true])
     func udpRoundTrip(ipv6: Bool) throws {
         var pair = try EnginePair()
         let (bob, alice) = ipv6 ? (EnginePair.Side.bob.address6, EnginePair.Side.alice.address6) : (EnginePair.Side.bob.address4, EnginePair.Side.alice.address4)
@@ -134,14 +134,14 @@ struct TailnetEngineTests {
         #expect(second.packets[.bob] == [reply])
         #expect(second.drops.isEmpty)
 
-        // 응답이 아닌 UDP는 bob의 필터가 막는다.
+        // bob's filter blocks UDP packets other than replies.
         let unsolicited = TestPacket.udp(from: alice, 7, to: bob, 40001)
         let third = pair.send(unsolicited, from: .alice, at: clockStart + .milliseconds(2))
         #expect(third.packets[.bob] == nil)
         #expect(third.drops[.bob] == [.inbound(.noRuleMatched)])
     }
 
-    @Test("필터가 막은 포트와 연 포트, TCP SYN")
+    @Test("Ports blocked and allowed by the filter, and TCP SYN")
     func inboundFilter() throws {
         var pair = try EnginePair()
         let open = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
@@ -154,7 +154,7 @@ struct TailnetEngineTests {
         #expect(syn23.drops[.alice] == [.inbound(.noRuleMatched)])
     }
 
-    @Test("목적지를 가진 피어가 없거나 패킷이 잘못되면 보내지 않는다")
+    @Test("Skip sending if no peer owns the destination or the packet is invalid")
     func sendDrops() throws {
         var pair = try EnginePair()
         #expect(pair.alice.send(TestPacket.udp(from: "100.64.0.1", 1, to: "100.64.0.3", 7), at: clockStart) == [.dropped(.noPeerForDestination)])
@@ -165,15 +165,15 @@ struct TailnetEngineTests {
         #expect(pair.alice.send(extensionHeader, at: clockStart) == [.dropped(.unsupportedPacket)])
     }
 
-    @Test("netmap 갱신: 피어를 더하고 지운다")
+    @Test("A netmap update adds and removes peers")
     func addAndRemovePeer() throws {
         var pair = try EnginePair()
-        // bob에게는 규칙이 없다. 아래에서 bob이 먼저 보낸 UDP(1 → 7)의 응답이 되는 패킷이다.
+        // bob has no rules. This packet will be a reply to the UDP packet (1 → 7) that bob sends first below.
         let packet = TestPacket.udp(from: "100.64.0.1", 7, to: "100.64.0.2", 1)
 
         _ = pair.alice.apply(try pair.netmap(for: .alice, peers: []), at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.send(packet, at: clockStart) == [.dropped(.noPeerForDestination)])
-        // alice에서 지워진 bob이 보낸 initiation은 모르는 피어다.
+        // To alice, an initiation from the removed bob comes from an unknown peer.
         let rejected = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
         #expect(rejected.drops[.alice] == [.wireGuard(.unknownPeer)])
 
@@ -182,7 +182,7 @@ struct TailnetEngineTests {
         #expect(delivered.packets[.bob] == [packet])
     }
 
-    @Test("세션이 선 뒤 피어를 지우면 그 세션의 데이터도 받지 않는다")
+    @Test("Removing a peer after establishing a session also blocks data from that session")
     func removePeerDropsSession() throws {
         var pair = try EnginePair()
         let toAlice = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
@@ -194,13 +194,13 @@ struct TailnetEngineTests {
         #expect(after.drops[.alice] == [.wireGuard(.unknownPeer)])
     }
 
-    @Test("AllowedIPs만 바뀌면 세션을 잇는다")
+    @Test("Preserve the session when only AllowedIPs changes")
     func allowedIPsChangeKeepsSession() throws {
         var pair = try EnginePair()
         let toAlice = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
         #expect(pair.send(toAlice, from: .bob).packets[.alice] == [toAlice])
 
-        // IPv6 주소를 AllowedIPs에서 뺀다. 같은 키이므로 핸드셰이크 없이 transport 하나로 닿는다.
+        // Remove the IPv6 address from AllowedIPs. The key is unchanged, so one transport message is enough and no handshake is needed.
         _ = pair.alice.apply(try pair.netmap(for: .alice, peerExtra: #","AllowedIPs":["100.64.0.2/32"]"#), at: clockStart, wallClock: wallClockStart)
         let outputs = pair.bob.send(toAlice, at: clockStart + .milliseconds(1))
         #expect(outputs.count == 1)
@@ -210,14 +210,14 @@ struct TailnetEngineTests {
         #expect(pair.send(fromV6, from: .bob, at: clockStart + .milliseconds(2)).drops[.alice] == [.wireGuard(.disallowedSource)])
     }
 
-    @Test("netmap 갱신: 피어의 키가 바뀌면 옛 키를 내리고 새 키로 잇는다")
+    @Test("A peer key change in the netmap removes the old key and connects with the new one")
     func keyRotation() throws {
         var pair = try EnginePair()
         let toAlice = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
         #expect(pair.send(toAlice, from: .bob).packets[.alice] == [toAlice])
         let oldBob = pair.bob
 
-        // bob이 새 node 키로 다시 시작한다.
+        // bob starts again with a new node key.
         pair.bobKey = Curve25519.KeyAgreement.PrivateKey()
         pair.bob = TailnetEngine(nodeKey: pair.bobKey, discoKey: .zero, now: clockStart, wallClock: wallClockStart)
         _ = pair.bob.apply(try pair.netmap(for: .bob), at: clockStart, wallClock: wallClockStart)
@@ -226,27 +226,27 @@ struct TailnetEngineTests {
         let rotated = pair.send(toAlice, from: .bob, at: clockStart + .seconds(1))
         #expect(rotated.packets[.alice] == [toAlice])
 
-        // 옛 키의 세션으로 온 데이터는 모르는 피어다.
+        // Data arriving through the old key's session comes from an unknown peer.
         var old = oldBob
         let stale = old.send(toAlice, at: clockStart + .seconds(1))
         let datagram = try #require(stale.compactMap { if case let .datagram(bytes, _) = $0 { bytes } else { nil } }.first)
         #expect(pair.alice.receive(datagram, from: EnginePair.Side.bob.source, at: clockStart + .seconds(1)) == [.dropped(.wireGuard(.unknownPeer))])
     }
 
-    @Test("AllowedIPs 밖의 출발지는 필터보다 먼저 WireGuard가 버린다")
+    @Test("WireGuard drops sources outside AllowedIPs before filtering")
     func spoofedSource() throws {
         var pair = try EnginePair()
-        // bob의 엔진은 목적지로 피어를 고를 뿐 출발지를 보지 않는다.
+        // bob's engine selects a peer by destination alone and ignores the source.
         let spoofed = TestPacket.udp(from: "100.64.0.99", 1, to: "100.64.0.1", 7)
         let delivery = pair.send(spoofed, from: .bob)
         #expect(delivery.packets[.alice] == nil)
         #expect(delivery.drops[.alice] == [.wireGuard(.disallowedSource)])
     }
 
-    @Test("넓은 접두를 자기 주소로 내세운 피어도 다른 피어의 주소를 출발지로 쓰지 못한다")
+    @Test("Even a peer advertising a broad prefix as its own cannot use another peer's address as its source")
     func widePrefixPeerCannotSpoofOtherPeer() throws {
         var pair = try EnginePair()
-        // bob이 tailnet 대역 전체를 자기 주소로 내세운다. carol(100.64.0.3)은 alice의 다른 피어다.
+        // bob advertises the entire tailnet range as its own address. carol (100.64.0.3) is another peer of alice.
         let wideBob = makeNodeJSON(
             id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32", "100.64.0.0/10", "fd7a:115c:a1e0::/48"],
             extra: #","DiscoKey":"\#(discoKeyText)","HomeDERP":\#(EnginePair.homeDERP)"#)
@@ -260,19 +260,19 @@ struct TailnetEngineTests {
         #expect(delivery.packets[.alice] == nil)
         #expect(delivery.drops[.alice] == [.wireGuard(.disallowedSource)])
 
-        // 자기 주소로 보낸 것은 그대로 닿는다.
+        // Traffic sent from its own address still arrives.
         let asBob = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
         #expect(pair.send(asBob, from: .bob, at: clockStart + .milliseconds(1)).packets[.alice] == [asBob])
     }
 
-    @Test("TSMP는 엔진이 소비하고 위로 올리지 않는다: 장치에서 온 것은 보내는 쪽이, 피어가 보낸 것은 받는 쪽이")
+    @Test("The engine consumes TSMP without passing it up. The sender consumes TSMP from the device, and the receiver consumes TSMP from a peer")
     func tsmpIsConsumed() throws {
         var pair = try EnginePair()
         let tsmp = TestPacket.ipv4(from: "100.64.0.2", to: "100.64.0.1", protocolNumber: 99, transport: Array("p12345678".utf8))
-        // 장치에서 읽은 TSMP는 WireGuard로 가지 않는다(계약 동작 L4).
+        // TSMP read from the device never goes to WireGuard (contract behavior L4).
         #expect(pair.bob.send(tsmp, at: clockStart) == [.dropped(.consumedControlPacket)])
 
-        // 다른 구현의 피어가 보낸 TSMP는 장치를 거쳐 직접 만든다. 세션을 세운 뒤 transport로 보낸다.
+        // Construct the TSMP from a peer running another implementation directly through the device. Send it as transport after establishing a session.
         _ = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
         let datagrams = pair.bob.route(try pair.bob.device.send(tsmp, to: PublicKey(pair.publicKey(.alice)), at: clockStart))
         #expect(!datagrams.isEmpty)
@@ -281,7 +281,7 @@ struct TailnetEngineTests {
         #expect(delivery.drops[.alice] == [.consumedControlPacket])
     }
 
-    @Test("홈 DERP가 우리와 다르거나 없는 피어에게도 데이터그램을 낸다. 경로는 Magicsock이 고른다(M-E1)")
+    @Test("Emit datagrams even for peers with a different home DERP or none. Magicsock chooses the route (M-E1)")
     func peersOutsideHomeRegion() throws {
         var pair = try EnginePair()
         let packet = TestPacket.udp(from: "100.64.0.1", 5000, to: "100.64.0.2", 7)
@@ -291,14 +291,14 @@ struct TailnetEngineTests {
         #expect(toRegion2.count == 1)
         #expect(toRegion2.allSatisfy { if case .datagram(_, to: pair.publicKey(.bob)) = $0 { true } else { false } })
 
-        // 홈 DERP가 0이어도 disco 키가 있으면 올린다(M-E3). 직접 경로로 닿을 수 있다.
+        // Include a peer with a disco key even if its home DERP is 0 (M-E3). A direct route may reach it.
         let noHome = makeNodeJSON(id: 2, key: pair.publicKey(.bob), addresses: ["100.64.0.2/32"], extra: #","DiscoKey":"\#(discoKeyText)""#)
         var fresh = TailnetEngine(nodeKey: pair.aliceKey, discoKey: .zero, now: clockStart, wallClock: wallClockStart)
         _ = fresh.apply(try pair.netmap(for: .alice, peers: [noHome]), at: clockStart, wallClock: wallClockStart)
         #expect(fresh.send(packet, at: clockStart).allSatisfy { if case .datagram = $0 { true } else { false } })
     }
 
-    @Test("netmap의 disco 키와 엔드포인트를 EnginePeer에 그대로 옮긴다(M-E3)")
+    @Test("Copy disco keys and endpoints from the netmap into EnginePeer unchanged (M-E3)")
     func peerCarriesDiscoAndEndpoints() throws {
         let pair = try EnginePair()
         let bob = makeNodeJSON(
@@ -310,7 +310,7 @@ struct TailnetEngineTests {
         #expect(peer.endpoints == [try #require(IPEndpoint("127.0.0.1:41641")), try #require(IPEndpoint("[2001:db8::1]:41641"))])
     }
 
-    @Test("Addresses가 겹쳐도 목적지의 AllowedIPs 주인에게 보낸다")
+    @Test("Even when Addresses overlap, send to the AllowedIPs owner of the destination")
     func sendUsesAllowedIPOwner() throws {
         var pair = try EnginePair()
         let addressClaimant = makeNodeJSON(
@@ -339,10 +339,10 @@ struct TailnetEngineTests {
         #expect(droppedUnowned)
     }
 
-    @Test("키 만료 시각에 피어가 내려간다")
+    @Test("Remove the peer at key expiry")
     func peerKeyExpiry() throws {
         var pair = try EnginePair()
-        // bob의 키는 wallClockStart + 60초에 만료된다.
+        // bob's key expires at wallClockStart + 60 seconds.
         let netmap = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"2027-01-15T08:01:00Z""#)
         _ = pair.alice.apply(netmap, at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.nextDeadline == clockStart + .seconds(60))
@@ -357,18 +357,18 @@ struct TailnetEngineTests {
         #expect(after.drops[.alice] == [.wireGuard(.unknownPeer)])
     }
 
-    @Test("아주 먼 키 만료는 하루마다 다시 보고, 그 시각이 오면 피어를 내린다")
+    @Test("Recheck a distant key expiry daily, and remove the peer when it expires")
     func distantPeerKeyExpiry() throws {
         var pair = try EnginePair()
         let day = Duration.seconds(24 * 60 * 60)
-        // 9999년의 만료: 단조 시각으로 바꿀 때 넘치지 않게 하루 뒤에 다시 본다.
+        // For an expiry in year 9999, recheck one day later to avoid overflow when converting to monotonic time.
         let distant = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"9999-12-31T00:00:00Z""#)
         _ = pair.alice.apply(distant, at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.nextDeadline == clockStart + day)
         _ = pair.alice.advance(to: clockStart + day)
         #expect(pair.alice.nextDeadline == clockStart + day + day)
 
-        // 하루하고 1초 뒤의 만료(wallClockStart는 2027-01-15T08:00:00Z): 하루 뒤에 한 번 보고, 1초 뒤에 내린다.
+        // For an expiry in one day and 1 second (wallClockStart is 2027-01-15T08:00:00Z), recheck after one day and remove the peer 1 second later.
         let soon = try pair.netmap(for: .alice, peerExtra: #","KeyExpiry":"2027-01-16T08:00:01Z""#)
         _ = pair.alice.apply(soon, at: clockStart, wallClock: wallClockStart)
         #expect(pair.alice.nextDeadline == clockStart + day)
@@ -379,11 +379,11 @@ struct TailnetEngineTests {
         #expect(pair.alice.send(packet, at: clockStart + day + .seconds(1)) == [.dropped(.noPeerForDestination)])
     }
 
-    @Test("WireGuard 타이머를 advance로 처리하고 nextDeadline에 반영한다")
+    @Test("Process WireGuard timers in advance and reflect them in nextDeadline")
     func wireGuardTimers() throws {
         var pair = try EnginePair()
         #expect(pair.alice.nextDeadline == nil)
-        // 응답 없는 initiation은 재시도 타이머를 건다.
+        // An unanswered initiation sets a retry timer.
         let outputs = pair.alice.send(TestPacket.udp(from: "100.64.0.1", 1, to: "100.64.0.2", 7), at: clockStart)
         #expect(outputs.count == 1)
         let deadline = try #require(pair.alice.nextDeadline)
@@ -393,43 +393,43 @@ struct TailnetEngineTests {
         #expect(!retry.isEmpty)
     }
 
-    @Test("부하 상태의 WireGuard가 낸 cookie reply를 출처로 되돌릴 것으로 내고, 같은 출처에서 mac2를 붙인 재시도로 세션이 선다")
+    @Test("Under load, WireGuard emits a cookie reply to return to the source. Retrying with mac2 from the same source establishes a session")
     func cookieReplyUnderLoad() throws {
         var pair = try EnginePair()
         pair.bob.device.handshakeLoad.underLoadUntil = clockStart + .seconds(60)
         let request = TestPacket.udp(from: "100.64.0.1", 40000, to: "100.64.0.2", 7)
         let initiation = pair.alice.send(request, at: clockStart)
         guard case let .datagram(bytes, _)? = initiation.first else {
-            Issue.record("initiation이 없다: \(initiation)")
+            Issue.record("Missing initiation, got \(initiation)")
             return
         }
         let answered = pair.bob.receive(bytes, from: EnginePair.Side.alice.source, at: clockStart)
         guard case let .cookieReply(reply)? = answered.first, answered.count == 1 else {
-            Issue.record("cookie reply가 아니다: \(answered)")
+            Issue.record("Expected a cookie reply, got \(answered)")
             return
         }
         #expect(reply.count == 64 && reply[0] == 3)
         #expect(pair.alice.receive(reply, from: EnginePair.Side.bob.source, at: clockStart).isEmpty)
 
-        // 재시도 initiation은 mac2를 붙인다. 다른 출처에서 오면 cookie가 맞지 않아 다시 cookie reply다.
+        // The retry initiation includes mac2. From a different source the cookie fails to match, so WireGuard sends another cookie reply.
         let retryAt = try #require(pair.alice.nextDeadline)
         let retry = pair.alice.advance(to: retryAt)
         guard case let .datagram(retried, _)? = retry.first else {
-            Issue.record("재시도가 없다: \(retry)")
+            Issue.record("Missing retry, got \(retry)")
             return
         }
         let elsewhere = TailnetEngine.Source(address: [198, 51, 100, 9, 0x29, 0xA2], host: [198, 51, 100, 9])
         guard case .cookieReply? = pair.bob.receive(retried, from: elsewhere, at: retryAt).first else {
-            Issue.record("다른 출처의 mac2를 받아들였다")
+            Issue.record("Accepted mac2 from a different source")
             return
         }
         let delivery = pair.deliver(pair.bob.receive(retried, from: EnginePair.Side.alice.source, at: retryAt), from: .bob, at: retryAt)
         #expect(delivery.drops[.alice] == nil)
-        // 세션이 섰다. 대기열의 요청이 bob에 닿는다(bob은 규칙이 없어 필터가 버린다).
+        // The session is established. The queued request reaches bob, whose filter drops it because bob has no rules.
         #expect(delivery.drops[.bob] == [.inbound(.noRuleMatched)])
     }
 
-    @Test("dump에 node 개인 키가 나오지 않는다")
+    @Test("The dump omits the node private key")
     func dumpHidesSecrets() throws {
         var pair = try EnginePair()
         _ = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
@@ -441,7 +441,7 @@ struct TailnetEngineTests {
         #expect(!text.contains("device") && !text.contains("staticKey"))
     }
 
-    @Test("임의 바이트열을 send·receive에 넣어도 죽지 않고 던지지 않는다")
+    @Test("Random byte sequences passed to send or receive cause no crash or throw")
     func fuzz() throws {
         var pair = try EnginePair()
         _ = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
@@ -455,14 +455,14 @@ struct TailnetEngineTests {
     }
 }
 
-// MARK: - TSMP disco 키 광고 (magicsock 계약 동작 T1~T3)
+// MARK: - TSMP disco key advertisements (magicsock contract behaviors T1–T3)
 
-/// 시험용 disco 키(공개 값).
+/// A disco key for tests (public value).
 private let aliceDisco = DiscoPublicKey(rawValue: [UInt8](repeating: 0xA1, count: 32))!
 private let bobDisco = DiscoPublicKey(rawValue: [UInt8](repeating: 0xB0, count: 32))!
 
 extension TailnetEngineTests {
-    @Test("세션이 서면 양쪽이 상대의 disco 키 광고를 받는다. 시작한 쪽의 광고가 대기열의 패킷보다 먼저 온다")
+    @Test("Once a session is established, each side receives the other's disco key advertisement. The initiator's advertisement arrives before the queued packet")
     func advertisementsAtSessionStart() throws {
         var pair = try EnginePair(aliceDisco: aliceDisco, bobDisco: bobDisco)
         let request = TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7)
@@ -473,16 +473,16 @@ extension TailnetEngineTests {
         #expect(delivery.packets[.alice] == [request])
         #expect(delivery.drops.isEmpty)
 
-        // 같은 세션에서는 다시 보내지 않는다.
+        // Do not advertise again in the same session.
         let again = pair.send(request, from: .bob, at: clockStart + .seconds(1))
         #expect(again.advertisements.isEmpty)
-        // rekey(시작한 쪽 keypair 120초)로 새 세션이 서면 다시 보낸다.
+        // Advertise again when rekey establishes a new session (initiator keypair at 120 seconds).
         let rekeyed = pair.send(request, from: .bob, at: clockStart + .seconds(121))
         #expect(rekeyed.advertisements[.alice] == [bobDisco])
         #expect(rekeyed.advertisements[.bob] == [aliceDisco])
     }
 
-    @Test("광고의 출발지는 피어의 첫 주소와 계열이 같은 자기 주소이고 바이트는 TSMP 'a' 형식이다")
+    @Test("The source of an advertisement is a local address in the family of the peer's first address, and the bytes use TSMP 'a' format")
     func advertisementBytes() throws {
         var pair = try EnginePair(aliceDisco: aliceDisco)
         let message = try #require(pair.alice.device.peers[PublicKey(pair.publicKey(.bob))]?.priorityMessage)
@@ -493,9 +493,9 @@ extension TailnetEngineTests {
         )
         #expect(message == expected?.bytes)
         #expect(message.count == 53)
-        // 0 disco 키(bob)는 광고하지 않는다.
+        // A zero disco key (bob) is never advertised.
         #expect(pair.bob.device.peers[PublicKey(pair.publicKey(.alice))]?.priorityMessage == nil)
-        // IPv6 주소만 가진 피어에게는 IPv6 광고(73바이트).
+        // Send an IPv6 advertisement (73 bytes) to an IPv6-only peer.
         let v6Only = makeNodeJSON(
             id: 3, key: NodePublicKey(Curve25519.KeyAgreement.PrivateKey().publicKey), addresses: ["fd7a:115c:a1e0::3/128"],
             extra: #","DiscoKey":"\#(discoKeyText)","HomeDERP":1"#
@@ -506,14 +506,14 @@ extension TailnetEngineTests {
         #expect(v6Message[0] >> 4 == 6)
     }
 
-    @Test("계열이 맞는 자기 주소가 없거나 키가 0이면 광고를 만들지 않는다")
+    @Test("Skip generating an advertisement if there is no local address of the matching family or the key is zero")
     func noAdvertisementWithoutMatchingAddress() {
         let v4Peer = IPAddress("100.64.0.2")!
         #expect(TSMPDiscoKeyAdvertisement(selfAddresses: [IPPrefix("fd7a:115c:a1e0::1/128")!], destination: v4Peer, key: aliceDisco) == nil)
-        // 한 주소짜리 접두만 출발지가 된다.
+        // Only single-address prefixes can serve as the source.
         #expect(TSMPDiscoKeyAdvertisement(selfAddresses: [IPPrefix("100.64.0.0/10")!], destination: v4Peer, key: aliceDisco) == nil)
         #expect(TSMPDiscoKeyAdvertisement(selfAddresses: [IPPrefix("100.64.0.1/32")!], destination: v4Peer, key: .zero) == nil)
-        // 첫 번째로 맞는 주소를 쓴다.
+        // Use the first matching address.
         let chosen = TSMPDiscoKeyAdvertisement(
             selfAddresses: [IPPrefix("fd7a:115c:a1e0::1/128")!, IPPrefix("100.64.0.9/32")!, IPPrefix("100.64.0.1/32")!],
             destination: v4Peer, key: aliceDisco
@@ -521,35 +521,35 @@ extension TailnetEngineTests {
         #expect(chosen?.source == IPAddress("100.64.0.9"))
     }
 
-    @Test("인증되지 않은 길로 온 광고는 쓰지 않는다: AllowedIPs 밖 출발지, WireGuard 밖, 0 키, 위에서 내려온 것")
+    @Test("Ignore advertisements received via unauthenticated paths or with invalid inputs, including sources outside AllowedIPs, packets outside WireGuard, zero keys, and packets from the layer above")
     func unauthenticatedAdvertisementsAreIgnored() throws {
         var pair = try EnginePair()
         _ = pair.send(TestPacket.udp(from: "100.64.0.2", 1, to: "100.64.0.1", 7), from: .bob)
         let alice = PublicKey(pair.publicKey(.alice))
 
-        // bob이 남의 주소를 출발지로 쓴 광고: WireGuard 출발지 검사가 먼저 버린다.
+        // bob advertises using another node's source address. The WireGuard source check drops it first.
         let spoofed = try #require(TSMPDiscoKeyAdvertisement(
             selfAddresses: [IPPrefix("100.64.0.99/32")!], destination: IPAddress("100.64.0.1")!, key: bobDisco))
         var delivery = pair.deliver(pair.bob.route(try pair.bob.device.send(spoofed.bytes, to: alice, at: clockStart)), from: .bob)
         #expect(delivery.advertisements.isEmpty)
         #expect(delivery.drops[.alice] == [.wireGuard(.disallowedSource)])
 
-        // WireGuard로 감싸지 않은 맨 패킷은 장치가 형식 오류로 버린다.
+        // The device drops the bare packet without WireGuard encapsulation as malformed.
         let genuine = try #require(TSMPDiscoKeyAdvertisement(
             selfAddresses: [IPPrefix("100.64.0.2/32")!], destination: IPAddress("100.64.0.1")!, key: bobDisco))
         #expect(pair.alice.receive(genuine.bytes, from: EnginePair.Side.bob.source, at: clockStart) == [.dropped(.wireGuard(.malformed))])
 
-        // 0 키 광고는 소비만 한다.
+        // Consume the zero-key advertisement without using it.
         var zero = genuine.bytes
         zero.replaceSubrange(21..., with: [UInt8](repeating: 0, count: 32))
         delivery = pair.deliver(pair.bob.route(try pair.bob.device.send(zero, to: alice, at: clockStart)), from: .bob)
         #expect(delivery.advertisements.isEmpty)
         #expect(delivery.drops[.alice] == [.consumedControlPacket])
 
-        // 장치(앱·netstack)에서 내려온 광고는 WireGuard로 보내지 않고 버린다(계약 동작 L4).
+        // Drop advertisements from the device (app or netstack) without sending them over WireGuard (contract behavior L4).
         #expect(pair.bob.send(genuine.bytes, at: clockStart) == [.dropped(.consumedControlPacket)])
 
-        // 같은 바이트를 bob의 세션으로 보내면 쓴다(위 경우들이 이것 때문에 버려진 것이 아님을 보인다).
+        // The same bytes are used when sent through bob's session, showing that the cases above were dropped for other reasons.
         delivery = pair.deliver(pair.bob.route(try pair.bob.device.send(genuine.bytes, to: alice, at: clockStart)), from: .bob)
         #expect(delivery.advertisements[.alice] == [bobDisco])
     }

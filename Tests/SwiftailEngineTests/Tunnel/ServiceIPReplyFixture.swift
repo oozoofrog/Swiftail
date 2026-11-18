@@ -1,5 +1,5 @@
-// 서비스 IP 응답 시험의 보조 코드. 구현(`ServiceIPReply`)과 무관하게 응답 바이트를 읽고 체크섬을 다시 계산한다.
-// RFC 1071의 1의 보수 합과 RFC 768·9293·8200·4443의 의사 머리를 시험 쪽에서 따로 적었다.
+// Helpers for service IP reply tests. Parse reply bytes and recalculate checksums independently of the implementation (`ServiceIPReply`).
+// Independently implement the RFC 1071 ones' complement sum and the pseudo-headers from RFC 768, 9293, 8200, and 4443 in the tests.
 
 import Foundation
 import Testing
@@ -8,7 +8,7 @@ import SwiftailBase
 import SwiftailEngine
 
 enum ReplyFixture {
-    /// 16진 문자열을 바이트로 바꾼다.
+    /// Converts a hex string to bytes.
     static func bytes(hex: String) -> [UInt8] {
         let digits = Array(hex.utf8)
         return stride(from: 0, to: digits.count - 1, by: 2).compactMap { index in
@@ -28,7 +28,7 @@ enum ReplyFixture {
         [UInt8(value >> 24), UInt8((value >> 16) & 0xFF), UInt8((value >> 8) & 0xFF), UInt8(value & 0xFF)]
     }
 
-    /// 요청 TCP 세그먼트(IP 패킷). 체크섬은 0이다(응답을 만드는 쪽은 보지 않는다).
+    /// Builds a request TCP segment as an IP packet. The checksum is 0 because the reply generator ignores it.
     static func tcpRequest(
         from source: String, _ sourcePort: UInt16, to destination: String, _ destinationPort: UInt16,
         sequence: UInt32, acknowledgement: UInt32 = 0, flags: UInt8, options: [UInt8] = [], payload: [UInt8] = []
@@ -39,7 +39,7 @@ enum ReplyFixture {
         return TestPacket.ip(from: source, to: destination, protocolNumber: 6, transport: header + payload)
     }
 
-    /// ICMP echo request(IP 패킷). `body`는 identifier·sequence·data다. 체크섬은 0이다.
+    /// Builds an ICMP echo request as an IP packet. `body` is identifier, sequence, and data. The checksum is 0.
     static func echoRequest(from source: String, to destination: String, body: [UInt8], type: UInt8? = nil, code: UInt8 = 0) -> [UInt8] {
         let isIPv6 = source.contains(":")
         return TestPacket.ip(
@@ -47,9 +47,9 @@ enum ReplyFixture {
             transport: [type ?? (isIPv6 ? 128 : 8), code, 0, 0] + body)
     }
 
-    // MARK: - 독립 계산
+    // MARK: - Independent computation
 
-    /// 바이트의 1의 보수 합(보수를 취하지 않은 것). 홀수 길이는 0을 덧붙인다.
+    /// Computes the ones' complement sum of the bytes without complementing it. Pad an odd length with 0.
     static func onesComplementSum(_ bytes: [UInt8]) -> UInt16 {
         var sum = 0
         for index in stride(from: 0, to: bytes.count, by: 2) {
@@ -59,7 +59,7 @@ enum ReplyFixture {
         return UInt16(sum)
     }
 
-    /// IPv4(RFC 768)·IPv6(RFC 8200 8.1)의 의사 머리.
+    /// Builds the IPv4 (RFC 768) or IPv6 (RFC 8200 §8.1) pseudo-header.
     static func pseudoHeader(source: [UInt8], destination: [UInt8], protocolNumber: UInt8, length: Int) -> [UInt8] {
         let high = UInt8((length >> 8) & 0xFF), low = UInt8(length & 0xFF)
         if source.count == 4 {
@@ -68,26 +68,26 @@ enum ReplyFixture {
         return source + destination + [0, 0, high, low] + [0, 0, 0, protocolNumber]
     }
 
-    /// 응답 IP 패킷을 시험 쪽에서 읽은 모습. 읽는 동안 머리의 일관성(버전, 길이 필드, IPv4 머리 체크섬, 조각 없음)을
-    /// 검사해 어긋나면 시험을 실패시킨다.
+    /// The reply IP packet as parsed by the test. While parsing, check header consistency (version, length field, IPv4 header checksum, no fragmentation)
+    /// and fail the test on any discrepancy.
     struct Decoded {
         let isIPv4: Bool
         let source: [UInt8]
         let destination: [UInt8]
         let protocolNumber: UInt8
         let hopLimit: UInt8
-        /// IPv4 identification 또는 IPv6 flow label.
+        /// IPv4 identification or IPv6 flow label.
         let identification: UInt32
         let transport: [UInt8]
 
         init(_ packet: [UInt8]) throws {
             let first = try #require(packet.first)
             if first >> 4 == 4 {
-                #expect(first == 0x45, "옵션 없는 IPv4 머리")
+                #expect(first == 0x45, "IPv4 header without options")
                 try #require(packet.count >= 20)
-                #expect(Int(packet[2]) << 8 | Int(packet[3]) == packet.count, "IPv4 전체 길이")
-                #expect(ReplyFixture.onesComplementSum(Array(packet[0..<20])) == 0xFFFF, "IPv4 머리 체크섬")
-                #expect(packet[6] == 0 && packet[7] == 0, "플래그·조각 오프셋 없음")
+                #expect(Int(packet[2]) << 8 | Int(packet[3]) == packet.count, "IPv4 total length")
+                #expect(ReplyFixture.onesComplementSum(Array(packet[0..<20])) == 0xFFFF, "IPv4 header checksum")
+                #expect(packet[6] == 0 && packet[7] == 0, "No flags or fragment offset")
                 isIPv4 = true
                 protocolNumber = packet[9]
                 hopLimit = packet[8]
@@ -98,7 +98,7 @@ enum ReplyFixture {
             } else {
                 #expect(first >> 4 == 6)
                 try #require(packet.count >= 40)
-                #expect(Int(packet[4]) << 8 | Int(packet[5]) == packet.count - 40, "IPv6 payload 길이")
+                #expect(Int(packet[4]) << 8 | Int(packet[5]) == packet.count - 40, "IPv6 payload length")
                 #expect(first == 0x60 && packet[1] & 0xF0 == 0, "traffic class 0")
                 isIPv4 = false
                 protocolNumber = packet[6]
@@ -110,7 +110,7 @@ enum ReplyFixture {
             }
         }
 
-        /// 전송 계층 체크섬이 맞다: 의사 머리(ICMPv4는 없음)와 전송 계층 전체의 합이 0xFFFF다.
+        /// Whether the transport checksum is valid. The sum of the pseudo-header (absent for ICMPv4) and the entire transport layer is 0xFFFF.
         var transportChecksumIsValid: Bool {
             let message = protocolNumber == 1
                 ? transport

@@ -1,35 +1,35 @@
-// Go MagicDNS 응답기와의 독립 대조 시험.
+// Independent comparison with the Go MagicDNS responder.
 //
-// 자료(`magicdns-fixtures.json`)는 Go `net/dns/resolver`의 `Query`가 돌려준 실제 UDP 응답 바이트다. 이 시험은 단계마다
-// 질의 바이트를 `MagicDNSResolver.response(to:at:)`에 넣고 응답을 두 수준으로 견준다.
-//   (1) 뜻: RCODE·16비트 머리 플래그·질문 절·답/권한/추가 레코드의 종류·이름·클래스·TTL·값. 이름은 대소문자를 구별하지
-//       않고 레코드는 순서를 구별하지 않으며 SOA의 SERIAL은 뺀다(차이가 나면 (2)에서 무엇이 다른지 밝힌다).
-//   (2) 응답 바이트 전체. (1)이 같은데 (2)가 다르면 대소문자·레코드 순서·SOA SERIAL·인코딩 중 무엇이 다른지 메시지에 적는다.
-// SOA SERIAL은 자료가 고정한 시각(`soaSerial`)을 `now`로 넘겨 바이트까지 견준다.
+// The fixture (`magicdns-fixtures.json`) contains actual UDP response bytes from `Query` in Go's `net/dns/resolver`. For each step, the test
+// passes query bytes to `MagicDNSResolver.response(to:at:)` and compares the response at two levels.
+//   (1) Meaning. Compare RCODE, 16-bit header flags, the question section, and the type, name, class, TTL, and value of answer, authority, and additional records. Ignore
+//       name case and record order, and omit the SOA SERIAL (if there is a difference, level (2) shows what differs).
+//   (2) All response bytes. If (1) matches and (2) differs, report which of case, record order, SOA SERIAL, or encoding differs.
+// Pass the time fixed by the fixture (`soaSerial`) as `now` to compare the SOA SERIAL byte for byte.
 //
-// 자료 → netmap 변환(README "dnsfixtures"를 확인했다):
-// - 자료의 노드 색인은 Go의 `ipnlocal` 규칙(D7: IPv4가 있는 대상의 IPv6는 `magicdns-aaaa` 능력이 있어야 답함, 자기가
-//   IPv6 전용이면 IPv6만)이 이미 적용된 **고정 표**다. `nodes[].answerAddresses`가 그 결과이고 `addresses`가 원래 주소다.
-//   이 시험은 원래 주소(`addresses`)와 능력(`capabilities`)만 netmap에 싣고, 응답기가 netmap에서 스스로 D7을 적용해
-//   `answerAddresses`와 같은 답에 이르는지를 본다. `answerAddresses`와 `aliases`는 변환에 쓰지 않는다(Go 쪽 기대 표라서
-//   `decoded`에 이미 결과가 있다).
-// - 첫 노드(`self: true`)가 자기 노드, 나머지가 피어다. 이름은 자료의 FQDN 그대로(끝 점 포함). 주소 없는 노드는 `Addresses: []`.
-// - `capabilities`는 자기 노드의 `CapMap` 키(값 null)로 싣는다. 옛 `Capabilities` 목록으로 싣는 변형도 한 번 확인한다.
-// - `hosts`는 `ExtraRecords`(끝 점을 뗀 이름, 형식 `""`=A·AAAA 자동)로 싣는다. 노드 `subdomain` 표시는 쓰지 않는다
-//   (M5가 `dns-subdomain-resolve`를 생략하므로 netmap에 그 능력을 싣지 않는다).
-// - 응답기의 `localZones`는 자료의 `localDomains`(Go 리졸버에 준 실제 값)를 그대로 넘긴다. Swiftail이 netmap에서 산출하는
-//   영역(`TunnelNetworkSettings.localZones(in:at:)`)이 이것과 같은지는 따로 확인한다(`영역을대조한다`). 그 확인을 위한
-//   `DNSConfig`는 `localDomains`에서 MagicDNS 영역(접미사·`ip6.arpa`·`64`~`127.100.in-addr.arpa`)을 뺀 나머지를 빈
-//   리졸버 `Routes`로, `Proxied`는 접미사 영역이 `localDomains`에 있는지로 정한다(7번 시나리오는 `proxied: true`이지만
-//   영역 표에는 긴 영역 하나뿐이라서 `proxied` 필드를 쓰지 않는다).
-// - "자기 키 만료 또는 netmap 없음"(6번)은 `MagicDNSResolver(netmap: nil, localZones: [])`다(계약: 그런 경우 nil을 넘긴다).
+// Fixture-to-netmap conversion follows the README's "dnsfixtures" section.
+// - The fixture node index is a **fixed table** that already incorporates Go's `ipnlocal` rules (D7: Answer with IPv6 for targets that have IPv4 only if
+//   the `magicdns-aaaa` capability is present. If self is IPv6-only, answer with IPv6 only). `nodes[].answerAddresses` holds the result, and `addresses` holds the original addresses.
+//   The test puts only the original addresses (`addresses`) and capabilities (`capabilities`) in the netmap, and checks that the responder applies D7 to the netmap itself
+//   to reach the same answers as `answerAddresses`. The conversion skips `answerAddresses` and `aliases` because they are Go expectations and
+//   `decoded` already contains the result.
+// - The first node (`self: true`) is the local node, and the rest are peers. Use the fixture FQDNs as is (with trailing dots). Nodes with no addresses use `Addresses: []`.
+// - Include `capabilities` as the local node's `CapMap` keys (with null values). Also check a variant that sends the legacy `Capabilities` list once.
+// - Include `hosts` as `ExtraRecords` (names without trailing dots, type `""` = automatic A or AAAA). Skip node `subdomain` markers
+//   because M5 omits `dns-subdomain-resolve`, so the netmap excludes that capability.
+// - Pass the fixture's `localDomains` (the actual values given to the Go resolver) directly as the responder's `localZones`. Separately verify that the
+//   zones Swiftail derives from the netmap (`TunnelNetworkSettings.localZones(in:at:)`) match (`compareZones`). For that check,
+//   construct `DNSConfig` with resolver-free `Routes` from `localDomains` after removing the MagicDNS zones (suffix, `ip6.arpa`, and `64` through `127.100.in-addr.arpa`).
+//   Set `Proxied` according to whether the suffix zone is in `localDomains` (scenario 7 has `proxied: true`, but
+//   its zone table has only one long zone, so the test skips the `proxied` field).
+// - For "Local key expired or no netmap" (scenario 6), use `MagicDNSResolver(netmap: nil, localZones: [])` (the contract calls for nil in these cases).
 //
-// 표시(`swiftailDiffers`)가 없는 단계는 Go와 같아야 한다. 표시가 있는 3단계(동작 D8·제외: 4via6 이름과 서브도메인)는
-// 계약이 정한 Swiftail의 응답을 기대값으로 따로 만든다: 영역 밖 4via6 이름은 질문 포함 SERVFAIL(동작 D5), 영역 안의
-// 알 수 없는 이름은 NXDOMAIN + SOA(동작 D2). 이 기대값을 만드는 방법은 Go가 같은 형태의 질의에 낸 바이트(1번 시나리오의
-// "영역 밖 라우트 없음"·"모르는 로컬 이름")로 보정해 확인한다.
-// 표시 없이 남은 차이(계약 D7과 달리 Go는 빈 색인에서도 서비스 이름의 A와 서비스 IP의 PTR에 답함)는 계약의 "응답기
-// 구현에서 정해진 것"이 Go와 같게 정했으므로 Go 값을 그대로 견준다(6번 시나리오 3·4단계).
+// Steps without `swiftailDiffers` must match Go. For the 3 marked steps (behavior D8 and exclusions for 4via6 names and subdomains),
+// build separate expectations for the Swiftail responses specified by the contract. Out-of-zone 4via6 names return SERVFAIL with the question (behavior D5), and
+// unknown in-zone names return NXDOMAIN + SOA (behavior D2). Verify how these expectations are built by calibrating them against Go's bytes for queries of the same shape
+// ("Out of zone with no route" and "Unknown local name" in scenario 1).
+// One unmarked difference remains. Unlike contract D7, Go answers A for the service name and PTR for the service IP even with an empty index. The contract's section
+// "Decisions made in the responder implementation" follows Go here, so compare directly against Go's values (steps 3 and 4 of scenario 6).
 
 import Foundation
 import Testing
@@ -38,66 +38,66 @@ import SwiftailBase
 import SwiftailControl
 @testable import SwiftailEngine
 
-@Suite("Go MagicDNS 응답기와의 독립 대조")
+@Suite("Independent comparison with the Go MagicDNS responder")
 struct GoMagicDNSComparisonTests {
-    @Test("같은 질의에 대한 응답의 뜻과 바이트가 같다", arguments: try loadGoDNSFixture().scenarios)
-    func 응답을대조한다(_ scenario: GoDNSScenario) throws {
+    @Test("The same queries produce responses with the same meaning and bytes", arguments: try loadGoDNSFixture().scenarios)
+    func compareResponses(_ scenario: GoDNSScenario) throws {
         let fixture = try loadGoDNSFixture()
         try compareScenario(scenario, fixture: fixture, legacyCapabilities: false)
     }
 
-    @Test("능력을 옛 Capabilities 목록으로 실어도 응답이 같다")
-    func 옛능력목록으로도대조한다() throws {
+    @Test("Sending capabilities in the legacy Capabilities list yields the same responses")
+    func compareWithLegacyCapabilities() throws {
         let fixture = try loadGoDNSFixture()
-        let scenario = try #require(fixture.scenarios.first { !$0.capabilities.isEmpty }, "기대=능력이 있는 시나리오 실제=없음")
+        let scenario = try #require(fixture.scenarios.first { !$0.capabilities.isEmpty }, "Expected a scenario with capabilities, got none")
         try compareScenario(scenario, fixture: fixture, legacyCapabilities: true)
     }
 
-    @Test("Swiftail이 netmap에서 산출한 영역이 Go 리졸버의 LocalDomains와 같다")
-    func 영역을대조한다() throws {
+    @Test("The zones Swiftail computes from the netmap match the Go resolver's LocalDomains")
+    func compareZones() throws {
         let fixture = try loadGoDNSFixture()
         let now = Date(timeIntervalSince1970: TimeInterval(fixture.soaSerial))
         for scenario in fixture.scenarios where !scenario.nodes.isEmpty {
             let netmap = try makeNetmap(scenario, now: now, legacyCapabilities: false, forZones: true)
             let zones = TunnelNetworkSettings.localZones(in: netmap, at: now)
-            // Go의 `LocalDomains`는 만든 순서(접미사, `ip6.arpa`, `64`~`127`)이고 정렬되어 있지 않다. 계약 동작 S5는 끝 점 포함
-            // 문자열의 바이트 순 정렬을 정하므로(자료의 tunnel `settings`도 그렇다) 같은 집합을 그 순서로 놓은 것이 기대값이다.
+            // Go's `LocalDomains` is in creation order (suffix, `ip6.arpa`, `64` through `127`) and is unsorted. Contract behavior S5 specifies bytewise sorting of
+            // strings with trailing dots (also used for the fixture's tunnel `settings`), so the expected value is the same set in that order.
             let expected = scenario.localDomains.sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
             #expect(zones == expected,
-                    "\(scenario.name): 기대=Go LocalDomains \(expected.count)개(계약 순서) 실제=Swift \(zones.count)개, 빠짐 \(Set(expected).subtracting(zones).sorted()), 더함 \(Set(zones).subtracting(expected).sorted())")
+                    "\(scenario.name), expected Go LocalDomains, \(expected.count) entries (contract order), got Swift, \(zones.count) entries, missing \(Set(expected).subtracting(zones).sorted()), extra \(Set(zones).subtracting(expected).sorted())")
         }
     }
 
-    @Test("자료의 decoded가 응답 hex를 따로 쓴 해석기로 읽은 것과 같다(해석기 보정)")
-    func 해석기를보정한다() throws {
+    @Test("The fixture's decoded value matches the response hex parsed by an independent parser (parser calibration)")
+    func calibrateParser() throws {
         for scenario in try loadGoDNSFixture().scenarios {
             for (index, step) in scenario.steps.enumerated() {
-                let context = "\(scenario.name) 단계 \(index + 1) [\(step.name)]"
-                let bytes = try #require([UInt8](hex: step.response), "\(context): 기대=올바른 응답 hex 실제=\(step.response)")
+                let context = "\(scenario.name) step \(index + 1) [\(step.name)]"
+                let bytes = try #require([UInt8](hex: step.response), "\(context), expected valid response hex, got \(step.response)")
                 let parsed = try GoDNSMessage(parsing: bytes)
                 let decoded = GoDNSMessage(decoded: step.decoded)
-                #expect(parsed == decoded, "\(context): 기대=자료 decoded \(decoded.rendered) 실제=hex 해석 \(parsed.rendered)")
-                #expect(step.decoded.rcode == parsed.flags & 0xF, "\(context): 기대=decoded.rcode 실제=플래그 RCODE")
+                #expect(parsed == decoded, "\(context), expected fixture decoded \(decoded.rendered), got parsed hex \(parsed.rendered)")
+                #expect(step.decoded.rcode == parsed.flags & 0xF, "\(context), expected decoded.rcode, got RCODE from flags")
             }
         }
     }
 
-    @Test("계약 기대값을 만드는 방법이 Go가 같은 형태에 낸 바이트와 같다(보정)")
-    func 계약기대값을보정한다() throws {
+    @Test("The method for building contract expectations matches Go's bytes for the same shape (calibration)")
+    func calibrateContractExpectations() throws {
         let fixture = try loadGoDNSFixture()
-        let base = try #require(fixture.scenarios.first, "기대=시나리오 실제=없음")
-        let servfail = try #require(base.steps.first { $0.name == "영역 밖 라우트 없음" }, "기대=영역 밖 단계 실제=없음")
-        let nxdomain = try #require(base.steps.first { $0.name == "모르는 로컬 이름" }, "기대=모르는 로컬 이름 단계 실제=없음")
+        let base = try #require(fixture.scenarios.first, "Expected a scenario, got none")
+        let servfail = try #require(base.steps.first { $0.name == "영역 밖 라우트 없음" }, "Expected the out-of-zone step, got none")
+        let nxdomain = try #require(base.steps.first { $0.name == "모르는 로컬 이름" }, "Expected the unknown local name step, got none")
         let servfailQuery = try #require([UInt8](hex: servfail.query))
         let servfailResponse = try #require([UInt8](hex: servfail.response))
-        #expect(Self.servfailShape(query: servfailQuery) == servfailResponse, "기대=Go SERVFAIL 바이트 실제=보정 기대값 불일치")
+        #expect(Self.servfailShape(query: servfailQuery) == servfailResponse, "Expected Go SERVFAIL bytes, got mismatched calibration bytes")
         let nxdomainQuery = try #require([UInt8](hex: nxdomain.query))
         let nxdomainResponse = try #require([UInt8](hex: nxdomain.response))
-        #expect(try Self.nxdomainShape(query: nxdomainQuery, reference: nxdomain) == nxdomainResponse, "기대=Go NXDOMAIN+SOA 바이트 실제=보정 기대값 불일치")
+        #expect(try Self.nxdomainShape(query: nxdomainQuery, reference: nxdomain) == nxdomainResponse, "Expected Go NXDOMAIN+SOA bytes, got mismatched calibration bytes")
     }
 
-    @Test("표시 없이 남은 차이: Go가 앞 질의의 질문을 싣는 단계는 하나뿐이다")
-    func 질문누출단계를확인한다() throws {
+    @Test("Unmarked difference where Go includes the previous query's question in exactly one step")
+    func verifyQuestionLeakStep() throws {
         var found: [String] = []
         for scenario in try loadGoDNSFixture().scenarios {
             for step in scenario.steps where step.swiftailDiffers == nil {
@@ -106,11 +106,11 @@ struct GoMagicDNSComparisonTests {
                 if try Self.hasStaleQuestion(query: query, goResponse: response) { found.append("\(scenario.name) [\(step.name)]") }
             }
         }
-        #expect(found == ["기본 노드·질의 형식 [머리 비트 8100]"], "기대=질문 누출 단계 1개 실제=\(found)")
+        #expect(found == ["기본 노드·질의 형식 [머리 비트 8100]"], "Expected one step with a question leak, got \(found)")
     }
 
-    @Test("자료의 기준 버전과 시나리오·단계·표시 수를 확인한다")
-    func 자료범위를확인한다() throws {
+    @Test("Verify the fixture reference version and scenario, step, and marker counts")
+    func verifyFixtureCoverage() throws {
         let fixture = try loadGoDNSFixture()
         #expect(fixture.reference == "tailscale.com v1.104.6")
         #expect(fixture.soaSerial == 1_767_323_045)
@@ -124,15 +124,15 @@ struct GoMagicDNSComparisonTests {
         #expect(fixture.scenarios.map(\.steps.count) == [61, 3, 4, 3, 3, 4, 4, 3])
         for scenario in fixture.scenarios {
             for (index, step) in scenario.steps.enumerated() {
-                let context = "\(scenario.name) 단계 \(index + 1) [\(step.name)]"
-                #expect([UInt8](hex: step.query) != nil, "\(context): 기대=질의 hex 실제=\(step.query)")
-                #expect([UInt8](hex: step.response) != nil, "\(context): 기대=응답 hex 실제=\(step.response)")
-                if let reason = step.swiftailDiffers { #expect(!reason.isEmpty, "\(context): 기대=차이 이유 실제=빈 문자열") }
+                let context = "\(scenario.name) step \(index + 1) [\(step.name)]"
+                #expect([UInt8](hex: step.query) != nil, "\(context), expected query hex, got \(step.query)")
+                #expect([UInt8](hex: step.response) != nil, "\(context), expected response hex, got \(step.response)")
+                if let reason = step.swiftailDiffers { #expect(!reason.isEmpty, "\(context), expected a reason for the difference, got an empty string") }
             }
         }
     }
 
-    // MARK: - 시나리오 대조
+    // MARK: - Scenario comparison
 
     private func compareScenario(_ scenario: GoDNSScenario, fixture: GoDNSFixture, legacyCapabilities: Bool) throws {
         let now = Date(timeIntervalSince1970: TimeInterval(fixture.soaSerial))
@@ -141,14 +141,14 @@ struct GoMagicDNSComparisonTests {
         let resolver = MagicDNSResolver(netmap: netmap, localZones: scenario.localDomains)
 
         for (index, step) in scenario.steps.enumerated() {
-            let context = "\(scenario.name) 단계 \(index + 1) [\(step.name)]"
-            let query = try #require([UInt8](hex: step.query), "\(context): 기대=질의 hex 실제=\(step.query)")
+            let context = "\(scenario.name) step \(index + 1) [\(step.name)]"
+            let query = try #require([UInt8](hex: step.query), "\(context), expected query hex, got \(step.query)")
             let actual = resolver.response(to: query, at: now)
             let expected: [UInt8]
             if let reason = step.swiftailDiffers {
                 expected = try contractResponse(reason: reason, query: query, fixture: fixture, context: context)
             } else {
-                let goResponse = try #require([UInt8](hex: step.response), "\(context): 기대=응답 hex 실제=\(step.response)")
+                let goResponse = try #require([UInt8](hex: step.response), "\(context), expected response hex, got \(step.response)")
                 expected = try Self.hasStaleQuestion(query: query, goResponse: goResponse)
                     ? Self.droppingQuestion(from: goResponse) : goResponse
             }
@@ -158,7 +158,7 @@ struct GoMagicDNSComparisonTests {
         }
     }
 
-    // MARK: - netmap 변환
+    // MARK: - Netmap conversion
 
     private func makeNetmap(_ scenario: GoDNSScenario, now: Date, legacyCapabilities: Bool, forZones: Bool) throws -> Netmap {
         func node(_ value: GoDNSNode, id: Int64, isSelf: Bool) -> GoFixtureNode {
@@ -167,7 +167,7 @@ struct GoMagicDNSComparisonTests {
                 capabilities: isSelf && !legacyCapabilities ? scenario.capabilities : [],
                 legacyCapabilities: isSelf && legacyCapabilities ? scenario.capabilities : [])
         }
-        let selfIndex = try #require(scenario.nodes.firstIndex { $0.isSelf == true }, "\(scenario.name): 기대=자기 노드 실제=없음")
+        let selfIndex = try #require(scenario.nodes.firstIndex { $0.isSelf == true }, "\(scenario.name), expected a local node, got none")
         let peers = scenario.nodes.enumerated().filter { $0.offset != selfIndex }
         return try makeGoFixtureNetmap(
             selfNode: node(scenario.nodes[selfIndex], id: Int64(selfIndex + 1), isSelf: true),
@@ -175,7 +175,7 @@ struct GoMagicDNSComparisonTests {
             dnsConfigJSON: dnsConfigJSON(scenario), receivedAt: now)
     }
 
-    /// 자료의 `hosts`·`localDomains`를 뜻하는 `DNSConfig` JSON.
+    /// The `DNSConfig` JSON representing the fixture's `hosts` and `localDomains`.
     private func dnsConfigJSON(_ scenario: GoDNSScenario) -> String {
         let suffix = scenario.magicDNSSuffix
         let magicZones: Set<String> = Set([suffix, "0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."] + (64...127).map { "\($0).100.in-addr.arpa." })
@@ -192,52 +192,52 @@ struct GoMagicDNSComparisonTests {
         address.contains(":") ? "\(address)/128" : "\(address)/32"
     }
 
-    // MARK: - 계약이 정한 기대값(표시가 있는 단계)
+    // MARK: - Contract expectations for marked steps
 
-    /// 표시 이유가 가리키는 계약 동작(D8)에 따른 Swiftail의 응답 바이트.
+    /// Swiftail response bytes under the contract behavior (D8) cited by the marker reason.
     private func contractResponse(reason: String, query: [UInt8], fixture: GoDNSFixture, context: String) throws -> [UInt8] {
         guard reason.contains("D8") else {
-            Issue.record("\(context): 기대값을 정할 근거 없음(이유=\(reason))")
+            Issue.record("\(context), no basis for an expected value (reason \(reason))")
             return []
         }
         if reason.contains("SERVFAIL") {
-            // 영역 밖의 이름: 로컬 답이 없고 `localZones` 밖이면 SERVFAIL(질문 포함, AA=1, RA는 질의 값). 동작 D5.
+            // A name with no local answer outside `localZones` yields SERVFAIL (with the question, AA=1, and RA from the query). Behavior D5.
             return Self.servfailShape(query: query)
         }
         if reason.contains("NXDOMAIN") {
-            // 영역 안의 알 수 없는 이름: NXDOMAIN + 영역의 SOA. 동작 D2. SOA는 같은 영역의 Go 응답에서 가져온다.
-            let base = try #require(fixture.scenarios.first, "기대=시나리오 실제=없음")
-            let reference = try #require(base.steps.first { $0.name == "모르는 로컬 이름" }, "기대=모르는 로컬 이름 단계 실제=없음")
+            // An unknown name inside the zone yields NXDOMAIN + the zone's SOA. Behavior D2. Take the SOA from a Go response for the same zone.
+            let base = try #require(fixture.scenarios.first, "Expected a scenario, got none")
+            let reference = try #require(base.steps.first { $0.name == "모르는 로컬 이름" }, "Expected the unknown local name step, got none")
             return try Self.nxdomainShape(query: query, reference: reference)
         }
-        Issue.record("\(context): 기대값을 정할 근거 없음(이유=\(reason))")
+        Issue.record("\(context), no basis for an expected value (reason \(reason))")
         return []
     }
 
-    /// 질의 머리를 복사해 QR=1, AA=1, RCODE=2로 바꾸고 질문을 실은 응답. 질의는 머리 + 질문 하나여야 한다.
+    /// Builds a response by copying the query header, setting QR=1, AA=1, and RCODE=2, and including the question. The query must be a header + one question.
     private static func servfailShape(query: [UInt8]) -> [UInt8] {
         let flags = (UInt16(query[2]) << 8 | UInt16(query[3])) & ~0x000F | 0x8000 | 0x0400 | 0x0002
         return [query[0], query[1], UInt8(flags >> 8), UInt8(flags & 0xFF), 0, 1, 0, 0, 0, 0, 0, 0] + query[12...]
     }
 
-    /// 질의 머리를 복사해 QR=1, AA=1, RD면 RA=1, RCODE=3으로 바꾸고 질문과 `reference` 응답의 권한 구역(SOA)을 실은 응답.
+    /// Builds a response by copying the query header, setting QR=1, AA=1, RA=1 if RD is set, and RCODE=3, and including the question and the `reference` response's authority section (SOA).
     private static func nxdomainShape(query: [UInt8], reference: GoDNSStep) throws -> [UInt8] {
-        let referenceQuery = try #require([UInt8](hex: reference.query), "기대=기준 질의 hex 실제=\(reference.query)")
-        let referenceResponse = try #require([UInt8](hex: reference.response), "기대=기준 응답 hex 실제=\(reference.response)")
+        let referenceQuery = try #require([UInt8](hex: reference.query), "Expected reference query hex, got \(reference.query)")
+        let referenceResponse = try #require([UInt8](hex: reference.response), "Expected reference response hex, got \(reference.response)")
         var flags = (UInt16(query[2]) << 8 | UInt16(query[3])) & ~0x000F | 0x8000 | 0x0400 | 0x0003
         if flags & 0x0100 != 0 { flags |= 0x0080 }
-        // 기준 응답 = 머리 + 질문 + 권한 구역이고 기준 질의 = 머리 + 질문이다.
+        // Reference response = header + question + authority section. Reference query = header + question.
         return [query[0], query[1], UInt8(flags >> 8), UInt8(flags & 0xFF), 0, 1, 0, 0, 0, 1, 0, 0]
             + query[12...] + referenceResponse[referenceQuery.count...]
     }
 
-    // MARK: - 표시 없는 차이: Go가 앞 질의의 질문을 싣는 경우
+    // MARK: - Unmarked difference when Go includes the previous query's question
 
-    /// 응답 비트(QR)가 켜졌거나 12바이트보다 짧은 질의에 대한 Go 응답이 질문을 싣고 있는가.
+    /// Whether Go's response includes a question for queries with the response bit (QR) set or shorter than 12 bytes.
     ///
-    /// Go는 그런 질의에 FORMERR로 답할 때 다시 쓰는 파서에 남아 있던 **앞 질의의 질문**을 응답에 싣는다(다른 앱의 질의 이름이
-    /// 새어 나갈 수 있다). Swiftail은 질문 없이 답한다: 계약 "응답기 구현에서 정해진 것"(M5-1)이 Go와 일부러 다르게 한 것으로
-    /// 적었다. 자료는 이 단계에 `swiftailDiffers`를 달지 않았다(표시 누락). 그래서 계약의 기대값(질문 없는 응답)을 쓴다.
+    /// When Go returns FORMERR for such a query, the response includes the **previous query's question** left in a reused parser (another app's query name
+    /// may leak). Swiftail replies without a question. The contract's "Decisions made in the responder implementation" (M5-1) records this as an intentional difference
+    /// from Go. The fixture omits `swiftailDiffers` for this step (a missing marker), so use the contract expectation (a reply without a question).
     private static func hasStaleQuestion(query: [UInt8], goResponse: [UInt8]) throws -> Bool {
         let short = query.count < 12
         let responseBit = query.count >= 3 && query[2] & 0x80 != 0
@@ -245,7 +245,7 @@ struct GoMagicDNSComparisonTests {
         return try !GoDNSMessage(parsing: goResponse).questions.isEmpty
     }
 
-    /// 응답에서 질문 하나(압축 없는 이름 + TYPE + CLASS)를 빼고 QDCOUNT를 0으로 한 것.
+    /// Removes one question (uncompressed name + TYPE + CLASS) from the response and sets QDCOUNT to 0.
     private static func droppingQuestion(from response: [UInt8]) -> [UInt8] {
         var end = 12
         while end < response.count, response[end] != 0 { end += Int(response[end]) + 1 }
@@ -253,9 +253,9 @@ struct GoMagicDNSComparisonTests {
         return Array(response[0..<4]) + [0, 0] + Array(response[6..<12]) + Array(response[end...])
     }
 
-    // MARK: - 비교
+    // MARK: - Comparison
 
-    /// 응답 하나의 차이 목록. 비어 있으면 바이트까지 같다.
+    /// Lists differences for one response. An empty list means the bytes match.
     private static func differences(expected: [UInt8], actual: [UInt8]) -> [String] {
         if expected == actual { return [] }
         let expectedMessage: GoDNSMessage
@@ -263,26 +263,26 @@ struct GoMagicDNSComparisonTests {
         do {
             expectedMessage = try GoDNSMessage(parsing: expected)
         } catch {
-            return ["기대 응답을 해석하지 못함(\(error)) 기대=\(expected.hex)"]
+            return ["Could not parse the expected response (\(error)), expected \(expected.hex)"]
         }
         do {
             actualMessage = try GoDNSMessage(parsing: actual)
         } catch {
-            return ["실제 응답을 해석하지 못함(\(error)) 기대=\(expectedMessage.rendered) 실제 hex=\(actual.hex)"]
+            return ["Could not parse the actual response (\(error)), expected \(expectedMessage.rendered), got hex \(actual.hex)"]
         }
         let meaning = expectedMessage.meaningDifferences(from: actualMessage)
         if !meaning.isEmpty {
-            return ["뜻이 다름: \(meaning.joined(separator: "; ")) | 기대=\(expectedMessage.rendered) 실제=\(actualMessage.rendered)"]
+            return ["Different meaning, \(meaning.joined(separator: "; ")) | expected \(expectedMessage.rendered), got \(actualMessage.rendered)"]
         }
-        // 뜻은 같고 바이트가 다르다: 무엇이 다른지 가른다.
+        // The meaning matches but the bytes differ. Identify what differs.
         var kinds = expectedMessage.byteDifferenceKinds(from: actualMessage)
-        if kinds.isEmpty { kinds = ["인코딩(압축·필드 배치)"] }
+        if kinds.isEmpty { kinds = ["encoding (compression or field layout)"] }
         let offset = zip(expected, actual).enumerated().first { $0.element.0 != $0.element.1 }?.offset ?? min(expected.count, actual.count)
-        return ["뜻은 같고 바이트가 다름[\(kinds.joined(separator: ", "))]: 길이 기대=\(expected.count) 실제=\(actual.count), 첫 차이 오프셋 \(offset), 기대=\(expectedMessage.rendered) 실제=\(actualMessage.rendered)"]
+        return ["Same meaning, different bytes [\(kinds.joined(separator: ", "))], expected length \(expected.count), got \(actual.count), first differing offset \(offset), expected \(expectedMessage.rendered), got \(actualMessage.rendered)"]
     }
 }
 
-// MARK: - DNS 메시지 해석(시험 전용, 코덱과 무관하게 따로 씀)
+// MARK: - DNS message parsing (test-only, independent of the codec)
 
 struct GoDNSParseError: Error, CustomStringConvertible {
     let description: String
@@ -300,7 +300,7 @@ struct GoDNSMessage: Equatable {
         var type: Int
         var cls: Int
         var ttl: Int
-        /// A·AAAA는 정규 표기 주소, PTR은 이름, SOA는 `ns mbox serial refresh retry expire minimum`, 그 밖은 hex.
+        /// Canonical address text for A and AAAA, a name for PTR, `ns mbox serial refresh retry expire minimum` for SOA, and hex for other types.
         var value: String
     }
 
@@ -312,7 +312,7 @@ struct GoDNSMessage: Equatable {
     var additionals: [Record]
 
     init(parsing bytes: [UInt8]) throws {
-        guard bytes.count >= 12 else { throw GoDNSParseError(description: "머리 12바이트보다 짧음(\(bytes.count))") }
+        guard bytes.count >= 12 else { throw GoDNSParseError(description: "Shorter than the 12-byte header (\(bytes.count))") }
         func u16(_ at: Int) -> Int { Int(bytes[at]) << 8 | Int(bytes[at + 1]) }
         id = u16(0)
         flags = u16(2)
@@ -322,7 +322,7 @@ struct GoDNSMessage: Equatable {
         questions = []
         for _ in 0..<counts[0] {
             let (name, next) = try Self.readName(bytes, at: offset)
-            guard next + 4 <= bytes.count else { throw GoDNSParseError(description: "질문이 잘림") }
+            guard next + 4 <= bytes.count else { throw GoDNSParseError(description: "Truncated question") }
             questions.append(Question(name: name, type: u16(next), cls: u16(next + 2)))
             offset = next + 4
         }
@@ -331,12 +331,12 @@ struct GoDNSMessage: Equatable {
             var records: [Record] = []
             for _ in 0..<count {
                 let (name, next) = try Self.readName(bytes, at: offset)
-                guard next + 10 <= bytes.count else { throw GoDNSParseError(description: "레코드 머리가 잘림") }
+                guard next + 10 <= bytes.count else { throw GoDNSParseError(description: "Truncated record header") }
                 let type = u16(next)
                 let ttl = u16(next + 4) << 16 | u16(next + 6)
                 let length = u16(next + 8)
                 let start = next + 10
-                guard start + length <= bytes.count else { throw GoDNSParseError(description: "RDATA가 잘림") }
+                guard start + length <= bytes.count else { throw GoDNSParseError(description: "Truncated RDATA") }
                 let value = try Self.readValue(bytes, type: type, start: start, length: length)
                 records.append(Record(name: name, type: type, cls: u16(next + 2), ttl: ttl, value: value))
                 offset = start + length
@@ -346,10 +346,10 @@ struct GoDNSMessage: Equatable {
         answers = sections[0]
         authorities = sections[1]
         additionals = sections[2]
-        guard offset == bytes.count else { throw GoDNSParseError(description: "구역 뒤에 \(bytes.count - offset)바이트가 남음") }
+        guard offset == bytes.count else { throw GoDNSParseError(description: "\(bytes.count - offset) bytes remain after the sections") }
     }
 
-    /// 자료의 `decoded`와 같은 메시지.
+    /// Builds a message matching the fixture's `decoded`.
     init(decoded: GoDNSDecoded) {
         id = decoded.id
         flags = decoded.flags
@@ -364,7 +364,7 @@ struct GoDNSMessage: Equatable {
 
     var rcode: Int { flags & 0xF }
 
-    /// 사람이 읽는 한 줄.
+    /// A single human-readable line.
     var rendered: String {
         func records(_ values: [Record]) -> String {
             values.map { "\($0.type) \($0.name) c\($0.cls) ttl\($0.ttl) \($0.value)" }.joined(separator: " | ")
@@ -372,47 +372,47 @@ struct GoDNSMessage: Equatable {
         return "{id=\(id) flags=0x\(String(flags, radix: 16)) rcode=\(rcode) Q=[\(questions.map { "\($0.name) t\($0.type) c\($0.cls)" }.joined(separator: " | "))] AN=[\(records(answers))] NS=[\(records(authorities))] AR=[\(records(additionals))]}"
     }
 
-    // MARK: 뜻 비교
+    // MARK: Semantic comparison
 
-    /// 뜻의 차이: ID·플래그·질문(이름은 대소문자 무시)·레코드 묶음(순서 무시, SOA SERIAL 제외).
+    /// Semantic differences in ID, flags, questions (case-insensitive names), and record groups (ignoring order and SOA SERIAL).
     func meaningDifferences(from other: GoDNSMessage) -> [String] {
         var result: [String] = []
-        if id != other.id { result.append("ID 기대=\(id) 실제=\(other.id)") }
-        if flags != other.flags { result.append("플래그 기대=0x\(String(flags, radix: 16)) 실제=0x\(String(other.flags, radix: 16))(\(flagDifference(other.flags)))") }
-        if questions.map(\.normalized) != other.questions.map(\.normalized) { result.append("질문 다름") }
-        for (label, mine, theirs) in [("답", answers, other.answers), ("권한", authorities, other.authorities), ("추가", additionals, other.additionals)]
+        if id != other.id { result.append("ID expected \(id), got \(other.id)") }
+        if flags != other.flags { result.append("Flags expected 0x\(String(flags, radix: 16)), got 0x\(String(other.flags, radix: 16))(\(flagDifference(other.flags)))") }
+        if questions.map(\.normalized) != other.questions.map(\.normalized) { result.append("Questions differ") }
+        for (label, mine, theirs) in [("Answer", answers, other.answers), ("Authority", authorities, other.authorities), ("Additional", additionals, other.additionals)]
         where mine.map(\.normalized).sorted() != theirs.map(\.normalized).sorted() {
-            result.append("\(label) 레코드 다름")
+            result.append("\(label) records differ")
         }
         return result
     }
 
     private func flagDifference(_ other: Int) -> String {
         let names: [(Int, String)] = [(0x8000, "QR"), (0x0400, "AA"), (0x0200, "TC"), (0x0100, "RD"), (0x0080, "RA"), (0x0040, "Z"), (0x0020, "AD"), (0x0010, "CD")]
-        var parts = names.filter { (flags ^ other) & $0.0 != 0 }.map { "\($0.1) 기대=\(flags & $0.0 != 0 ? 1 : 0)" }
-        if (flags ^ other) & 0x7800 != 0 { parts.append("Opcode 기대=\((flags >> 11) & 0xF) 실제=\((other >> 11) & 0xF)") }
-        if flags & 0xF != other & 0xF { parts.append("RCODE 기대=\(flags & 0xF) 실제=\(other & 0xF)") }
+        var parts = names.filter { (flags ^ other) & $0.0 != 0 }.map { "\($0.1) expected \(flags & $0.0 != 0 ? 1 : 0)" }
+        if (flags ^ other) & 0x7800 != 0 { parts.append("Opcode expected \((flags >> 11) & 0xF), got \((other >> 11) & 0xF)") }
+        if flags & 0xF != other & 0xF { parts.append("RCODE expected \(flags & 0xF), got \(other & 0xF)") }
         return parts.joined(separator: ", ")
     }
 
-    // MARK: 바이트 차이의 종류
+    // MARK: Types of byte differences
 
-    /// 뜻이 같은 두 메시지가 어떻게 다른지: 이름 대소문자, 레코드 순서, SOA SERIAL.
+    /// How two messages with the same meaning differ in name case, record order, or SOA SERIAL.
     func byteDifferenceKinds(from other: GoDNSMessage) -> [String] {
         var kinds: [String] = []
         let names = questions.map(\.name) + (answers + authorities + additionals).map(\.name)
         let otherNames = other.questions.map(\.name) + (other.answers + other.authorities + other.additionals).map(\.name)
-        if names != otherNames, names.map({ $0.lowercased() }) == otherNames.map({ $0.lowercased() }) { kinds.append("이름 대소문자") }
+        if names != otherNames, names.map({ $0.lowercased() }) == otherNames.map({ $0.lowercased() }) { kinds.append("name case") }
         if answers != other.answers || authorities != other.authorities {
             let sameSet = answers.map(\.normalized).sorted() == other.answers.map(\.normalized).sorted()
-            if sameSet, answers.map(\.normalized) != other.answers.map(\.normalized) { kinds.append("레코드 순서") }
+            if sameSet, answers.map(\.normalized) != other.answers.map(\.normalized) { kinds.append("record order") }
         }
         let serial = { (message: GoDNSMessage) in message.authorities.filter { $0.type == 6 }.map(\.value) }
-        if serial(self) != serial(other) { kinds.append("SOA 값(SERIAL)") }
+        if serial(self) != serial(other) { kinds.append("SOA value (SERIAL)") }
         return kinds
     }
 
-    // MARK: 바이트 읽기
+    // MARK: Reading bytes
 
     private static func readName(_ bytes: [UInt8], at start: Int) throws -> (String, Int) {
         var labels: [String] = []
@@ -420,22 +420,22 @@ struct GoDNSMessage: Equatable {
         var end: Int?
         var jumps = 0
         while true {
-            guard position < bytes.count else { throw GoDNSParseError(description: "이름이 잘림") }
+            guard position < bytes.count else { throw GoDNSParseError(description: "Truncated name") }
             let length = Int(bytes[position])
             if length == 0 {
                 position += 1
                 break
             }
             if length & 0xC0 == 0xC0 {
-                guard position + 1 < bytes.count else { throw GoDNSParseError(description: "포인터가 잘림") }
+                guard position + 1 < bytes.count else { throw GoDNSParseError(description: "Truncated pointer") }
                 let target = (length & 0x3F) << 8 | Int(bytes[position + 1])
                 if end == nil { end = position + 2 }
                 jumps += 1
-                guard jumps <= 16, target < bytes.count else { throw GoDNSParseError(description: "포인터 오류") }
+                guard jumps <= 16, target < bytes.count else { throw GoDNSParseError(description: "Invalid pointer") }
                 position = target
                 continue
             }
-            guard length < 64, position + 1 + length <= bytes.count else { throw GoDNSParseError(description: "레이블 오류") }
+            guard length < 64, position + 1 + length <= bytes.count else { throw GoDNSParseError(description: "Invalid label") }
             labels.append(String(decoding: bytes[position + 1..<position + 1 + length], as: UTF8.self))
             position += 1 + length
         }
@@ -446,14 +446,14 @@ struct GoDNSMessage: Equatable {
         let data = Array(bytes[start..<start + length])
         switch type {
         case 1, 28:
-            guard let address = IPAddress(bytes: data) else { throw GoDNSParseError(description: "주소 길이 \(length)") }
+            guard let address = IPAddress(bytes: data) else { throw GoDNSParseError(description: "Address length \(length)") }
             return address.description
         case 12:
             return try readName(bytes, at: start).0
         case 6:
             let (ns, afterNS) = try readName(bytes, at: start)
             let (mbox, afterMbox) = try readName(bytes, at: afterNS)
-            guard afterMbox + 20 <= bytes.count else { throw GoDNSParseError(description: "SOA가 잘림") }
+            guard afterMbox + 20 <= bytes.count else { throw GoDNSParseError(description: "Truncated SOA") }
             let numbers = (0..<5).map { index -> UInt32 in
                 bytes[afterMbox + index * 4..<afterMbox + index * 4 + 4].reduce(0) { $0 << 8 | UInt32($1) }
             }
@@ -469,7 +469,7 @@ private extension GoDNSMessage.Question {
 }
 
 private extension GoDNSMessage.Record {
-    /// 이름(대소문자 무시)·종류·클래스·TTL·값. SOA는 SERIAL(셋째 항목)을 뺀다.
+    /// Name (case-insensitive), type, class, TTL, and value. Omits SERIAL (the third field) from SOA.
     var normalized: String {
         var text = value.lowercased()
         if type == 6 {
@@ -481,7 +481,7 @@ private extension GoDNSMessage.Record {
     }
 }
 
-// MARK: - 자료 모델
+// MARK: - Fixture models
 
 private func loadGoDNSFixture() throws -> GoDNSFixture {
     try JSONDecoder().decode(GoDNSFixture.self, from: loadGoFixtureData("magicdns-fixtures"))
@@ -550,7 +550,7 @@ struct GoDNSDecodedRecord: Decodable, Sendable {
     let value: GoDNSValue
 }
 
-/// 레코드의 `value`: A·AAAA·PTR은 문자열, SOA는 객체.
+/// The record's `value` is a string for A, AAAA, and PTR and an object for SOA.
 enum GoDNSValue: Decodable, Sendable {
     struct SOA: Decodable, Sendable {
         let ns: String
@@ -574,7 +574,7 @@ enum GoDNSValue: Decodable, Sendable {
         }
     }
 
-    /// 해석기의 `Record.value`와 같은 표기.
+    /// The same representation as the parser's `Record.value`.
     func canonical(type: Int) -> String {
         switch self {
         case .text(let text):
