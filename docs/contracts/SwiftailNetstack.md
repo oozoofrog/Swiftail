@@ -1,70 +1,70 @@
-# Swiftail netstack 계약 (M6, 초안)
+# Swiftail netstack contract (M6, draft)
 
-M6의 목표는 **OS의 TCP 스택 없이 프로세스 안에서 tailnet 주소로 TCP를 듣고 거는 것**이다(`docs/plan.md` 7절 M6). M5까지 노드는 IP 패킷을 주고받았다. M6는 그 위에 Swift로 쓴 TCP를 얹어, tsnet의 `Listen("tcp", ":443")`과 `Dial`에 대응하는 공개 API를 낸다. 첫 사용처는 Mac 호스트(tailnet 위의 HTTPS 서버)이고, 지금 그 자리의 Go 코어(`tsnet.Server.Listen` + `tls.NewListener` + `http.Server`)를 걷어내는 것(M7)이 이 계약에 기댄다. 라이브러리는 전부 Swift이고 C·외부 패키지를 쓰지 않는다(plan 4절(a)).
+M6's goal is to **listen for and initiate TCP connections at tailnet addresses in process, without using the OS TCP stack** (M6 in `docs/plan.md` §7). Through M5, the node exchanged IP packets. M6 layers TCP written in Swift on top and exposes a public API corresponding to tsnet's `Listen("tcp", ":443")` and `Dial`. The first adopter is the Mac host (an HTTPS server on the tailnet). Removing the Go core from that host (`tsnet.Server.Listen` + `tls.NewListener` + `http.Server`) in M7 depends on this contract. The library is written entirely in Swift and uses neither C nor external packages (plan §4(a)).
 
-이 문서는 **초안**이다. "총괄 확인 필요"를 정하고 "첫 사용처 확인 필요"의 답을 받은 뒤 확정한다.
+This document is a **draft**. Finalize it after resolving "Lead session confirmation needed" and receiving the answers in "First adopter confirmation needed."
 
-프로토콜 세부는 [tcp-netstack.md](../protocol-notes/tcp-netstack.md)(아래에서 "TCP 노트". **아직 검증 전**이다)를 따른다. 이 문서는 범위, 구조, 공개 API, 한도, 시험과 관문만 정한다.
+Protocol details follow [tcp-netstack.md](../protocol-notes/tcp-netstack.md) ("TCP notes" below, **still unverified**). This document defines only scope, architecture, public API, limits, tests, and gates.
 
-기존 계약과의 관계: [SwiftailTunnel.md](SwiftailTunnel.md)(M5)와 [SwiftailEngine.md](SwiftailEngine.md)의 내용은 그대로 두고, 이 문서가 M6의 변경을 덧붙인다. 어긋나면 이 문서가 앞선다.
+This document adds the M6 changes to the existing contracts in [SwiftailTunnel.md](SwiftailTunnel.md) (M5) and [SwiftailEngine.md](SwiftailEngine.md) and takes precedence in a conflict.
 
-## 타깃
+## Targets
 
-| 타깃 | M6에서 더하는 것 | 근거 |
+| Target | Additions in M6 | Rationale |
 | --- | --- | --- |
-| `SwiftailNetstack`(새 타깃, 제품으로 내보내지 않음) | TCP 세그먼트 코덱, 연결 하나의 상태 기계(`TCPConnection`), 여러 연결과 리스너를 묶는 `TCPStack`. 모두 소켓·시계·난수 없는 값 타입이고 접근 수준은 `package`다 | plan 5절 코드 기준. `SwiftailIO`처럼 패키지 안에서만 쓴다 |
-| `SwiftailBase` | 인터넷 체크섬(RFC 1071)을 `package`로 옮겨 온다 | 엔진의 서비스 IP 응답과 netstack이 같은 계산을 쓴다(결정 D10) |
-| `SwiftailEngine` | `ServiceIPReply+Checksum.swift`가 옮긴 체크섬을 부른다. 동작은 바뀌지 않는다 | 같은 곳 |
-| `Swiftail` | `TunnelDevice.inProcess`, 공개 API(`listen`·`connect`, `TailnetListener`, `TailnetConnection`, `ConnectionError`), 노드와 스택 잇기, 기다리는 읽기·쓰기 깨우기 | 공개 API는 `Swiftail`에만 둔다(기존 구조) |
+| `SwiftailNetstack` (new target, not exposed as a product) | TCP segment codec, a state machine for one connection (`TCPConnection`), and a `TCPStack` that groups multiple connections and listeners. All are `package` value types without sockets, clocks, or random number generation | Code standards in plan §5. Used only within the package, like `SwiftailIO` |
+| `SwiftailBase` | Move the Internet checksum (RFC 1071) here with `package` visibility | The engine's service IP replies and the netstack share the calculation (decision D10) |
+| `SwiftailEngine` | `ServiceIPReply+Checksum.swift` calls the relocated checksum. Behavior stays the same | Same rationale |
+| `Swiftail` | `TunnelDevice.inProcess`, public API (`listen` and `connect`, `TailnetListener`, `TailnetConnection`, and `ConnectionError`), node and stack integration, and resumption of waiting reads and writes | The public API stays in `Swiftail` alone (existing architecture) |
 
-의존 방향: `SwiftailBase ◄─ SwiftailNetstack ◄─ Swiftail`. plan 5절 그림(`Swiftail ◄─ SwiftailNetstack`)과 반대다(총괄 확인 필요 N1). `SwiftailNetstack`은 `SwiftailBase`와 CryptoKit(ISN의 해시)만 쓴다. 엔진·제어·WireGuard를 모른다.
+The dependency direction is `SwiftailBase ◄─ SwiftailNetstack ◄─ Swiftail`. It reverses the diagram in plan §5 (`Swiftail ◄─ SwiftailNetstack`) (lead session confirmation needed N1). `SwiftailNetstack` uses only `SwiftailBase` and CryptoKit (to hash the ISN). It has no knowledge of the engine, control, or WireGuard.
 
-## M6에서 지원하는 범위
+## Scope supported in M6
 
-범위는 첫 사용처가 실제로 쓰는 것에서 정했다(TCP 노트 8절): 리스너 하나(포트 443 또는 시험 포트)와 그 위의 HTTPS, 진단용 프록시의 다이얼, 페어링한 기기 몇 대가 여는 동시 연결 수십 개, 서버 → 클라이언트 방향 수백 MB에서 4GiB까지의 전송, 클라이언트 → 서버 방향 4MB까지. 상대의 TCP 스택은 iPhone 커널과 gVisor다.
+The scope follows the first adopter's actual use (TCP notes §8): one listener (port 443 or a test port) serving HTTPS, dialing by the diagnostic proxy, dozens of concurrent connections opened by a few paired devices, transfers of several hundred MB to 4GiB from server to client, and up to 4MB from client to server. The peer TCP stacks are the iPhone kernel and gVisor.
 
-| 넣는다 | 근거 |
+| Included | Rationale |
 | --- | --- |
-| IPv4·IPv6 tailnet 주소 | 노드가 두 계열 주소를 다 갖는다. 차이는 IP 머리와 의사 머리뿐이다 |
-| 수동 열기(듣기)와 능동 열기(걸기), 반닫힘, RST | TCP 노트 8절 1·5 |
-| 체크섬 만들기와 검사, MSS 옵션 | 빼면 연결이 서지 않는다(TCP 노트 4.8) |
-| 창 확장 | 빼면 창이 64KiB로 묶인다. RTT 50ms에서 약 10Mbit/s가 한도가 된다 |
-| RFC 6298 재전송 타이머(Karn), SYN·데이터 재전송 한도 | 필수(MUST-18, MUST-20) |
-| slow start, congestion avoidance, fast retransmit·fast recovery, NewReno | 필수(MUST-19)와 plan 4절(a) |
-| 0 창 탐침, 보내는 쪽·받는 쪽 SWS 회피 | 필수(MUST-36, MUST-38, MUST-39) |
-| 지연 ACK | plan 4절(a). ACK 하나마다 WireGuard 암호화와 UDP 송신이 든다 |
-| keep-alive(고정 값, 늘 켬) | Go 호스트가 죽은 상대의 연결을 이것으로 거둔다(총괄 확인 필요 N5) |
-| RFC 5961의 RST·SYN·ACK 검사와 challenge ACK 속도 제한 | 동작 X |
-| 순서가 어긋난 세그먼트 보관(받는 창 안, 구간 수 상한) | 손실 뒤 창 전체를 다시 받지 않는다 |
-| 받는 쪽 SACK: SACK-Permitted 협상, 받는 버퍼의 구간을 SACK 블록으로 내기(M6-10a) | 상대(gVisor, 커널)가 한 창의 여러 손실을 RTO 없이 다시 보낸다. 관문의 손실 기록으로 열었다(N3). 받은 블록으로 다시 보내는 쪽(RFC 6675)은 제외 표 |
+| IPv4 and IPv6 tailnet addresses | The node has addresses in both families. Only the IP header and pseudo-header differ |
+| Passive open (listen), active open (connect), half-close, and RST | TCP notes §8 items 1 and 5 |
+| Checksum generation and validation, and the MSS option | Connections cannot be established without them (TCP notes §4.8) |
+| Window scaling | Without scaling the window is capped at 64KiB, limiting throughput to about 10Mbit/s at 50ms RTT |
+| RFC 6298 retransmission timer (Karn), SYN and data retransmission limits | Required (MUST-18, MUST-20) |
+| slow start, congestion avoidance, fast retransmit, fast recovery, NewReno | Required (MUST-19) and plan §4(a) |
+| 0-window probes, sender and receiver SWS avoidance | Required (MUST-36, MUST-38, MUST-39) |
+| Delayed ACK | Plan §4(a). Every ACK requires WireGuard encryption and a UDP send |
+| keep-alive (fixed settings, always on) | The Go host uses this to reclaim connections to dead peers (lead session confirmation needed N5) |
+| RFC 5961 RST, SYN, and ACK validation and challenge ACK rate limiting | Behavior X |
+| Storage for out-of-order segments (within the receive window, with a range count limit) | Avoids receiving the entire window again after loss |
+| Receiver-side SACK with SACK-Permitted negotiation and SACK blocks for ranges in the receive buffer (M6-10a) | The peer (gVisor or kernel) retransmits multiple losses in one window without RTO. Gate loss measurements triggered this work (N3). Sender-side retransmission based on received blocks (RFC 6675) is in the exclusions table |
 | TIME-WAIT | MUST-13 |
 
-빼는 것은 아래 "제외" 표에 근거와 필요해지는 시점을 적는다. 빠진 기능은 닫힌 쪽이다: 협상하지 않는 옵션은 보내지 않고, 받은 것은 무시한다.
+The "Exclusions" table below gives the rationale and when each feature would become necessary. Omitted features fail closed. Unnegotiated options are never sent and are ignored on receipt.
 
-## 구조
+## Architecture
 
 ```
-앱 Task ── await connection.read/write ──┐
+App Task ── await connection.read/write ──┐
                                          ▼
-TailnetNode (actor, 가장자리)   기다리는 읽기·쓰기·accept·connect를 쥐고 깨운다. 시각을 만든다
-   │   stack: TCPStack (값)  ◄── .ipPacket ── engine.receive ◄── Magicsock ◄── 소켓·DERP
-   │        └ 내보낼 IP 패킷 ──► engine.send ──► Magicsock ──► 소켓·DERP
+TailnetNode (actor, edge)   Holds and resumes waiting reads, writes, accepts, and connects. Supplies the time
+   │   stack: TCPStack (value)  ◄── .ipPacket ── engine.receive ◄── Magicsock ◄── sockets and DERP
+   │        └ outgoing IP packets ──► engine.send ──► Magicsock ──► sockets and DERP
    ▼
-TCPStack (값)        리스너 표, 4-튜플 → 연결, 맺는 중인 연결과 accept 대기열, ISN·포트, 한도, 연결 없는 곳의 RST
-   └ TCPConnection (값)   연결 하나: 상태, 보내는·받는 버퍼, 재전송 타이머, 혼잡 제어
-        └ TCPSegment (값)  검증을 마친 세그먼트. IP 패킷 바이트와 서로 바뀐다
+TCPStack (value)        Listener table, 4-tuple → connection, connections being established and accept queue, ISNs and ports, limits, and RST for missing connections
+   └ TCPConnection (value)   One connection with state, send and receive buffers, retransmission timers, and congestion control
+        └ TCPSegment (value)  A validated segment. Converts to and from IP packet bytes
 ```
 
-1. **연결 하나는 값 타입 상태 기계다.** 입력은 세그먼트, 응용의 호출(쓰기·읽기·닫기·중단), 시각이다. 출력은 보낼 세그먼트와 사건(맺어짐, 읽을 것이 생김, 쓸 자리가 생김, 상대가 쓰기를 닫음, 끝남과 그 까닭)이다. 소켓·시계·난수를 갖지 않는다. ISN은 인자로 받는다. WireGuard·엔진과 같은 모양이다(`advance(to:)`, `nextDeadline`).
-2. **스택도 값 타입이다.** ISN을 만들 비밀(32바이트)은 만들 때 인자로 받는다. 시스템 난수는 노드가 뽑는다.
-3. **가장자리는 `TailnetNode` actor 하나다.** 스택은 노드의 저장 프로퍼티이고, 엔진·`Magicsock`과 같은 actor 안에서 `await` 없이 주고받는다. 그래서 노드와 스택 사이에 버퍼도, 버림도, 따로 도는 타이머도 없다. 타이머는 노드의 것 하나가 엔진·`Magicsock`·스택의 가장 이른 기한에 깬다.
-4. **분리된 Task가 없다.** 스택을 움직이는 일은 모두 `run()` 안에서 일어난다. 앱의 읽기·쓰기는 앱의 Task가 노드 actor로 건너와 하고, 기다려야 하면 그 Task가 멈춘다.
+1. **Each connection is a value-type state machine.** Inputs are segments, application calls (write, read, close, and abort), and time. Outputs are outgoing segments and events (established, readable, writable, peer finished writing, and closed with a reason). It owns no socket, clock, or random number generator. The ISN is an argument. It follows the WireGuard and engine design (`advance(to:)`, `nextDeadline`).
+2. **The stack is also a value type.** The 32-byte secret used to generate ISNs is a construction argument. The node draws randomness from the system.
+3. **The only edge is the `TailnetNode` actor.** The stack is a stored property on the node and exchanges data with the engine and `Magicsock` in the same actor without `await`. There is no buffering, dropping, or independent timer between the node and the stack. The node's one timer wakes at the earliest deadline across the engine, `Magicsock`, and stack.
+4. **There is no separate Task.** All stack progress happens in `run()`. An app's Task crosses into the node actor for reads and writes and suspends if it has to wait.
 
 ```swift
-// SwiftailNetstack (package). 모양만 적는다. 이름과 인자는 구현 단위가 확정한다.
+// SwiftailNetstack (package). Outline only. The implementation units finalize names and arguments.
 package struct TCPSegment: Sendable, Equatable {
-    package init(parsingIPPacket bytes: [UInt8]) throws(ParseError)   // 동작 W
-    package func ipPacket(hopLimit: UInt8 = 64) -> [UInt8]?   // nil: 주소 계열이 다르거나 IP 패킷 하나에 들어가지 않음
+    package init(parsingIPPacket bytes: [UInt8]) throws(ParseError)   // Behavior W
+    package func ipPacket(hopLimit: UInt8 = 64) -> [UInt8]?   // nil if address families differ or the segment does not fit in one IP packet
 }
 
 package struct TCPConnection: Sendable {
@@ -85,36 +85,36 @@ package struct TCPStack: Sendable {
     package mutating func receive(_ ipPacket: [UInt8], at now: ContinuousClock.Instant) -> [Output]
     package mutating func advance(to now: ContinuousClock.Instant) -> [Output]
     package var nextDeadline: ContinuousClock.Instant? { get }
-    // listen·stopListening·accept·connect와, 연결 ID로 부르는 write·read·finishWriting·close·abort
+    // listen, stopListening, accept, and connect, plus write, read, finishWriting, close, and abort by connection ID
 }
 ```
 
-## 공개 API (`Swiftail`, M6에서 더하는 것)
+## Public API (`Swiftail`, additions in M6)
 
 ```swift
 import SwiftailBase
 
 public enum TunnelDevice: Sendable {
-    case utun(fileDescriptor: Int32, mtu: Int = 1280)   // M5 그대로
-    case memory(mtu: Int = 1280)                         // M5 그대로
-    /// 프로세스 안의 TCP 스택. 피어가 이 노드의 주소로 보낸 패킷을 스택이 받고, 스택이 만든 패킷이 tailnet으로 나간다.
-    /// `listen(port:)`과 `connect(to:port:)`는 이 장치에서만 쓸 수 있다. MTU는 1280으로 고정이다.
+    case utun(fileDescriptor: Int32, mtu: Int = 1280)   // Same as M5
+    case memory(mtu: Int = 1280)                         // Same as M5
+    /// An in-process TCP stack. It receives packets peers send to this node's addresses and sends its own packets to the tailnet.
+    /// `listen(port:)` and `connect(to:port:)` are available only with this device. The MTU is fixed at 1280.
     case inProcess
 }
 
 extension TailnetNode {
-    /// 이 노드의 tailnet 주소(IPv4·IPv6)에서 TCP 포트 하나를 듣는다. tsnet `Listen("tcp", ":<port>")`.
-    /// `run()` 전에 불러도 된다. `run()`이 끝나면 리스너도 끝난다.
+    /// Listens on one TCP port at this node's tailnet addresses (IPv4 and IPv6). Corresponds to tsnet `Listen("tcp", ":<port>")`.
+    /// You can call this before `run()`. The listener ends when `run()` ends.
     public func listen(port: UInt16) throws(ConnectionError) -> TailnetListener
 
-    /// tailnet의 피어에게 TCP 연결을 건다. tsnet `Dial(ctx, "tcp", "<host>:<port>")`.
-    /// `host`는 IP 주소이거나 netmap에 있는 이름(MagicDNS FQDN, 짧은 이름)이다. 연결이 맺어질 때까지 기다린다.
-    /// 호출한 Task를 취소하면 시도를 버리고 `.cancelled`를 던진다.
+    /// Opens a TCP connection to a tailnet peer. Corresponds to tsnet `Dial(ctx, "tcp", "<host>:<port>")`.
+    /// `host` is an IP address or a name in the netmap (a MagicDNS FQDN or short name). This call waits for the connection to establish.
+    /// Canceling the calling Task abandons the attempt and throws `.cancelled`.
     public func connect(to host: String, port: UInt16) async throws(ConnectionError) -> TailnetConnection
 }
 
-/// 듣는 포트 하나. 맺어진 연결을 차례로 낸다. 리스너를 닫거나 `run()`이 끝나면 흐름이 끝난다.
-/// 한 번에 한 Task만 돌 수 있다. 버려지면(`deinit`) 닫힌다.
+/// A single listening port that yields established connections in order. The stream ends when you close the listener or `run()` ends.
+/// Only one Task can iterate at a time. The listener closes when deinitialized (`deinit`).
 ///
 ///     let listener = try await node.listen(port: 443)
 ///     for await connection in listener { … }
@@ -122,338 +122,338 @@ public final class TailnetListener: AsyncSequence, Sendable {
     public typealias Element = TailnetConnection
     public typealias Failure = Never
     public let port: UInt16
-    /// 듣기를 그만둔다. 아직 받아 가지 않은 연결은 RST로 끊는다. 이미 받아 간 연결은 그대로다.
+    /// Stops listening. Resets unaccepted connections with RST. Accepted connections continue.
     public func close() async
 }
 
-/// 맺어진 TCP 연결 하나. 읽기 하나와 쓰기 하나를 서로 다른 Task에서 동시에 해도 된다.
-/// 닫지 않고 버려지면(`deinit`) RST로 끊는다.
+/// An established TCP connection. One read and one write can run concurrently in separate Tasks.
+/// Deinitialization (`deinit`) resets the connection with RST if it has yet to close.
 public final class TailnetConnection: Sendable {
-    /// 이 노드 쪽 주소와 포트.
+    /// The local node's address and port.
     public let localEndpoint: IPEndpoint
-    /// 상대의 tailnet 주소와 포트. 주소는 WireGuard가 인증한 피어의 것이다(엔진 계약 M3 동작 2·5의 AllowedIPs 출발지 검사).
+    /// The peer's tailnet address and port. The address belongs to the peer authenticated by WireGuard (AllowedIPs source check in M3 engine contract behaviors 2 and 5).
     public let remoteEndpoint: IPEndpoint
 
-    /// 받은 바이트를 순서대로 돌려준다. 버퍼에 있는 만큼(1바이트 이상, `maximumLength` 이하) 곧바로, 없으면 올 때까지 기다린다.
-    /// 상대가 쓰기를 닫았고 남은 것이 없으면 nil. 읽어 간 만큼 받는 창이 열린다.
+    /// Returns received bytes in order. Returns buffered bytes immediately (at least 1 byte and at most `maximumLength`) or waits for bytes to arrive.
+    /// Returns nil when the peer has finished writing and the buffer is empty. Reading opens the receive window by the number of bytes read.
     public func read(upTo maximumLength: Int = 65_536) async throws(ConnectionError) -> [UInt8]?
 
-    /// 바이트를 모두 보내는 버퍼에 넣을 때까지 기다린다. 상대가 받았다는 뜻이 아니다. 버퍼가 차면 자리가 날 때까지 멈춘다.
-    /// 취소되면 연결을 RST로 끊고 `.cancelled`를 던진다(얼마나 들어갔는지 알 수 없기 때문이다).
+    /// Waits until all bytes enter the send buffer. The peer may not have received them yet. A full buffer suspends the call until space becomes available.
+    /// Cancellation resets the connection with RST and throws `.cancelled` because the number of buffered bytes is unknown.
     public func write(_ bytes: [UInt8]) async throws(ConnectionError)
 
-    /// 보내기를 끝낸다(FIN). 버퍼에 남은 것을 다 보낸 뒤에 나간다. 읽기는 계속할 수 있다. tsnet `CloseWrite`.
+    /// Finishes sending (FIN) after all buffered bytes have been sent. Reads can continue. Corresponds to tsnet `CloseWrite`.
     public func finishWriting() async throws(ConnectionError)
 
-    /// 연결을 닫는다. 버퍼에 남은 것을 보내고 FIN으로 끝낸다. 곧바로 돌아오고, 마무리는 노드가 `run()` 안에서 한다.
-    /// 읽지 않은 데이터가 있거나 닫은 뒤에 데이터가 오면 RST로 끊는다. tsnet `Close`.
+    /// Closes the connection. Sends remaining buffered data and finishes with FIN. Returns immediately, and the node finishes the work in `run()`.
+    /// Resets the connection with RST if data remains unread or arrives after closing. Corresponds to tsnet `Close`.
     public func close() async
 
-    /// 연결을 곧바로 끊는다(RST). 버퍼의 것은 버린다.
+    /// Resets the connection immediately (RST) and discards buffered data.
     public func abort() async
 }
 
-/// 듣기·걸기·연결의 실패.
+/// Failures while listening, connecting, or using a connection.
 public enum ConnectionError: Error, Sendable, Equatable {
-    /// 장치가 `.inProcess`가 아니거나, 포트가 0이거나, 호스트가 비었다. 메시지는 무엇이 잘못됐는지만 담는다.
+    /// The device is other than `.inProcess`, the port is 0, or the host is empty. The message states only what is invalid.
     case invalidConfiguration(String)
-    /// 노드가 돌고 있지 않다(`run()`이 끝났다). `connect`는 상태가 `.running`이 아닐 때도 이것이다.
+    /// The node is no longer running (`run()` ended). `connect` also returns this error when the state is other than `.running`.
     case notRunning
-    /// 이름이 netmap에 없거나, 그 주소를 가진 피어가 없다.
+    /// The netmap has no such name, or no peer owns that address.
     case unknownHost
-    /// 그 포트에 이미 리스너가 있다.
+    /// A listener already uses the port.
     case addressInUse
-    /// 연결 수나 리스너 수가 상한에 닿았다.
+    /// The connection or listener count reached its limit.
     case limitReached
-    /// 건 연결을 상대가 거절했다(SYN에 RST).
+    /// The peer refused the connection attempt (RST in response to SYN).
     case refused
-    /// 상대가 답하지 않는다(재전송 한도, keep-alive 무응답, 닫는 중의 기한).
+    /// The peer did not respond (retransmission limit, no keep-alive response, or closing deadline).
     case timedOut
-    /// 상대가 연결을 끊었다(RST).
+    /// The peer reset the connection (RST).
     case reset
-    /// 상대가 netmap에서 빠졌거나 그 주소의 주인이 바뀌었다. 또는 이 노드의 주소가 바뀌었다.
+    /// The peer left the netmap, the owner of its address changed, or this node's address changed.
     case peerRemoved
-    /// 이미 닫거나 끊은 연결·리스너다.
+    /// The connection or listener has already been closed or aborted.
     case closed
-    /// 호출한 Task가 취소되었다.
+    /// The calling Task was canceled.
     case cancelled
-    /// 같은 방향의 호출이 이미 기다리고 있다(읽기 둘, 쓰기 둘).
+    /// A call in the same direction is already waiting (two reads or two writes).
     case concurrentUse
 }
 ```
 
-tsnet과의 대응:
+API correspondence with tsnet
 
-| tsnet(Go) | Swiftail | 다른 점 |
+| tsnet (Go) | Swiftail | Differences |
 | --- | --- | --- |
-| `Server.Listen("tcp", ":443")` | `node.listen(port: 443)` | 주소 지정, `tcp4`·`tcp6`, 포트 0이 없다(제외 표) |
-| `Listener.Accept()` | `for await connection in listener` | 받아 가지 않은 연결을 1초 뒤에 닫지 않는다. 대기열 상한으로 묶는다(동작 S5) |
-| `Listener.Close()` | `listener.close()`, 또는 버림 | |
-| `Server.Dial(ctx, "tcp", "host:443")` | `node.connect(to: "host", port: 443)` | `Running`을 기다리지 않는다. tailnet 밖의 주소로 걸지 않는다(동작 A2) |
-| `net.Conn.Read`·`Write` | `read(upTo:)`·`write(_:)` | 시간 제한(deadline)이 없다. Task 취소로 끊는다 |
+| `Server.Listen("tcp", ":443")` | `node.listen(port: 443)` | Address selection, `tcp4` and `tcp6`, and port 0 are unsupported (exclusions table) |
+| `Listener.Accept()` | `for await connection in listener` | Unaccepted connections have no 1-second close deadline. The queue limit bounds them (behavior S5) |
+| `Listener.Close()` | `listener.close()` or dropping the listener | |
+| `Server.Dial(ctx, "tcp", "host:443")` | `node.connect(to: "host", port: 443)` | Does not wait for `Running` or connect to addresses outside the tailnet (behavior A2) |
+| `net.Conn.Read` and `Write` | `read(upTo:)` and `write(_:)` | Calls have no deadline. Cancel the Task to terminate them |
 | `CloseWrite()` | `finishWriting()` | |
 | `Close()` | `close()` | |
 | `SetLinger(0)` + `Close()` | `abort()` | |
-| `RemoteAddr()`·`LocalAddr()` | `remoteEndpoint`·`localEndpoint` | 문자열이 아니라 `IPEndpoint`다 |
+| `RemoteAddr()` and `LocalAddr()` | `remoteEndpoint` and `localEndpoint` | These return `IPEndpoint` values in place of strings |
 
-`docs/plan.md` 6절 초안과 다른 점: `dial(host:port:)` → `connect(to:port:)`(총괄 확인 필요 N2), `listen`이 `async`가 아니다(actor 메서드라 밖에서는 `await`로 부르지만 안에서 기다리는 것이 없다), `TunnelDevice.inProcess`에 인자가 없다.
+Differences from the draft in `docs/plan.md` §6 are `dial(host:port:)` → `connect(to:port:)` (lead session confirmation needed N2), `listen` is synchronous rather than `async` (an actor method that requires `await` from outside but does not wait internally), and `TunnelDevice.inProcess` takes no arguments.
 
-## 동작
+## Behaviors
 
-번호는 시험과 검토에서 가리키는 이름이다. 값은 따로 적지 않으면 이 계약의 제안값이고 관문의 기록으로 조정한다.
+Tests and reviews refer to behaviors by number. Unless stated otherwise, values are proposed by this contract and are adjusted using gate measurements.
 
-### W. 세그먼트 코덱 (`TCPSegment`)
+### W. Segment codec (`TCPSegment`)
 
-1. **해석**: 입력은 IP 패킷 바이트다. IPv4(옵션 포함)와 IPv6(확장 헤더 없음)의 머리에서 주소와 길이를 읽고, 프로토콜이 6이 아니면 `notTCP`, TCP 머리가 20바이트보다 짧거나 data offset이 5 미만이거나 세그먼트 밖을 가리키면 `malformed`, 체크섬이 틀리면 `badChecksum`이다. 엔진이 이미 IP 머리를 검사했지만(`IPPacket`), 스택은 자기 경계에서 다시 본다(스택만 따로 시험할 수 있고, 패킷 캡처를 그대로 넣을 수 있다).
-2. **옵션**(TCP 노트 3.2): EOL에서 멈추고 NOP는 건너뛴다. MSS(kind 2, 길이 4), Window Scale(kind 3, 길이 3), SACK-Permitted(kind 4, 길이 2), SACK(kind 5, 길이 `2 + 8n`, n ≥ 1)만 읽는다. 앞의 셋은 SYN에서만, SACK은 SYN이 아닌 세그먼트에서만 담고 나머지 경우는 무시한다(RFC 2018 2: SACK-Permitted는 SYN에만 보낸다). 모르는 옵션은 길이로 건너뛴다. 길이가 2보다 작거나 머리 밖으로 나가면 세그먼트를 `malformed`로 버린다(MUST-7의 대비. 연결을 끊지 않는다). MSS 0은 536(IPv4)·1220(IPv6)으로, shift가 14를 넘으면 14로 읽는다(RFC 7323 2.3). SACK 블록은 왼쪽 끝·오른쪽 끝 32비트 둘을 옵션의 순서대로 값으로 내놓고, 번호의 뜻(왼쪽이 오른쪽보다 앞인지, 보낸 범위 안인지)은 따지지 않는다. 블록이 옵션 공간 40바이트를 넘는 SACK(n ≥ 5, 길이 42 이상)은 머리 밖으로 나가므로 `malformed`다. **연결은 받은 SACK 블록을 아직 쓰지 않는다**(보내는 쪽 회복은 M6-10b).
-3. **만들기**: 머리 20바이트 + 옵션 + 데이터. SYN에는 MSS, NOP 둘과 SACK-Permitted(실을 때), NOP와 Window Scale(협상 중이면)을 이 순서로 싣는다(gVisor `makeSynOptions`가 따르는 Linux의 순서). SYN이 아닌 세그먼트에는 SACK 블록이 있을 때만 NOP 둘과 SACK을 싣는다(gVisor `makeOptions`와 같다). 어느 조합이든 4바이트 경계에 맞는다. SACK 블록이 4개를 넘으면 머리에 들어가지 않아 만들지 않는다(`nil`). 체크섬을 채운다. IP 머리는 IPv4면 IHL 5, DF 켬, 식별자 0, TTL 64. IPv6면 hop limit 64, flow label 0. 64는 Go·gVisor의 기본값이다(터널 계약 동작 L2).
-4. urgent pointer와 CWR·ECE는 보낼 때 0, 받을 때 무시한다.
-구현에서 정해진 것(M6-1, 2026-11-15):
+1. **Parsing**. Input is IP packet bytes. Read addresses and lengths from the IPv4 header (including options) or IPv6 header (no extension headers). Return `notTCP` if the protocol is other than 6, `malformed` if the TCP header is shorter than 20 bytes, the data offset is below 5, or it points outside the segment, and `badChecksum` for a bad checksum. Although the engine has already validated the IP header (`IPPacket`), the stack checks it again at its own boundary. This supports independent stack tests and direct input from packet captures.
+2. **Options** (TCP notes §3.2). Stop at EOL and skip NOP. Read only MSS (kind 2, length 4), Window Scale (kind 3, length 3), SACK-Permitted (kind 4, length 2), and SACK (kind 5, length `2 + 8n`, n ≥ 1). Store the first three only in SYN segments and SACK only in non-SYN segments. Ignore them in other cases (RFC 2018 §2 sends SACK-Permitted only in SYN). Skip unknown options using their length. If the length is below 2 or goes past the header, drop the segment as `malformed` (the precaution for MUST-7. The connection stays open). Read MSS 0 as 536 (IPv4) or 1220 (IPv6) and clamp shifts above 14 to 14 (RFC 7323 §2.3). Return SACK blocks as pairs of 32-bit left and right edges in option order, without judging what the numbers mean (whether the left edge precedes the right or is within the sent range). A SACK whose blocks exceed the 40-byte option space (n ≥ 5, length at least 42) extends beyond the header and is `malformed`. **The connection does not use received SACK blocks yet** (sender recovery is M6-10b).
+3. **Encoding**. Encode a 20-byte header + options + data. In a SYN, include MSS, two NOPs and SACK-Permitted (when present), and NOP and Window Scale (if negotiating), in that order (the Linux order followed by gVisor `makeSynOptions`). In non-SYN segments, include two NOPs and SACK only when there are SACK blocks (as in gVisor `makeOptions`). Every combination aligns to 4 bytes. Over 4 SACK blocks do not fit in the header, so return `nil` without encoding. Fill in the checksum. For the IP header, IPv4 uses IHL 5, DF set, identifier 0, TTL 64. IPv6 uses hop limit 64 and flow label 0. 64 is the Go and gVisor default (tunnel contract behavior L2).
+4. Set urgent pointer, CWR, and ECE to 0 on send and ignore them on receive.
+Implementation decisions (M6-1, 2026-11-15)
 
-- 검사 순서는 IP 머리의 구조 → 프로토콜(`notTCP`) → 조각 → IPv4 머리 체크섬 → TCP 머리 → TCP 체크섬 → 옵션이다. IPv4 머리 체크섬도 본다(틀리면 `badChecksum`). IPv4 조각(MF나 오프셋)은 `malformed`, IPv6 확장 헤더·조각 헤더(next header가 6이 아님)는 `notTCP`다.
-- 길이가 규격과 다른 MSS(4가 아님)·Window Scale(3이 아님)은 값을 읽지 않고 길이로 건너뛴다. 같은 옵션이 여럿이면 뒤의 것이 남는다(gVisor와 같다). SYN이 아닌 세그먼트도 옵션의 길이는 검사한다.
-- 구현에서 정해진 것(M6-10a, 2026-11-15): 길이가 2가 아닌 SACK-Permitted와, 길이가 `2 + 8n`(n ≥ 1)이 아닌 SACK(블록 없는 길이 2 포함)도 같은 규칙으로 값을 읽지 않고 길이로 건너뛴다. gVisor는 길이가 `2 + 8n`이 아닌 SACK에서 해석을 멈추고(뒤에 다른 옵션이 없으면 결과가 같다), 길이 2인 SACK은 블록 0개로 읽어 **앞서 읽은 블록을 비우고** 다음 옵션으로 넘어간다(`header/tcp.go`). 그래서 "정상 SACK 뒤에 길이 2인 SACK"에서는 Swift가 앞의 블록을 남기고 gVisor는 비운다. 기준 자료에는 이 조합이 없다(대조 도구가 블록의 차이를 표시하지 못한다). 받은 블록을 쓰기 시작하는 M6-10b에서 다시 본다. 필드는 `sackPermitted`(SYN에만)와 `sackBlocks`(`TCPSegment.SACKBlock`의 `leftEdge`·`rightEdge`, SYN이 아닌 세그먼트에만)다. Go 기준값 대조에 SACK 사례 13개를 더했다(gVisor 인코더로 만든 SYN·ACK 5개는 Swift가 만드는 바이트와도 같다. 머리 밖으로 나가는 SACK 2개는 gVisor가 해석을 멈추고 계약은 `malformed`로 버리는 표시된 차이다).
-- 선언: `TCPSegment`의 필드는 `source`·`destination`(`IPEndpoint`), `sequenceNumber`·`acknowledgmentNumber`(`SequenceNumber`), `flags`(`fin`·`syn`·`rst`·`psh`·`ack`), `window`(머리의 16비트 그대로), `maximumSegmentSize`·`windowScale`(SYN에만), `payload`, 그리고 `sequenceLength`(SEG.LEN)다. 체크섬은 `SwiftailBase`의 `InternetChecksum`(`add`, `addPseudoHeader`, `value`)이다.
+- Validation order is IP header structure → protocol (`notTCP`) → fragmentation → IPv4 header checksum → TCP header → TCP checksum → options. Check the IPv4 header checksum too (`badChecksum` on failure). IPv4 fragments (MF or offset) are `malformed`. IPv6 extension and fragmentation headers (next header other than 6) produce `notTCP`.
+- Skip MSS with a nonstandard length (other than 4) and Window Scale with a nonstandard length (other than 3) by length without reading the value. If an option occurs more than once, the last one wins (as in gVisor). Validate option lengths for non-SYN segments too.
+- Implementation decisions (M6-10a, 2026-11-15). Skip SACK-Permitted with a length other than 2 and SACK with a length other than `2 + 8n` (n ≥ 1, including length 2 with no blocks) by length without reading the value, under the same rule. gVisor stops parsing on a SACK whose length is other than `2 + 8n` (the result is the same if no more options follow) and reads a SACK of length 2 as 0 blocks, **clearing earlier blocks**, then moves to the next option (`header/tcp.go`). Thus, for "valid SACK followed by a SACK of length 2," Swift retains the earlier blocks and gVisor clears them. This combination is absent from the reference fixtures because the comparison tool cannot show the difference in blocks. Revisit it in M6-10b, when received blocks become used. The fields are `sackPermitted` (SYN only) and `sackBlocks` (`leftEdge` and `rightEdge` of `TCPSegment.SACKBlock`, non-SYN only). 13 SACK cases were added to the Go reference comparison (5 gVisor-encoded SYNs and ACKs also match Swift's encoded bytes. The 2 SACKs extending past the header are documented differences where gVisor stops parsing and the contract drops them as `malformed`).
+- Declaration. `TCPSegment` fields are `source` and `destination` (`IPEndpoint`), `sequenceNumber` and `acknowledgmentNumber` (`SequenceNumber`), `flags` (`fin`, `syn`, `rst`, `psh`, `ack`), `window` (the 16-bit header value as given), `maximumSegmentSize` and `windowScale` (SYN only), `payload`, and `sequenceLength` (SEG.LEN). The checksum uses `InternetChecksum` (`add`, `addPseudoHeader`, `value`) from `SwiftailBase`.
 
-5. 시퀀스 번호는 2^32 순환 타입(`SequenceNumber`)으로만 다룬다. 비교와 차이는 부호 있는 32비트 차이로 한다. `UInt32`를 직접 견주는 코드가 없어야 한다.
+5. Handle sequence numbers only as a wrapping modulo-2^32 type (`SequenceNumber`). Use the signed 32-bit difference for comparisons and differences. There must be no code directly comparing `UInt32` values.
 
-### T. 연결 상태 기계 (`TCPConnection`)
+### T. Connection state machine (`TCPConnection`)
 
-1. 상태는 SYN-SENT, SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN-WAIT-2, CLOSE-WAIT, CLOSING, LAST-ACK, TIME-WAIT, CLOSED다(RFC 9293 3.3.2). LISTEN은 스택이 맡는다(동작 S).
-2. **세그먼트 처리 순서**는 RFC 9293 3.10.7.4(TCP 노트 4.2) 그대로다: 시퀀스 검사 → RST → SYN → ACK → 데이터 → FIN. 순서를 바꾸지 않는다. SYN-SENT는 이 순서가 아니라 RFC 9293 3.10.7.3의 절차를 따로 따른다(ACK 검사 → RST → SYN). gVisor의 처리 순서는 RFC와 다르므로(받은 데이터를 먼저, ACK를 나중에) 순서의 근거로 쓰지 않는다. FIN은 그 앞의 데이터가 빈 곳 없이 도착한 뒤에만 소비한다.
-3. **능동 열기**: SYN(MSS, SACK-Permitted, Window Scale)을 보내고 SYN-SENT. 다시 보내는 SYN도 같은 옵션이다. SYN-ACK를 받으면 ACK를 보내고 ESTABLISHED, `.established`. RST(ACK가 맞는 것)를 받으면 `.closed(.refused)`. ACK 없는 SYN(동시 열기)은 버린다(제외 표).
-4. **수동 열기**: 스택이 SYN을 넘겨 연결을 만든다. SYN-ACK를 보내고 SYN-RECEIVED. SYN-ACK에는 상대의 SYN에 SACK-Permitted가 있었을 때만 SACK-Permitted를 싣는다(RFC 2018은 수동 쪽의 조건을 정하지 않는다. gVisor `connect.go`의 SYN-ACK와 같다). 다시 보내는 SYN-ACK도 같다. **SACK 블록은 방향마다, 상대의 SYN(SYN-ACK)에 SACK-Permitted가 있었을 때만 보낸다**(RFC 2018 4 MUST NOT). 옵션 공간: SYN의 옵션은 MSS 4 + NOP 둘과 SACK-Permitted 4 + NOP와 Window Scale 4 = 12바이트로 40바이트 안이다. 맞는 ACK를 받으면 ESTABLISHED, `.established`. 틀린 ACK에는 `<SEQ=SEG.ACK><CTL=RST>`. RST는 동작 X3의 규칙으로 본다: `SEG.SEQ = RCV.NXT`일 때만 조용히 사라지고, 창 안의 다른 값이면 challenge ACK다(`.closed`를 내되 앱에는 알려지지 않는다. 아직 accept되지 않았다).
-5. **MSS**: 광고하는 값은 1280 − IP 머리 − 20이다(IPv4 1240, IPv6 1220. TCP 노트 7절). 보내는 세그먼트의 데이터는 `min(상대가 광고한 MSS, 광고하는 값과 같은 식)`에서 그 세그먼트의 TCP 옵션 길이를 뺀 것 이하다(RFC 9293 3.7.1). 데이터 세그먼트의 옵션은 SACK뿐이고 길이는 `4 + 8n`(블록 n개, 4개면 36바이트)이다. 광고하는 MSS가 MTU 1280을 꽉 채우므로 미리 둔 여유가 없다: SACK이 실리면 그만큼 데이터를 줄인다(IPv4 블록 4개면 1204바이트. M6-10a). 상대의 SYN에 MSS 옵션이 없으면 IPv4 536, IPv6 1220으로 본다(같은 절). MSS를 지킨다고 경로에서 단편화되지 않는 것은 아니다. tailnet 경로는 WireGuard가 1280을 보장한다.
-6. **닫기**(TCP 노트 4.4):
-   - `finishWriting`: 보내는 버퍼가 비면 FIN을 보낸다. ESTABLISHED → FIN-WAIT-1, CLOSE-WAIT → LAST-ACK.
-   - `close`: `finishWriting`에 더해 읽기를 끝낸다. 받는 버퍼에 읽지 않은 데이터가 있으면 곧바로 RST를 보내고 끝난다. 닫은 뒤에 데이터가 오면 RST를 보내고 끝난다(SHLD-3).
-   - FIN-WAIT-2에서 `close`를 부른 연결은 60초 안에 상대의 FIN이 오지 않으면 사라진다(gVisor의 linger 기본값). `finishWriting`만 부른 연결(읽는 쪽이 살아 있다)은 기한이 없고 keep-alive가 지킨다.
-   - TIME-WAIT는 60초다(gVisor의 값이다. RFC 9293 3.6.1의 2MSL은 4분이다). 이 상태에서 FIN이 든 세그먼트가 오면, 시퀀스 검사로는 받지 않는 세그먼트(이미 소비한 FIN의 재전송)여도 ACK로 답하고 60초를 다시 잰다(RFC 9293 3.10.7.4의 TIME-WAIT 예외). 일반 시퀀스 검사에서 먼저 버리면 여기에 닿지 못하므로 따로 본다.
-   - `abort`: SYN-SENT면 아무것도 보내지 않고, 그 밖에는 `<SEQ=SND.NXT><CTL=RST>`를 보내고 CLOSED.
-   - 받는 창이 0이어도 **RCV.NXT에 온 데이터 없는 FIN은 소비한다**(FIN은 버퍼를 쓰지 않는다. gVisor는 데이터 없는 FIN을 창과 무관하게 보내고 그 재전송은 RTO로 물러나므로, 받지 않으면 EOF가 최대 120초 늦고 상대의 재전송 한도에 닿을 수 있다. M6 검토 A).
-7. **상대가 닫음**: FIN을 받으면 `.endOfStream`. 그 전에 받은 데이터는 모두 읽을 수 있다. RST를 받으면 버퍼를 비우고 `.closed(.reset)`. 둘은 다른 사건이다(MUST-12).
-8. **keep-alive**: ESTABLISHED·CLOSE-WAIT·FIN-WAIT-2에서 받은 것도 보낼 것도 없이 2시간이 지나면 `<SEQ=SND.NXT-1><CTL=ACK>`(데이터 없음)를 75초마다 보낸다. 9번 보내도록 아무것도 받지 못하면 `.closed(.timedOut)`. 무엇이든 받으면 다시 2시간을 잰다. 값은 gVisor 기본값이다(TCP 노트 5절). 끄는 길은 없다(총괄 확인 필요 N5).
-9. 받은 keep-alive 탐침(`SEG.SEQ = RCV.NXT-1`, 길이 0 또는 1)에는 시퀀스 검사의 "받지 않는 세그먼트에 ACK" 규칙으로 답하게 된다. 따로 처리하지 않는다.
+1. States are SYN-SENT, SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN-WAIT-2, CLOSE-WAIT, CLOSING, LAST-ACK, TIME-WAIT, and CLOSED (RFC 9293 §3.3.2). The stack handles LISTEN (behavior S).
+2. **Segment processing order** follows RFC 9293 §3.10.7.4 (TCP notes §4.2) exactly: sequence check → RST → SYN → ACK → data → FIN. Keep this order. SYN-SENT follows the separate RFC 9293 §3.10.7.3 procedure (ACK check → RST → SYN). gVisor's processing order differs from the RFC (received data first, ACK later), so it is not the basis for this order. Consume FIN only after all preceding data has arrived without gaps.
+3. **Active open**. Send SYN (MSS, SACK-Permitted, and Window Scale) and enter SYN-SENT. Retransmitted SYNs use the same options. On SYN-ACK, send ACK, enter ESTABLISHED, and emit `.established`. On RST with a valid ACK, emit `.closed(.refused)`. Drop SYN without ACK (simultaneous open, exclusions table).
+4. **Passive open**. The stack passes in a SYN to create the connection. Send SYN-ACK and enter SYN-RECEIVED. Include SACK-Permitted in the SYN-ACK only if the peer's SYN included it (RFC 2018 does not specify a condition for the passive side. This matches the SYN-ACK in gVisor `connect.go`). Retransmitted SYN-ACKs follow the same rule. **Send SACK blocks in each direction only if the peer's SYN (SYN-ACK) carried SACK-Permitted** (RFC 2018 §4 MUST NOT). The SYN option space used is MSS 4 + two NOPs and SACK-Permitted 4 + NOP and Window Scale 4 = 12 bytes, within 40 bytes. On valid ACK, enter ESTABLISHED and emit `.established`. Reply to an invalid ACK with `<SEQ=SEG.ACK><CTL=RST>`. Handle RST under behavior X3. Only `SEG.SEQ = RCV.NXT` silently removes the connection. Other values in the window elicit a challenge ACK. For a silent removal, emit `.closed` without notifying the app because it has yet to accept the connection.
+5. **MSS**. Advertise 1280 − IP header − 20 (IPv4 1240, IPv6 1220, TCP notes §7). Outgoing data length is at most `min(peer's advertised MSS, same formula as the advertised value)` minus the TCP option length of that segment (RFC 9293 §3.7.1). SACK is the only data segment option and has length `4 + 8n` (n blocks, 36 bytes for 4 blocks). The advertised MSS fills the 1280 MTU, leaving no spare space. Carrying SACK reduces the data by that amount (1204 bytes for IPv4 with 4 blocks, M6-10a). With no MSS option in the peer SYN, assume 536 for IPv4 or 1220 for IPv6 (same section). Honoring MSS does not rule out fragmentation along the path. WireGuard guarantees 1280 for the tailnet path.
+6. **Closing** (TCP notes §4.4)
+   - `finishWriting` sends FIN when the send buffer empties. ESTABLISHED → FIN-WAIT-1, CLOSE-WAIT → LAST-ACK.
+   - `close` ends reading in addition to `finishWriting`. If unread data is in the receive buffer, send RST immediately and end. If data arrives after closing, send RST and end (SHLD-3).
+   - A connection on which `close` was called goes away in FIN-WAIT-2 if the peer's FIN has not arrived within 60 seconds (gVisor's default linger). A connection that only called `finishWriting` (read side stays open) has no deadline and is protected by keep-alive.
+   - TIME-WAIT lasts 60 seconds (gVisor's value. 2MSL in RFC 9293 §3.6.1 is 4 minutes). If a FIN-bearing segment arrives in this state, send ACK and restart the 60-second timer even if the sequence check would reject it (retransmission of a consumed FIN, RFC 9293 §3.10.7.4 TIME-WAIT exception). Check this separately because dropping it in the normal sequence check would prevent this path from running.
+   - `abort` sends nothing in SYN-SENT. Otherwise, send `<SEQ=SND.NXT><CTL=RST>` and enter CLOSED.
+   - Even when the receive window is 0, **consume a data-free FIN arriving at RCV.NXT**. FIN uses no buffer space. gVisor sends data-free FIN regardless of the window and backs off retransmissions by RTO. Rejecting it could delay EOF by up to 120 seconds and hit the peer's retransmission limit (M6 review A).
+7. **Peer closes**. On FIN, emit `.endOfStream`. All data received before it remains readable. On RST, empty the buffers and emit `.closed(.reset)`. These are separate events (MUST-12).
+8. **keep-alive**. After 2 hours without receiving or sending in ESTABLISHED, CLOSE-WAIT, or FIN-WAIT-2, send `<SEQ=SND.NXT-1><CTL=ACK>` (no data) every 75 seconds. If nothing arrives after sending 9 probes, emit `.closed(.timedOut)`. Receiving anything restarts the 2-hour interval. These are gVisor defaults (TCP notes §5). Keep-alive cannot be disabled (lead session confirmation needed N5).
+9. The sequence check's "ACK an unacceptable segment" rule answers an incoming keep-alive probe (`SEG.SEQ = RCV.NXT-1`, length 0 or 1). No separate handling is required.
 
-구현에서 정해진 것(M6-4, 2026-11-15. `Sources/SwiftailNetstack/Connection/`):
+Implementation decisions (M6-4, 2026-11-15, `Sources/SwiftailNetstack/Connection/`)
 
-- **생성**: `TCPConnection.connect(from:to:initialSequenceNumber:at:)`와, 스택이 ACK·RST 없는 SYN을 넘기는 `accept(_:initialSequenceNumber:at:) throws(AcceptError)`다. 상대 MSS가 64보다 작으면 그 SYN에 답할 RST를 오류에 담아 던진다. SYN·SYN-ACK에 실린 데이터와 FIN은 받지 않는다(상대가 다시 보낸다).
-- **곧바로 보낼 ACK는 그 세그먼트의 `receive` 출력으로 낸다.** 어긋난 데이터, 빈 곳을 메운 데이터, 2×MSS가 쌓인 순서대로 온 데이터, FIN, 창 밖 세그먼트, challenge ACK의 ACK는 "지금"이 기한인 타이머로 두었다가 그 `receive`의 끝에서 낸다(나가는 데이터가 있으면 거기에 실린다). 40ms 기한으로 미룬 ACK만 `advance(to:)`가 낸다. 스택과 노드는 패킷 묶음을 넣은 뒤 같은 시각으로 `advance(to:)`를 부른다(동작 N4). 응용 호출(`write`·`read`·`close` 등)은 끝에서 바로 낸다. 처음에는 `receive`가 순수 ACK를 내지 않고 묶음 끝의 `advance`가 모아 냈는데, 노드가 UDP를 묶음으로 받게 되자 묶음 안의 어긋난 세그먼트들의 ACK가 하나로 합쳐져 상대의 fast retransmit이 늦어지므로 바꿨다(2026-11-15).
-- **닫힌 까닭**은 `finished`·`reset`·`refused`·`timedOut`·`aborted`다. `finished`만 받는 버퍼를 남긴다. `close(at:)`가 선언에 더해졌다. `peerRemoved`는 연결이 아니라 스택이 낸다(아무것도 보내지 않고 연결을 버린다).
-- **타이머**는 일곱 개(TIME-WAIT, FIN-WAIT-2 linger, 재전송, 0 창 탐침, SWS override, keep-alive, ACK)이고 `nextDeadline`은 그중 가장 이른 것이다. 끝난 연결은 nil이다. 같은 시각이면 데이터를 내는 타이머가 ACK보다 먼저다.
-- **go-back-N**은 SND.NXT를 되돌리지 않고 "다음에 보낼 번호"를 따로 둔다(gVisor와 같다). ACK의 범위 검사는 지금까지 보낸 가장 높은 번호가 기준이다.
-- **0 창 탐침**은 `<SEQ=SND.UNA−1>`에 0 한 바이트를 실은 ACK다(gVisor의 형식. RFC 9293 3.8.6.1의 "새 데이터 한 바이트"와 다르다. 탐침이 재전송 횟수에 섞이지 않는다). 창이 0일 때 RCV.NXT에서 시작하는 데이터 세그먼트는 데이터만 버리고 ACK·RST를 처리한 뒤 곧바로 ACK한다(RFC 9293 3.10.7.4).
-- SYN-RECEIVED의 틀린 ACK는 RFC 5961 5.2의 범위 검사보다 먼저 보고 늘 RST로 답한다(T4, Linux·gVisor와 같다). challenge ACK의 속도 제한(5초에 10개)은 동작 X2·X3의 ACK에도 함께 쓴다.
-- TIME-WAIT의 FIN 예외는 번호가 RCV.NXT−1인 FIN에만 적용한다(이미 소비한 FIN의 재전송. gVisor와 같다). `abort`는 CLOSING·LAST-ACK·TIME-WAIT에서 RST를 보내지 않는다(RFC 9293 3.10.5). SYN-SENT의 `close`는 아무것도 보내지 않고 `aborted`로 끝난다.
-- 지연 ACK의 2×MSS는 이 쪽이 광고한 MSS가 기준이다. SYN을 다시 보내지 않았으면 핸드셰이크 왕복이 RTT의 첫 표본이다. PSH는 버퍼의 마지막 바이트를 싣는 세그먼트에 켠다.
-- 빈 곳 너머에 먼저 온 FIN은 번호를 적어 두었다가 그 앞의 데이터가 다 도착하면 소비한다(RFC 9293 3.10.7.4 SHLD-31. 처음에는 `shortcut:`이었으나 독립 시험 M6-6이 짚어 넣었다).
-- 손실이 심한 경로에서는 닫기가 `finished`가 아니라 `timedOut`으로 끝날 수 있다: TIME-WAIT 60초가 지난 뒤에야 상대의 FIN 재전송(RTO가 120초까지 자란다)이 닿으면 그 연결은 이미 없다. 데이터는 그 전에 모두 전달된 뒤다(M6-6의 손실 20% 조합에서 관찰).
+- **Creation** uses `TCPConnection.connect(from:to:initialSequenceNumber:at:)` and `accept(_:initialSequenceNumber:at:) throws(AcceptError)`, to which the stack passes a SYN with no ACK or RST. If the peer's MSS is below 64, throw an error containing an RST for that SYN. Do not accept data or FIN in SYN or SYN-ACK. The peer retransmits it.
+- **Emit immediate ACKs from `receive` for the corresponding segment.** For out-of-order data, gap-filling data, in-order data accumulating to 2×MSS, FIN, segments outside the window, and challenge ACKs, set a timer due "now" and emit the ACK at the end of that `receive` call (piggyback it if outgoing data is available). Only ACKs deferred with a 40ms deadline come from `advance(to:)`. The stack and node call `advance(to:)` with the same time after passing in a group of packets (behavior N4). Application calls (`write`, `read`, `close`, and so on) emit at the end of the call. Originally `receive` emitted no pure ACKs and `advance` at the end of the group emitted them together. Once the node began receiving UDP in groups, the ACKs for out-of-order segments in one group coalesced into one and delayed the peer's fast retransmit, so this changed (2026-11-15).
+- **Close reasons** are `finished`, `reset`, `refused`, `timedOut`, and `aborted`. Only `finished` keeps the receive buffer. `close(at:)` was added to the declaration. The stack emits `peerRemoved` and discards the connection without sending anything.
+- **Timers** number seven (TIME-WAIT, FIN-WAIT-2 linger, retransmission, 0-window probe, SWS override, keep-alive, and ACK), and `nextDeadline` is the earliest. The value is nil for a closed connection. If due at the same time, timers that produce data run before ACK.
+- **go-back-N** uses a separate "next sequence to send" rather than rewinding SND.NXT (as in gVisor). ACK range validation uses the highest sequence sent so far.
+- A **0-window probe** is an ACK at `<SEQ=SND.UNA−1>` carrying one byte of value 0 (gVisor's format, distinct from "one byte of new data" in RFC 9293 §3.8.6.1. Probes do not count as retransmissions). With a 0 window, a data segment starting at RCV.NXT has only its data dropped, then ACK and RST processing occurs, followed by an immediate ACK (RFC 9293 §3.10.7.4).
+- Check invalid ACKs in SYN-RECEIVED before the RFC 5961 §5.2 range check and always reply with RST (T4, as in Linux and gVisor). The challenge ACK rate limit (10 in 5 seconds) also applies to ACKs in behaviors X2 and X3.
+- The TIME-WAIT FIN exception applies only to FIN at RCV.NXT−1 (retransmission of a consumed FIN, as in gVisor). `abort` sends no RST in CLOSING, LAST-ACK, or TIME-WAIT (RFC 9293 §3.10.5). `close` in SYN-SENT sends nothing and ends with `aborted`.
+- The 2×MSS for delayed ACK is based on this side's advertised MSS. If SYN was not retransmitted, the handshake round trip is the first RTT sample. Set PSH on the segment carrying the buffer's last byte.
+- Record the sequence number of a FIN that arrives beyond a gap and consume it after all preceding data arrives (RFC 9293 §3.10.7.4 SHLD-31. This was originally a `shortcut:`, and independent test M6-6 identified the need for it).
+- On paths with high loss, closing can end with `timedOut` in place of `finished`. If the peer's FIN retransmission (RTO can grow to 120 seconds) arrives after the 60-second TIME-WAIT ends, the connection is already gone. All data was delivered before that point (observed in M6-6 combinations with 20% loss).
 
-### R. 재전송과 혼잡 제어
+### R. Retransmission and congestion control
 
-1. **RTO**(TCP 노트 4.5): 처음 1초. 측정이 생기면 RFC 6298 2.2·2.3의 식. 하한 200ms, 상한 120초(gVisor와 같다. RFC 6298 2.4의 1초 하한은 SHOULD다. 총괄 확인 필요 N4). G는 0으로 본다(시계가 나노초 단위다).
-2. **RTT 재기**: 한 번에 세그먼트 하나의 왕복만 잰다. 그 세그먼트가 재전송되면 그 측정을 버린다(Karn). 타임스탬프 옵션은 쓰지 않는다.
-3. **타이머 관리**는 RFC 6298 5.1~5.6 그대로다. SYN의 재전송 타이머가 만료된 적이 있고 맺어진 뒤의 RTO가 3초보다 작으면 3초로 올린다(5.7. 이미 더 큰 값을 낮추지 않는다).
-4. **한도**: 데이터는 같은 세그먼트를 15번 다시 보내도록 확인이 없으면 `.closed(.timedOut)`(gVisor와 같다). SYN과 SYN-ACK는 7번 다시 보낸다(보낸 뒤 1·3·7·15·31·63·127초). 일곱 번째 재전송의 타이머(128초가 상한 120초에서 잘린다)가 만료되는 247초에 버린다. 횟수는 연결이 세고, 간격은 `RTOEstimator`의 두 배 규칙과 상한 그대로다. RFC 9293 3.8.3(MUST-23)이 SYN의 R2를 3분 이상으로 요구한다. gVisor는 127초에 그만두지만(6번) 따르지 않는다. SYN-ACK를 일찍 버리면 상대의 마지막 ACK가 사라졌을 때 맺어진 줄 아는 상대의 연결이 끊긴다.
-5. **보낼 수 있는 양**: `min(cwnd, SND.WND) − (SND.NXT − SND.UNA)`.
-6. **혼잡 제어**(TCP 노트 4.7): 초기 창 `min(10*MSS, max(2*MSS, 14600))`(RFC 6928, gVisor도 10 세그먼트). slow start와 congestion avoidance는 RFC 5681 식 2·3(식 3의 정수 나눗셈이 0이면 1바이트를 올린다), 손실 때 ssthresh는 식 4. 다만 **같은 세그먼트의 재전송 타이머가 되풀이해 만료될 때는 ssthresh를 다시 줄이지 않는다**(RFC 5681 3.1. 처음 만료 때만 식 4). RTO 만료면 cwnd를 1 세그먼트로 하고 slow start. 중복 ACK 3개면 RFC 5681 3.2의 단계 2~6에 RFC 6582 3.2의 `recover`와 partial ACK 처리를 더한다. 중복 ACK의 정의는 RFC 5681 2절이다.
-   - 구현에서 정해진 것(M6-3, 2026-11-15. `RTOEstimator`, `NewRenoCongestionControl`): Karn(재전송된 세그먼트의 표본을 버림)은 보내는 버퍼를 쥔 연결이 지키고, 추정기는 재전송되지 않은 세그먼트의 표본만 받는다. `recover`는 RFC 6582의 "보낸 가장 높은 번호"를 한 칸 뒤(그때의 SND.NXT)로 적어 두고 `ACK > recover`로 견준다(같은 식이지만, 초기값 ISS에서도 첫 창의 손실이 fast retransmit에 걸린다. 문자 그대로의 `ACK − 1 > recover`는 SYN만 확인된 상태에서 거짓이 된다). 새 ACK가 `recover`를 넘으면 ACK − 1로 끌어올린다(손실 없이 2³¹바이트를 넘게 보낸 뒤 비교가 뒤집혀 fast retransmit이 막히는 것을 막는다. RFC에 없는 보완이다). full ACK의 cwnd는 `min(ssthresh, max(FlightSize, SMSS) + SMSS)`다. `cwnd == ssthresh`는 congestion avoidance로 본다. cwnd의 상한은 2³⁰이다. 같은 세그먼트의 반복 RTO 만료는 `SND.UNA`로 가린다. `shortcut:` fast recovery 중 부풀리기를 날아가는 세그먼트 수로 묶는 것(RFC 5681 3.2 단계 4의 MAY)은 없다.
-7. 재전송은 늘 SND.UNA부터의 한 세그먼트다(받은 SACK 블록을 쓰지 않는다. 보내는 쪽 SACK 회복은 M6-10b). RTO 만료 뒤에는 slow start가 창을 다시 열며 순서대로 다시 보낸다(go-back-N).
-8. 유휴가 RTO보다 길었으면 보내기 전에 cwnd를 `min(초기 창, cwnd)`로 줄인다(RFC 5681 4.1).
+1. **RTO** (TCP notes §4.5). Start at 1 second. Once measurements are available, use the formulas in RFC 6298 §2.2 and §2.3. The minimum is 200ms and the maximum is 120 seconds (as in gVisor. The 1-second minimum in RFC 6298 §2.4 is a SHOULD. Lead session confirmation needed N4). Treat G as 0 because the clock uses nanoseconds.
+2. **RTT measurement**. Measure the round trip for one segment at a time. Discard the sample if that segment is retransmitted (Karn). Do not use the timestamp option.
+3. **Timer management** follows RFC 6298 §5.1~5.6 exactly. If the SYN retransmission timer expired and the RTO after establishment is below 3 seconds, raise it to 3 seconds (§5.7. Do not lower an already higher value).
+4. **Limits**. For data, emit `.closed(.timedOut)` if the same segment is retransmitted 15 times without an acknowledgment (as in gVisor). Retransmit SYN and SYN-ACK 7 times (1, 3, 7, 15, 31, 63, and 127 seconds after sending). Discard at 247 seconds, when the timer for the seventh retransmission expires (128 seconds capped at 120 seconds). The connection counts the retransmissions, and intervals follow `RTOEstimator`'s doubling rule and cap exactly. RFC 9293 §3.8.3 (MUST-23) requires SYN R2 to be at least 3 minutes. gVisor stops at 127 seconds (6 retransmissions), which this implementation does not follow. Discarding a SYN-ACK too early drops a connection the peer believes is established if its final ACK was lost.
+5. **Send allowance** is `min(cwnd, SND.WND) − (SND.NXT − SND.UNA)`.
+6. **Congestion control** (TCP notes §4.7). Use initial window `min(10*MSS, max(2*MSS, 14600))` (RFC 6928, gVisor also uses 10 segments). Use RFC 5681 equations 2 and 3 for slow start and congestion avoidance (increase by 1 byte if the integer division in equation 3 yields 0), and equation 4 for ssthresh on loss. **Repeated retransmission timer expirations for the same segment do not reduce ssthresh again** (RFC 5681 §3.1. Apply equation 4 only on the first expiration). On RTO expiration, set cwnd to 1 segment and enter slow start. On 3 duplicate ACKs, apply RFC 5681 §3.2 steps 2~6 with `recover` and partial ACK handling from RFC 6582 §3.2. Duplicate ACKs follow the definition in RFC 5681 §2.
+   - Implementation decisions (M6-3, 2026-11-15, `RTOEstimator`, `NewRenoCongestionControl`). The connection that holds the send buffer enforces Karn (discard samples from retransmitted segments), and the estimator accepts samples only from segments that were never retransmitted. `recover` stores the position one beyond RFC 6582's "highest sequence sent" (SND.NXT at the time) and compares with `ACK > recover`. The formula is equivalent, but loss in the first window still triggers fast retransmit with the initial value ISS. Literal `ACK − 1 > recover` would be false with only SYN acknowledged. When a new ACK exceeds `recover`, raise the value to ACK − 1. This keeps the comparison from reversing and blocking fast retransmit after sending more than 2³¹ bytes without loss, an addition absent from the RFC. For a full ACK, cwnd is `min(ssthresh, max(FlightSize, SMSS) + SMSS)`. Treat `cwnd == ssthresh` as congestion avoidance. Cap cwnd at 2³⁰. Use `SND.UNA` to identify repeated RTO expiration for the same segment. `shortcut:` Inflation in fast recovery is not bounded by the number of in-flight segments (the MAY in RFC 5681 §3.2 step 4).
+7. Retransmit one segment starting from SND.UNA every time (received SACK blocks are unused. Sender-side SACK recovery is M6-10b). After RTO expiration, slow start reopens the window and retransmits in order (go-back-N).
+8. If idle for longer than RTO, reduce cwnd to `min(initial window, cwnd)` before sending (RFC 5681 §4.1).
 
-### F. 흐름 제어와 버퍼
+### F. Flow control and buffers
 
-1. **받는 버퍼**는 연결마다 256KiB다. 광고하는 창은 버퍼의 남은 자리이고(리스너의 대기열에 있는 동안은 16KiB까지, 동작 M), 창의 오른쪽 끝을 왼쪽으로 옮기지 않는다(SHLD-14). 창 확장의 shift로 내림한 탓에 방금 광고한 값이 전보다 작아져도, 전에 허용한 오른쪽 끝까지는 받아들인다(RFC 7323 2.4).
-2. **창 확장**(RFC 7323 2.2~2.4): 능동 열기의 SYN에는 늘 옵션을 싣고, 수동 열기의 SYN-ACK에는 상대의 SYN에 옵션이 있을 때만 싣는다. **양쪽 SYN에 모두 있을 때만** 켜지고, 방향마다 shift가 따로다(보내는 창은 상대의 shift로, 광고하는 창은 자기 shift로). SYN과 SYN-ACK 세그먼트의 창 필드는 확장하지 않는다. 상대의 shift가 14를 넘으면 14로 본다. 자기 shift는 3이다(`65535 << 3 >= 262144`가 되는 가장 작은 값. gVisor `FindWndScale`의 규칙). 꺼지면 창은 65,535까지다.
-3. **받는 쪽 SWS 회피**: 창의 오른쪽 끝은 늘릴 수 있는 양이 `min(버퍼/2, MSS)` 이상일 때만 올린다(RFC 9293 3.8.6.2.2). 앱이 읽어 그만큼 열렸고 **마지막으로 광고한 남은 창(광고한 오른쪽 끝 − RCV.NXT)이 받는 버퍼의 절반 이하일 때만** 순수 창 갱신 ACK를 곧바로 보낸다. 남은 창이 그보다 크면 상대는 아직 보낼 자리가 넉넉하므로 새 창은 데이터에 대한 ACK(동작 5의 2×MSS 또는 40ms)와 나가는 데이터가 싣는다(앱이 조금씩 읽을 때마다 순수 ACK를 내지 않는다. 2026-11-15). 창이 0이거나 작을 때는 남은 창이 절반 이하이므로 문턱만큼 열리는 즉시 알린다. 빈 곳이 있는 동안에도 같은 규칙으로 올린다(빈 곳이 있는 동안 끝을 고정해 중복 ACK의 창을 같게 두는 규칙을 넣었다가 뺐다. 남은 창이 shift로 내려 0이 된 채 빈 곳이 생기면 앱이 다 읽어도 창이 열리지 않아 상대의 0 창 탐침이 끝나지 않았고, 손실 1%의 처리량도 고정이 있을 때와 없을 때가 같은 범위였다. 2026-11-15).
-4. **순서가 어긋난 데이터**는 받는 창 안의 것만 받는 버퍼의 제자리에 둔다. 구간(빈 곳으로 갈린 덩어리)은 32개까지다. 넘으면 그 세그먼트를 버린다(상대가 다시 보낸다). 겹치는 바이트는 먼저 받은 것을 둔다. 창의 왼쪽이나 오른쪽으로 걸친 세그먼트는 창 안의 부분만 받는다.
-   - 구현에서 정해진 것(M6-2, `ReceiveBuffer`): 구간은 `RCV.NXT`에서의 거리로 둔다. 새 구간이 필요한 세그먼트만 32개 상한을 받고, 기존 구간을 늘리거나 잇거나 `RCV.NXT`에 닿는 세그먼트는 32개에서도 받는다. 33번째 구간이 필요한 세그먼트는 창 안의 부분도 받지 않는다. 저장소는 연결당 원형 하나이고 쓰는 만큼만(4KiB부터 두 배씩) 자란다. `shortcut:` 한 번 자란 저장소는 줄이지 않는다. `ReceiveBuffer.windowEnd`는 앱이 읽을 때만 나아가고, 연결은 거기서 SWS 회피와 shift 내림을 거친 오른쪽 끝을 따로 기억한다. 버퍼는 물리 한계까지만 자르므로, 광고한 오른쪽 끝을 넘는 바이트는 **연결이 `insert` 전에 잘라 버린다**.
-5. **ACK 보내기**: 순서가 어긋난 세그먼트, 빈 곳을 메우는 세그먼트, FIN, 창 밖 세그먼트에는 곧바로 ACK한다. 순서대로 온 데이터는 확인하지 않은 양이 2×MSS 이상이면 곧바로, 아니면 40ms 안에 ACK한다(RFC의 한도는 500ms 미만). 나가는 데이터 세그먼트가 있으면 거기에 실어 보낸다. 노드가 한 번에 처리하는 패킷 묶음 안에서도 곧바로 보낼 ACK는 **세그먼트마다 하나씩** 낸다(RFC 5681 4.2의 immediate ACK. 묶음 안의 어긋난 세그먼트들이 중복 ACK 하나로 합쳐지면 상대의 fast retransmit이 늦는다). 묶음에서 합쳐지는 것은 순서대로 온 데이터의 ACK뿐이고, 그것도 2×MSS마다 하나다(MUST-58·59. 동작 N4).
-   - **SACK 블록**(M6-10a, RFC 2018 4·7. 상대가 SACK-Permitted를 보냈을 때만, 동작 T4): 받는 버퍼에 빈 곳 너머의 구간이 있는 동안 나가는 **모든 ACK**(순수 ACK, 데이터에 실린 ACK, 0 창 탐침, keep-alive, challenge ACK)에 SACK 옵션을 싣는다. 블록은 받는 버퍼의 순서가 어긋난 구간(동작 F4, 32개까지)에서 만들고 옵션 공간이 허락하는 4개까지다(타임스탬프를 쓰지 않는다). **첫 블록은 이 ACK를 일으킨 세그먼트가 든 구간**이다. 그 세그먼트가 RCV.NXT를 나아가게 했으면 이 규칙은 걸리지 않는다. 나머지는 최근에 알린 순서다: 순서가 어긋난 세그먼트에는 늘 곧바로 ACK하므로 구간마다 "마지막으로 세그먼트가 든 차례"를 적어 두고 그 역순으로 고르면 그것이 "가장 최근에 첫 블록으로 알린 순서"다. 구간은 서로 겹치지 않으므로 앞 블록의 부분 집합인 블록이 없다. 이미 받아 둔 구간 안의 바이트가 다시 와도 그 구간이 첫 블록이 된다. 빈 곳이 다 메워지면 싣지 않는다. 받은 데이터를 버리지 않으므로(reneging 없음) 블록은 늘 받는 버퍼에 있는 바이트다. RST에는 싣지 않는다. 스택의 TIME-WAIT 기록이 내는 ACK에는 받는 버퍼가 없어 싣지 않는다. `shortcut:` D-SACK(RFC 2883)은 내지 않는다. 이 쪽이 상대에게 보내는 데이터 세그먼트는 SACK 옵션만큼 데이터를 줄인다(동작 T5).
-   - 받는 버퍼에 빈 곳이 있는 동안에도 새 데이터를 보낸다. SACK이 없을 때 gVisor는 데이터가 실린 세그먼트를 받으면 중복 ACK 수를 0으로 되돌리고, 데이터가 실린 partial ACK로는 다음 빈 곳을 다시 보내지 않는다(`snd.go`의 `checkDuplicateAck`·`isDupAck`, `reno_recovery.go`의 `DoRecovery`). 그래서 양방향으로 동시에 보내는 전송에서는 손실마다 상대의 RTO를 기다리게 된다. 빈 곳이 있는 동안 새 데이터를 보류하는 규칙을 넣어 보았으나 뺐다: 앱이 쓰기를 끝낸 뒤에야 읽는데 광고한 창이 0이면(상대는 빈 곳을 다시 보내지 못하고 탐침만 한다) 양쪽이 서로를 기다린 채 멈춘다. 손실 1%의 처리량은 보류가 있을 때 5.2~7.3MB/s, 없을 때 3.6~5.0MB/s로 조금 높았지만(두세 번씩 잰 값이고 실행마다 크게 흔들린다) 멈춤과 바꿀 만한 차이가 아니다. 이 손실 회복의 약점은 SACK(M6-10)으로 푼다(2026-11-15).
-6. **보내는 버퍼**는 연결마다 256KiB다(아직 확인받지 못한 것과 아직 보내지 않은 것의 합). `write`는 자리가 있는 만큼만 받아들인다.
-   - 구현에서 정해진 것(M6-2, `SendBuffer`): SYN·FIN은 버퍼 밖의 번호라 연결이 센다. `startSequence`는 데이터 쪽 `SND.UNA`이고, 범위 밖 ACK는 버퍼를 바꾸지 않는다. `shortcut:` 꺼낼 때마다 새 배열에 복사한다(`Span`은 지원 하한 macOS 15·iOS 18에 없다).
-7. **보내는 쪽 SWS 회피**: 보낼 데이터 D, 쓸 수 있는 창 U에 대해 `min(D, U) >= MSS`이거나 `D <= U`이거나 `min(D, U) >= 지금까지 본 가장 큰 SND.WND / 2`일 때 보낸다. 아니면 창이 열리기를 기다린다. 창이 0이 아닌 작은 값에 머물면 끝없이 기다리게 되므로, 보낼 것이 있는데 위 조건이 **200ms** 동안 채워지지 않으면 창이 허락하는 만큼 보낸다(RFC 9293 3.8.6.2.1의 override 시간. 권고는 0.1~1초). 창이 0이면 아래 탐침이 맡는다. Nagle은 없다(제외 표).
-8. **0 창 탐침**: 보낼 것이 있는데 SND.WND가 0이면 RTO 뒤에 1바이트를 보내고, 간격을 두 배씩(상한 60초) 늘려 계속한다. 상대가 ACK하는 한 끊지 않는다(MUST-37). 탐침 15번에 아무 ACK도 없으면 `.closed(.timedOut)`(gVisor `snd.go:597`). 다만 **응용이 `close`로 놓은 연결**은 상대가 답하더라도 탐침을 15번 보낸 뒤 RST로 끝낸다(`.closed(.timedOut)`). 상대가 창 0을 유지하며 탐침에 ACK만 하면 그 연결이 칸 하나와 보내는 버퍼를 무기한 쥐기 때문이다(RFC 9293 3.8.6.1이 열어 둔 자원 관리의 예외, RFC 6429. M6 검토 A). 응용이 쥐고 있는 연결은 그대로 끊지 않는다(응용이 Task 취소로 끊는다).
-   - 데이터가 날아가는 중에 상대가 창을 0으로 줄인 경우(오른쪽 끝을 왼쪽으로 옮김)에도 살아 있는 상대를 재전송 한도로 끊지 않는다: 재전송 타이머가 만료될 때 창이 0이고 마지막 재전송 뒤 ACK를 받았으면 그 만료는 15번의 한도에 세지 않는다(RFC 9293 3.8.6 SHLD-17·MUST-35. M6 검토 A).
-   - 구현에서 정해진 것(6af902c): 놓은 연결의 탐침 수는 새 데이터가 확인되거나 창이 0보다 커질 때만 다시 센다(천천히 읽는 상대에게 긴 응답을 보내다 끊기지 않게 한다). "마지막 재전송 뒤 ACK"는 받아들일 수 있는 ACK 아무것이다. 놓은 연결은 줄어든 창의 예외 없이 15번을 세고, 한도에서 RST를 보낸다.
-9. 창 갱신은 `SND.UNA =< SEG.ACK =< SND.NXT`인 세그먼트에서만, RFC 9293 3.10.7.4의 SND.WL1·WL2 규칙으로 받는다. 동작 X3이 받아 주는 오래된 ACK(`SND.UNA`보다 앞)는 창을 바꾸지 않는다.
+1. The **receive buffer** is 256KiB per connection. Advertise the remaining buffer space (up to 16KiB while in a listener queue, behavior M). Never move the right edge of the window left (SHLD-14). Even when rounding down for window scaling produces an advertisement smaller than the last one, accept up to the previously allowed right edge (RFC 7323 §2.4).
+2. **Window scaling** (RFC 7323 §2.2~2.4). Always include the option in an active open SYN. In a passive open SYN-ACK, include it only if the peer's SYN included it. Enable scaling **only if both SYNs carry it**, with a separate shift per direction (the peer's shift for the send window and our shift for the advertised window). Do not scale the window field in SYN or SYN-ACK segments. Treat a peer shift above 14 as 14. Our shift is 3 (the smallest value satisfying `65535 << 3 >= 262144`, as in gVisor `FindWndScale`). With scaling disabled, the window is at most 65,535.
+3. **Receiver SWS avoidance**. Advance the right edge only when it can increase by at least `min(buffer/2, MSS)` (RFC 9293 §3.8.6.2.2). After the app reads enough to open the window by that amount, send a pure window-update ACK immediately **only if the remaining advertised window (advertised right edge − RCV.NXT) is at most half the receive buffer**. A larger remaining window leaves the peer ample room to send, so ACKs for data (behavior 5, 2×MSS or 40ms) and outgoing data carry the new window. This avoids a pure ACK every time the app reads a little (2026-11-15). A 0 or small window has at most half the buffer remaining, so announce as soon as the window opens by the threshold. Advance under the same rule even while a gap exists. A rule freezing the right edge while a gap existed to keep duplicate ACK windows equal was added and then removed. If a gap appeared after the remaining window rounded down to 0, draining the buffer did not reopen it, so the peer's 0-window probes never ended. At 1% loss, throughput was in the same range with and without the freeze (2026-11-15).
+4. Store **out-of-order data** only within the receive window, in its place in the receive buffer. Keep up to 32 ranges (groups separated by gaps). Drop the segment if it would exceed this limit. The peer retransmits it. For overlapping bytes, keep the first arrival. For segments straddling the left or right edge, accept only the portion inside the window.
+   - Implementation decisions (M6-2, `ReceiveBuffer`). Store ranges as distances from `RCV.NXT`. The 32-range limit applies only to segments requiring a new range. Even at 32 ranges, accept segments that extend or join existing ranges or reach `RCV.NXT`. Reject even the in-window portion of a segment requiring a 33rd range. Use one ring per connection and grow only as needed (doubling from 4KiB). `shortcut:` Storage does not shrink after growing. `ReceiveBuffer.windowEnd` advances only when the app reads. The connection separately remembers the right edge after SWS avoidance and rounding down for the shift. The buffer only trims at the physical limit, so **the connection trims bytes beyond the advertised right edge before `insert`**.
+5. **Sending ACKs**. ACK out-of-order segments, segments that fill a gap, FIN, and segments outside the window immediately. ACK in-order data immediately for at least 2×MSS unacknowledged, otherwise within 40ms (the RFC limit is less than 500ms). Piggyback on an outgoing data segment if available. Even in a group of packets that the node processes together, emit one immediate ACK **per segment** (RFC 5681 §4.2 immediate ACK. Combining the out-of-order segments in the group into one duplicate ACK delays the peer's fast retransmit). Only ACKs for in-order data coalesce within a group, and even then emit one for each 2×MSS (MUST-58 and MUST-59, behavior N4).
+   - **SACK blocks** (M6-10a, RFC 2018 §4 and §7, only when the peer sent SACK-Permitted, behavior T4). While a range beyond a gap is present in the receive buffer, include a SACK option in **every outgoing ACK** (pure ACK, data-bearing ACK, 0-window probe, keep-alive, and challenge ACK). Build up to 4 blocks as option space allows from the receive buffer's out-of-order ranges (behavior F4, up to 32 ranges). Timestamps are unused. **The first block is the range containing the segment that triggered the ACK.** This rule does not apply if that segment advanced RCV.NXT. Order the rest by when they were most recently reported. Because out-of-order segments always get immediate ACKs, record for each range the order in which it last gained a segment. Selecting in reverse order yields the order "most recently reported as the first block." Ranges do not overlap, so no block is a subset of an earlier block. Even if bytes arrive again within a previously received range, that range becomes the first block. Omit SACK when all gaps fill. Received data is never discarded (no reneging), so blocks always refer to bytes in the receive buffer. Omit SACK on RST and on ACKs from the stack's TIME-WAIT records, which have no receive buffer. `shortcut:` Omit D-SACK (RFC 2883). Reduce outgoing data segment payloads by the size of the SACK option (behavior T5).
+   - Send new data even when the receive buffer has a gap. Without SACK, gVisor resets its duplicate ACK count to 0 on a data-bearing segment and does not retransmit the next gap on a data-bearing partial ACK (`checkDuplicateAck` and `isDupAck` in `snd.go`, `DoRecovery` in `reno_recovery.go`). Thus, simultaneous bidirectional transfers wait for the peer's RTO after each loss. Holding new data while a gap exists was tried and removed. If the app reads only after finishing its write and the advertised window is 0, the peer cannot retransmit the gap and only probes, so both sides stall waiting for each other. At 1% loss, throughput was somewhat higher with holding (5.2~7.3MB/s versus 3.6~5.0MB/s without it, measured two or three times each and highly variable between runs). That difference does not justify the stall. SACK (M6-10) addresses this loss recovery weakness (2026-11-15).
+6. The **send buffer** is 256KiB per connection (unacknowledged bytes plus unsent bytes). `write` accepts only what fits.
+   - Implementation decisions (M6-2, `SendBuffer`). SYN and FIN use sequence numbers outside the buffer, so the connection counts them. `startSequence` is the data-side `SND.UNA`. Out-of-range ACKs do not change the buffer. `shortcut:` Copy into a new array on every extraction (`Span` is unavailable at the supported minimums of macOS 15 and iOS 18).
+7. **Sender SWS avoidance**. Given data D to send and usable window U, send when `min(D, U) >= MSS`, `D <= U`, or `min(D, U) >= largest SND.WND seen so far / 2`. Otherwise wait for the window to open. A small window above 0 could keep the sender waiting forever, so if there is data to send and these conditions are unmet for **200ms**, send as much as the window allows (override time in RFC 9293 §3.8.6.2.1, recommended 0.1~1 second). For a 0 window, use the probes below. Nagle is excluded (exclusions table).
+8. **0-window probes**. With data to send and SND.WND of 0, send 1 byte after RTO, then continue doubling the interval (up to 60 seconds). Keep the connection open as long as the peer ACKs (MUST-37). With no ACK after 15 probes, emit `.closed(.timedOut)` (gVisor `snd.go:597`). For **a connection the application released with `close`**, terminate with RST after 15 probes even if the peer responds (`.closed(.timedOut)`). Otherwise a peer that keeps the window at 0 and only ACKs probes can hold a connection slot and its send buffer indefinitely (resource-management exception allowed by RFC 9293 §3.8.6.1, RFC 6429, M6 review A). Keep connections held by the app open (the app terminates them by canceling the Task).
+   - If the peer reduces the window to 0 (moves the right edge left) while data is in flight, keep a live peer connected despite the retransmission limit. If the window is 0 when the retransmission timer expires and an ACK arrived since the last retransmission, that expiration does not count toward the limit of 15 (RFC 9293 §3.8.6 SHLD-17 and MUST-35, M6 review A).
+   - Implementation decisions (6af902c). Reset a released connection's probe count only when new data is acknowledged or the window grows above 0 (to avoid dropping a long response to a slowly reading peer). "ACK after the last retransmission" means any acceptable ACK. Released connections count to 15 without the shrunk-window exception and send RST at the limit.
+9. Accept window updates only from segments with `SND.UNA =< SEG.ACK =< SND.NXT`, following RFC 9293 §3.10.7.4 SND.WL1 and WL2. Old ACKs (before `SND.UNA`) accepted under behavior X3 do not change the window.
 
-### S. 스택 (`TCPStack`)
+### S. Stack (`TCPStack`)
 
-1. **찾기**: 들어온 세그먼트는 (자기 주소, 자기 포트, 상대 주소, 상대 포트)로 연결을 찾고, 없으면 자기 포트로 리스너를 찾는다. 목적지가 자기 tailnet 주소가 아니면 `.dropped(.notForUs)`다(필터가 이미 걸렀지만 스택도 본다).
-2. **연결도 리스너도 없으면** RFC 9293 3.10.7.1대로 RST로 답한다(RST에는 답하지 않는다). 리스너 없는 포트로 온 SYN도 여기다. tsnet도 RST다(TCP 노트 6.2 4).
-3. **리스너**: 포트 하나에 하나, 16개까지. 자기 노드의 모든 tailnet 주소(IPv4·IPv6)를 듣는다. 리스너에 온 세그먼트는 TCP 노트 4.2의 LISTEN 규칙: RST는 무시, ACK가 있으면 RST로 답, SYN이면 연결을 만든다. SYN·ACK·RST가 모두 없는 세그먼트(FIN만 든 것 등)에는 듣지 않는 포트(동작 S2)와 같은 `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>`로 답한다(2026-11-17. RFC 9293 3.10.7.2 넷째는 "버린다"이지만, 수신 필터가 SYN만 규칙에 견주므로 조용히 버리면 ACL이 막은 피어가 답이 있고 없음으로 듣는 포트를 가려낸다. 리스너가 SYN이 아닌 세그먼트에 내는 답은 이제 모두 듣지 않는 포트의 답과 같다).
-4. **맺는 중인 연결(SYN-RECEIVED)의 상한**: 스택 전체 64개, 상대 피어 하나에 16개(아래 "피어 하나의 몫"). 넘는 SYN은 응답 없이 버린다(gVisor forwarder와 같다, TCP 노트 5절). 상대는 SYN을 다시 보낸다. 이 상태의 연결은 버퍼를 갖지 않는다.
-5. **accept 대기열**: 맺어졌지만 앱이 아직 받아 가지 않은 연결은 리스너마다 32개까지다. 차 있으면 새 SYN을 응답 없이 버린다. 그 가운데 상대 피어 하나의 것은 16개까지다(아래 "피어 하나의 몫"). 기다리는 동안에도 연결은 데이터를 받는다(받는 창까지. 받아 가기 전의 받는 창은 16KiB다, 동작 M). 리스너를 닫으면 대기열의 연결을 RST로 끊고 맺는 중인 연결을 버린다.
-6. **연결 수의 상한**: 맺는 중·맺어진·닫는 중인 연결을 합쳐 256개. 닿으면 새 SYN은 응답 없이 버리고 `connect`는 `limitReached`다. TIME-WAIT의 기록은 따로 1,024개까지 두고 **기한 전에 버리지 않는다**(버리면 상대의 FIN 재전송에 RST로 답하게 되고, 앞 연결의 늦은 세그먼트가 같은 4-튜플의 새 연결에 섞일 수 있다). 1,024개에 닿으면 기록이 빠질 때까지 새 SYN을 응답 없이 버리고 `connect`는 `limitReached`다(닫힌 쪽). 기록 하나는 4-튜플과 시퀀스 번호 둘, 기한뿐이다.
-7. **ISN**(RFC 6528 3): `ISN = M + F`. M은 스택을 만든 시각부터 4마이크로초마다 1씩 느는 값, F는 `HMAC-SHA256(비밀, 자기 주소 ‖ 자기 포트 ‖ 상대 주소 ‖ 상대 포트)`의 앞 32비트다. 비밀은 노드가 `run()`마다 시스템 난수로 32바이트를 뽑아 넘긴다.
-8. **나가는 연결의 포트**: 49152…65535에서 차례로 고르고, 같은 4-튜플이 쓰이고 있으면(TIME-WAIT 포함) 건너뛴다. 출발 주소는 목적지와 같은 계열의 자기 주소다(tsnet과 같다). 그 계열의 자기 주소가 없으면 `unknownHost`.
-9. **주소 바뀜**: 노드가 netmap을 적용할 때마다 자기 주소 목록을 넘긴다. 자기 주소가 아니게 된 주소를 쓰는 연결은 `.closed(.peerRemoved)`로 끝난다(아무것도 보내지 않는다).
-10. **출력의 순서**: `receive`·`advance`·응용 호출의 출력 목록은 낸 순서대로 처리해야 한다. 한 연결의 세그먼트는 시퀀스 순서로 나온다.
+1. **Lookup**. For an incoming segment, look up a connection by (local address, local port, remote address, remote port). If none exists, look up a listener by local port. A destination other than a local tailnet address produces `.dropped(.notForUs)` (the filter has already checked this, and the stack checks again).
+2. **If there is no connection or listener**, reply with RST under RFC 9293 §3.10.7.1. Do not reply to RST. This also applies to SYN received on a port without a listener. tsnet also sends RST (TCP notes §6.2 item 4).
+3. **Listeners**. Allow one per port and up to 16 in total. Listen on all local tailnet addresses (IPv4 and IPv6). Apply the LISTEN rules from TCP notes §4.2 to segments reaching a listener. Ignore RST, reply with RST if ACK is present, and create a connection on SYN. For segments without SYN, ACK, or RST (such as FIN alone), reply with the same `<SEQ=0><ACK=SEG.SEQ+SEG.LEN><CTL=RST,ACK>` as a port without a listener (behavior S2, 2026-11-17). The fourth step of RFC 9293 §3.10.7.2 says to drop them, but the receive filter checks only SYN against its rules. Silently dropping would let an ACL-blocked peer infer which ports listen from the presence or absence of a reply. All listener responses to non-SYN segments now match the responses of ports without listeners.
+4. **Limit on connections being established (SYN-RECEIVED)**. Allow 64 across the stack and 16 per remote peer (see "Per-peer share" below). Drop excess SYN without responding (like the gVisor forwarder, TCP notes §5). The peer retransmits SYN. Connections in this state have no buffers.
+5. **Accept queue**. Each listener allows up to 32 established connections that the app has yet to accept. When full, drop new SYN without response. Up to 16 may belong to one remote peer (see "Per-peer share" below). While waiting, a connection receives data up to its receive window (16KiB before acceptance, behavior M). Closing the listener resets queued connections with RST and discards connections still being established.
+6. **Connection count limit**. Allow 256 connections across establishment, established, and closing states. At the limit, drop new SYN without response and return `limitReached` from `connect`. Keep up to 1,024 separate TIME-WAIT records and **retain them until their deadline**. Discarding them would cause RST replies to the peer's FIN retransmissions and could let late segments from a previous connection enter a new connection with the same 4-tuple. At 1,024 records, drop new SYN without response and return `limitReached` from `connect` until a record expires (fail closed). Each record contains only the 4-tuple, two sequence numbers, and a deadline.
+7. **ISN** (RFC 6528 §3). `ISN = M + F`. M increments by 1 every 4 microseconds from stack creation. F is the first 32 bits of `HMAC-SHA256(secret, local address ‖ local port ‖ remote address ‖ remote port)`. The node draws and supplies a 32-byte secret from the system RNG each `run()`.
+8. **Ports for outgoing connections**. Pick sequentially from 49152…65535, skipping an already-used 4-tuple (including TIME-WAIT). Use a local source address in the destination's family (as in tsnet). If there is no local address in that family, return `unknownHost`.
+9. **Address changes**. The node passes its local address list whenever it applies a netmap. Connections using addresses that are no longer local end with `.closed(.peerRemoved)` and send nothing.
+10. **Output order**. Process outputs from `receive`, `advance`, and application calls in emission order. A connection's segments are emitted in sequence order.
 
-구현에서 정해진 것(M6-5, 2026-11-15. `Sources/SwiftailNetstack/Stack/`):
+Implementation decisions (M6-5, 2026-11-15, `Sources/SwiftailNetstack/Stack/`)
 
-- **ID**: `TCPStack.ConnectionID`·`ListenerID`는 스택 안에서 다시 쓰지 않는 `UInt64`다. 옛 ID로 부른 호출은 새 연결에 닿지 않고, 응용이 쥐지 않은 ID(없는 것, `close`·`abort`로 놓은 것, 대기열에 있는 것)는 아무 일도 하지 않는다.
-- **선언**: `init(isnSecret:now:)`, 입력 `receive(_:at:)`·`advance(to:)`·`setLocalAddresses(_:)`·`setRemoteAddressGroups(_:)`·`removeConnections(toRemoteAddress:)`, 응용 호출 `listen(on:) throws(ListenError)`·`stopListening(_:)`·`accept(from:at:)`(연결 ID와 출력)·`connect(to:at:) throws(ConnectError)`와 ID로 부르는 `write`·`read`·`finishWriting`·`close`·`abort`, 읽는 값 `connection(_:)`(복사본)·`nextDeadline`·`localAddresses`. 출력은 `.ipPacket`·`.event`·`.dropped`이고 사건은 `.established(id)`·`.acceptable(listener)`·`.readable(id)`·`.writable(id)`·`.endOfStream(id)`·`.closed(id, 까닭)`이다. 까닭에 `peerRemoved`가 더해진다.
-- **사건은 응용이 쥔 연결에만 나온다.** 맺는 중이거나 대기열에 있거나 `close`한 뒤의 연결은 알리지 않는다. 대기열에 있는 동안 받은 데이터와 FIN은 `accept` 뒤에 `connection(_:)`으로 본다. `.closed(.finished)`는 TIME-WAIT에 들 때 알리고, 남은 데이터는 응용이 `close`할 때까지 읽힌다.
-- **노드가 부르는 순서**: 스택을 만들고 `setLocalAddresses` → 패킷 묶음을 하나씩 `receive`에 넣은 뒤 같은 시각으로 `advance(to:)`(미뤄 둔 ACK가 나온다) → `nextDeadline`에 타이머를 맞춘다 → 출력은 낸 순서대로 처리한다. netmap을 적용할 때마다, 그리고 엔진이 키 만료를 처리해 피어를 바꿀 때마다 `setLocalAddresses`와 `setRemoteAddressGroups`를 다시 부르고, 주인이 바뀌거나 없어진 상대 주소마다 `removeConnections(toRemoteAddress:)`를 부른다(동작 X10에서 스택이 맡는 부분).
-- **한도**: accept 대기열 32개에는 맺는 중인 연결도 센다(대기열이 32개를 넘지 않게). 연결 256개에는 맺는 중·대기열·응용이 쥔 것·놓았지만 닫는 중인 것이 모두 든다. 넘친 것은 `.dropped(.limitReached(종류))`로 알린다. TIME-WAIT 기록이 1,024개면 그 뒤 TIME-WAIT에 든 연결은 기록으로 옮기지 않고 연결인 채로 마친다.
-- **TIME-WAIT 기록**: RST는 무시한다(RFC 9293 3.10.7.4는 CLOSED로 가라고 하지만 기한 전에 버리지 않기로 한 S6과 gVisor를 따른다). SYN과 데이터에는 ACK로 답하고 같은 4-튜플의 새 연결을 다시 열지 않는다. FIN의 재전송에는 ACK하고 기한을 다시 잰다. 데이터 없는 ACK에는 답하지 않는다. 주소가 바뀌어도 기록은 기한까지 둔다.
-- 나가는 포트는 차례로 고른다(RFC 6056의 무작위 고르기가 아니다. 상대는 인증된 tailnet 피어다). 포트 0은 노드가 거른다. `stopListening`은 맺는 중인 연결을 아무것도 보내지 않고 버린다.
-- 비용(연결 256개·기록 1,024개, 디버그 빌드): `receive` 하나 약 7µs, `nextDeadline` 약 5µs, 기한 없는 `advance` 약 27µs. `shortcut:` 기한은 힙 없이 훑는다.
+- **IDs**. `TCPStack.ConnectionID` and `ListenerID` are `UInt64` values that are never reused within the stack. Calls on old IDs cannot reach new connections. Calls on IDs the application does not hold (nonexistent IDs, IDs released by `close` or `abort`, or queued IDs) do nothing.
+- **Declaration**. `init(isnSecret:now:)`, inputs `receive(_:at:)`, `advance(to:)`, `setLocalAddresses(_:)`, `setRemoteAddressGroups(_:)`, and `removeConnections(toRemoteAddress:)`, application calls `listen(on:) throws(ListenError)`, `stopListening(_:)`, `accept(from:at:)` (connection ID and outputs), `connect(to:at:) throws(ConnectError)`, and `write`, `read`, `finishWriting`, `close`, and `abort` by ID, and read access through `connection(_:)` (a copy), `nextDeadline`, and `localAddresses`. Outputs are `.ipPacket`, `.event`, and `.dropped`. Events are `.established(id)`, `.acceptable(listener)`, `.readable(id)`, `.writable(id)`, `.endOfStream(id)`, and `.closed(id, reason)`. The reasons include the added `peerRemoved`.
+- **Emit events only for connections the application holds.** Do not notify for connections being established, queued, or after `close`. Inspect data and FIN received while queued through `connection(_:)` after `accept`. Emit `.closed(.finished)` on entering TIME-WAIT, and keep remaining data readable until the application calls `close`.
+- **Node call order**. Create the stack and call `setLocalAddresses` → pass a group of packets one by one to `receive`, then call `advance(to:)` at the same time (emits deferred ACKs) → arm the timer for `nextDeadline` → process outputs in emission order. Every time the node applies a netmap or the engine handles key expiration and changes the peers, call `setLocalAddresses` and `setRemoteAddressGroups` again. Call `removeConnections(toRemoteAddress:)` for each remote address whose owner changed or disappeared (the stack's part of behavior X10).
+- **Limits**. Connections being established count toward the accept queue's 32 slots so the queue cannot exceed 32. The 256 connection cap includes connections being established, queued connections, connections held by the application, and released connections still closing. Signal overflow with `.dropped(.limitReached(kind))`. Once there are 1,024 TIME-WAIT records, connections newly entering TIME-WAIT finish as connections without being converted to records.
+- **TIME-WAIT records**. Ignore RST (RFC 9293 §3.10.7.4 calls for CLOSED, but this follows S6's decision to retain records until the deadline and gVisor). ACK SYN and data and do not reopen a new connection with the same 4-tuple. ACK FIN retransmissions and restart the deadline. Do not reply to data-free ACKs. Keep records until their deadline even if an address changes.
+- Choose outgoing ports sequentially (this does not use RFC 6056 random selection. The remote side is an authenticated tailnet peer). The node filters out port 0. `stopListening` discards connections being established without sending anything.
+- Cost (256 connections and 1,024 records, debug build). About 7µs per `receive`, about 5µs for `nextDeadline`, and about 27µs for `advance` with no deadline. `shortcut:` Scan for deadlines without a heap.
 
-검토에서 고친 것(M6 검토 A, 2026-11-15. 한 피어가 다른 피어의 몫을 고갈시키는 길을 막는다):
+Review fixes (M6 review A, 2026-11-15). Prevent one peer from exhausting another peer's share.
 
-- **상대 주소 하나의 연결은 64개까지다**(맺는 중·대기열·응용이 쥔 것·놓았지만 닫는 중인 것을 합쳐. 2026-11-17부터 이 항목들의 "상대 주소 하나"는 피어 하나다, 아래 "피어 하나의 몫"). 넘는 SYN은 응답 없이 버리고(`.dropped(.limitReached(.connectionsPerAddress))`), 그 주소로 거는 `connect`는 `limitReached`다. 전체 256개만 있으면 한 피어가 256개를 채워 다른 피어의 SYN을 막는다. 첫 사용처는 기기당 10개 안팎이다(검토 결과 2).
-- **TIME-WAIT 기록은 상대 주소 하나에 64개까지다.** 넘으면 **그 주소의** 가장 오래된 기록을 지운다(그 피어 자신의 옛 연결만 영향을 받는다). 전체 1,024개에 닿았을 때의 동작(새 SYN을 버림)은 그대로다.
-- **TIME-WAIT 기록의 수명은 만든 때부터 240초를 넘지 않는다**(RFC 9293 3.6.1의 2MSL = 4분). FIN의 재전송마다 60초를 다시 재되 이 끝을 넘겨 늘리지 않는다. 늘리기만 하면 피어가 59초마다 FIN을 다시 보내 기록을 영영 쥘 수 있다.
-- 구현에서 정해진 것(6af902c): 주소별 연결 수에는 응용이 쥔 채 남은 데이터만 있는 연결도 든다. SYN은 전체 연결 256 → 피어별 64 → 기록 1,024 → 맺는 중(전체, 피어별) → 대기열(전체, 피어의 몫) 순으로 본다. 가장 오래된 기록은 만든 순서로 정한다. 240초는 연결이 TIME-WAIT에 든 때부터 재고, 기록이 차서 연결인 채로 남은 TIME-WAIT도 같은 끝을 넘지 않는다. 주소별 상한으로 지워진 기록의 4-튜플에 늦은 FIN이 오면 RST로 답한다(받아들인 대가다).
+- **One remote address can have up to 64 connections** (total of connections being established, queued, held by the application, and released but still closing. As of 2026-11-17, "one remote address" in these items means one peer, see "Per-peer share" below). Drop excess SYN without response (`.dropped(.limitReached(.connectionsPerAddress))`) and return `limitReached` for `connect` to that address. With only the 256 total limit, a single peer can fill all 256 slots and block other peers' SYNs. The first adopter uses about 10 connections per device (review result 2).
+- **Allow up to 64 TIME-WAIT records per remote address.** On overflow, remove the oldest record **for that address**, affecting only that peer's old connections. The behavior at the 1,024 total limit still drops new SYNs.
+- **TIME-WAIT records live for at most 240 seconds from creation** (2MSL = 4 minutes in RFC 9293 §3.6.1). Restart the 60-second timer on each FIN retransmission without extending beyond that cap. Without the cap, a peer could retain the record forever by retransmitting FIN every 59 seconds.
+- Implementation decisions (6af902c). The per-address connection count includes connections still held by the application with only unread data remaining. For SYN, check 256 total connections → 64 per peer → 1,024 records → connections being established (total and per peer) → queue (total and per-peer share). Determine the oldest record by creation order. Measure 240 seconds from entry into TIME-WAIT, and apply the same cap to TIME-WAIT connections that remain as connections because the records are full. Reply with RST to a late FIN on the 4-tuple of a record removed by the per-address cap (an accepted cost).
 
-피어 하나의 몫(데이터면 보안 검증에서 고친 것, 2026-11-17):
+Per-peer share (fixed during data plane security verification, 2026-11-17)
 
-- **위의 "상대 주소 하나"의 상한은 모두 상대 피어 하나의 상한이다**: 연결 64개, 맺는 중 16개, TIME-WAIT 기록 64개. 피어는 IPv4·IPv6 두 주소를 가지므로, 주소별로만 세면 피어 하나가 몫을 두 번 쥔다(맺는 중 16 × 2 = 32개가 리스너의 대기열 32개와 같아, 피어 하나가 리스너 하나를 다른 모든 피어에게서 막았다).
-- **묶음**: 노드가 주인 표를 바꿀 때마다(netmap 적용, 키 만료 처리) 자기 주소와 함께 "상대 주소 → 묶음" 표를 넘긴다(`setRemoteAddressGroups(_:)`). 표는 주소의 주인 확인(동작 X10)과 같은 표(`EnginePeer.addressOwners`: 그 주소를 AllowedIPs로 가진 피어)에서 나오고, 묶음의 이름은 그 피어의 node ID다(스택은 값의 뜻을 모른다). 표에 없는 주소(자기 주소 등)는 그 주소 하나가 한 묶음이다. 스택은 수를 주소별로 적어 두고 볼 때 묶음의 주소를 합치므로, 표가 바뀌면 그때부터 새 묶음으로 센다.
-- **리스너의 대기열에서 피어 하나의 몫은 16개다**(맺어진 것과 맺는 중인 것을 합쳐. 넘는 SYN은 `.dropped(.limitReached(.acceptQueueShare))`). 맺어진 연결은 맺는 중인 수에서 빠지므로, 이 몫이 없으면 피어 하나가 핸드셰이크를 끝낸 연결 32개로 대기열을 다 채운다. 16은 대기열의 절반이고 피어 하나의 맺는 중 상한과 같으며, 첫 사용처의 기기당 10개 안팎(검토 결과 2)을 한꺼번에 걸어도 닿지 않는다. 남는 것: ACL이 허용한 피어 둘이 함께하면 리스너 하나의 대기열을 채워 셋째 피어를 막을 수 있다. 몫을 더 줄이면 정상 피어가 한꺼번에 거는 연결이 SYN 재전송을 기다리게 된다.
-- TIME-WAIT 기록의 "그 피어의 가장 오래된 기록"은 피어의 주소마다의 첫 기록(만든 순서) 가운데 TIME-WAIT에 먼저 든 것이다.
-- `shortcut:` 리스너의 피어별 수는 SYN마다 연결 표(256개까지)를 훑어 센다. 필요해지는 시점: 연결 상한을 크게 올릴 때.
+- **All limits above for "one remote address" apply per remote peer**. The limits are 64 connections, 16 connections being established, and 64 TIME-WAIT records. A peer has both IPv4 and IPv6 addresses, so counting by address alone gives one peer twice its share. With 16 × 2 = 32 connections being established, equal to the listener queue of 32, one peer blocked all other peers from one listener.
+- **Groups**. Every time the node updates the owner table (netmap application or key expiration handling), it passes a "remote address → group" table along with local addresses (`setRemoteAddressGroups(_:)`). It comes from the same table used to check address ownership (behavior X10, `EnginePeer.addressOwners` maps each address to the peer that has it in AllowedIPs). The group name is that peer's node ID, whose meaning is opaque to the stack. An address absent from the table (such as a local address) is a group of its own. The stack stores counts by address and adds the addresses in each group when it checks, so an updated table takes effect immediately for counting.
+- **One peer gets 16 slots in a listener's queue** (established and being established combined. Excess SYN produces `.dropped(.limitReached(.acceptQueueShare))`). Established connections leave the count of connections being established, so without this share a peer could fill the queue with 32 completed handshakes. 16 is half the queue and matches the per-peer limit on connections being established. It exceeds the first adopter's roughly 10 connections per device (review result 2) even if opened together. Two ACL-allowed peers can still fill one listener's queue and block a third peer. Reducing the share further would force legitimate peers' concurrent connections to wait for SYN retransmission.
+- For TIME-WAIT records, "the peer's oldest record" is the one that entered TIME-WAIT earliest among the first records (in creation order) for each of the peer's addresses.
+- `shortcut:` Count each listener's connections per peer by scanning the connection table (up to 256) for every SYN. Revisit when the connection limit increases substantially.
 
-### X. 신뢰할 수 없는 입력
+### X. Untrusted input
 
-tailnet 피어는 WireGuard로 인증되고 출발 주소는 그 피어의 AllowedIPs로 검사된다(엔진 계약 M3 동작 2·5, M-E2). 그래서 어떤 피어도 **다른 피어의 연결**에 세그먼트를 끼워 넣지 못한다. 남는 위협은 피어 자신이 보내는 틀린 세그먼트와 자원 고갈이다. 수신 필터는 TCP에서 SYN만 규칙에 견주므로(`PacketFilter`), **SYN이 아닌 세그먼트는 ACL이 막은 피어의 것도 스택까지 온다.**
+WireGuard authenticates tailnet peers, and the source address is checked against that peer's AllowedIPs (M3 engine contract behaviors 2 and 5, M-E2). A peer therefore cannot inject segments into **another peer's connection**. Remaining threats are invalid segments from the peer itself and resource exhaustion. The receive filter checks only TCP SYN against its rules (`PacketFilter`), so **non-SYN segments reach the stack even from peers blocked by ACLs.**
 
-1. 어떤 바이트열을 넣어도 죽지 않는다. 범위를 넘는 인덱스, 정수 넘침(길이 합, 창 계산, `SEG.SEQ + SEG.LEN`), 끝없는 옵션 순회가 없어야 한다.
-2. **창 밖의 시퀀스**: 받지 않고 ACK로만 답한다(TCP 노트 4.2 1). 데이터 없는 창 밖 세그먼트에 대한 ACK는 4의 속도 제한을 받는다(ACK 고리를 막는다).
-3. **RST**(RFC 5961 3.2): 창 밖이면 조용히 버리고, `SEG.SEQ = RCV.NXT`일 때만 끊고, 창 안의 다른 값이면 challenge ACK를 보낸다. **SYN**(4.2): 동기화된 상태에서는 늘 challenge ACK를 보내고 버린다. **ACK**(5.2): `SND.UNA − MAX.SND.WND =< SEG.ACK =< SND.NXT` 밖이면 버리고 ACK를 보낸다.
-4. challenge ACK는 연결마다 5초에 10개까지다(RFC 5961 7의 예). 넘으면 보내지 않는다.
-5. **창 0**: 상대가 창을 0으로 두어도 연결은 탐침으로 유지된다(동작 F8). 보내는 버퍼는 256KiB에서 멈추고 `write`가 기다린다. 그 연결이 쥐는 메모리는 상한 그대로다.
-6. **작게 쪼갠 세그먼트**: 1바이트짜리 세그먼트를 띄엄띄엄 보내도 순서가 어긋난 구간은 32개까지이고(동작 F4), 데이터는 받는 버퍼 한 덩어리 안에 놓이므로 세그먼트마다 따로 쥐는 메모리가 없다. 다만 버퍼는 쓴 자리까지 자라므로 창 끝의 1바이트가 그 연결의 버퍼를 창 크기만큼 잡는다. 응용이 받아 가기 전의 연결은 그 창이 16KiB다(동작 M).
-7. **SYN 홍수**: 동작 S4·S5·S6의 상한. 맺는 중인 연결은 버퍼가 없고 247초 안에 사라진다(동작 R4). 상대 피어 하나가 쥘 수 있는 것은 주소를 합쳐 16개이고, 리스너 하나의 대기열에서도 16개다(동작 S "피어 하나의 몫").
-8. **연결 없는 곳으로 오는 세그먼트**: 하나에 RST 하나로 답한다. 답이 받은 것보다 크지 않으므로 증폭이 없다. 따로 속도를 제한하지 않는다.
-9. **상대가 광고하는 값**: MSS는 그대로 믿지 않고 자기 MTU로 다시 묶는다(동작 T5). 상대가 광고한 MSS가 64보다 작으면 **연결을 맺지 않는다**: 수동 열기면 그 SYN에 RST로 답하고, 능동 열기면 RST를 보내고 `.closed(.refused)`다. 작은 값을 올려 잡아 보내면 상대의 받는 한도를 넘기게 되고(RFC 9293 3.7.1 MUST-16), 그대로 따르면 1바이트 세그먼트를 끝없이 만들게 된다. 64는 이 계약의 값이다(gVisor는 광고받은 값이 0이 아니면 48로 올려 잡는다, `gvisor/header/tcp.go:439`. RFC가 허용하는 근거는 없다). 창이 줄어드는 것을 견딘다(MUST-34): 쓸 수 있는 창이 음수면 새 데이터를 보내지 않는다.
-10. **주소의 주인이 바뀜**: 노드는 엔진이 피어를 다시 계산할 때마다(netmap 적용, 키 만료 처리) 데이터면의 주소 주인 표(`addressOwners`)를 이전 표와 견준다. 상대 주소의 주인이 없어지거나 node 키가 바뀌면 그 주소의 연결을 `.closed(.peerRemoved)`로 끝낸다. 주소를 물려받은 다른 노드가 앞 노드의 연결을 이어 쓰는 것을 막는다(N8). Go의 netstack에는 이런 처리가 없다: 피어가 빠지거나 주소의 주인이 바뀌어도 열린 연결을 끊지 않고 재전송·keep-alive·응용의 종료에 맡긴다(`wgengine/netstack/netstack.go:729` 부근, TCP 노트). Swiftail이 더 엄격하다. 검토에서 정한 것(M6 검토 B, 2026-11-15):
-    - 주인은 **node 키**로 견준다. 같은 노드가 키만 바꿔도(재인증) 그 노드와의 연결은 `peerRemoved`로 끊긴다. 막으려는 것(주소를 물려받은 다른 노드)보다 넓지만, 키가 바뀌면 WireGuard 세션도 새로 서고 받는 쪽은 이어받기로 회복한다. node ID로 견주려면 `EnginePeer`에 ID를 실어야 한다. 필요해지는 시점: 키 교체 때 긴 전송이 끊기는 것이 문제로 보고될 때.
+1. Any input byte sequence must be safe to handle. Avoid out-of-bounds indices, integer overflow (length sums, window calculations, `SEG.SEQ + SEG.LEN`), and unbounded option traversal.
+2. **Sequence outside the window**. Reject it and reply only with ACK (TCP notes §4.2 item 1). ACKs for data-free, out-of-window segments are rate limited under item 4 to prevent ACK loops.
+3. **RST** (RFC 5961 §3.2). Silently drop outside the window, reset only for `SEG.SEQ = RCV.NXT`, and send a challenge ACK for other sequences inside the window. **SYN** (§4.2). In synchronized states, always send a challenge ACK and drop the segment. **ACK** (§5.2). Drop and send ACK if outside `SND.UNA − MAX.SND.WND =< SEG.ACK =< SND.NXT`.
+4. Allow up to 10 challenge ACKs per connection per 5 seconds (example in RFC 5961 §7). Suppress excess ACKs.
+5. **0 window**. Probes keep the connection alive even if the peer leaves its window at 0 (behavior F8). The send buffer stops at 256KiB and `write` waits. The connection remains within its memory limit.
+6. **Small segments**. Even if a peer sends scattered 1-byte segments, there are at most 32 out-of-order ranges (behavior F4). Data is stored within one receive buffer, with no separate memory retained per segment. The buffer grows to cover the written position, so 1 byte at the window's end grows that connection's buffer to the window size. Before the application accepts the connection, that window is 16KiB (behavior M).
+7. **SYN flood**. Apply the limits in behaviors S4, S5, and S6. Connections being established have no buffers and expire within 247 seconds (behavior R4). One remote peer can hold 16 across all its addresses and 16 in one listener's queue (behavior S, "Per-peer share").
+8. **Segments with no connection**. Reply with one RST per segment. The reply is at most the size received, so there is no amplification. There is no separate rate limit.
+9. **Peer-advertised values**. Cap MSS again by the local MTU (behavior T5). If the peer advertises an MSS below 64, **do not establish the connection**. On passive open, reply to SYN with RST. On active open, send RST and emit `.closed(.refused)`. Raising a small value would exceed the peer's receive limit (RFC 9293 §3.7.1 MUST-16), while following it could generate 1-byte segments indefinitely. 64 is this contract's value (gVisor raises the advertised value to 48 if it is other than 0, `gvisor/header/tcp.go:439`. The RFC does not provide a basis for this). Tolerate shrinking windows (MUST-34). Do not send new data when the usable window is negative.
+10. **Address ownership changes**. When the engine recomputes peers (netmap application or key expiration handling), the node compares the current data plane address owner table (`addressOwners`) with the previous table. If a remote address loses its owner or the node key changes, end connections for the address with `.closed(.peerRemoved)`. This prevents a different node that inherits the address from continuing the previous node's connection (N8). Go's netstack has no such handling. It leaves connections open when a peer disappears or address ownership changes and relies on retransmission, keep-alive, or application closure (near `wgengine/netstack/netstack.go:729`, TCP notes). Swiftail is stricter. Review decisions (M6 review B, 2026-11-15) follow.
+    - Compare owners by **node key**. Even a key change on the same node (reauthentication) drops connections to that node with `peerRemoved`. This covers more than the intended case (a different node inheriting an address), but when the key changes the WireGuard session is established again and the receiver recovers by resuming. Comparing by node ID would require carrying the ID in `EnginePeer`. Revisit if interrupted long transfers during key rotation are reported as a problem.
 
-### N. 노드와의 접점 (`Swiftail`)
+### N. Node integration (`Swiftail`)
 
-1. **장치**: `.inProcess`면 노드는 utun도 메모리 흐름도 쓰지 않는다. `inboundPackets`는 아무것도 내지 않고 `send(_:)`는 버린다. `networkSettings`는 M5와 같이 나온다(앱은 읽지 않아도 된다). `.utun`·`.memory`에서 `listen`·`connect`는 `invalidConfiguration`이다.
-2. **들어오는 길**: 엔진이 장치로 쓰라고 낸 `.ipPacket`(피어가 보냈고 필터를 통과한 것, 자기 주소로 되돌린 것)을 `stack.receive(_:at:)`에 넣는다. TCP가 아닌 패킷은 스택이 `.dropped(.notTCP)`로 버린다(제외 표의 ICMP·UDP).
-3. **나가는 길**: 스택의 `.ipPacket`을 `engine.send(_:at:)`에 넣는다. M5의 로컬 처리(동작 L)를 그대로 거친다: 자기 주소로 건 연결은 엔진이 되돌려 스택에 다시 들어오고, 서비스 IP로 건 연결은 엔진의 RST로 거절된다.
-4. **한 사건을 끝까지**: 패킷 하나(또는 앱 호출·타이머 하나)에서 비롯된 스택과 엔진 사이의 주고받기는 `await` 없이 끝까지 돈다. 재귀가 아니라 대기열로 돈다(자기 주소로 건 연결의 큰 전송에서 호출 깊이가 자라지 않게 한다). 대기열이 빈 뒤에 미뤄 둔 ACK를 낸다(동작 F5).
-5. **사건**: 스택의 사건으로 기다리던 호출을 깨운다. `readable` → 그 연결의 `read`, `writable` → `write`, `established` → `connect` 또는 리스너의 대기열, `closed(까닭)` → 그 연결의 모든 대기와 이후 호출이 그 까닭의 오류를 받는다.
-6. **타이머**: 노드의 타이머가 엔진·`Magicsock`·스택의 `nextDeadline` 가운데 이른 것에 깨어 셋 다 `advance`한다.
-7. **netmap**: 적용할 때마다, 그리고 엔진이 키 만료를 처리해 피어를 바꿀 때마다 자기 주소(동작 S9)와 피어별 상대 주소 묶음(동작 S "피어 하나의 몫")을 스택에 넘기고, 주소별 주인 키를 이전 표와 견준다(동작 X10).
-8. **노드가 멈출 때**: `run()`이 끝나며 열린 연결마다 RST를 한 번 낸다(직접 경로면 나간다. DERP 통로에 있던 것은 사라질 수 있다). 기다리던 호출은 `notRunning`으로 깨어나고 리스너의 흐름은 끝난다. 그 뒤의 `listen`·`connect`는 `notRunning`이다.
-9. **버려진 핸들**: `TailnetConnection`·`TailnetListener`의 `deinit`은 기다리지 않는 통로에 "끊기" 요청을 넣고, `run()`의 자식 하나가 그것을 처리한다(M5의 `startInteractiveLogin`과 같은 방식). 분리된 Task를 만들지 않는다.
-10. **손실에서 오는 역압**: 스택이 낸 패킷이 UDP 송신 실패나 DERP 통로의 넘침(256개·1MiB, 터널 계약 동작 M)으로 사라지는 것은 TCP에게 보통의 손실이다. 혼잡 제어가 줄인다. 통로에서 스택으로 가는 신호는 따로 없다.
-11. 시험 전용(공개 API 아님): `package func setInProcessLoss(rate: Double, seed: UInt64)`. 스택과 엔진 사이의 패킷을 양방향으로 `rate`의 확률로 버린다. 난수는 `seed`에서 만든다. 기본은 0이다.
+1. **Device**. With `.inProcess`, the node uses neither utun nor the memory stream. `inboundPackets` emits nothing and `send(_:)` discards packets. `networkSettings` emits as in M5 (the app may leave it unread). On `.utun` or `.memory`, `listen` and `connect` produce `invalidConfiguration`.
+2. **Inbound path**. Feed `.ipPacket` outputs emitted by the engine for device writes (peer packets that passed the filter and packets looped back to local addresses) into `stack.receive(_:at:)`. The stack drops non-TCP packets as `.dropped(.notTCP)` (ICMP and UDP in the exclusions table).
+3. **Outbound path**. Feed stack `.ipPacket` outputs into `engine.send(_:at:)`. They follow M5 local handling (behavior L). The engine loops connections to local addresses back to the stack and rejects connections to service IPs with RST.
+4. **Complete each event**. Exchanges between the stack and engine stemming from one packet (or one app call or timer) run to completion without `await`. Use a queue to avoid recursion and growing call depth on large transfers to the node's own addresses. Emit deferred ACKs after the queue drains (behavior F5).
+5. **Events**. Stack events resume waiting calls. `readable` → the connection's `read`, `writable` → `write`, `established` → `connect` or the listener queue, `closed(reason)` → all waiting or subsequent calls for the connection receive the corresponding error.
+6. **Timer**. The node timer wakes at the earliest `nextDeadline` of the engine, `Magicsock`, and stack and calls `advance` on all three.
+7. **netmap**. Whenever a netmap is applied or the engine handles key expiration and changes the peers, pass local addresses (behavior S9) and per-peer remote address groups (behavior S, "Per-peer share") to the stack. Compare each address's owner key with the previous table (behavior X10).
+8. **Node shutdown**. When `run()` ends, emit one RST for each open connection (direct paths send it. Packets in the DERP channel may be lost). Resume waiting calls with `notRunning` and end the listener stream. Subsequent `listen` and `connect` calls produce `notRunning`.
+9. **Dropped handles**. `deinit` of `TailnetConnection` or `TailnetListener` inserts an "abort" request into a nonwaiting channel, which one child of `run()` handles (same approach as M5 `startInteractiveLogin`). Do not create a separate Task.
+10. **Backpressure from loss**. TCP treats stack packets lost due to UDP send failure or DERP channel overflow (256 items and 1MiB, tunnel contract behavior M) as ordinary loss. Congestion control reduces sending. The channel sends no separate signal to the stack.
+11. Test-only (outside the public API) `package func setInProcessLoss(rate: Double, seed: UInt64)` drops packets between the stack and engine in both directions with probability `rate`. Generate randomness from `seed`. Defaults to 0.
 
-구현에서 정해진 것(M6-8, 2026-11-15. `Sources/Swiftail/`의 `TailnetNode+Netstack*.swift`, `TailnetListener.swift`, `TailnetConnection.swift`):
+Implementation decisions (M6-8, 2026-11-15, `TailnetNode+Netstack*.swift`, `TailnetListener.swift`, and `TailnetConnection.swift` in `Sources/Swiftail/`)
 
-- **처리 루프**: 엔진의 `.ipPacket`은 `.inProcess`에서 스택의 대기열로 간다. 가장 바깥의 호출 하나가 대기열을 비운다: 쌓인 패킷을 차례로 `stack.receive` → 비면 같은 시각으로 `advance(to:)`(미뤄 둔 ACK) → 그 출력이 대기열을 다시 채우면 되풀이 → 끝에 타이머를 다시 건다. 자기 주소로 건 연결의 패킷은 엔진이 되돌려 대기열에만 쌓이므로 재귀가 자라지 않는다. 타이머는 따로 없고, 노드의 타이머가 엔진·`Magicsock`·스택의 가장 이른 기한에 깬다.
-- **스택의 수명**: `.inProcess`의 `run()` 동안에만 있다. `run()`이 시작할 때 ISN 비밀 32바이트를 시스템 난수로 뽑아 만들고 `run()` 전에 연 리스너를 올린다. 끝날 때 리스너를 닫고, 응용이 쥔 연결을 abort하고, 나머지(맺는 중, 대기열, `close`로 놓았지만 닫는 중인 것)를 `TCPStack.abortAll()`로 끊는다. 소켓과 엔진을 닫기 전에 한다(RST가 직접 경로로 나간다. DERP 통로에 있던 것은 사라질 수 있다).
-- **기다리는 호출**: 기다릴 때마다 값을 나르지 않는 통로를 새로 걸고, 깨우는 쪽은 그것을 끝내기만 한다. 깨어난 호출이 상태를 다시 보고 무엇을 할지 정한다(그래서 이중 재개가 없다). 기록을 지우는 쪽(`close`·`abort`·리스너 닫기·`run()`의 끝)은 걸린 통로를 반드시 끝낸다. 자기 주소로 건 연결에서는 사건이 호출 자신의 출력 처리 안에서 나올 수 있어, 놓친 사건을 적어 두고 기다리기 전에 본다.
-- **취소**: `read`는 `cancelled`를 던지고 연결과 데이터는 그대로다. `write`는 연결을 abort(RST)한 뒤 `cancelled`. `connect`는 시도를 버리고 `cancelled`. 리스너의 흐름은 끝나고 리스너는 그대로다. `run()`이 끝나면 기다리던 호출은 `notRunning`이다. 버려진 핸들은 `run()`의 자식 하나가 RST(연결)·닫기(리스너)로 거둔다.
-- **주인 바뀜(X10)**: 연결마다 키를 적지 않고, 엔진이 피어를 다시 계산할 때마다(netmap 적용, 키 만료 처리) 데이터면 피어 주소의 주인 키를 앞의 것과 견주어 없어지거나 바뀐 주소에 `removeConnections(toRemoteAddress:)`를 부른다. 주인은 `whoIs`가 읽는 것과 같은 표(노드가 엔진에서 받아 쥔 `addressOwners`)에서 나온다(호스트 계약 동작 W6). AllowedIPs 출발지 검사가 있으므로 한 주소의 연결은 모두 그때의 주인과 맺은 것이다.
-- **이름 해석**: 이름이 겹치면 Go처럼 나중 노드가 이긴다(자기 노드 → 피어를 ID 순으로. `path(toPeerNamed:)`의 "ID가 작은 쪽"과 다르다). 짧은 이름의 접미사는 대소문자를 바꾸지 않고 견준다(Go와 같다).
-- **공개 API의 세부**: `read(upTo:)`의 0 이하 길이는 `invalidConfiguration`. 리스너를 두 Task가 동시에 돌면 나중 Task의 흐름이 곧바로 끝난다(`Failure = Never`라 던질 수 없다). `finishWriting()`을 두 번 불러도 오류가 아니다. `connect`는 상태가 `.running`이어야 한다(앱이 `events`로 기다린다).
-- **버려진 리스너**(M6 검토 B 반영): 리스너 기록은 핸들을 약한 참조로 쥔다. `listen(port:)`과 `run()`의 시작이 핸들이 버려진 리스너를 먼저 닫으므로, 버린 리스너는 `run()` 전에도 중에도 포트와 상한(16)을 쥐지 않는다. `run()` 중 스택의 리스너와 대기열 연결(RST)을 닫는 일은 버려진 핸들을 거두는 자식 또는 다음 `listen`이 한다(그 사이에 들어온 SYN은 맺혔다가 RST로 끊긴다).
-- `connect`는 맺어진 직후 돌아오기 전에 상대의 RST가 오면 `reset`을 던질 수 있다.
-- **손실 훅**: `package func setInProcessLoss(rate:seed:)`. 스택과 엔진 사이의 패킷을 양방향으로 버린다(SplitMix64). 0이면 끈다. 자기 주소로 건 연결의 패킷은 두 번 걸린다.
-- 재지 않은 것: iOS 터널 확장의 바이너리 크기 증가(N1), 처리량(관문).
+- **Processing loop**. With `.inProcess`, engine `.ipPacket` outputs enter the stack queue. One outermost call drains the queue: feed queued packets to `stack.receive` in order → when empty, call `advance(to:)` with the same time (deferred ACKs) → repeat if its outputs refill the queue → rearm the timer at the end. The engine loops packets for local connections back into the queue only, so recursion does not grow. There is no separate timer. The node timer wakes at the earliest deadline of the engine, `Magicsock`, and stack.
+- **Stack lifetime**. The stack exists only during `run()` on `.inProcess`. At the start of `run()`, draw a 32-byte ISN secret from system randomness, create the stack, and register listeners opened before `run()`. On exit, close listeners, abort connections held by the application, and terminate the rest (being established, queued, or released by `close` but still closing) with `TCPStack.abortAll()`. Do this before closing sockets and the engine (RST goes out on direct paths. Packets left in the DERP channel may be lost).
+- **Waiting calls**. Install a new channel without a payload each time a call waits. The resumer only finishes it. A resumed call rechecks state before deciding what to do, which avoids double resumption. Code removing a record (`close`, `abort`, listener closure, or end of `run()`) must finish any installed channel. On local-address connections, an event may occur while the call processes its own outputs. Record missed events and check them before waiting.
+- **Cancellation**. `read` throws `cancelled` and preserves the connection and data. `write` aborts the connection (RST) and then throws `cancelled`. `connect` abandons the attempt and throws `cancelled`. The listener stream ends and the listener stays open. When `run()` ends, waiting calls receive `notRunning`. One child of `run()` reclaims dropped handles with RST (connections) or closure (listeners).
+- **Owner changes (X10)**. The node keeps no key per connection. When the engine recomputes peers (netmap application or key expiration handling), it compares the owner key of each data plane peer address with the previous one and calls `removeConnections(toRemoteAddress:)` on missing or changed addresses. The owner comes from the same table read by `whoIs` (`addressOwners` retained by the node from the engine, host contract behavior W6). AllowedIPs source checks mean all connections for an address were established with its owner at the time.
+- **Name resolution**. On a name collision, the later node wins, as in Go (local node → peers in ID order). This differs from `path(toPeerNamed:)`, where the lower ID wins. Compare the suffix of a short name without changing case (as in Go).
+- **Public API details**. A `read(upTo:)` length of 0 or less produces `invalidConfiguration`. If two Tasks iterate a listener concurrently, the later Task's stream ends immediately (it cannot throw because `Failure = Never`). Two calls to `finishWriting()` are allowed. `connect` requires state `.running` (the app waits via `events`).
+- **Dropped listeners** (M6 review B). Listener records hold a weak handle reference. `listen(port:)` and the start of `run()` first close listeners whose handles were dropped. Thus, dropped listeners hold neither their port nor a slot in the limit (16) before or during `run()`. During `run()`, the child that reclaims dropped handles or the next `listen` closes the stack listener and resets queued connections (RST). A SYN arriving in the interim establishes a connection that is then reset with RST.
+- `connect` may throw `reset` if a peer RST arrives right after establishment and before return.
+- **Loss hook**. `package func setInProcessLoss(rate:seed:)` drops packets in both directions between stack and engine (SplitMix64). 0 disables it. Packets for local-address connections pass through it twice.
+- Unmeasured are the iOS tunnel extension binary size increase (N1) and throughput (gate).
 
-### A. 가장자리: 듣기·걸기·읽기·쓰기
+### A. Edge: listen, connect, read, and write
 
-1. **`listen`**: 장치와 포트를 검사하고 리스너를 스택에 올린다. `run()` 전이면 적어 두었다가 `run()`이 시작할 때 올린다(`run()`을 띄운 직후에 불러도 실패하지 않게 한다). netmap 전에 들어도 된다(SYN은 netmap과 필터가 선 뒤에만 온다).
-2. **`connect`**: ① 상태가 `.running`이 아니면 `notRunning`. ② `host`가 IP 주소면 그대로. 아니면 소문자로 바꾸고 끝 점을 뗀 이름을 netmap에서 찾는다: 피어와 자기 노드의 FQDN, MagicDNS 접미사를 뗀 짧은 이름. IPv4 주소를 먼저 고르고 없으면 IPv6다(Go `resolve.go:54-75`, `:115-140`). ③ 그 주소가 데이터면 피어의 주소나 자기 주소가 아니면 `unknownHost`. ④ SYN을 보내고 맺어질 때까지 기다린다. 결과는 연결, `refused`, `timedOut`(247초), `cancelled`다. tailnet 밖의 이름을 시스템 DNS로 찾거나 OS 소켓으로 걸지 않는다(tsnet과 다르다).
-3. **`read`**: 받는 버퍼에 있으면 곧바로, 없으면 `readable`까지 기다린다. 상대의 FIN 뒤 버퍼가 비면 nil. 취소되면 `.cancelled`를 던지고 연결은 그대로다(버퍼의 데이터는 남는다).
-4. **`write`**: 자리가 있는 만큼 넣고, 남으면 `writable`까지 기다렸다가 이어 넣는다. 사이사이 actor를 놓으므로 큰 쓰기가 노드를 붙잡지 않는다. `finishWriting`이나 `close` 뒤의 `write`는 `closed`.
-5. **역압**: 받는 쪽은 앱이 읽어 간 만큼만 창이 열린다(읽지 않으면 상대가 256KiB에서 멈춘다). 보내는 쪽은 `write`가 버퍼 256KiB에서 멈춘다. 가장자리에 따로 쌓는 버퍼가 없다.
-6. **동시 사용**: 연결 하나에 `read` 하나와 `write` 하나가 동시에 기다릴 수 있다. 같은 방향의 둘째 호출은 `concurrentUse`. 리스너를 도는 Task는 하나다.
-7. **끝난 연결**: `closed(까닭)` 뒤의 `read`·`write`·`finishWriting`은 그 까닭의 오류를 던진다(`reset`, `timedOut`, `peerRemoved`). 앱이 `close`·`abort`한 뒤에는 `closed`.
-8. **시간 제한**: API에 없다. 앱은 Task 취소로 건다(첫 사용처 확인 필요 F6).
+1. **`listen`**. Validate the device and port, then register the listener with the stack. Before `run()`, record it and register it when `run()` starts. This avoids a failure when called immediately after launching `run()`. Listening before a netmap is allowed (SYN arrives only after the netmap and filter are ready).
+2. **`connect`**. ① If the state is other than `.running`, return `notRunning`. ② If `host` is an IP address, use it as given. Otherwise lowercase it, remove the trailing dot, and look up the name in the netmap among peer and local node FQDNs and short names with the MagicDNS suffix removed. Prefer IPv4, with IPv6 as fallback (Go `resolve.go:54-75`, `:115-140`). ③ Return `unknownHost` unless the address belongs to a data plane peer or the local node. ④ Send SYN and wait for establishment. The result is a connection, `refused`, `timedOut` (247 seconds), or `cancelled`. Names outside the tailnet are never resolved through system DNS or connected via OS sockets (unlike tsnet).
+3. **`read`**. Return immediately if the receive buffer contains data, otherwise wait for `readable`. Return nil once the buffer is empty after the peer's FIN. Cancellation throws `.cancelled` and preserves the connection and buffered data.
+4. **`write`**. Buffer as much as fits. With bytes left, wait for `writable` and continue adding bytes. Release the actor between writes so a large write does not monopolize the node. `write` after `finishWriting` or `close` produces `closed`.
+5. **Backpressure**. On receive, the window opens only as the app reads (if it does not read, the peer stops at 256KiB). On send, `write` suspends at the 256KiB buffer limit. The edge has no separate backlog buffer.
+6. **Concurrent use**. One `read` and one `write` may wait concurrently on a connection. A second call in the same direction produces `concurrentUse`. One Task iterates the listener.
+7. **Ended connection**. After `closed(reason)`, `read`, `write`, and `finishWriting` throw the corresponding error (`reset`, `timedOut`, `peerRemoved`). After app `close` or `abort`, they produce `closed`.
+8. **Deadlines**. The API has none. The app uses Task cancellation for deadlines (first adopter confirmation needed F6).
 
-### M. 메모리
+### M. Memory
 
-| 버퍼 | 상한 | 넘으면 |
+| Buffer | Limit | On overflow |
 | --- | --- | --- |
-| 연결의 받는 버퍼(순서가 어긋난 데이터 포함) | 256KiB. 응용이 받아 가기 전(리스너의 대기열)에는 16KiB | 창 밖은 받지 않는다 |
-| 연결의 보내는 버퍼 | 256KiB | `write`가 기다린다 |
-| 순서가 어긋난 구간 | 연결마다 32개 | 그 세그먼트를 버린다 |
-| 연결(맺는 중·맺어짐·닫는 중) | 256개, 상대 피어 하나에 64개 | SYN을 버린다, `connect`는 `limitReached` |
-| 맺는 중인 연결 | 64개, 상대 피어 하나에 16개 | SYN을 버린다 |
-| accept 대기열 | 리스너마다 32개(맺는 중인 것 포함), 그 가운데 상대 피어 하나의 것은 16개 | SYN을 버린다 |
-| 리스너 | 16개 | `limitReached` |
-| TIME-WAIT 기록 | 1,024개, 상대 피어 하나에 64개(버퍼 없음). 수명은 240초까지 | 전체에 닿으면 새 SYN을 버리고 `connect`는 `limitReached`. 피어별 상한을 넘으면 그 피어의 가장 오래된 기록을 지운다(동작 S6과 그 아래) |
+| Connection receive buffer (including out-of-order data) | 256KiB. 16KiB before application acceptance (listener queue) | Reject bytes outside the window |
+| Connection send buffer | 256KiB | `write` waits |
+| Out-of-order ranges | 32 per connection | Drop the segment |
+| Connections (being established, established, or closing) | 256, up to 64 per remote peer | Drop SYN and return `limitReached` from `connect` |
+| Connections being established | 64, up to 16 per remote peer | Drop SYN |
+| Accept queue | 32 per listener (including those being established), up to 16 per remote peer | Drop SYN |
+| Listeners | 16 | `limitReached` |
+| TIME-WAIT records | 1,024, up to 64 per remote peer (no buffers). Lifetime up to 240 seconds | At the total limit, drop new SYN and return `limitReached` from `connect`. At the per-peer limit, remove that peer's oldest record (behavior S6 and below) |
 
-- "상대 피어 하나"는 그 피어의 주소들(IPv4·IPv6)을 합친 것이다. 노드가 피어의 것으로 알려 주지 않은 주소는 주소 하나가 한 몫이다(동작 S "피어 하나의 몫").
-- 버퍼는 쓰는 만큼만 잡고 상한까지 자란다. 유휴 연결은 버퍼를 쥐지 않는다.
-- **받아 가기 전의 받는 창은 16KiB다**(2026-11-17). 받는 버퍼는 쓴 자리까지 한 덩어리로 자라므로, 창이 256KiB면 순서대로 1바이트와 창 끝 바로 앞의 1바이트만으로 연결 하나가 256KiB를 잡고, 응용이 받아 가기도 전에 리스너 하나의 대기열(32개)이 8MiB를 잡는다. 스택은 리스너에 온 SYN으로 만든 연결의 받는 창을 16KiB로 묶어 SYN-ACK의 창 필드에 그 값을 싣고, `accept(from:at:)`가 창을 버퍼 전체(256KiB)로 열며 맺어진 연결이면 창 갱신 ACK를 곧바로 낸다. 대기열 하나가 잡는 받는 버퍼는 32 × 16KiB = 512KiB까지다. 16KiB를 고른 까닭: ① 상대의 첫 창(RFC 6928의 10 × MSS, MSS 1240에서 12,400바이트)을 담는 가장 작은 2의 거듭제곱이라, 받아 가기 전에 온 첫 요청이 창에 막히지 않는다. ② SYN-ACK의 창 필드는 확장하지 않으므로(동작 F2) 65,535 이하여야 그대로 실린다. ③ 자기 shift 3의 배수라 맺어진 뒤의 창 필드가 내림으로 어긋나지 않는다. 받아 가기 전에 16KiB를 다 채운 상대는 창 0에서 기다리다가 창 갱신 ACK로 다시 보낸다. `TCPConnection`을 직접 여는 쪽(`accept(_:initialSequenceNumber:receiveWindowLimit:at:)`의 기본값)과 능동 열기는 전과 같이 버퍼 전체다.
-- 최악은 256 × 512KiB = 128MiB다. 첫 사용처의 Mac 호스트를 기준으로 잡은 값이다. iOS 확장 안에서 `.inProcess`를 쓰게 되면 이 값으로는 50MiB 한도를 지킬 수 없다(첫 사용처 확인 필요 F6).
-- Go와의 비교: gVisor의 버퍼 기본값은 방향마다 1MiB, 맺는 중인 연결의 상한은 macOS 2,048개다(TCP 노트 5절).
+- "One remote peer" groups its addresses (IPv4 and IPv6). Addresses the node did not identify as belonging to a peer each have their own share (behavior S, "Per-peer share").
+- Buffers allocate as needed and grow to the limit. Idle connections hold no buffers.
+- **The receive window before acceptance is 16KiB** (2026-11-17). The receive buffer grows as one block up to the written position. With a 256KiB window, 1 in-order byte and 1 byte just before the window's end can allocate 256KiB for one connection, and one listener's queue (32 connections) can hold 8MiB before the app accepts. The stack caps the receive window for a connection created by a SYN to a listener at 16KiB and carries that value in the SYN-ACK window field. `accept(from:at:)` opens the window to the full buffer (256KiB) and sends an immediate window update ACK for an established connection. One queue can hold up to 32 × 16KiB = 512KiB of receive buffers. 16KiB was chosen because ① it is the smallest power of 2 that fits the peer's initial window (10 × MSS from RFC 6928, 12,400 bytes at MSS 1240), so the first request can arrive before acceptance without hitting the window limit. ② The SYN-ACK window field is unscaled (behavior F2), so the value must be at most 65,535 to fit as given. ③ It is a multiple of the local scale implied by shift 3, so rounding down does not distort the window field after establishment. A peer that fills 16KiB before acceptance waits at a 0 window and resumes sending after the window update ACK. Direct users of `TCPConnection` (the default in `accept(_:initialSequenceNumber:receiveWindowLimit:at:)`) and active opens retain the full buffer.
+- Worst case is 256 × 512KiB = 128MiB, based on the first adopter's Mac host. Using `.inProcess` inside an iOS extension with this limit would exceed the 50MiB limit (first adopter confirmation needed F6).
+- Go comparison. gVisor defaults to 1MiB of buffer per direction and a limit of 2,048 connections being established on macOS (TCP notes §5).
 
-### K. 비밀과 로그
+### K. Secrets and logs
 
-1. ISN의 비밀은 사건·오류·`description`·`dump`에 나오지 않는다.
-2. 로그는 노드가 `os.Logger(subsystem: "Swiftail")`로 남긴다(M5와 같은 규칙): 리스너 열림·닫힘(포트), 연결의 맺어짐과 끝난 까닭, 상한에 닿아 버린 횟수. 주소 전체와 실린 데이터는 남기지 않는다.
+1. The ISN secret never appears in events, errors, `description`, or `dump`.
+2. The node records logs with `os.Logger(subsystem: "Swiftail")` (same rules as M5). Log listener opening and closure (port), connection establishment and closure reason, and the count of drops at the limit. Omit full addresses and payload data.
 
-## 결정
+## Decisions
 
-| # | 결정 | 정한 것 | 근거 |
+| # | Decision | Defined | Rationale |
 | --- | --- | --- | --- |
-| D1 | 혼잡 제어 | NewReno(RFC 5681 + 6582) | plan 4절(a). 규격이 짧고 결정적 시험으로 덮기 쉽다. gVisor의 CUBIC은 넣지 않는다 |
-| D2 | 초기 창 | RFC 6928(10 세그먼트) | gVisor·Linux와 같다. 작은 HTTP 응답이 한 왕복에 끝난다 |
-| D3 | 타임스탬프 | 쓰지 않는다 | 선택 기능이다. Karn만으로 RTO를 잴 수 있다. 세그먼트마다 12바이트가 준다 |
-| D4 | 지연 ACK | 2×MSS 또는 40ms | RFC의 SHOULD. gVisor는 미루지 않는 것으로 보인다(TCP 노트 11절 1) |
-| D5 | Nagle | 없음 | `write`가 준 바이트는 창이 허락하는 대로 나간다. 작은 쓰기를 묶는 일은 앱이 한다 |
-| D6 | 받아 가지 않은 연결 | 대기열 상한(32)까지 둔다 | tsnet의 "1초 뒤 닫기"는 통로에 버퍼가 없어서 생긴 규칙이다(`tsnet.go:2406-2418`의 TODO) |
-| D7 | 연결 없는 곳의 세그먼트 | RST | RFC와 gVisor가 같다 |
-| D8 | 체크섬 검사 | 받을 때 검사한다 | Tailscale도 netstack 앞에서 검사한다. 자기 구현의 잘못을 관문에서 잡는다 |
-| D9 | MTU | 1280 고정 | Tailscale TUN의 기본값. 인자를 두지 않는다 |
-| D10 | 체크섬 코드의 자리 | `SwiftailBase`(`package`) | RFC 1071 계산을 두 벌 두지 않는다. 엔진 쪽은 호출만 바뀐다 |
-| D11 | `SwiftailNetstack`의 접근 수준 | `package`, 제품 아님 | 앱이 쓰는 타입은 `Swiftail`의 것뿐이다. 공개 표면을 늘리지 않는다 |
+| D1 | Congestion control | NewReno (RFC 5681 + 6582) | Plan §4(a). The specification is short and easy to cover with deterministic tests. Omit gVisor's CUBIC |
+| D2 | Initial window | RFC 6928 (10 segments) | Matches gVisor and Linux. Small HTTP replies finish in one round trip |
+| D3 | Timestamps | Unused | Optional. Karn alone is sufficient for RTO measurement. Saves 12 bytes per segment |
+| D4 | Delayed ACK | 2×MSS or 40ms | RFC SHOULD. gVisor appears to send without delay (TCP notes §11 item 1) |
+| D5 | Nagle | None | Bytes from `write` go out as the window permits. The app groups small writes |
+| D6 | Unaccepted connections | Keep up to the queue limit (32) | tsnet's "close after 1 second" rule exists because its channel has no buffer (TODO in `tsnet.go:2406-2418`) |
+| D7 | Segments with no connection | RST | Matches the RFC and gVisor |
+| D8 | Checksum validation | Validate on receive | Tailscale also validates before the netstack. The gate catches errors in this implementation |
+| D9 | MTU | 1280 fixed | Default value for Tailscale TUN. No arguments provided |
+| D10 | Checksum code location | `SwiftailBase` (`package`) | Keep one copy of the RFC 1071 calculation. The engine changes only its call |
+| D11 | Access level of `SwiftailNetstack` | `package`, not a product | The app uses only the type from `Swiftail`. No public surface is expanded. |
 
-## 총괄 확인 필요
+## Lead session confirmation needed
 
-| # | 무엇 | 선택지 | 권고 |
+| # | What | Options | Recommendation |
 | --- | --- | --- | --- |
-| N1 | 타깃의 의존 방향 | (가) `Swiftail`이 `SwiftailNetstack`에 의존한다. 스택은 노드 actor 안의 값이다 / (나) plan 5절대로 `SwiftailNetstack`이 `Swiftail`에 의존한다. 스택은 `.memory` 장치의 `inboundPackets`·`send` 위에 선 별도 actor다 | (가). (나)는 노드와 스택 사이에 256개에서 버리는 흐름과 actor 건너뛰기가 패킷마다 두 번 끼고, 타이머가 둘이 되고, `extension TailnetNode`에 저장 상태를 둘 수 없어 API가 다른 타입으로 간다. 대가: TCP를 쓰지 않는 앱(iOS 터널 확장)의 바이너리에도 스택 코드가 들어간다(상태는 `.inProcess`일 때만 생긴다). 코드 크기는 구현 뒤에 잰다 |
-| N2 | 공개 API의 모양 | (가) 핸들(`TailnetListener`·`TailnetConnection`은 `final class`, 버려지면 끊음), 이름은 `listen(port:)`·`connect(to:port:)` / (나) 범위 함수(`withConnection(to:port:) { … }`, `acceptConnections(port:) { connection in … }`)만 / (다) plan 6절의 이름 `dial(host:port:)` | (가). tsnet과 일대일로 놓이고 첫 사용처의 HTTP 서버가 연결을 자기 Task 묶음에 넣기 쉽다. `deinit`의 끊기는 안전망이다. (나)는 수명이 구조로 보장되지만 연결을 다른 곳에 넘기지 못한다. "dial"은 Go의 말이고 Swift에서는 `connect`가 읽힌다(Network 프레임워크, POSIX) |
-| N3 | SACK | (가) M6 최소 범위에서 빼고 관문의 손실 1%·5% 기록을 보고 정한다 / (나) 받는 쪽만(SACK 블록을 낸다) / (다) 양쪽(RFC 6675 회복) | (가). plan 4절(a)가 "측정 뒤에 판단"으로 적었다. 첫 사용처의 큰 전송은 Swift가 보내는 쪽이라 (나)는 도움이 작고, (다)는 상태 기계에서 가장 큰 덩어리다. 기준을 미리 둔다: 손실 1%에서 처리량이 손실 0%의 1/10 아래로 떨어지면 구현 단위 M6-10을 연다. 손실 5%는 기록만 한다 |
-| N4 | RTO 하한 | (가) 200ms(gVisor, Linux) / (나) 1초(RFC 6298 2.4의 SHOULD) | (가). 하한 1초면 창 끝의 손실마다 1초씩 멈춘다. 상대인 두 스택이 모두 200ms 근처를 쓴다(커널 쪽은 확인하지 못함) |
-| N5 | keep-alive | (가) 늘 켬(2시간·75초·9번), 설정 없음 / (나) 없음 / (다) 연결마다 켜고 끄는 API | (가). RFC는 기본 꺼짐과 응용의 선택을 요구하지만(MUST-24·25), tsnet은 받는 연결에 늘 켠다. Mac 호스트는 며칠씩 돌고 iPhone은 말없이 사라진다. (나)면 본문을 읽다 멈춘 연결이 상한 256을 갉아먹는다. (다)는 요청이 없다 |
-| N6 | 메모리 상한의 값 | 동작 M의 표(연결 256, 버퍼 256KiB씩) / 더 크게(gVisor처럼 1MiB) / 더 작게 | 표의 값으로 시작하고 관문의 처리량 기록으로 조정한다. 창 256KiB는 RTT 20ms에서 약 100Mbit/s다 |
-| N7 | macOS 커널 스택을 상대로 한 관문 | (가) 관리자 권한 한 번: Go 도구가 utun을 만들고 tsnet을 그 위에 띄운다(`addKernelPeer`). 반복해 돌릴 수 있다 / (나) 실기기: M5의 터널 확장을 켠 iPhone이 Mac의 Swift 리스너에서 받는다(첫 사용처 세션) / (다) 공식 Tailscale 앱을 켠 Mac과 실제 tailnet | (가)를 기본 관문으로, (나)를 마무리로. utun 없이 커널 TCP와 IP 패킷을 주고받는 길을 찾지 못했다(아래 "관문" (나)). (가)는 사용자가 sudo를 한 번 허락해야 한다 |
-| N8 | 주소의 주인이 바뀐 연결 | (가) 끊는다(동작 X10) / (나) 그대로 둔다 | (가). 첫 사용처는 요청마다 원격 주소로 WhoIs를 하므로 (나)여도 다음 요청에서 걸리지만, 이미 시작한 전송은 이어진다. Go가 어떻게 하는지는 확인하지 못했다. 대가: 노드가 이전 주소 주인 표를 쥐고 피어를 다시 계산할 때마다 새 표와 견준다 |
-| N9 | 연결 위의 TLS(M7의 일이지만 M6의 API를 가른다) | (가) 루프백 다리: Swiftail 연결을 `127.0.0.1`의 `NWListener`(TLS)로 이어 준다. 원격 주소는 따로 넘긴다 / (나) Swift로 쓴 TLS 1.3 서버 / (다) SecureTransport(`SSLSetIOFuncs`. macOS 10.15·iOS 13부터 폐기 표시, SDK 머리 파일에서 확인) | 지금 정하지 않는다. M6의 API는 바이트 흐름(`read`·`write`)만 내고, 어느 쪽이든 그 위에 설 수 있다. Network 프레임워크의 TLS를 사용자 바이트 흐름 위에 올리는 공개 API는 찾지 못했다(확인하지 못함). M7 계약 전에 따로 조사한다 |
-| N10 | 체크섬을 `SwiftailBase`로 옮기기 | (가) 옮긴다(엔진 파일 하나의 호출이 바뀐다) / (나) netstack에 한 벌 더 둔다 | (가)(결정 D10). 엔진의 기존 시험이 그대로 지킨다 |
-| N11 | `.inProcess`에서 ICMP echo에 답하기 | (가) 답하지 않는다 / (나) 답한다(tsnet은 답한다) | (가)로 시작한다. disco ping은 스택 없이 된다. 첫 사용처의 답(F12)에 따라 (나) |
+| N1 | Target dependency direction | (a) `Swiftail` depends on `SwiftailNetstack`. The stack is a value inside the node actor / (b) Per plan §5, `SwiftailNetstack` depends on `Swiftail`. The stack is a separate actor above `inboundPackets` and `send` on the `.memory` device | (a). Option (b) adds streams that drop at 256 items between the node and stack and two actor hops per packet. It doubles the timers and forces the API into a different type because `extension TailnetNode` cannot store state. The trade-off is that the stack code is in binaries that do not use TCP (iOS tunnel extension). State is created only for `.inProcess`. Measure code size after implementation |
+| N2 | Public API shape | (a) Handles (`TailnetListener` and `TailnetConnection` are `final class` and disconnect when dropped), named `listen(port:)` and `connect(to:port:)` / (b) Only scoped functions (`withConnection(to:port:) { … }`, `acceptConnections(port:) { connection in … }`) / (c) The plan §6 name `dial(host:port:)` | (a). Maps one-to-one to tsnet and lets the first adopter's HTTP server easily add connections to its own Task group. Disconnect in `deinit` is a fallback. Option (b) guarantees lifetime structurally but prevents passing connections elsewhere. "Dial" is Go terminology. `connect` is familiar in Swift (Network framework, POSIX) |
+| N3 | SACK | (a) Leave it out of the minimum M6 scope, decide from gate records at 1% and 5% loss / (b) Receiver only (emit SACK blocks) / (c) Both sides (RFC 6675 recovery) | (a). Plan §4(a) says "decide after measuring." Swift sends the first adopter's large transfers, so (b) helps little, and (c) is the largest part of the state machine. Set the criterion in advance: open implementation unit M6-10 if throughput at 1% loss falls below 1/10 of the throughput at 0% loss. Only record the 5% loss result |
+| N4 | RTO minimum | (a) 200ms (gVisor, Linux) / (b) 1 second (RFC 6298 §2.4 SHOULD) | (a). A 1-second minimum would stall for 1 second on each loss at the end of a window. Both peer stacks use about 200ms (unverified for the kernel) |
+| N5 | keep-alive | (a) Always on (2 hours, 75 seconds, 9 probes), no settings / (b) Off / (c) API to toggle per connection | (a). The RFC requires off by default and application choice (MUST-24 and MUST-25), but tsnet always enables it on incoming connections. The Mac host runs for days, and iPhones disappear without notice. With (b), connections that stop while reading the body consume slots from the limit of 256. (c) has not been requested |
+| N6 | Value of memory limit | Table of behavior M (connection 256, buffer 256KiB each) / larger (like gVisor at 1MiB) / smaller | Start with values from the table and adjust based on gate throughput records. A window of 256KiB achieves approximately 100Mbit/s over a RTT of 20ms |
+| N7 | Gate against the macOS kernel stack | (a) Administrator privileges once: Go tool creates utun and starts tsnet on top (`addKernelPeer`). Repeatable / (b) Real device: iPhone with the M5 tunnel extension enabled receives from the Mac Swift listener (first adopter session) / (c) Mac with the official Tailscale app on a real tailnet | (a) as the default gate, (b) for final verification. No path was found for exchanging IP packets with kernel TCP without utun (gate (b) below). For (a), the owner must authorize sudo once |
+| N8 | Connections whose address owner changed | (a) Close them (behavior X10) / (b) Leave them open | (a). The first adopter runs WhoIs for the remote address on every request, so even with (b) the next request would catch it, but transfers already in progress would continue. Go's handling is unverified. The cost is retaining the previous address owner table and comparing it with the new table whenever the node recomputes peers |
+| N9 | TLS over the connection (M7 work that affects the M6 API) | (a) Loopback bridge: connect the Swiftail connection to a TLS `NWListener` on `127.0.0.1`. Pass the remote address separately / (b) TLS 1.3 server written in Swift / (c) SecureTransport (`SSLSetIOFuncs`, deprecated since macOS 10.15 and iOS 13, verified in SDK headers) | Defer the decision. The M6 API exposes only a byte stream (`read` and `write`), and any option can run above it. No public API was found for layering Network framework TLS over a user-provided byte stream (unverified). Investigate separately before the M7 contract |
+| N10 | Move the checksum to `SwiftailBase` | (a) Move it (changes the call in one engine file) / (b) Keep an additional copy in the netstack | (a) (decision D10). Existing engine tests continue to cover it |
+| N11 | Respond to ICMP echo in `.inProcess` | (a) No reply / (b) Reply (tsnet replies) | Start with (a). Disco ping works without the stack. Move to (b) based on the first adopter's answer (F12) |
 
-### 총괄 확정 (2026-11-15, 초안 단계)
+### Lead session decisions (2026-11-15, draft stage)
 
-첫 사용처의 검토(아래 F1~F13) 전의 결정이다. 답에 따라 바뀔 수 있는 것은 그렇게 적는다.
+This is a review decision prior to the first adopter's review (below F1~F13). Any that may change based on the response are noted accordingly.
 
-| # | 결정 | 덧붙임 |
+| N1 | (a) `Swiftail` depends on `SwiftailNetstack` | Measure and record the iOS tunnel extension binary size increase after implementation. Update the plan §5 diagram and module table together after review |
 | --- | --- | --- |
-| N1 | (가) `Swiftail`이 `SwiftailNetstack`에 의존한다 | iOS 터널 확장의 바이너리 크기 증가를 구현 뒤에 재어 기록한다. plan 5절 그림과 모듈 표는 검토가 끝난 뒤 함께 고친다 |
-| N2 | (가) 핸들과 `listen(port:)`·`connect(to:port:)` | plan 6절 초안의 `dial`은 쓰지 않는다 |
-| N3 | (가) SACK 없이 시작하고 관문 기록으로 정한다 | 기준: 손실 1%의 처리량이 손실 0%의 1/10 아래면 M6-10을 연다 |
-| N4 | (가) RTO 하한 200ms | — |
-| N5 | (가) keep-alive를 늘 켠다 | RFC의 "기본 꺼짐"과 다르다는 것을 문서 주석에 적는다. F5의 답에 따라 다시 본다 |
-| N6 | 표의 값(연결 256개, 버퍼 256KiB씩)으로 시작 | Mac 호스트 기준이다. iOS 확장에서 `.inProcess`를 쓰게 되면(F6) 낮춘 값을 따로 정한다 |
-| N7 | (나) 실기기를 기본 마무리로 두고, (가) `addKernelPeer`는 **사용자가 sudo를 허락할 때만** 쓴다 | 관리자 권한은 사용자만 줄 수 있다. 허락 전에는 Go 피어(gVisor) 관문 (가)와 실기기로 간다 |
-| N8 | (가) 주소의 주인이 바뀐 연결은 끊는다 | — |
-| N9 | 정하지 않는다. M6의 API는 바이트 흐름만 낸다 | **M7의 가장 큰 위험이다**: 사용자 바이트 흐름 위에 TLS를 올릴 공개 API가 Apple 플랫폼에 마땅치 않다. M7 계약 전에 따로 조사하고, F1의 답을 먼저 받는다 |
-| N10 | (가) 체크섬을 `SwiftailBase`로 옮긴다 | — |
-| N11 | (가) `.inProcess`는 ICMP echo에 답하지 않는 것으로 시작 | F12의 답에 따라 다시 본다 |
+| N1 | (a) `Swiftail` depends on `SwiftailNetstack` | Measure and record the iOS tunnel extension binary size increase after implementation. Update the plan §5 diagram and module table together after review |
+| N2 | (a) Handles and `listen(port:)` and `connect(to:port:)` | The plan §6 draft name `dial` is unused |
+| N3 | (a) Start without SACK and decide from gate records | Open M6-10 if throughput at 1% loss is below 1/10 of throughput at 0% loss |
+| N4 | (a) RTO lower bound set to 200ms | — |
+| N5 | (a) Always enable keep-alive | Document in the doc comments that this differs from the RFC's "off by default." Revisit based on the F5 answer |
+| N6 | Start with values in the table (256 connections, 256KiB buffers each) | Based on Mac host. If iOS extension uses `.inProcess` (F6), separately define lower values. |
+| N7 | (b) Use a real device for final verification by default. Use (a) `addKernelPeer` **only if the owner authorizes sudo** | Only the owner can grant administrator privileges. Until then, use the Go peer (gVisor) gate (a) and real device |
+| N8 | (a) Terminate connections where the address owner has changed | — |
+| N9 | Deferred. The M6 API exposes only a byte stream | **The greatest risk for M7**. Apple platforms lack an apparent public API for layering TLS over a user-provided byte stream. Investigate separately before the M7 contract and get the answer to F1 first |
+| N10 | (a) Move checksum to `SwiftailBase` | — |
+| N11 | (a) Start with `.inProcess` sending no ICMP echo reply | Revisit based on the F12 answer |
 
-TCP 노트(`docs/protocol-notes/tcp-netstack.md`)는 다른 세션이 RFC 12개와 고정된 Go 소스에 대조해 고쳤다(2026-11-15). 그 대조에서 나온 계약의 정정을 동작 T2·T4·T5·T6, R3·R4·R6, F1·F2·F7·F9, S6, X7·X9·X10에 반영했다: 처리 순서의 근거는 RFC(gVisor는 다르다), RST는 X3 한 가지 규칙, 작은 창에서 멈추지 않게 하는 override 시간, SYN·SYN-ACK의 재전송은 247초까지(RFC의 3분 이상), TIME-WAIT 기록은 기한 전에 버리지 않음, 작은 MSS는 거절, 창 확장의 협상 규칙. 대조하지 못한 것: 커널 TCP(XNU)의 기본값, 실행으로 본 gVisor의 동작.
+A separate session revised the TCP notes (`docs/protocol-notes/tcp-netstack.md`) against 12 RFCs and pinned Go sources (2026-11-15). The contract incorporates the resulting corrections in behaviors T2, T4, T5, T6, R3, R4, R6, F1, F2, F7, F9, S6, X7, X9, and X10. The RFC is the basis for processing order (gVisor differs). RST follows the single rule in X3. The override interval prevents stalls on small windows. SYN and SYN-ACK retransmit up to 247 seconds (the RFC requires at least 3 minutes). TIME-WAIT records survive until their deadline, small MSS values are rejected, and window scaling follows the negotiation rules. Unverified against references are the kernel TCP (XNU) default values and runtime gVisor behavior.
 
-## 첫 사용처 확인 필요
+## First adopter confirmation needed
 
-이 절은 첫 사용처의 커밋된 코드(`core/internal/node/node.go`·`tls.go`, `core/internal/proxy/proxy.go`, `core/internal/host/`, `docs/protocol.md`, `docs/protocol-addenda.md`, `docs/tunnel.md`)를 읽고 세운 가정과 질문이다. 답에 따라 바뀌는 조항을 함께 적는다.
+This section presents assumptions and questions formed from reviewing the committed code of the first adopter (`core/internal/node/node.go`·`tls.go`, `core/internal/proxy/proxy.go`, `core/internal/host/`, `docs/protocol.md`, `docs/protocol-addenda.md`, `docs/tunnel.md`). The clauses that change based on the answers are listed together.
 
-대응(Mac 호스트):
+Response (Mac host):
 
 ```swift
 let node = try TailnetNode(configuration: configuration, device: .inProcess)
@@ -463,509 +463,509 @@ try await withThrowingDiscardingTaskGroup { group in
     for await connection in listener {
         group.addTask {
             // connection.remoteEndpoint.address → (M7) node.whoIs(…)
-            // TLS와 HTTP는 이 위에 선다(F1)
+            // TLS and HTTP run on top of this connection (F1)
             await serve(connection)
         }
     }
 }
 ```
 
-| # | 질문 | 가정한 것 | 답에 따라 바뀌는 곳 |
+| # | Question | Assumed | Changes based on answer |
 | --- | --- | --- | --- |
-| F1 | Mac 호스트를 바꿀 때 TLS와 HTTP 서버는 누가 맡는가? Go의 `tls.NewListener` + `http.Server`에 해당하는 것을 첫 사용처가 Swift로 쓰는가, Swiftail이 무엇을 내야 하는가? | Swiftail은 바이트 흐름까지만 낸다 | N9. Swiftail이 맡아야 한다면 M7의 범위가 커진다 |
-| F2 | 리스너는 하나인가(443 또는 시험 포트)? 한 노드에서 여러 포트를 동시에 듣는 일이 있는가? | 하나 | 동작 S3의 상한 16 |
-| F3 | 동시에 열리는 연결은 많아야 몇 개인가(페어링한 기기 수 × 기기 하나의 연결 수)? | 수십 개 | 동작 M의 256, S4·S5의 상한 |
-| F4 | 가장 큰 전송은 서버 → 클라이언트 4GiB(파일 하나의 상한), 클라이언트 → 서버 4MB가 맞는가? 4GiB를 넘는 것이 있는가? | 맞다 | 4GiB면 시퀀스 번호가 한 바퀴 돈다(시험 6). 넘는 전송이 흔하면 타임스탬프·PAWS(제외 표)를 다시 본다 |
-| F5 | Swift HTTP 서버에도 `ReadHeaderTimeout` 10초·`IdleTimeout` 60초를 두는가? Go에는 요청 본문 읽기의 시간 제한이 없어, 사라진 클라이언트의 연결은 tsnet의 keep-alive(2시간)가 거둔다 | keep-alive가 필요하다 | N5. 서버가 모든 읽기에 시간 제한을 둔다면 keep-alive를 뺄 수 있다 |
-| F6 | 프록시 모드(진단용)도 Swiftail로 옮기는가? 옮긴다면 iOS 확장 안에서 `.inProcess`를 쓰게 된다 | 옮기지 않는다. `connect`는 시험과 `rdtestenv`가 쓴다 | 옮긴다면: 동작 M의 상한을 iOS에서 낮춰야 한다(50MiB), `connect`에 시간 제한 인자가 필요한지(Go는 15초), `finishWriting`이 `CloseWrite` 자리에 맞는지 |
-| F7 | 연결의 원격 주소는 `IPEndpoint`(주소와 포트)면 충분한가? `r.RemoteAddr` 문자열을 WhoIs 밖에서 쓰는 곳이 있는가? | 충분하다 | 공개 API의 `remoteEndpoint` |
-| F8 | 지금은 `Running`이 된 뒤에 듣고, 듣기가 3번 실패하면 `Error`로 본다. Swiftail의 `listen`은 포트 중복과 상한 밖에는 실패하지 않고 `run()` 전에도 부를 수 있다. 그 재시도 로직을 없애도 되는가? | 된다 | 동작 A1 |
-| F9 | 노드가 멈출 때(앱 종료, 다시 시작) 열린 연결은 RST 한 번으로 끊는다(직접 경로가 아니면 닿지 않을 수 있다). 진행 중인 전송을 마저 보내고 멈춰야 하는가? | RST로 충분하다 | 동작 N8 |
-| F10 | 손실이 있는 경로(셀룰러, DERP)에서의 전송 속도에 기준이 있는가? Go 호스트로 잰 IPA 전송 속도 기록이 있으면 비교 기준으로 쓴다 | 없다 | N3(SACK), 관문 (가) 8·9의 기록 |
-| F11 | 가짜 tailnet e2e(`listenTLS=false`)가 Swift 노드의 리스너를 그대로 상대해야 하는가? | M7에서 다룬다 | 관문 (가)의 범위 |
-| F12 | Mac 호스트의 tailnet 주소로 ICMP ping을 보내 진단하는 절차가 있는가? | 없다 | N11 |
-| F13 | 리스너가 받아 가지 않은 연결을 32개까지 두는 것(Go는 1초 뒤 닫음)이 지금의 동작에 기대는 곳과 어긋나는가? | 어긋나지 않는다 | 결정 D6 |
+| F1 | Who owns the TLS and HTTP servers when replacing the Mac host? Does the first adopter implement the equivalent of Go's `tls.NewListener` + `http.Server` in Swift, or does Swiftail need to provide something? | Swiftail exposes only a byte stream | N9. M7 scope expands if Swiftail owns this |
+| F2 | Is there only one listener (port 443 or test port)? Can a node listen on multiple ports simultaneously? | One | Behavior S3 upper bound of 16 |
+| F3 | How many connections can be open simultaneously (at most, up to number of paired devices × connections per device)? | Dozens | Behavior M upper bound of 256, upper bound of S4·S5 |
+| F4 | Are the largest transfers 4GiB server → client (maximum for one file) and 4MB client → server? Do any exceed 4GiB? | Yes | At 4GiB the sequence number wraps (test 6). If larger transfers are common, revisit timestamps and PAWS (exclusions table) |
+| F5 | Does the Swift HTTP server also set `ReadHeaderTimeout` to 10 seconds and `IdleTimeout` to 60 seconds? Go has no timeout for reading a request body, so tsnet's keep-alive (2 hours) reclaims connections to vanished clients | keep-alive is needed | N5. If the server times out every read, keep-alive can be removed |
+| F6 | Is the proxy mode (diagnostic use) being migrated to Swiftail? If so, will it use `.inProcess` within the iOS extension? | No. `connect` is used in testing and `rdtestenv` | If migrated: the upper bound of behavior M must be reduced on iOS (50MiB), and a timeout parameter may be needed for `connect` (Go has 15 seconds), and whether `finishWriting` matches the `CloseWrite` action |
+| F7 | Is `IPEndpoint` (address and port) sufficient for the connection's remote address? Is the `r.RemoteAddr` string used outside WhoIs anywhere? | Sufficient | Public API `remoteEndpoint` |
+| F8 | Today, listening starts after `Running`, and 3 listen failures produce `Error`. Swiftail's `listen` fails only for duplicate ports or limits, and can be called before `run()`. Can the retry logic be removed? | Yes | Behavior A1 |
+| F9 | When a node stops (app termination, restart), open connections are terminated with a single RST (it may not reach if the direct path is not available). Should ongoing transmissions be completed and then the node be halted? | A single RST is sufficient | Behavior N8 |
+| F10 | Is the transmission rate based on paths with loss (cellular, DERP)? If there is a record of IPA transmission rate from a Go host, it can be used as a benchmark for comparison. | No | N3(SACK), Gate (a) 8·9 records |
+| F11 | Should the fake tailnet e2e test (`listenTLS=false`) use the Swift node's listener as-is? | Covered in M7 | Scope of gate (a) |
+| F12 | Is there a procedure to send an ICMP ping to the tailnet address on a Mac host for diagnostics? | No | N11 |
+| F13 | Does allowing up to 32 connections that the listener does not accept (Go closes them after 1 second) align with current behavior expectations? | It does not conflict | Decision D6 |
 
-## 첫 사용처 검토 결과 (2026-11-15)
+## First adopter review results (2026-11-15)
 
-RemoteDebug 세션이 F1~F13에 답했다(그쪽 `2814b2c`의 Go 코드에서 확인한 것과 제안). 가정은 모두 맞았고, 계약의 조항은 다음과 같이 굳는다.
+The RemoteDebug session answered F1 through F13 (confirmed in the Go code at commit `2814b2c` and as proposed). All assumptions were valid, and the contract provisions are now firmly established as follows.
 
-1. **TLS와 HTTP(F1)**: HTTP 서버는 첫 사용처가 Swift로 쓴다. 지금 Go 호스트는 `tls.NewListener` + `http.Server.Serve`라서 **HTTP/1.1만** 쓴다. TLS는 **루프백 다리**로 한다: Swiftail 연결을 `127.0.0.1`의 `NWListener`(TLS, ALPN `http/1.1`, 최소 TLS 1.2)로 이어 준다. 첫 사용처에는 tailnet과 무관한 OS TCP 리스너(같은 Wi-Fi 직접 연결)가 이미 있어, HTTP 서버 하나가 두 입구를 같은 방식으로 받게 된다. Swift로 쓴 TLS 서버는 하지 않는다. **M6의 API는 바이트 흐름 그대로다**(N9는 M7에서 닫는다). M7 계약이 정할 것:
-   - 다리를 Swiftail이 선택 제품으로 낼지(역압과 반닫힘을 정확히 잇는 일이다), 첫 사용처가 쓸지. 어느 쪽이든 루프백 연결의 출발 포트 → tailnet `IPEndpoint` 대응을 HTTP 서버가 요청마다 물을 수 있어야 한다(WhoIs).
-   - ts.net 인증서 API의 모양: 인증서 사슬(DER 또는 PEM)과 개인 키(`SecKey`로 만들 수 있는 형식. P-256이면 X9.63 원시 표현), 갱신을 알리는 사건. 첫 사용처가 키체인에 넣어 `SecIdentity`를 만든다.
-2. **범위(F2·F3·F4·F6·F12)**: 리스너는 하나(기본 443), 동시 연결은 기기당 10개 안팎(상한 256이면 충분), 가장 큰 전송은 서버 → 클라이언트 4GiB·반대 방향 4MiB다. 프록시 모드는 Go와 함께 없어진다(호출하는 곳이 없다). 그래서 **iOS 확장에서 `.inProcess`를 쓸 일이 없고**, 동작 M의 상한은 Mac 호스트 기준 그대로다. `connect`는 시험과 진단이 쓴다. ICMP echo에는 답하지 않는다(N11 확정).
-3. **시간 제한과 keep-alive(F5)**: 첫 사용처의 Swift 서버가 머리 10초, 본문 읽기 무응답 30초, 유휴 60초, 쓰기 무진행 60초를 둔다. 그래도 keep-alive는 켠 채로 둔다(N5 그대로. 다른 사용처는 시간 제한이 없을 수 있다). 쓰기 시간 제한은 `write`를 부른 Task의 취소로 건다: 취소된 `write`는 연결을 RST로 끊고 `.cancelled`를 던진다(동작 A4, 공개 API의 `write` 주석 그대로).
-4. **그 밖(F7·F8·F9·F13)**: 원격 주소는 `IPEndpoint`면 충분하다. 듣기 재시도 로직은 없앤다(`listen`은 `run()` 전에도 된다). 노드가 멈출 때 RST 한 번이면 된다(받는 쪽이 Range로 이어받는다). 받아 가지 않은 연결 32개는 어긋나지 않는다.
-5. **속도 기준(F10)**: 기록이 없다. 첫 사용처가 관문 (나)에서 Go 터널 + Go 호스트로 100MB 받는 시간을 재서 준다(Wi-Fi 직접 경로, 가능하면 셀룰러·DERP). 그 값이 N3(SACK)와 관문 기록의 비교 기준이다. **받은 값(2026-11-15, iPhone 14 Pro, 같은 Wi-Fi의 직접 UDP 경로): 100MiB를 23.0초에(4.56MiB/s).** 셀룰러·DERP 전용은 아직 없다. 루프백에서 잰 Swift 스택의 손실 0% 값(약 80MB/s)은 이 기준의 열 배를 넘으므로, 실기기에서 볼 것은 손실이 없을 때의 속도가 아니라 실제 망의 손실에서 이 기준에 얼마나 못 미치는가다.
-6. **통합 시험의 발판(F11)**: 가짜 tailnet e2e는 M7에서 다룬다. 그 전에, 계정 없이 프로세스 안에서 Swiftail 노드 둘(하나는 `listen`, 하나는 `connect`)을 `Tools/interop`의 시험 제어 서버에 붙여 돌리는 방법을 `Tools/interop/README.md`에 적는다(M6-9b의 몫으로 더한다). 첫 사용처가 호스트 이식의 통합 시험을 그 위에 올린다.
-7. **큰 전송의 복사 횟수(제안)**: `write(_: [UInt8])`의 복사가 4GiB 전송에서 Mac의 CPU에 주는 영향은 관문 (가)의 100MB 전송에서 잰다. 문제가 보이면 복사를 줄인 쓰기(`Span` 계열이나 `some Collection<UInt8>`)를 더한다. 안전하지 않은 포인터를 공개 API에 내지 않는다(plan 5절 코드 기준). `shortcut:`으로 남긴다.
-8. **커널 스택 관문**: "M5 터널을 켠 iPhone이 Mac의 Swift 리스너에서 큰 파일을 받는" 확인은 첫 사용처 세션이 맡는다. 그 시점에 맞춰 Swift 리스너 위의 최소 HTTPS 서버(파일 하나를 Range로 내보냄)를 그쪽이 만든다.
+1. **TLS and HTTP (F1)**. The first adopter writes the HTTP server in Swift. The current Go host uses `tls.NewListener` + `http.Server.Serve`, so it uses **HTTP/1.1 only**. TLS uses a **loopback bridge** that connects the Swiftail connection to an `NWListener` on `127.0.0.1` (TLS, ALPN `http/1.1`, minimum TLS 1.2). The first adopter already has an OS TCP listener independent of the tailnet (same-Wi-Fi direct connection), so one HTTP server will accept both entry points the same way. There will be no TLS server written in Swift. **M6's API remains a byte stream** (N9 is decided in M7). The M7 contract will decide the following.
+   - Whether Swiftail provides the bridge as an optional product (accurately relaying backpressure and half-close) or the first adopter writes it. In either case, the HTTP server must be able to look up the loopback connection's source port → tailnet `IPEndpoint` mapping for every request (WhoIs).
+   - Shape of the ts.net certificate API: a certificate chain (DER or PEM), private key (in a form usable to create a `SecKey`, X9.63 raw representation for P-256), and a renewal event. The first adopter adds them to the keychain and creates a `SecIdentity`.
+2. **Scope (F2, F3, F4, F6, F12)**. There is one listener (default 443), about 10 concurrent connections per device (the 256 cap is sufficient), and a maximum transfer of 4GiB server → client and 4MiB in the reverse direction. Proxy mode goes away with Go (no callers). So **the iOS extension has no use for `.inProcess`**, and behavior M limits remain based on the Mac host. Tests and diagnostics use `connect`. Do not respond to ICMP echo (N11 confirmed).
+3. **Timeouts and keep-alive (F5)**. The first adopter's Swift server sets 10 seconds for the header, 30 seconds without a response while reading the body, 60 seconds idle, and 60 seconds without write progress. Keep-alive stays on (N5 as written. Other adopters may have no timeouts). Enforce the write timeout by canceling the Task that called `write`. A canceled `write` resets the connection with RST and throws `.cancelled` (behavior A4 and the `write` comment in the public API).
+4. **Other items (F7, F8, F9, F13)**. `IPEndpoint` suffices for the remote address. Remove listen retry logic (`listen` can run before `run()`). One RST is sufficient on node shutdown (the receiver resumes with Range). Keeping up to 32 unaccepted connections does not conflict with current use.
+5. **Throughput baseline (F10)**. There are no records. The first adopter provides a measurement of the time to receive 100MB using the Go tunnel + Go host in gate (b) (direct Wi-Fi, and cellular and DERP if possible). This is the comparison baseline for N3 (SACK) and the gate results. **Measured value received (2026-11-15, iPhone 14 Pro, direct UDP path on the same Wi-Fi): 100MiB in 23.0 seconds (4.56MiB/s).** Cellular and DERP-only measurements are still unavailable. The Swift stack's loopback result at 0% loss (about 80MB/s) exceeds this baseline by more than tenfold. Real device testing will measure how far throughput under actual network loss falls below this baseline, rather than no-loss speed.
+6. **Integration test setup (F11)**. Fake-tailnet e2e is M7 work. First, document in `Tools/interop/README.md` how to run two in-process Swiftail nodes (one `listen`, one `connect`) against the `Tools/interop` test control server without an account (added to M6-9b). The first adopter builds the host migration integration test on this setup.
+7. **Copies in large transfers (proposal)**. Measure the effect of copying in `write(_: [UInt8])` on Mac CPU during a 4GiB transfer using the 100MB transfer in gate (a). If a problem appears, add a write API with fewer copies (`Span` family or `some Collection<UInt8>`). Keep unsafe pointers out of the public API (code standards in plan §5). Leave this as a `shortcut:`.
+8. **Kernel stack gate**. The first adopter session checks that an iPhone with the M5 tunnel enabled can receive a large file from the Mac's Swift listener. It builds a minimal HTTPS server on the Swift listener that serves one file with Range in time for that check.
 
-## 제외 (`shortcut:` 주석으로 남긴다)
+## Exclusions (recorded as `shortcut:` comments)
 
-| 제외 | 근거 | 필요해지는 시점 |
+| Excluded | Rationale | Time of need |
 | --- | --- | --- |
-| 보내는 쪽 SACK(받은 블록으로 잃은 구간 고르기, RFC 6675), D-SACK(RFC 2883) | 받는 쪽(협상과 블록 내기, 동작 F5 아래)은 M6-10a로 들어갔다. 받은 블록은 코덱이 값으로 내놓지만 연결이 쓰지 않는다 | 보내는 쪽: M6-10b(10a 뒤의 측정과 실기기 기록을 보고 연다). D-SACK: 상대의 재정렬 감지가 문제가 될 때 |
-| 타임스탬프, PAWS | D3 | 재전송이 잦은 경로에서 RTO가 맞지 않을 때, 한 연결이 4GiB를 여러 번 넘겨 옛 세그먼트와 헷갈릴 수 있을 때 |
-| CUBIC, RACK, limited transmit(RFC 3042) | D1 | 대역·지연이 큰 경로에서 NewReno의 처리량이 문제일 때 |
-| Nagle | D5 | 작은 쓰기를 많이 하는 앱이 생길 때 |
-| 동시 열기(SYN-SENT에서 ACK 없는 SYN) | 받는 쪽과 거는 쪽이 정해진 사용처뿐이다. 그 SYN은 버린다 | 양쪽이 동시에 거는 프로토콜을 쓸 때 |
-| urgent 데이터 | URG를 무시하고 보통 데이터로 읽는다(MUST-30과 다르다) | urgent를 쓰는 상대를 만날 때 |
-| ECN | 선택 | |
-| IP 단편화 재조립, 경로 MTU 탐색, ICMP 오류 처리 | 엔진이 조각을 받지 않는다. MSS가 MTU 1280 안에 있다 | 터널 MTU보다 작은 경로를 만날 때(WireGuard 바깥의 일이라 안쪽 TCP에는 보이지 않는다) |
-| 받는 버퍼 자동 조정 | 고정 256KiB | 처리량 기록에서 창이 병목일 때 |
-| 주소를 정한 듣기, `tcp4`·`tcp6`, 포트 0 | 첫 사용처는 포트만 정한다 | 그런 사용처가 생길 때 |
-| tailnet 밖으로 걸기(시스템 DNS, OS 소켓) | tsnet만의 편의다 | |
-| `connect`가 `Running`을 기다리기 | 앱이 `events`로 기다린다 | 상태를 볼 수 없는 호출자가 생길 때 |
-| 읽기·쓰기·걸기의 시간 제한 인자 | Task 취소로 한다 | F6의 답에 따라 |
-| UDP 소켓(`ListenPacket`), ICMP echo 응답 | 첫 사용처가 쓰지 않는다. N11 | F12의 답에 따라 |
-| 서비스 IP의 TCP 53(DNS over TCP) | `.inProcess`에는 서비스 IP로 질의할 OS 리졸버가 없고, utun 장치에는 스택을 붙이지 않는다. M5의 RST 그대로다 | 터널 모드에서 512바이트를 넘는 MagicDNS 응답이 실제로 생길 때(utun 장치에 스택을 붙이는 일이 된다) |
+| Sender-side SACK (selecting lost ranges from received blocks, RFC 6675), D-SACK (RFC 2883) | Receiver-side SACK (negotiation and emitting blocks, under behavior F5) shipped in M6-10a. The codec exposes received blocks as values, and the connection does not use them | Sender: M6-10b (opened based on measurements after 10a and real device records). D-SACK: when the peer's reordering detection becomes a problem |
+| Timestamps, PAWS | D3 | When RTO is inaccurate on a path with frequent retransmissions, or one connection passes 4GiB repeatedly and could confuse old segments with new ones |
+| CUBIC, RACK, limited transmit (RFC 3042) | D1 | On paths with high bandwidth and delay, NewReno's throughput becomes problematic |
+| Nagle | D5 | When applications frequently perform small writes |
+| Simultaneous open (SYN without ACK in SYN-SENT) | The use cases have fixed accepting and connecting sides. Drop that SYN | When using a protocol where both sides connect simultaneously |
+| Urgent data | Ignore URG and read as normal data (differs from MUST-30) | When encountering a peer that uses urgent data |
+| ECN | Optional | |
+| IP fragment reassembly, path MTU discovery, ICMP error handling | The engine does not accept fragments. MSS fits within the 1280 MTU | When a path has a smaller MTU than the tunnel (this occurs outside WireGuard and is invisible to inner TCP) |
+| automatically adjusting receive buffer size | fixed at 256KiB | when the window is bottlenecked as recorded in throughput metrics |
+| address-specific listening, `tcp4`·`tcp6`, port 0 | the first adopter specifies only the port | when such an adopter is created |
+| establishing connections outside the tailnet (system DNS, OS socket) | a convenience specific to tsnet | |
+| `connect` waiting for `Running` | The app waits through `events` | When there is a caller that cannot observe state |
+| timeout parameters for read, write, and connect | handled via task cancellation | depending on the response from F6 |
+| UDP socket (`ListenPacket`), ICMP echo response | the first adopter does not use it. N11 | depending on the response from F12 |
+| TCP 53 at the service IP (DNS over TCP) | There is no OS resolver querying the service IP with `.inProcess`, and the utun device has no stack attached. Keep M5's RST | When MagicDNS responses over 512 bytes actually occur in tunnel mode (requires attaching the stack to the utun device) |
 | TLS, HTTP | N9, F1 | M7 |
-| 바이트 `AsyncSequence`(`for try await chunk in connection`) | `read`를 도는 한 줄이다 | |
-| 스택의 기한 찾기: 연결을 모두 훑는다 | 연결이 256개까지다 | 상한을 크게 올릴 때 |
-| 패킷마다의 `[UInt8]` 할당과 복사 | M5까지와 같은 구조다 | 관문의 처리량 기록에서 병목일 때 |
+| Byte `AsyncSequence` (`for try await chunk in connection`) | A one-line loop around `read` | |
+| finding stack timeout: scans all connections | up to 256 connections | when the upper limit is increased |
+| Per-packet `[UInt8]` allocation and copying | Same structure as through M5 | When gate throughput records show a bottleneck |
 
-## 시험
+## Tests
 
-### 단위 시험 (소켓 없음, 시각을 넘겨 결정적으로)
+### Unit tests (no sockets, deterministic with supplied times)
 
-`Tests/SwiftailNetstackTests/`(새 시험 타깃):
+`Tests/SwiftailNetstackTests/` (new test target):
 
-1. **코덱**: IPv4·IPv6 세그먼트의 해석과 만들기가 서로 되돌아온다. 체크섬(홀수 길이, 올림이 여러 번, IPv6 의사 머리). 옵션: MSS·Window Scale, NOP로 어긋난 정렬, EOL 뒤의 바이트, 모르는 옵션, 길이 0·1·머리 밖, shift 15, SYN이 아닌 세그먼트의 MSS. data offset 4·16(머리 밖). IPv4 옵션이 있는 패킷. 임의 바이트(고정 씨앗 1만 개)로 죽지 않는다.
-2. **시퀀스 번호**: 2^32 경계를 넘는 비교·차이·창 포함 판정.
-3. **상태 기계의 길**(연결 둘을 메모리에서 맞붙인다): 수동·능동 열기, 양방향 데이터, 닫기의 모든 순서(한쪽 먼저, 동시에, 반닫힘 뒤 반대 방향 데이터), `close`에 읽지 않은 데이터가 있을 때의 RST, 닫은 뒤 온 데이터에 RST, `abort`, 거절(SYN에 RST), SYN·SYN-ACK·데이터의 재전송 한도와 걸리는 시간, FIN-WAIT-2 기한, TIME-WAIT의 FIN 재전송, keep-alive(2시간 뒤 탐침, 답이 오면 다시, 9번 무응답이면 끝).
-4. **세그먼트 처리 순서**(TCP 노트 4.2의 줄마다 하나): 받아들일 조건 표의 네 칸, 창 밖 세그먼트에 ACK, 창에 걸친 세그먼트의 자르기, SYN-SENT의 틀린 ACK에 RST, SYN-RECEIVED의 틀린 ACK에 RST, 창 갱신의 WL1·WL2 규칙, `SEG.ACK > SND.NXT`.
-5. **RFC 5961**: RST가 창 밖(버림)·정확히 RCV.NXT(끊음)·창 안의 다른 값(challenge ACK), 동기화 상태의 SYN(challenge ACK), ACK 범위 밖, challenge ACK 11번째가 5초 안이면 나가지 않음.
-6. **시퀀스 순환**: ISS가 `0xFFFF_F000`인 연결로 1MiB를 보낸다. 4GiB를 넘기는 전송은 가짜 데이터(길이만)로 시퀀스가 한 바퀴 도는 것을 본다.
-7. **재전송 타이머**: RFC 6298 2.2·2.3의 식을 손으로 계산한 표와 견준다. 하한·상한, 물러나기, Karn(재전송된 세그먼트의 측정을 버림), 5.7.
-8. **혼잡 제어**: 초기 창, slow start에서 congestion avoidance로 넘어가는 점, 중복 ACK 3개의 fast retransmit과 cwnd, partial ACK와 full ACK, RTO 뒤의 cwnd·ssthresh, 유휴 뒤 줄이기. 값은 RFC의 식으로 계산한 표다.
-9. **흐름 제어**: 받는 쪽이 읽지 않으면 보내는 쪽이 창에서 멈춘다. 0 창 탐침의 간격과 창이 열린 뒤의 재개. 받는 쪽·보내는 쪽 SWS 회피. 줄어드는 창. 지연 ACK(둘째 세그먼트에서 곧바로, 하나뿐이면 40ms, 순서가 어긋나면 곧바로).
-10. **순서가 어긋난 데이터**: 뒤집힌 순서, 겹침(앞·뒤·가운데·완전히 덮음), 33번째 구간 버림, 1바이트 세그먼트 1만 개에서 메모리가 상한 안.
-11. **스택**: 연결·리스너 찾기, 연결 없는 곳의 RST 두 형식, RST에 답하지 않음, 리스너의 ACK에 RST, 상한(맺는 중 64·피어당 16·대기열 32와 피어의 몫 16·연결 256·리스너 16)과 넘친 SYN의 무응답, 주소가 둘인 피어의 몫(두 주소를 합쳐 센다), 듣는 포트와 듣지 않는 포트가 SYN 아닌 세그먼트에 내는 답이 같음, 받아 가기 전의 받는 창 16KiB와 받아 간 뒤의 창 갱신, ISN이 같은 4-튜플에서 시간에 따라 늘고 다른 4-튜플에서 다름, 포트 고르기와 TIME-WAIT의 4-튜플 건너뛰기, 주소 바뀜에 `peerRemoved`.
-12. **손실 주입(속성 시험)**: 스택 둘 사이에 가짜 링크(`LinkSimulator`: 씨앗 있는 난수로 손실·재정렬·중복·지연)를 두고 가짜 시계로 돌린다. 손실 {0, 1, 5, 20}% × 재정렬 {없음, 있음} × 중복 {없음, 있음} × 지연 {1ms, 50ms, 500ms} × 씨앗 여럿에서 양방향 1MiB를 보내: ① 받은 바이트의 해시가 같고 ② 정한 가짜 시간 안에 끝나고 ③ 모든 단계에서 버퍼가 상한 안이고 ④ 끝난 뒤 두 연결이 CLOSED로 사라진다. 실패하면 씨앗을 출력한다.
+1. **Codec**. Round-trip parsing and encoding of IPv4 and IPv6 segments. Checksum (odd length, multiple carries, IPv6 pseudo-header). Options: MSS and Window Scale, alignment skewed by NOP, bytes after EOL, unknown options, length 0 or 1 or extending past the header, shift 15, MSS in a non-SYN segment. Data offset 4 and 16 (outside the header). Packet with IPv4 options. No crash on arbitrary bytes (10,000 fixed seeds).
+2. **Sequence number**: Comparison, difference, and window inclusion judgment when exceeding the 2^32 boundary.
+3. **State machine paths** (two connections linked in memory). Passive and active open, bidirectional data, all close orders (one side first, simultaneous, reverse-direction data after half-close), RST on `close` with unread data, RST for data received after close, `abort`, refusal (RST on SYN), retransmission limits and elapsed times for SYN, SYN-ACK, and data, FIN-WAIT-2 deadline, FIN retransmission in TIME-WAIT, keep-alive (probe after 2 hours, restart on response, close after 9 unanswered probes).
+4. **Segment processing order** (one test per line in TCP notes §4.2). Four cells in the acceptability table, ACK for out-of-window segments, trimming segments that straddle the window, RST for invalid ACK in SYN-SENT, RST for invalid ACK in SYN-RECEIVED, WL1 and WL2 window update rules, and `SEG.ACK > SND.NXT`.
+5. **RFC 5961**. RST outside the window (drop), exactly at RCV.NXT (reset), and elsewhere in the window (challenge ACK). SYN in a synchronized state (challenge ACK), ACK outside its range, and suppression of the 11th challenge ACK within 5 seconds.
+6. **Sequence wraparound**: On a connection with ISS at `0xFFFF_F000`, sends 1MiB. Observes a full sequence wrap when transmitting beyond 4GiB, with fake data (only length) used to simulate a full cycle.
+7. **Retransmission timer**. Compare to a table calculated by hand from the RFC 6298 §2.2 and §2.3 formulas. Minimum and maximum, backoff, Karn (discard samples for retransmitted segments), and §5.7.
+8. **Congestion control**. Initial window, transition from slow start to congestion avoidance, fast retransmit and cwnd on 3 duplicate ACKs, partial and full ACK, cwnd and ssthresh after RTO, and reduction after idle. Values come from a table calculated using RFC formulas.
+9. **Flow control**. The sender stops at the window if the receiver does not read. Test the 0-window probe interval and resume when the window opens, receiver and sender SWS avoidance, shrinking windows, and delayed ACK (immediately on the second segment, after 40ms for a single segment, and immediately for out-of-order data).
+10. **Out-of-order data**. Reverse order, overlaps (front, back, middle, completely covering), dropping the 33rd range, and memory staying within the limit for 10,000 1-byte segments.
+11. **Stack**. Connection and listener lookup, both RST forms with no connection, no response to RST, RST for ACK to a listener, limits (64 being established, 16 per peer, queue 32 and 16 per peer share, 256 connections, 16 listeners) and no response to excess SYN, two-address peer's share (combined across both addresses), identical non-SYN responses on listening and non-listening ports, 16KiB receive window before acceptance and window update after it, ISN increases with time for the same 4-tuple and differs for another 4-tuple, port selection skips TIME-WAIT 4-tuples, and address change yields `peerRemoved`.
+12. **Loss injection (property test)**. Put a fake link between two stacks (`LinkSimulator`, with seeded randomness for loss, reordering, duplication, and delay) and run on a fake clock. Send 1MiB in each direction with loss {0, 1, 5, 20}% × reordering {absent, present} × duplication {absent, present} × delay {1ms, 50ms, 500ms} × multiple seeds. Check ① matching hashes of received bytes, ② completion within the specified fake time, ③ buffers within limits at every step, and ④ both connections disappear into CLOSED afterward. Print the seed on failure.
 
-`Tests/SwiftailTests`(노드, 소켓 없음):
+`Tests/SwiftailTests` (node, socket absent):
 
-13. **이름 해석**(동작 A2): IP 주소, FQDN, 짧은 이름, 대소문자·끝 점, IPv4 먼저, 모르는 이름, 피어 아닌 주소, 자기 이름.
-14. **기다림과 취소**: 데이터 없는 `read`가 기다리다 깨어남, 취소된 `read` 뒤에도 데이터가 남음, 취소된 `write`가 연결을 끊음, 취소된 `connect`, 같은 방향 둘째 호출의 `concurrentUse`, `run()`이 끝날 때 기다리던 호출이 `notRunning`, 버려진 연결이 RST로 끊김.
-15. **주인이 바뀐 주소**(동작 X10): 피어가 netmap에서 빠짐, 같은 주소가 다른 키로 바뀜, 자기 주소가 바뀜.
-16. **장치**: `.utun`·`.memory`에서 `listen`·`connect`가 `invalidConfiguration`. `.inProcess`에서 `inboundPackets`가 비어 있음. 자기 주소로 건 연결이 자기 리스너에 닿아 1MiB가 오감(동작 N3·N4의 대기열).
+13. **Name Interpretation** (Behavior A2): IP address, FQDN, short name, case and dot, IPv4 first, unknown name, non-peer address, self name.
+14. **Waiting and cancellation**. A `read` with no data waits and resumes, data remains after a canceled `read`, a canceled `write` ends the connection, a canceled `connect`, a second call in the same direction gets `concurrentUse`, waiting calls get `notRunning` when `run()` ends, and a dropped connection is reset with RST.
+15. **Address ownership changes** (behavior X10). Peer removal from the netmap, same address assigned to a different key, and a local address change.
+16. **Device**. `listen` and `connect` produce `invalidConfiguration` on `.utun` and `.memory`. `inboundPackets` is empty on `.inProcess`. A connection to a local address reaches the local listener and transfers 1MiB (queue from behaviors N3 and N4).
 
-### Go 기준값 대조
+### Go reference comparison
 
-`Tools/interop/cmd/tcpfixtures`(새 도구): gVisor의 `header` 패키지(`gvisor/pkg/tcpip/header`)로 세그먼트를 만들어 바이트와 기대하는 해석 결과(포트, 번호, 플래그, 창, 옵션, 체크섬)를 JSON으로 낸다. 사례는 단위 시험 1의 것이다. 자료: `Tests/SwiftailNetstackTests/Fixtures/tcp-segments.json`. 대조 시험은 코덱을 쓴 세션과 다른 세션이 쓴다. 상태 기계의 기준은 자료가 아니라 관문 (가)의 실제 gVisor 피어다.
+`Tools/interop/cmd/tcpfixtures` (new tool) creates segments using gVisor's `header` package (`gvisor/pkg/tcpip/header`) and emits bytes and expected parse results (ports, numbers, flags, window, options, checksum) as JSON. Cases come from unit test 1. Fixture: `Tests/SwiftailNetstackTests/Fixtures/tcp-segments.json`. A different session from the one that wrote the codec writes the comparison tests. The state machine reference is the real gVisor peer in gate (a) rather than the fixture.
 
-## M6 관문
+## M6 gate
 
-### (가) Go 피어(gVisor)
+### (a) Go peer (gVisor)
 
-`Tools/interop`의 `tailnet`(testcontrol + DERP + STUN + Go tsnet 피어)을 상대로 Swift 노드를 `.inProcess`로 띄운다. 시험은 `Tests/SwiftailInteropTests/NetstackTests.swift`에 두고 `SWIFTAIL_TAILNET`이 없으면 건너뛴다.
+Launches a Swift node in `.inProcess` mode against the `tailnet` (testcontrol + DERP + STUN + Go tsnet peer) in `Tools/interop`. The test is located in `Tests/SwiftailInteropTests/NetstackTests.swift` and is skipped if `SWIFTAIL_TAILNET` is not set.
 
-`tailnet` 도구에 더할 명령(모두 곧바로 답하고, 전송은 뒤에서 돈다. 도구가 명령을 차례로 처리하기 때문이다):
+Commands to add to the `tailnet` tool. Each responds immediately and the transfer runs in the background because the tool handles commands sequentially.
 
-- `peerServe`: `{"cmd":"peerServe","name":"go-peer-a","port":9100}`. 그 피어의 tsnet 리스너를 연다. 받은 연결마다 아래 "전송"을 한다.
-- `peerDial`: `{"cmd":"peerDial","name":"go-peer-a","to":"100.64.0.2","port":9100,"send":104857600,"seed":1,"timeoutSec":15}`. 그 피어가 Swift 노드로 건다.
-- 구현에서 정해진 것(M6-9a, 2026-11-15. 정확한 규약은 `Tools/interop/README.md`): `peerDial`은 곧바로 `transferID`를 돌려주고 전송은 뒤에서 돈다. 거는 쪽이 먼저 보내는 16바이트 머리는 **받는 쪽이 보낼 길이(UInt64 BE) + 씨앗(UInt64 BE)**이고 바이트 수와 SHA-256에 들지 않는다. 데이터는 LCG64(`x₀ = seed`, `xₙ₊₁ = 6364136223846793005 × xₙ + 1442695040888963407 mod 2⁶⁴`)의 갱신한 상태를 little endian 8바이트씩 이어 붙이고 마지막 낱말은 길이에서 자른다. 두 방향이 동시에 흐르고, 다 보내면 `CloseWrite`, 받는 쪽은 EOF까지 읽는다. `peerClose`는 리스너만 닫는다. 손실·지연 주입은 Go 쪽에 없다(Swift 노드의 손실 훅으로 한다). `addKernelPeer`는 만들지 않았다(N7). Go 피어 둘 사이의 100MB 양방향 전송은 약 1.8초였다(루프백).
-- `transfers`: 끝났거나 도는 전송의 목록. 항목은 `{"name","remote","sent","sentSHA256","received","receivedSHA256","elapsedMs","error","state"}`.
-- `peerClose`: 리스너를 닫는다.
-- "전송": 한쪽 Task가 `send`바이트의 가짜 난수 흐름(씨앗에서 만든다. Swift와 Go가 같은 생성식을 쓴다)을 쓰고 `CloseWrite`, 다른 쪽이 EOF까지 읽으며 SHA-256과 바이트 수를 센다. `peerServe`가 보낼 양은 연결의 첫 16바이트(보낼 바이트 수와 씨앗)로 정한다.
+- `peerServe`: `{"cmd":"peerServe","name":"go-peer-a","port":9100}`. Open that peer's tsnet listener. Run "Transfer" below for each accepted connection.
+- `peerDial`: `{"cmd":"peerDial","name":"go-peer-a","to":"100.64.0.2","port":9100,"send":104857600,"seed":1,"timeoutSec":15}`. The peer connects to the Swift node.
+- Implementation decisions (M6-9a, 2026-11-15. See `Tools/interop/README.md` for the exact protocol). `peerDial` returns a `transferID` immediately and the transfer runs in the background. The dialing side first sends a 16-byte header containing **the length the receiving side will send (UInt64 BE) + seed (UInt64 BE)**. The header does not count toward the byte total or SHA-256. Data concatenates successive updated LCG64 states (`x₀ = seed`, `xₙ₊₁ = 6364136223846793005 × xₙ + 1442695040888963407 mod 2⁶⁴`) as 8-byte little-endian values and truncates the final word at the length. Both directions run concurrently. On finishing a send, use `CloseWrite`, and read through EOF on the receiving side. `peerClose` only closes the listener. There is no loss or delay injection on the Go side (use the Swift node's loss hook). `addKernelPeer` was not implemented (N7). A bidirectional 100MB transfer between two Go peers took about 1.8 seconds (loopback).
+- `transfers`: List of completed or ongoing transfers. Each entry is `{"name","remote","sent","sentSHA256","received","receivedSHA256","elapsedMs","error","state"}`.
+- `peerClose`: Closes the listener.
+- "Transfer" means a Task writes `send` bytes of a seeded pseudorandom stream (Swift and Go use the same generator) and calls `CloseWrite`. The other side reads through EOF while computing SHA-256 and counting bytes. The first 16 bytes of the connection (byte count to send and seed) determine how much `peerServe` sends.
 
-| # | 확인할 것 | 통과 기준 |
+| # | Items to verify | Pass criteria |
 | --- | --- | --- |
-| 1 | Swift가 듣고 Go가 건다 | 3-way handshake 뒤 양방향 100MB씩을 동시에 보내, 양쪽이 센 SHA-256과 바이트 수가 서로 같다. 걸린 시간과 처리량을 기록한다 |
-| 2 | Swift가 걸고 Go가 듣는다 | 1과 같다. 이름(FQDN, 짧은 이름)과 IP 주소로 각각 건다 |
-| 3 | IPv6 | 1·2를 피어의 IPv6 tailnet 주소로 10MB씩 |
-| 4 | DERP만으로 | 직접 경로를 막고(M4 관문의 방법) 1을 100MB로. DERP 통로의 넘침이 실제 손실을 만든다. 해시가 같고 멈추지 않는다 |
-| 5 | 거절 | 리스너 없는 Swift 포트로 Go가 걸면 제한 시간 전에 "connection refused"로 끝난다. Go 리스너 없는 포트로 Swift가 걸면 `refused` |
-| 6 | 닫기와 끊기 | 반닫힘(한쪽이 먼저 끝내도 반대 방향이 끝까지 간다), Swift의 `abort`를 Go가 reset 오류로 읽는다, Go가 끊으면 Swift가 `reset`을 받는다, 정상으로 닫으면 양쪽 모두 EOF |
-| 7 | 동시 연결 | 32개를 동시에 열어 4MB씩 양방향. 모두 해시가 같다. 그동안 프로세스의 `phys_footprint` 최고치를 기록한다 |
-| 8 | 손실 1% | `setInProcessLoss(rate: 0.01, seed:)`로 1을 20MB로. 해시가 같고, 받은 바이트 수가 30초 넘게 멈춘 구간이 없다. 처리량을 기록한다(N3의 판단 자료) |
-| 9 | 손실 5% | 8과 같되 `rate: 0.05`. 기준도 같다. 처리량을 기록한다 |
-| 10 | 상한 | 한 피어의 65번째 연결(상대 피어 하나에 64개)과 17번째 받아 가지 않은 연결(대기열에서 피어 하나의 몫 16개. 2026-11-17 전에는 33번째)의 SYN에 응답이 없고, 자리가 나면 다시 맺어진다. 노드는 죽지 않는다. 전체 256개와 대기열 32개의 상한은 피어가 여럿 있어야 닿으므로 단위 시험이 본다 |
-| 11 | 회귀 | M3·M4·M5 관문 (가)가 `.memory` 장치에서 그대로 통과한다 |
+| 1 | Swift listens, Go connects | After 3-way handshake, both sides simultaneously send 100MB in each direction. Both sides compute SHA-256 hashes and byte counts, which must match. Record the elapsed time and throughput. |
+| 2 | Swift connects, Go listens | Identical to #1. Connects using different names (FQDN, short name) and IP addresses. |
+| 3 | IPv6 | As in #1 and #2, but using the peer's IPv6 tailnet address, sending 10MB each. |
+| 4 | DERP-only | Block the direct path using the M4 gate method and run item 1 with 100MB. Overflow in the DERP channel causes real loss. Hashes match and the transfer does not stall |
+| 5 | Refusal | When Go connects to a Swift port with no listener, the connection ends with "connection refused" before the timeout. When Swift connects to a Go port with no listener, the result is `refused`. |
+| 6 | Close and abort | Half-close (one direction completes even after the other finishes first). Go sees a reset error when Swift calls `abort`. Swift receives `reset` when Go aborts. A normal close yields EOF on both sides |
+| 7 | Concurrent connections | Open 32 connections simultaneously, sending 4MB in each direction. All hashes match. Record the peak `phys_footprint` of the process during this time. |
+| 8 | 1% loss | Run item 1 with 20MB and `setInProcessLoss(rate: 0.01, seed:)`. Hashes match and there is no interval longer than 30 seconds with no increase in received byte count. Record throughput for N3 |
+| 9 | 5% loss | Same as item 8 with `rate: 0.05` and the same criteria. Record throughput |
+| 10 | Limits | No reply to SYN for one peer's 65th connection (64 per remote peer) and 17th unaccepted connection (16 per-peer queue share, or 33rd before 2026-11-17). Connections establish once space becomes available. The node stays up. Unit tests check the total cap of 256 and queue cap of 32 because reaching them requires multiple peers |
+| 11 | Regression | M3, M4, and M5 gate (a) all continue to pass on the `.memory` device |
 
-"멈추지 않는다"의 뜻: 전송이 끝나고, 받은 바이트 수가 늘지 않은 가장 긴 구간이 30초 아래다.
+"Does not stall" means that the transfer completes and the longest interval without an increase in received bytes is under 30 seconds.
 
-관문 (가)의 결과(2026-11-15, 총괄 실행. 개발용 Mac 한 대의 루프백 tailnet, Go 피어는 gVisor netstack):
+Gate (a) results (2026-11-15, run by the lead session on a single development Mac's loopback tailnet, Go peer with gVisor netstack)
 
-- 확인 항목 14개 시험이 모두 통과했다(검토 A·B 반영 뒤의 코드. 위임 세션의 3회 실행과 총괄의 전체 재실행). 100MiB 양방향 전송은 IPv4·IPv6·FQDN·짧은 이름·DERP 전용 경로에서 바이트 수와 SHA-256이 일치했다.
-- **처리량**(양방향 합계. 각 방향 100MiB를 동시에):
+- All 14 verification tests passed (code with reviews A and B incorporated, 3 runs by the delegated session and a full rerun by the lead session). Bidirectional 100MiB transfers matched byte counts and SHA-256 over IPv4, IPv6, FQDN, short name, and DERP-only paths.
+- **Throughput** (bidirectional total, 100MiB simultaneously in each direction)
 
-  | 빌드 | 직접 경로 100MiB × 2 | CPU 시간 | DERP 전용 |
+  | Build | Direct path 100MiB × 2 | CPU time | DERP-only |
   | --- | --- | --- | --- |
-  | 디버그 | 약 19초(약 11MB/s) | 40~55초 | 약 20초 |
-  | 릴리스 | 8.85초(23.7MB/s. 한 방향 약 11.8MB/s) | 약 11.5초 | 9.0초, CPU 23.6초 |
+  | Debug | Approximately 19 seconds (approximately 11 MB/s) | 40–55 seconds | Approximately 20 seconds |
+  | Release | 8.85 seconds (23.7 MB/s, approximately 11.8 MB/s per direction) | Approximately 11.5 seconds | 9.0 seconds, CPU 23.6 seconds |
 
-  같은 도구로 잰 Go 피어 둘 사이(gVisor ↔ gVisor)는 100MB 양방향이 약 1.8초였다. **Swift 쪽이 릴리스에서도 약 5배 느리다.** CPU 시간이 전송 시간보다 길어(코어 1.3개) 패킷마다의 처리 비용(약 33µs)이 병목으로 보인다(스택만이 아니라 UDP 수신 → `Magicsock` → WireGuard → 엔진 → 스택 → 응용 전체의 값이고, 시험의 데이터 생성·해시도 든다). 어디에 드는지는 재지 않았다. 관문의 기준(해시 일치, 멈추지 않음, 처리량 기록)은 채웠고, 줄이는 일은 측정에서 시작하는 따로 단위다.
-- **손실**(각 방향 20MiB, 씨앗 19766): 디버그 0% 11.1MB/s·1% 7.8MB/s(70%)·5% 0.23MB/s, 릴리스 0% 23.6MB/s·1% 6.0MB/s(26%)·5% 0.22MB/s. 손실 1%가 0%의 1/10 위이므로 **N3: SACK(M6-10)은 열지 않는다**(전송 경로를 고친 뒤 다시 판정해 열었다. 아래 "개선 단위 셋을 넣은 뒤의 결과"). 손실 5%는 20MiB에 약 3분이 걸린다(멈추지는 않는다. 최장 수신 간격 약 3~4초).
-- **메모리**(`phys_footprint` 표본 최고, 시험 프로세스 전체): 직접 경로 100MiB 전송에서 약 14MB, 동시 연결 32개에서 약 50~57MB(디버그). **DERP 전용 100MiB 전송에서 릴리스 81MB**가 관찰됐다. 직접 경로보다 크게 높은 까닭은 확인하지 못했다(DERP 송신 쪽에 쌓이는 곳이 있는지 봐야 한다).
+  Measured with the same tool, a 100MB bidirectional transfer between two Go peers (gVisor ↔ gVisor) took about 1.8 seconds. **Swift is about 5 times slower even in release.** CPU time exceeds transfer time (1.3 cores), so per-packet processing cost (about 33µs) appears to be the bottleneck. This covers the whole UDP receive → `Magicsock` → WireGuard → engine → stack → application path, plus test data generation and hashing. Where it is spent was not measured. The gate criteria were met (matching hashes, no stall, and throughput recorded). Reducing the cost is a separate unit that starts with measurements.
+- **Loss** (20MiB per direction, seed 19766): debug 0% 11.1MB/s, 1% 7.8MB/s (70%), 5% 0.23MB/s. Release 0% 23.6MB/s, 1% 6.0MB/s (26%), 5% 0.22MB/s. Throughput at 1% loss is above 1/10 of that at 0%, so **N3: Leave SACK (M6-10) unopened** (it was opened on reevaluation after fixing the transfer path, see "Results after the three improvement units" below). At 5% loss, 20MiB takes about 3 minutes (no stall, longest receive interval about 3~4 seconds).
+- **Memory** (peak `phys_footprint` sample, entire test process): about 14MB for direct 100MiB transfer and about 50~57MB for 32 concurrent connections (debug). **A DERP-only 100MiB transfer used 81MB in release.** Why it is so much higher than direct remains unverified (check for accumulation on the DERP send side).
 
-측정으로 알게 된 것(2026-11-15, 다른 세션이 릴리스 빌드에서 `sample`로 잼. 고치기 전의 값이다):
+Measurements (2026-11-15, taken by another session with `sample` in a release build before fixes)
 
-- 병목은 TCP 스택이 아니라 **노드 actor**다. 전송 동안 그 actor가 시간의 93%를 쓴다(그래서 전송 시간이 실행마다 같다). 스택 둘을 메모리에서 맞붙이면 100MiB 양방향이 약 0.44초다(패킷 하나에 약 2.4µs). 노드를 거치면 데이터그램 하나에 약 33µs다.
-- 몫: 타이머 기한 계산 24.6%(데이터그램 하나에 `rearmTimer`가 3번 불리고, 부를 때마다 값 전체의 복사와 배열 할당이 있다), UDP `sendto` 21.2%(actor 안에서 부른다), WireGuard 20%(실제 암호 계산은 그 가운데 약 30%, 나머지는 복사·할당), `recvfrom` 5.9%, 동시성 런타임 4.9%, TCP 상태 기계 3.2%, TCP 버퍼 0.2%. 전체의 30.8%가 할당·해제·복사·참조 계수다.
-- 묶음의 크기가 1이었다(데이터그램 하나가 actor 한 번, 그때마다 `advance`). 지연 ACK가 합쳐지지 않아 순수 ACK를 세그먼트마다 보냈고, UDP 수신 큐(256개)가 가득 차 913개를 버렸다. 그 결과 "양방향 동시" 전송이 사실상 한 방향씩 차례로 흘렀다.
-- **DERP 경로의 81MB는 큐가 아니라 쓰기마다 거는 5초 기한의 Task였다**(`DERPClient.writeLoop`의 `withTimeout`). 쓰기가 끝난 뒤에도 Task와 타이머가 5초 동안 남아, 쓰기 속도 × 5초만큼 쌓인다(정점에서 Task 약 7만 개). 계약의 큐 상한들은 모두 걸려 있었다. 이것은 결함이고 iOS 확장의 메모리에도 영향을 준다.
-- 임시로 고쳐 잰 효과(겹쳐서): 타이머를 가장 바깥에서만 다시 걸기와 할당 없는 기한 계산 → 6.9초, 창 갱신 조건 → 6.6초, UDP 묶음 수신과 묶음 끝의 `advance` 한 번 → 3.6초, `sendto`를 actor 밖으로 → **2.29초, CPU 4.1초**(고치기 전 8.87초, 11.4초).
-- 이 결과로 개선 단위 셋을 열었다: 노드 전송 경로(묶음 수신, 타이머, `sendto`, 창 갱신), DERP 쓰기 기한, WireGuard의 복사.
+- The **node actor** is the bottleneck rather than the TCP stack. The actor accounts for 93% of time during transfer, which makes transfer times consistent across runs. Between 2 stacks connected in memory, 100MiB bidirectional takes about 0.44 seconds (about 2.4µs per packet). Through the node, one datagram takes about 33µs.
+- Breakdown: timer deadline calculation 24.6% (`rearmTimer` is called 3 times per datagram, each with a copy of the entire value and an array allocation), UDP `sendto` 21.2% (called in the actor), WireGuard 20% (about 30% of that is cryptographic computation, the rest copying and allocation), `recvfrom` 5.9%, concurrency runtime 4.9%, TCP state machine 3.2%, TCP buffers 0.2%. Allocation, deallocation, copying, and reference counting make up 30.8% of the total.
+- Group size was 1 (one actor entry per datagram, with `advance` each time). Delayed ACKs did not coalesce, so one pure ACK was sent per segment. The UDP receive queue (256 items) filled and dropped 913 packets. As a result, "simultaneous bidirectional" transfer effectively ran one direction at a time.
+- **The 81MB on the DERP path came from Tasks for 5-second write deadlines, not the queue** (`withTimeout` in `DERPClient.writeLoop`). Tasks and timers stayed alive for 5 seconds even after writes finished, accumulating in proportion to write rate × 5 seconds (about 70,000 Tasks at peak). All contract queue limits were enforced. This is a defect that also affects iOS extension memory.
+- Effects of temporary fixes measured cumulatively: rearm the timer only at the outermost level and calculate deadlines without allocations → 6.9 seconds, window update condition → 6.6 seconds, group UDP receives and call `advance` once at the end → 3.6 seconds, move `sendto` outside the actor → **2.29 seconds, CPU 4.1 seconds** (before fixes, 8.87 seconds and 11.4 seconds).
+- This opened three improvement units: node transfer path (grouped receive, timer, `sendto`, window updates), DERP write deadline, and WireGuard copies.
 
-개선 단위 셋을 넣은 뒤의 결과(2026-11-15, 총괄 실행. 같은 Mac, 릴리스, Go 피어는 gVisor. 다른 세션의 검토를 반영한 뒤의 코드다):
+Results after the three improvement units (2026-11-15, lead session run, same Mac, release, Go peer with gVisor, code incorporating another session's review)
 
-| | 고치기 전 | 고친 뒤 |
+| | Before fix | After fix |
 | --- | --- | --- |
-| 직접 경로 100MiB × 2 | 8.85초(23.7MB/s) | 2.03초(103MB/s) |
-| 그때의 CPU 시간 | 약 11.5초 | 약 4.0초 |
-| DERP 전용 100MiB × 2 | 9.0초, CPU 23.6초 | 4.1초, CPU 10.1초 |
-| DERP 전용의 `phys_footprint` 표본 최고 | 81MB | 17MB |
-| 직접 경로의 `phys_footprint` 표본 최고 | 약 14MB | 약 15MB |
-| 손실 0% (20MiB × 2) | 23.6MB/s | 81MB/s |
-| 손실 1% | 6.0MB/s(위임 세션의 기준 측정은 10.1MB/s) | 3.6~5.0MB/s(세 번) |
-| 손실 5% | 0.22MB/s | 0.20~0.27MB/s |
+| Direct path 100MiB × 2 | 8.85 seconds (23.7 MB/s) | 2.03 seconds (103 MB/s) |
+| CPU time | Approximately 11.5 seconds | Approximately 4.0 seconds |
+| Dedicated DERP 100MiB × 2 | 9.0 seconds, CPU 23.6 seconds | 4.1 seconds, CPU 10.1 seconds |
+| Peak sample of `phys_footprint` for dedicated DERP | 81 MB | 17 MB |
+| Peak sample of `phys_footprint` for direct path | Approximately 14 MB | Approximately 15 MB |
+| Loss 0% (20MiB × 2) | 23.6 MB/s | 81 MB/s |
+| Loss 1% | 6.0 MB/s (delegated session baseline measurement: 10.1 MB/s) | 3.6–5.0 MB/s (over three runs) |
+| 5% loss | 0.22MB/s | 0.20~0.27MB/s |
 
-- 확인 항목 14개를 포함한 전체 시험이 통과했다(검토 반영 전의 병합 상태에서 16묶음 전부, 반영 뒤에는 관문 묶음과 고친 타깃의 단위 시험).
-- Go 피어끼리의 약 1.8초에 가까워졌다.
-- **손실 1%의 처리량은 오히려 떨어졌다.** 0%의 0.04~0.06배다. 까닭은 동작 F5에 적은 gVisor의 중복 ACK 세기다: SACK이 없으면 데이터가 실린 세그먼트가 중복 ACK 수를 0으로 되돌려, 양방향으로 동시에 보내는 이 시험에서는 fast retransmit 대신 상대의 RTO(200ms)를 기다린다. Swift 쪽이 빨라져 데이터가 실린 세그먼트가 더 촘촘히 나가면서 이 영향이 커졌다. 한 방향 전송의 손실 처리량은 재지 않았다.
-- **한 방향 전송**(20MiB, 관문 시험 `oneWayLoss`. 큰 전송이 한 방향인 실제 쓰임에 가깝다): Swift→Go는 손실 0% 82MB/s·1% 6.3MB/s, Go→Swift는 0% 80MB/s·1% 2.0MB/s다. 0%의 값은 20MiB가 약 0.25초에 끝나 연결 맺기·닫기의 시간에 묶인 값이라 실제 비율은 더 낮다. 손실 1%에서 최장 수신 간격이 약 0.5초인 것으로 보아 손실의 일부가 fast retransmit으로 회복되지 못하고 RTO(200ms 이상)를 기다린다. 루프백은 왕복 시간이 거의 0이라 RTO 한 번의 값이 실제 망보다 훨씬 크게 드러난다는 점은 감안한다.
-- **N3 다시 판정: 양방향·한 방향 모두 손실 1%가 0%의 1/10 아래이므로 SACK(M6-10)을 연다.** 둘로 나눈다.
-  - M6-10a 받는 쪽: SACK-Permitted를 협상하고 받는 버퍼의 구간을 SACK 블록으로 낸다(RFC 2018). 상대(gVisor, 커널)가 한 창의 여러 손실을 한 번에 다시 보내게 한다. 가장 느린 Go→Swift 방향을 겨눈다. 작다.
-  - M6-10b 보내는 쪽: 받은 SACK 블록으로 잃은 구간을 골라 다시 보낸다(RFC 6675). 상태 기계에서 가장 큰 덩어리라, 10a 뒤의 측정과 실기기 기록(첫 사용처 검토 결과 5)을 보고 구현을 연다. 그 전에 RFC 6675를 TCP 노트에 대조해 둔다.
-  - 양방향 동시 전송의 약점은 SACK으로 다 풀리지 않는다: gVisor는 SACK을 협상해도 데이터가 실린 ACK를 중복 ACK로 세지 않는다(`snd.go`의 `isDupAck`가 `seg.logicalLen() == 0`을 요구한다. 총괄이 소스에서 확인).
-- 고치기 전의 값들은 세 시간 넘게 CPU 하나를 쓰던 다른 시험 프로세스가 도는 상태에서 쟀다(나중에 끝냈다). 고친 뒤의 값에는 그 영향이 없다.
+- Passed a full test suite including 14 verification items (originally 16 groups in merge prior to review, now reduced to the gate group and fixed target unit tests after review).
+- Reduced to approximately 1.8 seconds between Go peers.
+- **Throughput at 1% loss decreased.** It was 0.04~0.06 times that at 0%. The cause is gVisor's duplicate ACK counting in behavior F5. Without SACK, data-bearing segments reset the duplicate ACK count to 0. This simultaneously bidirectional test waits for the peer's RTO (200ms) instead of fast retransmit. As Swift became faster, data-bearing segments went out closer together, magnifying the effect. One-way loss throughput had yet to be measured.
+- **One-way transfer** (20MiB, gate test `oneWayLoss`, closer to actual use with large transfers in one direction). Swift→Go at 0% loss 82MB/s and 1% loss 6.3MB/s. Go→Swift at 0% 80MB/s and 1% 2.0MB/s. At 0%, 20MiB finishes in about 0.25 seconds, so connection setup and teardown bound those measurements and the actual ratio is lower. At 1% loss, the longest receive interval is about 0.5 seconds, suggesting some losses wait for RTO (at least 200ms) instead of recovering through fast retransmit. Account for loopback's RTT of nearly 0, which makes one RTO look much costlier than on a real network.
+- **N3 reevaluation: Open SACK (M6-10) because throughput at 1% loss is below 1/10 of 0% in bidirectional and one-way transfers.** Split into two units.
+  - M6-10a receiver side. Negotiate SACK-Permitted and emit receive-buffer ranges as SACK blocks (RFC 2018). This lets the peer (gVisor or kernel) retransmit multiple losses from one window at once. Targets Go→Swift, the slowest direction. This is a small change.
+  - M6-10b sender side. Use received SACK blocks to select lost ranges and retransmit them (RFC 6675). This is the largest part of the state machine, so open implementation based on measurements after 10a and real device records (first adopter review result 5). First, check the TCP notes against RFC 6675.
+  - SACK does not fully address the weakness of simultaneous bidirectional transfer. Even when it negotiates SACK, gVisor does not count data-bearing ACKs as duplicate ACKs (`isDupAck` in `snd.go` requires `seg.logicalLen() == 0`. The lead session verified this in the source).
+- The values prior to the fix were measured during a separate test process that consumed one CPU core for over three hours (the process was later terminated). The values after the fix show no such impact.
 
-받는 쪽 SACK(M6-10a)을 넣은 뒤(2026-11-15, 같은 조건. 손실 1%의 처리량, MB/s. 실행마다 크게 흔들려 범위로 적는다):
+After receiver-side SACK (M6-10a) (2026-11-15, same conditions. Throughput at 1% loss in MB/s, with ranges due to substantial run-to-run variation)
 
-| | 넣기 전 | 넣은 뒤 |
+| | Before | After |
 | --- | --- | --- |
-| Go→Swift 한 방향 | 1.8~2.2 | 4.0~6.8 |
-| 양방향 동시 | 3.6~5.0 | 7.7~11.6 |
-| Swift→Go 한 방향 | 5.4~6.3 | 3.4~5.8 |
-| 손실 5%, 양방향 | 0.20~0.27 | 0.27~0.31 |
+| Go→Swift unidirectional | 1.8~2.2 | 4.0~6.8 |
+| Bidirectional concurrent | 3.6~5.0 | 7.7~11.6 |
+| Swift→Go unidirectional | 5.4~6.3 | 3.4~5.8 |
+| 5% loss, bidirectional | 0.20~0.27 | 0.27~0.31 |
 
-- 값은 위임 세션의 세 번과 총괄의 두 번(검토 반영 뒤의 코드)을 합친 범위다. 손실 0%는 바뀌지 않았다(약 80MB/s). 관문 묶음 34개와 스택 단위 시험 328개가 통과했다.
-- Go→Swift와 양방향은 두 배 넘게 올랐다. gVisor가 SACK 회복을 쓰는지는 패킷으로 직접 보지 못했다: Swift의 SYN이 기준 자료의 SACK-Permitted SYN과 바이트가 같고, gVisor 소스에서 그 경우 `newSACKRecovery`를 고르며(`snd.go:356-361`), 바뀐 것이 Swift가 내는 ACK뿐인데 gVisor가 보내는 방향이 빨라졌다는 간접 증거다.
-- **Swift→Go는 오르지 않았고 조금 낮게 나왔다.** Swift는 받은 SACK 블록을 쓰지 않으므로 오를 까닭이 없다. 낮아진 것이 흔들림인지(범위가 겹친다), SACK을 협상한 뒤 gVisor가 받는 쪽으로서 내는 ACK가 달라져서인지는 확인하지 못했다. 보내는 쪽 SACK(M6-10b)을 열 때 RTO 계수와 함께 본다.
-- 양방향의 1%/0% 비율은 0.096~0.14로 N3의 기준(0.1) 언저리다. 한 방향은 두 방향 모두 아직 0.1 아래다(0%의 값이 연결 맺기·닫기에 묶여 있어 실제 비율은 더 낮다).
+- Ranges combine 3 runs by the delegated session and 2 by the lead session (code after review). Throughput at 0% loss stayed the same (about 80MB/s). The gate group of 34 tests and 328 stack unit tests passed.
+- Go→Swift and bidirectional throughput more than doubled. Whether gVisor uses SACK recovery was not directly verified from packets. The evidence is indirect. Swift's SYN matches the reference SACK-Permitted SYN byte for byte, gVisor source selects `newSACKRecovery` in that case (`snd.go:356-361`), and only the ACKs sent by Swift changed, yet the direction sent by gVisor sped up.
+- **Swift→Go did not improve and measured slightly lower.** Swift does not use received SACK blocks, so there is no reason for an improvement. Whether the decrease was variability (the ranges overlap) or a change in the ACKs sent by gVisor as a receiver after SACK negotiation remains unverified. Review with RTO counters when opening sender-side SACK (M6-10b).
+- The bidirectional 1%/0% ratio is 0.096~0.14, near the N3 threshold of 0.1. The one-way ratio is still below 0.1 in both directions. The actual ratio is lower because connection setup and teardown bound the 0% value.
 
-### (나) macOS·iOS 커널 스택
+### (b) macOS and iOS kernel stacks
 
-**utun 없이 되는 길은 찾지 못했다.** 커널의 TCP가 사용자 프로세스와 IP 패킷을 주고받으려면 터널 인터페이스(utun), raw 소켓, BPF 가운데 하나가 있어야 하고, 저장소가 아는 범위에서는 모두 관리자 권한이나 Network Extension 권한이 든다(터널 계약 시험 9. XNU 소스로 확인하지는 못했다). 그래서 길은 셋이다(총괄 확인 필요 N7).
+**No path without utun was found.** Kernel TCP needs a tunnel interface (utun), raw socket, or BPF to exchange IP packets with a user process. As far as this repository has established, all require administrator privileges or a Network Extension entitlement (tunnel contract test 9, unverified against XNU source). There are 3 paths (lead session confirmation needed N7).
 
-1. **관리자 권한으로 띄우는 Go 피어**(권고하는 기본 관문). `tailnet`에 `addKernelPeer`를 더한다: wireguard-go의 `tun.CreateTUN("utun", 1280)`으로 utun을 만들고 `tsnet.Server.Tun`에 넣어 띄운다. TUN을 받은 tsnet은 자기 주소의 패킷을 netstack이 아니라 TUN으로 흘린다(`tsnet.go:332-335`, `:921-931`). 도구가 utun에 그 피어의 tailnet 주소를 붙이고 Swift 노드의 주소로 가는 경로를 넣은 뒤(`ifconfig`, `route`), **OS 소켓**(`net.Listen`, `net.Dial`)으로 (가)의 "전송"을 한다. 그러면 Swift 스택의 상대는 macOS 커널의 TCP다. 이 명령만 `sudo`로 띄운 별도 프로세스에서 돈다. 확인하지 못한 것: tsnet이 TUN 모드에서 testcontrol과 문제없이 도는지, utun 주소·경로 설정에 더 필요한 것이 있는지. 단위 M6-9가 먼저 손으로 한 번 돌려 본다.
-2. **실기기**(마무리). M5의 터널 확장(Swiftail 빌드 변형)을 켠 iPhone에서 Mac의 Swift 리스너로 접속한다. iPhone 커널의 TCP ↔ utun ↔ Swiftail 터널 ↔ tailnet ↔ Mac의 Swift TCP. 첫 사용처의 실제 경로와 같다. 첫 사용처 세션이 맡는다.
-3. **공식 Tailscale 앱**. 공식 앱을 켠 Mac에서 OS 소켓으로 Swift 노드에 건다. 실제 tailnet과 계정이 필요하다(plan 4절(b)의 마무리 관문과 같은 절차).
+1. **Go peer launched with administrator privileges** (recommended default gate). Add `addKernelPeer` to `tailnet`. Create utun with wireguard-go's `tun.CreateTUN("utun", 1280)` and pass it to `tsnet.Server.Tun` at startup. When given a TUN, tsnet sends packets for its own address to the TUN instead of the netstack (`tsnet.go:332-335`, `:921-931`). The tool assigns the peer's tailnet address to utun and adds a route to the Swift node's address (`ifconfig`, `route`), then performs "Transfer" from gate (a) with **OS sockets** (`net.Listen`, `net.Dial`). The Swift stack's peer is then macOS kernel TCP. Only this command runs in a separate process launched with `sudo`. It is unverified whether tsnet works with testcontrol in TUN mode and whether utun address or route setup requires anything else. Unit M6-9 runs it manually once first.
+2. **Real device** (final verification). Connect from an iPhone with the M5 tunnel extension enabled (Swiftail build variant) to the Mac's Swift listener. iPhone kernel TCP ↔ utun ↔ Swiftail tunnel ↔ tailnet ↔ Mac Swift TCP. This matches the first adopter's actual path. The first adopter session owns this test.
+3. **Official Tailscale app**. Connect to the Swift node with an OS socket from a Mac running the official app. Requires a real tailnet and account (same procedure as the final gate in plan §4(b)).
 
-| # | 확인할 것 | 통과 기준 |
+| # | Items to verify | Pass criteria |
 | --- | --- | --- |
-| 1 | 커널이 걸고 Swift가 듣는다 | 양방향 100MB의 해시가 같다. 처리량을 기록한다 |
-| 2 | Swift가 걸고 커널이 듣는다 | 1과 같다 |
-| 3 | 손실 1%·5% | (가) 8·9와 같은 기준 |
-| 4 | 닫기와 끊기 | (가) 6과 같다 |
-| 5 | 커널이 고른 옵션 | SYN·SYN-ACK를 잡아 MSS, Window Scale, SACK-Permitted, Timestamps를 기록한다(TCP 노트 11절 4를 채운다). Swift가 협상하지 않은 옵션을 커널이 쓰지 않는다 |
-| 6 | (실기기) iPhone이 Mac의 Swift 리스너에서 100MB를 받는다 | 해시가 같다. Wi-Fi와 셀룰러 각각의 처리량을 기록한다 |
+| 1 | Kernel connects and Swift listens | Hashes match for 100MB in each direction. Record throughput |
+| 2 | Swift connects, kernel listens | Same as #1 |
+| 3 | 1%·5% loss | (a) Same criteria as 8·9 |
+| 4 | Close and break | Same as (a) 6 |
+| 5 | Options selected by the kernel | Capture SYN and SYN-ACK and record MSS, Window Scale, SACK-Permitted, and Timestamps (fill in TCP notes §11 item 4). The kernel uses only options Swift negotiates |
+| 6 | (Real device) iPhone receives 100MB from Mac's Swift listener | Hash matches. Record throughput for Wi-Fi and cellular separately. |
 
-#### (나) 6의 첫 값: 실기기, Wi-Fi (2026-11-15, 첫 사용처 세션)
+#### (b) First measurements for item 6: real device, Wi-Fi (2026-11-15, first adopter session)
 
-Mac mini의 Swiftail 호스트(`.inProcess`, 최소 HTTPS 서버, 다리로 TLS) → iPhone 14 Pro(iOS 27.2, Swiftail 터널 변형, 커널 TCP)의 `GET /file`, 같은 Wi-Fi. 운영 tailnet, 스테이징 인증서. 100MiB(104,857,600바이트)의 길이는 양쪽 기록이 맞았고 끊김이 없었다.
+Mac mini Swiftail host (`.inProcess`, minimal HTTPS server, TLS via bridge) → iPhone 14 Pro (iOS 27.2, Swiftail tunnel variant, kernel TCP) `GET /file`, on the same Wi-Fi. Production tailnet and staging certificate. Both sides recorded the same 100MiB (104,857,600-byte) length, with no disconnection.
 
-| 실행 | 경로 | 시간 | 속도 | 가장 긴 멈춤 |
+| Execution | Path | Time | Speed | Longest pause |
 | --- | --- | --- | --- | --- |
-| Range 0~1MiB | relayed | 2.90초 | 0.3MiB/s | 0.13초 |
-| 전체 1 | relayed로 시작, 22초째 direct | 48.92초 | 2.0MiB/s | 1.15초 |
-| Range 0~8MiB | relayed | 5.98초 | 1.3MiB/s | 0.13초 |
-| 전체 2 | direct(시작 순간 direct·relayed·direct로 흔들림) | 32.20초 | 3.1MiB/s | 0.57초 |
+| Range 0~1MiB | relayed | 2.90s | 0.3MiB/s | 0.13s |
+| Full 1 | starts relayed, transitions to direct at 22s mark | 48.92s | 2.0MiB/s | 1.15s |
+| Range 0~8MiB | relayed | 5.98s | 1.3MiB/s | 0.13s |
+| full 2 | direct (at startup, fluctuating between direct·relayed·direct) | 32.20s | 3.1MiB/s | 0.57s |
 
-- 기준(검토 결과 5의 Go 터널 + Go 호스트, 직접 UDP): 23.0초. 지금은 그 **약 1.4배 시간**이다.
-- 확장 메모리: 전송 직전 8.8MiB, 직후 9.0MiB. 전송 도중의 표본은 없다.
-- 깨끗한 직접 경로에서 시작한 값이 없다(둘 다 시작이 DERP이거나 흔들렸다). 직접 경로가 서는 데 25~44초가 걸린 것은 따로 조사한다(`SwiftailMagicsock.md`).
-- 멈춤 0.57~1.15초는 RTO가 터진 모양이다. RTO·재전송 횟수와 iPhone 커널이 SACK을 싣는지를 보려고 연결 종료 통계 로그를 넣는다(아래 M6-10b S1의 조건). 그 줄을 보고 다시 잰다.
+- Baseline (Go tunnel + Go host over direct UDP in review result 5) was 23.0 seconds. This takes **about 1.4 times as long**.
+- Extension memory was 8.8MiB immediately before transfer and 9.0MiB immediately after. No samples during transfer.
+- There is no measurement starting on a clean direct path (both started on DERP or fluctuated). The 25~44 seconds to establish a direct path is investigated separately (`SwiftailMagicsock.md`).
+- The 0.57~1.15-second stalls look like RTO expirations. Add connection close statistics logging to observe RTO and retransmission counts and whether the iPhone kernel includes SACK (M6-10b S1 below). Measure again after inspecting that line.
 
-#### (나) 6의 둘째 값: 직접 경로에서 시작 (2026-11-16, 첫 사용처 세션)
+#### (b) Second measurements for item 6: starting on a direct path (2026-11-16, first adopter session)
 
-같은 구성, 같은 Wi-Fi, 양쪽 모두 `b27b482`(TSMP disco 키 광고가 든 뒤). 터널을 켠 뒤 첫 접촉에서 약 2초에 direct가 섰고(`SwiftailMagicsock.md` "실기기 재측정"), 전체 전송 둘은 direct가 선 상태에서 시작했다. 전송 중에 `relayed`로 내려간 일은 없었다.
+Same configuration, same Wi-Fi, both sides on `b27b482` (after TSMP disco key advertising was added). The first contact after enabling the tunnel established direct in about 2 seconds (`SwiftailMagicsock.md`, "Real device remeasurement"). Both full transfers started after direct was established. Neither fell back to `relayed` during transfer.
 
-| 실행 | 경로 | iPhone이 잰 시간 | 속도 | 가장 긴 멈춤 | 서버가 잰 시간 |
+| Run | Path | iPhone measured time | Speed | Longest stall | Server measured time |
 | --- | --- | --- | --- | --- | --- |
-| Range 0~8MiB | relayed(20)로 시작, 약 2초째 direct | 5.55초 | 1.4MiB/s | 0.12초 | 4.368초 |
-| 전체 1 | direct | 24.53초 | 4.1MiB/s | 0.83초 | 24.377초 |
-| 전체 2 | direct | 20.30초 | 4.9MiB/s | 0.13초 | 20.211초 |
+| Range 0~8MiB | relayed (20) at start, direct after ~2s | 5.55s | 1.4MiB/s | 0.12s | 4.368s |
+| full 1 | direct | 24.53s | 4.1MiB/s | 0.83s | 24.377s |
+| full 2 | direct | 20.30s | 4.9MiB/s | 0.13s | 20.211s |
 
-- 기준(Go 터널 + Go 호스트, 다른 날의 23.0초)의 **1.07배와 0.88배**다. 같은 날의 Go끼리 값은 없다(사용자가 Go 기준값은 재지 않기로 했다). 첫 값(32.2초)보다 빨라진 것은 시작이 direct였기 때문으로 본다(코드의 TCP 쪽은 바뀌지 않았다).
-- 확장 메모리: 켠 직후 7.3MiB까지 오르고 두 전송 동안 새 최고가 없었다(5초 간격 표본). 전송 중 7.3MiB 이하.
-- 받는 쪽만 Swiftail인 구성(Go 호스트 → iPhone의 Swiftail 터널, 같은 날): 100MiB 두 번 모두 약 26초(앱 로그 1초 단위), 확장 메모리 최고 9.1MiB.
-- **연결 종료 통계 줄은 이번에도 얻지 못했다.** 그 줄은 통합 로그의 info 수준이라 디스크에 남지 않아, 지나간 뒤에는 읽을 수 없었다. 첫 사용처가 `log stream --level info`를 걸어 두었으니 다음 전송부터 잡힌다. M6-10b S1의 조건(RTO 횟수, iPhone 커널의 SACK)은 그 줄이 올 때까지 열려 있다. 전체 1의 멈춤 0.83초는 RTO 한 번의 모양이다.
+- These take **1.07 and 0.88 times** the baseline (Go tunnel + Go host, 23.0 seconds on a different day). There is no same-day Go-to-Go result because the owner chose not to measure the Go baseline. The improvement over the first result (32.2 seconds) is attributed to starting direct (the TCP code did not change).
+- Extension memory rose to 7.3MiB just after startup, with no new peak during either transfer (samples every 5 seconds). At most 7.3MiB during transfer.
+- With Swiftail only on the receiving side (Go host → iPhone Swiftail tunnel, same day), both 100MiB transfers took about 26 seconds (1-second app log resolution). Extension memory peaked at 9.1MiB.
+- **The connection close statistics line was unavailable again.** It is at info level in the unified log and does not persist to disk, so it could not be read afterward. The first adopter started `log stream --level info`, so the next transfer will be captured. M6-10b S1's conditions (RTO count and iPhone kernel SACK) remain open until that line arrives. The 0.83-second stall in Full 1 looks like one RTO.
 
-#### 첫 통계 줄: 셀룰러, 8MiB (2026-11-16, 첫 사용처 세션)
+#### First statistics line: cellular, 8MiB (2026-11-16, first adopter session)
 
-iPhone이 Wi-Fi를 떠나 셀룰러(`pdp_ip0`)로 넘어간 직후, 같은 서버에서 Range 0~8MiB를 한 번 받았다. Mac은 집 공유기 뒤다. 양쪽 `b27b482`.
+Immediately after the iPhone left Wi-Fi for cellular (`pdp_ip0`), it received Range 0~8MiB once from the same server. The Mac was behind a home router. Both sides ran `b27b482`.
 
 ```
-연결이 끝남: finished, 수명 5898ms, 보냄 8404074B, 다시 보냄 0B, RTO 0, 빠른 재전송 0, partial ACK 재전송 0, 중복 ACK 0, SACK 실린 ACK 0, SACK 협상 true, cwnd 최대 4059334B, ssthresh 줄임 0
+Connection closed: finished, lifetime 5898ms, sent 8404074B, retransmitted 0B, RTO 0, fast retransmits 0, partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, max cwnd 4059334B, ssthresh reductions 0
 ```
 
-- **iPhone 커널은 SACK을 협상한다**(`SACK 협상 true`). S1의 두 조건 가운데 하나가 채워졌다.
-- 이 전송에는 손실이 없었다(재전송 0, 중복 ACK 0). 손실이 있을 때 iPhone이 SACK 블록을 싣는지와 RTO 횟수는 100MiB 전송의 줄을 기다린다.
-- 서버가 잰 시간 5.447초(1.47MiB/s), iPhone이 잰 시간 6.78초(연결 준비 1.10초 포함). 전송은 `relayed`로 시작해 약 3초째 direct였다. 셀룰러에서도 직접 경로가 선다.
-- Wi-Fi → 셀룰러 전환 뒤 8초에 direct가 다시 섰고, 터널은 내려가지 않았다. 확장 메모리 최고 9.1MiB(전환 전).
+- **The iPhone kernel negotiates SACK** (`SACK negotiated true`). This satisfies one of S1's two conditions.
+- No loss in this transfer (0 retransmissions and 0 duplicate ACKs). The 100MiB transfer log is needed to learn whether the iPhone includes SACK blocks on loss and to count RTOs.
+- Server measured 5.447 seconds (1.47MiB/s), and iPhone measured 6.78 seconds (including 1.10 seconds of connection setup). Transfer started `relayed` and became direct at about 3 seconds. A direct path is established on cellular too.
+- Direct connectivity returned 8 seconds after switching Wi-Fi → cellular, and the tunnel stayed up. Extension memory peaked at 9.1MiB (before transition).
 
-## M6-10b 초안: 보내는 쪽 SACK 회복
+## M6-10b draft: sender-side SACK recovery
 
-이 절은 **초안**이다. 아래 "M6-10b 총괄 확인 필요"를 정한 뒤 동작 R·F에 합치고 이 절을 지운다. 프로토콜 세부는 TCP 노트 12절(RFC 6675, RFC 2018 5·5.1·8과 정오표 1610, RFC 2883, gVisor 대조)이다. 이 절의 기존 동작 번호(R6, F5 등)는 위 "동작"의 것이다.
+This section is a **draft**. After resolving "M6-10b lead session confirmation needed" below, merge it into behaviors R and F and remove this section. Protocol details are in TCP notes §12 (RFC 6675, RFC 2018 §5, §5.1, and §8 and Errata 1610, RFC 2883, and gVisor comparison). Existing behavior numbers (R6, F5, and so on) refer to "Behaviors" above.
 
-10a(받는 쪽)에 기대는 것. 10a가 확정하면 이름을 맞춘다:
+Dependencies on 10a (receiver side). Align names when 10a is finalized.
 
-- `TCPSegment`가 받은 SACK 옵션의 블록(왼쪽·오른쪽 끝 `SequenceNumber` 쌍, 한 세그먼트에 4개까지. RFC 2018 3)을 해석해 낸다. 해석은 길이(`8*n+2`)만 보고 블록의 뜻은 보지 않는다(뜻의 검사는 아래 4, 연결의 몫).
-- 연결이 "SACK을 협상했다"(양쪽 SYN에 SACK-Permitted)를 안다. 상대가 SACK 블록을 보낼 수 있는 것은 **이 쪽 SYN에 SACK-Permitted가 있었을 때**다(RFC 2018 4). 이 절에서 "SACK 연결"은 이 조건을 채운 연결이다.
+- `TCPSegment` parses and exposes received SACK option blocks (pairs of left and right `SequenceNumber` edges, up to 4 per segment, RFC 2018 §3). Parsing checks only length (`8*n+2`). The connection validates block semantics in §4 below.
+- The connection knows it "negotiated SACK" (both SYNs carried SACK-Permitted). The peer can send SACK blocks only if **this side's SYN carried SACK-Permitted** (RFC 2018 §4). A "SACK connection" in this section meets this condition.
 
-### 1. 범위
+### 1. Scope
 
-| 넣는다 | 근거 |
+| Added | Rationale |
 | --- | --- |
-| scoreboard와 Update·IsLost·SetPipe(TCP 노트 12.3) | RFC 6675 4. 회복의 바탕 |
-| 중복 ACK의 RFC 6675 정의(새 SACK 정보) | RFC 6675 2. 데이터가 실린 ACK·창이 바뀐 ACK도 손실 신호로 쓴다(동작 F5가 적은 양방향 약점의 이 쪽 방향) |
-| 회복 진입 (1)·(2)·(4), 회복 중 (A)·(B)·(C) | RFC 6675 5 |
-| NextSeg 규칙 1·2·3 | RFC 6675 4. 규칙 3은 SHOULD다(RFC 3517의 MAY에서 올렸다) |
-| RTO에서 scoreboard 지우기, 왼쪽 끝 재전송, RTO 뒤 받은 SACK 구간 건너뛰기 | RFC 2018 5(SHOULD·MUST), RFC 6675 5.1(SHOULD) |
-| RTO 뒤 새 회복의 조건 `HighACK >= RecoveryPoint` | RFC 6675 5.1(MUST NOT) |
-| 받은 블록의 검사와 scoreboard 상한, reneging 검사 | 동작 X. RFC가 정하지 않은 부분은 이 계약의 선택이다(아래 4) |
+| Scoreboard and Update, IsLost, and SetPipe (TCP notes §12.3) | RFC 6675 §4. Basis for recovery |
+| RFC 6675 definition of duplicate ACK (new SACK information) | RFC 6675 §2. Use data-bearing and window-changing ACKs as loss signals too (this direction of the bidirectional weakness in behavior F5) |
+| Entry into recovery (1)(2)(4), recovery in progress (A)(B)(C) | RFC 6675 §5 |
+| NextSeg rules 1·2·3 | RFC 6675 §4. Rule 3 is SHOULD (originally MAY from RFC 3517) |
+| Clearing scoreboard from RTO, retransmitting from left endpoint, skipping SACK intervals received after RTO | RFC 2018 §5 (SHOULD/MUST), RFC 6675 §5.1 (SHOULD) |
+| Condition for new recovery after RTO: `HighACK >= RecoveryPoint` | RFC 6675 §5.1 (MUST NOT) |
+| Verification of received blocks and scoreboard upper bound, reneging check | Behavior X. For portions not specified in RFC, this contract's choice applies (below §4) |
 
-| 뺀다 | 까닭 | 다시 열 조건 |
+| subtracts | reason | reopens condition |
 | --- | --- | --- |
-| NextSeg 규칙 4(rescue 재전송) | SHOULD다. 창 끝에서 잃고 보낼 새 데이터도 없을 때만 든다. 큰 전송에서는 응답 끝에 한 번이고 그 값은 RTO 한 번(200ms)이다 | 관문·실기기 기록에서 응답 끝의 RTO가 보이거나, 작은 HTTP 응답의 지연이 문제로 보고될 때(총괄 확인 S2) |
-| limited transmit(RFC 6675 5 (3), RFC 3042) | MAY다. 지금도 빼 두었다(제외 표). 작은 창에서 중복 ACK 셋이 모이지 않는 손실에만 듣는다 | 계수에서 cwnd 4 세그먼트 아래의 RTO가 RTO의 많은 몫일 때 |
-| RACK·TLP(RFC 8985) | 시간으로 손실을 판정해 재전송의 손실까지 잡지만 덩어리가 크다. 본문을 대조하지 않았다(TCP 노트 12.11) | 남은 RTO의 대부분이 재전송의 손실에서 올 때 |
-| D-SACK에 따른 반응 | RFC 2883은 반응을 정하지 않는다. 버려도 규격에 맞다(TCP 노트 12.6) | 재정렬로 인한 거짓 재전송이 처리량을 깎는 기록이 있을 때 |
-| F-RTO(RFC 5682)·Eifel | 거짓 RTO를 되돌리는 기능이다. 읽지 않았다 | 셀룰러에서 거짓 RTO가 기록될 때 |
-| RFC 6675 6의 보수적 타이머(회복 중 재전송마다 다시 켬) | MAY다. RFC 6298 그대로(동작 R3) | 회복 중 이른 RTO가 기록될 때 |
-| RTO 뒤에도 SACK 정보 지키기(정오표 1610이 허용) | 견고한 reneging 검사가 전제다. 정하지 않은 방법이다 | RTO 뒤 이미 받은 데이터의 재전송이 처리량을 깎는 기록이 있을 때 |
-| PRR(RFC 6937) 같은 회복 중 송신량 조절 | 읽지 않았다. RFC 6675의 pipe만 쓴다 | 회복 직후의 덩어리 송신이 손실을 부르는 기록이 있을 때 |
+| NextSeg rule 4 (rescue retransmission) | SHOULD. Applies only when there is a loss at the window end and no new data to send. For large transfers, it occurs once at the end of the response and costs one RTO (200ms) | When gate or real device records show RTO at the end of a response, or small HTTP response latency is reported as a problem (lead session confirmation S2) |
+| limited transmit (RFC 6675 §5 (3), RFC 3042) | MAY. Already omitted (exclusions table). Helps only with loss in small windows where 3 duplicate ACKs do not accumulate | When counters show RTOs with cwnd below 4 segments account for much of the total |
+| RACK and TLP (RFC 8985) | Time-based loss detection also catches retransmission loss, but the implementation is large. The text was not checked (TCP notes §12.11) | When most remaining RTOs come from retransmission loss |
+| Response to D-SACK | RFC 2883 specifies no response. Ignoring it is compliant (TCP notes §12.6) | When records show spurious retransmission from reordering reduces throughput |
+| F-RTO (RFC 5682) and Eifel | Undo spurious RTO. The specifications were not read | When spurious RTO is recorded on cellular |
+| Conservative timer in RFC 6675 §6 (restart on each retransmission in recovery) | MAY. Follow RFC 6298 as written (behavior R3) | When records show early RTO during recovery |
+| Retaining SACK information after RTO (allowed by Errata 1610) | Requires robust reneging detection. The method is unspecified | When records show retransmission after RTO of data already received reduces throughput |
+| Send volume control during recovery such as PRR (RFC 6937) | The specification was not read. Use only RFC 6675 pipe | When records show a burst immediately after recovery causes loss |
 
-### 2. 상태
+### 2. State
 
-**`SACKScoreboard`**(새 값 타입, `Sources/SwiftailNetstack/Recovery/SACKScoreboard.swift`). 소켓·시계가 없고 입력과 출력이 수뿐이다(`NewRenoCongestionControl`과 같은 모양).
+**`SACKScoreboard`** (new value type, `Sources/SwiftailNetstack/Recovery/SACKScoreboard.swift`). Has no sockets or clock and only numbers as input and output (same shape as `NewRenoCongestionControl`).
 
-- 표현: **보내는 버퍼의 `startSequence`(데이터 쪽 `SND.UNA`)에서의 거리**로 둔 반열린 구간 `[start, end)`의 배열. `start`순이고 서로 겹치지도 맞닿지도 않으며 `start >= 1`이다(`SND.UNA`의 바이트는 SACK될 수 없다. 그러면 누적 ACK가 그것을 넘었을 것이다). `ReceiveBuffer`가 구간을 `RCV.NXT`에서의 거리로 두는 것과 같은 방식이다.
-- 위쪽 한도: 데이터 쪽 `SND.NXT`(= `min(SND.NXT, FIN 번호)`의 거리). FIN 번호는 scoreboard에 들지 않는다(gVisor도 데이터만 덮는다, TCP 노트 12.8).
-- 함께 두는 값: `retransmittedEnd`(RFC의 HighRxt + 1, 같은 거리). 회복에 들어갈 때만 뜻이 있다.
-- 누적 ACK가 오면 거리를 그만큼 옮기고 `0` 이하로 끝나는 구간을 지운다. 이때 reneging을 본다(동작 SR10).
-- **한도: 구간 32개**(동작 F4의 받는 버퍼와 같은 수와 규칙). 근거: ACK 하나는 블록을 4개까지 싣고(RFC 2018 3), 보내는 버퍼 256KiB를 MSS 1240으로 나누면 세그먼트가 약 212개라 구간이 번갈아 있는 최악은 약 106개다. 손실 판정에 필요한 것은 위쪽 구간 셋과 바이트 수뿐이다(RFC 6675 4). Swift 상대(받는 버퍼 32개)는 32개를 넘겨 알릴 수 없다. gVisor는 100개다(TCP 노트 12.8). 32개에서 **새 구간이 필요한 블록은 버리고**, 기존 구간을 늘리거나 잇는 블록은 받는다(gVisor는 100개에서 합치는 블록까지 버린다. 따르지 않는다). 버린 정보는 그 바이트를 SACK되지 않은 것으로 보게 할 뿐이라 정확성에는 영향이 없고, 불필요한 재전송이나 pipe 과대(보수적)로 나타난다. 메모리는 연결마다 512바이트 이하, 연결 256개에서 128KiB 이하다.
-- CPU: ACK 하나에 블록 4개 × 구간 32개의 합치기, SetPipe와 손실 경계 계산이 구간 수에 비례(아래 SR6·SR7), 보내는 세그먼트마다 NextSeg 하나가 구간 수에 비례한다. 바이트를 하나씩 도는 계산은 없다.
+- Representation is an array of half-open ranges `[start, end)` expressed as **distances from the send buffer's `startSequence` (data-side `SND.UNA`)**. Ordered by `start`, disjoint and nonadjacent, with `start >= 1`. The byte at `SND.UNA` cannot be SACKed because the cumulative ACK would already have passed it. This is the same approach as `ReceiveBuffer` expressing ranges as distances from `RCV.NXT`.
+- Upper bound is data-side `SND.NXT` (distance to `min(SND.NXT, FIN sequence number)`). The FIN sequence number is excluded from the scoreboard (gVisor also covers only data, TCP notes §12.8).
+- Also store `retransmittedEnd` (RFC HighRxt + 1, same distance representation). It is meaningful only on entering recovery.
+- On cumulative ACK, shift the distances by that amount and remove ranges ending at `0` or below. Check for reneging at this point (behavior SR10).
+- **Limit: 32 ranges** (the same count and rules as behavior F4's receive buffer). An ACK can carry up to 4 blocks (RFC 2018 §3). Dividing a 256KiB send buffer by MSS 1240 gives about 212 segments, so the worst case of alternating ranges needs about 106 ranges. Loss detection needs only the top three ranges and a byte count (RFC 6675 §4). A Swift peer (32 receive-buffer ranges) cannot report more than 32. gVisor uses 100 (TCP notes §12.8). At 32 ranges, **discard blocks that need a new range** and accept blocks that extend or join existing ranges (gVisor discards even merging blocks at 100, which this does not follow). Discarded information only marks those bytes as not SACKed. Correctness is preserved, at the cost of possible unnecessary retransmission or conservative overestimation of pipe. Memory is at most 512 bytes per connection and at most 128KiB across 256 connections.
+- CPU. Each ACK merges 4 blocks × 32 ranges. SetPipe and loss boundary calculation scale with the number of ranges (SR6 and SR7 below), as does one NextSeg per segment sent. No calculation iterates byte by byte.
 
-**지금 타입에서 바뀌는 것**(이름과 인자는 구현 단위가 확정한다):
+**Changes to existing types** (the implementation unit finalizes names and arguments)
 
-| 타입 | 바뀌는 것 |
+| Type | What's changing |
 | --- | --- |
-| `SendBuffer` | 없다. 누적 ACK 전에는 버리지 않는 지금의 규칙이 RFC 2018 8·RFC 6675 4의 MUST NOT을 이미 채운다. 재전송은 지금의 `bytes(from:upTo:)`를 거리로 부른다 |
-| `NewRenoCongestionControl` | SACK 회복의 진입·종료를 더한다: 진입은 `ssthresh = cwnd = max(FlightSize/2, 2·SMSS)`(RFC 6675 (4.2), 2·SMSS 하한은 RFC 5681 식 4)와 `recover = SND.NXT`. 부풀리기(`+3·SMSS`, 중복 ACK마다 `+SMSS`)가 없다. 회복 중의 ACK는 cwnd를 바꾸지 않고, `SEG.ACK >= recover`(= RFC의 "RecoveryPoint보다 큰 누적 ACK")에서 나오며 cwnd는 그대로 둔다. 진입 조건은 `SEG.ACK >= recover`다(RFC 6675 5.1. NewReno의 `>`보다 한 바이트 느슨하다). 지금의 NewReno 경로는 SACK 연결이 아니거나 아래 SR1의 예외일 때 그대로 쓴다 |
-| `TCPConnection` | `SACKScoreboard` 하나. 회복 중의 송신 고리(SR5의 (C)), 받은 블록의 기록(SR2), 중복 ACK 판정(SR3), RTO 처리(SR9), go-back-N의 건너뛰기(SR9), `terminate`·TIME-WAIT에서 scoreboard 비우기 |
-| 오류 | 새 오류 타입이 없다. 틀린 블록은 버리고 연결을 끊지 않는다(동작 X1과 같다). `TCPStack.Output.dropped`에도 세지 않는다(패킷이 아니라 옵션 하나의 일이다) |
+| `SendBuffer` | No changes. Keeping data until cumulative ACK already satisfies the MUST NOT in RFC 2018 §8 and RFC 6675 §4. For retransmission, call existing `bytes(from:upTo:)` with a distance |
+| `NewRenoCongestionControl` | Add SACK recovery entry and exit. At entry, set `ssthresh = cwnd = max(FlightSize/2, 2·SMSS)` (RFC 6675 (4.2), with the 2·SMSS floor from RFC 5681 equation 4) and `recover = SND.NXT`. Do not inflate cwnd (`+3·SMSS`, then `+SMSS` per duplicate ACK). ACKs during recovery leave cwnd unchanged. Exit on `SEG.ACK >= recover` (the RFC's "cumulative ACK greater than RecoveryPoint"), keeping cwnd unchanged. Entry requires `SEG.ACK >= recover` (RFC 6675 §5.1. One byte looser than NewReno's `>`). Use the current NewReno path for non-SACK connections and the SR1 exception below |
+| `TCPConnection` | One `SACKScoreboard`. Send loop in recovery (SR5 (C)), recording received blocks (SR2), duplicate ACK classification (SR3), RTO handling (SR9), skipping during go-back-N (SR9), and clearing the scoreboard in `terminate` and TIME-WAIT |
+| Error | No new error type. Invalid blocks are discarded and the connection is not terminated (same as behavior X1). Not counted in `TCPStack.Output.dropped` (only one option, not a packet) |
 
-시험·관문용 계수(총괄 확인 S9): 연결마다 RTO 만료 수, 회복 진입 수(NewReno·SACK 따로), 재전송한 바이트 수. `package`로만 읽는다. 속성 시험이 "덩어리 손실에서 RTO 0번"을 확인하는 데 쓴다.
+Test and gate counters (lead session confirmation S9) are per-connection counts of RTO expirations, recovery entries (NewReno and SACK separately), and retransmitted bytes. Readable only at `package` access. The property test uses them to verify "0 RTOs under burst loss."
 
-### 3. 동작 (SR)
+### 3. Behaviors (SR)
 
-1. **갈림**: SACK 연결이 아니면 지금의 동작 R6·R7(NewReno)이 그대로다. SACK 연결이라도 **회복에 들어가는 순간 scoreboard가 비어 있으면**(상대가 SACK을 허락하고도 블록을 내지 않음. RFC 2018 4는 이를 금지하지 않는다) 그 회복은 NewReno로 한다. 비어 있는 scoreboard로 RFC 6675 회복을 하면 partial ACK에 보낼 것을 고르지 못해 RTO를 기다리게 된다(NextSeg 규칙 1·3이 SACK을 요구한다). 총괄 확인 S5.
-2. **블록 기록**(RFC 6675 4 Update, 5 (B.1)): 동작 X3의 ACK 검사를 통과한 세그먼트에서, 누적 ACK를 처리해 `SND.UNA`를 옮긴 **뒤** 블록을 아래 4로 검사하고 합친다. 결과로 "새 SACK 정보가 있었나"(전에 SACK되지 않은 바이트를 하나라도 표시했나)를 낸다.
-3. **중복 ACK**(RFC 6675 2·5): 누적 ACK가 오면 DupAcks를 0으로 하고(MUST), 그다음 이 ACK가 중복 ACK이면 하나 늘린다(원문은 두 문장을 이 순서로 적는다). SACK 연결의 중복 ACK는 **SR2가 새 SACK 정보를 냈거나, 지금의 RFC 5681 2 정의를 채우는 것**이다(총괄 확인 S4). 앞의 것은 데이터·창 변경·누적 ACK 진행과 상관없이 센다. 뒤의 것을 함께 세는 까닭은 블록을 내지 않는 상대(SR1)에서 지금보다 나빠지지 않게 하려는 것이다. RFC 6675 8이 SACK 조건으로 얻는다고 적은 보호(창 밖 위조 세그먼트가 일으킨 중복 ACK)는 tailnet에서는 WireGuard가 이미 준다(동작 X 머리).
-4. **진입**(RFC 6675 5 (1)·(2)·(4)): 회복 중이 아니고 중복 ACK를 받았으며 `SEG.ACK >= recover`일 때, `DupAcks >= 3`이거나 `IsLost(SND.UNA)`이면 들어간다. (4.1) `recover = SND.NXT`. (4.2) 위 표의 ssthresh·cwnd. (4.3) `SND.UNA`부터 `min(SMSS, 첫 SACK 구간의 시작)`을 다시 보내고 `retransmittedEnd`를 그 끝으로 둔다. (4.4)·(4.5) SetPipe 뒤 (C). 어느 조건도 맞지 않으면 아무것도 더 보내지 않는다(limited transmit이 없다. 들어오는 ACK의 처리 끝에 지금처럼 cwnd가 허락하는 새 데이터만 나간다).
-5. **회복 중의 ACK**(RFC 6675 5 (A)~(C)): (A) `SEG.ACK >= recover`면 회복을 마친다. `SND.UNA` 위의 scoreboard는 지우지 않는다(SHOULD NOT clear). cwnd는 그대로라 그 뒤 `cwnd − FlightSize`만큼 잇달아 나갈 수 있다(RFC 6675 5가 적은 덩어리 송신. 받아들인다). (B) SR2, SetPipe. (C) `cwnd − pipe >= SMSS`인 동안 NextSeg가 고른 것을 보내고 pipe에 그 바이트를 더한다. 회복 중에는 `transmitNext`가 `SND.NXT`와 같다(go-back-N을 하지 않는다).
-6. **손실 판정**(RFC 6675 4 IsLost): 번호 S 위에 SACK 구간이 3개 이상이거나, S보다 큰 SACK된 바이트가 `2·SMSS`보다 **많으면** 잃은 것이다(gVisor는 이상이다. 따르지 않는다. 총괄 확인 S8). SMSS는 `sendMaximumSegmentSize`(Eff.snd.MSS)다. 구간 수는 scoreboard에서 합쳐진 구간의 수로 센다(TCP 노트 12.11 1). 이 판정은 S가 작을수록 참이 되는 단조 성질이 있으므로(위의 SACK이 늘기만 한다) 잃은 바이트는 `SND.UNA`부터 어떤 경계 L까지의 SACK되지 않은 바이트다. L은 위쪽 구간부터 내려오며 처음 문턱을 넘긴 구간의 시작이다. 구간 수에 비례해 한 번에 구한다(이 계약이 유도한 것. 시험에서 바이트 단위의 느린 구현과 견준다).
-7. **pipe**(RFC 6675 4 SetPipe): `[SND.UNA, 데이터 쪽 SND.NXT)`의 SACK되지 않은 바이트마다 L 이상이면 1, `retransmittedEnd` 앞이면 1을 더한 합이다. 바이트 단위다(gVisor는 세그먼트 단위다). 구간 수에 비례해 구한다.
-8. **보낼 것 고르기**(RFC 6675 4 NextSeg): ① `max(SND.UNA, retransmittedEnd)` 이상에서 가장 작은 SACK되지 않은 번호 S2가 가장 높은 SACK 구간의 끝보다 앞이고 L보다 앞이면 `[S2, min(S2 + SMSS, 다음 SACK 구간의 시작))`. ② 없으면 새 데이터 한 세그먼트(SMSS 이하. 창과 보내는 쪽 SWS 회피는 지금의 `transmit` 규칙 그대로). ③ 없으면 ①에서 L 조건을 뺀 S3. ④ 없으면 보내지 않는다. 다음 SACK 구간에서 자르는 것은 RFC가 정하지 않은 이 계약의 선택이다(이미 받은 바이트를 다시 보내지 않는다). ①·③으로 보낸 것은 `retransmittedEnd`를 그 끝으로 옮긴다((C.2)). 재전송은 지금처럼 상대의 창을 보지 않고(RFC 7323 2.4), Karn에 따라 RTT 표본을 버리고(동작 R2), 재전송 한도(동작 R4)에 세지 않는다(한도는 RTO 만료만 센다. 지금과 같다). 고른 구간이 FIN 번호에서 끝나고 FIN을 이미 보냈으면 FIN을 함께 싣는다(지금의 `retransmitFirstUnacknowledgedSegment`와 같다).
-9. **RTO**(동작 R3·R4·R6에 더해, RFC 2018 5·RFC 6675 5.1): scoreboard를 모두 지우고(SHOULD. gVisor와 같다), 회복 중이었으면 나오고, `recover = SND.NXT`로 둔다. 새 SACK 회복은 `SEG.ACK >= recover`가 될 때까지 시작하지 않는다(MUST NOT). `SND.UNA`부터 다시 보내는 go-back-N은 그대로이되(왼쪽 끝 세그먼트는 늘 다시 보낸다. MUST), **RTO 뒤에 받은 블록**이 SACK한 구간은 건너뛴다(SHOULD. gVisor `snd.go:1118-1123`과 같은 방식). 타이머는 RFC 6298 그대로다(RFC 6675 6의 기본).
-10. **reneging**(RFC 2018 8, 이 계약의 검사): 누적 ACK가 `SND.UNA`를 v로 옮길 때 v가 어떤 SACK 구간의 시작이거나 안이면(`start <= v < end`), 받는 쪽이 SACK한 데이터를 쥐지 않은 것이다(그 구간을 쥐고 있었다면 누적 ACK가 구간 끝 이상이었을 것이다. 늦게 온 ACK는 `SND.UNA`를 옮기지 않으므로 이 판정에 들지 않는다). 그러면 scoreboard를 모두 지운다. 회복 중이면 회복은 이어 가고(빈 scoreboard에서는 고를 것이 없다) 남은 것은 RTO가 맡는다. 데이터는 누적 ACK 전에는 버리지 않으므로 잃지 않는다. 총괄 확인 S6.
-11. **0 창·persist·FIN·닫는 중**:
-    - 0 창 탐침(동작 F8)은 날아가는 것이 없을 때만 켜지므로 회복과 겹치지 않는다. 회복 중 상대의 창이 0이 되어도 ①·③의 재전송은 나가고(보낼 때 창 안이었다) ②의 새 데이터는 나가지 않는다. 줄어든 창의 예외(동작 F8 아래)는 RTO의 셈에 관한 것이라 그대로다.
-    - FIN은 scoreboard 밖이다. 블록의 오른쪽 끝이 FIN 번호를 넘으면 데이터 끝까지로 자른다(아래 4).
-    - 회복은 지금 `transmit`이 도는 상태(ESTABLISHED, CLOSE-WAIT, FIN-WAIT-1, CLOSING, LAST-ACK)에서만 돈다. TIME-WAIT에 들거나 끝나면 scoreboard를 비운다. `readClosed`(동작 F8의 놓은 연결) 규칙은 바뀌지 않는다.
-12. **바뀌어야 하는 문구**(이 초안을 확정할 때 고친다. 지금 고치지 않는다):
-    - "M6에서 지원하는 범위" 표의 NewReno 행: "SACK 연결은 RFC 6675 회복(M6-10b)"을 더한다.
-    - 동작 R6 끝의 "중복 ACK 3개면 RFC 5681 3.2의 단계 2~6에 …": 앞에 "SACK 연결이 아니거나 SR1의 예외이면"을 붙인다. "구현에서 정해진 것"의 `recover` 비교(`ACK > recover`)는 SACK 회복에서 `>=`다.
-    - 동작 R7 "재전송은 늘 SND.UNA부터의 한 세그먼트다(SACK이 없다)": SACK 연결은 SR8, RTO 뒤의 go-back-N은 SR9의 건너뛰기.
-    - 동작 F5 둘째 항목 끝 "이 손실 회복의 약점은 SACK(M6-10)으로 푼다": Swift가 보내는 방향은 SR3(데이터가 실린 ACK도 센다)으로 풀리고, Go가 보내는 방향은 gVisor의 `isDupAck`(TCP 노트 12.8 다른 곳 1) 때문에 남는다.
-    - "개선 단위 셋을 넣은 뒤의 결과"의 10b 항목: 이 초안을 가리킨다.
-    - 동작 M 표: "SACK scoreboard 구간 | 연결마다 32개 | 그 블록을 버린다" 행.
-    - 동작 X: 새 항목(아래 4의 요약).
-    - 제외 표의 "SACK(보내기·받기)" 행: 위 1의 "뺀다" 표로 바꾼다.
-    - 시험 8·12: 아래 5를 더한다. 구현 단위 M6-10 행의 소유 파일: 아래 6의 표.
-    - 코드의 문서 주석: `NewRenoCongestionControl.swift`의 "SACK은 없다(계약 총괄 확정 N3)", `TCPConnection+Sending.swift` 머리의 "재전송은 늘 `SND.UNA`부터다(계약 동작 R7, SACK 없음)", `TCPConnection+Receiving.swift`의 `isDuplicateAcknowledgment` 문서.
-    - TCP 노트 4.7 7(중복 ACK의 정의)에 SACK 연결의 정의를 가리키는 문장. 노트 12.7이 그 목록이다.
+1. **Branch**. For a non-SACK connection, keep existing behaviors R6 and R7 (NewReno). Even for an SACK connection, **if the scoreboard is empty when entering recovery** (the peer permits SACK but emits no blocks, which RFC 2018 §4 allows), use NewReno for that recovery. RFC 6675 recovery with an empty scoreboard cannot choose what to send on a partial ACK and waits for RTO (NextSeg rules 1 and 3 require SACK). Lead session confirmation S5.
+2. **Recording blocks** (RFC 6675 §4 Update, §5 (B.1)). For a segment that passed behavior X3 ACK validation, validate blocks under §4 below and merge them **after** processing cumulative ACK and moving `SND.UNA`. Return whether there was "new SACK information" (whether at least one previously un-SACKed byte was marked).
+3. **Duplicate ACKs** (RFC 6675 §2 and §5). On receiving a cumulative ACK, reset DupAcks to 0 (MUST), then increment it by 1 if this ACK is a duplicate (the source states the two sentences in this order). An SACK connection's duplicate ACK is one for which **SR2 produced new SACK information or the current RFC 5681 §2 definition is met** (lead session confirmation S4). Count the former regardless of data, window change, or cumulative ACK progress. Count the latter too so performance does not worsen with a peer that emits no blocks (SR1). The protection RFC 6675 §8 attributes to the SACK criterion (duplicate ACKs caused by forged out-of-window segments) is already provided by WireGuard in the tailnet (introduction to behavior X).
+4. **Entry** (RFC 6675 §5 (1), (2), and (4)). When outside recovery with a duplicate ACK and `SEG.ACK >= recover`, enter if `DupAcks >= 3` or `IsLost(SND.UNA)`. (4.1) Set `recover = SND.NXT`. (4.2) Set ssthresh and cwnd from the table above. (4.3) Retransmit `min(SMSS, start of first SACK range)` from `SND.UNA` and set `retransmittedEnd` to its end. (4.4) and (4.5) Run SetPipe, then (C). If neither condition matches, send nothing extra (limited transmit is absent. As now, only new data that cwnd permits goes out at the end of handling an incoming ACK).
+5. **ACKs in recovery** (RFC 6675 §5 (A)~(C)). (A) If `SEG.ACK >= recover`, finish recovery. Keep the scoreboard above `SND.UNA` (SHOULD NOT clear). With cwnd unchanged, up to `cwnd − FlightSize` bytes can go out in succession (the burst noted in RFC 6675 §5 and accepted here). (B) Apply SR2 and SetPipe. (C) While `cwnd − pipe >= SMSS`, send what NextSeg selects and add its bytes to pipe. During recovery, `transmitNext` equals `SND.NXT` (no go-back-N).
+6. **Loss detection** (RFC 6675 §4 IsLost). Sequence S is lost if there are 3 or more SACK ranges above it, or if the number of SACKed bytes above S is **greater than** `2·SMSS` (gVisor uses greater than or equal, which this does not follow. Lead session confirmation S8). SMSS is `sendMaximumSegmentSize` (Eff.snd.MSS). Count merged ranges in the scoreboard (TCP notes §12.11 item 1). The test is monotonic, becoming true as S decreases (the SACKed portion above it only grows), so lost bytes are the un-SACKed bytes from `SND.UNA` to a boundary L. L is the start of the first range to cross the threshold while scanning down from the highest range. Compute it in one pass proportional to the range count (derived in this contract and compared against a slow byte-level implementation in tests).
+7. **pipe** (RFC 6675 §4 SetPipe). For each un-SACKed byte in `[SND.UNA, data-side SND.NXT)`, add 1 if it is at or above L and 1 if it is before `retransmittedEnd`. The sum is in bytes (gVisor uses segments). Compute it in proportion to range count.
+8. **Selecting what to send** (RFC 6675 §4 NextSeg). ① If the smallest un-SACKed sequence S2 at or above `max(SND.UNA, retransmittedEnd)` is below the end of the highest SACK range and below L, select `[S2, min(S2 + SMSS, start of next SACK range))`. ② Otherwise, select one new data segment (at most SMSS. Apply window and sender SWS avoidance under current `transmit` rules). ③ Otherwise, select S3 as in ① without the L condition. ④ Otherwise, send nothing. Trimming at the next SACK range is this contract's choice, unspecified by the RFC, and avoids retransmitting bytes already received. Sending through ① or ③ moves `retransmittedEnd` to the end of what was sent ((C.2)). As today, retransmissions ignore the peer's window (RFC 7323 §2.4), discard RTT samples per Karn (behavior R2), and do not count toward the retransmission limit (behavior R4. Only RTO expiration counts). If a selected range ends at the FIN sequence number and FIN has already been sent, include FIN (as in current `retransmitFirstUnacknowledgedSegment`).
+9. **RTO** (in addition to behaviors R3, R4, and R6, RFC 2018 §5 and RFC 6675 §5.1). Clear the entire scoreboard (SHOULD, as in gVisor), exit recovery if in it, and set `recover = SND.NXT`. Do not start new SACK recovery until `SEG.ACK >= recover` (MUST NOT). Keep go-back-N retransmission from `SND.UNA` (always retransmit the leftmost segment, MUST), but skip ranges SACKed by **blocks received after RTO** (SHOULD, as in gVisor `snd.go:1118-1123`). Follow RFC 6298 timer behavior unchanged (default in RFC 6675 §6).
+10. **reneging** (RFC 2018 §8, this contract's check). When a cumulative ACK moves `SND.UNA` to v, if v is at the start of or inside an SACK range (`start <= v < end`), the receiver no longer holds the SACKed data. If it still held that range, the cumulative ACK would be at or beyond its end. Late ACKs do not move `SND.UNA` and are outside this check. Clear the entire scoreboard. If in recovery, continue it (an empty scoreboard has nothing to select) and let RTO handle what remains. Data is retained until cumulative ACK, so it is not lost. Lead session confirmation S6.
+11. **0 window·persist·FIN·closing**:
+    - 0-window probes (behavior F8) are enabled only when nothing is in flight, so they do not overlap recovery. If the peer's window becomes 0 in recovery, retransmissions under ① and ③ still go out (they were in-window when first sent), while new data under ② stops. The shrunk-window exception (under behavior F8) is unchanged because it concerns RTO counting.
+    - FIN is outside the scoreboard. If the right edge of a block exceeds the FIN number, the data is truncated to the end of the data (as below 4).
+    - Recovery runs only in states where `transmit` currently runs (ESTABLISHED, CLOSE-WAIT, FIN-WAIT-1, CLOSING, LAST-ACK). Clear the scoreboard on entering TIME-WAIT or termination. The `readClosed` rule (released connections in behavior F8) stays the same.
+12. **Wording to update** (when finalizing this draft)
+    - NewReno row of "Scope supported in M6": Add "SACK connections use RFC 6675 recovery (M6-10b)."
+    - At the end of behavior R6, prepend "If this is not an SACK connection or the SR1 exception applies" to "On 3 duplicate ACKs, apply RFC 5681 §3.2 steps 2~6 with …". The `recover` comparison (`ACK > recover`) under "Implementation decisions" uses `>=` in SACK recovery.
+    - Behavior R7, "Retransmit one segment starting from SND.UNA every time (no SACK)". Use SR8 for SACK connections and SR9 skipping for go-back-N after RTO.
+    - At the end of the second item under behavior F5, "SACK (M6-10) addresses this loss recovery weakness". SR3 resolves it in the direction sent by Swift (counting data-bearing ACKs too), and it remains in the direction sent by Go because of gVisor's `isDupAck` (TCP notes §12.8, difference 1).
+    - The 10b item under "Results after the three improvement units" points to this draft.
+    - Behavior M table: "SACK scoreboard section | 32 per connection | discards that block" row.
+    - Behavior X: new item (summary of below 4).
+    - Replace the "SACK (sender and receiver)" exclusions row with the exclusions table in §1 above.
+    - Test 8·12: adds below 5. Ownership file for implementation unit M6-10 row: below 6's table.
+    - Code doc comments: "No SACK (contract lead session decision N3)" in `NewRenoCongestionControl.swift`, "Retransmissions always start at `SND.UNA` (contract behavior R7, no SACK)" in the `TCPConnection+Sending.swift` header, and the `isDuplicateAcknowledgment` doc comment in `TCPConnection+Receiving.swift`.
+    - Sentence in TCP note 4.7(7) defining duplicate ACKs, pointing to the SACK connection definition. Note 12.7 contains this list.
 
-### 4. 받은 블록의 검사
+### 4. Validation of received blocks
 
-블록마다 SR2에서, 누적 ACK를 처리한 뒤의 `SND.UNA`(이하 U)와 데이터 쪽 `SND.NXT`(이하 E)로 본다. 거리는 동작 W5대로 부호 있는 32비트 차이다.
+For each block, from SR2, after processing the cumulative ACK, examine `SND.UNA` (denoted U) and data-side `SND.NXT` (denoted E). The distance is a signed 32-bit difference as per behavior W5.
 
-1. SACK 연결이 아니면 SACK 옵션을 보지 않는다(상대는 보내면 안 된다. RFC 2018 4).
-2. 한 세그먼트에 블록은 4개까지다(코덱이 옵션 길이 `8*n+2`로 검사한다. 10a). 정렬되어 있다고 가정하지 않는다(RFC 2018 4).
-3. `s = 왼쪽 끝 − U`, `e = 오른쪽 끝 − U`. 다음이면 그 블록을 버린다:
-   - `s <= 0`: U 이하에서 시작한다. D-SACK(같은 패킷의 누적 ACK 아래), 늦게 온 ACK, 모순된 블록이 모두 여기다. D-SACK을 따로 가려 쓰지 않으므로 RFC 2883 5의 비교 규칙이 필요 없다.
-   - `e <= s`: 비었거나 거꾸로다. 2³² 순환으로 크기가 거의 2³²가 되는 블록이 여기서 걸린다(gVisor는 이 검사가 없다. TCP 노트 12.9).
-   - 오른쪽 끝이 `SND.NXT`보다 뒤: 보내지 않은 것을 SACK한다.
-   그다음 `e`를 E까지로 자른다(FIN 번호를 덮는 부분). 자른 뒤 `e <= s`면 버린다.
-4. 남은 블록을 합친다. 33번째 구간이 필요한 블록은 버린다(위 2).
-5. D-SACK이 누적 ACK 위의 이미 SACK된 구간을 되풀이하면 합쳐져도 바뀌는 것이 없다(새 정보가 아니므로 중복 ACK로도 세지 않는다).
-6. 버린 블록은 연결을 끊지 않고 응답하지도 않는다. 같은 세그먼트의 다른 블록과 ACK 처리는 그대로다.
-7. 누적 ACK의 reneging 검사(SR10).
+1. If not a SACK connection, do not process SACK option (the peer should not send it. RFC 2018 4).
+2. At most 4 blocks per segment (the codec validates option length `8*n+2`, 10a). Do not assume sorting (RFC 2018 §4).
+3. `s = left end − U`, `e = right end − U`. Discard the block if the following condition holds:
+   - `s <= 0` means the block starts at or below U. This includes D-SACK (below the cumulative ACK of the same packet), late ACKs, and inconsistent blocks. D-SACK is not identified separately or used, so the RFC 2883 §5 comparison rules are unnecessary.
+   - `e <= s`: Empty or reversed. A block of nearly 2³² size, cycling through 2³², is here (gVisor does not perform this check. TCP note 12.9).
+   - A right edge beyond `SND.NXT` SACKs unsent data.
+   Then truncate `e` to E (covering the FIN number portion). If after truncation `e <= s`, discard it.
+4. Merge remaining blocks. Discard blocks requiring a 33rd range (see §2 above).
+5. If D-SACK reiterates an already SACKed segment above the cumulative ACK, no change occurs upon combining (no new information, so it is not counted as a duplicate ACK).
+6. Discarded blocks do not respond and do not terminate the connection. ACK processing for different blocks of the same segment remains unchanged.
+7. Cumulative ACK reneging check (SR10).
 
-이것으로 막는 것: 거짓 블록이 늘리는 메모리(32구간)와 ACK당 CPU(블록 4 × 구간 32), 보내지 않은 데이터의 SACK으로 생기는 영구 건너뛰기, 순환 산술의 거꾸로 된 블록. 막지 못하는 것: 거짓 SACK이나 reneging으로 상대가 **자기 연결을** RTO까지 늦추는 것(정확성은 지킨다. 누적 ACK가 나아가지 않으면 동작 R4의 한도로 끝난다). 거짓 SACK으로 pipe를 줄여도 날아가는 양은 cwnd(회복에 들며 반으로 줄었다), 상대의 창, 보내는 버퍼 256KiB를 넘지 않는다.
+This bounds memory used by false blocks (32 ranges) and CPU per ACK (4 blocks × 32 ranges), prevents permanently skipping unsent data due to SACK, and rejects reversed blocks under wrapping arithmetic. A peer can still delay **its own connection** until RTO through false SACKs or reneging (correctness holds, and if cumulative ACK does not advance, behavior R4's limit ends the connection). Even if false SACKs reduce pipe, in-flight bytes stay within cwnd (halved on entering recovery), the peer's window, and the 256KiB send buffer.
 
-### 5. 시험 계획
+### 5. Test plan
 
-단위(`Tests/SwiftailNetstackTests/Recovery/SACKScoreboardTests.swift`, 소켓 없음):
+Unit (`Tests/SwiftailNetstackTests/Recovery/SACKScoreboardTests.swift`, no socket):
 
-1. 합치기: 겹침(앞·뒤·가운데·완전히 덮음), 맞닿음, 순서가 뒤섞인 블록 4개, 같은 블록의 반복은 새 정보가 아님.
-2. 버림: U에서 시작(`s = 0`), U 아래, 빈 블록, 거꾸로 된 블록, `SND.NXT` 위, FIN 번호까지 덮는 블록의 자르기, 2³² 경계를 넘는 정상 블록은 받음(ISS `0xFFFF_F000`).
-3. 상한: 32개에서 33번째 버림, 32개에서 기존 구간 늘리기·잇기는 받음.
-4. 누적 ACK: 구간 앞부분 지움과 거리 옮김, reneging(구간 시작·안에 닿는 ACK)에서 비움, 구간 끝에 닿는 ACK는 reneging이 아님.
-5. IsLost: 위 구간 셋이면 참·둘이면 거짓, SACK된 바이트가 정확히 `2·SMSS`면 거짓·하나 더면 참, SMSS보다 작은 세그먼트 여럿.
-6. pipe와 손실 경계: 바이트 단위의 느린 기준 구현(시험 안에 둔다. RFC 6675 4의 글 그대로)과 고정 씨앗의 무작위 scoreboard·`retransmittedEnd` 1만 가지를 견준다.
-7. NextSeg: 규칙 ①의 차례, (1.a) `retransmittedEnd` 뒤만, (1.b) 가장 높은 SACK 아래만, ②가 ③보다 앞섬, ③, 실패, 다음 구간에서 자르기, FIN을 싣는 끝.
+1. Merging: overlaps (front, back, middle, completely covering), touching ranges, 4 unordered blocks, and no new information from a repeated block.
+2. Discarding: start at U (`s = 0`), below U, empty block, reversed block, beyond `SND.NXT`, and trimming a block that covers the FIN sequence number. Accept a valid block crossing the 2³² boundary (ISS `0xFFFF_F000`).
+3. Limit: drop a 33rd range at 32 and still accept extensions and joins of existing ranges at 32.
+4. Cumulative ACK: remove range prefixes and shift distances, clear on reneging (ACK at the start of or within a range), and do not treat ACK at the range end as reneging.
+5. IsLost: true with three ranges above and false with two, false for exactly `2·SMSS` SACKed bytes and true for one more, and multiple segments smaller than SMSS.
+6. Pipe and loss boundary: compare a slow byte-level reference implementation (in the test, following the wording of RFC 6675 §4 exactly) against 10,000 fixed-seed random scoreboard and `retransmittedEnd` inputs.
+7. NextSeg: rule ① order, (1.a) only after `retransmittedEnd`, (1.b) only below the highest SACK, ② before ③, ③, failure, trimming at the next range, and an ending that includes FIN.
 
-연결(`Tests/SwiftailNetstackTests/Connection/ConnectionSACKRecoveryTests.swift`, `ScriptedTCPPeer`로 상대의 블록을 손으로 적어 RFC 6675의 단계를 따라간다):
+Connection (`Tests/SwiftailNetstackTests/Connection/ConnectionSACKRecoveryTests.swift`, `ScriptedTCPPeer` used to manually write the peer's blocks following RFC 6675 steps):
 
-8. 10 세그먼트를 보내고 셋째를 잃는다 → 블록을 실은 ACK 셋째에서 진입(DupAcks). 다른 사례: 큰 세그먼트 셋이 한 ACK에 SACK되어 첫째 ACK에서 진입(`IsLost(SND.UNA)`). 각 단계의 cwnd·ssthresh·pipe·`retransmittedEnd`를 손으로 계산한 표와 견준다.
-9. 한 창에서 셋을 잃는다(#2·#5·#7) → 한 회복 안에서 세 구간을 다시 보내고 RTO가 없으며, 다시 보낸 바이트가 잃은 바이트와 같다.
-10. 회복 중 보낸 새 데이터를 잃는다 → 같은 회복 안에서 ①로. recover 바로 다음 세그먼트를 잃는다 → 회복을 마친 뒤 `SEG.ACK >= recover`로 다시 들어간다(NewReno에서는 RTO가 나는 경우).
-11. 재전송을 잃는다 → RTO → scoreboard가 비고 `SND.UNA`를 다시 보냄 → RTO 뒤 받은 블록의 구간을 건너뜀. 회복 중 RTO → `SEG.ACK >= recover` 전에는 다시 들어가지 않음.
-12. 데이터가 실린 ACK, 창이 바뀐 ACK가 새 블록을 실으면 중복 ACK로 센다. SACK 연결이 아니면 지금의 시험(데이터·창 변경 ACK는 세지 않는다)이 그대로 통과한다.
-13. SACK을 허락했지만 블록을 내지 않는 상대 → NewReno 회복(지금의 회복 시험을 SACK 연결로도 돌린다).
-14. reneging: SACK한 뒤 누적 ACK가 그 구간 안에 닿는다 → scoreboard가 비고 전송이 끝까지 간다.
-15. 틀린 블록: 블록 4개짜리 ACK 1,000개(고정 씨앗, U 아래·`SND.NXT` 위·거꾸로·정상 섞음) → 죽지 않고, 구간이 32개 이하이고, 받은 바이트의 해시가 같다.
-16. 회복 중 상대의 창이 0이 됨(재전송은 나가고 새 데이터는 멈춤), FIN이 든 빈 곳, CLOSE-WAIT·FIN-WAIT-1에서의 회복, 끝난 뒤 scoreboard가 빔.
+8. Send 10 segments and lose the third → enter on the third ACK carrying blocks (DupAcks). Another case: three large segments are SACKed in one ACK → enter on the first ACK (`IsLost(SND.UNA)`). Compare cwnd, ssthresh, pipe, and `retransmittedEnd` at each step to a hand-calculated table.
+9. Lose three segments in one window (#2, #5, #7) → retransmit three ranges in one recovery without RTO, and the retransmitted bytes match the lost bytes.
+10. Lose new data sent during recovery → use ① in the same recovery. Lose the segment immediately following recover → after recovery ends, reenter with `SEG.ACK >= recover` (a case where NewReno would hit RTO).
+11. Lose retransmission → RTO → scoreboard empty, retransmit `SND.UNA` → skip interval after received block. During recovery, RTO → do not re-enter before `SEG.ACK >= recover`.
+12. An ACK carrying data, or an ACK with a changed window, triggers a duplicate ACK if it carries a new block. If SACK is not enabled, the current test (no data or window-change ACKs are recorded) proceeds as-is.
+13. Peer allows SACK but does not send a block → NewReno recovery (the current recovery test is also run with SACK-enabled connection).
+14. Reneging: After sending SACK, if the cumulative ACK reaches within the segment → scoreboard is cleared and transmission continues to completion.
+15. Invalid blocks: 1,000 ACKs with 4 blocks each (fixed seed, mix below U, above `SND.NXT`, reversed, and valid) → no crash, at most 32 ranges, and received byte hashes match.
+16. Peer window becomes 0 during recovery (retransmissions go out and new data stops), a gap that includes FIN, recovery in CLOSE-WAIT and FIN-WAIT-1, and empty scoreboard after termination.
 
-`LinkSimulator` 속성 시험(시험 12에 더한다):
+`LinkSimulator` property tests (add to test 12)
 
-17. 축 하나를 더한다: SACK 켬/끔(10a의 협상을 양쪽에서 켜고 끈다). 지금의 네 속성(해시, 시간, 버퍼 상한, CLOSED)에 scoreboard 구간 ≤ 32를 더한다.
-18. 덩어리 손실: `DropRule`로 한 방향의 연속 k개(k ∈ {3, 10, 30})를 한 번 버린다. SACK 켬에서 RTO 만료가 0번이고(재전송을 잃지 않은 씨앗), 끔보다 끝나는 가상 시간이 짧다.
+17. Add one more dimension: SACK on/off (enable and disable the negotiation on both sides of 10a). Add to current four properties (hash, time, buffer limit, CLOSED) the scoreboard segment ≤ 32.
+18. Burst loss: Use `DropRule` to drop k consecutive packets once in one direction (k ∈ {3, 10, 30}). With SACK enabled, there are 0 RTO expirations (seeds without retransmission loss), and the virtual completion time is shorter than with SACK disabled.
 
-관문에서 볼 값(관문 (가)·(나)에 기록만 더한다. 새 통과 기준은 두지 않는다):
+Gate measurements. Add records only to gates (a) and (b), with no new pass criteria.
 
-19. (가) 한 방향 Swift→Go 손실 1%(`oneWayLoss`): 처리량(지금 6.3MB/s), 최장 수신 간격(지금 약 0.5초). 양방향 1%에서 Swift→Go 방향의 처리량. 손실 5%. 같은 씨앗에서 10b 전과 뒤.
-20. (나) 5에서 XNU의 SACK-Permitted. (나) 6의 iPhone 수신 100MB를 Wi-Fi·셀룰러에서 10b 전과 뒤로(비교하려면 SACK을 끄는 시험용 스위치가 필요하다. 10a가 두는지 확인한다).
+19. (a) One-way Swift→Go at 1% loss (`oneWayLoss`): throughput (currently 6.3MB/s) and longest receive interval (currently about 0.5 seconds). Swift→Go throughput at 1% bidirectional loss. Loss at 5%. Measure before and after 10b using the same seed.
+20. Gate (b) item 5: XNU SACK-Permitted. Gate (b) item 6: iPhone receiving 100MB over Wi-Fi and cellular before and after 10b (comparison requires a test switch to disable SACK. Check whether 10a provides it).
 
-### 6. 크기와 판단
+### 6. Size and assessment
 
-**변경 규모(추정)**:
+**Change Scale (Estimated)**:
 
-| 파일 | 늘어나는 줄(문서 주석 포함) |
+| File | Increased lines (including document comments) |
 | --- | --- |
-| `Sources/SwiftailNetstack/Recovery/SACKScoreboard.swift`(새) | 약 200 |
-| `Sources/SwiftailNetstack/Recovery/NewRenoCongestionControl.swift` | 약 40 |
-| `Sources/SwiftailNetstack/Connection/TCPConnection.swift`, `+Receiving`, `+Sending`, `+Timers` | 약 170 |
-| `Tests/SwiftailNetstackTests/Recovery/SACKScoreboardTests.swift`(새) | 약 300 |
-| `Tests/SwiftailNetstackTests/Connection/ConnectionSACKRecoveryTests.swift`(새) | 약 350 |
-| `Tests/SwiftailNetstackTests/Support/LinkSimulator.swift`, `Scenarios/LinkPropertyTests.swift` | 약 60 |
+| `Sources/SwiftailNetstack/Recovery/SACKScoreboard.swift`(new) | about 200 |
+| `Sources/SwiftailNetstack/Recovery/NewRenoCongestionControl.swift` | about 40 |
+| `Sources/SwiftailNetstack/Connection/TCPConnection.swift`, `+Receiving`, `+Sending`, `+Timers` | about 170 |
+| `Tests/SwiftailNetstackTests/Recovery/SACKScoreboardTests.swift`(new) | about 300 |
+| `Tests/SwiftailNetstackTests/Connection/ConnectionSACKRecoveryTests.swift`(new) | about 350 |
+| `Tests/SwiftailNetstackTests/Support/LinkSimulator.swift`, `Scenarios/LinkPropertyTests.swift` | about 60 |
 
-제품 코드 약 400줄(지금 `SwiftailNetstack` 3,348줄의 약 12%), 시험 약 700줄. 10a가 고칠 `Wire/`·`TCPConnection+Opening.swift` 뒤에 붙으므로 10a가 끝난 뒤에 연다.
+About 400 lines of product code (about 12% of the current 3,348 lines of `SwiftailNetstack`) and about 700 lines of tests. It builds on `Wire/` and `TCPConnection+Opening.swift` changes from 10a, so open it once 10a is complete.
 
-**위험**:
+**Risk**:
 
-- pipe를 크게 보면 `cwnd − pipe < SMSS`에 머물러 RTO까지 멈추고, 작게 보면 덩어리로 보낸다. 바이트 단위 기준 구현과의 대조(시험 6)가 주된 방어다.
-- RFC의 닫힌 끝(HighRxt, RecoveryPoint)과 이 코드의 반열린 끝 사이의 하나 차이.
-- 회복 경로와 go-back-N(`transmitNext`)이 함께 있는 상태 기계. 회복 중에는 `transmitNext = SND.NXT`라는 불변식을 시험에서 늘 본다.
-- 상대의 SACK 생성에 기댄다. XNU가 SACK 블록을 내지 않으면 첫 사용처에서 효과가 없다(TCP 노트 12.11 4).
-- 회복을 마칠 때 cwnd를 고치지 않으므로 큰 누적 ACK 뒤에 덩어리 송신이 난다(RFC 6675 5가 인정한다).
+- Overestimating pipe can keep `cwnd − pipe < SMSS` and stall until RTO. Underestimating it can cause a burst. Comparison with the byte-level reference implementation (test 6) is the main defense.
+- Off-by-one difference between the RFC's inclusive endpoints (HighRxt and RecoveryPoint) and this code's half-open endpoints.
+- State machine that combines recovery path and go-back-N (`transmitNext`). During recovery, the invariant `transmitNext = SND.NXT` is observed in every test.
+- Relies on the peer's SACK generation. If XNU does not generate a SACK block, the benefit is ineffective at the first adopter (TCP note 12.11 4).
+- cwnd stays unchanged when recovery ends, so a large cumulative ACK causes a burst (acknowledged in RFC 6675 §5).
 
-**넣을 값이 있는가: 계산과 근거.** 아래 수는 모두 추정이다. MSS 1240(IPv4 tailnet, 동작 T5), RTO 하한 200ms(동작 R1)를 쓴다.
+**Is it worth adding? Calculations and rationale.** The values below are all estimates. Use MSS 1240 (IPv4 tailnet, behavior T5) and a 200ms RTO minimum (behavior R1).
 
-1. **루프백은 RTO 한 번의 값을 과장한다.** 루프백의 왕복 시간은 거의 0이라 RTO 하한 200ms가 수천 왕복이다. Swift→Go 20MiB(약 16,900 세그먼트)에서 손실 1%는 약 170번이다. 0%가 약 0.25초, 1%가 약 3.3초(6.3MB/s)이므로 늘어난 약 3.1초를 모두 RTO 기다림으로 보면 약 15번, 손실의 약 9%가 RTO로 회복된 셈이다(계수로 확인하지 않았다). 같은 일이 왕복 20~50ms의 망에서 나면 RTO 한 번의 값은 "200ms + slow start로 ssthresh까지 다시 오르는 2~3왕복 − fast recovery였다면 든 1왕복"이라 약 5왕복(50ms. RTO가 하한 200ms라면)~12왕복(20ms)이다. 루프백처럼 처리량이 1/10로 떨어지는 일은 실제 망에서는 생기지 않는다.
-2. **무작위 손실 1%에서 실제 망의 상한.** Mathis 근사 `처리량 ≈ (MSS/RTT) · √(3/2) / √p`로 RTT 20ms 약 0.76MB/s, 50ms 약 0.30MB/s이고, 그때 평균 창은 `√(1.5/p)` ≈ 12 세그먼트다. 이 식은 주기적 손실, 타임아웃 없음, 창 한도 없음, 긴 전송을 가정하므로 "모든 손실을 RTO 없이 회복할 때"의 상한으로 읽는다. 타임아웃을 넣은 Padhye 등의 근사(`T0 = 200ms`)로는 같은 조건에서 Mathis의 0.82배(20ms)·0.92배(50ms)(ACK가 세그먼트마다), 0.58배·0.65배(ACK가 두 세그먼트마다)다. 즉 **타임아웃을 모두 없애도 이 모형 안의 이득은 많아야 1.1~1.7배**다. 그런데 이 모형의 타임아웃은 주로 창이 작아 중복 ACK 셋이 모이지 않는 손실과 재전송의 손실에서 오고, 이것은 RFC 6675(rescue·limited transmit 없이)로 풀리지 않는다.
-3. **무작위 1%에서 한 창에 손실이 여럿인 경우는 드물다.** 창 12 세그먼트에서 손실이 있는 창 가운데 둘 이상인 비율은 약 5.4%(창 8에서 3.5%, 16에서 7.4%. 독립 손실의 이항 분포로 계산)다. 그리고 지금의 NewReno도 그 경우를 partial ACK마다 한 세그먼트씩, RTO 없이 회복한다(partial ACK가 타이머를 다시 켠다. 동작 R3, RFC 6298 5.3). 위 1의 9%를 실제 망에 옮겨 그 RTO를 모두 없앤다고 해도 시간의 약 6%(50ms)~13%(20ms)다. **무작위 1%·왕복 20~50ms에서 SACK 회복의 처리량 이득은 5~15% 정도로 추정한다**(20%를 넘기는 어렵다).
-4. **차이가 커지는 손실 모양**:
-   - **덩어리 손실**(연속 k개): NewReno는 한 왕복에 하나씩이라 k왕복이 걸리고 그동안 보내는 양이 적다. RFC 6675는 SACK 블록이 오는 첫 왕복 안에 빈 곳을 cwnd − pipe만큼 다시 보낸다. 예: k = 30, 왕복 30ms면 NewReno 약 0.9초, SACK 약 1~2왕복(0.03~0.06초). 덩어리 손실이 나는 곳: slow start가 병목 큐를 넘길 때(창이 두 배가 되며 많은 부분을 한꺼번에 잃는다), DERP 통로의 넘침(256개·1MiB, 동작 N10), 무선 구간의 연속 실패.
-   - **창이 큰 경로**: 손실 1%에 창 200 세그먼트면 창마다 평균 2개, 둘 이상이 60%다(루프백이 이렇다).
-   - **데이터가 실린 ACK와 창이 바뀐 ACK**: 지금은 RFC 5681 정의라 세지 않으므로 그 손실은 RTO로 간다. 양방향 전송과, 받는 창을 자동 조정해 ACK마다 창이 바뀌는 상대(gVisor는 자동 조정이 켜져 있다, TCP 노트 5절)에서 그렇다. 이것은 재전송 고르기가 아니라 SR3의 중복 ACK 정의에서 오는 이득이다. **루프백 한 방향의 RTO 일부가 gVisor의 창 변경 때문이라는 가설**은 확인하지 않았다(계수가 있으면 바로 가린다).
-   - **recover 바로 다음 세그먼트의 손실**: NewReno 규칙(`ACK − 1 > recover`)으로는 들어가지 못해 RTO다. 회복 중 처음 보낸 새 데이터이므로 손실 1%면 회복의 약 1%에서 생긴다.
-5. **첫 사용처**: 큰 전송은 Mac(Swift) → iPhone 커널이고 대부분 Wi-Fi 직접 경로다. XNU가 SACK 블록을 내는지 아직 모른다(관문 (나) 5). 내지 않으면 10b는 효과가 없다.
+1. **Loopback exaggerates the cost of one RTO.** Loopback RTT is nearly 0, so a 200ms RTO minimum is thousands of round trips. In a 20MiB Swift→Go transfer (about 16,900 segments), 1% loss is about 170 losses. The 0% run takes about 0.25 seconds and 1% takes about 3.3 seconds (6.3MB/s). Attributing the full extra 3.1 seconds to RTO waits gives about 15 expirations, or about 9% of losses recovered by RTO (unverified by counters). If the same happens on a network with 20~50ms RTT, one RTO costs "200ms + 2~3 round trips for slow start back to ssthresh − 1 round trip that fast recovery would have taken," or about 5 round trips (50ms, if RTO is at the 200ms minimum) to 12 round trips (20ms). The drop to 1/10 throughput seen on loopback does not occur on a real network.
+2. **Upper bound on a real network at 1% random loss.** The Mathis approximation `throughput ≈ (MSS/RTT) · √(3/2) / √p` gives about 0.76MB/s at 20ms RTT and 0.30MB/s at 50ms, with an average window of `√(1.5/p)` ≈ 12 segments. It assumes periodic loss, no timeouts, no window limit, and long transfers, so read it as an upper bound when "all losses recover without RTO." With timeouts, the Padhye et al. approximation (`T0 = 200ms`) gives 0.82× Mathis (20ms) and 0.92× (50ms) with an ACK per segment, or 0.58× and 0.65× with an ACK every two segments. **Even eliminating all timeouts gives at most 1.1~1.7× within this model.** Most model timeouts come from losses in small windows where three duplicate ACKs do not accumulate and from retransmission losses. RFC 6675 (without rescue or limited transmit) does not solve those.
+3. **Multiple losses in one window are rare at 1% random loss.** Among 12-segment windows with any loss, the fraction with at least two losses is about 5.4% (3.5% in an 8-segment window and 7.4% in a 16-segment window, calculated from the independent-loss binomial distribution). Current NewReno also recovers these without RTO, one segment per partial ACK (partial ACK restarts the timer, behavior R3 and RFC 6298 §5.3). Even applying the 9% in item 1 to a real network and eliminating all those RTOs saves about 6% of time (50ms) to 13% (20ms). **Estimated SACK recovery throughput gain at 1% random loss and 20~50ms RTT is about 5~15%** (exceeding 20% is difficult).
+4. **Loss patterns with increasing disparity**:
+   - **Burst loss** (k consecutive segments). NewReno retransmits one per round trip, taking k round trips and sending little during that time. RFC 6675 retransmits gaps up to cwnd − pipe within the first round trip with SACK blocks. For k = 30 and 30ms RTT, NewReno takes about 0.9 seconds and SACK about 1~2 round trips (0.03~0.06 seconds). Bursts arise when slow start overflows the bottleneck queue (the window doubles and much of it is lost together), the DERP channel overflows (256 items and 1MiB, behavior N10), or a wireless segment suffers consecutive failures.
+   - **Large-window paths**. At 1% loss and a 200-segment window, there are 2 losses per window on average and at least two in 60% of windows (as on loopback).
+   - **Data-bearing ACKs and window-changing ACKs**. The current RFC 5681 definition does not count these, so those losses go to RTO. This occurs in bidirectional transfers and with peers that autotune the receive window so each ACK changes it (gVisor enables autotuning, TCP notes §5). This benefit comes from SR3's duplicate ACK definition rather than retransmission selection. **The hypothesis that some one-way loopback RTOs result from gVisor's window changes** is unverified (counters would distinguish it immediately).
+   - **Loss of the segment immediately after recover**. The NewReno rule (`ACK − 1 > recover`) blocks entry and causes RTO. This is the first new data sent in recovery, so with 1% loss it occurs in about 1% of recoveries.
+5. **First adopter**: Large transfers use the path Mac(Swift) → iPhone kernel, mostly via direct Wi-Fi. It is still unknown whether XNU generates SACK blocks (gate (b) 5). If not, 10b has no effect.
 
-**판단**: 값은 있다. 다만 그 값은 "무작위 손실 1%의 처리량"(실제 망 추정 5~15%)보다 **덩어리 손실의 회복 시간, RTO로 생기는 200ms 넘는 멈춤, 데이터·창 변경 ACK를 손실 신호로 쓰는 것**에 있다. 그리고 첫 사용처에서의 값은 XNU의 SACK 생성에 달려 있다. 그래서 10a가 끝난 뒤 ① 관문 (나) 5로 XNU의 SACK-Permitted와 SACK 블록을 확인하고 ② 지금 코드에서 RTO 만료 수와 그 까닭(창 변경·데이터 실린 ACK로 세지 못함, 재전송의 손실, 중복 ACK 부족)을 위 계수로 잰 뒤, XNU가 SACK을 내면 1의 범위로 구현하는 것을 권고한다. ②에서 RTO의 대부분이 중복 ACK 정의 때문으로 나오면 S2의 (나)(진입만 SACK, 약 100줄)로도 그 몫은 얻는다.
+**Assessment**. There is a benefit. Compared with "throughput at 1% random loss" (estimated 5~15% on a real network), the benefit is mainly in **burst loss recovery time, stalls longer than 200ms due to RTO, and using data-bearing and window-changing ACKs as loss signals**. The first adopter's benefit depends on XNU emitting SACK. After 10a, ① check XNU's SACK-Permitted and SACK blocks in gate (b) item 5 and ② use the counters above to measure RTO expirations in current code and their causes (uncounted window-changing or data-bearing ACKs, loss of a retransmission, or insufficient duplicate ACKs). If XNU emits SACK, implement the scope in §1. If ② attributes most RTOs to the duplicate ACK definition, S2 option (b) also captures that benefit (SACK for entry only, about 100 lines).
 
-### M6-10b 총괄 확인 필요
+### M6-10b lead session confirmation needed
 
-| # | 무엇 | 선택지 | 권고 | 까닭 |
+| # | What | Options | Recommendation | Reason |
 | --- | --- | --- | --- | --- |
-| S1 | 언제 여나 | (가) 10a 직후 / (나) 10a 뒤, XNU의 SACK 확인과 RTO 계수 뒤 / (다) M7 뒤로 미룸 | (나) | 6의 판단. 첫 사용처의 값이 XNU에 달렸고, RTO의 까닭에 따라 S2의 답이 바뀐다 |
-| S2 | 범위 | (가) 1의 표(NextSeg 1~3, pipe, RTO 뒤 건너뛰기) / (나) 진입만 SACK(SR3의 정의와 `IsLost(SND.UNA)`로 들어가고 재전송은 NewReno) / (다) (가)에 rescue(규칙 4)를 더함 | (가). 계수가 중복 ACK 정의 쪽이면 (나) | (나)는 약 100줄로 데이터·창 변경 ACK 문제를 풀지만 덩어리 손실은 풀지 못한다. rescue는 SHOULD지만 응답 끝 RTO 한 번의 값이라 기록을 보고 연다 |
-| S3 | scoreboard 상한 | (가) 32구간, 새 구간이 필요한 블록만 버림 / (나) 100구간(gVisor) / (다) 보내는 버퍼의 세그먼트 수 절반(약 106) | (가) | 받는 버퍼와 같은 수·규칙이라 읽기 쉽다. 손실 판정은 위 구간 셋이면 된다. 버린 정보는 보수적으로만 작용한다 |
-| S4 | SACK 연결의 중복 ACK | (가) RFC 6675 정의 또는 RFC 5681 정의 / (나) RFC 6675 정의만 / (다) gVisor처럼 둘 다 채워야 함 | (가) | (나)는 블록을 내지 않는 상대에서 지금보다 나빠진다. (다)는 데이터가 실린 ACK를 다시 버린다. RFC 6675 8의 보호는 WireGuard가 준다 |
-| S5 | SACK 연결인데 진입 때 scoreboard가 빔 | (가) 그 회복은 NewReno / (나) RFC 6675 그대로 | (가) | (나)는 partial ACK에 보낼 것이 없어 RTO를 기다린다 |
-| S6 | reneging 검사 | (가) 누적 ACK가 SACK 구간의 시작이나 안에 닿으면 비움(SR10) / (나) RTO에서만 비움(gVisor) | (가) | 구간 수에 비례하는 비교 하나다. 정오표 1610이 견고한 검사를 요구한다. 없어도 정확성은 지켜지지만 RTO까지 늦다 |
-| S7 | RTO 때 scoreboard | (가) 지움(RFC 2018 5 SHOULD, gVisor) / (나) 지킴(정오표 1610이 허용, Linux) | (가) | (나)는 견고한 reneging 검사가 전제이고, 정오표가 그 방법을 정하지 않는다 |
-| S8 | IsLost의 바이트 문턱 | (가) `2·SMSS`보다 많음(RFC) / (나) 이상(gVisor) | (가) | RFC 6675 9가 "세 세그먼트"의 요구를 유지한다고 밝힌다 |
-| S9 | 시험·관문용 계수 | (가) 연결에 `package` 계수(RTO 만료, 회복 진입, 재전송 바이트) / (나) 두지 않고 출력 세그먼트로 셈 | (가) | 속성 시험 18과 S1의 ②가 RTO 수를 바로 본다. 로그로 내지 않으므로 동작 K와 부딪치지 않는다 |
+| S1 | When to open | (a) Immediately after 10a / (b) After 10a, after checking XNU SACK and RTO counters / (c) Defer until after M7 | (b) | Assessment in §6. The benefit for the first adopter depends on XNU, and the cause of RTOs changes the answer to S2 |
+| S2 | Scope | (a) Table in §1 (NextSeg 1~3, pipe, skipping after RTO) / (b) SACK for entry only (enter using SR3's definition and `IsLost(SND.UNA)`, retransmit with NewReno) / (c) Add rescue (rule 4) to (a) | (a). Use (b) if counters point to the duplicate ACK definition | (b) addresses data-bearing and window-changing ACKs in about 100 lines but does not address burst loss. Rescue is SHOULD, but it costs one RTO at the end of the response, so open it based on the records |
+| S3 | Scoreboard limit | (a) 32 ranges, drop only blocks requiring a new range / (b) 100 ranges (gVisor) / (c) Half the segment count of the send buffer (about 106) | (a) | Easy to read because the count and rule match the receive buffer. The top three ranges suffice for loss detection. Dropped information has only a conservative effect |
+| S4 | Duplicate ACK for SACK connection | (a) As defined in RFC 6675 or RFC 5681 / (b) Only as defined in RFC 6675 / (c) Both must be filled, as in gVisor | (a) | (b) Becomes worse than current when the peer does not send blocks. (c) Re-discards an ACK carrying data. Protection in RFC 6675 Section 8 is provided by WireGuard. |
+| S5 | SACK connection with scoreboard empty upon entry | (a) Recovery follows NewReno / (b) As per RFC 6675 verbatim | (a) | (b) Has no data to send for partial ACKs and thus waits for RTO. |
+| S6 | Reneging detection | (a) Clear if cumulative ACK reaches the start of or anywhere inside an SACK range (SR10) / (b) Clear only on RTO (gVisor) | (a) | One comparison proportional to the range count. Errata 1610 requires robust detection. Without it, correctness holds but recovery waits for RTO |
+| S7 | Scoreboard on RTO | (a) Clear (RFC 2018 §5 SHOULD, gVisor) / (b) Keep (allowed by Errata 1610, Linux) | (a) | (b) assumes robust reneging detection, and the erratum does not specify the method |
+| S8 | Byte threshold for IsLost | (a) greater than `2·SMSS` (RFC) / (b) or equal (gVisor) | (a) | RFC 6675 section 9 states that it maintains the requirement for "three segments" |
+| S9 | Test and gate counters | (a) Connection `package` counters (RTO expirations, recovery entries, retransmitted bytes) / (b) No counters, count from output segments | (a) | Property test 18 and S1's ② can read the RTO count directly. The counters are not logged, so they do not conflict with behavior K |
 
-총괄 확정(2026-11-15): **S1은 (나)다.** 10a를 병합해 다시 잰 값, 관문 (나) 5의 XNU SACK 확인, RTO 계수를 본 뒤에 연다. 그 전에는 구현하지 않는다. S2~S9는 열 때 권고대로 시작하되 계수의 결과로 S2를 다시 본다. TCP 노트 12절은 구현 전에 다른 세션이 RFC 원문에 대조해 검증한다.
+Lead session decision (2026-11-15). **S1 is (b).** Open it after merging 10a and remeasuring, checking XNU SACK in gate (b) item 5, and reviewing RTO counters. Do not implement before then. Start S2~S9 as recommended when opening the work, and revisit S2 based on the counters. A different session verifies TCP notes §12 against the original RFCs before implementation.
 
-## 구현 단위
+## Implementation units
 
-소유 파일이 겹치지 않게 나눈다. 단위 사이의 접점(타입의 모양)은 이 문서의 "구조" 절과 각 동작이 정하고, M6-0이 확정한다.
+Divide ownership so files do not overlap. "Architecture" and each behavior define the interfaces between units (type shapes), and M6-0 finalizes them.
 
-| 단위 | 내용 | 소유 파일 | 선후 |
+| Unit | Content | Owned files | Sequence |
 | --- | --- | --- | --- |
-| M6-0 | 총괄: 이 계약 확정(N1~N11, F의 답), TCP 노트 검증(다른 세션), `Package.swift`에 타깃 `SwiftailNetstack`·`SwiftailNetstackTests` 추가, plan 갱신 | `docs/contracts/SwiftailNetstack.md`, `docs/plan.md`, `Package.swift`, `docs/protocol-notes/` | 먼저 |
-| M6-1 | 체크섬 옮기기, `TCPSegment` 코덱(동작 W). `SequenceNumber`는 M6-0에서 총괄이 만들었다(`Sources/SwiftailNetstack/Wire/SequenceNumber.swift`. 병렬 단위가 함께 쓰는 타입이다) | `Sources/SwiftailBase/InternetChecksum.swift`, `Sources/SwiftailEngine/Tunnel/ServiceIPReply+Checksum.swift`(호출만), `Sources/SwiftailNetstack/Wire/*`, `Tests/SwiftailNetstackTests/Wire/*`, `Tests/SwiftailBaseTests/InternetChecksumTests.swift` | M6-0 뒤. **2·3·7·9a와 병렬** |
-| M6-2 | 보내는 버퍼와 받는 버퍼(순서가 어긋난 구간 포함. 동작 F1·F4·F6) | `Sources/SwiftailNetstack/Buffers/*`, `Tests/SwiftailNetstackTests/Buffers/*` | **병렬**(`SequenceNumber`의 모양만 M6-1과 맞춘다) |
-| M6-3 | RTO 추정기와 NewReno(동작 R1~R3·R6·R8). 입력과 출력이 수뿐인 값 타입 | `Sources/SwiftailNetstack/Recovery/*`, `Tests/SwiftailNetstackTests/Recovery/*` | **병렬** |
-| M6-4 | 연결 상태 기계(동작 T, R4·R5·R7, F2·F3·F5·F7~F9, X2~X5·X9) | `Sources/SwiftailNetstack/Connection/*`, `Tests/SwiftailNetstackTests/Connection/*`(시험 3·4·5·9의 기본 길) | M6-1·2·3 뒤. 가장 크다 |
-| M6-5 | 스택(동작 S, X7·X8) | `Sources/SwiftailNetstack/Stack/*`, `Tests/SwiftailNetstackTests/Stack/*` | M6-4 뒤 |
-| M6-6 | 독립 시험: `LinkSimulator`와 속성 시험(시험 12), 시험 4·5·6·10의 사례. 계약과 TCP 노트만 보고 쓴다 | `Tests/SwiftailNetstackTests/Support/*`, `Tests/SwiftailNetstackTests/Scenarios/*` | M6-4를 쓴 세션과 **다른 세션**. 하네스는 M6-4와 병렬로 쓰고, 시험은 M6-5 뒤에 돌린다 |
-| M6-7 | Go 기준값 도구와 자료, 대조 시험 | `Tools/interop/cmd/tcpfixtures/`, `Tests/SwiftailNetstackTests/Fixtures/tcp-segments.json`, `Tests/SwiftailNetstackTests/Wire/GoSegmentComparisonTests.swift`, `Tools/interop/README.md`의 새 절 | 도구는 **병렬**. 대조 시험은 M6-1 뒤 다른 세션이 |
-| M6-8 | 노드 통합(동작 N·A·K, X10): `TunnelDevice.inProcess`, 스택 잇기와 대기열, 공개 API, 이름 해석, 기다리는 호출, 버려진 핸들, 손실 훅 | `Sources/Swiftail/**`, `Tests/SwiftailTests/Netstack*`(시험 13~16) | M6-5 뒤 |
-| M6-9 | 관문: (9a) `tailnet` 도구의 `peerServe`·`peerDial`·`transfers`·`peerClose`·`addKernelPeer`와 README, (9b) `NetstackTests.swift`와, 시험 제어 서버에 Swiftail 노드 둘을 붙여 `listen`·`connect`를 돌리는 방법의 문서(첫 사용처 검토 결과 6) | `Tools/interop/cmd/tailnet/*`, `Tools/interop/README.md`의 `tailnet` 절, `Tests/SwiftailInteropTests/NetstackTests.swift` | 9a는 **병렬**(M6-7과 README의 절이 다르다). 9b는 M6-8 뒤 |
-| M6-10 | SACK. 10a 받는 쪽(협상, SACK 블록 내기), 10b 보내는 쪽(RFC 6675 회복. 10a 뒤의 측정을 보고 연다) | `Sources/SwiftailNetstack/Recovery/SACK*`와 M6-1·M6-2·M6-4의 파일 | 관문 (가) 8의 기록이 N3의 기준 아래라 열었다(2026-11-15) |
+| M6-0 | Lead session: finalize this contract (N1~N11, F answers), verify the TCP notes (another session), add `SwiftailNetstack` and `SwiftailNetstackTests` targets to `Package.swift`, and update the plan | `docs/contracts/SwiftailNetstack.md`, `docs/plan.md`, `Package.swift`, `docs/protocol-notes/` | First |
+| M6-1 | Move the checksum and implement the `TCPSegment` codec (behavior W). The lead session created `SequenceNumber` in M6-0 (`Sources/SwiftailNetstack/Wire/SequenceNumber.swift`, shared by parallel units) | `Sources/SwiftailBase/InternetChecksum.swift`, `Sources/SwiftailEngine/Tunnel/ServiceIPReply+Checksum.swift` (call only), `Sources/SwiftailNetstack/Wire/*`, `Tests/SwiftailNetstackTests/Wire/*`, `Tests/SwiftailBaseTests/InternetChecksumTests.swift` | After M6-0. **In parallel with 2, 3, 7, and 9a** |
+| M6-2 | Send and receive buffers (including out-of-order ranges, behaviors F1, F4, and F6) | `Sources/SwiftailNetstack/Buffers/*`, `Tests/SwiftailNetstackTests/Buffers/*` | **Parallel** (coordinate only the `SequenceNumber` shape with M6-1) |
+| M6-3 | RTO estimator and NewReno (behaviors R1~R3, R6, and R8). Value types with only numeric inputs and outputs | `Sources/SwiftailNetstack/Recovery/*`, `Tests/SwiftailNetstackTests/Recovery/*` | **Parallel** |
+| M6-4 | Connection state machine (behaviors T, R4·R5·R7, F2·F3·F5·F7~F9, X2~X5·X9) | `Sources/SwiftailNetstack/Connection/*`, `Tests/SwiftailNetstackTests/Connection/*` (basic path for tests 3·4·5·9) | After M6-1·2·3. Largest in size |
+| M6-5 | Stack (behaviors S, X7·X8) | `Sources/SwiftailNetstack/Stack/*`, `Tests/SwiftailNetstackTests/Stack/*` | After M6-4 |
+| M6-6 | Independent tests: `LinkSimulator` and property tests (test 12), and cases from tests 4, 5, 6, and 10. Write using only the contract and TCP notes | `Tests/SwiftailNetstackTests/Support/*`, `Tests/SwiftailNetstackTests/Scenarios/*` | A **different session** from M6-4's author. Write the harness in parallel with M6-4 and run tests after M6-5 |
+| M6-7 | Go reference tool and fixtures, and comparison test | `Tools/interop/cmd/tcpfixtures/`, `Tests/SwiftailNetstackTests/Fixtures/tcp-segments.json`, `Tests/SwiftailNetstackTests/Wire/GoSegmentComparisonTests.swift`, new section in `Tools/interop/README.md` | Tool in **parallel**. A different session writes the comparison test after M6-1 |
+| M6-8 | Node integration (behavior N·A·K, X10): `TunnelDevice.inProcess`, stack linking and queue, public API, name parsing, pending calls, dropped handles, loss hook | `Sources/Swiftail/**`, `Tests/SwiftailTests/Netstack*` (tests 13–16) | After M6-5 |
+| M6-9 | Gate: (9a) `tailnet` tool's `peerServe`·`peerDial`·`transfers`·`peerClose`·`addKernelPeer` and README, (9b) `NetstackTests.swift` and documentation on how to attach two Swiftail nodes to a test control server to run `listen`·`connect` (first adopter review result 6) | `Tools/interop/cmd/tailnet/*`, the `tailnet` section in `Tools/interop/README.md`, `Tests/SwiftailInteropTests/NetstackTests.swift` | (9a) is used **in parallel** (differs from the README section in M6-7). (9b) follows M6-8 |
+| M6-10 | SACK. 10a receiver side (negotiation, emitting SACK blocks), 10b sender side (RFC 6675 recovery, opened based on measurements after 10a) | `Sources/SwiftailNetstack/Recovery/SACK*` and files from M6-1, M6-2, and M6-4 | Opened because gate (a) item 8 was below the N3 threshold (2026-11-15) |
 
-순서: M6-0 → (M6-1, 2, 3, 6의 하네스, 7의 도구, 9a) 병렬 → M6-4 → M6-5 → M6-6의 시험 → M6-8 → M6-9b → 다른 세션의 검토 → 총괄이 관문 (가)를 다시 돌림 → 관문 (나) → (필요하면) M6-10.
+Order: M6-0 → (M6-1, 2, 3, 6 harness, 7 tool, 9a) in parallel → M6-4 → M6-5 → M6-6 tests → M6-8 → M6-9b → review by another session → lead session reruns gate (a) → gate (b) → M6-10 (if needed).
 
-## 연결 종료 통계 로그 (2026-11-16)
+## Connection close statistics log (2026-11-16)
 
-M6-10b S1의 판단(① RTO와 빠른 재전송이 각각 몇 번인가 ② 상대 커널이 SACK 블록을 싣는가)에 필요한 값을, 공개 진단 API를 늘리지 않고 연결이 끝날 때의 로그 한 줄로 남긴다.
+One log line at connection closure records the values needed for M6-10b S1 (① how many RTOs and fast retransmits occurred, ② whether the peer kernel includes SACK blocks) without expanding the public diagnostic API.
 
-**어디서 세나**: 연결 상태 기계의 값 `TCPConnection.Statistics`(`package`)다. 각 값은 사건이 일어나는 자리에서 한 줄로 센다(`TCPConnection+Sending`·`+Receiving`·`+Timers`·`+Opening`). 스택은 `.closed(id, 까닭, 통계)`에 그 값을 싣고(TIME-WAIT에 들며 알린 연결은 든 때까지의 값), 노드는 `연결이 끝남` 로그에 덧붙인다(`privacy: .public`). 숫자와 참·거짓만이고 주소·포트·피어 이름은 남기지 않는다(동작 K2). 응용이 받아 쥔 적이 있는 연결은 모두 한 줄씩 남긴다(맺는 중이거나 대기열에서 끝난 연결은 사건이 없으므로 줄도 없다).
+**Where counters are collected**. The connection state machine stores them in the `TCPConnection.Statistics` value (`package`). Each value is counted in one line at the point where the event occurs (`TCPConnection+Sending`, `+Receiving`, `+Timers`, and `+Opening`). The stack includes the value in `.closed(id, reason, statistics)` (for connections reported on entering TIME-WAIT, the counts stop at entry), and the node appends it to the `Connection closed` log entry (`privacy: .public`). The statistics contain only numbers and Booleans. The node omits addresses, ports, and peer names (behavior K2). Every connection the application has held gets one entry. Connections that end during establishment or while queued produce no event and therefore no log entry.
 
-**응용이 놓은 연결 (2026-11-16 고침)**: 응용이 `close`·`abort`로 놓은 연결도 TCP의 일이 끝날 때 같은 줄을 **한 번** 남기고, 끝에 `, 놓은 뒤 끝남`을 덧붙인다. "TCP의 일이 끝날 때"는 연결이 CLOSED가 되거나(마지막 ACK, RST, 재전송·keep-alive 한도, FIN-WAIT-2 기한) TIME-WAIT에 든 때다. 까닭 이름과 값의 뜻은 응용이 쥔 연결과 같고, 값은 그때까지 센 것이다(놓은 뒤의 재전송도 들어간다). 응용에 가는 사건과 `TailnetConnection`의 동작은 바뀌지 않는다: 놓은 연결의 끝은 로그에만 쓰이고 응용의 호출을 깨우지 않는다. 이미 줄을 남긴 연결(쥔 채 끝난 뒤 놓은 연결)은 다시 남기지 않는다. 노드가 멈추며 한꺼번에 버리는 연결은 줄이 없어도 된다.
+**Connections released by the application (updated 2026-11-16)**. A connection the application releases with `close` or `abort` also emits the same line **once** when TCP finishes and appends `, closed after release`. "When TCP finishes" means when the connection enters CLOSED (final ACK, RST, retransmission or keep-alive limit, or FIN-WAIT-2 deadline) or enters TIME-WAIT. The reason names and meanings are the same as for connections held by the application, and the values are counted up to that point (including retransmissions after release). Application events and `TailnetConnection` behavior stay the same. Closure of a released connection only produces a log entry and does not wake application calls. A connection that already logged closure while held and was then released does not log again. Connections dropped together when the node stops may omit the log entry.
 
-까닭: 상대가 먼저 FIN을 보낸 연결은 응용이 곧바로 `close`하므로(HTTP 서버가 흔히 그렇다) 정상으로 끝나도 줄이 남지 않았다. 서버 쪽에서 큰 응답을 보낸 연결의 통계가 바로 그 경우다.
+When a peer sent FIN first, the application called `close` immediately (common in HTTP servers), so even normal closure produced no log line. This is exactly the case for statistics from connections where the server sent a large response.
 
-구현: 스택 출력 `.releasedConnectionClosed(까닭, 통계)`(응용 사건 `Event`가 아니다)를 노드가 로그로만 쓴다. `abort`와 곧바로 끝나는 `close`는 그 호출이 내는 `.closed` 하나로 줄을 남긴다. 시험: `StackReleasedCloseTests`, `NetstackCloseLogTests`. 관문(2026-11-16): 경고 0, 단위 79·231·226·142·340·37·243·256, 상호 운용 62·8·5.
+The node uses the stack output `.releasedConnectionClosed(reason, statistics)` only for logging. It sits outside the application's `Event` type. An `abort` or a `close` that finishes immediately produces a single log line from the `.closed` emitted by that call. Tests are `StackReleasedCloseTests` and `NetstackCloseLogTests`. Gate (2026-11-16): 0 warnings, unit tests 79·231·226·142·340·37·243·256, interop tests 62·8·5.
 
-실제 전송에서 본 줄(2026-11-16, 실제 tailnet, 이 노드가 HTTP 서버로 100MiB를 보냄, 경로는 처음 3초 릴레이 뒤 direct):
-
-```
-연결이 끝남: reset, 수명 53189ms, 보냄 105002661B, 다시 보냄 439044B, RTO 7, 빠른 재전송 2, partial ACK 재전송 1, 중복 ACK 428, SACK 실린 ACK 435, SACK 협상 true, cwnd 최대 4729196B, ssthresh 줄임 8, 놓은 뒤 끝남
-```
-
-읽은 것: 다시 보낸 양은 보낸 양의 0.42%다. 손실 회복 10번 가운데 7번이 RTO였고 빠른 재전송은 2번뿐이다. SACK이 실린 ACK는 435개가 왔다. 수명에는 전송 뒤의 유휴 시간이 들어 있어 전송 속도로 읽으면 안 된다. 한 번의 전송이라 이것만으로 보내는 쪽 SACK의 이득을 정하지 않는다.
-
-**모양**:
+Line from a real transfer (2026-11-16, real tailnet, this node sent 100MiB to an HTTP server, relayed for the first 3 seconds and then direct)
 
 ```
-연결이 끝남: aborted, 수명 240ms, 보냄 262144B, 다시 보냄 0B, RTO 0, 빠른 재전송 0, partial ACK 재전송 0, 중복 ACK 0, SACK 실린 ACK 0, SACK 협상 true, cwnd 최대 143840B, ssthresh 줄임 0
+Connection closed: reset, lifetime 53189ms, sent 105002661B, retransmitted 439044B, RTO 7, fast retransmits 2, partial ACK retransmits 1, duplicate ACKs 428, ACKs with SACK 435, SACK negotiated true, max cwnd 4729196B, ssthresh reductions 8, closed after release
 ```
 
-| 이름 | 뜻 |
+The retransmitted amount was 0.42% of the sent amount. Of 10 loss recoveries, 7 were RTOs and only 2 were fast retransmits. There were 435 ACKs with SACK. Lifetime includes idle time after the transfer and cannot be used to infer transfer speed. One transfer does not determine the benefit of sender-side SACK.
+
+**Format**
+
+```
+Connection closed: aborted, lifetime 240ms, sent 262144B, retransmitted 0B, RTO 0, fast retransmits 0, partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, max cwnd 143840B, ssthresh reductions 0
+```
+
+| Name | Meaning |
 | --- | --- |
-| 수명 | SYN(능동 열기) 또는 SYN-ACK(수동 열기)를 처음 보낸 때부터 노드가 `.closed`를 처리한 때까지(밀리초) |
-| 보냄 | 처음 보낸 데이터 바이트. SYN·FIN 제외 |
-| 다시 보냄 | 다시 보낸 데이터 바이트: RTO 뒤 go-back-N, fast retransmit, partial ACK. 0 창 탐침의 1바이트는 넣지 않는다 |
-| RTO | 데이터·FIN의 재전송 타이머가 만료된 횟수. SYN·SYN-ACK의 만료는 넣지 않는다 |
-| 빠른 재전송 | 중복 ACK 셋으로 fast recovery에 들어간 횟수(RFC 5681 3.2) |
-| partial ACK 재전송 | fast recovery 중 partial ACK로 한 세그먼트를 다시 보낸 횟수(RFC 6582 3.2 3) |
-| 중복 ACK | RFC 5681 2의 정의(데이터 없음, 창이 직전 ACK와 같음 등)에 맞은 ACK의 수 |
-| SACK 실린 ACK | ACK 검사(RFC 5961 5.2)를 통과한 받은 세그먼트 가운데 SACK 옵션이 있던 것의 수. 협상과 상관없이 온 것을 센다. 블록은 아직 쓰지 않는다 |
-| SACK 협상 | 상대 SYN(SYN-ACK)에 SACK-Permitted가 있었다. 이 쪽은 능동 열기면 늘, 수동 열기면 상대가 보냈을 때만 실으므로 서로 협상했다는 뜻이다 |
-| cwnd 최대 | fast recovery 밖에서 새 데이터를 확인한 직후 cwnd의 최댓값(바이트). 회복 중 부풀린 값은 빠진다. 보낸 것이 없으면 초기 창(IPv4 12400), 맺어지기 전에 끝났으면 0 |
-| ssthresh 줄임 | 손실(중복 ACK 셋, 같은 세그먼트의 처음 RTO 만료)로 ssthresh가 전보다 작아진 횟수 |
+| lifetime | From the first SYN (active open) or SYN-ACK (passive open) until the node processed `.closed`, in milliseconds |
+| sent | Data bytes sent for the first time, excluding SYN and FIN |
+| retransmitted | Data bytes retransmitted by go-back-N after RTO, fast retransmit, or partial ACK. Excludes the 1-byte 0-window probe |
+| RTO | The number of retransmission timer expirations for data or FIN, excluding SYN or SYN-ACK expirations |
+| fast retransmits | The number of fast recovery entries after three duplicate ACKs (RFC 5681 §3.2) |
+| partial ACK retransmits | The number of times a partial ACK caused a segment retransmission during fast recovery (RFC 6582 §3.2 item 3) |
+| duplicate ACKs | The number of ACKs that met the RFC 5681 §2 definition (no data, same window as the previous ACK, and so on) |
+| ACKs with SACK | The number of received segments with a SACK option that passed ACK validation (RFC 5961 §5.2). Counts arrivals regardless of negotiation. Blocks are still unused |
+| SACK negotiated | The peer SYN (SYN-ACK) contained SACK-Permitted. This side always includes the option on an active open and includes it on a passive open only if the peer sent it, so both sides negotiated it |
+| max cwnd | The maximum cwnd in bytes immediately after acknowledgment of new data outside fast recovery. Excludes the inflated value during recovery. If no data was sent, this is the initial window (IPv4 12400). If the connection ended before establishment, this is 0 |
+| ssthresh reductions | The number of times a loss (three duplicate ACKs or the first RTO expiration for the same segment) reduced ssthresh from its previous value |
 
-받는 쪽의 값(순서 밖 구간의 최대 수, 버린 세그먼트 수)은 세고 있지 않아 싣지 않는다.
+Receiver-side values (maximum out-of-order range count and number of dropped segments) are omitted because they are not counted.
 
-**읽는 법**:
+**How to read the statistics**
 
-- `다시 보냄 / 보냄`이 재전송 비율이다. 큰 전송 하나에서 손실 1%면 대략 0.01 근처다. 훨씬 크면 RTO 뒤 go-back-N이 받는 쪽이 이미 가진 구간까지 다시 보낸 것이다.
-- `RTO`와 `빠른 재전송 + partial ACK 재전송`의 비가 손실이 어디로 회복됐는지다. 멈춤(200ms 넘는 공백)은 대개 RTO 하나와 같다.
-- `중복 ACK`가 `SACK 실린 ACK`보다 눈에 띄게 적으면, 손실 신호를 담은 ACK 가운데 RFC 5681 정의(창이 바뀜, 데이터가 실림)로 세지 못한 것이 있다는 뜻이다(M6-10b 6의 4 "데이터·창 변경 ACK"). 맺은 직후의 첫 중복 ACK는 직전 ACK가 SYN-ACK(창 확장 전의 창 필드)라 창이 달라 세지 않는다. 그래서 그 차이는 손실마다 하나쯤은 늘 있을 수 있다.
-- `ssthresh 줄임`은 손실 사건(회복 진입)의 수다. 같은 세그먼트의 되풀이 만료는 넣지 않는다.
+- `retransmitted / sent` is the retransmission ratio. At 1% loss during one large transfer, it is about 0.01. A much larger value means go-back-N after RTO retransmitted ranges the receiver already had.
+- The ratio of `RTO` to `fast retransmits + partial ACK retransmits` shows how losses were recovered. A stall (a gap of more than 200ms) usually corresponds to one RTO.
+- If `duplicate ACKs` is noticeably lower than `ACKs with SACK`, the RFC 5681 definition excluded some ACKs that carried loss signals because the window changed or the ACK carried data (M6-10b §6 item 4, "Data-bearing ACKs and window-changing ACKs"). The first duplicate ACK immediately after establishment is excluded because the preceding ACK was a SYN-ACK with a different window (the window field before scaling). A difference of about one per loss may therefore always occur.
+- `ssthresh reductions` counts loss events (recovery entries). Repeated expirations for the same segment are excluded.
 
-**M6-10b S1에 쓰는 법**: Mac(Swiftail) → iPhone 100MiB 전송을 한 번 돌리고 보낸 쪽 연결의 줄을 본다.
+**How to use the statistics for M6-10b S1**. Run one 100MiB Mac (Swiftail) → iPhone transfer and inspect the log line for the sending connection.
 
-1. `SACK 협상 true`이고 `SACK 실린 ACK`가 0보다 크면 XNU가 SACK 블록을 낸다(관문 (나) 5의 답). `SACK 협상 false`이거나 손실이 있었는데(`ssthresh 줄임` > 0) `SACK 실린 ACK`가 0이면 내지 않는 것이고, 10b는 첫 사용처에서 효과가 없다(6의 판단 5).
-2. `RTO`가 `빠른 재전송`과 견줄 만큼 많으면 RTO가 멈춤의 주된 까닭이다. 이때 `중복 ACK`와 `SACK 실린 ACK`의 차이가 크면 중복 ACK 정의 쪽(S2의 (나), 진입만 SACK)으로 그 몫을 얻는다. 차이가 작고 `partial ACK 재전송`이 많으면 한 창의 여러 손실(덩어리 손실)이라 S2의 (가)다.
-3. `RTO`가 거의 없고 `빠른 재전송`만 있으면 32초와 23초의 차이는 손실 회복이 아닌 다른 데서 온다(cwnd 최대를 보고 창이 자라지 못했는지 본다). 이때 10b의 값은 작다.
+1. If `SACK negotiated true` and `ACKs with SACK` is greater than 0, XNU emits SACK blocks (the answer to gate (b) item 5). If `SACK negotiated false`, or loss occurred (`ssthresh reductions` > 0) and `ACKs with SACK` is 0, it emits none and 10b will have no effect for the first adopter (assessment in §6 item 5).
+2. If `RTO` is comparable to `fast retransmits`, RTO is the main cause of stalls. If the gap between `duplicate ACKs` and `ACKs with SACK` is large, the duplicate ACK definition accounts for that benefit (S2 option (b), SACK only for recovery entry). If the gap is small and there are many `partial ACK retransmits`, multiple losses in one window (burst loss) point to S2 option (a).
+3. If there are almost no `RTO` events and only `fast retransmits`, something other than loss recovery accounts for the difference between 32 seconds and 23 seconds (check max cwnd to see whether the window failed to grow). In that case, 10b offers little benefit.
