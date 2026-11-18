@@ -24,15 +24,15 @@ Start in the "Node" section. There are three options.
 | --- | --- |
 | Saved identity | A previously registered device reconnects automatically when you launch the app |
 | Auth key | Enter the key and select "Start Node". The app does not save the key |
-| Sign-in | Without a key, select "Start Node" → "Sign In with Browser" |
+| Sign-in | Without a key, select "Start Node" → "Sign In in Browser" |
 
-When the status changes to "Connected," you can see the node's name, peer count, and tailnet lock status.
+When the status changes to "Connected", you can see the node's name, peer count, and tailnet lock status.
 
 ## Pair two devices
 
-Both devices must be on the same tailnet. If the joiner is not on the tailnet yet, use "Include an Auth Key" below.
+Both devices must be on the same tailnet. If the joiner is not on the tailnet yet, see [Include Auth Key](#include-auth-key) below.
 
-1. Host. Select the "Host" role and start the node. Once it is "Connected," choose a lifetime and select "Open Offer." A QR code and a link appear.
+1. Host. Select the "Host" role and start the node. Once it is "Connected", choose a lifetime and select "Open Offer". A QR code and a link appear.
 2. Joiner. Select the "Joiner" role and receive the offer. On iPhone, "Scan QR Code" is the safest option. If you received a link, paste it and select "Read Link", or open the link to pass it to the app.
 3. Joiner. Check that the host name in "Received Offer" belongs to the device you intended to pair with, then select "Pair". The screen shows a 6-digit SAS.
 4. Host. Select "Approve" only if the number on the approval screen matches the number on the joiner's screen. The peer supplies its own device name, so do not rely on the name alone.
@@ -44,9 +44,9 @@ Pairing uses port 4747, and the greeting uses port 4748. The tailnet policy (ACL
 
 The offer's QR code and link are secret. Show them only to the device you intend to pair. The app's links use a custom scheme (`swiftail-demo://`), so another app that declares the same scheme may receive them. Share offers that include an auth key by QR code.
 
-### Include an Auth Key
+### Include Auth Key
 
-To let the joiner enter the tailnet without signing in, enable "Include an Auth Key" on the host. Enter the ID, secret, and tags of an OAuth client created in the Tailscale admin console (with `auth_keys` write permission and at least one tag), select "Save to Keychain," and open the offer. Each offer gets a single-use key with the same lifetime as the offer. A device that joins using this key becomes a tagged node.
+To let the joiner enter the tailnet without signing in, enable "Include Auth Key" on the host. Enter the ID, secret, and tags of an OAuth client created in the Tailscale admin console (with `auth_keys` write permission and at least one tag), select "Save to Keychain", and open the offer. Each offer gets a single-use key with the same lifetime as the offer. A device that joins using this key becomes a tagged node.
 
 If the joiner is already on the tailnet, it does not use the offer's key.
 
@@ -55,13 +55,13 @@ If the joiner is already on the tailnet, it does not use the offer's key.
 A node that joins with an auth key stays locked until signed. A locked node cannot pair.
 
 1. On the host, open an offer with a lifetime longer than signing will take (15 or 60 minutes).
-2. Select "Pair" on the joiner. The node becomes "Connected," but "tailnet lock" shows "On · Awaiting Signature". After 60 seconds, the attempt ends with "Could Not Reach the Host."
+2. Select "Pair" on the joiner. The node becomes "Connected", but "tailnet lock" shows "Enabled · Awaiting signature". After 60 seconds, the attempt ends with the message "Could not reach the host within 60 seconds. Check that both devices are on the same tailnet. If Tailnet Lock is enabled, retry with the same offer after this device is signed."
 3. Copy the `tailscale lock sign …` command from the "Node" section and run it on a signing device in the tailnet.
-4. When "tailnet lock" changes to "On · This Node Is Signed," select "Pair" again in "Received Offer." The joiner uses the same offer.
+4. When "tailnet lock" changes to "Enabled · This node is signed", select "Pair" again in "Received Offer". The joiner uses the same offer.
 
 ## Logs
 
-Events from each step appear under "Logs" and in `events.jsonl` (one event per line with its time, role, event name, and result). The logs omit links, auth keys, OAuth secrets, sign-in URLs, and SAS values.
+Events from each step appear under "Log" and in `events.jsonl` (one event per line with its time, role, event name, and result). The logs omit links, auth keys, OAuth secrets, and sign-in URLs. They omit SAS values unless you enable `--log-confirmation-code` in automation mode.
 
 | Platform | Location |
 | --- | --- |
@@ -70,7 +70,7 @@ Events from each step appear under "Logs" and in `events.jsonl` (one event per l
 
 ## Automation mode
 
-Use this mode for unattended verification. It requires both the `--automation` launch argument and a loopback control server specified by `--control-url=http://127.0.0.1:<port>`. When enabled, "Automation Mode" appears at the top of the screen. Use the test control server started by the `tailnet` tool in `Tools/interop` (`Tools/interop/README.md`).
+Use this mode for unattended verification. It requires both the `--automation` launch argument and a loopback control server specified by `--control-url=http://127.0.0.1:<port>`. When enabled, "Automation Mode" appears at the top of the screen. Use the test control server started by the [`tailnet` tool](../../Tools/interop/README.md#tailnet) in `Tools/interop`.
 
 | Argument | What it does |
 | --- | --- |
@@ -87,6 +87,6 @@ open -n <built PairingDemo.app> --args --automation --control-url=http://127.0.0
   --role=host --auth-key=tskey-auth-EXAMPLE --open-offer --auto-approve --write-offer-link --log-confirmation-code
 ```
 
-Launch the joiner with the same `--automation --control-url=… --role=joiner` arguments and open the link in `offer-link.txt`.
+Launch the joiner with the same `--automation --control-url=…` arguments and set `--role=joiner`. Open the link in `offer-link.txt`.
 
-After `setAuth`, the test server requires a key on every registration request. As a result, relaunching a node with a saved identity on that server ends with "Registration Was Rejected." To check that the identity and paired peers persist across app relaunches, use a test server started without `setAuth`.
+After you configure the test server with `setAuth` to require an auth key, it requires the key on every registration request. As a result, relaunching a node with a saved identity on that server ends with the message "The control server rejected registration. Check the tailnet admin policy." To check that the identity and paired peers persist across app relaunches, use a test server started without `setAuth`.
