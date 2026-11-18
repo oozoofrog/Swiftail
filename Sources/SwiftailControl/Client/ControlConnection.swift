@@ -223,7 +223,7 @@ actor ControlConnection {
             deliver(.data(bytes), to: id)
         case let .streamClosed(id, resetCode):
             if let resetCode {
-                streams.removeValue(forKey: id)?.finish(throwing: ControlError.connection("Server reset the stream (RST_STREAM \(resetCode))"))
+                streams.removeValue(forKey: id)?.finish(throwing: ControlError.connection("Stream reset (RST_STREAM \(resetCode))"))
             } else {
                 streams.removeValue(forKey: id)?.finish()
             }

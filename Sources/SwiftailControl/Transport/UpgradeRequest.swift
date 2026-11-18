@@ -13,12 +13,12 @@ public enum UpgradeRequest {
     ///
     /// - Parameters:
     ///   - host: The upgrade URL's host and, if specified, its port (for example, `127.0.0.1:9911`). Comes from configuration.
-    ///     Whitespace or control characters are a programmer error.
+    ///     Must be nonempty and contain no ASCII whitespace or control characters.
     ///   - initiation: `ControlHandshake.initiation`.
     public static func bytes(host: String, initiation: [UInt8]) -> [UInt8] {
         precondition(
             !host.isEmpty && host.utf8.allSatisfy { $0 > 0x20 && $0 != 0x7F },
-            "Spaces or control characters in the Host value corrupt the request head"
+            "The Host value must be nonempty and contain no ASCII whitespace or control characters"
         )
         let lines = [
             "POST /ts2021 HTTP/1.1",

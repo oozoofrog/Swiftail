@@ -251,11 +251,11 @@ extension Magicsock.Source {
 ///
 /// The line includes the peer number, path, reason if it degraded, time since that peer's previous path event, and
 /// counts by kind of disco dropped since the previous path event for any peer. Example:
-/// `Peer 2 path: relayed(7) (trust expired, 96.5s since previous event, dropped disco: unknown key 0, unopened 0, routing rule 0)`.
+/// `Peer 1 path: relayed(7) (trust expired, 96.5s since previous event, dropped disco: unknown key 0, could not open 0, path rule 0)`.
 /// - Assign peer numbers in order of first path events, starting at 1. When a peer leaves, discard its record and never
 ///   reuse the number. Logs appear in the public repository, so omit keys, addresses, names, and stable IDs.
-/// - Drops accumulating as unknown key mean the peer's new disco key is not known yet (a late netmap). Drops
-///   accumulating as unopened mean the peer sealed messages with this node's old key. If neither occurs, disco was
+/// - Drops accumulating as `unknown key` mean the peer's new disco key is not known yet (a late netmap). Drops
+///   accumulating as `could not open` mean the peer sealed messages with this node's old key. If neither occurs, disco was
 ///   exchanged but UDP did not reach its destination.
 ///
 /// See “Fixes” under “Direct Path Delay Investigation” and “Investigation Results” under
@@ -305,7 +305,7 @@ struct PathEventTally: Sendable {
             nextPeerNumber += 1
             details.append("first event")
         }
-        details.append("dropped disco: unknown key \(unknownKey), unopened \(unopened), routing rule \(misrouted)")
+        details.append("dropped disco: unknown key \(unknownKey), could not open \(unopened), path rule \(misrouted)")
         peers[peer] = (number, now)
         (unknownKey, unopened, misrouted) = (0, 0, 0)
         return "Peer \(number) path: \(path.logName) (\(details.joined(separator: ", ")))"

@@ -16,7 +16,7 @@ struct NetstackCloseLogTests {
         return statistics
     }
 
-    @Test("The line for an application-held connection has no suffix. The line for a connection that ended after release ends with `, ended after release`")
+    @Test("The line for an application-held connection has no suffix. The line for a connection that closed after release ends with `, closed after release`")
     func releasedSuffix() {
         let openedAt = ContinuousClock.now
         let statistics = Self.statistics(openedAt: openedAt)
@@ -28,6 +28,6 @@ struct NetstackCloseLogTests {
                 + "partial ACK retransmits 0, duplicate ACKs 0, ACKs with SACK 0, SACK negotiated true, peak cwnd 143840B, ssthresh reductions 0")
         let released = statistics.closeLogLine(
             reason: .finished, closedAt: openedAt + .milliseconds(240), afterRelease: true)
-        #expect(released == held.replacingOccurrences(of: "aborted", with: "finished") + ", ended after release")
+        #expect(released == held.replacingOccurrences(of: "aborted", with: "finished") + ", closed after release")
     }
 }

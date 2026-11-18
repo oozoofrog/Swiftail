@@ -121,17 +121,17 @@ struct NodeDataPlaneMappingTests {
         let first = try Self.nodeKey(0x02), second = try Self.nodeKey(0x03)
         var tally = PathEventTally()
         #expect(tally.line(for: first, path: .relayed(derpRegion: 7), downgrade: nil, at: start)
-            == "Peer 1 path: relayed(7) (first event, dropped disco: unknown key 0, unopened 0, routing rule 0)")
+            == "Peer 1 path: relayed(7) (first event, dropped disco: unknown key 0, could not open 0, path rule 0)")
         for drop in [Magicsock.Drop.unknownDiscoKey, .unknownDiscoKey, .malformedDisco, .misroutedDisco, .noRouteToPeer, .unexpectedSTUN] {
             tally.count(drop)
         }
         #expect(tally.line(for: second, path: .relayed(derpRegion: 20), downgrade: nil, at: start + .seconds(1))
-            == "Peer 2 path: relayed(20) (first event, dropped disco: unknown key 2, unopened 1, routing rule 1)")
+            == "Peer 2 path: relayed(20) (first event, dropped disco: unknown key 2, could not open 1, path rule 1)")
         // "Since previous event" measures from the previous event for the same peer, even if another peer had an event in between. Discarded disco messages are counted since the previous event for any peer.
         #expect(tally.line(for: first, path: .relayed(derpRegion: 7), downgrade: .trustExpired, at: start + .milliseconds(96_570))
-            == "Peer 1 path: relayed(7) (trust expired, 96.5s since previous event, dropped disco: unknown key 0, unopened 0, routing rule 0)")
+            == "Peer 1 path: relayed(7) (trust expired, 96.5s since previous event, dropped disco: unknown key 0, could not open 0, path rule 0)")
         #expect(tally.line(for: second, path: nil, downgrade: .discoKeyChanged, at: start + .seconds(3))
-            == "Peer 2 path: none (disco key changed, 2.0s since previous event, dropped disco: unknown key 0, unopened 0, routing rule 0)")
+            == "Peer 2 path: none (disco key changed, 2.0s since previous event, dropped disco: unknown key 0, could not open 0, path rule 0)")
     }
 
     @Test("Deletes path records for peers removed from the netmap, retains the remaining peers' numbers, and never reuses old numbers")

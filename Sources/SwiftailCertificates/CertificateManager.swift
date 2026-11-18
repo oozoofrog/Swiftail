@@ -90,7 +90,7 @@ public actor CertificateManager {
     ) throws(CertificateError) {
         let directoryURL = configuration.directoryURL.absoluteString
         guard ACMEInputRules.isAcceptableURL(directoryURL) else {
-            throw .invalidConfiguration("The ACME directory URL must be an https URL of at most 2,048 bytes")
+            throw .invalidConfiguration("The ACME directory URL must be a valid HTTPS URL of at most 2,048 bytes, with a host, no user info, and no changes after parsing")
         }
         if let configured = configuration.trustAnchors, configured.isEmpty {
             throw .invalidConfiguration("The trust anchor list is empty")
