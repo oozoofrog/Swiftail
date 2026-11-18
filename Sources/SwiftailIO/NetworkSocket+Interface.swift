@@ -1,20 +1,20 @@
 import Network
 
 extension NetworkSocket {
-    /// 이 목적지로 나갈 때 연결을 묶을 인터페이스. 루프백 목적지는 묶지 않으므로 nil이다.
+    /// Returns the interface to bind the connection to for this destination. Returns nil for loopback destinations, which are left unbound.
     ///
-    /// 루프백 주소는 어떤 물리 인터페이스로도 닿지 않아, 묶으면 연결이 실패한다. Go도 같은 규칙이다
-    /// (`net/netns/netns_darwin.go`의 `controlLogf`가 `isLocalhost(address)`이면 묶지 않는다. `net/netns/netns.go`
-    /// `isLocalhost`: `localhost`·`localhost6`·`ip6-loopback`·`ip6-localhost`와 루프백 IP). 시험의 로컬 서버가
-    /// 이 규칙으로 돈다.
+    /// A loopback address is unreachable through any physical interface, so binding the connection would make it fail.
+    /// Go uses the same rule. `controlLogf` in `net/netns/netns_darwin.go` skips binding if `isLocalhost(address)` is
+    /// true. `isLocalhost` in `net/netns/netns.go` recognizes `localhost`, `localhost6`, `ip6-loopback`,
+    /// `ip6-localhost`, and loopback IPs. The local test servers rely on this rule.
     ///
-    /// shortcut: 호스트 이름이 가리키는 주소는 풀어 보지 않고 이름과 IP 리터럴만 본다. Go는 이름을 푼 뒤의 실제 주소로
-    /// 판정하므로(`net.Dialer.Control`), 루프백으로 풀리는 다른 이름이나 `::1`의 다른 표기는 여기서만 묶인다. 운영
-    /// 서버에는 영향이 없다. 필요해지는 시점: 그런 이름의 로컬 서버로 시험할 때.
+    /// shortcut: Check only names and IP literals without resolving host names. Go checks the actual address after
+    /// resolution (`net.Dialer.Control`), so only this implementation binds other names that resolve to loopback or
+    /// other spellings of `::1`. Production servers are unaffected. This needs to change when testing with a local
+    /// server that uses such a name.
     ///
-    /// - Parameters:
-    ///   - interface: 묶고 싶은 인터페이스. nil이면 묶지 않는다.
-    ///   - host: 연결할 호스트 이름 또는 IP 리터럴.
+    /// - Parameters: - interface: The interface to bind to. Nil leaves the connection unbound. - host: The host name or
+    ///   IP literal to connect to.
     package static func bindableInterface(_ interface: NWInterface?, forHost host: String) -> NWInterface? {
         isLoopback(host: host) ? nil : interface
     }
@@ -23,7 +23,7 @@ extension NetworkSocket {
         let name = host.lowercased()
         if ["localhost", "localhost6", "ip6-loopback", "ip6-localhost"].contains(name) { return true }
         if name == "::1" { return true }
-        // IPv4 리터럴 127.0.0.0/8.
+        // IPv4 literal 127.0.0.0/8.
         let octets = name.split(separator: ".", omittingEmptySubsequences: false)
         guard octets.count == 4, octets.allSatisfy({ UInt8($0) != nil }) else { return false }
         return octets[0] == "127"

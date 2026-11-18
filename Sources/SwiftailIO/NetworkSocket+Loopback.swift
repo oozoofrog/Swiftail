@@ -1,24 +1,28 @@
 import Foundation
 import Network
 
-/// 루프백 다리(`SwiftailLoopback.LoopbackBridge`)가 쓰는 보탬. 계약 `docs/contracts/SwiftailHost.md` 동작 B와 8절.
+/// Support for the loopback bridge (`SwiftailLoopback.LoopbackBridge`). Contract `docs/contracts/SwiftailHost.md` behavior B and §8.
 ///
-/// 다리는 tailnet 연결을 같은 기기의 `127.0.0.1` 리스너에 잇는다. 그러려면 셋이 더 필요하다: 리스너 쪽 framer가 받은
-/// 연결의 출발 포트와 견줄 자기 쪽 포트, 반닫힘을 옮길 쓰기 끝내기(FIN), 오류를 정상 닫기와 구별되게 옮길 끊기(RST).
+/// The bridge forwards tailnet connections to a `127.0.0.1` listener on the same device. This requires three additions.
+/// The local port lets the listener's framer compare it with the source port of the accepted connection. A write
+/// shutdown (FIN) propagates a half-close. An abort (RST) propagates errors in a way distinguishable from a normal
+/// close.
 extension NetworkSocket {
-    /// `127.0.0.1:<port>`에 평문 TCP로 걸고 준비될 때까지 기다린다.
+    /// Connects to `127.0.0.1:<port>` over plaintext TCP and waits until ready.
     ///
-    /// 기한은 부르는 쪽이 건다(`withTimeout`). 듣는 쪽이 없으면 곧바로 실패한다(`connect`와 같이 `waiting`을 실패로 본다).
-    /// IPv4 루프백만 쓴다: 다리의 표는 `(출발 포트, 리스너 포트)`로 찾으므로 두 끝이 `127.0.0.1`이어야 한다.
+    /// The caller sets the deadline (`withTimeout`). If nothing is listening, the connection fails immediately. Like
+    /// `connect`, it treats `waiting` as a failure. It uses only IPv4 loopback because the bridge looks up entries by
+    /// (source port, listener port), so both ends must be `127.0.0.1`.
     ///
-    /// 이 소켓은 기다리던 `receive`·`write`의 Task가 취소되어도 **연결을 닫지 않는다**. 다리는 소비되지 않은 토큰을 거둔
-    /// 뒤에 닫아야 하고(동작 B6), 정상 끝이면 FIN(`close()`), 오류면 RST(`abort()`)로 닫기를 골라야 하기 때문이다.
-    /// 그래서 주인이 반드시 `close()`나 `abort()`를 부른다(버리면 `deinit`이 `close()`처럼 닫는다).
+    /// This socket **keeps the connection open** if a Task waiting on `receive` or `write` is canceled. The bridge must
+    /// withdraw the unconsumed token before closing (behavior B6) and choose FIN (`close()`) after normal completion or
+    /// RST (`abort()`) after an error. The owner must therefore call `close()` or `abort()`. If released, `deinit`
+    /// closes it like `close()`.
     ///
-    /// - Throws: `port`가 0이거나, 걸지 못했거나, 기다리던 Task가 취소되면 `connectFailed`.
+    /// - Throws: `connectFailed` if `port` is zero, the connection fails, or the waiting Task is canceled.
     package static func connectLoopback(port: UInt16) async throws(SocketError) -> NetworkSocket {
         guard port != 0, let nwPort = NWEndpoint.Port(rawValue: port) else {
-            throw .connectFailed("포트가 잘못되었다")
+            throw .connectFailed("Invalid port")
         }
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -26,24 +30,25 @@ extension NetworkSocket {
         return try await open(connection, closesOnCancel: false)
     }
 
-    /// 준비된 연결의 자기 쪽 포트. 루프백 리스너가 받은 연결에서는 상대(이 소켓)의 출발 포트로 보인다.
-    /// 연결이 준비되기 전이거나 경로가 없으면 nil이다.
+    /// The local port of the ready connection. The loopback listener sees it as the peer's (this socket's) source port
+    /// on the accepted connection. Returns nil before the connection is ready or if there is no path.
     package var localPort: UInt16? {
         guard case .hostPort(_, let port)? = connection.currentPath?.localEndpoint else { return nil }
         return port.rawValue
     }
 
-    /// 쓰기 방향만 닫는다(TCP FIN). 앞서 부른 `send`·`write`의 바이트가 먼저 나간다. 읽기는 계속할 수 있다.
+    /// Closes only the write side (TCP FIN). Bytes from earlier calls to `send` or `write` go out first. Reads can continue.
     ///
-    /// 내용 없이 `finalMessage` 문맥으로 끝을 알린다. 그 뒤의 `send`·`write`는 보내지지 않는다.
+    /// Signals completion with a `finalMessage` context and no content. Later `send` and `write` calls send nothing.
     package func finishWriting() {
         connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .idempotent)
     }
 
-    /// 연결을 곧바로 끊는다. 상대에게는 정상 닫기(FIN)가 아니라 오류로 보인다(RST). 보내지 못한 바이트는 버린다.
-    /// 걸려 있던 `receive()`는 오류로 끝난다. 여러 번 불러도 된다.
+    /// Aborts the connection immediately. The peer sees an error (RST) distinct from a normal close (FIN). Drops unsent
+    /// bytes. Any pending `receive()` ends with an error. May be called multiple times.
     ///
-    /// `NWConnection.forceCancel()`이다. `cancel()`(`close()`)은 FIN으로 닫으므로 상대가 끝까지 받은 것으로 읽는다.
+    /// Uses `NWConnection.forceCancel()`. The `cancel()` in `close()` closes with FIN, so the peer reads it as having
+    /// received the complete stream.
     package func abort() {
         connection.forceCancel()
     }

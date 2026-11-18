@@ -2,29 +2,32 @@ import SwiftailBase
 import SwiftailControl
 import SwiftailEngine
 
-/// 지금 노드의 모습. 앱의 상태 화면과 진단이 `TailnetNode.status`로 읽는다. 키는 담지 않는다.
+/// The node's current state. The app's status screen and diagnostics read it through `TailnetNode.status`. Contains no keys.
 public struct NodeStatus: Sendable, Equatable {
     public var state: NodeState
-    /// 자기 tailnet 주소(netmap 자기 노드의 `Addresses` 가운데 한 주소짜리). netmap 전에는 비어 있다.
+    /// Local tailnet addresses (single-address entries in the netmap's local node `Addresses`). Empty before a netmap.
     public var addresses: [IPAddress]
-    /// 자기 MagicDNS 이름에서 끝의 점을 뗀 것(`rd-phone-1a2b3c4d.tail0001.ts.net`). netmap 전이나 이름이 없으면 nil.
+    /// The local MagicDNS name with its trailing dot removed (`rd-phone-1a2b3c4d.tail0001.ts.net`). Nil before a netmap
+    /// or if the name is missing.
     public var fqdn: String?
-    /// 자기 노드의 `StableID`. netmap 전이나 비어 있으면 nil.
+    /// The local node's `StableID`. Nil before a netmap or if empty.
     public var stableID: String?
-    /// ts.net 인증서를 받을 수 있는 이름(netmap `DNSConfig.CertDomains`). 읽어 보여 주기만 한다.
+    /// Names eligible for ts.net certificates (netmap `DNSConfig.CertDomains`). Only read and display them.
     public var certDomains: [String]
-    /// netmap의 피어 수.
+    /// The number of peers in the netmap.
     public var peerCount: Int
-    /// 마지막으로 `TailnetNode.networkSettings`에 낸 설정. 아직 내지 않았으면 nil.
+    /// The last settings published to `TailnetNode.networkSettings`. Nil until first publication.
     public var networkSettings: TunnelNetworkSettings?
-    /// tailnet lock의 모습(netmap `tailnetLock`). netmap 전에는 `.disabled`다.
+    /// The tailnet lock state (netmap `tailnetLock`). `.disabled` before a netmap.
     ///
-    /// 잠긴 노드도 `state`는 `.running`까지 간다(Go와 같다). 그래서 통신이 안 되는 까닭은 이 값으로 안다: 꺼짐(`.disabled`),
-    /// 켜짐·이 노드 서명됨(`.enforcing`, `signingRequest`가 nil), 켜짐·서명을 기다림(`.enforcing`, `signingRequest`가 있음),
-    /// 확인하지 못해 피어를 올리지 않음(`.unverified`). `docs/contracts/SwiftailTailnetLock.md` 결정 L4.
+    /// A locked node's `state` still reaches `.running`, as in Go. Use this value to determine why communication is
+    /// unavailable. It can be off (`.disabled`), on with this node signed (`.enforcing` and a nil `signingRequest`), on
+    /// and awaiting a signature (`.enforcing` with a `signingRequest`), or unverified with peers not installed
+    /// (`.unverified`). `docs/contracts/SwiftailTailnetLock.md` decision L4.
     public var tailnetLock: TailnetLockStatus
 
-    /// 값을 직접 채운다. 노드는 netmap에서 만들므로 쓰지 않는다. 이 타입을 받는 쪽의 코드를 노드 없이 시험할 때 쓴다.
+    /// Creates a status from supplied values. The node creates its status from the netmap and does not use this
+    /// initializer. Use it to test consumers of this type without a node.
     public init(
         state: NodeState,
         addresses: [IPAddress] = [],
@@ -45,7 +48,7 @@ public struct NodeStatus: Sendable, Equatable {
         self.tailnetLock = tailnetLock
     }
 
-    /// 마지막 netmap에서 읽는다.
+    /// Reads from the last netmap.
     init(state: NodeState, netmap: Netmap?, networkSettings: TunnelNetworkSettings?) {
         self.state = state
         addresses = netmap?.selfNode.addresses

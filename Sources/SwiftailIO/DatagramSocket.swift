@@ -3,53 +3,60 @@ import Darwin
 import SwiftailBase
 import Synchronization
 
-/// IPv4 와일드카드(0.0.0.0)에 묶인 UDP 소켓 하나를 async 데이터그램 흐름과 기다리지 않는 송신 큐로 감싼다.
+/// Wraps a UDP socket bound to the IPv4 wildcard address (0.0.0.0) with an async datagram stream and a nonblocking send queue.
 ///
-/// WireGuard·disco·STUN이 같은 소켓을 쓴다(`docs/protocol-notes/derp-stun.md` 4.10 2). 포트 하나로 여러 상대와 주고받아야
-/// 해서 `Network` 프레임워크가 아니라 POSIX 소켓을 쓴다(`docs/plan.md` 4절 (c)). 부르는 쪽은 `SwiftailMagicsock`의
-/// 상태 기계를 부리는 노드다. 실패는 `SocketError`로 낸다.
+/// WireGuard, disco, and STUN share the socket (`docs/protocol-notes/derp-stun.md` 4.10 2). A POSIX socket lets them
+/// send to and receive from multiple peers on one port, which is why this uses POSIX over the `Network` framework
+/// (`docs/plan.md` §4 (c)). The caller is the node that drives the `SwiftailMagicsock` state machine. Failures are
+/// reported as `SocketError`.
 ///
-/// 지키는 것:
+/// Guarantees
 ///
-/// - **읽기는 사건으로 깨어난다.** `DispatchSource` 읽기 사건이 오면 더 읽을 것이 없을 때(`EAGAIN`)까지 읽는다. 폴링하지 않는다.
-///   읽기 버퍼(65,535바이트)는 소켓마다 하나를 만들어 다시 쓴다.
-/// - **보내기는 소켓의 직렬 큐가 한다.** `enqueue(_:)`는 송신 큐에 넣기만 하고, `sendto(2)`는 읽기 원천과 같은 직렬 디스패치
-///   큐에서 넣은 순서대로 한다. 노드 actor가 시스템 호출을 기다리지 않는다.
-/// - **받은 것과 아직 보내지 못한 것은 각각 256개와 1MiB까지만 쥔다.** 넘으면 오래된 데이터그램부터 버린다(`DatagramQueue`).
-///   개수만으로는 256 × 65,535바이트(최악 16MiB)를 쥐므로 바이트 합으로도 묶는다(`queuedByteLimit`). UDP는 어차피 손실을
-///   받아들이는 전송이다.
-/// - **파일 기술자는 한 번만 닫고, 닫은 뒤에는 쓰지 않는다.** `close()`는 기술자를 상태에서 떼어 낸 뒤 읽기 원천을 취소하고,
-///   실제 `close(2)`는 원천의 취소 처리기가 한다. 취소 처리기는 같은 직렬 큐에서 돌던 읽기·보내기가 끝난 뒤에 돌므로 그동안
-///   기술자가 닫히지 않는다. `close()` 뒤에는 상태가 비어 있어 `send`도 송신 큐의 남은 것도 기술자를 건드리지 않는다(남은 것은
-///   버린다. 다른 곳이 재사용한 번호에 쓰는 일이 없다).
-/// - **인터페이스에 묶을 수 있다.** `interfaceIndex`를 주면 `IP_BOUND_IF`로 그 인터페이스로 나간다(터널 안에서
-///   소켓이 터널로 되돌아가지 않게 한다. 계약 동작 N 4). 이 타입은 인터페이스를 index로만 안다.
-/// - **신호로 죽지 않는다.** 소켓에 `SO_NOSIGPIPE`를 건다. Darwin은 UDP 송신에도 `EPIPE`와 SIGPIPE를 낼 수 있다.
-/// - **구조적 동시성을 깨지 않는다.** 읽기와 보내기는 Task가 아니라 디스패치 원천과 큐가 맡고, 흐름을 기다리는 Task가 취소되면
-///   `for await`가 끝난다. 소켓을 버리면(`deinit`) 닫히고 흐름도 끝난다. 읽기 처리기는 `self`를 붙잡지 않아 소켓이 버려질 수
-///   있다(보내기 블록은 보낼 동안만 붙잡는다).
+/// - **Read events trigger reads.** On a `DispatchSource` read event, the socket reads until there is nothing more to
+///   read (`EAGAIN`). It does not poll. Each socket allocates and reuses a single read buffer (65,535 bytes).
+/// - **The socket's serial queue sends datagrams.** `enqueue(_:)` only adds to the send queue. Calls to `sendto(2)` run
+///   in enqueue order on the same serial dispatch queue as the read source. The node actor does not wait for the system
+///   call.
+/// - **The receive and send queues each hold at most 256 datagrams and 1MiB.** On overflow, the oldest datagrams are
+///   dropped first (`DatagramQueue`). A count limit alone would allow 256 × 65,535 bytes (16MiB in the worst case), so
+///   total bytes are capped as well (`queuedByteLimit`). UDP already tolerates loss.
+/// - **The file descriptor is closed exactly once and is never written to after closing.** `close()` removes the
+///   descriptor from state and then cancels the read source, whose cancellation handler performs the actual `close(2)`.
+///   The handler runs after reads and sends on the same serial queue have finished, leaving the descriptor open until
+///   then. After `close()`, the state is empty, so neither `send` nor the remaining send queue touches the descriptor.
+///   Queued items are dropped, preventing writes to a descriptor number reused elsewhere.
+/// - **The socket can bind to an interface.** When given an `interfaceIndex`, it uses `IP_BOUND_IF` to send through
+///   that interface. This keeps the socket inside the tunnel from routing back through the tunnel (contract behavior N
+///   4). This type knows the interface only by index.
+/// - **Signals do not terminate the process.** The socket sets `SO_NOSIGPIPE`. On Darwin, even a UDP send can produce `EPIPE` and SIGPIPE.
+/// - **The socket preserves structured concurrency.** The dispatch source and queue handle reads and sends without a
+///   Task. Canceling the Task waiting on the stream ends `for await`. Releasing the socket (`deinit`) closes it and
+///   ends the stream. The read handler does not retain `self`, so the socket can be released. The send block retains it
+///   only while sending.
 ///
-/// 소켓 주소를 다루는 `sockaddr` 재해석과 버퍼 포인터는 이 파일 아래쪽의 `receiveOne`·`sendOne`·`bind`·`localPort`에만
-/// 가둔다. 커널 API가 C 구조체의 포인터를 요구하고 `sockaddr_in`을 `sockaddr`로 다시 보아야 하기 때문이며, 모든 포인터는
-/// 호출 하나의 수명 안에서만 쓴다.
+/// Socket address reinterpretation as `sockaddr` and buffer pointers stay inside `receiveOne`, `sendOne`, `bind`, and
+/// `localPort` below. The kernel API requires pointers to C structs and treats `sockaddr_in` as `sockaddr`. Each
+/// pointer is used only for the lifetime of one call.
 ///
-/// - `shortcut:` IPv6 소켓과 이중 스택은 만들지 않는다. 필요해지는 시점: IPv6만 되는 망을 M5 실기기에서 만날 때. 넣을 때는
-///   두 소켓을 같은 포트에 묶는다(계약 "제외").
+/// - `shortcut:` IPv6 and dual-stack sockets are omitted. When to add them is when an M5 real device encounters an
+///   IPv6-only network. At that point, bind both sockets to the same port (contract “Exclusions”).
 package final class DatagramSocket: Sendable {
-    /// 한 번에 읽는 최대 크기. UDP 데이터그램의 이론적 최대(65,535)다. 더 큰 것은 커널이 자른다.
+    /// The maximum size of one read, the theoretical UDP datagram maximum (65,535). The kernel truncates anything larger.
     private static let maximumDatagramSize = 65_535
-    /// 받은 큐와 송신 큐가 각각 쥐는 데이터그램 수의 한도.
+    /// The datagram count limit for each of the receive and send queues.
     private static let queuedDatagramLimit = 256
-    /// 받은 큐와 송신 큐가 각각 쥐는 데이터그램 본문의 바이트 합의 한도(1MiB). 넘으면 오래된 것부터 버린다.
+    /// The total datagram payload byte limit for each of the receive and send queues (1MiB). The oldest datagrams are
+    /// dropped first on overflow.
     ///
-    /// 개수 한도만으로는 데이터그램당 최대 65,535바이트 × 256개 = 최악 16MiB를 쥔다. iOS 패킷 터널 확장의 한도(약 50MiB)의
-    /// 3분의 1이라 버퍼가 셋이면 넘친다(`docs/contracts/SwiftailTunnel.md` 동작 M). 1MiB는 그 최악의 16분의 1이다.
-    /// 근거는 이 계산뿐인 제안값이라 실기기 처리량 측정에서 버림이 보이면 조정한다. 데이터그램 하나(65,535바이트)는
-    /// 한도 안이므로 어떤 데이터그램도 혼자서 한도를 넘지 않는다.
+    /// A count limit alone would allow a worst case of 65,535 bytes per datagram × 256 datagrams = 16MiB. That is one
+    /// third of the iOS packet tunnel extension limit (about 50MiB), so three buffers would exceed the limit
+    /// (`docs/contracts/SwiftailTunnel.md` behavior M). 1MiB is one sixteenth of that worst case. This proposed value
+    /// rests on that calculation alone. Adjust it if real-device throughput measurements show drops. A single datagram
+    /// (65,535 bytes) fits, so no datagram exceeds the limit on its own.
     static let queuedByteLimit = 1 << 20
 
     package typealias Datagram = (bytes: [UInt8], source: IPEndpoint)
-    /// 보낼 데이터그램과 목적지.
+    /// A datagram to send and its destination.
     package typealias OutgoingDatagram = (bytes: [UInt8], destination: IPEndpoint)
 
     private struct Open {
@@ -59,25 +66,29 @@ package final class DatagramSocket: Sendable {
         let outgoing: DatagramQueue
     }
 
-    /// 닫으면 nil. 기술자와 읽기 원천은 이 상자 안에서만 만지고, `close(2)`는 원천의 취소 처리기가 한다.
+    /// Nil after close. The descriptor and read source are accessed only inside this box, and the source's cancellation
+    /// handler performs `close(2)`.
     private let state: Mutex<Open?>
-    /// 읽기 원천과 송신이 함께 쓰는 직렬 큐. 기술자의 `close(2)`도 여기서 일어난다.
+    /// The serial queue shared by the read source and sends. The descriptor's `close(2)` also runs here.
     private let queue: DispatchQueue
 
-    /// 묶인 포트. 0을 요청했으면 OS가 고른 값이다.
+    /// The bound port. If 0 was requested, the OS chose this value.
     package let localPort: UInt16
 
-    /// 받은 데이터그램의 흐름. 구독자는 하나다. 소비가 느리면 오래된 것부터 버린다(256개, 그리고 바이트 합 1MiB). 소켓을
-    /// 닫거나 버리면 끝난다. 닫지 않았는데 끝났다면 읽기가 오류로 멈춘 것이니 `close()`하고 새로 연다.
+    /// The stream of received datagrams. It has one subscriber. If consumption falls behind, the oldest datagrams are
+    /// dropped first (256 datagrams and 1MiB total). Closing or releasing the socket ends the stream. If it ends while
+    /// the socket is open, an error stopped the reads. Call `close()` and open a new socket.
     package let datagrams: AsyncStream<Datagram>
 
-    /// IPv4 와일드카드에 묶는다. `port`가 0이면 OS가 고른다. 읽기는 곧바로 시작한다.
+    /// Binds to the IPv4 wildcard address. The OS chooses the port if `port` is 0. Reads start immediately.
     ///
-    /// `interfaceIndex`를 주면 묶기 전에 `IP_BOUND_IF`로 그 인터페이스(`if_nametoindex`나 `NWInterface.index`가 주는 번호)에
-    /// 소켓을 묶는다. 그러면 소켓이 보내는 것은 그 인터페이스로 나간다. macOS에서 보면 물리 인터페이스에 묶은 소켓도
-    /// 루프백과는 주고받으므로(`DatagramSocketTests`), 목적지가 여럿인 이 소켓에는 루프백 예외를 두지 않는다.
+    /// If given an `interfaceIndex`, binds the socket to that interface through `IP_BOUND_IF` before binding the
+    /// address. The index is the number returned by `if_nametoindex` or `NWInterface.index`. Outgoing datagrams use
+    /// that interface. On macOS, a socket bound to a physical interface can still send to and receive from loopback
+    /// (`DatagramSocketTests`), so this multidestination socket has no loopback exception.
     ///
-    /// - Throws: 소켓을 만들거나 묶지 못하면, 또는 인터페이스에 묶지 못하면(없는 index 등) `SocketError.bindFailed`(errno 이름).
+    /// - Throws: `SocketError.bindFailed` (errno name) if socket creation, address binding, or interface binding fails
+    ///   (for example, if the index does not exist).
     package init(port: UInt16 = 0, interfaceIndex: UInt32? = nil) throws(SocketError) {
         let descriptor = Darwin.socket(AF_INET, SOCK_DGRAM, 0)
         guard descriptor >= 0 else { throw .bindFailed(errnoName(errno)) }
@@ -108,13 +119,14 @@ package final class DatagramSocket: Sendable {
         close()
     }
 
-    /// 데이터그램 하나를 곧바로 보낸다. 기다리지 않는다. 노드는 `enqueue(_:)`를 쓴다.
+    /// Sends one datagram immediately without waiting. The node uses `enqueue(_:)`.
     ///
-    /// - Throws: `SocketError.sendFailed`(errno 이름). 닫은 소켓은 `EBADF`, IPv6 목적지는 `EAFNOSUPPORT`, 커널의 보내기
-    ///   버퍼가 찼으면 `EAGAIN`이다. 부르는 쪽이 그 데이터그램을 버린다(DERP가 함께 나가거나 다시 보낸다).
+    /// - Throws: `SocketError.sendFailed` (errno name). A closed socket returns `EBADF`, an IPv6 destination returns
+    ///   `EAFNOSUPPORT`, and a full kernel send buffer returns `EAGAIN`. The caller drops the datagram. It also goes
+    ///   out over DERP or is sent again.
     package func send(_ bytes: [UInt8], to destination: IPEndpoint) throws(SocketError) {
         guard destination.address.isIPv4 else { throw .sendFailed(errnoName(EAFNOSUPPORT)) }
-        // 보내는 동안 잠금을 쥐어 `close()`가 끼어들지 못하게 한다. 비차단이라 오래 걸리지 않는다.
+        // Hold the lock during the send so `close()` cannot intervene. The send is nonblocking, so it finishes quickly.
         let failure: Int32? = state.withLock { state in
             guard let state else { return EBADF }
             return Self.sendOne(bytes, to: destination, descriptor: state.descriptor)
@@ -122,32 +134,34 @@ package final class DatagramSocket: Sendable {
         if let failure { throw .sendFailed(errnoName(failure)) }
     }
 
-    /// 데이터그램들을 송신 큐에 넣는다. 기다리지 않는다. 소켓의 직렬 큐가 넣은 순서대로 보낸다.
+    /// Enqueues datagrams for sending without waiting. The socket's serial queue sends them in enqueue order.
     ///
-    /// 아직 보내지 못한 것이 256개나 바이트 합 1MiB를 넘으면 오래된 것부터 버린다. 닫은 소켓이면 버린다. 보내기 실패(IPv6
-    /// 목적지, `EAGAIN`, `EHOSTUNREACH` 등)는 그 데이터그램을 버린다(DERP로 함께 나가거나 WireGuard·disco가 다시 보낸다).
-    /// UDP 데이터그램 하나에 실을 수 없는 크기(65,535바이트 초과)는 넣지 않는다. 그래서 하나가 바이트 한도를 넘는 일이 없다.
+    /// If pending datagrams exceed 256 or 1MiB total, drops the oldest first. Drops them if the socket is closed. A
+    /// send failure (IPv6 destination, `EAGAIN`, `EHOSTUNREACH`, and so on) drops that datagram. It also goes out over
+    /// DERP or WireGuard or disco sends it again. Payloads too large for one UDP datagram (over 65,535 bytes) are never
+    /// enqueued, so no single item can exceed the byte limit.
     package func enqueue(_ datagrams: [OutgoingDatagram]) {
         guard let outgoing = state.withLock({ $0?.outgoing }) else { return }
         let envelopes = datagrams.compactMap { datagram in
             datagram.bytes.count <= Self.maximumDatagramSize ? Envelope(bytes: datagram.bytes, endpoint: datagram.destination) : nil
         }
-        // 비어 있던 큐에 넣었을 때만 보내기를 건다. 비어 있지 않으면 이미 걸린 보내기가 아직 꺼내 가지 않았다.
+        // Schedule a send only when adding to an empty queue. A nonempty queue still has a scheduled send that has yet to drain it.
         guard outgoing.append(contentsOf: envelopes) else { return }
         queue.async {
             self.sendQueued()
         }
     }
 
-    /// 받아 쌓아 둔 데이터그램을 기다리지 않고 모두 꺼낸다. 없거나 닫혔으면 빈 배열이다.
+    /// Takes all buffered incoming datagrams without waiting. Returns an empty array if there are none or the socket is closed.
     ///
-    /// `datagrams`에서 하나를 받은 뒤 불러, 그동안 쌓인 것을 묶음 하나로 처리하게 한다. 묶음은 받은 큐의 한도(256개, 1MiB)를
-    /// 넘지 않는다. `datagrams`와 같은 큐에서 꺼내므로 같은 구독자만 부른다.
+    /// Call this after receiving one datagram from `datagrams` to process those accumulated in the meantime as one
+    /// group. The group stays within the receive queue's limits (256 datagrams, 1MiB). Only the same subscriber may
+    /// call it because it takes from the same queue as `datagrams`.
     package func takeQueuedDatagrams() -> [Datagram] {
         (state.withLock { $0?.received }?.takeAll() ?? []).map { ($0.bytes, $0.endpoint) }
     }
 
-    /// 소켓을 닫는다. 흐름이 끝나고 읽기가 멈춘다. 아직 보내지 못한 데이터그램은 버린다. 여러 번 불러도 된다.
+    /// Closes the socket, ending the stream and stopping reads. Drops pending outgoing datagrams. May be called more than once.
     package func close() {
         let opened = state.withLock { state in
             defer { state = nil }
@@ -158,10 +172,10 @@ package final class DatagramSocket: Sendable {
         opened?.source.cancel()
     }
 
-    /// 송신 큐에 이미 넣은 것을 보낸 뒤 닫는다. 기다리지 않는다(보내기와 닫기는 직렬 큐에서 이 순서로 일어난다).
+    /// Sends queued datagrams and then closes the socket. Returns without waiting. Sending and closing run in that order on the serial queue.
     ///
-    /// 노드가 멈출 때 쓴다: 마지막 처리가 낸 RST(netstack 계약 동작 N8)가 직접 경로로 나가게 한다. 그 밖의 닫기(재결속)는
-    /// 남은 것을 버리는 `close()`다.
+    /// The node uses this when stopping so that RSTs from its final processing (netstack contract behavior N8) go out
+    /// over the direct path. Other closures (rebinding) use `close()`, which drops what is left.
     package func closeAfterSending() {
         queue.async {
             self.sendQueued()
@@ -169,10 +183,11 @@ package final class DatagramSocket: Sendable {
         }
     }
 
-    /// 송신 큐의 것을 모두 보낸다. 직렬 큐에서만 돈다.
+    /// Sends everything in the send queue. Runs only on the serial queue.
     ///
-    /// 기술자의 `close(2)`는 같은 직렬 큐의 취소 처리기에서만 일어나므로 이 블록이 도는 동안 기술자는 열려 있다. 그래도 보낼
-    /// 때마다 상태를 보아, 그사이 `close()`가 불렸으면 남은 것을 버린다.
+    /// The descriptor's `close(2)` runs only in the cancellation handler on the same serial queue, so the descriptor
+    /// stays open while this block runs. The block still checks the state for each send and drops anything left if
+    /// `close()` has been called.
     private func sendQueued() {
         guard let opened = state.withLock({ $0 }) else { return }
         for datagram in opened.outgoing.takeAll() {
@@ -182,10 +197,11 @@ package final class DatagramSocket: Sendable {
         }
     }
 
-    // MARK: POSIX 경계
+    // MARK: POSIX Edge
 
-    /// 비차단으로 바꾸고 (주어졌으면) 인터페이스에 묶고 와일드카드에 묶은 뒤 OS가 정한 포트를 돌려준다. 실패하면 포트 대신
-    /// errno 이름을 돌려준다. 인터페이스 묶기는 `bind(2)` 전에 한다(묶은 뒤에 걸면 이미 정한 지역 주소가 그대로다).
+    /// Makes the socket nonblocking, binds it to the interface if provided, binds it to the wildcard address, and
+    /// returns the port assigned by the OS. Returns the errno name on failure. Bind the interface before `bind(2)`.
+    /// Applying the option afterward leaves the already-selected local address in place.
     private static func prepare(
         _ descriptor: Int32, port: UInt16, interfaceIndex: UInt32?
     ) -> (port: UInt16?, error: String) {
@@ -193,9 +209,9 @@ package final class DatagramSocket: Sendable {
         guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
             return (nil, errnoName(errno))
         }
-        // Darwin에서는 UDP `sendto`도 `EPIPE`로 실패할 수 있고(M4 관문에서 LAN 주소로 보낼 때 관찰. Go도 UDP 송신의
-        // `EPIPE`를 다룬다, `net/neterror/neterror_unix.go`), 그때 커널은 SIGPIPE를 보낸다. 신호의 기본 동작은 프로세스
-        // 종료이므로 꺼 둔다. 그러면 그 송신은 `sendFailed("EPIPE")`로 돌아온다.
+        // On Darwin, even UDP `sendto` can fail with `EPIPE`, as observed when sending to a LAN address at the M4 gate.
+        // Go also handles `EPIPE` on UDP sends (`net/neterror/neterror_unix.go`). The kernel then sends SIGPIPE, whose
+        // default action terminates the process, so disable it. The send then returns `sendFailed("EPIPE")`.
         var noSignal: Int32 = 1
         guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
             return (nil, errnoName(errno))
@@ -210,7 +226,7 @@ package final class DatagramSocket: Sendable {
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         address.sin_addr = in_addr(s_addr: INADDR_ANY)
-        // `sockaddr_in`을 `sockaddr`로 다시 본다. bind(2)와 getsockname(2)이 주소 종류에 맞는 구조체를 `sockaddr *`로만 받는다.
+        // Reinterpret `sockaddr_in` as `sockaddr`. bind(2) and getsockname(2) take the address-family-specific struct only as `sockaddr *`.
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
@@ -225,11 +241,11 @@ package final class DatagramSocket: Sendable {
         return (UInt16(bigEndian: address.sin_port), "")
     }
 
-    /// 읽을 것이 없을 때까지 읽어 받은 큐에 넣는다. 읽기 원천의 처리기 안에서만 부른다.
+    /// Reads until there is nothing more to read, adding datagrams to the receive queue. Called only in the read source's handler.
     ///
-    /// 예기치 않은 오류(`EAGAIN`·`EINTR` 밖)가 나면 흐름을 끝낸다. 읽기 원천은 여기서 멈추지 못하므로(멈추려면 기술자를
-    /// 닫아야 하고, 그것은 `close()`가 상태와 함께 한다) 흐름이 끝난 것을 본 쪽이 `close()`를 불러야 한다. 노드는 그때
-    /// 소켓을 새로 연다.
+    /// An unexpected error (anything other than `EAGAIN` or `EINTR`) ends the stream. The read source cannot stop here
+    /// because stopping requires closing the descriptor, which `close()` handles along with the state. The observer of
+    /// the stream's end must call `close()`. The node then opens a new socket.
     private static func drain(_ descriptor: Int32, using buffer: ReadBuffer, into output: DatagramQueue) {
         buffer.bytes.withLock { bytes in
             while true {
@@ -248,44 +264,48 @@ package final class DatagramSocket: Sendable {
         }
     }
 
-    /// 소켓 하나의 읽기 버퍼. 읽기 사건마다 65,535바이트를 새로 만들고 0으로 채우지 않게 하나를 다시 쓴다. 읽기 원천의
-    /// 처리기(직렬 큐)만 쓰므로 잠금은 다투지 않는다. 처리기가 붙잡을 수 있게 클래스로 감싼다.
+    /// The read buffer for one socket. Reuse it to avoid allocating and zeroing 65,535 bytes per read event. Only the
+    /// read source's handler on the serial queue uses it, so there is no lock contention. A class wraps it so the
+    /// handler can retain it.
     private final class ReadBuffer: Sendable {
         let bytes = Mutex([UInt8](repeating: 0, count: DatagramSocket.maximumDatagramSize))
     }
 
-    /// 데이터그램 하나와 상대 주소(받은 것이면 보낸 쪽, 보낼 것이면 목적지).
+    /// A datagram and the peer address, either its source on receipt or its destination on send.
     private struct Envelope {
         var bytes: [UInt8]
         var endpoint: IPEndpoint
     }
 
-    /// 데이터그램 큐. 받은 큐(소비자가 `next()`로 하나씩, 또는 `takeAll()`로 한꺼번에 당겨 간다)와 송신 큐(직렬 큐가
-    /// `takeAll()`로 꺼내 보낸다)가 같은 것을 쓴다.
+    /// A shared datagram queue implementation for receiving and sending. The consumer pulls received datagrams one at a
+    /// time with `next()` or all at once with `takeAll()`. The serial queue takes outgoing datagrams with `takeAll()`
+    /// and sends them.
     ///
-    /// 가장 새 것 `queuedDatagramLimit`개까지, 그리고 본문 바이트 합 `queuedByteLimit`까지만 쥐고 넘치면 오래된 것부터
-    /// 버린다. `AsyncStream`의 `bufferingNewest`는 개수로만 묶으므로 버퍼를 여기서 쥐고 `AsyncStream(unfolding:)`으로
-    /// 소비자가 당겨 가게 한다(`DERPClient.EventQueue`와 같은 모양이다. 두 타깃이 서로 모르므로 따로 둔다). 기다리는 소비자는
-    /// 하나다. 앞에서 꺼내기는 O(1)이다(`Ring`).
+    /// Keeps up to the newest `queuedDatagramLimit` datagrams and `queuedByteLimit` total payload bytes, dropping the
+    /// oldest first on overflow. `AsyncStream`'s `bufferingNewest` limits only the count, so the buffer lives here and
+    /// the consumer pulls via `AsyncStream(unfolding:)`. This follows `DERPClient.EventQueue`'s design. The two targets
+    /// are independent, so each has its own. At most one consumer waits. Removing from the front is O(1) (`Ring`).
     private final class DatagramQueue: Sendable {
         private struct State {
             var datagrams = Ring()
-            /// 데이터그램을 기다리는 소비자.
+            /// The consumer waiting for a datagram.
             var waiter: CheckedContinuation<Envelope?, Never>?
             var isFinished = false
         }
 
-        /// 한도 안의 데이터그램을 넣은 순서대로 쥔다. 꺼낸 자리는 비워 두었다가 절반이 넘으면 한꺼번에 당긴다.
+        /// Holds datagrams within the limits in enqueue order. Leaves vacated slots empty and compacts them together
+        /// once they occupy more than half.
         private struct Ring {
             private var slots: [Envelope?] = []
             private var head = 0
-            /// 쥔 데이터그램 본문의 바이트 합.
+            /// The total payload bytes of the queued datagrams.
             private(set) var bytes = 0
 
             var isEmpty: Bool { head == slots.count }
             var count: Int { slots.count - head }
 
-            /// 뒤에 넣는다. 넣은 뒤 한도를 넘으면 오래된 것부터 버린다. 하나는 바이트 한도보다 작으므로 넣은 것은 남는다.
+            /// Appends a datagram and drops the oldest first if this exceeds a limit. One datagram is smaller than the
+            /// byte limit, so the appended datagram stays.
             mutating func append(_ datagram: Envelope) {
                 slots.append(datagram)
                 bytes += datagram.bytes.count
@@ -319,11 +339,11 @@ package final class DatagramSocket: Sendable {
 
         private let state = Mutex(State())
 
-        /// 하나를 넣는다. 기다리는 소비자가 있으면 곧바로 넘긴다. `finish()` 뒤에는 버린다.
+        /// Enqueues one datagram. Hands it directly to a waiting consumer. Drops it after `finish()`.
         func push(_ datagram: Envelope) {
             let waiter: CheckedContinuation<Envelope?, Never>? = state.withLock { state in
                 guard !state.isFinished else { return nil }
-                // 기다리는 소비자가 있으면 큐는 비어 있다.
+                // The queue is empty if a consumer is waiting.
                 if let waiter = state.waiter.take() { return waiter }
                 state.datagrams.append(datagram)
                 return nil
@@ -331,7 +351,8 @@ package final class DatagramSocket: Sendable {
             waiter?.resume(returning: datagram)
         }
 
-        /// 여럿을 넣는다(송신 큐). 비어 있던 큐에 넣었으면 참이다(꺼내 갈 쪽을 불러야 한다). `finish()` 뒤에는 버리고 거짓이다.
+        /// Enqueues multiple datagrams in the send queue. Returns true if the queue was empty and the consumer needs to
+        /// be called. After `finish()`, drops them and returns false.
         func append(contentsOf datagrams: [Envelope]) -> Bool {
             state.withLock { state in
                 guard !state.isFinished, !datagrams.isEmpty else { return false }
@@ -343,12 +364,12 @@ package final class DatagramSocket: Sendable {
             }
         }
 
-        /// 쌓인 것을 모두 꺼낸다.
+        /// Takes everything queued.
         func takeAll() -> [Envelope] {
             state.withLock { $0.datagrams.removeAll() }
         }
 
-        /// 더 넣지 못하게 한다. 받은 큐는 남은 것을 다 읽으면 흐름이 끝난다.
+        /// Prevents further enqueues. The receive stream ends after the remaining datagrams are read.
         func finish() {
             let waiter = state.withLock { state in
                 state.isFinished = true
@@ -357,13 +378,14 @@ package final class DatagramSocket: Sendable {
             waiter?.resume(returning: nil)
         }
 
-        /// 다음 데이터그램. 없으면 올 때까지 기다린다. 끝났거나 소비자의 Task가 취소되면 nil.
+        /// Returns the next datagram, waiting for one if needed. Returns nil if finished or if the consumer's Task is canceled.
         func next() async -> Envelope? {
             await withTaskCancellationHandler {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Envelope?, Never>) in
                     let ready: Envelope?? = state.withLock { state in
                         if let datagram = state.datagrams.popFirst() { return .some(datagram) }
-                        // 이미 취소되었으면 취소 처리기가 먼저 돌았으므로 기다리지 않는다. 두 번째 구독자도 기다리게 하지 않는다.
+                        // If already canceled, the cancellation handler ran first, so do not wait. A second subscriber
+                        // must also return without waiting.
                         if state.isFinished || Task.isCancelled || state.waiter != nil { return .some(nil) }
                         state.waiter = continuation
                         return .none
@@ -378,7 +400,7 @@ package final class DatagramSocket: Sendable {
 
     private enum Received {
         case datagram(count: Int, source: IPEndpoint)
-        /// IPv4가 아닌 출처. IPv4 소켓에서는 일어나지 않지만 해석할 수 없으면 버리고 계속 읽는다.
+        /// A non-IPv4 source. This cannot occur with an IPv4 socket, but an address that cannot be parsed is dropped and reading continues.
         case ignored
         case failed(Int32)
     }
@@ -386,7 +408,7 @@ package final class DatagramSocket: Sendable {
     private static func receiveOne(_ descriptor: Int32, into buffer: inout [UInt8]) -> Received {
         var address = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        // 받은 주소를 `sockaddr_in`으로 받으려고 `sockaddr *`로 다시 본다. 두 포인터는 이 호출 안에서만 산다.
+        // Reinterpret the received address as `sockaddr *` to receive it in `sockaddr_in`. Both pointers live only within this call.
         let count = buffer.withUnsafeMutableBytes { bytes in
             withUnsafeMutablePointer(to: &address) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -395,7 +417,7 @@ package final class DatagramSocket: Sendable {
             }
         }
         guard count >= 0 else { return .failed(errno) }
-        // `s_addr`는 네트워크 바이트 순서다. 호스트 순서로 바꿔 상위 바이트부터 꺼낸다.
+        // `s_addr` is in network byte order. Convert to host order, then extract the high byte first.
         let host = UInt32(bigEndian: address.sin_addr.s_addr)
         guard address.sin_family == sa_family_t(AF_INET),
               let ip = IPAddress(bytes: (0..<4).map { UInt8(truncatingIfNeeded: host >> UInt32(24 - 8 * $0)) })
@@ -403,13 +425,13 @@ package final class DatagramSocket: Sendable {
         return .datagram(count: count, source: IPEndpoint(address: ip, port: UInt16(bigEndian: address.sin_port)))
     }
 
-    /// 성공하면 nil, 실패하면 errno를 돌려준다. 데이터그램은 한 번에 다 가거나 아예 가지 않는다.
+    /// Returns nil on success and errno on failure. A datagram is sent in full or not at all.
     private static func sendOne(_ bytes: [UInt8], to destination: IPEndpoint, descriptor: Int32) -> Int32? {
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = destination.port.bigEndian
-        // 주소 4바이트를 상위 바이트부터 호스트 정수로 모은 뒤 네트워크 바이트 순서로 바꿔 `s_addr`에 넣는다.
+        // Assemble the 4 address bytes into a host integer, high byte first, then convert to network byte order and store in `s_addr`.
         address.sin_addr.s_addr = destination.address.bytes.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }.bigEndian
         let sent = bytes.withUnsafeBytes { payload in
             withUnsafePointer(to: &address) {
@@ -423,7 +445,7 @@ package final class DatagramSocket: Sendable {
     }
 }
 
-/// errno의 이름. 오류 메시지에는 이름만 담는다(주소나 바이트는 담지 않는다).
+/// The errno name. Error messages contain only this name and omit addresses and bytes.
 func errnoName(_ code: Int32) -> String {
     switch code {
     case EACCES: "EACCES"

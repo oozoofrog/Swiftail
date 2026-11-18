@@ -1,33 +1,39 @@
-/// TIME-WAIT에 든 연결 대신 남기는 기록(계약 동작 S6).
+/// The record that replaces a connection in TIME-WAIT (contract behavior S6).
 ///
-/// 먼저 닫은 쪽은 TIME-WAIT에 머물며 상대의 FIN 재전송에 ACK하고, 앞 연결의 늦은 세그먼트가 같은 4-튜플의 새 연결에
-/// 섞이지 않게 한다(RFC 9293 3.6.1, MUST-13). 버퍼를 쥔 연결을 60초씩 두지 않으려고 4-튜플(표의 열쇠)과 시퀀스 번호 둘,
-/// 기한만 남긴다. 기록은 기한 전에 버리지 않는다(상대 피어별 상한을 넘을 때의 예외는 `TCPStack.addTimeWaitRecord`).
+/// The side that closed first stays in TIME-WAIT to ACK retransmissions of the peer's FIN and keep late segments from
+/// the previous connection out of a new connection with the same 4-tuple (RFC 9293 §3.6.1, MUST-13). To avoid holding a
+/// connection and its buffers for 60 seconds, retains only the 4-tuple (the table key), two sequence numbers, and the
+/// deadline. A record is not discarded before the deadline, except when the per-peer limit is exceeded (see
+/// `TCPStack.addTimeWaitRecord`).
 struct TimeWaitRecord: Sendable, Equatable {
-    /// SND.NXT: 이 쪽 FIN의 다음 번호.
+    /// SND.NXT, the sequence number after the local FIN.
     var sendNext: SequenceNumber
-    /// RCV.NXT: 상대 FIN의 다음 번호.
+    /// RCV.NXT, the sequence number after the peer's FIN.
     var receiveNext: SequenceNumber
-    /// 기록이 사라지는 시각.
+    /// The time at which the record expires.
     var deadline: ContinuousClock.Instant
-    /// `deadline`이 넘지 않는 끝: 연결이 TIME-WAIT에 든 시각 + 2MSL(`TCPConnection.maximumTimeWaitLifetime`, 240초.
-    /// RFC 9293 3.6.1 MUST-13). FIN 재전송이 기한을 다시 재기만 하면 피어가 59초마다 FIN을 다시 보내 기록을 영영 쥘 수 있다
-    /// (M6 검토 A).
+    /// The latest possible `deadline`, the time the connection entered TIME-WAIT + 2MSL
+    /// (`TCPConnection.maximumTimeWaitLifetime`, 240 seconds, RFC 9293 §3.6.1 MUST-13). If FIN retransmissions simply
+    /// reset the deadline, a peer could hold the record forever by retransmitting FIN every 59 seconds (M6 review A).
     let lifetimeEnd: ContinuousClock.Instant
 
-    /// 이 4-튜플로 온 세그먼트에 답할 세그먼트. 답하지 않으면 `nil`. FIN 재전송이면 기한을 60초 뒤로 다시 재되
-    /// `lifetimeEnd`를 넘기지 않는다.
+    /// Returns the reply to a segment for this 4-tuple, or `nil` if no reply is due. A retransmitted FIN resets the
+    /// deadline to 60 seconds later, capped at `lifetimeEnd`.
     ///
-    /// - RST는 무시한다. RFC 9293 3.10.7.4 둘째는 TIME-WAIT의 RST에 CLOSED로 가라고 하지만, 계약 동작 S6이 기록을 기한 전에
-    ///   버리지 않기로 했다(gVisor도 TIME-WAIT의 RST를 무시한다, TCP 노트 4.2. RFC 1337의 TIME-WAIT 암살을 막는다).
-    /// - 이미 소비한 상대 FIN의 재전송(`SEG.SEQ + 데이터 길이 = RCV.NXT − 1`)에는 ACK하고 기한을 다시 잰다
-    ///   (RFC 9293 3.10.7.4 다섯째·여덟째의 TIME-WAIT, 계약 동작 T6. `TCPConnection`의 TIME-WAIT 예외와 같은 조건이다).
-    /// - SYN에는 challenge ACK로 답한다(RFC 5961 4.2, RFC 9293 3.10.7.4 넷째). 같은 4-튜플로 새 연결을 바로 열지 않는다
-    ///   (RFC 9293 3.6.1의 MAY를 쓰지 않는다).
-    /// - 그 밖에 시퀀스 번호를 쓰는 세그먼트(데이터, 다른 FIN)에는 ACK로 답한다(시퀀스 검사의 "받지 않는 세그먼트에 ACK").
-    /// - 데이터 없는 ACK에는 답하지 않는다(ACK 고리를 막는다). 받은 세그먼트 하나에 답은 많아야 하나라 증폭이 없다(계약 동작 X8).
+    /// - Ignores RST. Step two of RFC 9293 §3.10.7.4 says to enter CLOSED on an RST in TIME-WAIT, but contract behavior
+    ///   S6 keeps the record until its deadline. gVisor also ignores RST in TIME-WAIT (TCP notes §4.2). This prevents
+    ///   the TIME-WAIT assassination described in RFC 1337.
+    /// - ACKs a retransmission of the peer's already consumed FIN (`SEG.SEQ + data length = RCV.NXT − 1`) and resets
+    ///   the deadline (TIME-WAIT in steps five and eight of RFC 9293 §3.10.7.4, contract behavior T6). Uses the same
+    ///   condition as the TIME-WAIT exception in `TCPConnection`.
+    /// - Replies to SYN with a challenge ACK (RFC 5961 §4.2, RFC 9293 §3.10.7.4 step four). Does not immediately open a
+    ///   new connection on the same 4-tuple and does not use the MAY in RFC 9293 §3.6.1.
+    /// - ACKs other segments that consume sequence numbers (data, other FINs), following the sequence check rule to ACK
+    ///   unacceptable segments.
+    /// - Does not reply to ACKs without data, preventing an ACK loop. At most one reply per received segment means
+    ///   there is no amplification (contract behavior X8).
     ///
-    /// 답은 `<SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>`이고 창은 0이다(이 연결은 더 받지 않는다).
+    /// Replies with `<SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>` and a window of 0 because this connection receives no more data.
     mutating func reply(to segment: TCPSegment, at now: ContinuousClock.Instant) -> TCPSegment? {
         let flags = segment.flags
         if flags.contains(.rst) { return nil }

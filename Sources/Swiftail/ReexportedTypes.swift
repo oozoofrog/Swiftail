@@ -3,33 +3,34 @@ import SwiftailControl
 import SwiftailEngine
 import SwiftailMagicsock
 
-// `Swiftail`의 공개 선언에 나오는 다른 모듈의 타입. 앱이 `import Swiftail`만으로 그 이름을 쓰게 같은 타입을 별명으로
-// 내보낸다. 그 타입의 공개 속성·연관 값에 나오는 타입(`IPPrefix`)도 함께 낸다. 중첩 타입(`TailnetLockStatus.Mode`)은
-// 별명을 거쳐 그대로 쓰인다.
+// Types from other modules that appear in `Swiftail`'s public declarations. Re-exports aliases of the same types so an
+// app can use their names with only `import Swiftail`. Also exposes types found in their public properties and
+// associated values (`IPPrefix`). Nested types (`TailnetLockStatus.Mode`) are available through the alias.
 //
-// 모듈을 다시 내보내지 않고 이름만 고른 까닭: `@_exported import`는 밑줄 붙은 비공식 기능이고, 모듈 전체(`Netmap`과
-// tailcfg 모델, 키 타입, 제어 클라이언트)를 `Swiftail`의 표면으로 넓힌다. Swift 6의 `public import`(SE-0409)는 이름을
-// 내보내지 않는다. 별명은 원래 타입과 같은 타입이라, 그 모듈을 함께 가져온 코드와 값을 그대로 주고받는다.
+// Only selected names are exposed because `@_exported import` is an unofficial underscored feature and would expand
+// `Swiftail`'s surface to entire modules (`Netmap` and tailcfg models, key types, and the control client). Swift 6
+// `public import` (SE-0409) does not re-export names. An alias is the original type, so code importing that module too
+// can exchange values directly.
 //
-// 앱이 쓰지 않을 입력 쪽 선언(`TunnelNetworkSettings.init?(netmap:mtu:at:)`의 `Netmap`)은 내보내지 않는다.
+// Input declarations apps will not use (`Netmap` in `TunnelNetworkSettings.init?(netmap:mtu:at:)`) are left out.
 
-/// IPv4·IPv6 주소. `NodeStatus.addresses`, `TailnetNode.whoIs(_:)`, `TunnelNetworkSettings.dnsServers`에 나온다.
+/// An IPv4 or IPv6 address. Appears in `NodeStatus.addresses`, `TailnetNode.whoIs(_:)`, and `TunnelNetworkSettings.dnsServers`.
 public typealias IPAddress = SwiftailBase.IPAddress
 
-/// 주소와 포트. `TailnetConnection.remoteEndpoint`·`localEndpoint`, `PeerPath.direct(_:)`에 나온다.
+/// An address and port. Appears in `TailnetConnection.remoteEndpoint` and `localEndpoint`, and `PeerPath.direct(_:)`.
 public typealias IPEndpoint = SwiftailBase.IPEndpoint
 
-/// 주소 접두(CIDR). `TunnelNetworkSettings.addresses`·`routes`에 나온다.
+/// An address prefix (CIDR). Appears in `TunnelNetworkSettings.addresses` and `routes`.
 public typealias IPPrefix = SwiftailBase.IPPrefix
 
-/// 제어 클라이언트가 끝낸 실패. `NodeError.control(_:)`에 실린다.
+/// A failure that ended the control client. Carried by `NodeError.control(_:)`.
 public typealias ControlError = SwiftailControl.ControlError
 
-/// tailnet lock의 모습. `NodeStatus.tailnetLock`, `NodeEvent.tailnetLockChanged(_:)`에 나온다.
+/// The tailnet lock state. Appears in `NodeStatus.tailnetLock` and `NodeEvent.tailnetLockChanged(_:)`.
 public typealias TailnetLockStatus = SwiftailControl.TailnetLockStatus
 
-/// 앱이 OS에 적용할 터널 설정. `TailnetNode.networkSettings`, `NodeStatus.networkSettings`에 나온다.
+/// Tunnel settings for the app to apply to the OS. Appears in `TailnetNode.networkSettings` and `NodeStatus.networkSettings`.
 public typealias TunnelNetworkSettings = SwiftailEngine.TunnelNetworkSettings
 
-/// 피어까지의 경로(직접·중계). `TailnetNode.path(toPeerNamed:)`, `NodeEvent.peerPathChanged(fqdn:path:)`에 나온다.
+/// A path to a peer (direct or relayed). Appears in `TailnetNode.path(toPeerNamed:)` and `NodeEvent.peerPathChanged(fqdn:path:)`.
 public typealias PeerPath = SwiftailMagicsock.PeerPath

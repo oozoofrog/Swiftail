@@ -1,56 +1,68 @@
-// 4바이트 프로토콜 머리(읽을 때 건너뛰고 쓸 때 IP 버전으로 `AF_INET`·`AF_INET6`를 넣는 규칙)와 utun 제어 소켓의 이름 확인
-// (`getsockopt(SYSPROTO_CONTROL, UTUN_OPT_IFNAME)`)은 wireguard-go `tun/tun_darwin.go`의 `Name`·`Read`·`Write`를 따른다.
-// 코드를 옮기지는 않았고 동작만 같다. wireguard-go는 MIT 라이선스다(Copyright (C) 2017-2023 WireGuard LLC).
+// The 4-byte protocol header (skipped on read and set to `AF_INET` or `AF_INET6` by IP version on write) and utun
+// control socket name check (`getsockopt(SYSPROTO_CONTROL, UTUN_OPT_IFNAME)`) follow `Name`, `Read`, and `Write` in
+// wireguard-go `tun/tun_darwin.go`. Only the behavior was reproduced. wireguard-go uses the MIT license (Copyright (C)
+// 2017-2023 WireGuard LLC).
 
 import Darwin
 import Dispatch
 import Synchronization
 
-/// 패킷 터널 제공자가 넘겨 준 utun 파일 기술자를 IP 패킷의 흐름과 쓰기 호출로 감싼다(`docs/contracts/SwiftailTunnel.md` 동작 U).
+/// Wraps a utun file descriptor supplied by a packet tunnel provider with a stream of IP packets and a write operation
+/// (`docs/contracts/SwiftailTunnel.md` behavior U).
 ///
-/// 노드는 이것으로 OS가 터널로 보낸 IP 패킷을 읽어 tailnet으로 보내고, tailnet에서 온 패킷을 OS에 넣는다. utun을 만들거나 인터페이스를
-/// 설정하는 일은 하지 않는다. 그것은 앱의 Network Extension이 한다.
+/// The node reads IP packets the OS sends to the tunnel and forwards them to the tailnet, and injects packets from the
+/// tailnet into the OS. The app's Network Extension creates utun and configures the interface.
 ///
-/// 지키는 것:
+/// Guarantees
 ///
-/// - **받은 기술자를 복제해 쓴다.** `F_DUPFD_CLOEXEC`로 복제하고 복제본에 `O_NONBLOCK`을 건다. 이 객체는 복제본만 닫는다. 호출자의
-///   기술자는 닫지도 읽지도 않는다. `O_NONBLOCK`은 같은 열린 파일 설명을 공유하는 호출자의 기술자에도 걸리지만 앱은 그것으로 읽고
-///   쓰지 않는다(계약 U2).
-/// - **utun임을 확인한다.** 소켓 주소 계열이 `AF_SYSTEM`이고 `UTUN_OPT_IFNAME`의 이름이 `utun`으로 시작해야 한다. 확인은 복제본에서
-///   읽기 호출만으로 하므로 거절해도 호출자의 기술자는 그대로다(계약 U1).
-/// - **패킷마다 4바이트 머리가 붙는다.** 읽을 때 머리를 떼고 IP 패킷만 올린다. 4바이트 이하(IP 패킷이 없음)는 버리고 머리 값은 보지
-///   않는다. 쓸 때 IP 버전 니블이 4면 `AF_INET`, 6이면 `AF_INET6`를 머리에 넣고 그 밖은 쓰지 않는다(계약 U3).
-/// - **읽기는 사건으로 깨어난다.** `DispatchSource` 읽기 사건이 오면 더 읽을 것이 없을 때(`EAGAIN`)까지 읽는다. `read` 한 번이 패킷
-///   하나이고, 읽기 버퍼(4 + 65,535바이트)는 하나를 되풀이해 쓰며 읽은 길이만 복사해 올린다(계약 U4).
-/// - **쌓이는 양에 상한이 있다.** 소비가 느리면 오래된 패킷부터 256개까지만 남긴다. 한 패킷이 장치의 MTU를 넘으면 버린다. OS는 설정한
-///   MTU를 넘는 패킷을 utun에 넣지 않으므로 이는 어긋난 입력에 대한 방어이고, 덕분에 쌓인 바이트가 256 × 1,420바이트(1MiB 미만)를
-///   넘지 않는다(계약 M).
-/// - **읽기가 끝나면 이유를 알린다.** 0바이트(끝)나 `EAGAIN`·`EINTR`가 아닌 오류는 장치가 닫힌 것이다. 흐름이 끝나고 `readFailure`가
-///   `SocketError.readFailed`(errno 이름, 끝은 `EOF`)가 된다. `close()`나 버리기로 끝난 흐름은 `readFailure`가 nil이다(계약 U4).
-///   `AsyncThrowingStream`은 오류 종류를 `any Error`로만 받으므로 흐름 자체는 던지지 않고 이유를 따로 둔다.
-/// - **쓰기는 기다리지 않고 큐도 없다.** 실패한 패킷은 `SocketError.sendFailed`로 알리고 부르는 쪽이 버린다. 쓰기 실패는 장치가 닫혔다는
-///   뜻이 아니다. 장치의 끝은 읽기 쪽이 알린다(계약 U5).
-/// - **기술자는 한 번만 닫는다.** 읽기 실패와 `close()`는 기술자를 상태에서 떼어 낸 뒤 흐름을 끝내고 읽기 원천을 취소한다. 실제
-///   `close(2)`는 읽기 처리기가 끝난 뒤 취소 처리기가 한다. 닫힌 뒤의 `write`는 상태가 비어 있어
-///   기술자를 건드리지 않는다(다른 곳이 재사용한 번호를 쓰는 일이 없다). 버리면(`deinit`) 닫힌다. `DatagramSocket`과 같다.
-/// - **구조적 동시성을 깨지 않는다.** 읽기는 Task가 아니라 디스패치 원천이 맡고, 흐름을 기다리는 Task가 취소되면 `for await`가
-///   끝난다.
+/// - **Uses a duplicate of the supplied descriptor.** Duplicates it with `F_DUPFD_CLOEXEC` and sets `O_NONBLOCK` on the
+///   duplicate. This object closes only the duplicate. It neither reads nor closes the caller's descriptor.
+///   `O_NONBLOCK` also applies to the caller's descriptor because it shares the open file description, but the app does
+///   not read or write with it (contract U2).
+/// - **Verifies that the descriptor is utun.** The socket address family must be `AF_SYSTEM` and the name from
+///   `UTUN_OPT_IFNAME` must start with `utun`. The checks use only read calls on the duplicate, leaving the caller's
+///   descriptor unchanged on rejection (contract U1).
+/// - **Each packet has a 4-byte header.** On read, strip the header and pass up only the IP packet. Drop reads of 4
+///   bytes or fewer (no IP packet) and ignore the header value. On write, put `AF_INET` in the header for IP version
+///   nibble 4 and `AF_INET6` for 6. Skip all other versions (contract U3).
+/// - **Read events trigger reads.** On a `DispatchSource` read event, read until there is nothing left to read
+///   (`EAGAIN`). One `read` returns one packet. Reuse one read buffer (4 + 65,535 bytes) and copy only the bytes read
+///   (contract U4).
+/// - **The buffer is bounded.** If the consumer falls behind, drop the oldest packets to keep at most 256. Drop any
+///   packet exceeding the device's MTU. The OS does not put packets exceeding the configured MTU into utun, so this
+///   guards against invalid input and keeps buffered bytes within 256 × 1,420 bytes (under 1MiB) (contract M).
+/// - **Reports why reads ended.** A 0-byte read (end of file) or an error other than `EAGAIN` or `EINTR` means the
+///   device closed. The stream ends and `readFailure` becomes `SocketError.readFailed` (errno name, or `EOF` at end of
+///   file). `readFailure` is nil when the stream ends through `close()` or release (contract U4). Because
+///   `AsyncThrowingStream` accepts only `any Error` as its error type, the stream itself does not throw and the reason
+///   is kept separately.
+/// - **Writes neither wait nor queue.** Reports failed packets as `SocketError.sendFailed` and the caller drops them. A
+///   write failure does not mean that the device has closed. Reads report when the device ends (contract U5).
+/// - **Closes the descriptor exactly once.** A read failure or `close()` detaches the descriptor from the state, ends
+///   the stream, and cancels the read source. The actual `close(2)` runs in the cancellation handler after the read
+///   handler finishes. After close, the empty state prevents `write` from touching the descriptor, including a
+///   descriptor number reused elsewhere. Release (`deinit`) closes it. This matches `DatagramSocket`.
+/// - **Preserves structured concurrency.** The dispatch source handles reads without a Task. Canceling the Task waiting
+///   on the stream ends `for await`.
 ///
-/// 시스템 호출과 주소·문자열 버퍼의 포인터는 이 파일 아래쪽의 POSIX 경계(`duplicate`, `requireUTUN`, `readOne`, `writeOne`)에만 가둔다.
-/// 커널 API가 포인터를 요구하고 `sockaddr_storage`를 `sockaddr`로 다시 보아야 하기 때문이며, 모든 포인터는 호출 하나의 수명 안에서만 쓴다.
+/// System calls and address and string buffer pointers stay within the POSIX edge below (`duplicate`, `requireUTUN`,
+/// `readOne`, `writeOne`). The kernel API requires pointers and needs `sockaddr_storage` reinterpreted as `sockaddr`.
+/// Each pointer is used only for the lifetime of one call.
 package final class UTUNDevice: Sendable {
-    /// 허용하는 MTU 범위. 아래는 첫 사용처 시험 계약, 위는 wireguard-go의 기본값(`device/tun.go`의 `DefaultMTU` 1420)이다.
+    /// The supported MTU range. The lower bound comes from the first adopter's test contract. The upper bound is
+    /// wireguard-go's default (`DefaultMTU` of 1420 in `device/tun.go`).
     package static let supportedMTU = 1280...1420
 
-    /// utun이 패킷마다 앞에 붙이는 프로토콜 머리의 크기.
+    /// The size of the protocol header utun prepends to each packet.
     private static let headerLength = 4
-    /// IP 패킷의 이론적 최대 길이(전체 길이 필드는 16비트).
+    /// The theoretical maximum length of an IP packet (the total length field is 16 bits).
     private static let maximumPacketLength = 65_535
-    /// 소비하지 못하고 쌓아 두는 패킷 수.
+    /// The number of unread packets that can be buffered.
     private static let bufferedPacketCount = 256
 
-    // Darwin의 소켓 주소 계열과 옵션. `AF_SYSTEM`은 이 SDK 모듈에 있지만 제어 소켓 옵션은 `<sys/sys_domain.h>`·`<net/if_utun.h>`의
-    // 매크로라서 Swift로 오지 않으므로 값을 적는다(wireguard-go `Name()`도 숫자로 적는다).
+    // Darwin socket address families and options. This SDK module includes `AF_SYSTEM`. The control socket options are
+    // macros in `<sys/sys_domain.h>` and `<net/if_utun.h>` that Swift does not import, so specify their values directly
+    // (wireguard-go's `Name()` also uses numbers).
     private static let systemAddressFamily = sa_family_t(32)  // AF_SYSTEM
     private static let controlProtocol: Int32 = 2  // SYSPROTO_CONTROL
     private static let interfaceNameOption: Int32 = 2  // UTUN_OPT_IFNAME
@@ -61,44 +73,47 @@ package final class UTUNDevice: Sendable {
         let continuation: AsyncStream<[UInt8]>.Continuation
     }
 
-    /// 읽기 처리기가 쥐는 것. 읽기 버퍼는 처리기가 되풀이해 쓴다. 처리기는 한 번에 하나씩만 돌지만(직렬 큐) 가변 값을 `Sendable`
-    /// 클로저가 붙잡을 수 없어 잠금으로 감싼다(경합하지 않는다). 읽기가 끝난 이유는 흐름을 끝내기 전에 적는다.
+    /// State retained by the read handler, which reuses the read buffer. Only one handler runs at a time on the serial
+    /// queue, but a `Sendable` closure cannot capture a mutable value, so wrap it in an uncontended lock. Record the
+    /// reason reads ended before ending the stream.
     private final class Reader: Sendable {
         let buffer = Mutex([UInt8](repeating: 0, count: UTUNDevice.headerLength + UTUNDevice.maximumPacketLength))
         let failure = Mutex<SocketError?>(nil)
     }
 
-    /// 닫으면 nil. 기술자와 읽기 원천은 이 상자 안에서만 만지고, `close(2)`는 원천의 취소 처리기가 한다.
+    /// Nil after close. The descriptor and read source are accessed only inside this box, and the source's cancellation
+    /// handler performs `close(2)`.
     private let state: Mutex<Open?>
 
-    /// 앱이 `NEPacketTunnelNetworkSettings.mtu`로 적용하는 값. 노드는 이것을 설정 산출에 그대로 쓴다.
+    /// The value the app applies through `NEPacketTunnelNetworkSettings.mtu`. The node uses it unchanged when generating settings.
     package let mtu: Int
 
     private let reader: Reader
 
-    /// OS가 터널로 보낸 IP 패킷의 흐름(머리는 뗀 것). 구독자는 하나다. 소비가 느리면 오래된 것부터 버린다(256개). `close()`나
-    /// 버리기로 끝나거나 장치를 더 읽을 수 없어 끝난다. 끝난 이유는 `readFailure`다.
+    /// The stream of IP packets sent by the OS to the tunnel, with headers removed. It has one subscriber. If
+    /// consumption falls behind, drops the oldest packets first (256 packets). Ends on `close()`, release, or when the
+    /// device can no longer be read. `readFailure` gives the reason.
     package let packets: AsyncStream<[UInt8]>
 
-    /// 읽기가 장치의 끝이나 오류로 멈췄으면 그 이유(`SocketError.readFailed`, errno 이름 또는 `EOF`). 흐름이 끝난 뒤에 읽는다.
-    /// `close()`나 버리기로 끝났거나 아직 끝나지 않았으면 nil이다. 노드는 이것을 `tunnelDeviceClosed`로 알린다.
+    /// The reason reads stopped if the device ended or an error occurred (`SocketError.readFailed`, with an errno name
+    /// or `EOF`). Read this after the stream ends. It is nil if the stream ended through `close()` or release, or if it
+    /// has not ended. The node reports this as `tunnelDeviceClosed`.
     package var readFailure: SocketError? {
         reader.failure.withLock { $0 }
     }
 
-    /// `descriptor`가 utun 제어 소켓인지 확인하고 복제해 읽기를 시작한다.
+    /// Verifies that `descriptor` is a utun control socket, duplicates it, and starts reading.
     ///
-    /// - Parameters:
-    ///   - descriptor: 패킷 터널 제공자가 찾은 utun의 파일 기술자. 닫지 않는다.
-    ///   - mtu: 앱이 적용하는 MTU. `supportedMTU` 안이어야 한다.
-    /// - Throws: `SocketError.invalidDevice`(utun이 아니거나 닫힌·음수 기술자, MTU가 범위 밖) 또는 복제하지 못했을 때
-    ///   `SocketError.readFailed`(errno 이름).
+    /// - Parameters: - descriptor: The utun file descriptor found by the packet tunnel provider. This initializer
+    ///   leaves it open. - mtu: The MTU the app applies. Must be within `supportedMTU`.
+    /// - Throws: `SocketError.invalidDevice` if the descriptor is not utun, is closed or negative, or the MTU is out of
+    ///   range. Throws `SocketError.readFailed` (errno name) if duplication fails.
     package convenience init(duplicating descriptor: Int32, mtu: Int) throws(SocketError) {
         try self.init(duplicating: descriptor, mtu: mtu) { (copy) throws(SocketError) in try Self.requireUTUN(copy) }
     }
 
-    /// 복제본을 `verify`로 확인한 뒤 읽기를 시작한다. 시험이 utun 대신 `socketpair`를 붙이려고 확인을 바꿔 끼운다.
-    /// `onReadEvent`는 시험에서 읽기 처리기 호출을 센다.
+    /// Checks the duplicate using `verify`, then starts reading. Tests substitute the check to use `socketpair` in
+    /// place of utun. Tests use `onReadEvent` to count read handler calls.
     init(
         duplicating descriptor: Int32,
         mtu: Int,
@@ -140,13 +155,14 @@ package final class UTUNDevice: Sendable {
         close()
     }
 
-    /// IP 패킷 하나를 장치에 쓴다. 기다리지 않는다.
+    /// Writes one IP packet to the device without waiting.
     ///
-    /// - Throws: `SocketError.sendFailed`(errno 이름). IP 버전이 4도 6도 아니면 `EAFNOSUPPORT`(쓰지 않는다), 닫은 장치는 `EBADF`,
-    ///   커널이 받지 못하면 `EAGAIN`·`ENOBUFS`·`EMSGSIZE` 등이다. 부르는 쪽이 그 패킷을 버리고 계속한다.
+    /// - Throws: `SocketError.sendFailed` (errno name). IP versions other than 4 or 6 yield `EAFNOSUPPORT` without
+    ///   writing. A closed device yields `EBADF`. If the kernel cannot accept the packet, it yields `EAGAIN`,
+    ///   `ENOBUFS`, `EMSGSIZE`, or another errno. The caller drops the packet and continues.
     package func write(_ ipPacket: [UInt8]) throws(SocketError) {
         guard let frame = Self.frame(ipPacket) else { throw .sendFailed(errnoName(EAFNOSUPPORT)) }
-        // 쓰는 동안 잠금을 쥐어 `close()`가 끼어들지 못하게 한다. 비차단이라 오래 걸리지 않는다.
+        // Hold the lock during the write so `close()` cannot intervene. The write is nonblocking, so it finishes quickly.
         let failure: Int32? = state.withLock { state in
             guard let state else { return EBADF }
             return Self.writeOne(frame, descriptor: state.descriptor)
@@ -154,7 +170,8 @@ package final class UTUNDevice: Sendable {
         if let failure { throw .sendFailed(errnoName(failure)) }
     }
 
-    /// 복제본을 닫는다. 흐름이 오류 없이 끝나고 읽기가 멈춘다. 여러 번 불러도 된다. 호출자의 기술자는 닫지 않는다.
+    /// Closes the duplicate, ending the stream without error and stopping reads. May be called multiple times. Leaves
+    /// the caller's descriptor open.
     package func close() {
         close(readFailure: nil)
     }
@@ -162,7 +179,7 @@ package final class UTUNDevice: Sendable {
     private func close(readFailure: SocketError?) {
         let opened = state.withLock { state -> Open? in
             guard let opened = state else { return nil }
-            // 먼저 닫는 쪽이 흐름의 종료 이유를 정한다.
+            // The first close determines the stream's termination reason.
             if let readFailure { reader.failure.withLock { $0 = readFailure } }
             state = nil
             return opened
@@ -171,15 +188,16 @@ package final class UTUNDevice: Sendable {
         opened?.source.cancel()
     }
 
-    /// 복제본의 파일 기술자 번호. 닫았으면 nil. 시험이 복제본의 성질(`FD_CLOEXEC`, 닫힘)을 확인할 때만 쓴다.
+    /// The duplicate's file descriptor number, or nil if closed. Used only by tests to check its properties (`FD_CLOEXEC`, closure).
     var duplicateDescriptor: Int32? {
         state.withLock { $0?.descriptor }
     }
 
-    // MARK: 머리 붙이기·떼기 (입출력 없는 순수 함수)
+    // MARK: Header Insertion and Removal (Pure Functions Without I/O)
 
-    /// IP 패킷 앞에 프로토콜 머리를 붙인다. IP 버전이 4면 `00 00 00 02`(`AF_INET`), 6이면 `00 00 00 1e`(`AF_INET6`)다. 비었거나 그 밖의
-    /// 버전이면 nil이다. 버전은 첫 바이트의 윗 니블이다. 머리 길이 같은 나머지 검증은 하지 않는다(커널과 엔진이 한다).
+    /// Prepends the protocol header to the IP packet. Uses `00 00 00 02` (`AF_INET`) for IP version 4 and `00 00 00 1e`
+    /// (`AF_INET6`) for 6. Returns nil for empty packets or other versions. The version is the first byte's high
+    /// nibble. The kernel and engine handle remaining validation, such as header length.
     static func frame(_ ipPacket: [UInt8]) -> [UInt8]? {
         guard let first = ipPacket.first else { return nil }
         let family: Int32
@@ -191,15 +209,17 @@ package final class UTUNDevice: Sendable {
         return [0, 0, 0, UInt8(family)] + ipPacket
     }
 
-    /// 읽은 프레임에서 머리를 떼고 IP 패킷을 돌려준다. 머리 값은 보지 않는다. 머리만 있거나 그보다 짧으면 nil이다(버린다).
+    /// Strips the header from a received frame and returns the IP packet. Ignores the header value. Returns nil to
+    /// discard frames that contain only the header or are shorter than it.
     static func ipPacket(inFrame frame: ArraySlice<UInt8>) -> [UInt8]? {
         guard frame.count > headerLength else { return nil }
         return Array(frame.dropFirst(headerLength))
     }
 
-    // MARK: POSIX 경계
+    // MARK: POSIX Edge
 
-    /// `F_DUPFD_CLOEXEC`로 복제한다. 번호가 닫혀 있으면 `invalidDevice`, 그 밖의 실패(예: `EMFILE`)는 `readFailed`다.
+    /// Duplicates with `F_DUPFD_CLOEXEC`. A closed descriptor number yields `invalidDevice`. Other failures (such as
+    /// `EMFILE`) yield `readFailed`.
     private static func duplicate(_ descriptor: Int32) throws(SocketError) -> Int32 {
         let copy = fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
         guard copy >= 0 else {
@@ -216,8 +236,9 @@ package final class UTUNDevice: Sendable {
         }
     }
 
-    /// 끊긴 소켓에 써도 SIGPIPE가 나지 않게 한다. 신호의 기본 동작은 프로세스 종료이고, 이 코드는 패킷 터널 확장 안에서 돈다.
-    /// 걸어 두면 그런 쓰기는 `EPIPE`로 돌아와 `write`가 `sendFailed`로 알린다. 같은 소켓을 가리키는 호출자의 기술자에도 걸린다.
+    /// Prevent SIGPIPE on writes to a disconnected socket. The default signal action terminates the process, and this
+    /// code runs in the packet tunnel extension. With this option, those writes return `EPIPE` and `write` reports
+    /// `sendFailed`. The option also applies to the caller's descriptor, which points to the same socket.
     private static func suppressSIGPIPE(_ descriptor: Int32) throws(SocketError) {
         var enabled: Int32 = 1
         guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
@@ -225,24 +246,26 @@ package final class UTUNDevice: Sendable {
         }
     }
 
-    /// `descriptor`가 utun 제어 소켓이면 그 인터페이스 이름(`utun3` 등)을 돌려준다. 복제하지 않고 읽기 호출만 한다.
+    /// Returns the interface name (such as `utun3`) if `descriptor` is a utun control socket. Uses only read calls and does not duplicate it.
     ///
-    /// 노드가 `init`에서 장치를 검사하고(파일·소켓을 만들지 않는다), 기본 인터페이스 통지에서 자기 utun을 걸러 내는 데 쓴다
-    /// (계약 U1, N1).
+    /// The node uses this to validate the device in `init` without creating files or sockets, and to filter out its own
+    /// utun in default interface notifications (contract U1, N1).
     ///
-    /// - Throws: `SocketError.invalidDevice`(음수·닫힌 기술자, utun이 아님).
+    /// - Throws: `SocketError.invalidDevice` for a negative or closed descriptor or a descriptor that is not utun.
     package static func interfaceName(ofUTUN descriptor: Int32) throws(SocketError) -> String {
         guard descriptor >= 0 else { throw .invalidDevice("fileDescriptor") }
         return try requireUTUN(descriptor)
     }
 
-    /// utun 제어 소켓인지 읽기 호출만으로 확인하고 인터페이스 이름을 돌려준다(계약 U1): 상대 주소의 계열이 `AF_SYSTEM`이고
-    /// 인터페이스 이름이 `utun`으로 시작한다. 소켓이 아니거나(파이프) 다른 계열이면 어느 호출이든 실패하거나 계열이 다르다.
+    /// Verifies a utun control socket using only read calls and returns its interface name (contract U1). The peer
+    /// address family must be `AF_SYSTEM` and the interface name must start with `utun`. For a non-socket (such as a
+    /// pipe) or another address family, a call fails or the family differs.
     @discardableResult
     private static func requireUTUN(_ descriptor: Int32) throws(SocketError) -> String {
         var address = sockaddr_storage()
         var addressLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
-        // `getpeername`이 주소 종류에 맞는 구조체를 `sockaddr *`로만 받아서, 가장 큰 `sockaddr_storage`를 `sockaddr`로 다시 본다.
+        // `getpeername` accepts the address-family-specific struct only as `sockaddr *`, so reinterpret the largest
+        // struct, `sockaddr_storage`, as `sockaddr`.
         let named = withUnsafeMutablePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getpeername(descriptor, $0, &addressLength) }
         }
@@ -250,7 +273,7 @@ package final class UTUNDevice: Sendable {
 
         var name = [UInt8](repeating: 0, count: Int(IFNAMSIZ))
         var nameLength = socklen_t(name.count)
-        // 옵션 값을 담을 버퍼의 시작 주소와 길이를 커널에 넘긴다.
+        // Pass the base address and length of the option value buffer to the kernel.
         let queried = name.withUnsafeMutableBytes {
             getsockopt(descriptor, controlProtocol, interfaceNameOption, $0.baseAddress, &nameLength)
         }
@@ -259,10 +282,10 @@ package final class UTUNDevice: Sendable {
         return String(decoding: text, as: UTF8.self)
     }
 
-    /// 읽을 것이 없을 때까지 읽어 흐름에 넣는다. 읽기 원천의 처리기 안에서만 부른다.
+    /// Reads until there is nothing left and adds packets to the stream. Called only from the read source's handler.
     ///
-    /// 끝(0바이트)이나 예기치 않은 오류(`EAGAIN`·`EINTR` 밖)를 돌려줘 처리기가 읽기 원천을 취소하게 한다.
-    /// EOF에서도 읽기 사건이 계속 오는 것을 막는다.
+    /// Returns end of file (0 bytes) or an unexpected error (anything other than `EAGAIN` or `EINTR`) so the handler
+    /// can cancel the read source. This prevents continuing read events after EOF.
     private static func drain(
         _ descriptor: Int32,
         using buffer: inout [UInt8],
@@ -272,7 +295,7 @@ package final class UTUNDevice: Sendable {
         while true {
             switch readOne(descriptor, into: &buffer) {
             case .frame(let count):
-                // 머리보다 짧거나 머리뿐인 것, MTU를 넘는 것은 버리고 계속 읽는다.
+                // Drop packets shorter than or equal to the header or exceeding the MTU, then keep reading.
                 if let packet = ipPacket(inFrame: buffer[..<count]), packet.count <= mtu {
                     output.yield(packet)
                 }
@@ -288,20 +311,20 @@ package final class UTUNDevice: Sendable {
 
     private enum Read {
         case frame(count: Int)
-        /// errno. 0은 끝(읽은 바이트 0)이다.
+        /// The errno value. 0 means end of file (0 bytes read).
         case failed(Int32)
     }
 
     private static func readOne(_ descriptor: Int32, into buffer: inout [UInt8]) -> Read {
-        // 버퍼의 시작 주소와 길이를 `read(2)`에 넘긴다. 포인터는 이 호출 안에서만 산다.
+        // Pass the buffer's base address and length to `read(2)`. The pointer lives only within this call.
         let count = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
         if count < 0 { return .failed(errno) }
         return count == 0 ? .failed(0) : .frame(count: count)
     }
 
-    /// 성공하면 nil, 실패하면 errno를 돌려준다. 패킷은 한 번에 다 가거나 아예 가지 않는다.
+    /// Returns nil on success or errno on failure. A packet is written in full or not at all.
     private static func writeOne(_ frame: [UInt8], descriptor: Int32) -> Int32? {
-        // 프레임의 시작 주소와 길이를 `write(2)`에 넘긴다. 포인터는 이 호출 안에서만 산다.
+        // Pass the frame's base address and length to `write(2)`. The pointer lives only within this call.
         let written = frame.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
         if written < 0 { return errno }
         return written == frame.count ? nil : EMSGSIZE

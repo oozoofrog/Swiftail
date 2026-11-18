@@ -1,44 +1,46 @@
-/// 연결 하나의 받는 버퍼(계약 `docs/contracts/SwiftailNetstack.md` 동작 F1·F4, 동작 X6).
+/// The receive buffer for one connection (contract `docs/contracts/SwiftailNetstack.md` behaviors F1 and F4, behavior X6).
 ///
-/// `RCV.NXT`부터 빈 곳 없이 이어진 바이트(읽을 수 있는 것)와, 받는 창 안에서 순서가 어긋나 먼저 도착한 구간을
-/// 고정 용량의 원형 저장소 한 덩어리 안에 둔다. 어긋난 데이터도 자기 자리(`RCV.NXT`에서의 거리)에 바로 쓰므로,
-/// 세그먼트를 따로 쥐거나 나중에 옮겨 적지 않는다. 그래서 1바이트짜리 세그먼트를 띄엄띄엄 보내도 쥐는 메모리는
-/// 용량(256KiB)과 구간 표(32개)가 전부다.
+/// Holds contiguous readable bytes starting at `RCV.NXT` and ranges that arrived out of order within the receive
+/// window in a single fixed-capacity circular store. Out-of-order data goes straight into place at its distance from `RCV.NXT`,
+/// so segments need not be retained separately or copied later. Even when 1-byte segments arrive with gaps, memory is
+/// limited to the capacity (256KiB) and the range table (32 entries).
 ///
-/// 받는 창은 `RCV.NXT`에서 `windowSize`바이트다. 읽지 않은 바이트가 자리를 차지하고 순서가 어긋난 바이트는 창 안에
-/// 놓이므로, 창의 오른쪽 끝(`windowEnd`)은 데이터가 들어오는 것만으로는 움직이지 않고 앱이 읽을 때만 오른쪽으로
-/// 나아간다. 오른쪽 끝을 왼쪽으로 옮기지 않는다는 SHLD-14(RFC 9293 3.8.6)는 이 성질에서 나온다.
+/// The receive window extends `windowSize` bytes from `RCV.NXT`. Unread bytes occupy space and out-of-order bytes sit
+/// within the window. As a result, the right edge (`windowEnd`) stays put when data arrives and advances only when the
+/// app reads. This is why the right edge does not move left, as required by SHLD-14 (RFC 9293 §3.8.6).
 ///
-/// FIN은 시퀀스 번호를 하나 쓰지만 데이터가 아니다. 이 버퍼의 `nextSequence`는 **데이터**의 끝이고, FIN을 소비한 뒤의
-/// `RCV.NXT`(= `nextSequence + 1`)는 연결이 쥔다.
+/// FIN consumes one sequence number but carries no data. This buffer's `nextSequence` is the end of **data**, and the
+/// connection tracks `RCV.NXT` (= `nextSequence + 1`) after consuming FIN.
 package struct ReceiveBuffer: Sendable {
-    /// 계약 동작 F1: 연결마다 256KiB.
+    /// Contract behavior F1 specifies 256KiB per connection.
     package static let defaultCapacity = 256 * 1024
-    /// 계약 동작 F4: 순서가 어긋난 구간은 32개까지.
+    /// Contract behavior F4 allows up to 32 out-of-order ranges.
     package static let maximumOutOfOrderRanges = 32
 
-    /// `RCV.NXT`에서의 거리로 나타낸 순서가 어긋난 구간 `[start, end)`.
-    /// 목록은 `start`순이고 서로 겹치지도 맞닿지도 않으며 `start >= 1`이다(`RCV.NXT`에 닿으면 읽을 수 있는 바이트가 된다).
+    /// An out-of-order range `[start, end)` expressed as distances from `RCV.NXT`. The list is ordered by `start`.
+    /// Ranges neither overlap nor touch and have `start >= 1`. A range that reaches `RCV.NXT` becomes readable bytes.
     private struct Extent: Sendable {
         var start: Int
         var end: Int
-        /// 이 구간에 마지막으로 세그먼트가 든 `insert`의 차례. SACK 블록을 최근 순서로 고르는 데 쓴다(`sackBlocks(limit:)`).
+        /// The order number of the last `insert` whose segment touched this range. Used to select SACK blocks in
+        /// recency order (`sackBlocks(limit:)`).
         var lastInsertion: UInt64
     }
 
-    /// 한 번의 `insert`가 한 일. 연결은 `advancedCount`·`filledGap`으로 ACK를 언제 낼지 정한다(계약 동작 F5).
-    /// `storedCount`·`rejectedForRangeLimit`은 연결이 쓰지 않고 시험이 버퍼의 동작을 확인하는 데 쓴다.
+    /// The result of an `insert`. The connection uses `advancedCount` and `filledGap` to decide when to send an ACK
+    /// (contract behavior F5). Only tests use `storedCount` and `rejectedForRangeLimit` to check buffer behavior.
     package struct Insertion: Sendable, Equatable {
-        /// `RCV.NXT`가 나아간 양. 순서대로 온 데이터이거나 빈 곳을 메운 데이터면 0보다 크다.
+        /// The amount by which `RCV.NXT` advanced. Greater than 0 for data that arrived in order or filled a gap.
         package var advancedCount = 0
-        /// 이번에 새로 저장한 바이트 수. 이미 있던 바이트와 겹친 부분, 창 밖으로 잘려 나간 부분은 세지 않는다.
+        /// The number of newly stored bytes. Excludes overlap with existing bytes and bytes trimmed outside the window.
         package var storedCount = 0
-        /// 순서가 어긋난 구간이 있는 채로 `RCV.NXT`가 나아갔다. 빈 곳의 전부나 일부를 메운 것이라 곧바로 ACK해야 한다(RFC 5681 4.2).
+        /// `RCV.NXT` advanced while an out-of-order range existed. This filled all or part of a gap, so it requires an
+        /// immediate ACK (RFC 5681 §4.2).
         package var filledGap = false
-        /// 새 구간을 만들어야 하는데 이미 32개라서 세그먼트 전체를 받지 않았다. 상대가 다시 보낸다.
+        /// The entire segment was rejected because it needed a new range and there were already 32. The peer retransmits it.
         package var rejectedForRangeLimit = false
 
-        /// 필드로 만든다. 시험이 기대값을 적는 데 쓴다.
+        /// Creates the result from its fields. Tests use this to specify expected values.
         package init(
             advancedCount: Int = 0, storedCount: Int = 0, filledGap: Bool = false, rejectedForRangeLimit: Bool = false
         ) {
@@ -51,51 +53,54 @@ package struct ReceiveBuffer: Sendable {
 
     private var ring: ByteRing
     private var extents: [Extent] = []
-    /// 창 안에 바이트를 둔 `insert`의 수. 구간의 `lastInsertion`이 이 값을 받는다.
+    /// The number of `insert` calls that placed bytes within the window. The range's `lastInsertion` gets this value.
     private var insertionCount: UInt64 = 0
 
-    /// `RCV.NXT`(FIN을 빼고 센 데이터의 끝). 이 번호 앞까지는 빈 곳 없이 받았다.
+    /// `RCV.NXT`, the end of data without counting FIN. All bytes before this number have been received without gaps.
     package private(set) var nextSequence: SequenceNumber
-    /// 앱이 읽어 갈 수 있는 바이트 수.
+    /// The number of bytes available for the app to read.
     package private(set) var readableCount = 0
 
-    /// `nextSequence`(`RCV.NXT`)가 `initialSequence`이고 용량이 `capacity`인 빈 버퍼.
-    /// `initialSequence`는 상대의 첫 데이터 바이트 번호(`IRS + 1`)다. 용량은 2³⁰ 이하여야 시퀀스 번호의 앞뒤 판정이 맞다.
+    /// Creates an empty buffer with `nextSequence` (`RCV.NXT`) set to `initialSequence` and capacity `capacity`.
+    /// `initialSequence` is the peer's first data byte number (`IRS + 1`). Capacity must be at most 2³⁰ for sequence
+    /// number ordering to be correct.
     package init(initialSequence: SequenceNumber, capacity: Int = ReceiveBuffer.defaultCapacity) {
-        precondition(capacity <= 1 << 30, "용량이 시퀀스 번호의 비교 범위를 넘는다")
+        precondition(capacity <= 1 << 30, "Capacity exceeds the sequence number comparison range")
         ring = ByteRing(capacity: capacity)
         nextSequence = initialSequence
         extents.reserveCapacity(Self.maximumOutOfOrderRanges)
     }
 
-    /// 저장소의 용량(바이트). 받는 창은 이것을 넘지 않는다.
+    /// Storage capacity in bytes. The receive window cannot exceed it.
     package var capacity: Int { ring.capacity }
 
-    /// 광고할 수 있는 창의 최대치: `RCV.NXT`에서 버퍼의 남은 자리까지. 연결은 여기서 SWS 회피와 창 확장의 내림을 적용해 광고한다.
+    /// The largest window that can be advertised, from `RCV.NXT` to the end of free buffer space. The connection
+    /// applies SWS avoidance and rounds down for window scaling before advertising it.
     package var windowSize: Int { capacity - readableCount }
 
-    /// 창의 오른쪽 끝(`RCV.NXT + windowSize`). 앱이 읽을 때만 나아가고 줄지 않는다.
+    /// The right edge of the window (`RCV.NXT + windowSize`). Advances only when the app reads and never retreats.
     package var windowEnd: SequenceNumber { nextSequence.advanced(by: UInt32(windowSize)) }
 
-    /// 순서가 어긋난 구간의 수. 0 ... 32.
+    /// The number of out-of-order ranges. 0 ... 32.
     package var outOfOrderRangeCount: Int { extents.count }
 
-    /// 순서가 어긋난 채로 저장된 바이트의 합.
+    /// The total number of bytes stored out of order.
     package var outOfOrderByteCount: Int { extents.reduce(0) { $0 + ($1.end - $1.start) } }
 
-    /// 저장소로 실제 잡힌 바이트 수(시험·측정용). 용량을 넘지 않는다.
+    /// The number of bytes actually allocated for storage (for tests and measurement). Never exceeds capacity.
     package var allocatedByteCount: Int { ring.allocatedByteCount }
 
-    /// 상대가 보낸 데이터 `bytes`(첫 바이트의 번호가 `sequence`)를 받는 창 안의 부분만 받는다.
+    /// Accepts the part of the peer's `bytes` within the receive window. `sequence` is the first byte's number.
     ///
-    /// - 창의 왼쪽(이미 받은 쪽)이나 오른쪽(`windowEnd` 너머)으로 걸친 부분은 버리고 창 안의 부분만 둔다.
-    /// - 이미 있는 바이트(읽을 수 있는 것, 순서가 어긋난 채 있는 것)와 겹치면 먼저 받은 것을 그대로 둔다.
-    /// - 새 구간이 필요한데 32개를 넘으면 세그먼트 전체를 받지 않는다(`rejectedForRangeLimit`).
-    /// - 빈 곳이 메워지면 `RCV.NXT`가 이어진 끝까지 나아간다.
+    /// - Drops bytes that extend to the left (already received) or right (past `windowEnd`) of the window and keeps only the bytes inside it.
+    /// - Keeps existing bytes on overlap, whether they are readable or out of order.
+    /// - Rejects the entire segment if a new range would exceed 32 (`rejectedForRangeLimit`).
+    /// - Filling a gap advances `RCV.NXT` to the end of contiguous data.
     ///
-    /// 시퀀스 검사(RST·ACK로 답할지)는 연결이 한다. 이 함수는 창 안의 바이트만 다룬다.
+    /// The connection checks sequence numbers and decides whether to answer with RST or ACK. This function handles only
+    /// bytes inside the window.
     package mutating func insert(_ bytes: ArraySlice<UInt8>, at sequence: SequenceNumber) -> Insertion {
-        // 창 안의 구간 [lower, upper)를 `RCV.NXT`에서의 거리로 구한다.
+        // Compute the in-window range [lower, upper) as distances from `RCV.NXT`.
         let start = Int(sequence.distance(from: nextSequence))
         let skipped = max(0, -start)
         let lower = max(0, start)
@@ -103,14 +108,14 @@ package struct ReceiveBuffer: Sendable {
         let upper = lower + min(bytes.count - skipped, windowSize - lower)
         let payload = bytes[bytes.startIndex + skipped..<bytes.startIndex + skipped + (upper - lower)]
 
-        // 새 구간과 겹치거나 맞닿는 기존 구간은 first..<last다.
+        // The existing ranges overlapping or touching the new range are first..<last.
         let first = extents.firstIndex { $0.end >= lower } ?? extents.count
         let last = extents[first...].firstIndex { $0.start > upper } ?? extents.count
         if first == last, lower > 0, extents.count >= Self.maximumOutOfOrderRanges {
             return Insertion(rejectedForRangeLimit: true)
         }
 
-        // 기존 구간이 덮지 않은 틈만 쓴다(겹치는 바이트는 먼저 받은 것이 이긴다).
+        // Write only the gaps not covered by existing ranges. On overlap, the bytes received first win.
         var storedCount = 0
         var cursor = lower
         for extent in extents[first..<last] {
@@ -123,7 +128,7 @@ package struct ReceiveBuffer: Sendable {
             storedCount += write(payload, from: cursor, to: upper, payloadBase: lower)
         }
 
-        // 겹친 구간을 하나로 합친다. 합친 구간이 이 세그먼트가 든 구간이라 가장 최근 것이 된다.
+        // Merge the overlapping ranges into one. The merged range contains this segment and becomes the most recent range.
         insertionCount &+= 1
         let merged = Extent(
             start: first < last ? min(lower, extents[first].start) : lower,
@@ -133,7 +138,7 @@ package struct ReceiveBuffer: Sendable {
         let hadOutOfOrderData = !extents.isEmpty
         extents.replaceSubrange(first..<last, with: [merged])
 
-        // `RCV.NXT`에 닿은 구간은 읽을 수 있는 바이트가 되고 나머지 구간은 그만큼 앞으로 당겨진다.
+        // The range that reaches `RCV.NXT` becomes readable bytes. Shift the remaining ranges forward by that amount.
         var advancedCount = 0
         if merged.start == 0 {
             advancedCount = merged.end
@@ -149,16 +154,18 @@ package struct ReceiveBuffer: Sendable {
             advancedCount: advancedCount, storedCount: storedCount, filledGap: advancedCount > 0 && hadOutOfOrderData)
     }
 
-    /// 순서가 어긋난 구간을 SACK 블록으로, 최근에 세그먼트가 든 것부터 `limit`개까지 낸다(RFC 2018 4).
+    /// Returns out-of-order ranges as up to `limit` SACK blocks, most recently updated by a segment first (RFC 2018 §4).
     ///
-    /// - 첫 블록은 마지막 `insert`가 바이트를 둔 구간이다. 그 세그먼트가 `RCV.NXT`를 나아가게 했으면(구간이 읽을 수 있는
-    ///   바이트가 되어 사라졌으면) 그 다음으로 최근인 구간이다. RFC 2018 4의 첫째 규칙("이 ACK를 일으킨 세그먼트가 든 블록,
-    ///   그 세그먼트가 Acknowledgment Number를 나아가게 했으면 예외")이다. 연결은 순서가 어긋난 세그먼트마다 곧바로 ACK하므로
-    ///   (계약 동작 F5) 이 ACK를 일으킨 세그먼트가 곧 마지막 `insert`다.
-    /// - 나머지는 세그먼트가 든 차례의 역순이다. 구간마다 세그먼트가 들 때 그 세그먼트의 ACK에서 첫 블록으로 알렸으므로,
-    ///   이 순서가 셋째 규칙의 "가장 최근에 (첫 블록으로) 알린 순서"다. 구간은 서로 겹치지 않으므로 앞의 블록의 부분 집합인
-    ///   블록이 없고(셋째 규칙), 어느 블록도 이미 읽을 수 있게 된 바이트를 가리키지 않는다.
-    /// - 구간이 없으면 빈 배열이다. 빈 곳이 다 메워진 뒤의 ACK에는 SACK을 싣지 않는다.
+    /// - The first block is the range in which the last `insert` placed bytes. If that segment advanced `RCV.NXT` and
+    ///   the range disappeared by becoming readable bytes, use the next most recent range. This is the first rule in
+    ///   RFC 2018 §4, the block containing the segment that triggered this ACK, unless that segment advanced the
+    ///   Acknowledgment Number. The connection immediately ACKs every out-of-order segment (contract behavior F5), so
+    ///   the segment that triggered this ACK is the last `insert`.
+    /// - Remaining blocks are in reverse order of segment insertion. A range was reported as the first block in the ACK
+    ///   each time it received a segment, so this is the third rule's order of most recently reported first blocks.
+    ///   Ranges do not overlap, so no block is a subset of an earlier block (the third rule), and none points to bytes
+    ///   that have become readable.
+    /// - Returns an empty array if there are no ranges. An ACK after all gaps are filled carries no SACK.
     package func sackBlocks(limit: Int) -> [TCPSegment.SACKBlock] {
         extents.sorted { $0.lastInsertion > $1.lastInsertion }.prefix(max(0, limit)).map { extent in
             TCPSegment.SACKBlock(
@@ -167,9 +174,9 @@ package struct ReceiveBuffer: Sendable {
         }
     }
 
-    /// 읽을 수 있는 바이트를 앞에서부터 `maximumLength`바이트까지 꺼낸다. 꺼낸 만큼 창이 열린다.
+    /// Takes up to `maximumLength` readable bytes from the front. Opens the window by the amount taken.
     ///
-    /// shortcut: 호출마다 새 배열 하나에 복사한다(`SendBuffer.bytes`와 같은 까닭).
+    /// shortcut: Copies into a new array per call, for the same reason as `SendBuffer.bytes`.
     package mutating func read(upTo maximumLength: Int) -> [UInt8] {
         let count = min(max(maximumLength, 0), readableCount)
         guard count > 0 else { return [] }
@@ -182,7 +189,8 @@ package struct ReceiveBuffer: Sendable {
         return bytes
     }
 
-    /// `payload`(거리 `payloadBase`부터)의 `[from, to)` 거리 구간을 저장소의 제자리에 쓰고 쓴 바이트 수를 돌려준다.
+    /// Writes `payload`'s distance range `[from, to)` into its place in storage and returns the number of bytes
+    /// written. The payload starts at distance `payloadBase`.
     private mutating func write(
         _ payload: ArraySlice<UInt8>, from: Int, to: Int, payloadBase: Int
     ) -> Int {

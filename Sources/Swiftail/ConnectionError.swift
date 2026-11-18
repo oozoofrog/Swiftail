@@ -1,30 +1,31 @@
-/// 듣기·걸기·연결의 실패(`TailnetNode.listen(port:)`, `TailnetNode.connect(to:port:)`, `TailnetListener`,
-/// `TailnetConnection`). 계약 `docs/contracts/SwiftailNetstack.md` "공개 API"와 동작 A.
+/// A failure while listening, connecting, or using a connection (`TailnetNode.listen(port:)`,
+/// `TailnetNode.connect(to:port:)`, `TailnetListener`, `TailnetConnection`). Contract
+/// `docs/contracts/SwiftailNetstack.md`, “Public API” and behavior A.
 ///
-/// 메시지에는 무엇이 잘못됐는지만 담는다. 주소·이름·실린 데이터는 담지 않는다(동작 K).
+/// Messages describe only what went wrong. They omit addresses, names, and payload data (behavior K).
 public enum ConnectionError: Error, Sendable, Equatable {
-    /// 장치가 `.inProcess`가 아니거나, 포트가 0이거나, 호스트가 비었거나, 읽을 길이가 1보다 작다.
+    /// The device is not `.inProcess`, the port is 0, the host is empty, or the read length is less than 1.
     case invalidConfiguration(String)
-    /// 노드가 돌고 있지 않다(`run()`이 끝났다). `connect`는 상태가 `.running`이 아닐 때도 이것이다.
+    /// The node is not running (`run()` ended). `connect` also returns this when the state is not `.running`.
     case notRunning
-    /// 이름이 netmap에 없거나, 그 주소를 가진 피어가 없다.
+    /// The name is missing from the netmap, or no peer has that address.
     case unknownHost
-    /// 그 포트에 이미 리스너가 있다.
+    /// The port already has a listener.
     case addressInUse
-    /// 연결 수나 리스너 수가 상한에 닿았다.
+    /// The connection or listener count reached its limit.
     case limitReached
-    /// 건 연결을 상대가 거절했다(SYN에 RST).
+    /// The peer refused the outgoing connection (RST in response to SYN).
     case refused
-    /// 상대가 답하지 않는다(재전송 한도, keep-alive 무응답, 닫는 중의 기한).
+    /// The peer did not respond (retransmission limit, unanswered keep-alive, or a deadline during closure).
     case timedOut
-    /// 상대가 연결을 끊었다(RST).
+    /// The peer aborted the connection (RST).
     case reset
-    /// 상대가 netmap에서 빠졌거나 그 주소의 주인이 바뀌었다. 또는 이 노드의 주소가 바뀌었다.
+    /// The peer left the netmap, the owner of its address changed, or this node's address changed.
     case peerRemoved
-    /// 이미 닫거나 끊은 연결·리스너다. 쓰기를 끝낸(`finishWriting`) 뒤의 `write`도 이것이다.
+    /// The connection or listener was already closed or aborted. Also applies to `write` after `finishWriting`.
     case closed
-    /// 호출한 Task가 취소되었다.
+    /// The calling Task was canceled.
     case cancelled
-    /// 같은 방향의 호출이 이미 기다리고 있다(읽기 둘, 쓰기 둘).
+    /// A call in the same direction is already waiting (two reads or two writes).
     case concurrentUse
 }

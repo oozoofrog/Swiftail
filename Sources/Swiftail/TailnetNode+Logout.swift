@@ -1,27 +1,29 @@
 import SwiftailControl
 
-/// 서버 쪽 로그아웃. 계약 `docs/contracts/SwiftailHost.md` "로그아웃" 동작 O.
+/// Server-side logout. Contract `docs/contracts/SwiftailHost.md`, “Logout,” behavior O.
 extension TailnetNode {
-    /// 제어 서버에 이 노드의 node 키를 만료시키라고 알린다(Go `tailscale logout`의 서버 쪽).
+    /// Asks the control server to expire this node's node key (the server side of Go `tailscale logout`).
     ///
-    /// `run()`이 돌지 않을 때(시작 전이나 끝난 뒤) 부른다. 앱의 순서는 `run()`을 취소하고 끝나기를 기다림 → `logOut()` →
-    /// 상태 디렉터리 비우기다. 이 메서드는 로컬 파일(신원·lock 상태·인증서)을 지우지 않는다. 실패해도(망 없음) 앱은 디렉터리를
-    /// 지울 수 있고, 그때는 옛 노드가 서버에 남는다. 다만 요청을 보낸 뒤의 취소나 기한 초과는 서버가 이미 키를 만료시킨
-    /// 뒤일 수 있다. 실패가 "서버에 남았다"를 뜻하지는 않는다.
+    /// Call before `run()` starts or after it ends. The app cancels `run()` and waits for it to end, calls `logOut()`,
+    /// then empties the state directory. This method leaves local files (identity, lock state, and certificates) in
+    /// place. The app can clear the directory even on a failure such as no network, in which case the old node remains
+    /// on the server. If cancellation or a timeout occurs after sending the request, the server may already have
+    /// expired the key. A failure does not imply that the node remains on the server.
     ///
-    /// 겹침은 **같은 프로세스 안에서만** 막는다. 다른 프로세스(터널 확장)가 같은 상태 디렉터리로 `run()`하는 중이면 막지
-    /// 못하고, 그 노드는 자기 키의 만료를 보고 새 키로 다시 등록한다(인증 키가 있으면 로그아웃이 되돌려진다). 앱이 그
-    /// 프로세스를 먼저 멈춘다.
+    /// Overlapping calls are prevented **only within the same process**. If another process (a tunnel extension) is in
+    /// `run()` with the same state directory, it is not blocked. That node sees its key expire and registers again with
+    /// a new key, undoing logout if it has an auth key. The app stops that process first.
     ///
-    /// 등록한 적이 없으면(저장된 node 키가 없으면) 아무것도 보내지 않고 돌아온다. 보낸 요청은 다시 시도하지 않는다.
-    /// `setDefaultInterface`로 알린 인터페이스가 있으면 그 인터페이스로 연결한다.
+    /// Returns without sending anything if the node was never registered (no stored node key). Does not retry a request
+    /// that was sent. Connects through the interface reported by `setDefaultInterface`, if any.
     ///
-    /// - Throws: 같은 프로세스에서 같은 상태 디렉터리의 `run()`이나 다른 `logOut()`(이 노드든 다른 노드든)이 도는 중이면
-    ///   `stateDirectoryInUse`. 서버가 거절하면
-    ///   `control(.registrationRejected)`. 10초 안에 끝나지 않거나 연결하지 못하면 `control(.connection)`, 200이 아니면
-    ///   `control(.http(status:))`, 신원 파일을 읽지 못하면 `control(.storage)`.
+    /// - Throws: `stateDirectoryInUse` if a `run()` or another `logOut()` for the same directory is in progress in this
+    ///   process, whether on this node or another. Throws `control(.registrationRejected)` if the server rejects it,
+    ///   `control(.connection)` if it does not finish within 10 seconds or cannot connect, `control(.http(status:))`
+    ///   for a response other than 200, or `control(.storage)` if the identity file cannot be read.
     public func logOut() async throws(NodeError) {
-        // `run()`과 같은 표로 막는다. 이 디렉터리를 쥔 동안 시작하는 `run()`은 `stateDirectoryInUse`로 끝난다.
+        // Uses the same table as `run()` to prevent overlap. A `run()` started while this directory is claimed ends
+        // with `stateDirectoryInUse`.
         let claim = try StateDirectoryClaims.shared.claimCreating(configuration.stateDirectory)
         defer { StateDirectoryClaims.shared.release(claim) }
 
@@ -35,9 +37,9 @@ extension TailnetNode {
         do throws(ControlError) {
             try await control.logOut()
         } catch {
-            Self.log.error("로그아웃 실패")
+            Self.log.error("Logout failed")
             throw NodeError(error)
         }
-        Self.log.info("로그아웃: 서버에 node 키 만료를 알림")
+        Self.log.info("Logout: notified the server of node key expiration")
     }
 }

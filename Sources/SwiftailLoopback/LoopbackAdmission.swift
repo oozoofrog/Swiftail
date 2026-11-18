@@ -2,33 +2,37 @@ import Network
 import SwiftailCrypto
 import Synchronization
 
-/// 다리가 연 루프백 연결만 리스너를 지나가게 하는 표와 framer(계약 `docs/contracts/SwiftailHost.md` 동작 B6, M7-9b).
+/// A table and framer that admit only loopback connections opened by the bridge (contract
+/// `docs/contracts/SwiftailHost.md` behavior B6, M7-9b).
 ///
-/// 다리는 루프백 연결을 맺으면 TLS 바이트보다 먼저 32바이트 토큰을 보낸다. 리스너의 스택에서 TLS 아래(TCP 바로 위)에
-/// 놓인 `LoopbackAdmissionFramer`가 그 토큰을 이 표에서 찾아 소비한 연결만 위로 올린다. 그 연결의
-/// `(출발 포트, 리스너 포트)`에 상대를 적어 두고, 서버가 그 연결이 `.ready`가 된 뒤 한 번 가져간다.
+/// When the bridge establishes a loopback connection, it sends a 32-byte token before any TLS bytes.
+/// `LoopbackAdmissionFramer`, below TLS and directly above TCP in the listener's stack, passes up only connections
+/// whose token it finds and consumes in this table. The table records the peer under the connection's (source port,
+/// listener port). The server retrieves it once after that connection becomes `.ready`.
 ///
-/// 출발 포트만으로는 연결을 가릴 수 없다(검토에서 재현된 것: 다른 리스너로 같은 출발 포트를 쓰는 연결, RST로 풀린 포트를
-/// 다시 쓰는 연결). 토큰은 그 연결 안에서만 오가므로 같은 기기의 다른 프로세스는 그것을 내밀 수 없다.
+/// The source port alone cannot distinguish connections. The review reproduced connections using the same source port
+/// with different listeners and connections reusing a port released by RST. The token travels only within that
+/// connection, so other processes on the same device cannot present it.
 final class LoopbackAdmissionTable: Sendable {
-    /// 루프백 연결 하나를 가리키는 열쇠. 두 끝이 모두 `127.0.0.1`이므로 4-튜플은 두 포트로 정해진다.
+    /// A key for one loopback connection. Both ends are `127.0.0.1`, so the two ports determine the 4-tuple.
     struct Key: Hashable, Sendable {
         var sourcePort: UInt16
         var listenerPort: UInt16
     }
 
-    /// 시험이 보는 표의 모양. 토큰과 신원은 담지 않는다.
+    /// The table snapshot used by tests. Contains no tokens or identities.
     struct Snapshot: Sendable {
         var expected: Set<Key>
         var admitted: Set<Key>
     }
 
-    /// 토큰의 길이(바이트).
+    /// The token length in bytes.
     static let tokenLength = 32
-    /// 기다리는 토큰의 상한. 다리가 잇는 연결의 상한(256)과 같다.
+    /// The pending token limit, equal to the bridge's connection limit (256).
     static let expectedLimit = 256
-    /// 서버가 아직 가져가지 않은 허가의 상한. 넘으면 다리 쪽이 끝난 연결의 허가 가운데 가장 오래된 것을 버린다(그 연결의
-    /// 조회는 nil이 된다). 다리가 잇는 연결은 256개까지이므로 살아 있는 연결의 허가는 밀려나지 않는다.
+    /// The limit on admissions the server has yet to claim. On overflow, drops the oldest admission among connections
+    /// that have ended on the bridge side, causing lookups for that connection to return nil. The bridge forwards at
+    /// most 256 connections, so admissions for live connections are retained.
     static let admittedLimit = 256
 
     private struct Expected {
@@ -39,30 +43,31 @@ final class LoopbackAdmissionTable: Sendable {
 
     private struct Admitted {
         var origin: LoopbackBridge.Origin
-        /// 다리가 그 루프백 연결을 끝냈다. 서버가 가져가지 않으면 남는 허가다(TLS 핸드셰이크 전에 끝난 연결이 그렇다).
+        /// The bridge ended the loopback connection. The admission stays if the server did not claim it, as with a
+        /// connection that ends before the TLS handshake.
         var hasBridgeEnded = false
     }
 
     private struct State {
         var expected: [Expected] = []
         var admitted: [Key: Admitted] = [:]
-        /// `admitted`의 열쇠를 적은 차례(오래된 것부터). 상한을 넘을 때 버릴 것을 고른다.
+        /// The insertion order of `admitted` keys, oldest first. Used to choose what to drop when the limit is exceeded.
         var admittedOrder: [Key] = []
     }
 
     private let state = Mutex(State())
 
-    /// 연결마다 새로 만드는 일회용 토큰.
+    /// A one-time token generated for each connection.
     static func makeToken() -> [UInt8] {
         var generator = SystemRandomNumberGenerator()
         return (0..<tokenLength).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
     }
 
-    /// 다리: `key`의 연결에서 올 `token`을 기다린다.
+    /// Records that the bridge expects `token` from the connection identified by `key`.
     ///
-    /// 그 열쇠가 이미 기다리는 중이거나, 허가된 채 서버가 아직 가져가지 않았으면 적지 않고 false다. 그 허가는 앞서 같은
-    /// 4-튜플을 썼던 연결의 것이고, 서버가 그 연결에 대해 아직 물을 수 있기 때문이다(다리는 다른 출발 포트로 다시 건다).
-    /// 상한에 닿아도 false다.
+    /// Returns false without recording if the key is already pending or has an admission the server has not claimed.
+    /// That admission belongs to an earlier connection with the same 4-tuple, which the server may still query. The
+    /// bridge retries with a different source port. Returns false at the limit as well.
     func expect(_ token: [UInt8], for key: Key, origin: LoopbackBridge.Origin) -> Bool {
         state.withLock { state in
             guard state.expected.count < Self.expectedLimit,
@@ -74,9 +79,11 @@ final class LoopbackAdmissionTable: Sendable {
         }
     }
 
-    /// 다리: 끝난 연결의 토큰을 거둔다. framer가 이미 소비했으면 그 허가에 다리 쪽이 끝났다고 적는다.
+    /// Withdraws the bridge's token for an ended connection. If the framer already consumed it, marks the admission as
+    /// ended on the bridge side.
     ///
-    /// 허가를 지우지는 않는다. 서버가 그 연결에 대해 아직 물을 수 있고, 지우면 같은 열쇠의 새 허가가 그 조회에 답할 수 있다.
+    /// Keeps the admission because the server may still query that connection. Removing it could let a new admission
+    /// with the same key answer the query.
     func withdraw(_ key: Key) {
         state.withLock { state in
             state.expected.removeAll { $0.key == key }
@@ -84,10 +91,11 @@ final class LoopbackAdmissionTable: Sendable {
         }
     }
 
-    /// framer: `token`을 찾아 소비하고, 그것이 `key`의 연결을 위한 것이면 허가를 적고 true다.
+    /// Lets the framer find and consume `token`. Records an admission and returns true if the token belongs to the
+    /// connection identified by `key`.
     ///
-    /// 기다리는 토큰을 모두 상수 시간으로 견준다(맞은 것이 있어도 멈추지 않는다). 맞은 토큰은 열쇠가 달라도 소비한다:
-    /// 다른 리스너나 다른 출발 포트에서 내민 토큰은 가로챈 것이다.
+    /// Compares all pending tokens in constant time, continuing even after a match. Consumes a matching token even if
+    /// the key differs. A token presented from a different listener or source port was intercepted.
     func admit(_ token: [UInt8], for key: Key) -> Bool {
         state.withLock { state in
             var match: Int?
@@ -107,7 +115,7 @@ final class LoopbackAdmissionTable: Sendable {
         }
     }
 
-    /// 서버: 허가된 연결의 상대를 한 번 내준다. 내준 뒤에는 지운다.
+    /// Gives the server the admitted connection's peer once and removes it after returning it.
     func take(_ key: Key) -> LoopbackBridge.Origin? {
         state.withLock { state in
             guard let admitted = state.admitted.removeValue(forKey: key) else { return nil }
@@ -121,20 +129,21 @@ final class LoopbackAdmissionTable: Sendable {
     }
 }
 
-/// 리스너 쪽 framer. 연결의 첫 32바이트를 토큰으로 읽고, 표에서 소비한 연결만 그 뒤의 바이트를 위로 올린다.
+/// The listener-side framer. Reads the connection's first 32 bytes as a token and passes subsequent bytes up only for
+/// connections whose token it consumes in the table.
 ///
-/// 스택의 TLS 아래(TCP 바로 위)에 둔다(`applicationProtocols`의 끝에 더한다). 토큰을 기다리는 동안 위로 한 바이트도
-/// 올리지 않고 연결을 준비 상태로 두지 않으므로(`willMarkReady`), 토큰이 없거나 틀리거나 짧은 연결은 서버에게
-/// `.ready`가 되지 않고 실패한다. 맞으면 이미 받아 둔 바이트를 올린 뒤 지나가게 한다(`passThroughInput`은 그 전에
-/// 받아 둔 바이트를 올리지 않는다).
+/// Place it below TLS and directly above TCP by appending it to `applicationProtocols`. While waiting for the token, it
+/// passes up no bytes and leaves the connection unready (`willMarkReady`). Connections with missing, incorrect, or
+/// short tokens fail before the server sees them as `.ready`. On a match, it passes up already received bytes and then
+/// enables passthrough, because `passThroughInput` does not deliver bytes received before it was enabled.
 ///
-/// Network.framework가 연결마다 만들고 그 연결의 문맥에서만 부른다. 상태는 그 문맥 안에서만 바뀐다.
+/// Network.framework creates a framer per connection and calls it only in that connection's context. State changes only within that context.
 final class LoopbackAdmissionFramer: NWProtocolFramerImplementation {
     static let label = "SwiftailLoopbackAdmission"
     static let definition = NWProtocolFramer.Definition(implementation: LoopbackAdmissionFramer.self)
-    /// `NWProtocolFramer.Options`에 표를 싣는 열쇠.
+    /// The key for storing the table in `NWProtocolFramer.Options`.
     static let tableOption = "table"
-    /// 토큰을 기다리는 시간(밀리초). 다리가 루프백 연결을 맺는 기한과 같다.
+    /// The wait for a token in milliseconds, equal to the bridge's deadline for establishing a loopback connection.
     static let tokenTimeout: UInt64 = 5_000
 
     private let table: LoopbackAdmissionTable?
@@ -158,8 +167,8 @@ final class LoopbackAdmissionFramer: NWProtocolFramerImplementation {
             token = Array(buffer.prefix(length))
             return length
         }
-        // 토큰을 다 받기 전에는 상대가 끝내도(FIN) 알 수 없다: 준비 전의 framer는 끝을 알리는 호출을 받지 않는다(실험으로
-        // 확인). 그런 연결은 `wakeup`의 기한에 끝난다.
+        // Before the complete token arrives, the framer cannot tell if the peer closed with FIN. A framer that is not
+        // ready receives no end notification (verified experimentally). Those connections end at the `wakeup` deadline.
         guard let token else { return length }
         guard let table, let key = Self.key(of: framer), table.admit(token, for: key) else {
             framer.markFailed(error: .posix(.EACCES))
@@ -173,7 +182,8 @@ final class LoopbackAdmissionFramer: NWProtocolFramerImplementation {
         return 0
     }
 
-    /// 허가 전에는 위에서 내려오는 것이 없어야 한다(준비 상태가 아니다). 오면 내보내지 않고 연결을 끝낸다.
+    /// Nothing should come down from above before admission because the connection is not ready. If anything does, end
+    /// the connection without sending it.
     func handleOutput(framer: NWProtocolFramer.Instance, message: NWProtocolFramer.Message, messageLength: Int, isComplete: Bool) {
         framer.markFailed(error: .posix(.EACCES))
     }
@@ -186,7 +196,7 @@ final class LoopbackAdmissionFramer: NWProtocolFramerImplementation {
 
     func cleanup(framer: NWProtocolFramer.Instance) {}
 
-    /// 연결의 두 끝이 `127.0.0.1`일 때 그 열쇠.
+    /// The connection key when both ends are `127.0.0.1`.
     private static func key(of framer: NWProtocolFramer.Instance) -> LoopbackAdmissionTable.Key? {
         guard case .hostPort(.ipv4(let remoteHost), let remotePort)? = framer.remote, remoteHost == .loopback,
               case .hostPort(.ipv4(let localHost), let localPort)? = framer.local, localHost == .loopback
@@ -194,7 +204,7 @@ final class LoopbackAdmissionFramer: NWProtocolFramerImplementation {
         return LoopbackAdmissionTable.Key(sourcePort: remotePort.rawValue, listenerPort: localPort.rawValue)
     }
 
-    /// 토큰과 함께 받아 둔 바이트를 위로 올린다.
+    /// Passes up bytes already received along with the token.
     private static func deliverBuffered(_ framer: NWProtocolFramer.Instance) {
         while true {
             var available = 0

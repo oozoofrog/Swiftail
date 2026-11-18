@@ -1,14 +1,16 @@
 import CryptoKit
 import SwiftailBase
 
-/// 연결의 ISN(RFC 6528 3, RFC 9293 3.4.1).
+/// A connection's ISN (RFC 6528 §3, RFC 9293 §3.4.1).
 ///
-/// `ISN = M + F(localip, localport, remoteip, remoteport, secretkey)`. M은 스택을 만든 시각부터 4마이크로초마다 1씩 느는
-/// 시계 성분이고(MUST-8), F는 `HMAC-SHA256(비밀, 자기 주소 ‖ 자기 포트 ‖ 상대 주소 ‖ 상대 포트)`의 앞 32비트다(계약 동작 S7).
-/// F는 비밀 없이 밖에서 계산할 수 없어야 한다(RFC 6528 3, MUST-9). 같은 4-튜플의 ISN은 시간에 따라 늘고, 다른 4-튜플의
-/// ISN은 서로 짐작할 수 없다.
+/// `ISN = M + F(localip, localport, remoteip, remoteport, secretkey)`. M is the clock component, increasing by 1 every
+/// 4 microseconds from stack creation (MUST-8). F is the first 32 bits of
+/// `HMAC-SHA256(secret, local address ‖ local port ‖ remote address ‖ remote port)` (contract behavior S7). An outsider
+/// must be unable to compute F without the
+/// secret (RFC 6528 §3, MUST-9). ISNs for the same 4-tuple increase over time, and ISNs for different 4-tuples cannot
+/// be inferred from one another.
 ///
-/// 비밀은 `description`·`dump`에 나오지 않는다(계약 동작 K1).
+/// The secret is omitted from `description` and `dump` (contract behavior K1).
 struct InitialSequenceNumberGenerator: Sendable, CustomStringConvertible, CustomReflectable {
     private let key: SymmetricKey
     private let origin: ContinuousClock.Instant
@@ -18,7 +20,7 @@ struct InitialSequenceNumberGenerator: Sendable, CustomStringConvertible, Custom
         self.origin = origin
     }
 
-    /// `local`과 `remote` 사이의 새 연결에 쓸 ISN.
+    /// Returns the ISN for a new connection between `local` and `remote`.
     func initialSequenceNumber(
         local: IPEndpoint, remote: IPEndpoint, at now: ContinuousClock.Instant
     ) -> SequenceNumber {
@@ -33,14 +35,15 @@ struct InitialSequenceNumberGenerator: Sendable, CustomStringConvertible, Custom
         return SequenceNumber(function).advanced(by: clockComponent(at: now))
     }
 
-    /// M: `origin`부터 4마이크로초(4×10¹² 아토초)마다 1. 2³²에서 돈다. 시각이 거꾸로 가도 죽지 않는다(넘치지 않는 산술).
+    /// M advances by 1 every 4 microseconds (4×10¹² attoseconds) from `origin` and wraps at 2³². Arithmetic does not
+    /// overflow even if time goes backward.
     func clockComponent(at now: ContinuousClock.Instant) -> UInt32 {
         let (seconds, attoseconds) = (now - origin).components
         let ticks = UInt64(bitPattern: seconds) &* 250_000 &+ UInt64(bitPattern: attoseconds / 4_000_000_000_000)
         return UInt32(truncatingIfNeeded: ticks)
     }
 
-    var description: String { "InitialSequenceNumberGenerator(비밀 숨김)" }
+    var description: String { "InitialSequenceNumberGenerator(secret redacted)" }
 
     var customMirror: Mirror { Mirror(self, children: [:]) }
 }

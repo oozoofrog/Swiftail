@@ -1,43 +1,43 @@
 import SwiftailBase
 import SwiftailEngine
 
-/// 데이터면 피어의 node 키와 이름(FQDN)의 표. 경로 사건에 이름을 붙이고, 이름으로 피어의 경로를 찾는다.
+/// A table of node keys and names (FQDNs) for data plane peers. Attaches names to path events and looks up peer paths by name.
 ///
-/// 이름은 netmap `Node.name`에서 끝의 점 하나를 뗀 것이다(`rd-mac-1a2b3c4d.tail0001.ts.net`). 찾을 때는 끝의 점 하나를
-/// 떼고 ASCII 대소문자를 무시해 비교하며, 같은 이름이 둘이면 node ID가 작은 쪽이다. 노드가 netmap마다 새로 만든다.
-/// 계약 `docs/contracts/SwiftailEngine.md` "M4에서 바뀌는 것" N6.
+/// The name is netmap `Node.name` with one trailing dot removed (`rd-mac-1a2b3c4d.tail0001.ts.net`). Lookup removes one
+/// trailing dot and compares ASCII case-insensitively. If two peers share a name, the lower node ID wins. The node
+/// rebuilds it for each netmap. Contract `docs/contracts/SwiftailEngine.md`, “Changes in M4” N6.
 struct PeerDirectory: Sendable, Equatable {
     struct Entry: Sendable, Equatable {
         var key: NodePublicKey
-        /// 끝의 점을 뗀 이름. 비어 있을 수 있다.
+        /// The name with the trailing dot removed. May be empty.
         var name: String
     }
 
-    /// node ID 오름차순.
+    /// Ascending node ID order.
     private(set) var entries: [Entry] = []
 
     init() {}
 
-    /// - Parameter peers: 데이터면에 올린 피어(`EnginePeer.peers(in:at:)`, node ID 오름차순).
+    /// - Parameter peers: Peers installed in the data plane (`EnginePeer.peers(in:at:)`, ascending node ID order).
     init(peers: [EnginePeer]) {
         entries = peers.map { peer in
             Entry(key: peer.key, name: peer.name.hasSuffix(".") ? String(peer.name.dropLast()) : peer.name)
         }
     }
 
-    /// 이 피어의 이름. 표에 없거나 이름이 비었으면 nil.
+    /// The peer's name. Returns nil if absent from the table or empty.
     func name(of key: NodePublicKey) -> String? {
         entries.first { $0.key == key }.map(\.name).flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// 이름이 `fqdn`인 피어의 키. 같은 이름이 둘이면 node ID가 작은 쪽이다.
+    /// The key of the peer named `fqdn`. If two peers share the name, the lower node ID wins.
     func key(named fqdn: String) -> NodePublicKey? {
         let wanted = Self.comparable(fqdn)
         guard !wanted.isEmpty else { return nil }
         return entries.first { Self.comparable($0.name) == wanted }?.key
     }
 
-    /// `other`에만 있는 피어를 뒤에 덧붙인 표. 빠지는 피어의 경로 사건에 옛 이름을 붙이는 동안만 쓴다.
+    /// The table with peers present only in `other` appended. Used only to attach old names to path events for departing peers.
     func keepingNames(of other: PeerDirectory) -> PeerDirectory {
         let present = Set(entries.map(\.key))
         var merged = self
@@ -45,7 +45,8 @@ struct PeerDirectory: Sendable, Equatable {
         return merged
     }
 
-    /// 비교용 이름: 끝의 점 하나를 떼고 ASCII 대문자만 소문자로 바꾼다(DNS 이름은 ASCII 대소문자를 구분하지 않는다).
+    /// The name used for comparison, with one trailing dot removed and only uppercase ASCII converted to lowercase. DNS
+    /// names are ASCII case-insensitive.
     private static func comparable(_ name: String) -> String {
         let trimmed = name.hasSuffix(".") ? name.dropLast() : Substring(name)
         let lowered = trimmed.unicodeScalars.map { scalar in

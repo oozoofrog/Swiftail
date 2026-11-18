@@ -1,50 +1,52 @@
 import Foundation
 
-/// 노드 상태를 정하는 값 타입. 입력을 받을 때마다 아래 표를 위에서부터 보고, 상태가 바뀌었을 때만 새 상태를 돌려준다.
+/// A value type that determines the node state. Checks the table below from top to bottom on each input and returns a
+/// new state only when it changes.
 ///
-/// | # | 조건(위에서부터) | 결과 |
+/// | # | Condition (top to bottom) | Result |
 /// | --- | --- | --- |
-/// | 1 | 제어가 `loginRequired(url)`를 냈고 그 뒤 `registered`가 오지 않았다 | `.needsLogin(url)` |
-/// | 2 | netmap 없음 | `.starting` |
-/// | 3 | 자기 노드가 `MachineAuthorized`가 아님 | `.needsMachineAuth` |
-/// | 4 | 이전이 `.running` | `.running` |
-/// | 5 | 홈 DERP 연결이 선 적이 있거나 세션을 맺은 피어가 있음 | `.running` |
-/// | 6 | 그 밖 | `.starting` |
+/// | 1 | Control emitted `loginRequired(url)` and no `registered` followed | `.needsLogin(url)` |
+/// | 2 | No netmap | `.starting` |
+/// | 3 | The local node is not `MachineAuthorized` | `.needsMachineAuth` |
+/// | 4 | The previous state was `.running` | `.running` |
+/// | 5 | A home DERP connection was established or a session was established with a peer | `.running` |
+/// | 6 | Otherwise | `.starting` |
 ///
-/// Go `nextStateLocked`(`ipn/ipnlocal/local.go`)의 표를 Swiftail의 입력으로 옮긴 것이다. 자기 키 만료는 제어 클라이언트가
-/// 새 키로 다시 등록하며 `loginRequired`로 알리므로 1로 간다. `.running` 뒤 연결이 끊겨도 4로 `.running`이다.
-/// `docs/contracts/SwiftailTunnel.md` 동작 B, `docs/protocol-notes/dns-state-node.md` 4.5.
+/// Adapts the table in Go `nextStateLocked` (`ipn/ipnlocal/local.go`) to Swiftail's inputs. On local key expiration,
+/// the control client registers again with a new key and reports `loginRequired`, leading to 1. If the connection drops
+/// after `.running`, 4 keeps it `.running`. `docs/contracts/SwiftailTunnel.md` behavior B,
+/// `docs/protocol-notes/dns-state-node.md` §4.5.
 struct NodeStateMachine: Sendable, Equatable {
     private(set) var state: NodeState = .starting
-    /// 1의 URL. `registered`가 지운다(Go가 `Running` 진입 때 URL을 지우는 것과 같은 효과).
+    /// The URL from 1. `registered` clears it, with the same effect as Go clearing the URL on entering `Running`.
     private var loginURL: URL?
-    /// 2. 받은 netmap이 하나라도 있었다.
+    /// 2. At least one netmap has been received.
     private var hasNetmap = false
-    /// 3. 마지막 netmap의 자기 노드가 승인되었다.
+    /// 3. The local node in the last netmap was authorized.
     private var machineAuthorized = false
-    /// 5. 홈 DERP 연결이 선 적이 있거나 피어와 세션을 맺은 적이 있다.
+    /// 5. A home DERP connection or a session with a peer has been established.
     private var hasConnected = false
 
-    /// 제어 서버가 로그인 URL을 주었다.
+    /// The control server supplied a login URL.
     mutating func loginRequired(_ url: URL) -> NodeState? {
         loginURL = url
         return reevaluate()
     }
 
-    /// 등록을 마쳤다.
+    /// Registration completed.
     mutating func registered() -> NodeState? {
         loginURL = nil
         return reevaluate()
     }
 
-    /// netmap을 받았다.
+    /// A netmap was received.
     mutating func receivedNetmap(machineAuthorized: Bool) -> NodeState? {
         hasNetmap = true
         self.machineAuthorized = machineAuthorized
         return reevaluate()
     }
 
-    /// 홈 DERP 연결이 섰거나 피어와 WireGuard 세션을 맺었다.
+    /// A home DERP connection or a WireGuard session with a peer was established.
     mutating func connected() -> NodeState? {
         hasConnected = true
         return reevaluate()

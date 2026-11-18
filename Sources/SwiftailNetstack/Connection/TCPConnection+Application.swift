@@ -1,12 +1,13 @@
-/// 응용의 호출: 쓰기, 읽기, 쓰기 끝내기, 닫기, 끊기(RFC 9293 3.10.2~3.10.5, 계약 동작 T6).
+/// Application calls for writing, reading, finishing writes, closing, and aborting (RFC 9293 §§3.10.2~3.10.5, contract behavior T6).
 ///
-/// 각 호출은 끝에서 보낼 수 있는 것을 보내고 기한이 된 ACK를 낸다. 끝난 연결에서는 아무것도 하지 않는다
-/// (읽기만은 남은 데이터를 돌려준다).
+/// Each call ends by sending what it can and emitting due ACKs. An ended connection does nothing except return
+/// remaining data on reads.
 extension TCPConnection {
-    /// 바이트를 보내는 버퍼에 자리가 있는 만큼 넣는다. 맺어지기 전(SYN-SENT, SYN-RECEIVED)에 쓴 것은 맺어진 뒤에 나간다.
+    /// Writes as many bytes as fit in the send buffer. Writes before establishment (SYN-SENT, SYN-RECEIVED) go out after establishment.
     ///
-    /// - Returns: 받아들인 바이트 수와 출력. 다 받지 못했으면 자리가 날 때 `.writable`이 나온다.
-    ///   쓰기를 끝냈거나(`finishWriting`·`close`) 쓸 수 없는 상태면 0이다.
+    /// - Returns: The number of accepted bytes and the output. If some bytes did not fit, emits `.writable` when space
+    ///   becomes available. Returns 0 after finishing writes (`finishWriting` or `close`) or in a state that cannot
+    ///   write.
     package mutating func write(
         _ bytes: ArraySlice<UInt8>, at now: ContinuousClock.Instant
     ) -> (accepted: Int, outputs: [Output]) {
@@ -18,8 +19,9 @@ extension TCPConnection {
         return (accepted, outputs)
     }
 
-    /// 읽을 수 있는 바이트를 앞에서부터 `maximumLength`까지 꺼낸다. 읽은 만큼 받는 창이 열리고, 광고한 남은 창이 버퍼의 절반
-    /// 이하이며 SWS 회피의 문턱을 넘으면 창 갱신 ACK가 나간다(계약 동작 F3, `windowUpdateIsDue`).
+    /// Takes up to `maximumLength` readable bytes from the front. The receive window opens by the amount read. A window
+    /// update ACK goes out if the remaining advertised window is at most half the buffer and the SWS avoidance
+    /// threshold is exceeded (contract behavior F3, `windowUpdateIsDue`).
     package mutating func read(
         upTo maximumLength: Int, at now: ContinuousClock.Instant
     ) -> (bytes: [UInt8], outputs: [Output]) {
@@ -38,8 +40,9 @@ extension TCPConnection {
         return (bytes, outputs)
     }
 
-    /// 받는 창의 상한을 버퍼의 용량으로 올리고, 맺어진 연결이면 새 창을 곧바로 알린다(창 갱신 ACK). 스택이 리스너의
-    /// 대기열에서 연결을 꺼내 응용에 넘길 때 부른다(`receiveWindowLimit`, 계약 동작 M).
+    /// Raises the receive window limit to buffer capacity. If established, immediately advertises the new window
+    /// (window update ACK). The stack calls this when it takes the connection from the listener's queue and hands it to
+    /// the application (`receiveWindowLimit`, contract behavior M).
     package mutating func openReceiveWindow(at now: ContinuousClock.Instant) -> [Output] {
         receiveWindowLimit = receiveBuffer.capacity
         var outputs: [Output] = []
@@ -51,8 +54,8 @@ extension TCPConnection {
         return outputs
     }
 
-    /// 보내기를 끝낸다(반닫힘). 보내는 버퍼가 비면 FIN이 나간다: ESTABLISHED → FIN-WAIT-1, CLOSE-WAIT → LAST-ACK.
-    /// 읽기는 계속할 수 있다. 맺어지기 전에 부르면 맺어진 뒤에 나간다.
+    /// Finishes sending (half-close). FIN goes out when the send buffer is empty, moving ESTABLISHED → FIN-WAIT-1 or
+    /// CLOSE-WAIT → LAST-ACK. Reads can continue. If called before establishment, sends FIN after establishment.
     package mutating func finishWriting(at now: ContinuousClock.Instant) -> [Output] {
         guard canWrite else { return [] }
         finRequested = true
@@ -61,12 +64,12 @@ extension TCPConnection {
         return outputs
     }
 
-    /// 연결을 닫는다: `finishWriting`에 더해 읽기를 끝낸다(RFC 9293 3.10.4, 계약 동작 T6).
+    /// Closes the connection by ending reads in addition to `finishWriting` (RFC 9293 §3.10.4, contract behavior T6).
     ///
-    /// - 읽지 않은 데이터가 있으면 곧바로 `<SEQ=SND.NXT><CTL=RST>`를 보내고 끝난다(SHLD-3).
-    /// - 이 뒤에 새 데이터가 오면 RST를 보내고 끝난다.
-    /// - FIN-WAIT-2에서 60초 안에 상대의 FIN이 오지 않으면 끝난다.
-    /// - SYN-SENT면 아무것도 보내지 않고 끝난다(RFC 9293 3.10.4: TCB를 지운다).
+    /// - With unread data, immediately sends `<SEQ=SND.NXT><CTL=RST>` and ends (SHLD-3).
+    /// - If new data arrives afterward, sends RST and ends.
+    /// - In FIN-WAIT-2, ends if the peer's FIN does not arrive within 60 seconds.
+    /// - In SYN-SENT, ends without sending anything (RFC 9293 §3.10.4 deletes the TCB).
     package mutating func close(at now: ContinuousClock.Instant) -> [Output] {
         var outputs: [Output] = []
         switch state {
@@ -96,10 +99,10 @@ extension TCPConnection {
         return outputs
     }
 
-    /// 연결을 곧바로 끊는다(RFC 9293 3.10.5). 버퍼의 것은 버린다.
+    /// Aborts the connection immediately and drops buffered data (RFC 9293 §3.10.5).
     ///
-    /// SYN-SENT는 아무것도 보내지 않는다. CLOSING·LAST-ACK·TIME-WAIT도 보내지 않는다(양쪽 데이터가 이미 끝났다. 같은 절).
-    /// 그 밖에는 `<SEQ=SND.NXT><CTL=RST>`를 보낸다.
+    /// SYN-SENT sends nothing. CLOSING, LAST-ACK, and TIME-WAIT also send nothing because both sides have finished
+    /// sending data (same section). Otherwise sends `<SEQ=SND.NXT><CTL=RST>`.
     package mutating func abort() -> [Output] {
         var outputs: [Output] = []
         switch state {
@@ -114,7 +117,7 @@ extension TCPConnection {
         return outputs
     }
 
-    /// 응용이 아직 쓸 수 있다: 쓰기를 끝내지 않았고, 상태가 이 쪽 FIN 전이다.
+    /// The application can still write. It has not finished writing, and the state precedes the local FIN.
     var canWrite: Bool {
         guard !finRequested else { return false }
         switch state {
@@ -123,7 +126,8 @@ extension TCPConnection {
         }
     }
 
-    /// 응용 호출의 끝: 보낼 수 있는 것을 보내고 기한이 된 ACK를 낸다(데이터 세그먼트가 나갔으면 거기에 실렸다).
+    /// At the end of an application call, send what can be sent and emit due ACKs. An outgoing data segment already
+    /// carried the ACK if one went out.
     private mutating func completeCall(at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         guard state != .closed else { return }
         transmit(at: now, into: &outputs)

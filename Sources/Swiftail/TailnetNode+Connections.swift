@@ -1,29 +1,33 @@
 import SwiftailBase
 import SwiftailNetstack
 
-/// 듣기·걸기와 연결 핸들의 호출(`docs/contracts/SwiftailNetstack.md` "공개 API", 동작 A).
+/// Listening, connecting, and connection handle calls (`docs/contracts/SwiftailNetstack.md`, “Public API,” behavior A).
 ///
-/// 앱의 호출은 앱의 Task가 노드 actor로 건너와 스택을 부른다. 기다려야 하면 그 Task가 노드에서 멈추고(`suspend(until:)`),
-/// 스택의 사건이 깨운다. 분리된 Task는 없다. 기다림이 끝나는 길은 넷이고 어느 쪽이든 호출은 한 번 돌아온다:
-/// - 사건(읽을 것이 생김, 자리가 남, 맺어짐, 대기열에 들어옴) → 다시 시도한다.
-/// - 연결이 끝남 → 까닭의 오류. 앱이 `close`·`abort`했으면 `closed`.
-/// - 호출한 Task의 취소 → `read`는 `cancelled`(연결과 데이터는 그대로), `write`는 RST로 끊고 `cancelled`, `connect`는
-///   시도를 버리고 `cancelled`, 리스너의 흐름은 nil.
-/// - `run()`의 끝 → `notRunning`, 리스너의 흐름은 nil.
+/// The app's Task crosses to the node actor and calls the stack. If it must wait, that Task suspends on the node
+/// (`suspend(until:)`) and a stack event wakes it. There are no detached Tasks. A wait ends in four ways, with one
+/// return from the call in every case.
+/// - Event (readable data, available space, establishment, or entry in the queue) → retry.
+/// - Connection ends → the error for the reason. Returns `closed` if the app called `close` or `abort`.
+/// - Calling Task canceled → `read` returns `cancelled` and leaves the connection and data in place, `write` aborts
+///   with RST and returns `cancelled`, `connect` discards the attempt and returns `cancelled`, and the listener stream
+///   returns nil.
+/// - `run()` ends → `notRunning`, or nil for the listener stream.
 extension TailnetNode {
-    /// 리스너 수의 상한(계약 동작 S3, M). 스택과 같은 값이다. `run()` 전의 리스너도 이 안에 들게 노드가 먼저 센다.
+    /// The listener limit (contract behaviors S3 and M), the same as the stack's. The node counts first so listeners
+    /// opened before `run()` count toward it.
     static let listenerLimit = 16
 
-    // MARK: 듣기 (동작 A1)
+    // MARK: Listening (Behavior A1)
 
-    /// 이 노드의 tailnet 주소(IPv4·IPv6)에서 TCP 포트 하나를 듣는다. tsnet `Listen("tcp", ":<port>")`.
+    /// Listens on one TCP port on this node's tailnet addresses (IPv4 and IPv6). Corresponds to tsnet `Listen("tcp", ":<port>")`.
     ///
-    /// `run()` 전에 불러도 된다(`run()`이 시작할 때 스택에 올린다). netmap 전이어도 된다. 리스너는 리스너를 닫거나,
-    /// 버리거나, `run()`이 끝날 때까지 듣는다. 버려진 리스너는 이 호출이 먼저 닫으므로 포트와 상한(16)을 쥐지 않는다.
+    /// May be called before `run()`, which installs the listener on the stack when it starts, and before a netmap
+    /// arrives. The listener listens until it is closed or released or `run()` ends. This call first closes released
+    /// listeners so they do not hold ports or count toward the limit (16).
     ///
-    /// - Throws: 장치가 `.inProcess`가 아니거나 포트가 0이면 `invalidConfiguration`, 그 포트에 아직 쓰는 리스너가 있으면
-    ///   `addressInUse`, 쓰는 리스너가 16개면 `limitReached`, `run()`이 끝났거나 시작 검사(`stateDirectoryInUse` 등)에서
-    ///   끝났으면 `notRunning`.
+    /// - Throws: `invalidConfiguration` if the device is not `.inProcess` or the port is 0, `addressInUse` if a
+    ///   listener still uses that port, `limitReached` if 16 listeners are in use, or `notRunning` if `run()` ended or
+    ///   if startup checks ended `run()` (`stateDirectoryInUse` and so on).
     public func listen(port: UInt16) throws(ConnectionError) -> TailnetListener {
         try checkInProcessDevice(port: port)
         if hasRun, !isRunning { throw .notRunning }
@@ -40,22 +44,22 @@ extension TailnetNode {
         nextListenerToken += 1
         let listener = TailnetListener(node: self, token: token, port: port)
         listenerRecords[token] = ListenerRecord(port: port, handle: listener, stackID: stackID)
-        Self.log.info("듣기 시작: 포트 \(port, privacy: .public)")
+        Self.log.info("Started listening: port \(port, privacy: .public)")
         return listener
     }
 
-    /// 리스너의 다음 연결. 대기열에 있으면 곧바로, 없으면 들어올 때까지 기다린다.
+    /// The listener's next connection. Returns immediately if queued or waits for one to arrive.
     ///
-    /// 꺼낸 연결은 대기열에 있는 동안 받은 데이터와 FIN을 그대로 쥐고 있다(`read`가 스택에서 읽는다).
+    /// The accepted connection still holds data and FIN received while queued. `read` reads from the stack.
     func nextConnection(from token: UInt64) async -> TailnetConnection? {
         while let record = listenerRecords[token], record.waiter == nil {
             let now = ContinuousClock.now
             if let stackID = record.stackID, let accepted = netstack?.stack.accept(from: stackID, at: now) {
                 let connection = adoptConnection(accepted.connection)
-                // 대기열에 있는 동안 묶어 둔 받는 창을 여는 ACK가 나간다.
+                // Sends an ACK opening the receive window that was capped while queued.
                 process(accepted.outputs, at: now)
                 if let connection {
-                    Self.log.info("연결을 받음: 포트 \(record.port, privacy: .public)")
+                    Self.log.info("Accepted connection: port \(record.port, privacy: .public)")
                     return connection
                 }
             }
@@ -66,33 +70,36 @@ extension TailnetNode {
         return nil
     }
 
-    /// 듣기를 그만둔다. 대기열의 연결은 RST로 끊고 기다리던 흐름을 끝낸다. 없는 리스너면 아무 일도 하지 않는다.
+    /// Stops listening. Aborts queued connections with RST and ends the waiting stream. An unknown listener has no effect.
     func closeListener(_ token: UInt64, at now: ContinuousClock.Instant = .now) {
         guard let record = listenerRecords.removeValue(forKey: token) else { return }
         record.waiter?.finish()
         if let stackID = record.stackID {
             process(netstack?.stack.stopListening(stackID) ?? [], at: now)
         }
-        Self.log.info("듣기 끝: 포트 \(record.port, privacy: .public)")
+        Self.log.info("Stopped listening: port \(record.port, privacy: .public)")
     }
 
-    // MARK: 걸기 (동작 A2)
+    // MARK: Connecting (Behavior A2)
 
-    /// tailnet의 피어에게 TCP 연결을 건다. tsnet `Dial(ctx, "tcp", "<host>:<port>")`. 연결이 맺어질 때까지 기다린다.
+    /// Opens a TCP connection to a tailnet peer. Corresponds to tsnet `Dial(ctx, "tcp", "<host>:<port>")`. Waits for
+    /// the connection to establish.
     ///
-    /// `host`는 IP 주소이거나 netmap에 있는 이름이다: MagicDNS FQDN(`rd-phone-1a2b3c4d.tail0001.ts.net`), MagicDNS 접미사를
-    /// 뗀 짧은 이름(`rd-phone-1a2b3c4d`). 대소문자와 끝의 점은 가리지 않는다. 이름이면 그 노드의 IPv4 주소를 먼저 고른다.
-    /// 주소는 데이터면에 오른 피어의 것이거나 이 노드의 것이어야 한다. tailnet 밖의 이름을 시스템 DNS로 찾거나 OS 소켓으로
-    /// 걸지 않는다(tsnet과 다르다). 자기 주소로 건 연결은 자기 리스너에 닿는다.
+    /// `host` is an IP address or a name in the netmap, either a MagicDNS FQDN (`rd-phone-1a2b3c4d.tail0001.ts.net`) or
+    /// a short name without the MagicDNS suffix (`rd-phone-1a2b3c4d`). Ignores case and a trailing dot. When given a
+    /// name, prefers the node's IPv4 address. The address must belong to a peer installed in the data plane or to this
+    /// node. Unlike tsnet, does not look up names outside the tailnet through system DNS or dial through an OS socket.
+    /// A connection to a local address reaches a local listener.
     ///
-    /// - Throws: 장치가 `.inProcess`가 아니거나 포트가 0이거나 호스트가 비면 `invalidConfiguration`, 상태가 `.running`이
-    ///   아니면 `notRunning`(맺는 사이 `run()`이 끝나도), 이름·주소를 찾지 못하면 `unknownHost`, 연결이 256개이거나 그
-    ///   피어와의 연결이 64개면 `limitReached`, 상대가 거절하면 `refused`, 247초 안에 답이 없으면 `timedOut`, 그 사이
-    ///   주소의 주인이 바뀌면 `peerRemoved`, 맺어진 직후 이 호출이 돌아오기 전에 상대의 RST가 오면 `reset`, 호출한 Task가
-    ///   취소되면 `cancelled`(시도를 버린다).
+    /// - Throws: `invalidConfiguration` if the device is not `.inProcess`, the port is 0, or the host is empty. Throws
+    ///   `notRunning` if the state is not `.running` or `run()` ends during establishment, `unknownHost` if the name or
+    ///   address is not found, `limitReached` at 256 connections or 64 to that peer, `refused` if the peer refuses,
+    ///   `timedOut` if no reply arrives within 247 seconds, `peerRemoved` if the address owner changes during the
+    ///   attempt, `reset` if the peer sends RST just after establishment and before this call returns, or `cancelled`
+    ///   if the calling Task is canceled (discards the attempt).
     public func connect(to host: String, port: UInt16) async throws(ConnectionError) -> TailnetConnection {
         try checkInProcessDevice(port: port)
-        guard !host.isEmpty else { throw .invalidConfiguration("호스트가 비었다") }
+        guard !host.isEmpty else { throw .invalidConfiguration("Host is empty") }
         guard netstack != nil, stateMachine.state == .running else { throw .notRunning }
         guard let address = lastNetmap?.address(ofHost: host),
             netstack?.addressOwners[address] != nil || netstack?.stack.localAddresses.contains(address) == true
@@ -115,7 +122,7 @@ extension TailnetNode {
                 throw ConnectionError(closedBy: reason) ?? .closed
             }
             if record.isEstablished, let connection = adoptConnection(id) {
-                Self.log.info("연결을 맺음: 포트 \(port, privacy: .public)")
+                Self.log.info("Connected: port \(port, privacy: .public)")
                 return connection
             }
             await suspend { netstack?.connections[id]?.writeWaiter = $0 }
@@ -131,11 +138,11 @@ extension TailnetNode {
         throw .notRunning
     }
 
-    // MARK: 연결 핸들의 호출 (동작 A3~A7)
+    // MARK: Connection Handle Calls (Behaviors A3~A7)
 
     /// `TailnetConnection.read(upTo:)`.
     func readConnection(_ id: TCPStack.ConnectionID, upTo maximumLength: Int) async throws(ConnectionError) -> [UInt8]? {
-        guard maximumLength > 0 else { throw .invalidConfiguration("읽을 길이는 1 이상이어야 한다") }
+        guard maximumLength > 0 else { throw .invalidConfiguration("Read length must be at least 1") }
         guard try usableRecord(id).readWaiter == nil else { throw .concurrentUse }
         while true {
             netstack?.connections[id]?.hasReadEvent = false
@@ -155,7 +162,8 @@ extension TailnetNode {
         }
     }
 
-    /// `TailnetConnection.write(_:)`. 자리가 있는 만큼 넣고, 남으면 자리가 날 때까지 기다렸다 이어 넣는다(동작 A4·A5).
+    /// `TailnetConnection.write(_:)`. Writes as much as fits, then waits for free space before continuing with the rest
+    /// (behaviors A4 and A5).
     func writeConnection(_ id: TCPStack.ConnectionID, _ bytes: [UInt8]) async throws(ConnectionError) {
         guard try usableRecord(id).writeWaiter == nil else { throw .concurrentUse }
         var written = 0
@@ -173,7 +181,7 @@ extension TailnetNode {
             await suspend { netstack?.connections[id]?.writeWaiter = $0 }
             netstack?.connections[id]?.writeWaiter = nil
             if Task.isCancelled {
-                // 얼마나 들어갔는지 앱이 알 수 없으므로 연결을 끊는다(첫 사용처 검토 결과 3).
+                // Abort the connection because the app cannot know how many bytes were accepted (first adopter review result 3).
                 let now = ContinuousClock.now
                 process(netstack?.stack.abort(id, at: now) ?? [], at: now)
                 throw .cancelled
@@ -181,7 +189,7 @@ extension TailnetNode {
         }
     }
 
-    /// `TailnetConnection.finishWriting()`. 기다리던 `write`는 `closed`로 깨어난다.
+    /// `TailnetConnection.finishWriting()`. A waiting `write` wakes with `closed`.
     func finishWritingConnection(_ id: TCPStack.ConnectionID) throws(ConnectionError) {
         guard !(try usableRecord(id).hasFinishedWriting) else { return }
         netstack?.connections[id]?.hasFinishedWriting = true
@@ -190,7 +198,7 @@ extension TailnetNode {
         wakeWriter(id)
     }
 
-    /// `TailnetConnection.close()`. 기록을 지우고 기다리던 호출을 깨운다(`closed`). 마무리는 스택이 한다.
+    /// `TailnetConnection.close()`. Removes the record and wakes waiting calls with `closed`. The stack completes the close.
     func closeConnection(_ id: TCPStack.ConnectionID) {
         guard let record = netstack?.connections.removeValue(forKey: id) else { return }
         record.finishWaiters()
@@ -198,7 +206,7 @@ extension TailnetNode {
         process(netstack?.stack.close(id, at: now) ?? [], at: now)
     }
 
-    /// `TailnetConnection.abort()`와 버려진 연결(`deinit`). RST로 끊는다.
+    /// `TailnetConnection.abort()` and released connections (`deinit`). Aborts with RST.
     func abortConnection(_ id: TCPStack.ConnectionID) {
         guard let record = netstack?.connections.removeValue(forKey: id) else { return }
         record.finishWaiters()
@@ -206,21 +214,23 @@ extension TailnetNode {
         process(netstack?.stack.abort(id, at: now) ?? [], at: now)
     }
 
-    // MARK: 도우미
+    // MARK: Helpers
 
-    /// 장치가 `.inProcess`인가. `listen`·`connect`가 되는 노드인지를 `SwiftailPairing`이 `PairingHost`를 만들 때 본다.
+    /// Whether the device is `.inProcess`. `SwiftailPairing` checks if the node supports `listen` and `connect` when
+    /// creating a `PairingHost`.
     package nonisolated var hasInProcessDevice: Bool {
         if case .inProcess = device { return true }
         return false
     }
 
     private func checkInProcessDevice(port: UInt16) throws(ConnectionError) {
-        guard case .inProcess = device else { throw .invalidConfiguration("listen·connect는 .inProcess 장치에서만 쓴다") }
-        guard port != 0 else { throw .invalidConfiguration("포트는 0이 아니어야 한다") }
+        guard case .inProcess = device else { throw .invalidConfiguration("listen and connect require an .inProcess device") }
+        guard port != 0 else { throw .invalidConfiguration("Port must be nonzero") }
     }
 
-    /// 앱이 연결 `id`를 아직 쓸 수 있으면 그 기록. `run()`이 끝났으면 `notRunning`, 앱이 닫았으면 `closed`, 상대 쪽 일로
-    /// 끝났으면 그 까닭의 오류(동작 A7). `finished`로 끝난 연결은 남은 데이터를 읽도록 기록을 돌려준다.
+    /// The record for connection `id` if the app can still use it. Throws `notRunning` after `run()` ends, `closed`
+    /// after the app closes it, or the error for the peer-related reason if it ended due to the peer (behavior A7).
+    /// Returns the record for a `finished` connection so remaining data can be read.
     private func usableRecord(_ id: TCPStack.ConnectionID) throws(ConnectionError) -> ConnectionRecord {
         guard netstack != nil else { throw .notRunning }
         guard let record = netstack?.connections[id] else { throw .closed }
@@ -228,7 +238,7 @@ extension TailnetNode {
         return record
     }
 
-    /// 맺어진 연결의 핸들을 만든다. 받은 연결이면 기록도 만든다.
+    /// Creates a handle for an established connection. Also creates a record for an accepted connection.
     private func adoptConnection(_ id: TCPStack.ConnectionID) -> TailnetConnection? {
         guard let connection = netstack?.stack.connection(id) else { return nil }
         if netstack?.connections[id] == nil {

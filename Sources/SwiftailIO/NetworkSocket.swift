@@ -2,36 +2,37 @@ import Foundation
 import Network
 import Synchronization
 
-/// TCP(또는 TLS) 연결 하나를 async 바이트 스트림으로 감싼다.
+/// Wraps one TCP (or TLS) connection as an async byte stream.
 ///
-/// 제어 서버(`SwiftailControl`)와 DERP 서버(`SwiftailDERP`)가 함께 쓴다. 실패는 `SocketError`로 내고,
-/// 부르는 쪽이 자기 오류 타입으로 옮긴다.
+/// Used for control server (`SwiftailControl`) and DERP server (`SwiftailDERP`) connections. Failures are reported as
+/// `SocketError`, which callers convert to their own error types.
 ///
-/// Network 프레임워크의 `NWConnection`은 콜백으로 결과를 알린다. 콜백을 continuation으로 바꾸는 곳은 이 파일뿐이다.
-/// 지키는 것:
+/// The Network framework's `NWConnection` reports results through callbacks. This file is the only place that bridges
+/// those callbacks to continuations. It guarantees the following.
 ///
-/// - continuation은 정확히 한 번 재개한다. 상태 콜백은 여러 번 오므로 `ResumeOnce`로 첫 결과만 넘긴다.
-/// - 기다리던 Task가 취소되면 continuation을 곧바로 오류로 풀고 연결을 닫는다(루프백 다리의 소켓은 닫지 않는다.
-///   `connectLoopback(port:)`). 이미 취소된 Task에서 부르면
-///   취소 처리기가 continuation보다 먼저 돌므로, 그 결과를 `ResumeOnce`에 담아 두었다가 continuation을 다는
-///   즉시 넘긴다(취소된 `NWConnection`의 콜백이 오리라고 기대하지 않는다).
-/// - 보내기는 두 가지다. `send`는 기다리지 않고, `write`는 네트워크 스택이 바이트를 받아 갈 때까지 기다린다.
-///   둘 다 `NWConnection`이 부른 순서대로 내보내므로 Noise 레코드의 순서(nonce 순서)와 프레임의 순서가 지켜진다.
-///   보내기 실패는 연결을 실패 상태로 만들고, 그 사실은 다음 `receive()`가 알린다.
-/// - 버린 소켓은 연결을 닫는다(`deinit`). 시간 초과와 연결 완료가 겹쳐 결과를 받을 쪽이 없어진 소켓도 상대에게
-///   남지 않는다.
-/// - 인터페이스를 지정하면 그 인터페이스로만 나간다(`connect(host:port:tls:interface:)`). 패킷 터널 안에서 제어·DERP
-///   연결이 터널 자신으로 되돌아가지 않게 하는 길이다.
+/// - Resumes each continuation exactly once. Status callbacks can arrive more than once, so `ResumeOnce` delivers only the first result.
+/// - On cancellation of a waiting Task, immediately resumes the continuation with an error and closes the connection,
+///   except for loopback bridge sockets (`connectLoopback(port:)`). If called from an already canceled Task, the
+///   cancellation handler runs before the continuation is installed. Store the result in `ResumeOnce` and deliver it as
+///   soon as the continuation is installed. A canceled `NWConnection` callback may never arrive.
+/// - Offers two ways to send. `send` returns without waiting. `write` waits until the network stack accepts the bytes.
+///   `NWConnection` sends both in call order, preserving Noise record order (nonce order) and frame order. A send
+///   failure puts the connection in the failed state, which the next `receive()` reports.
+/// - Releasing the socket closes the connection (`deinit`). When a timeout races with connection completion and no
+///   caller remains to receive the socket, it does not leave an open connection at the peer.
+/// - With an interface specified, traffic uses only that interface (`connect(host:port:tls:interface:)`). This keeps
+///   control and DERP connections in a packet tunnel from looping back into that tunnel.
 ///
-/// 바이트의 경계는 뜻이 없다. TCP 조각을 그대로 돌려주고 레코드·프레임은 위 계층이 모은다.
+/// Byte boundaries carry no meaning. Returns TCP fragments as received and lets higher layers assemble records and frames.
 package final class NetworkSocket: Sendable {
     private static let maximumReadSize = 64 << 10
 
     let connection: NWConnection
-    /// 기다리던 `receive`·`write`의 Task가 취소될 때 연결을 닫는가. 닫지 않으면 닫기는 소켓의 주인이 정한다.
+    /// Whether to close the connection when a Task waiting on `receive` or `write` is canceled. Otherwise the socket's
+    /// owner decides when to close.
     private let closesOnCancel: Bool
-    /// 상대의 끝(FIN)이 마지막 바이트와 함께 왔다. 그 바이트를 돌려준 뒤의 `receive()`는 nil이다. `NWConnection`은 끝을 한 번만
-    /// 알리고, 그 뒤의 받기는 오류(`ENODATA`)로 끝내기 때문이다.
+    /// The peer's end of stream (FIN) arrived with its final bytes. After returning those bytes, `receive()` returns
+    /// nil. `NWConnection` reports the end only once and fails later reads with `ENODATA`.
     private let receivedEnd = Mutex(false)
 
     private init(connection: NWConnection, closesOnCancel: Bool) {
@@ -43,28 +44,29 @@ package final class NetworkSocket: Sendable {
         connection.cancel()
     }
 
-    /// 연결이 준비될 때까지 기다린다.
+    /// Waits until the connection is ready.
     ///
-    /// - Parameter interface: 지정하면 이 연결은 그 인터페이스로만 나간다(`NWParameters.requiredInterface`). 그
-    ///   인터페이스로 목적지에 닿을 수 없으면 다른 길로 돌지 않고 연결에 실패한다. nil이면 시스템이 고른다.
-    ///   목적지가 루프백이면 그 인터페이스로 닿을 수 없으므로 부르는 쪽이 `bindableInterface(_:forHost:)`로 거른다.
+    /// - Parameter interface: If specified, the connection uses only that interface (`NWParameters.requiredInterface`).
+    ///   If the destination is unreachable through that interface, the connection fails without switching routes. If
+    ///   nil, the system chooses. A loopback destination is unreachable through the interface, so the caller filters it
+    ///   with `bindableInterface(_:forHost:)`.
     package static func connect(
         host: String, port: UInt16, tls: TLS, interface: NWInterface? = nil
     ) async throws(SocketError) -> NetworkSocket {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            throw .connectFailed("포트가 잘못되었다")
+            throw .connectFailed("Invalid port")
         }
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.connectionTimeout = 10
-        // ALPN은 비워 둔다. HTTP/2로 협상되면 HTTP/1.1 업그레이드를 할 수 없다(노트 control-transport 4.4).
+        // Leave ALPN empty. Negotiating HTTP/2 would prevent the HTTP/1.1 upgrade (control-transport notes §4.4).
         let parameters = NWParameters(tls: tls.options, tcp: tcp)
         parameters.requiredInterface = interface
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: parameters)
         return try await open(connection, closesOnCancel: true)
     }
 
-    /// `connection`을 시작하고 준비될 때까지 기다린다. 실패하거나 기다리던 Task가 취소되면 연결을 닫고 던진다.
+    /// Starts `connection` and waits until it is ready. Closes the connection and throws on failure or if the waiting Task is canceled.
     static func open(_ connection: NWConnection, closesOnCancel: Bool) async throws(SocketError) -> NetworkSocket {
         let socket = NetworkSocket(connection: connection, closesOnCancel: closesOnCancel)
         let once = ResumeOnce<Void>()
@@ -77,11 +79,11 @@ package final class NetworkSocket: Sendable {
                         case .ready:
                             once.resume(with: .success(()))
                         case .waiting(let error), .failed(let error):
-                            // 연결 거부 같은 실패에서 NWConnection은 waiting으로 머물며 다시 시도한다.
-                            // 다시 시도는 위 계층의 물러나기가 맡으므로 여기서 실패로 끝낸다.
-                            once.resume(with: .failure(SocketError.connectFailed("연결하지 못했다: \(error)")))
+                            // On failures such as connection refusal, NWConnection stays in waiting and retries. Treat
+                            // waiting as failure here because the upper layer retries with backoff.
+                            once.resume(with: .failure(SocketError.connectFailed("Could not connect: \(error)")))
                         case .cancelled:
-                            once.resume(with: .failure(SocketError.connectFailed("연결이 취소되었다")))
+                            once.resume(with: .failure(SocketError.connectFailed("Connection canceled")))
                         default:
                             break
                         }
@@ -89,42 +91,44 @@ package final class NetworkSocket: Sendable {
                     connection.start(queue: DispatchQueue(label: "Swiftail.NetworkSocket"))
                 }
             } onCancel: {
-                once.resume(with: .failure(SocketError.connectFailed("연결이 취소되었다")))
+                once.resume(with: .failure(SocketError.connectFailed("Connection canceled")))
                 connection.cancel()
             }
         } catch {
             connection.cancel()
-            throw error as? SocketError ?? .connectFailed("연결하지 못했다")
+            throw error as? SocketError ?? .connectFailed("Could not connect")
         }
         return socket
     }
 
-    /// 바이트를 보낸다. 기다리지 않는다(형식 설명 참고).
+    /// Sends bytes without waiting (see the type documentation).
     ///
-    /// 상대가 읽지 않거나 업링크가 느리면 `NWConnection`의 버퍼가 끝없이 자란다. 보낼 양에 상한이 필요하면 `write`를 쓴다.
+    /// If the peer does not read or the uplink is slow, the `NWConnection` buffer grows without bound. Use `write` to cap pending bytes.
     package func send(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         connection.send(content: Data(bytes), completion: .contentProcessed { _ in })
     }
 
-    /// 바이트를 보내고, 네트워크 스택이 그 바이트를 받아 갈 때까지 기다린다.
+    /// Sends bytes and waits for the network stack to accept them.
     ///
-    /// 상대가 읽지 않거나 업링크가 느리면 돌아오지 않는다. 그래서 부르는 쪽이 쥔 미전송 바이트는 지금 쓰는 덩어리
-    /// 하나뿐이고, 막힘은 부르는 쪽이 기한을 두어 알아챈다(`DERPClient`는 연결당 쓰기 감시 하나). 보낸 양을 세어 알려 주는 형태보다 부르는 쪽이
-    /// 단순하다(줄어들 때를 따로 기다릴 필요가 없다).
+    /// The call does not return while the peer is not reading or the uplink is slow. The caller therefore holds only
+    /// one unsent chunk, the current write, and uses a deadline to detect a stall (`DERPClient` has one write watchdog
+    /// per connection). This is simpler for the caller than reporting a byte count because it need not separately wait
+    /// for the backlog to shrink.
     ///
-    /// 실패는 던지지 않는다. `send`처럼 연결이 실패 상태가 되고 다음 `receive()`가 알린다. 기다리던 Task가 취소되면
-    /// 연결을 닫고 돌아온다(루프백 다리의 소켓은 닫지 않는다).
+    /// Does not throw on failure. As with `send`, failure puts the connection in the failed state and the next
+    /// `receive()` reports it. If the waiting Task is canceled, closes the connection and returns. Loopback bridge
+    /// sockets stay open.
     package func write(_ bytes: [UInt8]) async {
         await writeAccepted(bytes)
     }
 
-    /// `write`와 같고, 결과를 돌려준다.
+    /// Writes as `write` does and returns the result.
     ///
-    /// 읽는 방향이 이미 끝난 연결에서는 다음 `receive()`가 실패를 알려 주지 않으므로, 쓰기만 남은 쪽(루프백 다리)이
-    /// 이것으로 상대가 끊었음을 안다.
+    /// When the connection's read side has already ended, the next `receive()` does not report a failure. A caller with
+    /// only writes left (the loopback bridge) uses this result to detect that the peer disconnected.
     ///
-    /// - Returns: 네트워크 스택이 받아 갔으면 true, 보내기가 실패했거나 Task가 취소되었으면 false.
+    /// - Returns: True if the network stack accepted the bytes, or false if sending failed or the Task was canceled.
     @discardableResult
     package func writeAccepted(_ bytes: [UInt8]) async -> Bool {
         guard !bytes.isEmpty else { return true }
@@ -144,7 +148,7 @@ package final class NetworkSocket: Sendable {
         }
     }
 
-    /// 도착한 바이트를 받는다. 상대가 연결을 닫았으면 nil.
+    /// Receives incoming bytes. Returns nil if the peer closed the connection.
     package func receive() async throws(SocketError) -> [UInt8]? {
         guard !receivedEnd.withLock({ $0 }) else { return nil }
         let connection = connection
@@ -159,7 +163,7 @@ package final class NetworkSocket: Sendable {
                             if isComplete { self.receivedEnd.withLock { $0 = true } }
                             once.resume(with: .success([UInt8](data)))
                         } else if let error {
-                            once.resume(with: .failure(SocketError.readFailed("읽기 실패: \(error)")))
+                            once.resume(with: .failure(SocketError.readFailed("Read failed: \(error)")))
                         } else if isComplete {
                             once.resume(with: .success(nil))
                         } else {
@@ -168,24 +172,24 @@ package final class NetworkSocket: Sendable {
                     }
                 }
             } onCancel: {
-                once.resume(with: .failure(SocketError.readFailed("읽기가 취소되었다")))
+                once.resume(with: .failure(SocketError.readFailed("Read canceled")))
                 if closesOnCancel { connection.cancel() }
             }
         } catch {
-            throw error as? SocketError ?? .readFailed("읽기 실패")
+            throw error as? SocketError ?? .readFailed("Read failed")
         }
     }
 
-    /// 연결을 닫는다. 걸려 있던 `receive()`는 오류로 끝난다. 여러 번 불러도 된다.
+    /// Closes the connection. Any pending `receive()` ends with an error. May be called multiple times.
     package func close() {
         connection.cancel()
     }
 }
 
-/// continuation을 정확히 한 번 재개하게 하는 상자. 콜백이 여러 번 와도 첫 결과만 넘긴다.
+/// A container that resumes a continuation exactly once. Delivers only the first result even if several callbacks arrive.
 ///
-/// 결과가 continuation보다 먼저 올 수 있다(이미 취소된 Task에서는 취소 처리기가 본문보다 먼저 돈다).
-/// 그때는 결과를 쥐고 있다가 `install`에서 넘긴다.
+/// A result can arrive before the continuation, as when the cancellation handler runs before the body of an already
+/// canceled Task. In that case, the container holds the result until `install` delivers it.
 private final class ResumeOnce<Value: Sendable>: Sendable {
     private enum State {
         case empty
@@ -196,7 +200,8 @@ private final class ResumeOnce<Value: Sendable>: Sendable {
 
     private let state = Mutex(State.empty)
 
-    /// continuation을 단다. 결과가 이미 와서 곧바로 재개했으면 false다. 그때는 콜백을 걸지 않는다.
+    /// Installs the continuation. Returns false if a result has already arrived and the continuation was resumed
+    /// immediately. In that case, skip registering the callback.
     func install(_ continuation: CheckedContinuation<Value, any Error>) -> Bool {
         let early: Result<Value, any Error>? = state.withLock { state in
             switch state {

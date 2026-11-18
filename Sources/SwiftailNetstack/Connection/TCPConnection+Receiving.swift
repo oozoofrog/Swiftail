@@ -1,13 +1,14 @@
-/// 세그먼트 받기. 동기화된 상태(SYN-RECEIVED 이후)의 처리는 RFC 9293 3.10.7.4의 순서 그대로다:
-/// 시퀀스 검사 → RST → SYN → ACK → 데이터 → FIN(계약 동작 T2). gVisor의 순서(데이터를 먼저, ACK를 나중에)는 따르지 않는다.
-/// RST·SYN·ACK의 검사는 RFC 5961을 따른다(계약 동작 X3).
+/// Receives segments. Processing in synchronized states (SYN-RECEIVED onward) follows RFC 9293 §3.10.7.4 in order:
+/// sequence check → RST → SYN → ACK → data → FIN (contract behavior T2). gVisor uses a different order, with data
+/// before ACK. RST, SYN, and ACK checks follow RFC 5961 (contract behavior X3).
 extension TCPConnection {
-    /// 상대가 보낸 세그먼트 하나를 처리한다. 4-튜플이 이 연결의 것인지는 스택이 이미 보았다.
+    /// Processes one segment from the peer. The stack has already checked that the 4-tuple belongs to this connection.
     ///
-    /// 곧바로 보낼 ACK(순서가 어긋난 데이터, 빈 곳을 메운 데이터, 2×MSS가 쌓인 데이터, FIN, 창 밖 세그먼트 등)는 이 세그먼트의
-    /// 출력으로 나온다. 그래서 묶음으로 받아도 세그먼트마다 ACK가 하나씩 나간다(RFC 5681 4.2의 immediate ACK. 상대의 fast
-    /// retransmit이 중복 ACK 셋을 센다). 미룰 수 있는 ACK(순서대로 온 데이터가 2×MSS 미만)만 40ms 기한으로 둔다(타입 문서).
-    /// 어떤 세그먼트를 넣어도 죽지 않는다(계약 동작 X1).
+    /// Immediate ACKs (out-of-order data, data filling a gap, 2×MSS of accumulated data, FIN, out-of-window segments,
+    /// and so on) come from this segment's output. This sends one ACK per segment even when received in a group (RFC
+    /// 5681 §4.2 immediate ACK, since the peer's fast retransmit counts three duplicate ACKs). Only deferrable ACKs
+    /// (less than 2×MSS of in-order data) get a 40ms deadline (see the type documentation). Accepting any segment does
+    /// not crash (contract behavior X1).
     package mutating func receive(_ segment: TCPSegment, at now: ContinuousClock.Instant) -> [Output] {
         var outputs: [Output] = []
         switch state {
@@ -21,32 +22,34 @@ extension TCPConnection {
                 isFastRetransmitPending = false
                 if state != .closed { retransmitFirstUnacknowledgedSegment(at: now, into: &outputs) }
             }
-            // 처리한 뒤의 상태로 잰다(이 세그먼트로 FIN-WAIT-2·CLOSE-WAIT가 된 연결도 keep-alive를 갖는다).
+            // Measure from the state after processing, so a connection that just entered FIN-WAIT-2 or CLOSE-WAIT also gets keep-alive.
             refreshKeepalive(at: now)
         }
         transmit(at: now, into: &outputs)
-        // 나가는 데이터가 있었으면 ACK는 거기에 실려 기한이 지워졌다. 남은 "지금" 기한의 ACK를 여기서 낸다.
+        // If data went out, it carried the ACK and cleared its deadline. Emit any remaining ACK whose deadline is now.
         flushAcknowledgment(at: now, into: &outputs)
         return outputs
     }
 
-    /// 시퀀스 검사를 통과하고 창 밖을 잘라 낸 데이터와 FIN.
+    /// Data and FIN that passed the sequence check, trimmed to the window.
     struct InboundText {
-        /// 남은 데이터의 첫 번호. `RCV.NXT` 이상이다.
+        /// The first sequence number of remaining data, at least `RCV.NXT`.
         var sequence: SequenceNumber
         var payload: ArraySlice<UInt8>
-        /// FIN이 창 안에 있다. 번호는 `sequence + payload.count`다.
+        /// FIN is inside the window. Its number is `sequence + payload.count`.
         var fin: Bool
-        /// 창이 0이라 데이터를 모두 버렸다(RFC 9293 3.10.7.4 첫째의 "창 0의 특별 허용").
+        /// The window was 0, so all data was dropped (the special allowance for a zero window in step one of RFC 9293 §3.10.7.4).
         var droppedForZeroWindow: Bool
     }
 
     mutating func receiveSynchronized(_ segment: TCPSegment, at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         let flags = segment.flags
 
-        // TIME-WAIT에서 상대 FIN의 재전송(이미 소비한 FIN)은 시퀀스 검사로는 받지 않는 세그먼트다. 먼저 보아 ACK로 답하고
-        // 60초를 다시 잰다(RFC 9293 3.10.7.4 다섯째·여덟째의 TIME-WAIT, 계약 동작 T6). 든 때부터 240초는 넘기지 않는다
-        // (RFC 9293 3.6.1의 2MSL. 피어가 59초마다 FIN을 다시 보내 연결을 쥐지 못하게 한다. M6 검토 A).
+        // In TIME-WAIT, the sequence check would reject a retransmission of the peer's already consumed FIN. Check it
+        // first, answer with ACK, and restart the 60-second timer (TIME-WAIT in steps five and eight of RFC 9293
+        // §3.10.7.4, contract behavior T6). Cap the deadline at 240 seconds from entering TIME-WAIT (2MSL in RFC 9293
+        // §3.6.1). This prevents a peer from holding the connection by retransmitting FIN every 59 seconds (M6 review
+        // A).
         if state == .timeWait, flags.contains(.fin), !flags.contains(.rst), !flags.contains(.syn),
             segment.sequenceNumber.advanced(by: UInt32(clamping: segment.payload.count))
                 == receiveNext.advanced(by: .max)  // RCV.NXT − 1
@@ -57,8 +60,8 @@ extension TCPConnection {
             return
         }
 
-        // 첫째: 시퀀스 검사(표 6). 받지 않는 세그먼트에는 ACK로 답하고 버린다(RST면 조용히 버린다).
-        // 데이터 없는 세그먼트에 대한 답은 속도 제한을 받는다(계약 동작 X2).
+        // First, sequence check (table 6). ACK and drop an unacceptable segment, or silently drop an RST. Replies to
+        // segments without data are rate-limited (contract behavior X2).
         guard let text = acceptedText(of: segment) else {
             if !flags.contains(.rst), !segment.payload.isEmpty || challengeLimiter.permit(at: now) {
                 scheduleAcknowledgment(immediately: true, at: now)
@@ -66,7 +69,7 @@ extension TCPConnection {
             return
         }
 
-        // 둘째: RST(RFC 5961 3.2). 창 안이지만 RCV.NXT가 아니면 challenge ACK. 원래 SEG.SEQ로 본다.
+        // Second, RST (RFC 5961 §3.2). Send a challenge ACK if in the window but not at RCV.NXT. Use the original SEG.SEQ.
         if flags.contains(.rst) {
             if segment.sequenceNumber == receiveNext {
                 terminate(.reset, into: &outputs)
@@ -76,8 +79,8 @@ extension TCPConnection {
             return
         }
 
-        // 넷째: SYN. 수동 열기의 SYN-RECEIVED는 LISTEN으로 돌아간다(스택이 조용히 지운다).
-        // 동기화된 상태에서는 번호와 상관없이 challenge ACK를 보내고 버린다(RFC 5961 4.2).
+        // Fourth, SYN. SYN-RECEIVED from a passive open returns to LISTEN (the stack silently removes it). In
+        // synchronized states, send a challenge ACK and drop it regardless of its number (RFC 5961 §4.2).
         if flags.contains(.syn) {
             if state == .synReceived {
                 terminate(.reset, into: &outputs)
@@ -87,7 +90,7 @@ extension TCPConnection {
             return
         }
 
-        // 다섯째: ACK.
+        // Fifth, ACK.
         guard flags.contains(.ack) else { return }
         if state == .synReceived {
             guard completeHandshake(segment, at: now, into: &outputs) else { return }
@@ -95,25 +98,28 @@ extension TCPConnection {
             guard processAcknowledgment(segment, at: now, into: &outputs) else { return }
         }
 
-        // 여섯째(URG)는 쓰지 않는다(계약 제외 표). 일곱째·여덟째.
+        // Step six (URG) is unused (contract exclusions table). Proceed to steps seven and eight.
         if text.droppedForZeroWindow {
             scheduleAcknowledgment(immediately: true, at: now)
         }
         processText(text, at: now, into: &outputs)
     }
 
-    // MARK: 첫째: 시퀀스 검사
+    // MARK: First Step — Sequence Check
 
-    /// 받아들일 조건(RFC 9293 3.10.7.4 표 6)을 보고, 받는다면 창 밖(이미 받은 쪽과 광고한 오른쪽 끝 너머)을 잘라 낸다.
+    /// Checks acceptability (RFC 9293 §3.10.7.4 table 6). If acceptable, trims bytes outside the window, both already
+    /// received bytes and bytes beyond its advertised right edge.
     ///
-    /// RCV.WND는 광고한 가장 먼 오른쪽 끝까지다(계약 동작 F1, RFC 7323 2.4). 창이 0이면 데이터 있는 세그먼트는
-    /// 받지 않는 것이 원칙이지만, RCV.NXT에서 시작하는 것은 데이터를 버리고 ACK·RST만 본다
-    /// (같은 절의 "창 0의 특별 허용". 그렇지 않으면 창을 닫은 쪽이 상대의 ACK를 놓친다).
+    /// RCV.WND extends to the farthest advertised right edge (contract behavior F1, RFC 7323 §2.4). A window of 0
+    /// generally rejects data segments. For a segment starting at RCV.NXT, drops the data and checks only ACK and RST
+    /// (the special allowance for a zero window in the same section). Otherwise the side that closed the window would
+    /// miss the peer's ACKs.
     ///
-    /// 창이 0이어도 RCV.NXT에 온 **데이터 없는 FIN**은 받는다(계약 동작 T6). 표 6으로는 길이 1이라 받지 않는 세그먼트지만
-    /// FIN은 버퍼를 쓰지 않는다. gVisor는 길이를 데이터로만 재어 이 FIN을 받고(`rcv.go:460`, `header/tcp.go:682-685`) 자기도
-    /// 창과 상관없이 보낸다. 받지 않으면 그 재전송이 RTO로 물러나 EOF가 최대 120초 늦고 상대의 재전송 한도에 닿을 수 있다
-    /// (M6 검토 A). 데이터가 든 FIN은 위 원칙대로 데이터와 함께 버린다.
+    /// Accepts a **FIN without data** at RCV.NXT even if the window is 0 (contract behavior T6). Table 6 would reject
+    /// it because it has length 1, but FIN uses no buffer. gVisor measures length using data alone and accepts this FIN
+    /// (`rcv.go:460`, `header/tcp.go:682-685`). It also sends FIN regardless of the window. Rejecting it would make
+    /// retransmission back off on RTO, delaying EOF by up to 120 seconds and possibly reaching the peer's
+    /// retransmission limit (M6 review A). Drops FIN with data along with the data, following the rule above.
     func acceptedText(of segment: TCPSegment) -> InboundText? {
         let receiveNext = self.receiveNext
         let window = max(0, Int(advertisedWindowEnd.distance(from: receiveNext)))
@@ -130,7 +136,8 @@ extension TCPConnection {
             guard (0 <= start && start < window) || (0 <= last && last < window) else { return nil }
         }
 
-        // 데이터는 SYN 다음 번호부터다. 왼쪽(RCV.NXT 앞)과 오른쪽(광고한 끝 너머)을 잘라 낸다. 잘린 FIN은 소비하지 않는다.
+        // Data starts at the number after SYN. Trim the left (before RCV.NXT) and right (past the advertised edge). Do
+        // not consume a trimmed FIN.
         var sequence = segment.sequenceNumber.advanced(by: segment.flags.contains(.syn) ? 1 : 0)
         var payload = segment.payload[...]
         let behind = Int(receiveNext.distance(from: sequence))
@@ -140,7 +147,7 @@ extension TCPConnection {
             sequence = sequence.advanced(by: UInt32(dropped))
         }
         let room = max(0, Int(advertisedWindowEnd.distance(from: sequence)))
-        // FIN의 번호는 원래 데이터의 끝이다. RCV.NXT 앞(이미 소비한 것)이거나 광고한 끝 너머면 소비하지 않는다.
+        // FIN is numbered at the end of the original data. Do not consume it before RCV.NXT (already consumed) or beyond the advertised edge.
         let fin = segment.flags.contains(.fin) && behind <= segment.payload.count && payload.count < room
         if payload.count > room {
             payload = payload.prefix(room)
@@ -148,11 +155,11 @@ extension TCPConnection {
         return InboundText(sequence: sequence, payload: payload, fin: fin, droppedForZeroWindow: false)
     }
 
-    // MARK: 다섯째: ACK
+    // MARK: Fifth Step — ACK
 
-    /// SYN-RECEIVED의 ACK. `SND.UNA < SEG.ACK =< SND.NXT`면 ESTABLISHED로 가고 창을 이 세그먼트로 채운다.
-    /// 아니면 `<SEQ=SEG.ACK><CTL=RST>`(계약 동작 T4). 이 상태에는 RFC 5961 5.2의 범위 검사를 먼저 하지 않는다:
-    /// 틀린 ACK는 모두 RST다(Linux·gVisor와 같다).
+    /// ACK in SYN-RECEIVED. If `SND.UNA < SEG.ACK =< SND.NXT`, enter ESTABLISHED and fill the window from this segment.
+    /// Otherwise, send `<SEQ=SEG.ACK><CTL=RST>` (contract behavior T4). Skip the preliminary RFC 5961 §5.2 range check
+    /// in this state. Every invalid ACK gets RST, as in Linux and gVisor.
     mutating func completeHandshake(
         _ segment: TCPSegment, at now: ContinuousClock.Instant, into outputs: inout [Output]
     ) -> Bool {
@@ -172,12 +179,14 @@ extension TCPConnection {
         return true
     }
 
-    /// 동기화된 상태의 ACK 처리. 계속 처리할 세그먼트면 `true`.
+    /// Processes an ACK in a synchronized state. Returns `true` if processing should continue for this segment.
     ///
-    /// 1. RFC 5961 5.2: `SND.UNA − MAX.SND.WND =< SEG.ACK =< SND.NXT` 밖이면 버리고 ACK로 답한다(계약 동작 X3, 속도 제한 X4).
-    /// 2. 새 데이터를 확인하면 버퍼·RTT·혼잡 제어·타이머를 고친다. `SEG.ACK = SND.UNA`면 중복 ACK인지 본다(RFC 5681 2).
-    /// 3. 창 갱신은 `SND.UNA =< SEG.ACK =< SND.NXT`이고 WL1·WL2 규칙이 맞을 때만(계약 동작 F9).
-    /// 4. 이 쪽 FIN이 확인되면 상태를 옮긴다.
+    /// 1. RFC 5961 §5.2. If outside `SND.UNA − MAX.SND.WND =< SEG.ACK =< SND.NXT`, drop and reply with ACK (contract
+    ///    behavior X3, rate limit X4).
+    /// 2. If it acknowledges new data, update the buffer, RTT, congestion control, and timer. If `SEG.ACK = SND.UNA`,
+    ///    check for a duplicate ACK (RFC 5681 §2).
+    /// 3. Update the window only if `SND.UNA =< SEG.ACK =< SND.NXT` and the WL1 and WL2 rules hold (contract behavior F9).
+    /// 4. Transition state if the local FIN was acknowledged.
     mutating func processAcknowledgment(
         _ segment: TCPSegment, at now: ContinuousClock.Instant, into outputs: inout [Output]
     ) -> Bool {
@@ -190,13 +199,14 @@ extension TCPConnection {
         }
         acknowledgedSinceRetransmissionTimeout = true
         let peerWindow = scaledWindow(of: segment)
-        // 탐침에 답했으니 다시 센다(MUST-37). 응용이 놓은 연결은 진전이 있을 때만이다(계약 동작 F8).
+        // Restart the count because the peer answered the probe (MUST-37). A connection released by the application
+        // requires progress (contract behavior F8).
         if !readClosed || sendUnacknowledged.precedes(ack) || peerWindow > 0 {
             zeroWindowProbeCount = 0
         }
 
-        // shortcut: 받은 SACK 블록(`segment.sackBlocks`)은 쓰지 않는다. 잃은 구간을 골라 다시 보내는 일(RFC 6675)은 M6-10b다.
-        // 상대가 SACK을 내는지는 통계로 센다(M6-10b S1).
+        // shortcut: Does not use received SACK blocks (`segment.sackBlocks`). Selective retransmission of lost ranges
+        // (RFC 6675) is M6-10b. The statistics count whether the peer sends SACK (M6-10b S1).
         if !segment.sackBlocks.isEmpty { statistics.acknowledgmentsWithSACK += 1 }
         if sendUnacknowledged.precedes(ack) {
             acknowledge(upTo: ack, at: now, into: &outputs)
@@ -239,10 +249,10 @@ extension TCPConnection {
         return true
     }
 
-    /// 새 데이터를 확인하는 ACK(RFC 9293 3.10.7.4 다섯째 ESTABLISHED, RFC 6298 5.2·5.3).
+    /// An ACK of new data (ESTABLISHED in step five of RFC 9293 §3.10.7.4, RFC 6298 §§5.2 and 5.3).
     mutating func acknowledge(upTo ack: SequenceNumber, at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         let acknowledgedCount = Int(ack.distance(from: sendUnacknowledged))
-        // FIN의 ACK는 버퍼 밖의 번호다. 데이터 쪽은 FIN 번호까지만 버린다.
+        // The ACK of FIN is outside the buffer. Discard data only up to the FIN number.
         let released = sendBuffer.acknowledge(upTo: finAcknowledgedBy(ack) ? finSequence : ack)
         sendUnacknowledged = ack
         if transmitNext.precedes(ack) { transmitNext = ack }
@@ -267,8 +277,8 @@ extension TCPConnection {
         }
     }
 
-    /// 중복 ACK(RFC 5681 2): 확인받지 못한 데이터가 있고, 데이터·SYN·FIN이 없고, ACK가 지금까지의 최댓값(SND.UNA)과 같고,
-    /// 광고한 창이 직전 ACK와 같다.
+    /// Duplicate ACK (RFC 5681 §2). There is unacknowledged data, the segment has no data, SYN, or FIN, the ACK equals
+    /// the highest seen so far (SND.UNA), and the advertised window is the same as in the preceding ACK.
     func isDuplicateAcknowledgment(_ segment: TCPSegment, peerWindow: Int) -> Bool {
         hasOutstandingData && segment.payload.isEmpty && !segment.flags.contains(.syn)
             && !segment.flags.contains(.fin) && segment.acknowledgmentNumber == sendUnacknowledged
@@ -279,22 +289,23 @@ extension TCPConnection {
         finRequested && ack == finSequence.advanced(by: 1)
     }
 
-    /// SYN이 아닌 세그먼트의 창: `SEG.WND << Snd.Wind.Shift`(RFC 7323 2.3).
+    /// The window on a non-SYN segment, `SEG.WND << Snd.Wind.Shift` (RFC 7323 §2.3).
     func scaledWindow(of segment: TCPSegment) -> Int {
         Int(segment.window) << sendWindowShift
     }
 
-    // MARK: 일곱째·여덟째: 데이터와 FIN
+    // MARK: Seventh and Eighth Steps — Data and FIN
 
-    /// 데이터는 ESTABLISHED·FIN-WAIT-1·FIN-WAIT-2에서만 받는다. FIN은 그 앞의 데이터가 빈 곳 없이 도착했을 때만 소비한다
-    /// (계약 동작 T2). 그 밖의 상태에서는 상대가 이미 FIN을 보냈으므로 데이터와 FIN을 무시한다.
+    /// Accepts data only in ESTABLISHED, FIN-WAIT-1, and FIN-WAIT-2. Consumes FIN only after the preceding data has
+    /// arrived without gaps (contract behavior T2). In other states, the peer has already sent FIN, so ignore data and
+    /// FIN.
     mutating func processText(_ text: InboundText, at now: ContinuousClock.Instant, into outputs: inout [Output]) {
         switch state {
         case .established, .finWait1, .finWait2: break
         default: return
         }
         if !text.payload.isEmpty {
-            // close 뒤에 온 새 데이터: RST로 데이터를 잃었다고 알리고 끝낸다(SHLD-3, 계약 동작 T6).
+            // New data after close. Send RST to report lost data and end the connection (SHLD-3, contract behavior T6).
             if readClosed {
                 outputs.append(.segment(resetSegment(sequence: sendNext)))
                 terminate(.aborted, into: &outputs)
@@ -303,8 +314,8 @@ extension TCPConnection {
             let wasReadable = receiveBuffer.readableCount > 0
             let inOrder = text.sequence == receiveBuffer.nextSequence
             let insertion = receiveBuffer.insert(text.payload, at: text.sequence)
-            // 순서가 어긋난 데이터, 빈 곳을 메우는 데이터는 곧바로 ACK한다(RFC 5681 4.2). 순서대로 온 데이터는 2×RMSS가
-            // 쌓이면 곧바로, 아니면 40ms 안에(계약 동작 F5).
+            // Immediately ACK out-of-order data or data filling a gap (RFC 5681 §4.2). For in-order data, ACK
+            // immediately once 2×RMSS accumulates, or within 40ms otherwise (contract behavior F5).
             if !inOrder || insertion.filledGap || insertion.advancedCount == 0 {
                 scheduleAcknowledgment(immediately: true, at: now)
             } else {
@@ -317,12 +328,12 @@ extension TCPConnection {
             }
         }
         if text.fin {
-            // FIN에는 곧바로 ACK한다. 앞에 빈 곳이 있으면 자리만 적어 두고, 빈 곳이 메워질 때 소비한다(SHLD-31. 상대가
-            // FIN을 다시 보내기를 기다리면 닫기가 RTO만큼 늦는다).
+            // ACK FIN immediately. If preceded by a gap, record only its position and consume it when the gap is filled
+            // (SHLD-31). Waiting for the peer to retransmit FIN would delay closure by an RTO.
             scheduleAcknowledgment(immediately: true, at: now)
             pendingFinSequence = text.sequence.advanced(by: UInt32(text.payload.count))
         }
-        // 적어 둔 FIN 앞의 데이터가 빈 곳 없이 다 왔는가. 이 세그먼트가 빈 곳을 메웠을 수도 있다.
+        // Has all data before the recorded FIN arrived without gaps? This segment may have filled the gap.
         guard let finSequence = pendingFinSequence, finSequence.precedesOrEquals(receiveBuffer.nextSequence) else { return }
         pendingFinSequence = nil
         scheduleAcknowledgment(immediately: true, at: now)
@@ -340,9 +351,9 @@ extension TCPConnection {
         }
     }
 
-    // MARK: 상태 옮기기
+    // MARK: State Transitions
 
-    /// FIN-WAIT-2. `close`를 부른 연결은 60초 안에 상대의 FIN이 오지 않으면 끝난다(계약 동작 T6).
+    /// FIN-WAIT-2. A connection on which `close` was called ends if the peer's FIN does not arrive within 60 seconds (contract behavior T6).
     mutating func enterFinWait2(at now: ContinuousClock.Instant) {
         state = .finWait2
         if readClosed {
@@ -350,8 +361,8 @@ extension TCPConnection {
         }
     }
 
-    /// TIME-WAIT. 다른 타이머를 모두 끄고 60초를 잰다(RFC 9293 3.10.7.4 여덟째, 계약 동작 T6).
-    /// 미뤄 둔 ACK(FIN에 대한 것)는 남긴다.
+    /// TIME-WAIT. Clear all other timers and start 60 seconds (step eight of RFC 9293 §3.10.7.4, contract behavior T6).
+    /// Keep the delayed ACK for FIN.
     mutating func enterTimeWait(at now: ContinuousClock.Instant) {
         state = .timeWait
         let acknowledgment = timers[.acknowledgment]
@@ -362,7 +373,7 @@ extension TCPConnection {
         roundTripSample = nil
     }
 
-    /// 무엇이든 받으면 keep-alive를 다시 2시간으로(계약 동작 T8). 그 밖의 상태에서는 끈다.
+    /// Reset keep-alive to 2 hours on receiving anything (contract behavior T8). Disable it in other states.
     mutating func refreshKeepalive(at now: ContinuousClock.Instant) {
         keepaliveProbeCount = 0
         switch state {
@@ -373,7 +384,7 @@ extension TCPConnection {
         }
     }
 
-    /// challenge ACK(RFC 5961 3.2·4.2): `<SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>`. 5초에 10개까지(계약 동작 X4).
+    /// Challenge ACK (RFC 5961 §§3.2 and 4.2), `<SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>`. Up to 10 per 5 seconds (contract behavior X4).
     mutating func sendChallengeAcknowledgment(at now: ContinuousClock.Instant) {
         if challengeLimiter.permit(at: now) {
             scheduleAcknowledgment(immediately: true, at: now)
